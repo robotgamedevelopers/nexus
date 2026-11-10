@@ -878,6 +878,21 @@ void checkPromptBox(const Harness& h) {
     CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
 }
 
+// Nothing is shown under the prompt: no model name (the owner 2026-11-10; choosing a friend's model and effort by hotkey
+// is roadmap work). The footer holds the prompt's box alone, one unit above the window's bottom.
+void noModelUnderThePrompt() {
+    Harness h;
+    h.frame();
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), "m1"));
+    PrLayoutNode footer = prLayoutNodeParent(h.tree, h.view.promptBox);
+    CHECK(prLayoutNodeFirstChild(h.tree, footer) == h.view.promptBox);
+    CHECK(prLayoutNodeNextSibling(h.tree, h.view.promptBox) == kPrLayoutNodeNone);
+    PrRect window = h.bounds(prLayoutNodeParent(h.tree, footer));
+    CHECK(near(window.bottom - h.bounds(h.view.promptBox).bottom, style::kU));
+    h.commandDigit(2);
+    CHECK(h.active().name == "emma" && !h.hasText(prLayoutTreeRoot(h.tree), "m2"));
+}
+
 void promptIsARoundedBoxHoldingThePlus() {
     Harness h;
     h.frame();
@@ -1049,8 +1064,8 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
 
 // ---- Terminal tabs ----
 
-// Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt, no
-// model label and no transcript; its label is "terminal" until its shell sets a title.
+// Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt and
+// no transcript; its label is "terminal" until its shell sets a title.
 void commandTAddsAndShowsATerminal() {
     Harness h;
     h.type("draft");
@@ -1327,6 +1342,69 @@ void sprintTabNeverMoves() {
     CHECK((h.labels() == std::vector<std::string>{"sprint", "f2", "f3", "f1"}));
 }
 
+// The owner's report: alex dragged to the end of the friends, the overlay hidden on the sprint tab and shown again
+// comes up focused on alex. A press focuses the tab it lands on (ui.cpp PointerDown), the sprint tab has no prompt to
+// take the focus back, and Escape makes the focus visible (ui.cpp routeKey): the ring stood on alex, and Enter or Space
+// reaching the tree selected alex. Hiding and showing keep the selected tab, and the keyboard focus is on it.
+void hideAndShowKeepTheSelectedTab() {
+    Harness h(std::vector<FriendInfo>{{"alex", "m"}, {"emma", "m"}, {"f3", "m"}}, true, true);
+    std::vector<PrLayoutNode> t = h.tabs();
+    PrVec2 start = h.centre(t[1]);
+    PrVec2 end{h.bounds(t.back()).right + 80, start.y};      // past the last tab: alex to the end
+    h.pointer(PrAppEventKind_PointerDown, start);
+    h.pointer(PrAppEventKind_PointerMove, PrVec2{start.x + 10, start.y});
+    h.pointer(PrAppEventKind_PointerMove, end);
+    h.pointer(PrAppEventKind_PointerUp, end);
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "emma", "f3", "alex"}));
+    CHECK(h.active().kind == TabKind::Sprint);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);             // hide
+    CHECK(h.hides == 1);
+    h.frame();                                               // shown again
+    h.frame();
+    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(prUiFocus(h.ui) != h.tabs()[3]);                   // no ring on alex
+    CHECK(prUiFocus(h.ui) == h.tabs()[0]);                   // the focus is on the sprint tab
+    h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
+    h.enter();
+    CHECK(h.active().kind == TabKind::Sprint);
+    // On a friend's tab the same: the friend stays selected, and the prompt has the focus.
+    h.commandDigit(2);
+    CHECK(h.active().name == "emma");
+    h.dragTab(1, 3);                                         // emma to the end, past alex
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "f3", "alex", "emma"}));
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    h.frame();
+    CHECK(h.active().name == "emma" && prUiFocus(h.ui) == h.view.prompt);
+}
+
+// A launch with a saved order that puts alex last shows the sprint tab, with no focus on alex.
+void launchWithAlexLastShowsTheSprintTab() {
+    std::vector<FriendInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
+    Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "rowan", "emma", "alex"}));
+    CHECK(h.active().kind == TabKind::Sprint);
+    h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
+    CHECK(h.active().kind == TabKind::Sprint && prUiFocus(h.ui) != h.tabs()[3]);
+}
+
+// Each change of the selected tab, and only a change, asks for the selection to be saved: a drag keeps the selected tab
+// and saves only the order.
+void selectionChangesAreSaved() {
+    Harness h = withSprint(3);
+    int selections = 0;
+    h.view.selected = [&selections] { ++selections; };
+    h.frame();
+    const int first = selections;               // the first round saves what it shows
+    CHECK(first <= 1);
+    h.commandDigit(3);
+    CHECK(selections == first + 1);
+    h.frame();
+    h.dragTab(1, 3);                            // a move keeps f2 selected
+    CHECK(h.active().name == "f2" && selections == first + 1 && h.saves == 1);
+    h.commandDigit(1);
+    CHECK(selections == first + 2);
+}
+
 // Command-W leaves the sprint tab; Escape hides the overlay there; Command-Escape stops nothing.
 void sprintTabKeysCloseNothing() {
     Harness h = withSprint();
@@ -1380,6 +1458,9 @@ int main() {
     onlyTheActiveTabShowsSelected();
     sprintTabTakesNoText();
     sprintTabNeverMoves();
+    hideAndShowKeepTheSelectedTab();
+    launchWithAlexLastShowsTheSprintTab();
+    selectionChangesAreSaved();
     sprintTabKeysCloseNothing();
     sprintTabSaysWhyThereIsNoPage();
     textKeysZoomTheBoard();
@@ -1409,6 +1490,7 @@ int main() {
     dragWithOneTabDoesNothing();
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
+    noModelUnderThePrompt();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();

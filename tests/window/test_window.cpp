@@ -265,9 +265,78 @@ void badStoreUsesTheLoadedOrderAndSaysSo() {
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
+void selectedTabTextRoundTrips() {
+    SavedTab saved;
+    std::string error;
+    Model model(named({"alex", "zhi yǎ"}), true);
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Sprint);
+    model.select_tab(2);
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
+    CHECK(saved.kind == TabKind::Friend && saved.name == "zhi yǎ");
+    model.add_terminal();
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Terminal);
+    CHECK(!parseSelectedTab("friend alex\n", &saved, &error) && has(error, "first line"));
+    CHECK(!parseSelectedTab("nexus selected tab 1\n", &saved, &error) && has(error, "no tab"));
+    CHECK(!parseSelectedTab("nexus selected tab 1\nwindow\n", &saved, &error) && has(error, "window"));
+    CHECK(!parseSelectedTab("nexus selected tab 1\nfriend \n", &saved, &error) && has(error, "no name"));
+    CHECK(!parseSelectedTab(std::string("nexus selected tab 1\nfriend a\0b\n", 32), &saved, &error) &&
+        has(error, "NUL"));
+}
+
+// The owner's case: alex selected, then dragged to the end. A relaunch with the saved order puts alex last, and the
+// selection comes back to alex by name, not to the position alex stood at.
+void selectedTabComesBackByIdentity() {
+    const std::vector<FriendInfo> loaded = named({"alex", "emma", "rowan"});
+    MemoryStore order;
+    MemoryStore selection;
+    Model model(loaded, true);
+    CHECK(model.select_tab(1) && model.tab(1).name == "alex");
+    CHECK(model.move_tab(1, 3));
+    std::string error;
+    CHECK(saveTabOrder(order.store(), model, &error) && saveSelectedTab(selection.store(), model, &error));
+    std::string warning;
+    Model again(loadTabOrder(order.store(), loaded, &warning), true);
+    CHECK(again.tab(3).name == "alex");
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 3 && warning.empty());
+    // The sprint tab saved, with alex last: the sprint tab, never the last friend.
+    CHECK(model.select_tab(0) && saveSelectedTab(selection.store(), model, &error));
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
+    // emma saved, then the friend list changes order: emma wherever she now stands.
+    CHECK(model.select_tab(1) && model.tab(1).name == "emma" && saveSelectedTab(selection.store(), model, &error));
+    Model reordered(named({"rowan", "alex", "emma"}), true);
+    CHECK(loadSelectedTab(selection.store(), reordered, &warning) == 3);
+}
+
+// Nothing saved, a terminal saved (terminals do not survive a quit), a friend no longer in the list, or a file that is
+// not a selection: the sprint tab. Only the bad file warns.
+void selectedTabFallsBackToTheSprintTab() {
+    MemoryStore selection;
+    Model model(named({"a", "b"}), true);
+    std::string warning;
+    CHECK(loadSelectedTab(selection.store(), model, &warning) == 0 && warning.empty());
+    model.add_terminal();
+    std::string error;
+    CHECK(saveSelectedTab(selection.store(), model, &error));
+    Model again(named({"a", "b"}), true);
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
+    selection.text = "nexus selected tab 1\nfriend gone\n";
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
+    selection.text = "a\n";
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0);
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "first line") && has(warning, "deleting it"));
+    selection.readError = "it cannot be read";
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && has(warning, "cannot be read"));
+    selection.writeError = "Permission denied";
+    CHECK(!saveSelectedTab(selection.store(), again, &error));
+    CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
 } // namespace
 
 int main() {
+    selectedTabTextRoundTrips();
+    selectedTabComesBackByIdentity();
+    selectedTabFallsBackToTheSprintTab();
     savedOrderIsApplied();
     tabOrderTextRoundTrips();
     storeSavesAndRestores();
