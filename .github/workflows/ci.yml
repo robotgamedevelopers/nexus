@@ -1,0 +1,89 @@
+# CI for nexus: the build with its unit tests, and the TLA+ models with their trace checks, as two jobs in
+# parallel on the fleet's macOS runners (never GitHub-hosted). Every pull request runs it, whatever its base,
+# and so does every push to main.
+#
+# Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
+# enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
+#
+# Warnings are errors: CMakeLists.txt sets the flags, so these jobs use the plain build commands.
+#
+# Java and the TLC jar come from the runner's machine (the fleet installs them), never downloaded here. The
+# jar must be the pinned tla2tools.jar v1.7.4, whose sha256 is in .github/tla2tools.sha256; any other jar
+# fails the job.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-unit:
+    # a pull request from a fork never runs on the fleet's runners
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain. Today only the runners labelled
+    # `services` have Xcode; drop the extra label when every macOS runner has it.
+    runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j4
+      - name: Unit tests
+        run: ctest --test-dir build -L unit --output-on-failure
+
+  model:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, macOS, ARM64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Java and the pinned TLC jar from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          java=""
+          for c in "$HOME/sdk/bin/java" /opt/homebrew/opt/openjdk/bin/java; do
+            if [ -x "$c" ] && "$c" -version >/dev/null 2>&1; then java=$c; break; fi
+          done
+          if [ -z "$java" ]; then
+            echo "::error::no working java on $(hostname -s) (looked at \$HOME/sdk/bin/java and /opt/homebrew/opt/openjdk/bin/java): install a JDK 21 on this runner's machine through the fleet play, then re-run"
+            exit 1
+          fi
+          "$java" -version
+          dirname "$java" >> "$GITHUB_PATH"
+          jar="$HOME/sdk/tla/tla2tools.jar"
+          if [ ! -f "$jar" ]; then
+            echo "::error::no TLC jar at $jar on $(hostname -s): place tla2tools.jar v1.7.4 there (sha256 in .github/tla2tools.sha256; another fleet machine holds one), then re-run"
+            exit 1
+          fi
+          want=$(cut -d' ' -f1 .github/tla2tools.sha256)
+          have=$(shasum -a 256 "$jar" | cut -d' ' -f1)
+          if [ "$want" != "$have" ]; then
+            echo "::error::$jar on $(hostname -s) is not the pinned tla2tools.jar v1.7.4 (sha256 $have, want $want): replace it with the pinned jar, then re-run"
+            exit 1
+          fi
+          echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      # Only the model and its check programs: no app and no Prax shaders, so any macOS runner will do.
+      - name: Build the model checks
+        run: cmake --build build -j4 --target model_checks
+      - name: Models and trace checks
+        run: ctest --test-dir build -L model -j4 --output-on-failure
