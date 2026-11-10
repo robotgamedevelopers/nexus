@@ -1,4 +1,4 @@
-// Every size and colour the window draws with, in one place. Sizes are in points (logical px).
+// Every size and colour the window draws with, in one place. Sizes are in points (logical px), at a text scale of 1.
 //
 // Measured from the owner's reference capture (the Claude desktop app, fullscreen on a 2560x1440-point display,
 // captured at 2000x1125, so 1 capture px = 1.28 pt): cap heights of 15.5 capture px for body text, 13.5 for the model
@@ -32,6 +32,20 @@ constexpr float kPromptBottom = 2.75f * kU;   // window bottom to the prompt box
 constexpr float kLabelBaseline = 0.9f * kU;   // window bottom to the label row's baseline
 constexpr float kPromptMaxLines = 8;          // the prompt grows to this many lines, then scrolls
 constexpr float kColumnInset = 0.6f * kU;     // above the first transcript entry
+
+// The person's text scale, set from the keyboard (view.cpp kTextKeys) for every tab at once. It multiplies every size
+// above, so all text, spacing and radii scale together, as changing kBodySize would. It moves in steps of
+// kTextScaleStep between kTextScaleMin and kTextScaleMax.
+constexpr float kTextScaleStep = 0.1f;
+constexpr float kTextScaleMin = 0.5f;
+constexpr float kTextScaleMax = 2.0f;
+constexpr int kTextStepsDown = int((1 - kTextScaleMin) / kTextScaleStep + 0.5f);   // steps from 1 down to the minimum
+constexpr int kTextStepsUp = int((kTextScaleMax - 1) / kTextScaleStep + 0.5f);     // steps from 1 up to the maximum
+
+// The text scale after `steps` steps from 1 (negative is smaller).
+constexpr float textScale(int steps) {
+    return 1 + float(steps) * kTextScaleStep;
+}
 
 // Widths, as percentages of the window width.
 constexpr float kColumnPercent = 54.1f;       // transcript: x 462..1544 of 2000

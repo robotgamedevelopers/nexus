@@ -89,6 +89,7 @@ PrKitThemeVariant theme(void*, PrStudioWindow*, const PrAppUserPreferences*) {
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
     App& a = appOf(context);
+    beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
     if (a.overlay && !a.overlayOpened) {
         // Prax's lib/app has no window styles; go through the window behind its NSView. Shown once at launch.
         a.overlayOpened = true;
@@ -113,7 +114,7 @@ void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2) {
 bool laidOut(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     if (a.bench == 0)
-        return false;
+        return windowWantsFrame(a.view);
     if (a.stats.frames >= a.bench) {
         prAppStop(prStudioWindowApp(window));
         return false;

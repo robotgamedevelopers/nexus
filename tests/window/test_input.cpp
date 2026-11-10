@@ -88,6 +88,7 @@ struct Harness {
     }
 
     void frame() {
+        beginWindowFrame(view, kit, fonts);
         time += 1.0 / 60;
         PrUiFrameDesc desc{
             .time = time,
@@ -154,6 +155,35 @@ struct Harness {
 
     PrRect bounds(PrLayoutNode node) const {
         return prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Viewport));
+    }
+
+    float height(PrLayoutNode node) const {
+        PrRect b = bounds(node);
+        return b.bottom - b.top;
+    }
+
+    // The height of the prompt's text, and of the transcript's first entry, at the last layout.
+    float promptTextHeight() const {
+        return height(prLayoutNodeFirstChild(tree, view.prompt));
+    }
+    float firstEntryHeight() const {
+        std::vector<PrLayoutNode> e = entries();
+        return e.empty() ? 0 : height(e.front());
+    }
+
+    // Command-= (larger), Command-+ (Shift-=, larger) and Command-minus (smaller), as macOS sends them: no text. Then a
+    // frame more, whose start applies the scale.
+    void larger(PrAppModifierFlags extra = 0) {
+        key(PrAppKey('='), PrAppKeyCode_Equal, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
+        frame();
+    }
+    void largerWithShift() {
+        key(PrAppKey('+'), PrAppKeyCode_Equal, PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_Shift));
+        frame();
+    }
+    void smaller(PrAppModifierFlags extra = 0) {
+        key(PrAppKey('-'), PrAppKeyCode_Minus, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
+        frame();
     }
 };
 
@@ -301,6 +331,64 @@ void enterWhileComposingCommitsOnly() {
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == kana);
 }
 
+bool near(float a, float b) {
+    return a > b - 0.5f && a < b + 0.5f;
+}
+
+void textKeysScaleTheTranscriptAndThePrompt() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Friend, "a reply"});
+    h.type("hello");
+    h.frame();
+    const float prompt1 = h.promptTextHeight();
+    const float entry1 = h.firstEntryHeight();
+    CHECK(prompt1 > 0 && entry1 > 0);
+    CHECK(h.look.textSteps == 0);
+
+    h.larger();
+    CHECK(h.look.textSteps == 1);
+    CHECK(h.promptTextHeight() > prompt1 + 1);
+    CHECK(h.firstEntryHeight() > entry1 + 1);
+    h.smaller();
+    CHECK(h.look.textSteps == 0);
+    CHECK(near(h.promptTextHeight(), prompt1));
+    CHECK(near(h.firstEntryHeight(), entry1));
+    h.largerWithShift();
+    CHECK(h.look.textSteps == 1);
+    h.smaller();
+    h.smaller();
+    CHECK(h.look.textSteps == -1);
+    CHECK(h.promptTextHeight() < prompt1 - 1);
+    CHECK(h.firstEntryHeight() < entry1 - 1);
+
+    // Neither key types a character, and the draft and transcript are as they were.
+    CHECK(h.active().draft == "hello");
+    CHECK(h.active().transcript.size() == 1);
+}
+
+void textScaleIsClamped() {
+    Harness h;
+    for (int i = 0; i < style::kTextStepsUp + 5; ++i)
+        h.larger();
+    CHECK(h.look.textSteps == style::kTextStepsUp);
+    CHECK(near(style::textScale(h.look.textSteps), style::kTextScaleMax));
+    for (int i = 0; i < style::kTextStepsUp + style::kTextStepsDown + 5; ++i)
+        h.smaller();
+    CHECK(h.look.textSteps == -style::kTextStepsDown);
+    CHECK(near(style::textScale(h.look.textSteps), style::kTextScaleMin));
+    CHECK(h.active().draft.empty());
+}
+
+void textKeysWorkWithCapsLock() {
+    Harness h;
+    h.larger(PrAppModifierFlag_CapsLock);
+    CHECK(h.look.textSteps == 1);
+    h.smaller(PrAppModifierFlag_CapsLock);
+    h.smaller(PrAppModifierFlag_CapsLock);
+    CHECK(h.look.textSteps == -1);
+    CHECK(h.active().draft.empty());
+}
+
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp() {
     Harness h;
     for (int i = 0; i < 30; ++i)
@@ -359,6 +447,9 @@ int main() {
     capsLockKeepsTheBindings();
     eachTabKeepsItsDraft();
     enterWhileComposingCommitsOnly();
+    textKeysScaleTheTranscriptAndThePrompt();
+    textScaleIsClamped();
+    textKeysWorkWithCapsLock();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);

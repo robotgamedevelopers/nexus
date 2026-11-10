@@ -42,14 +42,22 @@ enum class Part : unsigned char {
     Ring,
 };
 
-// The kit's icons' sides, and the ring's.
-constexpr float kPlusSide = 0.7f * kU;
-constexpr float kStopSide = 0.72f * kU;
-constexpr float kRingSide = 0.76f * kLabelSize + 3;
+// The kit's icons' sides, and the ring's, at text scale `k`.
+float plusSide(float k) {
+    return 0.7f * kU * k;
+}
+float stopSide(float k) {
+    return 0.72f * kU * k;
+}
+float ringSide(float k) {
+    return 0.76f * kLabelSize * k + 3;
+}
 
-// The height of the kit text area with one line, which the icons beside it centre on: the line, the area's padding
-// of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders.
-constexpr float kOneLineArea = kLinePitch + 2 * 4 + 2;
+// The height of the kit text area with one line at text scale `k`, which the icons beside it centre on: the line, the
+// area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale.
+float oneLineArea(float k) {
+    return kLinePitch * k + 2 * 4 + 2;
+}
 
 PrColor faded(PrColor c, float alpha) {
     c.a = alpha;
@@ -72,11 +80,14 @@ void padding(PrLayoutBoxStyle& box, float top, float right, float bottom, float 
     box.padding[PrRectSide_Left] = px(left);
 }
 
+// Each recipe holds its part and the text scale, in steps from 1 (style::textScale), so a new scale makes new records.
 struct BoxRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
     Part part;
+    signed char steps;
 
     void make(const Look&, PrLayoutBoxStyle& box) const {
+        const float k = textScale(steps);
         box.boxSizing = PrLayoutBoxSizing_BorderBox;
         switch (part) {
             case Part::Window:
@@ -96,7 +107,7 @@ struct BoxRecipe {
                 box.minHeight = prLayoutLengthPercent(100);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
-                padding(box, kColumnInset, 0, 0, 0);
+                padding(box, kColumnInset * k, 0, 0, 0);
                 break;
             case Part::Centered:
                 box.display = PrLayoutDisplay_Block;
@@ -110,11 +121,11 @@ struct BoxRecipe {
             case Part::BubbleQueued:
                 box.display = PrLayoutDisplay_Block;
                 box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
-                padding(box, kBubblePadY, kBubblePadX, kBubblePadY, kBubblePadX);
+                padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
                 break;
             case Part::Footer:
                 box.display = PrLayoutDisplay_Flex;
-                padding(box, kU, 0, 0, 0);
+                padding(box, kU * k, 0, 0, 0);
                 break;
             case Part::PromptRow:
                 box.display = PrLayoutDisplay_Flex;
@@ -123,11 +134,11 @@ struct BoxRecipe {
             case Part::LabelRow:
                 box.display = PrLayoutDisplay_Flex;
                 box.width = prLayoutLengthPercent(kPromptPercent);
-                box.height = px(kPromptBottom);
-                padding(box, 0, 0.7f * kU, kLabelBaseline - 0.32f * kLabelSize, 0);
+                box.height = px(kPromptBottom * k);
+                padding(box, 0, 0.7f * kU * k, (kLabelBaseline - 0.32f * kLabelSize) * k, 0);
                 break;
             case Part::Ring:
-                box.margin[PrRectSide_Left] = px(kLabelSize);
+                box.margin[PrRectSide_Left] = px(kLabelSize * k);
                 break;
         }
     }
@@ -136,19 +147,21 @@ struct BoxRecipe {
 struct DecorationRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
     Part part;
+    signed char steps;
 
     void make(const Look& look, PrLayoutDecorationStyle& d) const {
+        const float k = textScale(steps);
         switch (part) {
             case Part::Window:
                 d.background = prColor16FromColor(look.overlay ? faded(kBackground, kOverlayOpacity) : kBackground);
                 break;
             case Part::Bubble:
                 d.background = prColor16FromColor(kBubble);
-                radius(d, kBubbleRadius);
+                radius(d, kBubbleRadius * k);
                 break;
             case Part::BubbleQueued:
                 d.background = prColor16FromColor(faded(kBubble, kQueuedFill));
-                radius(d, kBubbleRadius);
+                radius(d, kBubbleRadius * k);
                 break;
             default:
                 break;
@@ -159,8 +172,10 @@ struct DecorationRecipe {
 struct FlexRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Flex;
     Part part;
+    signed char steps;
 
     void make(const Look&, PrLayoutFlexStyle& flex) const {
+        const float k = textScale(steps);
         switch (part) {
             case Part::Window:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -175,7 +190,7 @@ struct FlexRecipe {
             case Part::Column:
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
-                flex.rowGap = px(kGap);
+                flex.rowGap = px(kGap * k);
                 flex.shrink = 0;
                 break;
             case Part::Entry:
@@ -190,7 +205,7 @@ struct FlexRecipe {
             case Part::PromptRow:
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
-                flex.columnGap = px(0.8f * kU);
+                flex.columnGap = px(0.8f * kU * k);
                 break;
             case Part::LabelRow:
                 flex.direction = PrLayoutFlexDirection_Row;
@@ -207,16 +222,18 @@ struct FlexRecipe {
 };
 
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
-    return pr::uiStyle(ui, look, BoxRecipe{p}, DecorationRecipe{p}, FlexRecipe{p});
+    signed char s = static_cast<signed char>(look.textSteps);
+    return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
 }
 
-// The context ring beside the model label: no kit part or icon shows a ring.
-PrDrawList* drawRing() {
+// The context ring beside the model label, at text scale `k`: no kit part or icon shows a ring.
+PrDrawList* drawRing(float k) {
     PrDrawList* list = prDrawListCreate();
     PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = 2.2f;
-    float r = 0.38f * kLabelSize;
-    prDrawListEllipse(list, PrVec2{kRingSide / 2, kRingSide / 2}, PrVec2{r, r}, 0,
+    stroke.shape.width = 2.2f * k;
+    float r = 0.38f * kLabelSize * k;
+    float side = ringSide(k);
+    prDrawListEllipse(list, PrVec2{side / 2, side / 2}, PrVec2{r, r}, 0,
         PrDrawPaint{.color = kRing, .stroke = &stroke});
     return list;
 }
@@ -230,6 +247,19 @@ PrStringView sv(std::string_view s) {
 
 // The digits that select tabs with Command, in tab order: the keyboard's number row.
 constexpr std::string_view kTabKeys = "1234567890";
+
+// The text scale's keys, in this one place: a logical key with exactly these modifiers, and the steps it moves the
+// scale: the standard macOS keys. Command-= is larger without Shift, as Command-+ (Shift-=) is; Command-minus is smaller.
+struct TextKey {
+    PrAppKey key;
+    PrAppModifierFlags modifiers;
+    int steps;
+};
+constexpr TextKey kTextKeys[] = {
+    {'=', PrAppModifierFlag_Super, 1},
+    {'+', PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_Shift), 1},
+    {'-', PrAppModifierFlag_Super, -1},
+};
 
 constexpr std::string_view kPlaceholderText = "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later";
 
@@ -245,6 +275,11 @@ struct Builder {
     const Look& look;
     Model& model;
 
+    // The text scale the look and the kit's theme are at.
+    float k() const {
+        return textScale(look.textSteps);
+    }
+
     PrLayoutNode element(PrLayoutNode parent, Part p, PrUiFlags flags = 0, PrUiKey key = 0) {
         return prUiElement(ui, parent, key, style(ui, look, p), flags);
     }
@@ -258,7 +293,7 @@ struct Builder {
             PrKitIconStyle{.size = side, .tone = PrKitTone_Primary, ._pad = {}});
         // Centred on the prompt's first line, where the row aligns its items at the bottom.
         PrKitPlace place{};
-        place.margin.bottom = (kOneLineArea - side) / 2;
+        place.margin.bottom = (oneLineArea(k()) - side) / 2;
         place.flex = PrKitFlex_Fixed;
         prKitPlace(kit, node, &place);
     }
@@ -267,17 +302,17 @@ struct Builder {
         PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = false},
             PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
-        rowPlace.height = prKitPx(kStripHeight + 1);
+        rowPlace.height = prKitPx(kStripHeight * k() + 1);
         rowPlace.flex = PrKitFlex_Fixed;
         prKitPlace(kit, row, &rowPlace);
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, i),
                 .selected = i == model.active(), .disabled = false});
             PrKitPlace tabPlace{};
-            tabPlace.height = prKitPx(1.75f * kTabSize);
+            tabPlace.height = prKitPx(1.75f * kTabSize * k());
             tabPlace.align = PrKitAlign_Center;
             if (i == 0)
-                tabPlace.margin.left = 0.8f * kU;
+                tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
             if (prKitActivated(kit, tab))
                 model.select_tab(i);
@@ -329,8 +364,8 @@ struct Builder {
                     if (queued) {
                         PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
                         PrKitPlace place{};
-                        place.margin.top = 0.3f * kMetaSize;
-                        place.margin.right = 6;
+                        place.margin.top = 0.3f * kMetaSize * k();
+                        place.margin.right = 6 * k();
                         prKitPlace(kit, tag, &place);
                     }
                     break;
@@ -354,7 +389,7 @@ struct Builder {
         if (text == kPrLayoutNodeNone)
             return view.promptRows;
         PrLayoutRect box = prLayoutNodeBounds(tree, text, PrLayoutCoordinates_Layout);
-        float lines = std::round(prLayoutUnitToPx(box.bottom - box.top) / kLinePitch);
+        float lines = std::round(prLayoutUnitToPx(box.bottom - box.top) / (kLinePitch * k()));
         return uint32_t(std::clamp(lines, 1.0f, kPromptMaxLines));
     }
 
@@ -370,7 +405,7 @@ struct Builder {
         bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
         view.promptRows = promptRows();
 
-        icon(row, PrKitIconKind_Plus, kPlusSide);
+        icon(row, PrKitIconKind_Plus, plusSide(k()));
         PrKitTextArea area{};
         area.key = prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6});
         area.text = sv(model.tab(active).draft);
@@ -396,13 +431,13 @@ struct Builder {
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
         }
-        icon(row, PrKitIconKind_Stop, kStopSide);
+        icon(row, PrKitIconKind_Stop, stopSide(k()));
 
         PrLayoutNode labels = element(footer, Part::LabelRow);
         label(labels, model.tab(active).model, textStyle(PrKitTextRole_BodySmall, PrKitTone_Primary));
         PrLayoutNode ring = prLayoutTreeFrameReplaced(tree, labels, 0, style(ui, look, Part::Ring));
         prLayoutTreeFrameSetNaturalSize(tree, ring,
-            PrLayoutNaturalSize{prLayoutUnitFromPx(kRingSide), prLayoutUnitFromPx(kRingSide), 0});
+            PrLayoutNaturalSize{prLayoutUnitFromPx(ringSide(k())), prLayoutUnitFromPx(ringSide(k())), 0});
         PrLayoutContent content{};
         content.kind = PrLayoutContentKind_DrawList;
         content.list = look.ring;
@@ -418,6 +453,11 @@ struct Builder {
             if (prUiKeyPressed(ui, window, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super))
                 model.select_tab(n);
         }
+        // The text scale's keys, claimed the same way, ask for a new scale; the next frame applies it (beginWindowFrame).
+        for (const TextKey& t : kTextKeys) {
+            if (prUiKeyPressed(ui, window, t.key, t.modifiers))
+                view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
+        }
         strip(window);
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
@@ -429,7 +469,7 @@ struct Builder {
 } // namespace
 
 void openLook(Look& look) {
-    look.ring = drawRing();
+    look.ring = drawRing(textScale(look.textSteps));
 }
 
 void closeLook(Look& look) {
@@ -437,7 +477,8 @@ void closeLook(Look& look) {
     look = Look{};
 }
 
-PrKitTheme windowTheme(PrFontSet* fonts, bool overlay) {
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
+    const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
     PrKitPalette& p = theme.palette;
     p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
@@ -453,15 +494,31 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay) {
         PrKitType& t = theme.types[role];
         t.mono = false;
         t.italic = false;
-        t.size = size;
+        t.size = size * k;
         t.weight = 400;
-        t.lineHeight = lineHeight;
+        t.lineHeight = lineHeight * k;
         t.letterSpacing = 0;
     };
     type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
     type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the model label
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
     return theme;
+}
+
+bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
+    Look& look = *view.look;
+    if (look.textSteps == view.askedTextSteps)
+        return false;
+    look.textSteps = view.askedTextSteps;
+    prDrawListRelease(look.ring);
+    look.ring = drawRing(textScale(look.textSteps));
+    PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps);
+    prKitSetTheme(kit, &theme);
+    return true;
+}
+
+bool windowWantsFrame(const View& view) {
+    return view.look->textSteps != view.askedTextSteps;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
