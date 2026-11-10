@@ -85,6 +85,13 @@ Each module in `witnesses/` extends `MCWindow` and passes one broken action to `
 | `WMoveOutOfRange` | a move past the last tab returns false but moves the tab to the end | `RefusedChangesNothing` |
 | `WMoveSwaps` | move swaps the two tabs instead of shifting those between (three tabs) | `MovePlaces` |
 | `WSendByPosition` | send and queue take the position as the friend, as if no tab had moved | `SendTouchesNoOtherTab` |
+| `WSetDraftOutsideDrafts` | set_draft stores a text it was not given | `TypeOK` |
+| `WSendAppendsTwice` | send appends the `Person` entry twice | `SendAppendsOne` |
+| `WQueueAppendsTwice` | queue appends the draft twice | `QueueAppendsOne` |
+| `WSelectReorders` | select brings the selected tab to the front | `OnlyMoveReorders` |
+| `WAppendRenamesFriend` | append also rewrites the friend's model | `FriendsFixed` |
+
+Every property in the table above has a witness.
 
 ## The binding: code traces checked against the spec
 
@@ -105,7 +112,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j4
 ```
 
-The `model` label runs the three instances, the witnesses, eight code traces (seeds 1 to 5 on three tabs, seed 6 on two tabs and seed 8 on one, each 1000 steps; seed 7 with no tabs) and the six faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+The `model` label runs the three instances, the twenty-six witnesses, eight code traces (seeds 1 to 5 on three tabs, seed 6 on two tabs and seed 8 on one, each 1000 steps; seed 7 with no tabs) and the six faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 

@@ -12,7 +12,7 @@ The rules for an AI working in this repository. Each one holds on every change.
 ## Tests
 
 - A unit test uses no real time, no sockets, no network and no outside services. It takes time as an argument and fakes the transport. Anything that needs the real thing is a functional test.
-- `ctest -L unit` runs the unit tests; `ctest -L model` runs the TLA+ models and their trace checks. CI runs both on every pull request.
+- `ctest -L unit` runs the unit tests; `ctest -L functional` the functional tests (the headless window, which sets text in the system's fonts, real processes, real files); `ctest -L model` the TLA+ models and their trace checks. CI runs all three on every pull request.
 
 ## Models
 

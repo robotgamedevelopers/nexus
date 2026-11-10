@@ -43,7 +43,10 @@ jobs:
       - name: Build
         run: cmake --build build -j4
       - name: Unit tests
-        run: ctest --test-dir build -L unit --output-on-failure
+        run: ctest --test-dir build -L unit -j4 --output-on-failure
+      # The headless window (system fonts), real child processes and a real file: not unit tests.
+      - name: Functional tests
+        run: ctest --test-dir build -L functional -j4 --output-on-failure
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

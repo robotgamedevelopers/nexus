@@ -67,6 +67,11 @@ tlc_test(tlc_witness_move_leaves_draft    WMoveLeavesDraft    WMoveLeavesDraft.c
 tlc_test(tlc_witness_move_out_of_range    WMoveOutOfRange     WMoveOutOfRange.cfg     action    PROPERTY RefusedChangesNothing)
 tlc_test(tlc_witness_move_swaps           WMoveSwaps          WMoveSwaps.cfg          action    PROPERTY MovePlaces)
 tlc_test(tlc_witness_send_by_position     WSendByPosition     WSendByPosition.cfg     action    PROPERTY SendTouchesNoOtherTab)
+tlc_test(tlc_witness_set_draft_outside    WSetDraftOutsideDrafts WSetDraftOutsideDrafts.cfg invariant PROPERTY TypeOK)
+tlc_test(tlc_witness_send_appends_twice   WSendAppendsTwice   WSendAppendsTwice.cfg   action    PROPERTY SendAppendsOne)
+tlc_test(tlc_witness_queue_appends_twice  WQueueAppendsTwice  WQueueAppendsTwice.cfg  action    PROPERTY QueueAppendsOne)
+tlc_test(tlc_witness_select_reorders      WSelectReorders     WSelectReorders.cfg     action    PROPERTY OnlyMoveReorders)
+tlc_test(tlc_witness_append_renames       WAppendRenamesFriend WAppendRenamesFriend.cfg action  PROPERTY FriendsFixed)
 
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).

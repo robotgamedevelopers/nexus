@@ -1,6 +1,6 @@
 // The window's input, headless: the nexus view built over a Prax UI context and Studio Kit with no window and no GPU,
 // fed events as the window would feed them (through takeEvent), with the model checked after each. Frames carry a
-// made-up clock (from 1000 s), never the real one. Text is set in the system's fonts.
+// made-up clock (from 1000 s), never the real one. Text is set in the system's fonts, so these are functional tests.
 
 #include <cstdio>
 #include <string>
@@ -790,6 +790,29 @@ bool within(const Harness& h, PrLayoutNode node, PrRect outer) {
     return true;
 }
 
+// No friends: no tabs and no prompt; the transcript shows the notice (why there are none) and nothing else.
+void noFriendsShowsTheNotice() {
+    Harness h(std::vector<FriendInfo>{});
+    h.view.notice = "No friends to show.\nnova-config listed no enabled friends";
+    h.frame();
+    h.frame();
+    CHECK(h.tabs().empty());
+    CHECK(h.view.prompt == kPrLayoutNodeNone);
+    std::vector<std::string> texts;
+    textsUnder(h, h.view.transcript, texts);
+    CHECK(texts.size() == 1 && texts[0] == h.view.notice);
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 1);
+    PrRect port = h.bounds(h.view.transcript);
+    CHECK(e.size() == 1 && within(h, e[0], port));
+    CHECK(e.size() == 1 && h.height(e[0]) > style::kLinePitch);    // two lines
+    // Keys change nothing and nothing fails: a digit, Enter, a text key.
+    h.commandDigit(1);
+    h.enter();
+    h.type("x");
+    CHECK(h.model.tab_count() == 0);
+}
+
 // A long URL or token with no break opportunity wraps inside the column, the bubble and the prompt.
 void longUnbrokenTextWraps() {
     Harness h;
@@ -896,6 +919,7 @@ int main() {
     promptIsARoundedBoxHoldingThePlus();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
+    noFriendsShowsTheNotice();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {
