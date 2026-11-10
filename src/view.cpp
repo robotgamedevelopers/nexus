@@ -455,8 +455,8 @@ struct Builder {
         }
     }
 
-    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
-    // "terminal".
+    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
+    // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend)
             return tab.name;
@@ -654,10 +654,18 @@ struct Builder {
         PrStringView changed{};
         if (prKitTextChanged(kit, edit, &changed))
             model.set_draft(active, std::string(changed.data, changed.size));
-        if (!composing && send)
-            model.send(active);
-        if (!composing && queue)
-            model.queue(active);
+        if (!composing && send) {
+            if (view.submit)
+                view.submit(active, false);
+            else
+                model.send(active);
+        }
+        if (!composing && queue) {
+            if (view.submit)
+                view.submit(active, true);
+            else
+                model.queue(active);
+        }
         // A friend's draft comes back with the caret at its end.
         if (view.prompted != model.tab(active).id) {
             view.prompted = model.tab(active).id;
@@ -686,7 +694,9 @@ struct Builder {
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
-        // terminal's, and does nothing on a friend's. Claimed like the keys above: a terminal leaves
+        // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the
+        // sprint tab. A terminal that cannot start leaves the tab that showed before. Claimed like the keys above: a
+        // terminal leaves
         // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
         if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
@@ -739,8 +749,16 @@ struct Builder {
         }
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
-        if (model.tab_count() != 0)
+        // The link's state, plainly, where the prompt stands; until the server is reached there is no prompt to type in.
+        if (!view.status.empty() && model.tab_count() != 0)
+            label(footer, view.status, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+        if (model.tab_count() != 0 && view.promptOpen) {
             prompt(footer, composing);
+        } else {
+            view.prompted = ~std::size_t(0);
+            view.prompt = kPrLayoutNodeNone;
+            view.promptBox = kPrLayoutNodeNone;
+        }
     }
 };
 
@@ -786,6 +804,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         view.terminals->setTextScale(textScale(look.textSteps));
     if (view.board != nullptr)
         view.board->setTextScale(textScale(look.textSteps));
+    if (view.scaled)
+        view.scaled();
     return true;
 }
 

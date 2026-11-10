@@ -12,18 +12,26 @@
 // opaque window, where Escape does nothing. --print-window-config prints what the overlay asks of Prax and exits.
 //
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
-// screenshot show one after a command has printed.
+// screenshot show one after a command has printed. The terminal tabs open at quit come back at launch, in their order,
+// each a new login shell in the directory its shell last worked in (tab_order.h).
 //
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
 // (sprint.h) or NEXUS_SPRINT_URL. The window opens on the tab selected when it last quit (tab_order.h), or the sprint
-// tab if that tab is gone, was a terminal, or nothing is saved; --tab N opens tab N, and a screenshot without --tab
-// shows the sprint tab. --backdrop draws the screenshot see-through,
+// tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot without --tab shows the sprint
+// tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes back at launch.
+// --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
+// --server HOST makes the friend tabs the server's: the window runs `nexus-server new` on HOST over ssh and keeps in
+// step with it over mosh's transport (link/client.h). A prompt goes to the server, and the transcripts and queues show
+// what the server holds (sync/mirror.h). Until the server is first heard there is no prompt, only the line that says
+// the window is connecting (or why it could not); afterwards that line shows only while the server is not heard.
+//
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
-//              [--bench FRAMES] [--print-window-config]
+//              [--bench FRAMES] [--print-window-config] [--server HOST]
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +39,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "pr/compress.h"
@@ -56,6 +65,13 @@
 #include "tab_order.h"
 #include "terminals.h"
 #include "view.h"
+
+#if NEXUS_LINK
+#include "link/client.h"
+#include "sync/client.h"
+#include "sync/hub.h"
+#include "sync/mirror.h"
+#endif
 
 namespace {
 
@@ -85,10 +101,74 @@ struct App {
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
+    std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
+    // Kept across launches (tab_order.h); a screenshot keeps nothing. The terminal tabs reopened at launch, by Tab::id,
+    // with the directory each starts in, are opened with the window.
+    bool keep = false;
+    const TabOrderStore* terminalStore = nullptr;
+    const TabOrderStore* selectionStore = nullptr;
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    std::string savedTerminals;     // the text last written to each file, so that only a change is written
+    std::string savedSelection;
+    std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
+#if NEXUS_LINK
+    std::string host;                       // --server
+    std::unique_ptr<link::ClientLink> link;
+    sync::Mirror mirror;
+    std::string promptProblem;              // why the last prompt was not sent, until one is
+#endif
 };
+
+// Saves the selected tab if its text changed: a new selection, or a selected terminal whose place among the terminals
+// changed.
+void keepSelection(App& a) {
+    if (!a.keep)
+        return;
+    std::string text = formatSelectedTab(*a.model);
+    if (text == a.savedSelection)
+        return;
+    a.savedSelection = text;
+    std::string error;
+    if (!saveSelectedTab(*a.selectionStore, *a.model, &error))
+        std::fprintf(stderr, "nexus: %s\n", error.c_str());
+}
+
+// Saves the terminal tabs, each with the directory its shell works in now, if that changed (a terminal opened, closed or
+// moved, or a shell changed directory), and the selection with them. Called at each frame's start and as the window
+// closes, so a quit of any kind leaves them saved.
+void keepTerminals(App& a) {
+    if (!a.keep || a.terminals == nullptr)
+        return;
+    PraxTerminals* terminals = a.terminals.get();
+    std::vector<std::string> directories = terminalDirectories(*a.model,
+        [terminals](std::size_t id) { return terminals->workingDirectory(id); });
+    std::string text = formatTerminals(directories);
+    if (text != a.savedTerminals) {
+        a.savedTerminals = text;
+        std::string error;
+        if (!saveTerminals(*a.terminalStore, directories, &error))
+            std::fprintf(stderr, "nexus: %s\n", error.c_str());
+    }
+    keepSelection(a);
+}
+
+#if NEXUS_LINK
+// Each frame: the server's latest tabs into the model, and the link's state into the line where the prompt stands.
+// The prompt opens once the server is first heard, and stays.
+void pollLink(App& a) {
+    link::ClientLink::Snapshot s;
+    if (a.link == nullptr || !a.link->poll(&s))
+        return;
+    a.mirror.apply(*a.model, s.tabs);
+    if (s.phase == sync::LinkPhase::Connected)
+        a.view.promptOpen = true;
+    const std::string status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
+    a.view.status = status.empty() ? a.promptProblem : status;
+}
+#endif
 
 App& appOf(void* context) {
     return *static_cast<App*>(context);
@@ -145,7 +225,21 @@ bool open(void* context, PrStudioWindow* window) {
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window), a.overlay);
+    a.terminals->machines = a.machines;
     a.view.terminals = a.terminals.get();
+    // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
+    // closes, as one opened with Command-T does.
+    for (const auto& [id, dir] : a.reopen) {
+        if (a.terminals->openIn(id, dir))
+            continue;
+        for (std::size_t i = 0; i < a.model->tab_count(); ++i) {
+            if (a.model->tab(i).id == id) {
+                a.model->close_tab(i);
+                break;
+            }
+        }
+    }
+    a.reopen.clear();
     PraxBoard::Desc board;
     board.kit = prStudioWindowKit(window);
     board.fonts = a.fonts;
@@ -155,6 +249,8 @@ bool open(void* context, PrStudioWindow* window) {
         board.visible = [&a] { return overlayVisible(a); };
     a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
+    a.wakeApp = prStudioWindowApp(window);
+    prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
     return true;
 }
 
@@ -166,6 +262,8 @@ void closeWindow(void* context, PrStudioWindow*) {
         std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
         a.failed = true;
     }
+    keepTerminals(a);
+    a.wakeApp = nullptr;
     a.window = nullptr;
     a.view.board = nullptr;
     a.board.reset();
@@ -182,6 +280,13 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
+    // Each terminal's foreground process, for its tab's label, read where its working directory is read.
+    if (a.terminals != nullptr)
+        a.terminals->observe(f->time);
+    keepTerminals(a);
+#if NEXUS_LINK
+    pollLink(a);
+#endif
     beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
     if (a.board != nullptr)
         a.board->frame(f->time, f->display);
@@ -486,8 +591,11 @@ int main(int argc, char** argv) {
     bool windowed = false;
     bool printConfig = false;
     unsigned bench = 0;
+    const char* server = nullptr;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--windowed") == 0) {
+        if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
+            server = argv[++i];
+        } else if (std::strcmp(argv[i], "--windowed") == 0) {
             windowed = true;
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             shot = argv[++i];
@@ -506,9 +614,21 @@ int main(int argc, char** argv) {
             printConfig = true;
         } else {
             std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
-                "[--backdrop]] [--bench FRAMES] [--print-window-config]\n");
+                "[--backdrop]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
             return 2;
         }
+    }
+    if (server != nullptr) {
+#if NEXUS_LINK
+        if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
+            std::fprintf(stderr, "nexus: --server runs the live window only, without --screenshot, --demo, "
+                "--demo-terminal, --bench or --print-window-config\n");
+            return 2;
+        }
+#else
+        std::fprintf(stderr, "nexus: this build has no --server (it was configured with -DNEXUS_LINK=OFF)\n");
+        return 2;
+#endif
     }
 
     if (printConfig) {
@@ -530,6 +650,15 @@ int main(int argc, char** argv) {
         std::printf("nexus: %zu friends from nova-config\n", friends.friends.size());
     else
         std::fprintf(stderr, "nexus: %s\n", friends.error.c_str());
+    // The fleet's machines, by which a terminal tab in ssh is named. A screenshot runs no ssh.
+    MachineList machines;
+    if (shot == nullptr) {
+        machines = loadMachines();
+        if (machines.error.empty())
+            std::printf("nexus: %zu machines from nova-config\n", machines.machines.size());
+        else
+            std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
+    }
     // The friend tabs in the order the person last left them (tab_order.h).
     static const TabOrderStore order = fileTabOrderStore();
     std::string orderWarning;
@@ -538,10 +667,22 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
     // The sprint tab first, then the friends.
     static Model model(friends.friends, true);
-    // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
-    // is (tab_order.h), or the sprint tab. A screenshot without --tab shows the sprint tab, whatever was saved.
-    static const TabOrderStore selection = fileSelectedTabStore();
+    // The terminal tabs open when nexus last quit, after the friends in the order they stood, each to start a new shell
+    // in its directory when the window opens (tab_order.h). A screenshot reopens none.
     const bool live = shot == nullptr;
+    static const TabOrderStore terminalStore = fileTerminalsStore();
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    if (live) {
+        std::string terminalsWarning;
+        for (const std::string& dir : loadTerminals(terminalStore, &terminalsWarning))
+            reopen.emplace_back(model.add_terminal(), dir);
+        if (!terminalsWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+    }
+    // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
+    // is or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A screenshot without
+    // --tab shows the sprint tab, whatever was saved.
+    static const TabOrderStore selection = fileSelectedTabStore();
     if (!tabGiven && live) {
         std::string selectionWarning;
         tab = loadSelectedTab(selection, model, &selectionWarning) + 1;
@@ -571,16 +712,58 @@ int main(int argc, char** argv) {
         if (!saveTabOrder(order, model, &error))
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
     };
-    // Each change of the selected tab is saved as it happens, so a quit of any kind leaves it saved. A screenshot saves
-    // nothing.
+    // Each change of the selected tab, and of the terminal tabs, is saved as it happens, so a quit of any kind leaves
+    // them saved. A screenshot saves nothing.
     if (live) {
-        a.view.selected = [] {
+        a.keep = true;
+        a.terminalStore = &terminalStore;
+        a.selectionStore = &selection;
+        a.reopen = std::move(reopen);
+        a.view.selected = [] { keepSelection(a); };
+    }
+    // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
+    // screenshot draws at the default scale and saves nothing.
+    static const TabOrderStore scale = fileTextScaleStore();
+    if (live) {
+        std::string scaleWarning;
+        a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
+        if (!scaleWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", scaleWarning.c_str());
+        a.view.scaled = [] {
             std::string error;
-            if (!saveSelectedTab(selection, model, &error))
+            if (!saveTextScale(scale, a.look.textSteps, &error))
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
+#if NEXUS_LINK
+    if (server != nullptr) {
+        a.host = server;
+        a.view.promptOpen = false;
+        a.view.status = sync::linkStatus(sync::LinkPhase::Connecting, a.host, 0, "");
+        a.view.submit = [](std::size_t i, bool queue) {
+            std::string text;
+            std::string why;
+            if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
+                a.promptProblem.clear();
+                a.link->send(queue ? sync::ActionKind::Queue : sync::ActionKind::Send, model.tab(i).name,
+                    std::move(text));
+            } else if (!why.empty()) {
+                a.promptProblem = why;
+                if (a.view.status.empty())
+                    a.view.status = why;
+            }
+        };
+        link::ClientLink::Options options;
+        options.bootstrap.host = a.host;
+        options.wake = [] {
+            if (PrApp* app = a.wakeApp.load())
+                prAppWake(app);
+        };
+        a.link = std::make_unique<link::ClientLink>(std::move(options));
+    }
+#endif
     a.bench = bench;
+    a.machines = std::move(machines.machines);
     a.demoTerminal = demoTerminal;
     a.backdrop = backdrop && shot != nullptr;
     if (a.backdrop)
@@ -609,6 +792,12 @@ int main(int argc, char** argv) {
             .backdrop = a.overlay ? overlayBackdrop() : PrAppWindowBackdrop(PrAppWindowBackdrop_Opaque),
             .hidden = a.overlay,
             .placement = PrAppWindowPlacement_Center,
+            // Frames come from Prax's display link at the display's own rate (120 Hz on a ProMotion or XDR display)
+            // and only when one is asked for, so the idle overlay draws nothing. The swap chain stays SDR: the window,
+            // the board and the terminals draw only sRGB colours at or below SDR white, and Prax's HDR path presents
+            // every pixel opaque (lib/draw/src/draw_display.slang convertPixel), which would cover the screen behind
+            // the see-through overlay. HDR waits on that (docs/roadmap.sexp "hdr").
+            .intent = PrGpuSwapChainIntent_Sdr,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
@@ -635,6 +824,9 @@ int main(int argc, char** argv) {
                 int(status));
         if (status != PrStatus_Ok || a.failed)
             code = 1;
+#if NEXUS_LINK
+        a.link.reset();     // mosh's shutdown, so the server ends this session
+#endif
         printStats(a.stats);
     }
     prFontSetDestroy(a.fonts);

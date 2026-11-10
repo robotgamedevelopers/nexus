@@ -77,13 +77,21 @@ jobs:
           else
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
+          # The link's functional tests reach this machine over ssh by its loopback and, when it is on the tailnet, by
+          # its tailnet address too (tests/link/CMakeLists.txt).
+          tailnet=""
+          if command -v tailscale >/dev/null; then
+            tailnet=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+          fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
-            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto"
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
+            "-DNEXUS_E2E_TAILNET=$tailnet"
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
         run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
-      # The headless window (system fonts), real child processes and a real file: not unit tests.
+      # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
+      # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       - name: Functional tests
         run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure
       - name: ccache hits in this job
@@ -93,7 +101,9 @@ jobs:
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
   # the first report: the unit tests, and the trace walks (the window's on every friend count, the overlay's) with every
-  # fault (no TLC).
+  # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
+  # and journal_walk). Configured without the link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs
+  # do not use, so any macOS runner will do.
   sanitizers:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
@@ -113,7 +123,7 @@ jobs:
           echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
       - name: Build the model checks
@@ -137,8 +147,27 @@ jobs:
             done
             build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
           done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close; do
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
+          done
+          build/tests/sync/sync_test
+          for windows in 1 2 3 4; do
+            for seed in 1 2 3 4; do
+              build/tests/sync/link_walk "$seed" 1000 "$windows" walks/link.tla
+            done
+          done
+          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
+            build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
+          done
+          # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
+          # journal's walks
+          build/tests/store/store_test
+          build/tests/store/durable_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
 
   model:
@@ -184,13 +213,14 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
       # Only the model and its check programs: no app and no Prax shaders, so any macOS runner will do.
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
-      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The two largest instances, label
-      # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
+      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
+      # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure

@@ -12,7 +12,7 @@ The rules for an AI working in this repository. Each one holds on every change.
 ## Tests
 
 - A unit test uses no real time, no sockets, no network and no outside services. It takes time as an argument and fakes the transport. Anything that needs the real thing is a functional test.
-- `ctest -L unit` runs the unit tests; `ctest -L functional` the functional tests (the headless window, which sets text in the system's fonts, real processes, real files); `ctest -L model` the TLA+ models and their trace checks. CI runs all three on every pull request; the two largest TLC instances (label `model_nightly`) run in the nightly workflow, and every property is still checked on every pull request on the smaller ones.
+- `ctest -L unit` runs the unit tests; `ctest -L functional` the functional tests (the headless window, which sets text in the system's fonts, real processes, real files, and the link end to end: `nexus-server` over `ssh localhost` and mosh's transport over real UDP, never ssh to another machine); `ctest -L model` the TLA+ models and their trace checks. CI runs all three on every pull request; the largest TLC instances (label `model_nightly`: the window model's three largest, the link's and the store's largest) run in the nightly workflow, and every property is still checked on every pull request on the smaller ones.
 - Build with every core and run tests one job per core: `-j "$(sysctl -n hw.ncpu)"`.
 
 ## Models

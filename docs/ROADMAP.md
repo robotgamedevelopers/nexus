@@ -9,7 +9,7 @@
 | feature | done |
 |---|:---:|
 | 1. Window: tabs, transcript and prompt draw and take input (in progress) | ❌ |
-| 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice | ❌ |
+| 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress) | ❌ |
 | 3. Friends: each tab is a real conversation with one friend over nova-bus, driven by the server; no message lost or shown twice | ❌ |
 | 4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end | ❌ |
 | 5. Fleet: see the machines and what runs on each | ❌ |
@@ -32,8 +32,10 @@
 | Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
 | The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
+| The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store) (later) | ❌ |
 | Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt (later) | ❌ |
-| complete | 25% |
+| HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
+| complete | 20% |
 
 [Source data](roadmap.sexp)
 

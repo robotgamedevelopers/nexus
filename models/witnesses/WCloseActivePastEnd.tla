@@ -7,6 +7,7 @@ EXTENDS MCWindow
 BrokenClose(i) ==
     IF i \in Tabs /\ TabKind(At(i)) = "Terminal"
     THEN /\ order' = Removed(order, i)
+         /\ history' = Forget(history, At(i))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, active, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)

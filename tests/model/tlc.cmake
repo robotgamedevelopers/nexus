@@ -5,19 +5,25 @@
 #   MODELS      the models/ directory of the checkout (its *.tla and witnesses/*.tla are copied)
 #   MODULE      the module TLC checks (e.g. MCWindow)
 #   CFG         the configuration file, relative to MODELS (e.g. MCWindow.cfg or witnesses/WSendToActive.cfg)
-#   EXPECT      pass | invariant | action | temporal | deadlock
-#   PROPERTY    with invariant or action: the property whose violation is expected (temporal: TLC does not name it)
-#   WALK        optional: the trace_walk program; it is run first and writes WindowTraceData.tla into WORK
-#   DATA        optional, with WALK: the walk is another program, run as `<seed> <steps> [--faulty-<FAULTY>] <WORK/DATA>`
-#               (overlay_walk, which writes OverlayTraceData.tla); FRIENDS and NOSPRINT do not apply
-#   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends
+#   EXPECT      pass | invariant | action | liveness | deadlock
+#   PROPERTY    with invariant or action: the property whose violation is expected (TLC does not name the temporal
+#               property it found violated, so with liveness the cfg names the one temporal property it checks)
+#   WALK        optional: the walk program (trace_walk, or label_walk); it is run first and writes DATA.tla into WORK
+#   DATA        with WALK: the module the walk writes, WindowTraceData unless given
+#   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends (label_walk: of remotes)
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
 #               move the one whose move_tab leaves active behind, queue-cap the one whose queue drops its oldest past
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
 #               text just sent appends nothing, close the one whose close_tab removes a friend, sprint-move the one
 #               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
-#               sprint tab
+#               sprint tab, close-fallback the one whose close of the active tab ignores the selection history;
+#               for label_walk, before the one that takes the label to return to at a session's first observation
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
+#   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
+#               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
+#               mirror, tail
+#   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
+#               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
@@ -57,16 +63,31 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED WALK AND NOT "${WALK}" STREQUAL "" AND DEFINED DATA AND NOT "${DATA}" STREQUAL "")
-    set(walk_args "${SEED}" "${STEPS}")
-    if(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        list(APPEND walk_args --faulty-${FAULTY})
+if(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")
+    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror or tail")
     endif()
-    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${DATA}"
+    execute_process(COMMAND "${LINKWALK}" ${walk_args} "${WORK}/LinkTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
-        message(FATAL_ERROR "${WALK} failed (${walk_rc}): ${walk_out}")
+        message(FATAL_ERROR "link_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "hide-unkeyed" OR FAULTY STREQUAL "hotkey-hides")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not hide-unkeyed or hotkey-hides")
+    endif()
+    execute_process(COMMAND "${OVERLAYWALK}" ${walk_args} "${WORK}/OverlayTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
@@ -88,14 +109,21 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-sprint-move)
     elseif(FAULTY STREQUAL "sprint-close")
         list(APPEND walk_args --faulty-sprint-close)
+    elseif(FAULTY STREQUAL "close-fallback")
+        list(APPEND walk_args --faulty-close-fallback)
+    elseif(FAULTY STREQUAL "before")
+        list(APPEND walk_args --faulty-before)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move or sprint-close")
+            "close, sprint-move, sprint-close, close-fallback or before")
     endif()
     if(NOSPRINT)
         list(APPEND walk_args --no-sprint)
     endif()
-    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/WindowTraceData.tla"
+    if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
+        set(DATA WindowTraceData)
+    endif()
+    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${DATA}.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
@@ -144,7 +172,7 @@ elseif(EXPECT STREQUAL "action")
     if(NOT out MATCHES "Action property ${PROPERTY} [^\n]*is violated")
         message(FATAL_ERROR "expected action property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
     endif()
-elseif(EXPECT STREQUAL "temporal")
+elseif(EXPECT STREQUAL "liveness")
     if(NOT out MATCHES "Temporal properties were violated")
         message(FATAL_ERROR "expected a temporal property to be violated, TLC exit ${rc}:\n${out}")
     endif()
@@ -153,6 +181,6 @@ elseif(EXPECT STREQUAL "deadlock")
         message(FATAL_ERROR "expected a deadlock, TLC exit ${rc}:\n${out}")
     endif()
 else()
-    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action, temporal or deadlock")
+    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action, liveness or deadlock")
 endif()
 message("${MODULE} ${cfg_name}: as expected (${EXPECT} ${PROPERTY})")

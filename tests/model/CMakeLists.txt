@@ -2,7 +2,7 @@
 #   unit           model_test: the model's behaviour and edges, logic only
 #   model          TLC: Window.tla on four instances, every reversed witness rejected, code traces checked against the
 #                  spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
-#   model_nightly  TLC: Window.tla on the two largest instances (the nightly workflow)
+#   model_nightly  TLC: Window.tla on the three largest instances (the nightly workflow)
 
 set(warnings -Wall -Wextra -Wpedantic -Werror)
 
@@ -14,6 +14,11 @@ add_executable(trace_walk trace_walk.cpp)
 target_link_libraries(trace_walk PRIVATE nexus_model)
 target_compile_options(trace_walk PRIVATE ${warnings})
 
+# TabLabel's walk (src/remote.h), for TabLabelTrace.tla.
+add_executable(label_walk label_walk.cpp)
+target_link_libraries(label_walk PRIVATE nexus_window_logic)
+target_compile_options(label_walk PRIVATE ${warnings})
+
 # The overlay's rules (src/overlay.h): their unit tests, and the walk whose traces OverlayTrace.tla checks.
 add_executable(overlay_test overlay_test.cpp)
 target_link_libraries(overlay_test PRIVATE nexus_model)
@@ -24,26 +29,29 @@ target_link_libraries(overlay_walk PRIVATE nexus_model)
 target_compile_options(overlay_walk PRIVATE ${warnings})
 
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk overlay_test overlay_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk label_walk overlay_test overlay_walk)
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
-set(models_dir "${PROJECT_SOURCE_DIR}/models")
-set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
-
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [WORKERS w] [NIGHTLY] [OVERLAY])
-# OVERLAY: SEED and STEPS run overlay_walk (writing OverlayTraceData.tla) in place of trace_walk; FAULTY is its
-# --faulty-<fault>.
+#          [SEED s STEPS n WINDOWS w LINKWALK] [WORKERS w] [NIGHTLY] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
+# With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
+# (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
+# With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
+# With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
+# (hide-unkeyed, hotkey-hides).
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;OVERLAY" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS"
+        "" ${ARGN})
+    set(models_dir "${PROJECT_SOURCE_DIR}/models")
+    set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
         set(T_WORKERS 2)
     endif()
@@ -59,9 +67,13 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(DEFINED T_SEED AND T_OVERLAY)
-        list(APPEND defs -DWALK=$<TARGET_FILE:overlay_walk> -DDATA=OverlayTraceData.tla -DSEED=${T_SEED}
-             -DSTEPS=${T_STEPS})
+    if(T_LINKWALK)
+        list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
+    elseif(DEFINED T_SEED AND T_OVERLAY)
+        list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(DEFINED T_SEED AND T_LABEL)
+        list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
+             -DFRIENDS=${T_FRIENDS})
     elseif(DEFINED T_SEED)
         list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFRIENDS=${T_FRIENDS})
     endif()
@@ -77,16 +89,19 @@ endfunction()
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
-tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass WORKERS 8)
+tlc_test(tlc_spec_sprint_terminals MCWindow MCWindowSprint.cfg pass WORKERS 8)
 tlc_test(tlc_spec_no_friends MCWindow MCWindowEmpty.cfg pass)
 tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass WORKERS 8)
-tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass)
-# Nightly: the two largest instances (three friends in all orders, 104,976 states; entries and queues of two, 142,884).
+tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass WORKERS 8)
+# Nightly: the three largest instances. With the selection history, every order of it a state of its own: the sprint tab,
+# two friends, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
+# without entries, MCWindowSprint.cfg, 8,910, runs above); three friends in all orders, 384,912 (27 s); entries and
+# queues of two, 214,326 (12 s).
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
-# runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers: 8 s in a login
-# session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these two do not fit a 60 s cap
-# beside the other tests (105 s each at the utility QoS beside them). Even apart they do not: the two together at the
-# utility QoS took 65 s each. 300 s still stops a state space that runs away.
+# runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers, before the history:
+# 8 s in a login session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these do not fit a
+# 60 s cap. 300 s still stops a state space that runs away.
+tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass WORKERS 8 NIGHTLY)
 
@@ -137,6 +152,13 @@ tlc_test(tlc_witness_move_before_sprint   WMoveBeforeSprint   WMoveBeforeSprint.
 tlc_test(tlc_witness_move_sprint          WMoveSprint         WMoveSprint.cfg         action    PROPERTY SprintNeverMoves)
 tlc_test(tlc_witness_close_sprint         WCloseSprint        WCloseSprint.cfg        action    PROPERTY SprintNeverCloses)
 tlc_test(tlc_witness_send_to_sprint       WSendToSprint       WSendToSprint.cfg       action    PROPERTY SprintTakesNoText)
+# The selection history: closing the active tab goes back to the tab selected before it.
+tlc_test(tlc_witness_close_old_rule       WCloseOldRule       WCloseOldRule.cfg       action    PROPERTY CloseActiveRule)
+tlc_test(tlc_witness_close_keeps_history  WCloseKeepsHistory  WCloseKeepsHistory.cfg  invariant PROPERTY HistoryOpen)
+tlc_test(tlc_witness_close_forgets_all    WCloseForgetsAll    WCloseForgetsAll.cfg    action    PROPERTY CloseForgets)
+tlc_test(tlc_witness_select_keeps_place   WSelectKeepsPlace   WSelectKeepsPlace.cfg   action    PROPERTY SelectMovesToEnd)
+tlc_test(tlc_witness_select_appends_again WSelectAppendsAgain WSelectAppendsAgain.cfg invariant PROPERTY HistoryOnce)
+tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistory.cfg invariant PROPERTY HistoryEndsActive)
 
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
@@ -172,6 +194,23 @@ tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invar
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-move)
 tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-close)
+# And with closing the active tab ignoring the selection history.
+tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 FAULTY close-fallback)
+
+# A terminal tab's label across ssh sessions (src/remote.h TabLabel): TabLabel.tla, its reversed witnesses, and the code's
+# random walks checked against it, with a faulty walk that must be rejected.
+tlc_test(tlc_label_spec TabLabel TabLabel.cfg pass)
+tlc_test(tlc_witness_label_no_mask         WLabelNoMask        WLabelNoMask.cfg        action PROPERTY EndRestores)
+tlc_test(tlc_witness_label_mask_sticks     WLabelMaskSticks    WLabelMaskSticks.cfg    action PROPERTY MaskEnds)
+tlc_test(tlc_witness_label_before_at_start WLabelBeforeAtStart WLabelBeforeAtStart.cfg action PROPERTY BeforeIsOwn)
+tlc_test(tlc_witness_label_no_tail         WLabelNoTail        WLabelNoTail.cfg        action PROPERTY TailRestores)
+foreach(seed 1 2 3)
+    tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
+endforeach()
+tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
+tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
+         LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
 tlc_test(tlc_overlay_spec Overlay Overlay.cfg pass)
@@ -195,7 +234,7 @@ tlc_test(tlc_overlay_witness_loss_kept         WOverlayLossKept         WOverlay
          PROPERTY LossHides)
 tlc_test(tlc_overlay_witness_refused_kept      WOverlayRefusedKept      WOverlayRefusedKept.cfg      action
          PROPERTY RefusedShowHides)
-tlc_test(tlc_overlay_witness_stranded          WOverlayStranded         WOverlayStranded.cfg         temporal)
+tlc_test(tlc_overlay_witness_stranded          WOverlayStranded         WOverlayStranded.cfg         liveness)
 tlc_test(tlc_overlay_witness_held_after_open   WOverlayHeldAfterOpen    WOverlayHeldAfterOpen.cfg    action
          PROPERTY HotkeyShows)
 foreach(seed 1 2 3)

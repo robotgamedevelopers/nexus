@@ -8,6 +8,7 @@ BrokenSelect(i) ==
     IF i \in Tabs
     THEN /\ order' = Moved(order, i, 0)
          /\ active' = 0
+         /\ history' = Touch(history, At(i))
          /\ last' = Did("select", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, transcript, draft, queue>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
