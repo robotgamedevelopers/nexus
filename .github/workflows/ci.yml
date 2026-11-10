@@ -1,5 +1,5 @@
-# CI for nexus: the build with its unit tests, and the TLA+ models with their trace checks, as two jobs in
-# parallel on the fleet's macOS runners (never GitHub-hosted). Every pull request runs it, whatever its base,
+# CI for nexus: the build with its unit and functional tests, the model under the sanitizers, and the TLA+ models
+# with their trace checks, as three jobs in parallel on the fleet's macOS runners (never GitHub-hosted). Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -47,6 +47,39 @@ jobs:
       # The headless window (system fonts), real child processes and a real file: not unit tests.
       - name: Functional tests
         run: ctest --test-dir build -L functional -j4 --output-on-failure
+
+  # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
+  # the first report: the unit tests, and the trace walks on every friend count and every fault (no TLC).
+  sanitizers:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, macOS, ARM64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Configure (Debug, ASan and UBSan)
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build the model checks
+        run: cmake --build build -j4 --target model_checks
+      - name: Unit tests and trace walks under the sanitizers
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/tests/model/model_test
+          mkdir -p walks
+          for friends in 0 1 2 3; do
+            for seed in 1 2 3 4 5 6 7 8; do
+              build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
+            done
+          done
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup; do
+            build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
+          done
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
