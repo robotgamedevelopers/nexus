@@ -1,8 +1,8 @@
-// Unit tests of the sprint board's held Up and Down (src/scroll_hold.h): a press moves the page on the first frame and
-// every frame after at a steady speed, key repeats change nothing, a release or the window losing the keyboard stops it,
-// both keys at once stand still and a reversal follows the key left down. A reversed check shows that a scroll driven by
-// key repeats, as before (src/scroll_glide.h), stands still between the press's glide and the first repeat. Time is an
-// argument: no clock, no OS, no window.
+// Unit tests of the sprint board's held Up and Down (src/scroll_hold.h): a press moves the page on the first frame
+// and every frame after at a steady speed, key repeats change nothing, a release or the window losing the keyboard
+// stops it, both keys at once stand still and a reversal follows the key left down. A reversed check shows that a
+// scroll driven by key repeats, as before (src/scroll_glide.h), stands still between the press's glide and the first
+// repeat. Time is an argument: no clock, no OS, no window.
 
 #include <cmath>
 #include <cstdio>

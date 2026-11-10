@@ -43,8 +43,8 @@ public:
         PrKit* kit = nullptr;                   // the window's kit, whose tree shows the page
         PrFontSet* fonts = nullptr;             // the window's fonts; the page's set is a child with aliases
         PrApp* app = nullptr;                   // woken when the page has work, and when the address is found; may be null
-        PrAppWindow* window = nullptr;          // whose clipboard the page's text controls use, and whose keyboard a held
-                                            // key needs; may be null
+        // Whose clipboard the page's text controls use, and whose keyboard a held key needs; may be null.
+        PrAppWindow* window = nullptr;
         // The board's address. Empty: `find` on a thread of its own (findSprintBoard if unset).
         std::string url;
         std::function<SprintBoardAddress()> find;

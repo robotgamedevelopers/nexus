@@ -2,9 +2,9 @@
 // frame after the press until the release. The key's down state drives the scroll, not the system's key repeats: there
 // is no wait for the first repeat, and a repeat changes nothing. A tap scrolls as far as the key was down for.
 //
-// The state is which of the two keys is down. Up alone scrolls up, Down alone scrolls down, both or neither stand still;
-// so a reversal follows the key held last, once the other is let go. A change of direction starts a short ease-in, from
-// half the speed to the whole over kHoldEaseSeconds, so the page does not jolt. The window losing the keyboard, or the
+// The state is which of the two keys is down. Up alone scrolls up, Down alone scrolls down, both or neither stand
+// still; so a reversal follows the key left down once the other is let go. A change of direction starts a short
+// ease-in, from half the speed to the whole over kHoldEaseSeconds, so the page does not jolt. The window losing the keyboard, or the
 // sprint tab leaving the screen, lets go of both. models/scroll/ScrollHold.tla is this state machine, and
 // tests/window/hold_walk.cpp binds this code to it by trace checking.
 //
@@ -16,8 +16,8 @@
 namespace nexus {
 
 // The speed of a held key, in the window's px per second (the board divides it by the text scale, as it does a
-// trackpad's pixels, so the page moves as fast on screen at every scale). Unmeasured: a reading of how fast a held arrow
-// moves a page in macOS's own apps, to be tuned by eye.
+// trackpad's pixels, so the page moves as fast on screen at every scale). Unmeasured: a first guess, to be tuned by
+// eye.
 constexpr double kHoldSpeed = 900;
 
 // The ease-in at a change of direction: the speed starts at kHoldEaseStart of kHoldSpeed and reaches all of it after

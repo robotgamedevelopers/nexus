@@ -524,7 +524,8 @@ bool PraxBoard::event(const PrAppEvent& e) {
     PrAppEvent copy = prAppEventPlaced(&e, PrVec2{pane_.left, pane_.top}, zoom_);
     HoldKey key{};
     const bool arrow = arrowKey(e, &key);
-    const bool plain = (e.modifiers & (PrAppModifierFlag_Super | PrAppModifierFlag_Control | PrAppModifierFlag_Alt)) == 0;
+    const PrAppModifierFlags chords = PrAppModifierFlag_Super | PrAppModifierFlag_Control | PrAppModifierFlag_Alt;
+    const bool plain = (e.modifiers & chords) == 0;
     if (arrow && e.kind == PrAppEventKind_KeyDown && e.keyboard.repeat && isHeld(hold_, key)) {
         // A repeat of a held key: the key's down state drives the scroll, and the page does not see the repeat.
         hold_ = holdRepeat(hold_, key);
@@ -579,11 +580,11 @@ bool PraxBoard::isHeld(const Hold& h, HoldKey key) {
     return key == HoldKey::Up ? h.up : h.down;
 }
 
-// A press of Up or Down. Prax's view takes it as it would (its keydown, a form control's use of the key, a listener that
-// cancels it), from a place where the page's own scroll has room to move the key's way. If that moved the page's scroll,
-// the page scrolls by its keys: the scroll goes back to where the page shows, and the hold drives it from the next
-// frame. If not (a form control took the key, a listener cancelled it, or the page cannot scroll), the key does what
-// Prax made of it, and no hold starts.
+// A press of Up or Down. Prax's view takes it as it would (its keydown, a form control's use of the key, a listener
+// that cancels it), from a place where the page's own scroll has room to move the key's way. If that moved the page's
+// scroll, the page scrolls by its keys: the scroll goes back to where the page shows, and the hold drives it from the
+// next frame. If not (a form control took the key, a listener cancelled it, or the page cannot scroll), the key does
+// what Prax made of it, and no hold starts.
 void PraxBoard::pressHeld(const PrAppEvent& e, HoldKey key) {
     PrDomElement* s = scroller();
     if (s == nullptr) {
