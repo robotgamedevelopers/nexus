@@ -74,7 +74,7 @@ struct View {
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
-    std::function<void()> hide;                 // Escape: hides the overlay (platform_mac.h hideOverlay); unset when
+    std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing
     std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position

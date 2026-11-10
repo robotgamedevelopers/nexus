@@ -19,14 +19,25 @@ add_executable(label_walk label_walk.cpp)
 target_link_libraries(label_walk PRIVATE nexus_window_logic)
 target_compile_options(label_walk PRIVATE ${warnings})
 
+# The overlay's rules (src/overlay.h): their unit tests, and the walk whose traces OverlayTrace.tla checks.
+add_executable(overlay_test overlay_test.cpp)
+target_link_libraries(overlay_test PRIVATE nexus_model)
+target_compile_options(overlay_test PRIVATE ${warnings})
+
+add_executable(overlay_walk overlay_walk.cpp)
+target_link_libraries(overlay_walk PRIVATE nexus_model)
+target_compile_options(overlay_walk PRIVATE ${warnings})
+
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk label_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk label_walk overlay_test overlay_walk)
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
+add_test(NAME overlay_unit COMMAND overlay_test)
+set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [SEED s STEPS n WINDOWS w LINKWALK] [WORKERS w] [NIGHTLY] [LABEL])
+#          [SEED s STEPS n WINDOWS w LINKWALK] [WORKERS w] [NIGHTLY] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
@@ -34,9 +45,11 @@ set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
+# With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
+# (hide-unkeyed, hotkey-hides).
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" ""
-        ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS"
+        "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -56,6 +69,8 @@ function(tlc_test name module cfg expect)
     endif()
     if(T_LINKWALK)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
+    elseif(DEFINED T_SEED AND T_OVERLAY)
+        list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
         list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
              -DFRIENDS=${T_FRIENDS})
@@ -196,3 +211,36 @@ endforeach()
 tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
 tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
          LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+
+# The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
+tlc_test(tlc_overlay_spec Overlay Overlay.cfg pass)
+tlc_test(tlc_overlay_witness_act_name          WOverlayActName          WOverlayActName.cfg          invariant
+         PROPERTY TypeOK)
+tlc_test(tlc_overlay_witness_escape_keeps_keyed WOverlayEscapeKeepsKeyed WOverlayEscapeKeepsKeyed.cfg invariant
+         PROPERTY KeyedOnlyVisible)
+tlc_test(tlc_overlay_witness_show_unchecked    WOverlayShowUnchecked    WOverlayShowUnchecked.cfg    invariant
+         PROPERTY UnkeyedIsChecked)
+tlc_test(tlc_overlay_witness_hotkey_hides_unkeyed WOverlayHotkeyHidesUnkeyed WOverlayHotkeyHidesUnkeyed.cfg action
+         PROPERTY HotkeyShows)
+tlc_test(tlc_overlay_witness_hotkey_only_shows WOverlayHotkeyOnlyShows  WOverlayHotkeyOnlyShows.cfg  action
+         PROPERTY HotkeyHides)
+tlc_test(tlc_overlay_witness_escape_ignored    WOverlayEscapeIgnored    WOverlayEscapeIgnored.cfg    action
+         PROPERTY EscapeHides)
+tlc_test(tlc_overlay_witness_hide_while_active WOverlayHideWhileActive  WOverlayHideWhileActive.cfg  action
+         PROPERTY NoHideWhileActive)
+tlc_test(tlc_overlay_witness_hide_before_key   WOverlayHideBeforeKey    WOverlayHideBeforeKey.cfg    action
+         PROPERTY NoHideBeforeKey)
+tlc_test(tlc_overlay_witness_loss_kept         WOverlayLossKept         WOverlayLossKept.cfg         action
+         PROPERTY LossHides)
+tlc_test(tlc_overlay_witness_refused_kept      WOverlayRefusedKept      WOverlayRefusedKept.cfg      action
+         PROPERTY RefusedShowHides)
+tlc_test(tlc_overlay_witness_stranded          WOverlayStranded         WOverlayStranded.cfg         liveness)
+tlc_test(tlc_overlay_witness_held_after_open   WOverlayHeldAfterOpen    WOverlayHeldAfterOpen.cfg    action
+         PROPERTY HotkeyShows)
+foreach(seed 1 2 3)
+    tlc_test(tlc_overlay_trace_seed_${seed} OverlayTrace OverlayTrace.cfg pass OVERLAY SEED ${seed} STEPS 1000)
+endforeach()
+tlc_test(tlc_overlay_trace_faulty_hide_unkeyed_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
+         OVERLAY SEED 1 STEPS 1000 FAULTY hide-unkeyed)
+tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
+         OVERLAY SEED 1 STEPS 1000 FAULTY hotkey-hides)
