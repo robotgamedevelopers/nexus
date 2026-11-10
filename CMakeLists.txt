@@ -58,9 +58,10 @@ target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
-# The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
-# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
-add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/tab_order.cpp)
+# The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
+# them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
+# which events go to it, the script nexus adds to it).
+add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
@@ -73,7 +74,7 @@ target_link_libraries(nexus_view PUBLIC nexus_window_logic
     prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
 # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
-add_library(nexus_terminals STATIC src/terminals.cpp)
+add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
 target_include_directories(nexus_terminals PUBLIC src)
 target_compile_options(nexus_terminals PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_terminals PUBLIC nexus_view prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)

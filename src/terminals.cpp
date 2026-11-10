@@ -8,6 +8,7 @@
 #include "pr/raw_string.h"
 #include "pr/vterm.h"
 
+#include "foreground.h"
 #include "style.h"
 
 namespace nexus {
@@ -43,6 +44,18 @@ void PraxTerminals::closeAll() {
     for (auto& [id, terminal] : terminals_)
         prTerminalDestroy(terminal);
     terminals_.clear();
+    shells_.clear();
+    labels_.clear();
+}
+
+void PraxTerminals::observe(double time) {
+    for (auto& [id, terminal] : terminals_) {
+        auto shell = shells_.find(id);
+        std::string remote;
+        if (shell != shells_.end())
+            remote = remoteLabel(sshDestination(foregroundArguments(shell->second)), machines);
+        labels_[id].observe(remote, programTitle(id), time);
+    }
 }
 
 PrTerminal* PraxTerminals::find(std::size_t id) const {
@@ -84,6 +97,8 @@ bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
     desc.scrollback = kPrTerminalScrollbackDefault;
     desc.notificationTag = id + 1;
     PrTerminal* terminal = nullptr;
+    // The shell is the child that prTerminalCreate starts (foreground.h): it returns once the shell has started.
+    const std::vector<int> before = childProcesses();
     PrStatus status = prTerminalCreate(&desc, &terminal);
     prRawStringReset(&home);
     if (status != PrStatus_Ok || terminal == nullptr) {
@@ -92,6 +107,13 @@ bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
         return false;
     }
     terminals_[id] = terminal;
+    labels_[id] = TabLabel();
+    const int shell = startedShell(before, childProcesses());
+    if (shell > 0)
+        shells_[id] = shell;
+    else
+        std::fprintf(stderr, "nexus: could not find the shell of a new terminal tab among nexus's child processes; the "
+            "tab keeps its title while ssh runs in it\n");
     applyBackground(terminal);
     prTerminalFocus(terminal);
     return true;
@@ -103,6 +125,8 @@ void PraxTerminals::close(std::size_t id) {
         return;
     prTerminalDestroy(it->second);
     terminals_.erase(it);
+    shells_.erase(id);
+    labels_.erase(id);
 }
 
 // Sets the screen's background colour to the window's if it is not, under the screen's lock. Returns true if it was
@@ -147,12 +171,18 @@ bool PraxTerminals::ended(std::size_t id) {
     return info.exited && info.outputEnded;
 }
 
-std::string PraxTerminals::title(std::size_t id) {
+std::string PraxTerminals::programTitle(std::size_t id) {
     PrTerminal* terminal = find(id);
     if (terminal == nullptr)
         return {};
     PrStringView t = prTerminalTitle(terminal);
     return std::string(t.data != nullptr ? t.data : "", t.size);
+}
+
+std::string PraxTerminals::title(std::size_t id) {
+    const std::string title = programTitle(id);
+    auto label = labels_.find(id);
+    return label != labels_.end() ? label->second.label(title) : title;
 }
 
 void PraxTerminals::setTextScale(float k) {

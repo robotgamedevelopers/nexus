@@ -93,6 +93,7 @@ struct App {
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
+    std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
@@ -182,6 +183,7 @@ bool open(void* context, PrStudioWindow* window) {
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window), a.overlay);
+    a.terminals->machines = a.machines;
     a.view.terminals = a.terminals.get();
     // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
     // closes, as one opened with Command-T does.
@@ -233,6 +235,9 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
+    // Each terminal's foreground process, for its tab's label, read where its working directory is read.
+    if (a.terminals != nullptr)
+        a.terminals->observe(f->time);
     keepTerminals(a);
 #if NEXUS_LINK
     pollLink(a);
@@ -542,6 +547,15 @@ int main(int argc, char** argv) {
         std::printf("nexus: %zu friends from nova-config\n", friends.friends.size());
     else
         std::fprintf(stderr, "nexus: %s\n", friends.error.c_str());
+    // The fleet's machines, by which a terminal tab in ssh is named. A screenshot runs no ssh.
+    MachineList machines;
+    if (shot == nullptr) {
+        machines = loadMachines();
+        if (machines.error.empty())
+            std::printf("nexus: %zu machines from nova-config\n", machines.machines.size());
+        else
+            std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
+    }
     // The friend tabs in the order the person last left them (tab_order.h).
     static const TabOrderStore order = fileTabOrderStore();
     std::string orderWarning;
@@ -646,6 +660,7 @@ int main(int argc, char** argv) {
     }
 #endif
     a.bench = bench;
+    a.machines = std::move(machines.machines);
     a.demoTerminal = demoTerminal;
     a.backdrop = backdrop && shot != nullptr;
     if (a.backdrop)

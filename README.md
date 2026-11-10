@@ -53,6 +53,13 @@ its shell was last in (the home directory if that is gone); what a terminal show
 not come back. On a terminal tab every key that is not a Command chord, Escape included, goes to the shell. The
 window opens on the tab that was selected when it quit, a terminal tab included.
 
+A terminal tab shows the title its program sets. While its shell runs ssh, the tab shows where ssh goes instead: the
+fleet machine's name from `nova-config machine list` when the destination is the machine's name,
+`<name>.<tailnet>.ts.net`, its address or any of those after `user@`, and otherwise the host as typed. A program on the
+remote side that sets its own title does not change it. When ssh ends, the tab has its label from before the session
+back until its shell sets a new title. A nested ssh on the remote machine is not seen: the tab names the machine the
+local ssh reaches.
+
 nexus finds `nova-config` on the PATH your login shell gives, or at the full path in `NEXUS_NOVA_CONFIG`.
 
 ## The server

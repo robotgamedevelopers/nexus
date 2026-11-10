@@ -2,10 +2,12 @@
 // terminal (terminals.h) running /bin/sh on a pseudoterminal in a directory under the test's working directory. It
 // opens a tab with Command-T, types a command that prints a marker, waits for the marker on the screen, types exit,
 // and waits for the tab to close by itself. Then a relaunch's round trip: a terminal saved with its shell's directory,
-// to a file under the test's working directory, comes back there. Real processes, files and time (bounded waits): a
-// functional test.
+// to a file under the test's working directory, comes back there. Then a tab in ssh, with a stand-in ssh (fake_ssh.cpp)
+// first on the PATH that connects nowhere: the tab names the fleet machine while it runs, whatever title it sets, and
+// has its usual label back after it exits. Real processes, files and time (bounded waits): a functional test.
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -81,7 +83,9 @@ struct Harness {
         prFontSystemDestroy(system);
     }
 
+    // As the app's frame: each terminal's foreground process is read at the frame's start (main.cpp beginFrame).
     void frame() {
+        terminals->observe(time);
         beginWindowFrame(view, kit, fonts);
         time += 1.0 / 60;
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 60, .extent = PrVec2{1000, 780}, .maxRounds = 8,
@@ -224,11 +228,88 @@ void aTerminalComesBackInItsDirectory() {
     CHECK(inSub);
 }
 
+// Shows the tab's label and the screen when a wait for the label failed.
+void showLabel(Harness& h, std::size_t id) {
+    std::fprintf(stderr, "  label %s, title %s, screen:\n%s\n", h.terminals->title(id).c_str(),
+        h.terminals->programTitle(id).c_str(), h.terminals->text(id).c_str());
+}
+
+// The owner's case: Command-T, `ssh space`, and the tab reads "space" for the whole session, while the remote side sets
+// titles of its own (OSC 0 and 2); after exit it has its usual label back, though the remote's last title is still set.
+void aTabInSshNamesTheMachine() {
+    Harness h;
+    h.terminals->program = "/bin/sh";
+    h.terminals->machines = {Machine{"space", "100.64.0.9"}, Machine{"hetzner2", ""}};
+    h.key(PrAppKey('T'), PrAppKeyCode_KeyT, PrAppModifierFlag_Super);
+    CHECK(h.model.tab_count() == 2);
+    if (h.model.tab_count() != 2)
+        return;
+    const std::size_t id = h.model.tab(1).id;
+    CHECK(h.until([&] { return h.terminals->text(id).find('$') != std::string::npos; }));
+    const std::string usual = h.terminals->title(id);
+    CHECK(!usual.empty() && usual != "space");
+    h.typeLine("ssh space");
+    const bool named = h.until([&] {
+        return h.terminals->text(id).find("fake-ssh-connected space") != std::string::npos &&
+            h.terminals->title(id) == "space";
+    });
+    if (!named)
+        showLabel(h, id);
+    CHECK(named);
+    // While working in space: each line sets the remote title, and the tab still reads "space".
+    for (const char* line : {"vim notes.txt", "htop"}) {
+        h.typeLine(line);
+        const std::string ran = std::string("ran-") + line;
+        CHECK(h.until([&] {
+            return h.terminals->text(id).find(ran) != std::string::npos && h.terminals->programTitle(id) == line;
+        }));
+        h.frame();
+        CHECK(h.terminals->title(id) == "space");
+    }
+    h.typeLine("exit");
+    const bool back = h.until([&] {
+        return h.terminals->text(id).find("Connection to remote closed.") != std::string::npos &&
+            h.terminals->title(id) == usual;
+    });
+    if (!back)
+        showLabel(h, id);
+    CHECK(back);
+    CHECK(h.terminals->programTitle(id) == "nova@remote: left behind");
+    // A fleet machine by its tailnet name, with options; then a host that is not one, shown as given. Each time the
+    // usual label comes back.
+    const std::pair<const char*, const char*> sessions[] = {
+        {"ssh -p 22 nova@hetzner2.tailbd3740.ts.net", "hetzner2"},
+        {"ssh -o BatchMode=yes glenn@unknown.example", "unknown.example"},
+    };
+    for (const auto& [command, label] : sessions) {
+        h.typeLine(command);
+        const bool in = h.until([&] { return h.terminals->title(id) == label; });
+        if (!in)
+            showLabel(h, id);
+        CHECK(in);
+        h.typeLine("exit");
+        const bool out = h.until([&] {
+            return h.terminals->title(id) == usual && h.terminals->programTitle(id) == "nova@remote: left behind";
+        });
+        if (!out)
+            showLabel(h, id);
+        CHECK(out);
+    }
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // The stand-in ssh's directory, first on the PATH that the terminals' shells inherit.
+    if (argc != 2) {
+        std::fprintf(stderr, "usage: nexus_terminal_tests <directory of the stand-in ssh>\n");
+        return 2;
+    }
+    const char* path = std::getenv("PATH");
+    setenv("PATH", (std::string(argv[1]) + ":" + (path != nullptr ? path : "/usr/bin:/bin")).c_str(), 1);
     aShellRunsAndItsTabClosesWhenItExits();
     aTerminalComesBackInItsDirectory();
+    aTabInSshNamesTheMachine();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

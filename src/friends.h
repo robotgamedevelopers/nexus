@@ -51,6 +51,9 @@ Command novaConfigCommand(const char* override, const char* shell, const std::ve
 // The command that lists the friends: novaConfigCommand with `friend list --json`.
 Command friendListCommand(const char* override, const char* shell);
 
+// What went wrong when `command` gave `r`, naming the command, what happened and what to do; empty if it exited 0.
+std::string commandProblem(const Command& command, const CommandResult& r, int timeoutSeconds);
+
 // Runs `command` with `run` and parses what it prints. Every error names the command, what happened and what to do.
 FriendList loadFriends(const Command& command, const CommandRunner& run);
 

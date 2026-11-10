@@ -44,7 +44,8 @@ struct Terminals {
     virtual void show(std::size_t id, PrLayoutNode parent) = 0;
     virtual void update(std::size_t id) = 0;    // services one that does not show this round
     virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read
-    virtual std::string title(std::size_t id) = 0;  // the title its shell set, or empty
+    // Its tab's label, or empty: the title its shell set, or while ssh runs in it the machine it reaches (remote.h).
+    virtual std::string title(std::size_t id) = 0;
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
 };
 

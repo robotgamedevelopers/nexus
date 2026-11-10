@@ -455,8 +455,8 @@ struct Builder {
         }
     }
 
-    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
-    // "terminal".
+    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
+    // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend)
             return tab.name;

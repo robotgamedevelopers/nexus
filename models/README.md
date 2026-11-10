@@ -153,6 +153,27 @@ Every property in the table above has a witness.
 
 The binding is shown to fail, ten times: `--faulty-close-fallback` walks a subclass whose `close_tab` of the active tab ignores the history and keeps the rule before it (rejected at the first close of an active tab where the two rules differ); `--faulty-sprint-move` walks a subclass whose `move_tab` takes the sprint tab among the friends, `--faulty-sprint-close` one whose `close_tab` closes it; `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, `--faulty-move` one whose `move_tab` leaves `active` at the old position, `--faulty-queue-cap` one whose queue drops its oldest prompt past four, `--faulty-send-trim` one whose `send` strips trailing spaces, `--faulty-send-dedup` one whose `send` of the text just sent appends nothing, and `--faulty-close` one whose `close_tab` also removes a friend's tab. TLC must report `TraceMatches` violated at the first step where each fault shows.
 
+## TabLabel.tla: a terminal tab's label across ssh sessions
+
+`TabLabel.tla` is `nexus::TabLabel` in `src/remote.h`: one terminal tab's label. Once a frame the window observes the terminal: the remote label of its foreground process (the fleet machine its ssh reaches, its host if not a fleet machine, or none when the foreground is not ssh), the program's title, and `late`, whether the frame comes after the tail of the last session to end (the code compares the frame's time with that end plus `kSessionTailSeconds`). Its state is the code's members: `remote`, `before` (the title at the last observation outside sessions and masks), `after` (the title a session left), `masking` and `tail`; `last` records the observation. `Label(t)` is the label drawn when the title is `t`.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | every variable has its type |
+| `TailMasks` | invariant | a tail is part of a mask |
+| `SessionNamed` | invariant | while a session is seen, the label is its remote label, whatever the title |
+| `TitleShows` | invariant | outside sessions and masks, the label is the title |
+| `SessionNamedAtOnce` | action | an observation of a session names it at once |
+| `EndRestores` | action | the observation that sees a session end gives back the label from before it, whatever title it left |
+| `TailRestores` | action | in the session's tail the label stays the one from before, whatever title arrives |
+| `MaskEnds` | action | past the tail, the first title other than the one the session left is shown: the label never sticks |
+| `BeforeIsOwn` | action | the label to return to only ever changes to a title observed outside sessions and masks |
+| `BeforeIsLatest` | action | and every such observation takes it |
+
+`TabLabel.cfg` checks them on two remote labels and three titles (295 states). Its witnesses: `WLabelNoMask` (a session's end shows the title it left; `EndRestores`), `WLabelMaskSticks` (the mask never lifts; `MaskEnds`), `WLabelBeforeAtStart` (the label to return to is the title at a session's first observation, which ssh may already have set; `BeforeIsOwn`), `WLabelNoTail` (no tail, so a last title read after the process is seen gone shows; `TailRestores`).
+
+`tests/model/label_walk.cpp` (`label_walk <seed> <steps> <remotes> [--faulty-before] <out.tla>`) drives the real `TabLabel` with a seeded walk on a made-up clock (a frame or a pause a step): sessions start, run, switch and end, titles change, and frames fall inside tails and after them. It writes `TabLabelTraceData.tla`: one record per observation with its arguments, the code's state after it and the label the code draws for every title. `TabLabelTrace.tla` takes `Observe` with each record's arguments and `TraceMatches` requires the spec's state and every label to equal the code's; every `TabLabel` property is checked on the trace. Four traces run (seeds 1 to 3 on two remotes, seed 4 on three), and `--faulty-before`, which feeds the code an unrecorded observation before each session's first (the code then takes the label to return to from a title ssh may have set), must be rejected with `TraceMatches` violated.
+
 ## Link.tla: what nexus adds on top of mosh
 
 `Link.tla` models the link between the windows and `nexus-server` (`src/sync`, `src/link`, `src/server`): what nexus puts on top of mosh's State Synchronization Protocol, not mosh. mosh is abstracted to the two things nexus relies on. Up, what reaches the server of a window's list is some range of it, which may repeat a range, come after a later one, or start past what the server has: `Deliver(c, first, last)` takes any range. Down, a window's receiver eventually holds the server's newest state, may skip states between, and never goes back to an older one (mosh numbers its states and keeps the newest): `Receive(c, j)` is window c receiving the server's j-th state, the same as before or a later one.
