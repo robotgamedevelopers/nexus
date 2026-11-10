@@ -80,6 +80,8 @@ struct View {
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)
     std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
+    std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
+                                                // the first one included: saves it (tab_order.h)
     // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
     // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
     KitTabs pinnedTabs{prKitTabsCreate()};

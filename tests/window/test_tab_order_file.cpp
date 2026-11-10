@@ -1,6 +1,7 @@
-// Functional test of the tab order's and the selected tab's file stores (src/tab_order.h): real files, inside this
-// test's working directory.
+// Functional test of the tab order's, the selected tab's and the text scale's file stores (src/tab_order.h): real
+// files, inside this test's working directory.
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -55,6 +56,18 @@ int main() {
     CHECK(saveSelectedTab(selected, sprint, &error));
     Model relaunched(loadTabOrder(store, loaded, &warning), true);
     CHECK(relaunched.tab(3).name == "a" && loadSelectedTab(selected, relaunched, &warning) == 3 && warning.empty());
+    // The text scale, in a file beside them: nothing saved is the default; a saved scale comes back; a file that is not
+    // a text scale warns and gives the default.
+    const std::string scalePath = "tab-order-test/nexus/text-scale.txt";
+    prFileRemove(PrStringView{scalePath.data(), scalePath.size()});
+    TabOrderStore scale = fileTabOrderStore(scalePath);
+    CHECK(loadTextScale(scale, -5, 10, &warning) == 0 && warning.empty());
+    CHECK(saveTextScale(scale, 4, &error) && saveTextScale(scale, -2, &error));
+    CHECK(loadTextScale(scale, -5, 10, &warning) == -2 && warning.empty());
+    const std::string garbage = "not a scale\n";
+    CHECK(prFileWrite(PrStringView{scalePath.data(), scalePath.size()},
+        PrByteView{reinterpret_cast<const uint8_t*>(garbage.data()), garbage.size()}));
+    CHECK(loadTextScale(scale, -5, 10, &warning) == 0 && warning.find(scalePath) != std::string::npos);
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

@@ -1,4 +1,5 @@
-// The order of the friend tabs and the selected tab, kept across launches: the person's drag and choice are remembered.
+// The order of the friend tabs, the selected tab and the text scale, kept across launches: the person's drag, choice and
+// size are remembered.
 //
 // Kept on this machine for now, in one small file under the user's application-support directory. Later this state
 // moves to the server, with the rest of what the window shows.
@@ -82,5 +83,26 @@ std::size_t loadSelectedTab(const TabOrderStore& store, const Model& model, std:
 
 // Saves the model's active tab. Returns false, with one line in `error` naming the file and the cause.
 bool saveSelectedTab(const TabOrderStore& store, const Model& model, std::string* error);
+
+// The text scale (Command-plus and Command-minus), kept across launches beside the order: in steps from 1, as
+// style::textScale takes it.
+//
+// The file's text: a header line, then the steps as a whole number, negative for smaller. Pure.
+std::string formatTextScale(int steps);
+
+// Reads the file's text into `steps`. Returns false, with `error` saying what is wrong, for text that is not a text
+// scale file. Pure.
+bool parseTextScale(std::string_view text, int* steps, std::string* error);
+
+// The store in a file, text-scale.txt beside tab-order.txt. `where` is empty if the platform names no such directory.
+TabOrderStore fileTextScaleStore();
+
+// The steps to start at: 0 (the default scale) if nothing is saved, and on an unreadable or malformed file, with
+// `warning` one line naming the file, what was wrong and that deleting it resets the scale. A saved number outside `lo`
+// to `hi` is clamped into it, and `warning` says so.
+int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning);
+
+// Saves the steps. Returns false, with one line in `error` naming the file and the cause.
+bool saveTextScale(const TabOrderStore& store, int steps, std::string* error);
 
 } // namespace nexus

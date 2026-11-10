@@ -331,9 +331,56 @@ void selectedTabFallsBackToTheSprintTab() {
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
+void textScaleTextRoundTrips() {
+    int steps = 99;
+    std::string error;
+    for (int s : {0, 1, -1, 5, -5, 10, 123456, -123456}) {
+        CHECK(parseTextScale(formatTextScale(s), &steps, &error) && steps == s);
+    }
+    CHECK(formatTextScale(-3) == "nexus text scale 1\n-3\n");
+    CHECK(parseTextScale("nexus text scale 1\n4", &steps, &error) && steps == 4);   // no final line feed
+    CHECK(!parseTextScale("4\n", &steps, &error) && has(error, "first line") && steps == 0);
+    CHECK(!parseTextScale("nexus text scale 2\n4\n", &steps, &error) && has(error, "first line"));
+    CHECK(!parseTextScale("nexus text scale 1\n", &steps, &error) && has(error, "no scale"));
+    CHECK(!parseTextScale("nexus text scale 1", &steps, &error) && has(error, "no scale"));
+    for (const char* bad : {"1.5", "+2", "-", "two", " 2", "2 ", "1234567", "--1"}) {
+        CHECK(!parseTextScale(std::string("nexus text scale 1\n") + bad + "\n", &steps, &error));
+        CHECK(has(error, "whole number") && has(error, bad));
+    }
+    CHECK(!parseTextScale(std::string("nexus text scale 1\n2\0\n", 22), &steps, &error) && has(error, "NUL"));
+}
+
+// Nothing saved: the default scale, and no warning. A saved scale comes back; one outside the range is clamped into it
+// and says so; a bad or unreadable file warns and gives the default; a failed save names the file and why.
+void textScaleLoadsClampsAndWarns() {
+    MemoryStore mem;
+    std::string warning;
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0 && warning.empty());
+    std::string error;
+    CHECK(saveTextScale(mem.store(), 3, &error) && mem.text == "nexus text scale 1\n3\n");
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 3 && warning.empty());
+    CHECK(saveTextScale(mem.store(), -5, &error) && loadTextScale(mem.store(), -5, 10, &warning) == -5);
+    CHECK(warning.empty());
+    mem.text = "nexus text scale 1\n40\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 10);
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "40") && has(warning, "using 10"));
+    mem.text = "nexus text scale 1\n-9\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == -5 && has(warning, "using -5"));
+    mem.text = "nexus text scale 1\nbig\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0);
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "whole number") && has(warning, "deleting it resets"));
+    mem.readError = "it cannot be read";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0 && has(warning, "cannot be read"));
+    mem.writeError = "Permission denied";
+    CHECK(!saveTextScale(mem.store(), 1, &error));
+    CHECK(has(error, "text scale") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
 } // namespace
 
 int main() {
+    textScaleTextRoundTrips();
+    textScaleLoadsClampsAndWarns();
     selectedTabTextRoundTrips();
     selectedTabComesBackByIdentity();
     selectedTabFallsBackToTheSprintTab();

@@ -138,6 +138,12 @@ TabOrderStore fileStoreNamed(std::string_view name) {
 constexpr std::string_view kSelectedHeader = "nexus selected tab 1";
 constexpr std::string_view kFriendPrefix = "friend ";
 
+// The first line of the text scale's file: what it is, and its format's version.
+constexpr std::string_view kTextScaleHeader = "nexus text scale 1";
+
+// The most digits a saved number of steps may have: far past any range, and short of overflowing an int.
+constexpr std::size_t kMaxStepDigits = 6;
+
 } // namespace
 
 TabOrderStore fileTabOrderStore() {
@@ -146,6 +152,10 @@ TabOrderStore fileTabOrderStore() {
 
 TabOrderStore fileSelectedTabStore() {
     return fileStoreNamed("selected-tab.txt");
+}
+
+TabOrderStore fileTextScaleStore() {
+    return fileStoreNamed("text-scale.txt");
 }
 
 std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
@@ -258,6 +268,74 @@ bool saveSelectedTab(const TabOrderStore& store, const Model& model, std::string
     if (store.write(formatSelectedTab(model), &why))
         return true;
     *error = "the selected tab could not be saved to " + store.where + ": " + why;
+    return false;
+}
+
+std::string formatTextScale(int steps) {
+    return std::string(kTextScaleHeader) + '\n' + std::to_string(steps) + '\n';
+}
+
+bool parseTextScale(std::string_view text, int* steps, std::string* error) {
+    *steps = 0;
+    if (text.find('\0') != std::string_view::npos) {
+        *error = "it holds a NUL byte";
+        return false;
+    }
+    std::size_t end = text.find('\n');
+    if (text.substr(0, end) != kTextScaleHeader) {
+        *error = "its first line is not \"" + std::string(kTextScaleHeader) + "\"";
+        return false;
+    }
+    std::string_view line = end == std::string_view::npos ? std::string_view() : text.substr(end + 1);
+    line = line.substr(0, line.find('\n'));
+    if (line.empty()) {
+        *error = "it names no scale";
+        return false;
+    }
+    const std::size_t sign = line[0] == '-' ? 1 : 0;
+    bool digits = line.size() > sign && line.size() - sign <= kMaxStepDigits;
+    for (std::size_t k = sign; k < line.size() && digits; ++k)
+        digits = line[k] >= '0' && line[k] <= '9';
+    if (!digits) {
+        *error = "its second line \"" + std::string(line) + "\" is not a whole number of steps";
+        return false;
+    }
+    int value = 0;
+    for (std::size_t k = sign; k < line.size(); ++k)
+        value = value * 10 + (line[k] - '0');
+    *steps = sign != 0 ? -value : value;
+    return true;
+}
+
+int loadTextScale(const TabOrderStore& store, int lo, int hi, std::string* warning) {
+    warning->clear();
+    std::string text;
+    std::string error;
+    int steps = 0;
+    if (!store.read(&text, &error)) {
+        if (!error.empty())
+            *warning = "the saved text scale " + store.where + " is not used: " + error +
+                "; deleting it resets the scale";
+        return 0;
+    }
+    if (!parseTextScale(text, &steps, &error)) {
+        *warning = "the saved text scale " + store.where + " is not used: " + error + "; deleting it resets the scale";
+        return 0;
+    }
+    if (steps < lo || steps > hi) {
+        const int clamped = steps < lo ? lo : hi;
+        *warning = "the saved text scale " + store.where + " is " + std::to_string(steps) + " steps, outside " +
+            std::to_string(lo) + " to " + std::to_string(hi) + "; using " + std::to_string(clamped);
+        return clamped;
+    }
+    return steps;
+}
+
+bool saveTextScale(const TabOrderStore& store, int steps, std::string* error) {
+    std::string why;
+    if (store.write(formatTextScale(steps), &why))
+        return true;
+    *error = "the text scale could not be saved to " + store.where + ": " + why;
     return false;
 }
 

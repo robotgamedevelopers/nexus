@@ -592,6 +592,30 @@ void textScaleIsClamped() {
     CHECK(h.active().draft.empty());
 }
 
+// Each text scale applied, and only a change, asks for it to be saved, with the scale applied; a scale restored at
+// launch is applied at the first frame, terminals and page too, and saved like any other.
+void textScaleChangesAreSaved() {
+    Harness h;
+    std::vector<int> saved;
+    h.view.scaled = [&h, &saved] { saved.push_back(h.look.textSteps); };
+    h.larger();
+    h.larger();
+    h.smaller();
+    CHECK((saved == std::vector<int>{1, 2, 1}));
+    h.frame();
+    CHECK(saved.size() == 3);
+    for (int i = 0; i < style::kTextStepsUp + 5; ++i)
+        h.larger();
+    CHECK(saved.back() == style::kTextStepsUp && saved.size() == 3 + std::size_t(style::kTextStepsUp - 1));
+    Harness relaunched;
+    std::vector<int> again;
+    relaunched.view.scaled = [&relaunched, &again] { again.push_back(relaunched.look.textSteps); };
+    relaunched.view.askedTextSteps = 3;     // as main.cpp sets it from the saved file
+    relaunched.frame();
+    CHECK(relaunched.look.textSteps == 3 && (again == std::vector<int>{3}));
+    CHECK(near(relaunched.terminals.scale, style::textScale(3)) && near(relaunched.board.scale, style::textScale(3)));
+}
+
 void textKeysWorkWithCapsLock() {
     Harness h;
     h.larger(PrAppModifierFlag_CapsLock);
@@ -1516,6 +1540,7 @@ int main() {
     enterWhileComposingCommitsOnly();
     textKeysScaleTheTranscriptAndThePrompt();
     textScaleIsClamped();
+    textScaleChangesAreSaved();
     textKeysWorkWithCapsLock();
     escapeHidesAndCommandEscapeStops();
     escapeWindowedHidesNothing();

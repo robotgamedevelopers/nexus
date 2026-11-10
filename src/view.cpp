@@ -788,6 +788,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         view.terminals->setTextScale(textScale(look.textSteps));
     if (view.board != nullptr)
         view.board->setTextScale(textScale(look.textSteps));
+    if (view.scaled)
+        view.scaled();
     return true;
 }
 

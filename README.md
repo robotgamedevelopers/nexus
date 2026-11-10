@@ -42,7 +42,8 @@ Escape hides it too, and so does switching away: Command-Tab, a click on another
 
 Each friend listed by `nova-config friend list` has a tab. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. Enter sends the prompt, Command-Enter queues it, and
-Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller.
+Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
+and the size is kept across launches.
 
 Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it, and it
 closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends,

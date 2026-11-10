@@ -15,7 +15,8 @@
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
 // (sprint.h) or NEXUS_SPRINT_URL. The window opens on the tab selected when it last quit (tab_order.h), or the sprint
 // tab if that tab is gone, was a terminal, or nothing is saved; --tab N opens tab N, and a screenshot without --tab
-// shows the sprint tab. --backdrop draws the screenshot see-through,
+// shows the sprint tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes back at launch.
+// --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
@@ -474,6 +475,20 @@ int main(int argc, char** argv) {
         a.view.selected = [] {
             std::string error;
             if (!saveSelectedTab(selection, model, &error))
+                std::fprintf(stderr, "nexus: %s\n", error.c_str());
+        };
+    }
+    // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
+    // screenshot draws at the default scale and saves nothing.
+    static const TabOrderStore scale = fileTextScaleStore();
+    if (live) {
+        std::string scaleWarning;
+        a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
+        if (!scaleWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", scaleWarning.c_str());
+        a.view.scaled = [] {
+            std::string error;
+            if (!saveTextScale(scale, a.look.textSteps, &error))
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
