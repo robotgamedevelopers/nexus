@@ -25,9 +25,8 @@ FetchContent_MakeAvailable(prax)
 
 set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 
-# The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
-# No OS, no time.
-add_library(nexus_model STATIC src/model.cpp src/overlay.cpp)
+# The non-drawing logic: tabs, transcripts, drafts, send and queue. No OS, no time.
+add_library(nexus_model STATIC src/model.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
@@ -66,7 +65,7 @@ set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fob
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
     prax::studio_app prax::gpu prax::image prax::compress
-    "-framework AppKit")
+    "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
     MACOSX_BUNDLE_BUNDLE_NAME nexus

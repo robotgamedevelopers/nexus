@@ -5,11 +5,9 @@
 // application of one Studio window (pr/studio_app.h, pr/studio_window.h) or lays the same tree out offscreen and writes
 // one frame to a PNG (--screenshot).
 //
-// The window is the overlay: Prax's Overlay window (a borderless panel above other apps, on every Space and beside
-// fullscreen apps) with a Transparent backdrop, in an Accessory app (no Dock icon), shown and hidden by Prax's global
-// hotkey (style.h kOverlayHotkey) and by Escape, and hidden when it loses the keyboard, as overlay.h's rules say.
-// platform_mac.h makes it cover the whole screen, menu bar included, which Prax does not. --windowed gives a normal
-// opaque window, where Escape does nothing. --print-window-config prints what the overlay asks of Prax and exits.
+// The window is the overlay (platform_mac.h): see-through, over the whole screen, shown and hidden by a global hotkey
+// (style.h), and hidden by Escape. --windowed gives a normal opaque window, where Escape does nothing. --print-window-config makes the overlay window hidden, prints its
+// configuration and exits.
 //
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
 // screenshot show one after a command has printed. The terminal tabs open at quit come back at launch, in their order,
@@ -53,7 +51,6 @@
 #include "board.h"
 #include "friends.h"
 #include "model.h"
-#include "overlay.h"
 #include "platform_mac.h"
 #include "style.h"
 #include "tab_order.h"
@@ -78,9 +75,8 @@ struct App {
     View view;
     Look look;
     PrFontSet* fonts = nullptr;
-    bool overlay = true;            // the overlay window; --windowed gives a normal window
-    PrStudioWindow* window = nullptr;   // from open() to close()
-    OverlayRules rules;             // when the overlay shows and hides (overlay.h)
+    bool overlay = true;            // the overlay window (platform_mac.h); --windowed gives Prax's own window
+    bool overlayOpened = false;
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
@@ -134,52 +130,19 @@ App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
 
-// The overlay's tags: its hotkey's, and the timer of the key check after each show.
-constexpr uint64_t kHotkeyTag = 1;
-constexpr uint64_t kKeyCheckTag = 2;
-// How long after a show the overlay must have the keyboard. Not measured: Prax gives an overlay the keyboard within
-// prAppWindowFocus, so this only has to outlast the frames that report it (a guess, as the earlier code's was).
-constexpr double kKeyCheckSeconds = 0.5;
-
-PrAppWindowBackdrop overlayBackdrop() {
-    return style::kOverlayBlur ? PrAppWindowBackdrop_Blur : PrAppWindowBackdrop_Transparent;
+OverlayConfig overlayConfig() {
+    return OverlayConfig{
+        .hotKeyCode = style::kOverlayHotKeyCode,
+        .hotKeyModifiers = style::kOverlayHotKeyModifiers,
+        .blur = style::kOverlayBlur,
+        .accessory = style::kOverlayAccessory,
+    };
 }
 
-// Does what the overlay's rules answered. Show covers the screen with the window, shows it and gives it the keyboard
-// (prAppWindowFocus shows a hidden window first, and gives an overlay the keyboard without activating nexus), then
-// checks after kKeyCheckSeconds that it has the keyboard.
-void carryOut(App& a, OverlayAct act) {
-    if (act == OverlayAct::None || a.window == nullptr)
-        return;
-    PrAppWindow* window = prStudioWindowAppWindow(a.window);
-    PrApp* app = prStudioWindowApp(a.window);
-    if (act == OverlayAct::Hide) {
-        prAppTimerCancel(app, kKeyCheckTag);
-        prAppWindowSetVisible(window, false);
-        return;
-    }
-    PrAppSurface surface{};
-    if (prAppWindowSurface(window, &surface) != PrStatus_Ok || surface.kind != PrAppSurfaceKind_NsView ||
-            !coverScreen(surface.handle))
-        std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no NSView, window or screen), so "
-            "it covers the screen's work area only, below the menu bar\n");
-    prAppWindowFocus(window);
-    prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
-}
-
-bool overlayVisible(const App& a) {
-    return a.window != nullptr && prAppWindowIsVisible(prStudioWindowAppWindow(a.window));
-}
-
-bool overlayActive(const App& a) {
-    return a.window != nullptr && prAppWindowIsActive(prStudioWindowAppWindow(a.window));
-}
-
-// The window's kit theme (view.h). Over the overlay's Transparent backdrop the window draws no background of its own,
-// so the see-through fill is the window part's (view.cpp, style::kOverlayOpacity), which the window clears to.
+// The window's kit theme (view.h). Its bg0 is the canvas, which the window clears to with its alpha, so the overlay's
+// background is see-through and what is drawn on it is not.
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
-    a.window = window;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
@@ -203,8 +166,10 @@ bool open(void* context, PrStudioWindow* window) {
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
     board.window = prStudioWindowAppWindow(window);
-    if (a.overlay)
-        board.visible = [&a] { return overlayVisible(a); };
+    if (a.overlay) {
+        board.visible = overlayVisible;
+        setOverlayShown([](void* app) { prAppWake(static_cast<PrApp*>(app)); }, prStudioWindowApp(window));
+    }
     a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
     return true;
@@ -214,7 +179,7 @@ bool open(void* context, PrStudioWindow* window) {
 void closeWindow(void* context, PrStudioWindow*) {
     App& a = appOf(context);
     keepTerminals(a);
-    a.window = nullptr;
+    setOverlayShown(nullptr, nullptr);
     a.view.board = nullptr;
     a.board.reset();
     a.view.terminals = nullptr;
@@ -234,38 +199,15 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
     if (a.board != nullptr)
         a.board->frame(f->time, f->display);
-    // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.
-    if (a.overlay)
-        carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
-}
-
-// The overlay at launch: registers the hotkey and shows the overlay, as a press of the hotkey would.
-bool start(void* context, PrStudioApp* studio) {
-    App& a = appOf(context);
-    if (!a.overlay)
-        return true;
-    PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
-    if (status != PrStatus_Ok)
-        std::fprintf(stderr, "nexus: the overlay hotkey (Command-backtick) did not register (status %d: %s), so only "
-            "launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h\n",
-            int(status), status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
-    carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
-    return true;
-}
-
-// The app's events: the hotkey, and the key check after a show.
-void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
-    App& a = appOf(context);
-    if (!a.overlay)
-        return;
-    if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
-        carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
-    } else if (e->kind == PrAppEventKind_Timer && e->tag == kKeyCheckTag) {
-        OverlayAct act = a.rules.keyCheck(overlayVisible(a), overlayActive(a));
-        if (act == OverlayAct::Hide)
-            std::fprintf(stderr, "nexus: the overlay did not get the keyboard within %.1f s of showing, so it is "
-                "hidden rather than cover other apps without it; press the hotkey again\n", kKeyCheckSeconds);
-        carryOut(a, act);
+    if (a.overlay && !a.overlayOpened) {
+        // Prax's lib/app has no window styles; go through the window behind its NSView. Shown once at launch.
+        a.overlayOpened = true;
+        PrAppSurface surface{};
+        if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok &&
+                surface.kind == PrAppSurfaceKind_NsView && openOverlay(surface.handle, overlayConfig(), true))
+            std::printf("nexus: overlay window\n%s", describeOverlay().c_str());
+        else
+            std::fprintf(stderr, "nexus: no NSView behind the window; the overlay is not set up\n");
     }
 }
 
@@ -474,25 +416,6 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     return code;
 }
 
-// Writes the main display's size in logical px and its pixel ratio, from a headless Prax app that never runs (so it
-// shows nothing). Returns false if there is no display.
-bool mainDisplay(float* width, float* height, float* ratio) {
-    PrAppOptions options = prAppOptionsDefault();
-    options.headless = true;
-    PrApp* app = prAppCreate(PrAppBackend_Default, &options);
-    if (app == nullptr)
-        return false;
-    PrAppDisplayInfo info{};
-    const bool found = prAppDisplays(app, &info, 1) != 0;   // the main display first
-    prAppDestroy(app);
-    if (!found)
-        return false;
-    *width = info.extent.x;
-    *height = info.extent.y;
-    *ratio = info.display.pixelRatio;
-    return true;
-}
-
 // Sample entries for --demo: every kind, and a person's message long enough to wrap.
 void seedDemo(Model& model, std::size_t tab) {
     model.append(0, Entry{EntryKind::Person,
@@ -547,16 +470,14 @@ int main(int argc, char** argv) {
     }
 
     if (printConfig) {
-        std::printf("nexus: the overlay window, as nexus asks Prax for it\n"
-            "role: Overlay (a borderless panel above other apps, on every Space and beside fullscreen apps)\n"
-            "backdrop: %s; opens hidden; shown at launch\n"
-            "presence: %s\n"
-            "hotkey: Command-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
-            "frame: the whole screen with the pointer, menu bar included, set through the NSView at each show\n"
-            "background alpha: %.2f; tab strip fill alpha: %.2f\n",
-            style::kOverlayBlur ? "Blur" : "Transparent", style::kOverlayAccessory ? "Accessory" : "Regular",
-            unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
-            double(style::kOverlayOpacity), double(style::kOverlayStripFill));
+        std::string text = describeHiddenOverlay(overlayConfig());
+        if (text.empty()) {
+            std::fprintf(stderr, "nexus: no screen to make the overlay window on\n");
+            return 1;
+        }
+        std::printf("nexus: overlay window (made hidden, as Prax's backend makes its window)\n%s"
+            "background alpha: %.2f; tab strip fill alpha: %.2f; blur: %s\n", text.c_str(),
+            double(style::kOverlayOpacity), double(style::kOverlayStripFill), style::kOverlayBlur ? "on" : "off");
         return 0;
     }
 
@@ -612,7 +533,7 @@ int main(int argc, char** argv) {
     a.look.overlay = a.overlay;
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
-        a.view.hide = [] { carryOut(a, a.rules.escape(overlayVisible(a))); };
+        a.view.hide = hideOverlay;
     a.view.moved = [] {
         std::string error;
         if (!saveTabOrder(order, model, &error))
@@ -662,14 +583,9 @@ int main(int argc, char** argv) {
             code = screenshot(a, shot, PrVec2{w, h}, scale);
         }
     } else {
-        // The overlay opens hidden at the size Prax holds it to; each show gives it the whole screen (carryOut).
         PrStudioWindowDesc window{
             .title = "nexus",
             .extent = {1000, 780},
-            .role = a.overlay ? PrAppWindowRole(PrAppWindowRole_Overlay) : PrAppWindowRole(PrAppWindowRole_Normal),
-            .backdrop = a.overlay ? overlayBackdrop() : PrAppWindowBackdrop(PrAppWindowBackdrop_Opaque),
-            .hidden = a.overlay,
-            .placement = PrAppWindowPlacement_Center,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
@@ -680,16 +596,13 @@ int main(int argc, char** argv) {
             .trace = trace,
             .context = &a,
         };
-        PrAppOptions options = prAppOptionsDefault();
-        if (a.overlay && style::kOverlayAccessory)
-            options.presence = PrAppPresence_Accessory;
-        PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = &window,
-            .lastWindow = PrStudioAppLastWindow_Stop, .start = start, .event = appEvent, .context = &a};
+        PrStudioAppDesc desc{.fonts = a.fonts, .window = &window, .lastWindow = PrStudioAppLastWindow_Stop};
         PrStatus status = prStudioAppRun(&desc);
         if (status == PrStatus_NotSupported) {
             std::fprintf(stderr, "nexus: no GPU device to render with\n");
             code = 1;
         }
+        closeOverlay();
         printStats(a.stats);
     }
     prFontSetDestroy(a.fonts);

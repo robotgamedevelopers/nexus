@@ -5,11 +5,9 @@
 #   MODELS      the models/ directory of the checkout (its *.tla and witnesses/*.tla are copied)
 #   MODULE      the module TLC checks (e.g. MCWindow)
 #   CFG         the configuration file, relative to MODELS (e.g. MCWindow.cfg or witnesses/WSendToActive.cfg)
-#   EXPECT      pass | invariant | action | temporal | deadlock
-#   PROPERTY    with invariant or action: the property whose violation is expected (temporal: TLC does not name it)
+#   EXPECT      pass | invariant | action | deadlock
+#   PROPERTY    with invariant or action: the property whose violation is expected
 #   WALK        optional: the trace_walk program; it is run first and writes WindowTraceData.tla into WORK
-#   DATA        optional, with WALK: the walk is another program, run as `<seed> <steps> [--faulty-<FAULTY>] <WORK/DATA>`
-#               (overlay_walk, which writes OverlayTraceData.tla); FRIENDS and NOSPRINT do not apply
 #   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
 #               move the one whose move_tab leaves active behind, queue-cap the one whose queue drops its oldest past
@@ -57,18 +55,7 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED WALK AND NOT "${WALK}" STREQUAL "" AND DEFINED DATA AND NOT "${DATA}" STREQUAL "")
-    set(walk_args "${SEED}" "${STEPS}")
-    if(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        list(APPEND walk_args --faulty-${FAULTY})
-    endif()
-    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${DATA}"
-        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
-    message("${walk_out}")
-    if(NOT walk_rc EQUAL 0)
-        message(FATAL_ERROR "${WALK} failed (${walk_rc}): ${walk_out}")
-    endif()
-elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
+if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
     if(FAULTY STREQUAL "send")
         list(APPEND walk_args --faulty)
@@ -146,15 +133,11 @@ elseif(EXPECT STREQUAL "action")
     if(NOT out MATCHES "Action property ${PROPERTY} [^\n]*is violated")
         message(FATAL_ERROR "expected action property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
     endif()
-elseif(EXPECT STREQUAL "temporal")
-    if(NOT out MATCHES "Temporal properties were violated")
-        message(FATAL_ERROR "expected a temporal property to be violated, TLC exit ${rc}:\n${out}")
-    endif()
 elseif(EXPECT STREQUAL "deadlock")
     if(NOT out MATCHES "Deadlock reached")
         message(FATAL_ERROR "expected a deadlock, TLC exit ${rc}:\n${out}")
     endif()
 else()
-    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action, temporal or deadlock")
+    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action or deadlock")
 endif()
 message("${MODULE} ${cfg_name}: as expected (${EXPECT} ${PROPERTY})")

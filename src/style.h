@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include "pr/app_input.h"
 #include "pr/color.h"
 
 namespace nexus::style {
@@ -87,11 +86,13 @@ constexpr PrColor kQueuedBubble = PrColor{kBackground.r + (kBubble.r - kBackgrou
 // global hotkey, in the manner of iTerm2's hotkey window.
 constexpr float kOverlayOpacity = 0.50f;    // alpha of the window background; what is behind shows through, dimmed
 constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
-constexpr bool kOverlayBlur = false;          // true blurs what is behind (Prax's Blur backdrop); off: plain alpha
+constexpr bool kOverlayBlur = false;          // true blurs what is behind (an NSVisualEffectView); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
-// The hotkey, by key position: Command-backtick (the key left of 1, which also types the tilde; macOS's virtual key
-// 0x32). Command-backtick is macOS's "move focus to next window" key, which this registration takes over while nexus
-// runs.
-constexpr PrAppHotkey kOverlayHotkey{.code = PrAppKeyCode_Backquote, .modifiers = PrAppModifierFlag_Super};
+// The hotkey, as Carbon's virtual key code and modifier mask (Carbon/HIToolbox Events.h). Command-backtick (the key
+// that also types the tilde, without Shift) by default.
+// Modifiers: cmdKey 0x0100, shiftKey 0x0200, optionKey 0x0800, controlKey 0x1000; add them to combine.
+constexpr unsigned kOverlayHotKeyCode = 0x32;         // kVK_ANSI_Grave, the backtick key
+// cmdKey: Command-backtick is macOS's "move focus to next window" key, which this registration takes over while it runs.
+constexpr unsigned kOverlayHotKeyModifiers = 0x0100;
 
 } // namespace nexus::style
