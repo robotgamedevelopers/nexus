@@ -1,7 +1,8 @@
-# Tests of the window model (src/model.h), with two labels:
-#   unit   model_test: the model's behaviour and edges, logic only
-#   model  TLC: Window.tla on three instances, every reversed witness rejected, code traces checked against the
-#          spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
+# Tests of the window model (src/model.h), with three labels:
+#   unit           model_test: the model's behaviour and edges, logic only
+#   model          TLC: Window.tla on four instances, every reversed witness rejected, code traces checked against the
+#                  spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
+#   model_nightly  TLC: Window.tla on the two largest instances (the nightly workflow)
 
 set(warnings -Wall -Wextra -Wpedantic -Werror)
 
@@ -23,16 +24,25 @@ set(models_dir "${PROJECT_SOURCE_DIR}/models")
 set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [WORKERS w])
+#          [WORKERS w] [NIGHTLY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
+# NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
+# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
     if(NOT T_WORKERS)
         set(T_WORKERS 2)
     endif()
+    set(label model)
+    set(cap 60)
+    if(T_NIGHTLY)
+        set(label model_nightly)
+        set(cap 300)
+    endif()
+    math(EXPR ctest_timeout "${cap} + 30")
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
-             -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS})
+             -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
@@ -46,17 +56,23 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DNOSPRINT=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
-    set_tests_properties(${name} PROPERTIES LABELS model TIMEOUT 90 PROCESSORS ${T_WORKERS})
+    set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
-# them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio's M-series cores).
+# them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
 tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass WORKERS 8)
-tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass WORKERS 8)
 tlc_test(tlc_spec_no_friends MCWindow MCWindowEmpty.cfg pass)
-tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass WORKERS 8)
 tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass WORKERS 8)
 tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass)
+# Nightly: the two largest instances (three friends in all orders, 104,976 states; entries and queues of two, 142,884).
+# The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
+# runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers: 8 s in a login
+# session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these two do not fit a 60 s cap
+# beside the other tests. Even alone they do not: the two together at the utility QoS took 65 s each. 300 s still stops
+# a state space that runs away.
+tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass WORKERS 8 NIGHTLY)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_witness_send_clears_all      WSendClearsAll      WSendClearsAll.cfg      action    PROPERTY SendClearsOnlyItsDraft)

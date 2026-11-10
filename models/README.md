@@ -144,10 +144,10 @@ TLC needs Java 11 or newer and `tla2tools.jar`. The tests find the jar through `
 cmake -S . -B build
 cmake --build build --target model_checks -j4
 ctest --test-dir build -L unit
-TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j4
+TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j "$(sysctl -n hw.ncpu)"
 ```
 
-The `model` label runs the six instances, the forty-two witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the nine faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on the four largest instances, which ctest counts as eight of its `-j` slots) and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+`-L model` matches two labels: `model` runs four instances (`MCWindow`, `MCWindowEmpty`, `MCWindowNoSprint`, `MCWindow3Sprint`), the forty-two witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the nine faulty traces; `model_nightly` runs the two largest instances, `MCWindow3` and `MCWindowLong`. CI's per-commit job runs `-L '^model$'` and the nightly workflow `-L '^model_nightly$'`: every property is still checked on every commit, on the smaller instances. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on the four instances with tens of thousands of states, which ctest counts as eight of its `-j` slots) and a 60 second cap (300 on the nightly instances); its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 

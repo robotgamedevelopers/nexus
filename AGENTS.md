@@ -4,7 +4,7 @@ The rules for an AI working in this repository. Each one holds on every change.
 
 ## Code
 
-- nexus is C++ built with CMake. Build with `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release` and `cmake --build build -j4`.
+- nexus is C++ built with CMake. Build with `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release` and `cmake --build build -j "$(sysctl -n hw.ncpu)"`.
 - Zero warnings. Warnings are errors on every compiler; a change that adds a warning does not land.
 - Prax is pinned and never forked or patched. When nexus needs something Prax lacks, work around it in nexus and record the gap as feedback for Prax's author.
 - Errors never fail silently. Each error carries its cause and how to fix it.
@@ -12,7 +12,8 @@ The rules for an AI working in this repository. Each one holds on every change.
 ## Tests
 
 - A unit test uses no real time, no sockets, no network and no outside services. It takes time as an argument and fakes the transport. Anything that needs the real thing is a functional test.
-- `ctest -L unit` runs the unit tests; `ctest -L functional` the functional tests (the headless window, which sets text in the system's fonts, real processes, real files); `ctest -L model` the TLA+ models and their trace checks. CI runs all three on every pull request.
+- `ctest -L unit` runs the unit tests; `ctest -L functional` the functional tests (the headless window, which sets text in the system's fonts, real processes, real files); `ctest -L model` the TLA+ models and their trace checks. CI runs all three on every pull request; the two largest TLC instances (label `model_nightly`) run in the nightly workflow, and every property is still checked on every pull request on the smaller ones.
+- Build with every core and run tests one job per core: `-j "$(sysctl -n hw.ncpu)"`.
 
 ## Models
 
