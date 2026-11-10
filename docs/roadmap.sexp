@@ -8,7 +8,7 @@
   (:id "layers" :type :roadmap :title "Layers"
    :rows (
      ("window" "1. Window: tabs, transcript and prompt draw and take input (in progress)")
-     ("server-sync" "2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice")
+     ("server-sync" "2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress)")
      ("friends" "3. Friends: each tab is a real conversation with one friend over nova-bus, driven by the server; no message lost or shown twice")
      ("heads-down" "4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end")
      ("fleet" "5. Fleet: see the machines and what runs on each")
@@ -47,7 +47,7 @@
   (:id "t-model-effort-keys" :type :task :title "Hotkeys to choose a friend's model and effort" :state :todo)
   (:id "t-upload" :type :task :title "Upload: the plus button sends a file to the selected AI's incoming/, images to the chat too" :state :todo)
   (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
-  (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :todo)
+  (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :doing)
   (:id "t-friends" :type :task :title "Friends: a real conversation per tab over nova-bus, driven by the server" :state :todo)
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)

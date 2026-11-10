@@ -9,7 +9,7 @@
 | feature | done |
 |---|:---:|
 | 1. Window: tabs, transcript and prompt draw and take input (in progress) | ❌ |
-| 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice | ❌ |
+| 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress) | ❌ |
 | 3. Friends: each tab is a real conversation with one friend over nova-bus, driven by the server; no message lost or shown twice | ❌ |
 | 4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end | ❌ |
 | 5. Fleet: see the machines and what runs on each | ❌ |
