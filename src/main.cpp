@@ -8,13 +8,20 @@
 // (style.h), and hidden by Escape. --windowed gives a normal opaque window, where Escape does nothing. --print-window-config makes the overlay window hidden, prints its
 // configuration and exits.
 //
-// Usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES] [--print-window-config]
+// Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
+// screenshot show one after a command has printed.
+//
+// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png] [--bench FRAMES]
+//              [--print-window-config]
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "pr/compress.h"
@@ -35,6 +42,7 @@
 #include "platform_mac.h"
 #include "style.h"
 #include "tab_order.h"
+#include "terminals.h"
 #include "view.h"
 
 namespace {
@@ -57,6 +65,8 @@ struct App {
     PrFontSet* fonts = nullptr;
     bool overlay = true;            // the overlay window (platform_mac.h); --windowed gives Prax's own window
     bool overlayOpened = false;
+    bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
+    std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
 };
@@ -80,7 +90,17 @@ bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
+    a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
+        a.overlay);
+    a.view.terminals = a.terminals.get();
     return true;
+}
+
+// The terminals end with the window, while its kit still exists.
+void closeWindow(void* context, PrStudioWindow*) {
+    App& a = appOf(context);
+    a.view.terminals = nullptr;
+    a.terminals.reset();
 }
 
 // Always the dark variant, so the window never puts Studio's own theme back over the one set in open().
@@ -107,8 +127,9 @@ bool event(void*, PrStudioWindow* window, const PrAppEvent* e) {
     return takeEvent(prStudioWindowUi(window), *e);
 }
 
-void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2) {
+void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
+    a.view.extent = extent;
     buildWindow(a.view, prStudioWindowKit(window), root);
 }
 
@@ -201,18 +222,36 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     Offscreen off{&a, kit};
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
-    // Enough frames for every query to read a layout: the first round routes nothing, and scrolling reads the last one.
-    for (int i = 0; i < 4; ++i) {
-        PrUiFrameDesc frame{
-            .time = 1000.0 + i / 60.0,
-            .delta = 1 / 60.0,
-            .extent = extent,
-            .maxRounds = 4,
-            .display = display,
-            .preferences = {},
-        };
-        prUiFrame(ui, &frame, buildOffscreen, &off);
+    a.view.extent = extent;
+    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, false);
+    a.view.terminals = terminals.get();
+    int frames = 0;
+    auto frame = [&] {
+        PrUiFrameDesc desc{.time = 1000.0 + frames++ / 60.0, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
+            .display = display, .preferences = {}};
+        prUiFrame(ui, &desc, buildOffscreen, &off);
+    };
+    if (a.demoTerminal) {
+        // A terminal tab running /bin/sh in the home directory, after a command has printed, within 10 s.
+        terminals->program = "/bin/sh";
+        const std::size_t id = a.model->add_terminal();
+        if (!terminals->open(id))
+            a.model->close_tab(a.model->active());
+        const char* command = "echo nexus terminal tab; uname -sm\r";
+        bool typed = false;
+        for (int i = 0; i < 500 && terminals->text(id).find("Darwin") == std::string::npos; ++i) {
+            frame();
+            if (!typed && i == 10) {
+                PrAppEvent e{.kind = PrAppEventKind_Text, .text = PrStringView{command, std::strlen(command)}};
+                prUiPushEvent(ui, &e);
+                typed = true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
+    // Enough frames for every query to read a layout: the first round routes nothing, and scrolling reads the last one.
+    for (int i = 0; i < 4; ++i)
+        frame();
     const PrLayoutScene* scene = prLayoutTreeScene(tree);
     std::vector<PrLayoutSceneScroll> scrolls(prLayoutSceneScrolls(tree, scene, nullptr, 0));
     prLayoutSceneScrolls(tree, scene, scrolls.data(), uint32_t(scrolls.size()));
@@ -244,6 +283,8 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prDrawRendererDestroy(renderer);
     prGpuDeviceDestroy(device);
     prDrawListRelease(list);
+    a.view.terminals = nullptr;
+    terminals.reset();
     prKitDestroy(kit);
     prUiDestroy(ui);
     prLayoutTreeDestroy(tree);
@@ -273,6 +314,7 @@ int main(int argc, char** argv) {
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool demo = false;
+    bool demoTerminal = false;
     bool windowed = false;
     bool printConfig = false;
     unsigned bench = 0;
@@ -287,11 +329,13 @@ int main(int argc, char** argv) {
             bench = unsigned(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--demo") == 0) {
             demo = true;
+        } else if (std::strcmp(argv[i], "--demo-terminal") == 0) {
+            demoTerminal = true;
         } else if (std::strcmp(argv[i], "--print-window-config") == 0) {
             printConfig = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES] "
-                "[--print-window-config]\n");
+            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png] "
+                "[--bench FRAMES] [--print-window-config]\n");
             return 2;
         }
     }
@@ -344,6 +388,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
     };
     a.bench = bench;
+    a.demoTerminal = demoTerminal;
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
@@ -370,6 +415,7 @@ int main(int argc, char** argv) {
             .event = event,
             .build = build,
             .laidOut = laidOut,
+            .close = closeWindow,
             .trace = trace,
             .context = &a,
         };

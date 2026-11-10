@@ -39,8 +39,10 @@ std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, con
 
 std::vector<std::string> friendTabNames(const Model& model) {
     std::vector<std::string> names;
-    for (std::size_t i = 0; i < model.tab_count(); ++i)
-        names.push_back(model.tab(i).name);      // a later tab kind that is never saved is skipped here
+    for (std::size_t i = 0; i < model.tab_count(); ++i) {
+        if (model.tab(i).kind == TabKind::Friend)  // a terminal tab is never saved
+            names.push_back(model.tab(i).name);
+    }
     return names;
 }
 

@@ -1,7 +1,8 @@
 # nexus
 
 nexus is a desktop app, being built, where one person talks with all of their AIs in one window: a tab for
-each AI, and Cmd-1 to Cmd-0 to switch between the first ten of them. It is for people who trust their AIs. In
+each AI, and Cmd-1 to Cmd-0 to switch between the first ten of them. Cmd-T opens a terminal tab after the AIs'
+tabs, a shell in the home directory, and Cmd-W closes it. It is for people who trust their AIs. In
 nexus each AI is to run with its permission prompts bypassed, inside a strict sandbox that is the guard, and
 nexus will never show a permission prompt.
 
@@ -42,6 +43,11 @@ Escape hides it too, and so does switching away: Command-Tab, a click on another
 Each friend listed by `nova-config friend list` has a tab. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. Enter sends the prompt, Command-Enter queues it, and
 Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller.
+
+Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it, and it
+closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends,
+and their order is not kept. On a terminal tab every key that is not a Command chord, Escape included, goes to the
+shell.
 
 nexus finds `nova-config` on the PATH your login shell gives, or at the full path in `NEXUS_NOVA_CONFIG`.
 

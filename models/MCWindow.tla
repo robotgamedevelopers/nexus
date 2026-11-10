@@ -1,8 +1,9 @@
 ------------------------------ MODULE MCWindow ------------------------------
 (***************************************************************************)
-(* The instance TLC checks Window.tla on: the constants as values, and a   *)
-(* bound on transcript and queue length. MCWindow.cfg is two tabs,         *)
-(* MCWindow3.cfg three, MCWindowEmpty.cfg none.                            *)
+(* The instance TLC checks Window.tla on: the constants as values, and     *)
+(* bounds on transcript and queue length and on the terminals ever added.  *)
+(* MCWindow.cfg is two friends, MCWindow3.cfg three, MCWindowEmpty.cfg     *)
+(* none; each adds terminals.                                              *)
 (***************************************************************************)
 EXTENDS Window
 
@@ -37,8 +38,19 @@ MCAppendEntries3 == {[kind |-> "Friend", text |-> "ok"]}
 \* the longest transcript, and the longest queue, TLC explores (set in each .cfg)
 CONSTANT MaxLen
 
+\* the most terminals ever added (a .cfg may override it: MaxTerms <- ...)
+MaxTerms == 1
+MCMaxTerms0 == 0
+MCMaxTerms2 == 2
+
+\* positions up to one past the last tab with every terminal open
+MCIdxT0 == 0 .. 2           \* no friends, up to two terminals
+MCIdxT2 == 0 .. 4           \* two friends, up to two terminals
+MCIdxT3 == 0 .. 4           \* three friends, up to one terminal
+
 \* the state constraint that keeps the instance finite
-Bounded == \A f \in Ids : Len(transcript[f]) <= MaxLen /\ Len(queue[f]) <= MaxLen
+Bounded == /\ \A f \in Ids : Len(transcript[f]) <= MaxLen /\ Len(queue[f]) <= MaxLen
+           /\ nextId <= N + MaxTerms
 
 \* TLC tells states apart by the model variables alone. Sound because no
 \* action reads `last` and no property reads it unprimed: two states that

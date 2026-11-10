@@ -339,24 +339,74 @@ struct Builder {
             prKitPlace(kit, tab, &tabPlace);
             if (prKitActivated(kit, tab))
                 model.select_tab(i);
-            prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(model.tab(i).name)});
+            prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(label(model.tab(i)))});
         }
+        // A drop across zones (a terminal among the friends, or a friend among the terminals) is refused by the model
+        // and changes nothing: the kit's strip has no way to keep its caret out of another zone.
         uint32_t from = 0;
         uint32_t to = 0;
         if (prKitMoved(kit, row, &from, &to) && model.move_tab(from, to) && view.moved)
             view.moved();
     }
 
+    // A friend's tab shows the friend's name; a terminal's the title its shell set, or "terminal".
+    std::string label(const Tab& tab) {
+        if (tab.kind == TabKind::Friend)
+            return tab.name;
+        std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
+        return title.empty() ? std::string("terminal") : title;
+    }
+
     // Each friend keeps its scroll while another shows, wherever its tab stands. Offsets count from the scroller's
     // origin, its bottom, so a tab never scrolled stays at its newest entry.
     void keepScroll(PrLayoutNode scroller, std::size_t id) {
-        view.scrolls.resize(model.tab_count(), 0);
         if (view.shown == id)
             return;
-        if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone)
-            view.scrolls[view.shown] = prLayoutUnitToPx(prLayoutNodeScroll(tree, view.transcript).y);
+        leaveTranscript();
         view.shown = id;
         prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(view.scrolls[id])});
+    }
+
+    // Keeps the scroll of the friend the transcript showed last round (by Tab::id; the friends' ids are 0 to the number
+    // of friends less one, below tab_count()).
+    void leaveTranscript() {
+        view.scrolls.resize(model.tab_count(), 0);
+        if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone)
+            view.scrolls[view.shown] = prLayoutUnitToPx(prLayoutNodeScroll(tree, view.transcript).y);
+    }
+
+    // A terminal tab: its terminal fills the window's width and the height below the strip, with no prompt. The
+    // transcript and the prompt are not declared, so the friend shown before keeps its scroll, and its draft comes back
+    // with the caret at its end.
+    void terminal(PrLayoutNode window, const Tab& tab) {
+        if (view.shown != ~std::size_t(0))
+            leaveTranscript();
+        view.shown = ~std::size_t(0);
+        view.prompted = ~std::size_t(0);
+        view.transcript = kPrLayoutNodeNone;
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+        const float below = std::max(0.0f, view.extent.y - (kStripHeight * k() + 1));
+        view.terminals->show(tab.id, window, PrVec2{view.extent.x, below});
+    }
+
+    // Each round: a terminal whose shell ended closes; every other terminal that does not show is serviced, so that
+    // its title, alerts and exit stay current.
+    void serviceTerminals() {
+        if (view.terminals == nullptr)
+            return;
+        for (std::size_t i = model.tab_count(); i-- > 0;) {
+            const Tab& tab = model.tab(i);
+            if (tab.kind != TabKind::Terminal)
+                continue;
+            const std::size_t id = tab.id;
+            if (view.terminals->ended(id)) {
+                model.close_tab(i);
+                view.terminals->close(id);
+            } else if (i != model.active()) {
+                view.terminals->update(id);
+            }
+        }
     }
 
     void transcript(PrLayoutNode window) {
@@ -481,19 +531,43 @@ struct Builder {
             if (prUiKeyPressed(ui, window, t.key, t.modifiers))
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
+        // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
+        // terminal's, and does nothing on a friend's. Claimed on the window like the keys above: a terminal leaves
+        // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
+        if (prUiKeyPressed(ui, window, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
+            const std::size_t id = model.add_terminal();
+            if (!view.terminals->open(id))
+                model.close_tab(model.active());
+        }
+        if (prUiKeyPressed(ui, window, PrAppKey('W'), PrAppModifierFlag_Super) && model.tab_count() != 0 &&
+                model.tab(model.active()).kind == TabKind::Terminal) {
+            const std::size_t id = model.tab(model.active()).id;
+            model.close_tab(model.active());
+            view.terminals->close(id);
+        }
+        serviceTerminals();
+        // On a terminal tab, Escape and Command-Escape are not claimed: the terminal claims Escape for its shell, and
+        // Command-Escape does nothing there.
+        const bool onFriend = model.tab_count() == 0 || model.tab(model.active()).kind == TabKind::Friend;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
         // first, then CompositionEnd): read before the area takes this round's events.
         const bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
         // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed on the window
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
-        if (prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing && view.hide)
+        if (onFriend && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing &&
+                view.hide)
             view.hide();
         // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
         // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
-        if (prUiKeyPressed(ui, window, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
+        if (onFriend && prUiKeyPressed(ui, window, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
             view.stop();
         strip(window);
+        // the strip may have selected or moved a tab: read the active tab again
+        if (model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Terminal) {
+            terminal(window, model.tab(model.active()));
+            return;
+        }
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
         if (model.tab_count() != 0)
@@ -539,6 +613,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     look.textSteps = view.askedTextSteps;
     PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps);
     prKitSetTheme(kit, &theme);
+    if (view.terminals != nullptr)
+        view.terminals->setTextScale(textScale(look.textSteps));
     return true;
 }
 

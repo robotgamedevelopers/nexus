@@ -236,6 +236,14 @@ void storeSavesAndRestores() {
     CHECK(again.tab_count() == 3 && again.tab(0).name == "c" && again.tab(1).name == "a" && again.tab(2).name == "b");
 }
 
+void terminalTabsAreNeverSaved() {
+    Model model(named({"a", "b"}));
+    model.add_terminal();
+    model.add_terminal();
+    CHECK(model.move_tab(1, 0));
+    CHECK(friendTabNames(model) == (std::vector<std::string>{"b", "a"}));
+}
+
 void badStoreUsesTheLoadedOrderAndSaysSo() {
     const std::vector<FriendInfo> loaded = named({"a", "b"});
     MemoryStore mem;
@@ -260,6 +268,7 @@ int main() {
     savedOrderIsApplied();
     tabOrderTextRoundTrips();
     storeSavesAndRestores();
+    terminalTabsAreNeverSaved();
     badStoreUsesTheLoadedOrderAndSaysSo();
     capsLockIsStripped();
     parsesEnabledFriendsInOrder();

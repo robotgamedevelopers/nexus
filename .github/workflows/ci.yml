@@ -77,7 +77,7 @@ jobs:
               build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
             done
           done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup; do
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
           done
 

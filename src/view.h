@@ -32,9 +32,25 @@ struct Look {
 // text scale `steps` steps from 1.
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0);
 
+// The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
+// tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
+struct Terminals {
+    virtual ~Terminals() = default;
+    virtual bool open(std::size_t id) = 0;      // starts a new tab's shell; false, having printed why, if it cannot
+    virtual void close(std::size_t id) = 0;     // ends its shell and frees it
+    // Declares the one that shows this round under `parent`, `extent` px, and gives it focus.
+    virtual void show(std::size_t id, PrLayoutNode parent, PrVec2 extent) = 0;
+    virtual void update(std::size_t id) = 0;    // services one that does not show this round
+    virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read
+    virtual std::string title(std::size_t id) = 0;  // the title its shell set, or empty
+    virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
+};
+
 struct View {
     Model* model = nullptr;
     Look* look = nullptr;
+    Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
+    PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (platform_mac.h hideOverlay); unset when
@@ -59,7 +75,9 @@ bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
 // the round's input: tab clicks and drags (reordering), Command-1 to Command-0 (by position), the text scale's keys,
-// Escape (hide) and Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter.
+// Command-T (a terminal tab) and Command-W (closes a terminal tab), and on a friend's tab Escape (hide),
+// Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter. A terminal tab shows its terminal in
+// place of the transcript and the prompt; terminals that do not show are serviced, and one whose shell ended closes.
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 // Runs one event through the event filter (input.h). Returns true if the window took it, having queued the event

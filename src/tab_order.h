@@ -18,8 +18,9 @@ namespace nexus {
 // in their loaded order. Saved names that no longer exist are dropped, and a name saved twice counts once. Pure.
 std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, const std::vector<std::string>& saved);
 
-// The names of the friend tabs, in the order they stand. Every tab is a friend's today; when tabs of other kinds
-// arrive (a terminal's, never saved), the one-line kind check goes in this function's loop (tab_order.cpp).
+// The names of the friend tabs, in the order they stand. Terminal tabs are skipped: they are never saved. A saved
+// order is applied to the friend list before the model is built (applyTabOrder), so it only ever reorders friends,
+// inside the friend zone; terminals are added after.
 std::vector<std::string> friendTabNames(const Model& model);
 
 // The file's text: a header line, then one name per line, UTF-8. Pure.
