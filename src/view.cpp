@@ -594,28 +594,32 @@ struct Builder {
 
     void build(PrLayoutNode parent) {
         PrLayoutNode window = element(parent, Part::Window);
+        // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
+        // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
+        // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
+        // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
+        const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
         // Command-1 to Command-0 select the tabs at positions 1 to 10 in the strip's current order, in the keyboard
-        // row's order, claimed on the window, an ancestor
-        // of the focused prompt. A key whose tab does not exist is refused by the model and changes nothing. macOS
-        // types no text for a Command chord.
+        // row's order. A key whose tab does not exist is refused by the model and changes nothing. macOS types no text
+        // for a Command chord.
         for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
-            if (prUiKeyPressed(ui, window, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super))
+            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super))
                 model.select_tab(n);
         }
         // The text scale's keys, claimed the same way, ask for a new scale; the next frame applies it (beginWindowFrame).
         for (const TextKey& t : kTextKeys) {
-            if (prUiKeyPressed(ui, window, t.key, t.modifiers))
+            if (prUiKeyPressed(ui, keys, t.key, t.modifiers))
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
-        // terminal's, and does nothing on a friend's. Claimed on the window like the keys above: a terminal leaves
+        // terminal's, and does nothing on a friend's. Claimed like the keys above: a terminal leaves
         // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
-        if (prUiKeyPressed(ui, window, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
+        if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
             if (!view.terminals->open(id))
                 model.close_tab(model.active());
         }
-        if (prUiKeyPressed(ui, window, PrAppKey('W'), PrAppModifierFlag_Super) && model.tab_count() != 0 &&
+        if (prUiKeyPressed(ui, keys, PrAppKey('W'), PrAppModifierFlag_Super) && model.tab_count() != 0 &&
                 model.tab(model.active()).kind == TabKind::Terminal) {
             const std::size_t id = model.tab(model.active()).id;
             model.close_tab(model.active());
@@ -630,15 +634,15 @@ struct Builder {
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
         // first, then CompositionEnd): read before the area takes this round's events.
         const bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
-        // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed on the window
+        // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
-        if (hides && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing &&
+        if (hides && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing &&
                 view.hide)
             view.hide();
         // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
         // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
-        if (onFriend && prUiKeyPressed(ui, window, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
+        if (onFriend && prUiKeyPressed(ui, keys, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
             view.stop();
         strips(window);
         // the strip may have selected or moved a tab: read the active tab again

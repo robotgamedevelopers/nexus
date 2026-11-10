@@ -10,6 +10,7 @@
 
 #include "pr/font_set.h"
 #include "pr/kit.h"
+#include "pr/kit_surface.h"
 #include "pr/layout_query.h"
 #include "pr/layout_tree.h"
 #include "pr/text.h"
@@ -165,9 +166,15 @@ struct Harness {
             .display = prAppDisplayDefault(),
             .preferences = {},
         };
+        // Under a surface that fills the viewport, as Prax's studio window builds the app's round (studio_window.cpp
+        // build), so that the window is not the tree's root, as in the app.
         prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
             Harness& h = *static_cast<Harness*>(context);
-            buildWindow(h.view, h.kit, kPrLayoutNodeNone);
+            PrKitSurfaceStyle style{
+                .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
+                .background = PrKitBackground_App,
+            };
+            buildWindow(h.view, h.kit, prKitSurface(h.kit, kPrLayoutNodeNone, {}, style));
         }, this);
     }
 
@@ -241,6 +248,10 @@ struct Harness {
     // The tab strip, the window's first child, and its tabs in order, at the last layout. Outside a drag the strip holds
     // only its tabs.
     PrLayoutNode strip() const {
+        return prLayoutNodeFirstChild(tree, window());
+    }
+    // The window: the surface's one child (frame).
+    PrLayoutNode window() const {
         return prLayoutNodeFirstChild(tree, prLayoutTreeRoot(tree));
     }
     // With the sprint tab, the window's first child is a row of two strips: the sprint tab's, then the others'.
@@ -1022,7 +1033,7 @@ void commandTAddsAndShowsATerminal() {
     std::vector<std::string> l = h.labels();
     CHECK(l.size() == 3 && l[2] == "terminal");
     // The window holds only the strip: the fake draws nothing, and nothing else is declared.
-    PrLayoutNode window = prLayoutTreeRoot(h.tree);
+    PrLayoutNode window = h.window();
     CHECK(prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, window)) == kPrLayoutNodeNone);
     h.terminals.titles[2] = "~/src";
     h.frame();
@@ -1192,6 +1203,32 @@ void sprintTabIsFirstAndCommandOne() {
     CHECK(h.active().kind == TabKind::Sprint);
 }
 
+// Command-digit selects by strip position from the sprint tab and from a friend's, at launch and after coming back to
+// the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
+void commandDigitsWorkFromTheSprintTab() {
+    Harness h = withSprint(3);
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "f1", "f2", "f3"}));
+    h.commandDigit(3);
+    CHECK(h.active().name == "f2");
+    h.commandDigit(2);
+    CHECK(h.active().name == "f1");
+    h.commandDigit(1);
+    CHECK(h.active().kind == TabKind::Sprint);
+    h.commandDigit(2);
+    CHECK(h.active().name == "f1");
+    h.commandDigit(1);
+    CHECK(h.active().kind == TabKind::Sprint);
+    h.commandDigit(3);
+    CHECK(h.active().name == "f2");
+    h.commandDigit(9);
+    CHECK(h.active().name == "f2");
+    h.commandDigit(1);
+    h.commandDigit(9);
+    CHECK(h.active().kind == TabKind::Sprint);
+    h.commandDigit(4);
+    CHECK(h.active().name == "f3");
+}
+
 // Typing, Enter and Command-Enter on the sprint tab change no draft and send nothing.
 void sprintTabTakesNoText() {
     Harness h = withSprint();
@@ -1264,6 +1301,7 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 
 int main() {
     sprintTabIsFirstAndCommandOne();
+    commandDigitsWorkFromTheSprintTab();
     sprintTabTakesNoText();
     sprintTabNeverMoves();
     sprintTabKeysCloseNothing();
