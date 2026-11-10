@@ -10,6 +10,19 @@
 # Java and the TLC jar come from the runner's machine (the fleet installs them), never downloaded here. The
 # jar must be the pinned tla2tools.jar v1.7.4, whose sha256 is in .github/tla2tools.sha256; any other jar
 # fails the job.
+#
+# Builds use every core and tests run one job per core (`sysctl -n hw.ncpu`). Caches live outside the workspace, under
+# ~/Library/Caches/nexus-ci on the runner's machine, so a build is from scratch but Prax is not recompiled each time:
+#   ccache/                    compiled objects, when the machine has ccache; CCACHE_BASEDIR makes the runners'
+#                              different workspaces hit (it compiles with relative paths, so objects are identical)
+#   lto/                       the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
+#                              everything it pulls in unless this cache holds it); it hits across workspaces only
+#                              because ccache made the objects identical
+# Both are shared by the machine's runners: ccache and LLVM's LTO cache write each entry to a temporary file and rename
+# it into place, so concurrent jobs are safe.
+#   <runner>/prax-downloads/   Prax's download cache (PR_DOWNLOAD_DIR). One per runner, because Prax writes a download
+#                              straight to its final path and two jobs fetching one file at once corrupt it; a runner
+#                              runs one job at a time.
 
 name: ci
 
@@ -38,15 +51,45 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          caches="$HOME/Library/Caches/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "NEXUS_CACHES=$caches"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
+            echo "JOBS=$(sysctl -n hw.ncpu)"
+          } >> "$GITHUB_ENV"
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
+          else
+            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto"
       - name: Build
-        run: cmake --build build -j4
+        run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
-        run: ctest --test-dir build -L unit -j4 --output-on-failure
+        run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
       # The headless window (system fonts), real child processes and a real file: not unit tests.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j4 --output-on-failure
+        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure
+      - name: ccache hits in this job
+        if: always()
+        shell: bash
+        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
   # the first report: the unit tests, and the trace walks on every friend count and every fault (no TLC).
@@ -59,13 +102,21 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Prax's download cache, one per runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
       - name: Build the model checks
-        run: cmake --build build -j4 --target model_checks
+        run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -117,10 +168,21 @@ jobs:
             exit 1
           fi
           echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Prax's download cache, one per runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       # Only the model and its check programs: no app and no Prax shaders, so any macOS runner will do.
       - name: Build the model checks
-        run: cmake --build build -j4 --target model_checks
+        run: cmake --build build --parallel "$JOBS" --target model_checks
+      # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
+      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The two largest instances, label
+      # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
-        run: ctest --test-dir build -L model -j4 --output-on-failure
+        run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure

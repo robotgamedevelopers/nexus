@@ -1,0 +1,70 @@
+# Nightly for nexus: the TLA+ instances too large for the per-commit model job (ctest label model_nightly), on the same
+# runners as ci.yml's model job. ci.yml checks every property on every pull request, on the smaller instances, with
+# every witness and trace check; this workflow adds the two largest instances (tests/model/CMakeLists.txt says which and
+# why). Nightlies have no 2-minute limit.
+#
+# Java and the TLC jar come from the runner's machine, as in ci.yml.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  model-large:
+    runs-on: [self-hosted, fleet, macOS, ARM64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Java and the pinned TLC jar from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          java=""
+          for c in "$HOME/sdk/bin/java" /opt/homebrew/opt/openjdk/bin/java; do
+            if [ -x "$c" ] && "$c" -version >/dev/null 2>&1; then java=$c; break; fi
+          done
+          if [ -z "$java" ]; then
+            echo "::error::no working java on $(hostname -s) (looked at \$HOME/sdk/bin/java and /opt/homebrew/opt/openjdk/bin/java): install a JDK 21 on this runner's machine through the fleet play, then re-run"
+            exit 1
+          fi
+          "$java" -version
+          dirname "$java" >> "$GITHUB_PATH"
+          jar="$HOME/sdk/tla/tla2tools.jar"
+          if [ ! -f "$jar" ]; then
+            echo "::error::no TLC jar at $jar on $(hostname -s): place tla2tools.jar v1.7.4 there (sha256 in .github/tla2tools.sha256; another fleet machine holds one), then re-run"
+            exit 1
+          fi
+          want=$(cut -d' ' -f1 .github/tla2tools.sha256)
+          have=$(shasum -a 256 "$jar" | cut -d' ' -f1)
+          if [ "$want" != "$have" ]; then
+            echo "::error::$jar on $(hostname -s) is not the pinned tla2tools.jar v1.7.4 (sha256 $have, want $want): replace it with the pinned jar, then re-run"
+            exit 1
+          fi
+          echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Prax's download cache, one per runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build the model checks
+        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: The largest instances
+        run: ctest --test-dir build -L '^model_nightly$' -j "$JOBS" --output-on-failure
