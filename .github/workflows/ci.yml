@@ -44,6 +44,8 @@ jobs:
         run: cmake --build build -j4
       - name: Unit tests
         run: ctest --test-dir build -L unit --output-on-failure
+      - name: Functional tests
+        run: ctest --test-dir build -L functional --output-on-failure
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

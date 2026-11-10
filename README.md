@@ -1,7 +1,8 @@
 # nexus
 
 nexus is a desktop app, being built, where one person talks with all of their AIs in one window: a tab for
-each AI, and Cmd-1 to Cmd-0 to switch between the first ten of them. It is for people who trust their AIs. In
+each AI, and Cmd-1 to Cmd-0 to switch between the first ten of them. Cmd-T opens a terminal tab after the AIs'
+tabs, a shell in the home directory, and Cmd-W closes it. It is for people who trust their AIs. In
 nexus each AI is to run with its permission prompts bypassed, inside a strict sandbox that is the guard, and
 nexus will never show a permission prompt.
 

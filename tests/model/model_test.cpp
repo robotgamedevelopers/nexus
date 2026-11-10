@@ -41,8 +41,8 @@ bool same_entry(const Entry& a, const Entry& b) {
 }
 
 bool same_tab(const Tab& a, const Tab& b) {
-    if (a.id != b.id || a.name != b.name || a.model != b.model || a.draft != b.draft || a.queue != b.queue ||
-            a.transcript.size() != b.transcript.size())
+    if (a.id != b.id || a.kind != b.kind || a.name != b.name || a.model != b.model || a.draft != b.draft ||
+            a.queue != b.queue || a.transcript.size() != b.transcript.size())
         return false;
     for (std::size_t k = 0; k < a.transcript.size(); ++k) {
         if (!same_entry(a.transcript[k], b.transcript[k]))
@@ -307,6 +307,10 @@ std::string names(const Model& m) {
     return out;
 }
 
+std::vector<FriendInfo> friendsOne() {
+    return {{"ada", "m1"}};
+}
+
 std::vector<FriendInfo> five() {
     return {{"a", "m"}, {"b", "m"}, {"c", "m"}, {"d", "m"}, {"e", "m"}};
 }
@@ -435,6 +439,124 @@ void move_with_one_tab_or_none() {
     CHECK(none.tab_count() == 0 && none.active() == 0);
 }
 
+// ---- Terminal tabs ----
+
+using nexus::TabKind;
+
+// the tabs' ids in order, joined by spaces
+std::string ids(const Model& m) {
+    std::string out;
+    for (std::size_t j = 0; j < m.tab_count(); ++j)
+        out += (j ? " " : "") + std::to_string(m.tab(j).id);
+    return out;
+}
+
+void add_terminal_appends_selects_and_returns_a_new_id() {
+    Model m(three());
+    m.set_draft(1, "kept");
+    const Model before = m;
+    CHECK(m.add_terminal() == 3);
+    CHECK(m.tab_count() == 4);
+    CHECK(m.active() == 3);
+    CHECK(m.tab(3).id == 3 && m.tab(3).kind == TabKind::Terminal);
+    CHECK(m.tab(3).name.empty() && m.tab(3).transcript.empty() && m.tab(3).draft.empty() && m.tab(3).queue.empty());
+    for (std::size_t j = 0; j < 3; ++j)
+        CHECK(same_tab(m.tab(j), before.tab(j)));
+    CHECK(m.add_terminal() == 4);
+    CHECK(ids(m) == "0 1 2 3 4" && m.active() == 4);
+}
+
+void ids_are_never_reused() {
+    Model m(three());
+    CHECK(m.add_terminal() == 3);
+    CHECK(m.add_terminal() == 4);
+    CHECK(m.close_tab(4));
+    CHECK(m.close_tab(3));
+    CHECK(m.add_terminal() == 5);
+    CHECK(ids(m) == "0 1 2 5");
+    Model none({});
+    CHECK(none.add_terminal() == 0);
+    CHECK(none.close_tab(0));
+    CHECK(none.add_terminal() == 1);
+}
+
+void close_refuses_a_friend_and_out_of_range() {
+    Model m(three());
+    m.add_terminal();
+    m.set_draft(0, "x");
+    m.select_tab(1);
+    const Model before = m;
+    CHECK(!m.close_tab(0));
+    CHECK(!m.close_tab(2));
+    CHECK(!m.close_tab(4));
+    CHECK(!m.close_tab(kHuge));
+    CHECK(same(m, before));
+}
+
+void close_removes_exactly_that_tab() {
+    Model m(friendsOne());
+    m.add_terminal();   // id 1
+    m.add_terminal();   // id 2
+    m.add_terminal();   // id 3
+    m.select_tab(0);
+    CHECK(m.close_tab(2));
+    CHECK(ids(m) == "0 1 3");
+    CHECK(m.active() == 0);   // another tab was active: it stays active
+    m.select_tab(2);          // id 3
+    CHECK(m.close_tab(1));
+    CHECK(ids(m) == "0 3");
+    CHECK(m.active() == 1 && m.tab(1).id == 3);   // the active tab, shifted left with it
+}
+
+void close_active_takes_the_next_or_the_last() {
+    Model m(friendsOne());
+    m.add_terminal();   // 1
+    m.add_terminal();   // 2
+    m.add_terminal();   // 3
+    m.select_tab(2);    // id 2, in the middle
+    CHECK(m.close_tab(2));
+    CHECK(ids(m) == "0 1 3" && m.active() == 2 && m.tab(2).id == 3);   // the tab now at its position
+    CHECK(m.close_tab(2));   // the active tab is the last
+    CHECK(ids(m) == "0 1" && m.active() == 1);
+    CHECK(m.close_tab(1));
+    CHECK(ids(m) == "0" && m.active() == 0);
+    Model none({});
+    none.add_terminal();
+    CHECK(none.close_tab(0));
+    CHECK(none.tab_count() == 0 && none.active() == 0);   // none left
+}
+
+void a_terminal_takes_no_text() {
+    Model m(three());
+    m.set_draft(0, "friend's");
+    m.add_terminal();
+    const Model before = m;
+    CHECK(!m.set_draft(3, "hi"));
+    CHECK(!m.send(3));
+    CHECK(!m.queue(3));
+    CHECK(!m.append(3, Entry{EntryKind::Friend, "x"}));
+    CHECK(same(m, before));
+    CHECK(m.select_tab(3) && m.select_tab(0));   // select treats every kind alike
+}
+
+void moves_stay_in_their_zone() {
+    Model m(three());
+    m.add_terminal();   // 3
+    m.add_terminal();   // 4
+    m.select_tab(1);
+    const Model before = m;
+    CHECK(!m.move_tab(3, 0));   // a terminal before a friend
+    CHECK(!m.move_tab(4, 2));   // a terminal between friends
+    CHECK(!m.move_tab(0, 3));   // a friend behind a terminal
+    CHECK(!m.move_tab(2, 4));
+    CHECK(same(m, before));
+    CHECK(m.move_tab(4, 3));    // terminals among themselves
+    CHECK(ids(m) == "0 1 2 4 3");
+    CHECK(m.move_tab(0, 2));    // friends among themselves
+    CHECK(ids(m) == "1 2 0 4 3");
+    CHECK(m.tab(m.active()).id == 1);
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -469,6 +591,13 @@ const Case kCases[] = {
     {"repeated_moves_are_a_permutation", repeated_moves_are_a_permutation},
     {"move_out_of_range_changes_nothing", move_out_of_range_changes_nothing},
     {"move_with_one_tab_or_none", move_with_one_tab_or_none},
+    {"add_terminal_appends_selects_and_returns_a_new_id", add_terminal_appends_selects_and_returns_a_new_id},
+    {"ids_are_never_reused", ids_are_never_reused},
+    {"close_refuses_a_friend_and_out_of_range", close_refuses_a_friend_and_out_of_range},
+    {"close_removes_exactly_that_tab", close_removes_exactly_that_tab},
+    {"close_active_takes_the_next_or_the_last", close_active_takes_the_next_or_the_last},
+    {"a_terminal_takes_no_text", a_terminal_takes_no_text},
+    {"moves_stay_in_their_zone", moves_stay_in_their_zone},
 };
 
 } // namespace

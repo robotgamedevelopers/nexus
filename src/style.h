@@ -16,6 +16,8 @@ constexpr float kBodySize = 28;        // transcript, bubbles, prompt, dim notic
 constexpr float kTabSize = 26;         // tab labels (the reference's title row)
 constexpr float kLabelSize = 24;       // model label under the prompt
 constexpr float kMetaSize = 21;        // "queued" (not in the reference; one step below the label)
+constexpr float kTerminalSize = 21;    // a terminal tab's monospaced cells (not in the reference; a guess, at 0.75 of
+                                       // the body size, where Prax's terminal app sets 13 px in a smaller window)
 
 // Spacing, as multiples of the body size.
 constexpr float kU = kBodySize;

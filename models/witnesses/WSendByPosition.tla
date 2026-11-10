@@ -5,7 +5,7 @@
 EXTENDS MCWindow
 
 BrokenSend(i) ==
-    IF i \in Tabs /\ draft[i] \notin Blank
+    IF i \in Tabs /\ i \in Ids /\ draft[i] \notin Blank
     THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
@@ -14,7 +14,7 @@ BrokenSend(i) ==
          /\ UNCHANGED model
 
 BrokenQueue(i) ==
-    IF i \in Tabs /\ draft[i] \notin Blank
+    IF i \in Tabs /\ i \in Ids /\ draft[i] \notin Blank
     THEN /\ queue' = [queue EXCEPT ![i] = Append(@, draft[i])]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)

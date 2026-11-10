@@ -3,6 +3,8 @@
 // made-up clock (from 1000 s), never the real one. Text is set in the system's fonts.
 
 #include <cstdio>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -46,6 +48,38 @@ std::vector<FriendInfo> friendsNamed(std::size_t count) {
     return out;
 }
 
+// The terminal tabs' shells with no process: it records what the view asks of it.
+struct FakeTerminals final : Terminals {
+    std::set<std::size_t> running;              // opened and not closed
+    std::vector<std::size_t> closed;            // in the order closed
+    std::vector<std::size_t> shown;             // the ids shown, one per round
+    std::map<std::size_t, int> updates;         // rounds each was serviced without showing
+    std::set<std::size_t> finished;             // ids whose shell has ended
+    std::map<std::size_t, std::string> titles;
+    PrVec2 extent{};                            // the extent the last show was given
+    float scale = 1;
+    bool refuse = false;                        // open fails
+
+    bool open(std::size_t id) override {
+        if (refuse)
+            return false;
+        running.insert(id);
+        return true;
+    }
+    void close(std::size_t id) override {
+        running.erase(id);
+        closed.push_back(id);
+    }
+    void show(std::size_t id, PrLayoutNode, PrVec2 e) override {
+        shown.push_back(id);
+        extent = e;
+    }
+    void update(std::size_t id) override { ++updates[id]; }
+    bool ended(std::size_t id) override { return finished.count(id) != 0; }
+    std::string title(std::size_t id) override { return titles.count(id) ? titles[id] : std::string(); }
+    void setTextScale(float k) override { scale = k; }
+};
+
 // A window with no window: the view, its model of two friends (or as many as asked), and a kit over a UI context over
 // a layout tree.
 struct Harness {
@@ -57,6 +91,7 @@ struct Harness {
     PrUi* ui = nullptr;
     PrKit* kit = nullptr;
     Look look;
+    FakeTerminals terminals;
     View view;
     double time = 1000;
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
@@ -76,6 +111,8 @@ struct Harness {
         kit = prKitCreate(ui, &theme);
         view.model = &model;
         view.look = &look;
+        view.terminals = &terminals;
+        view.extent = PrVec2{1000, 780};
         view.hide = [this] { ++hides; };
         view.stop = [this] { ++stops; };
         frame();
@@ -178,7 +215,7 @@ struct Harness {
     // The tab strip, the window's first child, and its tabs in order, at the last layout. Outside a drag the strip holds
     // only its tabs.
     PrLayoutNode strip() const {
-        return prLayoutNodeFirstChild(tree, prLayoutNodeParent(tree, view.transcript));
+        return prLayoutNodeFirstChild(tree, prLayoutTreeRoot(tree));
     }
     std::vector<PrLayoutNode> tabs() const {
         std::vector<PrLayoutNode> out;
@@ -215,6 +252,33 @@ struct Harness {
         std::string out;
         for (std::size_t j = 0; j < model.tab_count(); ++j)
             out += (j ? " " : "") + model.tab(j).name;
+        return out;
+    }
+
+    // The tabs' ids in order.
+    std::string ids() const {
+        std::string out;
+        for (std::size_t j = 0; j < model.tab_count(); ++j)
+            out += (j ? " " : "") + std::to_string(model.tab(j).id);
+        return out;
+    }
+
+    // Command-T and Command-W, as macOS sends them: the letter's key, its code, and no text.
+    void commandT() {
+        key(PrAppKey('T'), PrAppKeyCode_KeyT, PrAppModifierFlag_Super);
+    }
+    void commandW() {
+        key(PrAppKey('W'), PrAppKeyCode_KeyW, PrAppModifierFlag_Super);
+    }
+
+    // The tab labels' texts, in order.
+    std::vector<std::string> labels() const {
+        std::vector<std::string> out;
+        for (PrLayoutNode t : tabs()) {
+            PrLayoutNode only = prLayoutNodeFirstChild(tree, t);
+            PrStringView text = only != kPrLayoutNodeNone ? prLayoutNodeText(tree, only) : PrStringView{};
+            out.emplace_back(text.data != nullptr ? text.data : "", text.size);
+        }
         return out;
     }
 
@@ -794,6 +858,169 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     CHECK(after > before - 0.5f && after < before + 0.5f);
 }
 
+// ---- Terminal tabs ----
+
+// Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt, no
+// model label and no transcript; its label is "terminal" until its shell sets a title.
+void commandTAddsAndShowsATerminal() {
+    Harness h;
+    h.type("draft");
+    h.commandT();
+    CHECK(h.model.tab_count() == 3);
+    CHECK(h.model.active() == 2 && h.active().kind == TabKind::Terminal && h.active().id == 2);
+    CHECK(h.terminals.running.count(2) == 1);
+    CHECK(!h.terminals.shown.empty() && h.terminals.shown.back() == 2);
+    CHECK(h.terminals.extent.x == 1000);
+    CHECK(near(h.terminals.extent.y, 780 - (style::kStripHeight + 1)));
+    CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
+    CHECK(h.view.transcript == kPrLayoutNodeNone);
+    CHECK(h.model.tab(0).draft == "draft");
+    h.frame();
+    std::vector<std::string> l = h.labels();
+    CHECK(l.size() == 3 && l[2] == "terminal");
+    // The window holds only the strip: the fake draws nothing, and nothing else is declared.
+    PrLayoutNode window = prLayoutTreeRoot(h.tree);
+    CHECK(prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, window)) == kPrLayoutNodeNone);
+    h.terminals.titles[2] = "~/src";
+    h.frame();
+    l = h.labels();
+    CHECK(l.size() == 3 && l[2] == "~/src");
+    // Typing reaches no draft: keys on a terminal tab are the terminal's.
+    h.type("ls");
+    CHECK(h.model.tab(0).draft == "draft" && h.model.tab(1).draft.empty() && h.active().draft.empty());
+    // Back on a friend, its prompt shows its draft again.
+    h.commandDigit(1);
+    CHECK(h.view.promptBox != kPrLayoutNodeNone);
+    h.type("!");
+    CHECK(h.model.tab(0).draft == "draft!");
+}
+
+// Command-W on a friend's tab does nothing at all, whatever terminals are open.
+void commandWOnAFriendDoesNothing() {
+    Harness h;
+    h.type("keep");
+    h.commandW();
+    CHECK(h.model.tab_count() == 2 && h.model.active() == 0 && h.active().draft == "keep");
+    h.commandT();
+    h.commandDigit(2);
+    h.commandW();
+    CHECK(h.ids() == "0 1 2" && h.model.active() == 1);
+    CHECK(h.terminals.closed.empty() && h.terminals.running.count(2) == 1);
+    CHECK(h.hides == 0 && h.stops == 0);
+}
+
+// Command-W on a terminal's tab ends its shell and removes it: the tab now at its position shows, or the last tab if
+// it was the last.
+void commandWClosesTheTerminal() {
+    Harness h;
+    h.commandT();   // 2
+    h.commandT();   // 3
+    h.commandT();   // 4
+    CHECK(h.ids() == "0 1 2 3 4" && h.model.active() == 4);
+    h.commandDigit(4);  // id 3, between two terminals
+    h.commandW();
+    CHECK(h.ids() == "0 1 2 4" && h.model.active() == 3 && h.active().id == 4);
+    CHECK((h.terminals.closed == std::vector<std::size_t>{3}));
+    CHECK(h.terminals.shown.back() == 4);
+    h.commandW();       // the last tab
+    CHECK(h.ids() == "0 1 2" && h.model.active() == 2 && h.active().id == 2);
+    h.commandW();
+    CHECK(h.ids() == "0 1" && h.model.active() == 1);
+    CHECK((h.terminals.closed == std::vector<std::size_t>{3, 4, 2}) && h.terminals.running.empty());
+    h.commandW();       // a friend: nothing
+    CHECK(h.ids() == "0 1" && h.model.active() == 1);
+    h.commandT();
+    CHECK(h.ids() == "0 1 5");  // a new terminal takes a new id
+}
+
+// On a terminal's tab, Escape asks for no hide and Command-Escape does nothing; Command-digits, the text scale's keys,
+// Command-T and Command-W still work.
+void escapeOnATerminalHidesNothing() {
+    Harness h;
+    h.commandT();
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    h.key(PrAppKey_Enter, PrAppKeyCode_Enter);
+    CHECK(h.hides == 0 && h.stops == 0);
+    CHECK(h.model.active() == 2);
+    h.larger();
+    CHECK(h.look.textSteps == 1 && near(h.terminals.scale, style::textScale(1)));
+    h.smaller();
+    CHECK(h.look.textSteps == 0 && near(h.terminals.scale, 1));
+    h.commandDigit(1);
+    CHECK(h.model.active() == 0);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);    // a friend again: Escape hides
+    CHECK(h.hides == 1);
+}
+
+// Terminals that do not show are serviced every round; the one that shows is declared instead.
+void hiddenTerminalsAreServiced() {
+    Harness h;
+    h.commandT();   // 2
+    h.commandT();   // 3, shows
+    h.terminals.updates.clear();
+    h.frame();
+    CHECK(h.terminals.updates[2] > 0 && h.terminals.updates[3] == 0);
+    h.commandDigit(1);
+    h.terminals.updates.clear();
+    h.frame();
+    CHECK(h.terminals.updates[2] > 0 && h.terminals.updates[3] > 0);
+}
+
+// A terminal whose shell ended closes by itself, shown or not.
+void anEndedTerminalCloses() {
+    Harness h;
+    h.commandT();   // 2
+    h.commandT();   // 3, shows
+    h.terminals.finished.insert(2);
+    h.frame();
+    CHECK(h.ids() == "0 1 3" && h.model.active() == 2 && h.active().id == 3);
+    h.terminals.finished.insert(3);
+    h.frame();
+    CHECK(h.ids() == "0 1" && h.model.active() == 1);
+    CHECK((h.terminals.closed == std::vector<std::size_t>{2, 3}));
+    CHECK(h.view.promptBox != kPrLayoutNodeNone);
+}
+
+// A shell that cannot start leaves no tab.
+void aTerminalThatCannotStartLeavesNoTab() {
+    Harness h;
+    h.terminals.refuse = true;
+    h.commandT();
+    CHECK(h.ids() == "0 1" && h.model.active() == 1);
+    h.terminals.refuse = false;
+    h.commandT();
+    CHECK(h.ids() == "0 1 3");
+}
+
+// Terminals stand after the friends: a drag across the zones changes nothing; a drag among terminals reorders them;
+// Command-digits follow positions.
+void dragsStayInTheirZone() {
+    Harness h;
+    h.commandT();   // 2
+    h.commandT();   // 3
+    h.commandT();   // 4
+    h.frame();
+    h.dragTab(3, 0);        // a terminal before a friend
+    CHECK(h.ids() == "0 1 2 3 4");
+    h.dragTab(3, 1);        // between the friends' end and ... still a friend's place
+    CHECK(h.ids() == "0 1 2 3 4");
+    h.dragTab(0, 3);        // a friend among the terminals
+    CHECK(h.ids() == "0 1 2 3 4");
+    h.dragTab(1, 4);        // a friend to the end
+    CHECK(h.ids() == "0 1 2 3 4");
+    h.dragTab(4, 2);        // among the terminals
+    CHECK(h.ids() == "0 1 4 2 3");
+    h.dragTab(0, 1);        // among the friends
+    CHECK(h.ids() == "1 0 4 2 3");
+    h.commandDigit(3);
+    CHECK(h.active().id == 4);
+    h.commandDigit(1);
+    CHECK(h.active().id == 1);
+    h.commandDigit(5);
+    CHECK(h.active().id == 3);
+}
+
 } // namespace
 
 int main() {
@@ -823,6 +1050,14 @@ int main() {
     overlayKeepsAllButTheBackgroundOpaque();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
+    commandTAddsAndShowsATerminal();
+    commandWOnAFriendDoesNothing();
+    commandWClosesTheTerminal();
+    escapeOnATerminalHidesNothing();
+    hiddenTerminalsAreServiced();
+    anEndedTerminalCloses();
+    aTerminalThatCannotStartLeavesNoTab();
+    dragsStayInTheirZone();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

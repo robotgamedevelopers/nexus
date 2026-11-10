@@ -44,11 +44,17 @@ target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_view PUBLIC nexus_window_logic
     prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
+# The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
+add_library(nexus_terminals STATIC src/terminals.cpp)
+target_include_directories(nexus_terminals PUBLIC src)
+target_compile_options(nexus_terminals PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_terminals PUBLIC nexus_view prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)
+
 # The app, as a real bundle: nexus.app.
 add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
 set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus PRIVATE nexus_view
+target_link_libraries(nexus PRIVATE nexus_view nexus_terminals
     prax::studio_window prax::gpu prax::image prax::compress
     "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
 set_target_properties(nexus PROPERTIES

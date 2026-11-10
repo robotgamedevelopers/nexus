@@ -10,7 +10,7 @@
 #   WALK        optional: the trace_walk program; it is run first and writes WindowTraceData.tla into WORK
 #   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
-#               move the one whose move_tab leaves active behind
+#               move the one whose move_tab leaves active behind, close the one whose close_tab removes a friend
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at 60 s.
@@ -56,8 +56,10 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-queue)
     elseif(FAULTY STREQUAL "move")
         list(APPEND walk_args --faulty-move)
+    elseif(FAULTY STREQUAL "close")
+        list(APPEND walk_args --faulty-close)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue or move")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move or close")
     endif()
     execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/WindowTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
