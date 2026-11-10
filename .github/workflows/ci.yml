@@ -29,7 +29,9 @@ jobs:
   build-and-unit:
     # a pull request from a fork never runs on the fleet's runners
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain. Today only the runners labelled
+    # `services` have Xcode; drop the extra label when every macOS runner has it.
+    runs-on: [self-hosted, fleet, macOS, ARM64, services]
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -80,7 +82,8 @@ jobs:
           echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build -j4
+      # Only the model and its check programs: no app and no Prax shaders, so any macOS runner will do.
+      - name: Build the model checks
+        run: cmake --build build -j4 --target model_checks
       - name: Models and trace checks
         run: ctest --test-dir build -L model -j4 --output-on-failure
