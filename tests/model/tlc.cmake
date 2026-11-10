@@ -17,6 +17,7 @@
 #               sprint tab
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
+#   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at 60 s.
 
@@ -88,7 +89,10 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     endif()
 endif()
 
-set(flags -workers 2 -metadir "${WORK}/meta" -config "${cfg_name}")
+if(NOT DEFINED WORKERS OR "${WORKERS}" STREQUAL "")
+    set(WORKERS 2)
+endif()
+set(flags -workers ${WORKERS} -metadir "${WORK}/meta" -config "${cfg_name}")
 if(NOCHECK_DEADLOCK)
     list(APPEND flags -deadlock)
 endif()

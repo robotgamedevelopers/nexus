@@ -73,8 +73,8 @@ All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, f
 | `MCWindow.cfg` | the sprint tab, two friends and up to two terminals (`MaxTerms`, a bound on `nextId`), transcripts and queues up to 1 entry: 20,088 distinct states, about 8 s |
 | `MCWindowNoSprint.cfg` | the same without the sprint tab |
 | `MCWindow3Sprint.cfg` | the sprint tab, three friends in all six orders and up to one terminal, no entries: 2,106 distinct states, about 1 s |
-| `MCWindow3.cfg` | three friends in all six orders, no sprint tab, no terminals, transcripts and queues up to 1 entry: 104,976 distinct states, about 24 s |
-| `MCWindowLong.cfg` | two friends in both orders, no sprint tab, no terminals, transcripts and queues up to 2 entries: 142,884 distinct states, about 25 s |
+| `MCWindow3.cfg` | three friends in all six orders, no sprint tab, no terminals, transcripts and queues up to 1 entry: 104,976 distinct states, about 28 s on two workers, 8 s on eight |
+| `MCWindowLong.cfg` | two friends in both orders, no sprint tab, no terminals, transcripts and queues up to 2 entries: 142,884 distinct states, about 28 s on two workers, 8 s on eight |
 | `MCWindowEmpty.cfg` | the sprint tab, no friends, up to two terminals: added, moved among themselves and closed |
 
 ## Reversed witnesses
@@ -147,7 +147,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j4
 ```
 
-The `model` label runs the six instances, the forty-two witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the nine faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+The `model` label runs the six instances, the forty-two witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the nine faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on the four largest instances, which ctest counts as eight of its `-j` slots) and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 
