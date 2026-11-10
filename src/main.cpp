@@ -295,7 +295,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
         carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
 }
 
-// The overlay at launch: creates its window, registers the hotkey and shows the overlay, as a press of the hotkey would.
+// The overlay at launch: creates its window, registers the hotkey, and leaves the overlay hidden.
 // nexus creates the window here rather than through the app's description because a Studio window's open comes with
 // its first frame and a hidden window has no frames (Prax 2908525 studio_window.h prStudioWindowCreate, app_window.h
 // prAppWindowSetVisible): waiting on open() for a.window, nothing ever showed the overlay (models/Overlay.tla held,
@@ -314,7 +314,10 @@ bool start(void* context, PrStudioApp* studio) {
         std::fprintf(stderr, "nexus: the overlay hotkey (Command-backtick) did not register (status %d: %s), so only "
             "launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h\n",
             int(status), status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
-    carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
+    // Launch shows nothing and takes no focus (the owner 2026-11-10: "I want nothing visible no change, no input focus
+    // change ... until the hotkey"); the link connects meanwhile. Only with no hotkey does launch show it, else never.
+    if (status != PrStatus_Ok)
+        carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
     return true;
 }
 
@@ -634,7 +637,7 @@ int main(int argc, char** argv) {
     if (printConfig) {
         std::printf("nexus: the overlay window, as nexus asks Prax for it\n"
             "role: Overlay (a borderless panel above other apps, on every Space and beside fullscreen apps)\n"
-            "backdrop: %s; opens hidden; shown at launch\n"
+            "backdrop: %s; opens hidden; shown by the hotkey\n"
             "presence: %s\n"
             "hotkey: Command-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
             "frame: the whole screen with the pointer, menu bar included, set through the NSView at each show\n"
