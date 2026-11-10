@@ -36,6 +36,11 @@ MCDrafts3 == {"", " ", "hi"}
 MCBlank3 == {"", " "}
 MCAppendEntries3 == {[kind |-> "Friend", text |-> "ok"]}
 
+\* The empty draft and one with text: for the instance with the sprint tab, three friends and a terminal, where every
+\* order of the selection history multiplies the states (the other instances keep an all-whitespace draft).
+MCDrafts2 == {"", "hi"}
+MCBlank2 == {""}
+
 \* the longest transcript, and the longest queue, TLC explores (set in each .cfg)
 CONSTANT MaxLen
 

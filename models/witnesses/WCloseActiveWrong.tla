@@ -1,15 +1,16 @@
 -------------------------- MODULE WCloseActiveWrong --------------------------
 \* Reversed witness: closing the active tab makes the tab before it active,
-\* not the one that takes its position. CloseActiveRule must reject it.
+\* not the one selected before it. CloseActiveRule must reject it.
 EXTENDS MCWindow
 
-BrokenIndex(a, i, n) ==
-    IF a = i /\ i > 0 THEN i - 1 ELSE ClosedIndex(a, i, n)
+BrokenIndex(a, i, h) ==
+    IF a = i /\ i > 0 THEN i - 1 ELSE ClosedActive(a, i, order, h)
 
 BrokenClose(i) ==
     IF i \in Tabs /\ TabKind(At(i)) = "Terminal"
     THEN /\ order' = Removed(order, i)
-         /\ active' = BrokenIndex(active, i, Count)
+         /\ history' = Forget(history, At(i))
+         /\ active' = BrokenIndex(active, i, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)

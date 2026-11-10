@@ -129,7 +129,7 @@ jobs:
             done
             build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
           done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close; do
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
           done
 

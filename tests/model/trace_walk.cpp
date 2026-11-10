@@ -4,7 +4,7 @@
 //
 //   trace_walk <seed> <steps> <friends> [--no-sprint] [--faulty | --faulty-queue | --faulty-move |
 //              --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close |
-//              --faulty-sprint-move | --faulty-sprint-close] <out.tla>
+//              --faulty-sprint-move | --faulty-sprint-close | --faulty-close-fallback] <out.tla>
 //
 // The model is made with the sprint tab first, as the window makes it, unless --no-sprint.
 //
@@ -13,7 +13,7 @@
 // them, across zones too), drafts that are empty, all whitespace or text, and entries of every kind; it adds
 // terminals (up to kMaxTerminals open) and closes tabs of both kinds. Each record holds the operation, its arguments,
 // the value it returned (and the id add returned) and the model's whole state after it: the tabs' order (each
-// position's Tab::id) and, by position, each tab's kind, friend, draft, transcript and queue.
+// position's Tab::id), the selection history and, by position, each tab's kind, friend, draft, transcript and queue.
 //
 // --faulty walks FaultyModel instead: a test-only subclass whose send accepts a draft that is all whitespace but
 // not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. --faulty-move
@@ -22,7 +22,8 @@
 // trailing spaces. --faulty-send-dedup walks FaultySendDedupModel: a send of the text just sent appends nothing.
 // --faulty-close walks FaultyCloseModel: its close_tab removes a friend's tab too. --faulty-sprint-move walks
 // FaultySprintMoveModel: its move_tab puts the sprint tab in the friends' zone. --faulty-sprint-close walks
-// FaultySprintCloseModel: its close_tab removes the sprint tab too. TLC must reject each one's traces;
+// FaultySprintCloseModel: its close_tab removes the sprint tab too. --faulty-close-fallback walks
+// FaultyCloseFallbackModel: closing the active tab ignores the selection history. TLC must reject each one's traces;
 // that is the negative check that shows the binding can fail.
 
 #include "model.h"
@@ -147,6 +148,22 @@ public:
     }
 };
 
+// The test-only close fallback fault: closing the active tab ignores the selection history and keeps the rule before
+// it, the tab now at its position or the last, so closing the last terminal goes back to the last friend. Hides
+// Model::close_tab.
+class FaultyCloseFallbackModel : public Model {
+public:
+    using Model::Model;
+    bool close_tab(std::size_t i) {
+        const bool was_active = i == active();
+        if (!Model::close_tab(i))
+            return false;
+        if (was_active)
+            active_ = i < tab_count() ? i : (tab_count() == 0 ? 0 : tab_count() - 1);
+        return true;
+    }
+};
+
 // The test-only queue-length fault: past four queued prompts, the queue drops its oldest. Hides Model::queue.
 class FaultyQueueCapModel : public Model {
 public:
@@ -201,7 +218,8 @@ constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
                              : std::is_same_v<M, FaultySendDedupModel> ? ", faulty send-dedup model"
                              : std::is_same_v<M, FaultyCloseModel> ? ", faulty close model"
                              : std::is_same_v<M, FaultySprintMoveModel> ? ", faulty sprint-move model"
-                             : std::is_same_v<M, FaultySprintCloseModel> ? ", faulty sprint-close model" : "";
+                             : std::is_same_v<M, FaultySprintCloseModel> ? ", faulty sprint-close model"
+                             : std::is_same_v<M, FaultyCloseFallbackModel> ? ", faulty close-fallback model" : "";
 
 const char* tab_kind_name(nexus::TabKind k) {
     switch (k) {
@@ -277,6 +295,10 @@ std::string state(const M& m) {
     o << ">>, kind |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
         o << (j ? ", " : "") << tab_kind_name(m.tab(j).kind);
+    o << ">>, history |-> <<";
+    const auto& h = m.selection_history();
+    for (std::size_t k = 0; k < h.size(); ++k)
+        o << (k ? ", " : "") << h[k];
     o << ">>, friends |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
         o << (j ? ", " : "") << "[name |-> " << str(m.tab(j).name) << ", model |-> " << str(m.tab(j).model) << "]";
@@ -459,7 +481,8 @@ bool parse(const char* s, std::uint64_t& v) {
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     const std::vector<std::string> faults = {"--faulty", "--faulty-queue", "--faulty-move", "--faulty-queue-cap",
-        "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close", "--faulty-sprint-move", "--faulty-sprint-close"};
+        "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close", "--faulty-sprint-move", "--faulty-sprint-close",
+        "--faulty-close-fallback"};
     std::string fault;
     int faultCount = 0;
     bool sprint = true;
@@ -479,11 +502,13 @@ int main(int argc, char** argv) {
         !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() || faultCount > 1) {
         std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--no-sprint] [--faulty | "
                      "--faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | "
-                     "--faulty-close | --faulty-sprint-move | --faulty-sprint-close] <out.tla>\n",
-                     kFriends.size());
+                     "--faulty-close | --faulty-sprint-move | --faulty-sprint-close | --faulty-close-fallback] "
+                     "<out.tla>\n", kFriends.size());
         return 2;
     }
     const char* out = rest[3].c_str();
+    if (fault == "--faulty-close-fallback")
+        return walk<FaultyCloseFallbackModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-sprint-move")
         return walk<FaultySprintMoveModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-sprint-close")

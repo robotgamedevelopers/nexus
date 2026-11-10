@@ -14,7 +14,7 @@
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
 #               text just sent appends nothing, close the one whose close_tab removes a friend, sprint-move the one
 #               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
-#               sprint tab
+#               sprint tab, close-fallback the one whose close of the active tab ignores the selection history
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
@@ -75,9 +75,11 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-sprint-move)
     elseif(FAULTY STREQUAL "sprint-close")
         list(APPEND walk_args --faulty-sprint-close)
+    elseif(FAULTY STREQUAL "close-fallback")
+        list(APPEND walk_args --faulty-close-fallback)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move or sprint-close")
+            "close, sprint-move, sprint-close or close-fallback")
     endif()
     if(NOSPRINT)
         list(APPEND walk_args --no-sprint)

@@ -11,9 +11,9 @@
 (*   Trace: one record per step. Trace[1] is the constructed model (op     *)
 (*     "init"); each later record is the operation called, its arguments,  *)
 (*     the value the code returned, and the code's whole state after it:   *)
-(*     the order (each position's Tab::id) and, by position, each tab's    *)
-(*     kind, friend, draft, transcript and queue; and for add, the id it   *)
-(*     returned.                                                           *)
+(*     the order (each position's Tab::id), the selection history (ids,    *)
+(*     most recent last) and, by position, each tab's kind, friend, draft, *)
+(*     transcript and queue; and for add, the id it returned.              *)
 (*                                                                         *)
 (* Each step of this spec takes the Window action the record names, with   *)
 (* the record's arguments. The invariant TraceMatches then requires the    *)
@@ -25,7 +25,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, WindowTraceData
 
-VARIABLES friends, order, active, transcript, draft, queue, nextId, last, l
+VARIABLES friends, order, active, transcript, draft, queue, nextId, history, last, l
 
 W == INSTANCE Window WITH FriendList <- TraceFriends, Idx <- TraceIdx, Drafts <- TraceDrafts,
                           Blank <- TraceBlank, AppendEntries <- TraceEntries, Sprint <- TraceSprint
@@ -43,6 +43,7 @@ Matches(k) ==
     LET s == Trace[k] IN
     /\ order = AsTabs(s.order)
     /\ active = s.active
+    /\ history = s.history
     /\ friends = TraceFriends
     /\ \A p \in W!Tabs :
         /\ s.kind[p + 1] = W!TabKind(order[p])
@@ -74,7 +75,7 @@ Step(s) ==
          [] s.op = "close"     -> W!CloseTab(s.i)
          [] OTHER              -> FALSE
 
-traceVars == <<friends, order, active, transcript, draft, queue, nextId, last, l>>
+traceVars == <<friends, order, active, transcript, draft, queue, nextId, history, last, l>>
 
 TraceInit == l = 1 /\ W!Init
 
@@ -117,6 +118,11 @@ NextIdGrows == W!NextIdGrows
 CloseRemovesExactly == W!CloseRemovesExactly
 CloseKeepsFriends == W!CloseKeepsFriends
 CloseActiveRule == W!CloseActiveRule
+SelectMovesToEnd == W!SelectMovesToEnd
+CloseForgets == W!CloseForgets
+HistoryOpen == W!HistoryOpen
+HistoryOnce == W!HistoryOnce
+HistoryEndsActive == W!HistoryEndsActive
 MovePlaces == W!MovePlaces
 MoveKeepsTabs == W!MoveKeepsTabs
 OnlyMoveReorders == W!OnlyMoveReorders

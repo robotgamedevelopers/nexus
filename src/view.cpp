@@ -686,7 +686,9 @@ struct Builder {
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
-        // terminal's, and does nothing on a friend's. Claimed like the keys above: a terminal leaves
+        // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the
+        // sprint tab. A terminal that cannot start leaves the tab that showed before. Claimed like the keys above: a
+        // terminal leaves
         // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
         if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();

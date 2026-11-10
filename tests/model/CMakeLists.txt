@@ -61,16 +61,19 @@ endfunction()
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
-tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass WORKERS 8)
+tlc_test(tlc_spec_sprint_terminals MCWindow MCWindowSprint.cfg pass WORKERS 8)
 tlc_test(tlc_spec_no_friends MCWindow MCWindowEmpty.cfg pass)
 tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass WORKERS 8)
-tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass)
-# Nightly: the two largest instances (three friends in all orders, 104,976 states; entries and queues of two, 142,884).
+tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass WORKERS 8)
+# Nightly: the three largest instances. With the selection history, every order of it a state of its own: the sprint tab,
+# two friends, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
+# without entries, MCWindowSprint.cfg, 8,910, runs above); three friends in all orders, 384,912 (27 s); entries and
+# queues of two, 214,326 (12 s).
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
-# runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers: 8 s in a login
-# session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these two do not fit a 60 s cap
-# beside the other tests (105 s each at the utility QoS beside them). Even apart they do not: the two together at the
-# utility QoS took 65 s each. 300 s still stops a state space that runs away.
+# runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers, before the history:
+# 8 s in a login session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these do not fit a
+# 60 s cap. 300 s still stops a state space that runs away.
+tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass WORKERS 8 NIGHTLY)
 
@@ -121,6 +124,13 @@ tlc_test(tlc_witness_move_before_sprint   WMoveBeforeSprint   WMoveBeforeSprint.
 tlc_test(tlc_witness_move_sprint          WMoveSprint         WMoveSprint.cfg         action    PROPERTY SprintNeverMoves)
 tlc_test(tlc_witness_close_sprint         WCloseSprint        WCloseSprint.cfg        action    PROPERTY SprintNeverCloses)
 tlc_test(tlc_witness_send_to_sprint       WSendToSprint       WSendToSprint.cfg       action    PROPERTY SprintTakesNoText)
+# The selection history: closing the active tab goes back to the tab selected before it.
+tlc_test(tlc_witness_close_old_rule       WCloseOldRule       WCloseOldRule.cfg       action    PROPERTY CloseActiveRule)
+tlc_test(tlc_witness_close_keeps_history  WCloseKeepsHistory  WCloseKeepsHistory.cfg  invariant PROPERTY HistoryOpen)
+tlc_test(tlc_witness_close_forgets_all    WCloseForgetsAll    WCloseForgetsAll.cfg    action    PROPERTY CloseForgets)
+tlc_test(tlc_witness_select_keeps_place   WSelectKeepsPlace   WSelectKeepsPlace.cfg   action    PROPERTY SelectMovesToEnd)
+tlc_test(tlc_witness_select_appends_again WSelectAppendsAgain WSelectAppendsAgain.cfg invariant PROPERTY HistoryOnce)
+tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistory.cfg invariant PROPERTY HistoryEndsActive)
 
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
@@ -156,3 +166,6 @@ tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invar
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-move)
 tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-close)
+# And with closing the active tab ignoring the selection history.
+tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 FAULTY close-fallback)
