@@ -59,6 +59,8 @@ struct Harness {
     Look look;
     View view;
     double time = 1000;
+    int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
+    int stops = 0;      // stop requests (View::stop)
 
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
@@ -74,6 +76,8 @@ struct Harness {
         kit = prKitCreate(ui, &theme);
         view.model = &model;
         view.look = &look;
+        view.hide = [this] { ++hides; };
+        view.stop = [this] { ++stops; };
         frame();
         frame();
     }
@@ -169,6 +173,49 @@ struct Harness {
     float firstEntryHeight() const {
         std::vector<PrLayoutNode> e = entries();
         return e.empty() ? 0 : height(e.front());
+    }
+
+    // The tab strip, the window's first child, and its tabs in order, at the last layout. Outside a drag the strip holds
+    // only its tabs.
+    PrLayoutNode strip() const {
+        return prLayoutNodeFirstChild(tree, prLayoutNodeParent(tree, view.transcript));
+    }
+    std::vector<PrLayoutNode> tabs() const {
+        std::vector<PrLayoutNode> out;
+        for (PrLayoutNode n = prLayoutNodeFirstChild(tree, strip()); n != kPrLayoutNodeNone;
+                n = prLayoutNodeNextSibling(tree, n))
+            out.push_back(n);
+        return out;
+    }
+    PrVec2 centre(PrLayoutNode node) const {
+        PrRect b = bounds(node);
+        return PrVec2{(b.left + b.right) / 2, (b.top + b.bottom) / 2};
+    }
+
+    void pointer(PrAppEventKind kind, PrVec2 at) {
+        push(PrAppEvent{.kind = kind, .position = at});
+        frame();
+    }
+
+    // Presses the tab at `from`, drags it past the kit's threshold and on over the tab at `to`, near its far edge (its
+    // right edge moving right, its left edge moving left, so that it lands at `to`), and, if `release`, releases it.
+    void dragTab(std::size_t from, std::size_t to, bool release = true) {
+        std::vector<PrLayoutNode> t = tabs();
+        PrVec2 start = centre(t[from]);
+        PrVec2 end{to > from ? bounds(t[to]).right - 2 : bounds(t[to]).left + 2, start.y};
+        pointer(PrAppEventKind_PointerDown, start);
+        pointer(PrAppEventKind_PointerMove, PrVec2{start.x + (end.x < start.x ? -10.0f : 10.0f), start.y});
+        pointer(PrAppEventKind_PointerMove, end);
+        if (release)
+            pointer(PrAppEventKind_PointerUp, end);
+    }
+
+    // The friends' names in tab order.
+    std::string order() const {
+        std::string out;
+        for (std::size_t j = 0; j < model.tab_count(); ++j)
+            out += (j ? " " : "") + model.tab(j).name;
+        return out;
     }
 
     // Command-= (larger), Command-+ (Shift-=, larger) and Command-minus (smaller), as macOS sends them: no text. Then a
@@ -395,9 +442,9 @@ void textKeysWorkWithCapsLock() {
     CHECK(h.active().draft.empty());
 }
 
-// Escape is stop, which has nothing to stop in this layer: it types nothing and changes no draft, transcript, queue or
-// tab.
-void escapeChangesNothing() {
+// Escape asks for the overlay to hide and does not stop; Command-Escape stops and does not hide. With Caps Lock on, both
+// still do. Neither types anything or changes a draft, transcript, queue or the active tab.
+void escapeHidesAndCommandEscapeStops() {
     Harness h;
     h.type("draft");
     h.enter(PrAppModifierFlag_Super);
@@ -409,7 +456,13 @@ void escapeChangesNothing() {
     const Tab before0 = h.model.tab(0);
     const Tab before1 = h.model.tab(1);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1 && h.stops == 0);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_CapsLock);
+    CHECK(h.hides == 2 && h.stops == 0);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    CHECK(h.hides == 2 && h.stops == 1);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_CapsLock));
+    CHECK(h.hides == 2 && h.stops == 2);
     CHECK(h.model.active() == 0);
     for (std::size_t i = 0; i < 2; ++i) {
         const Tab& was = i == 0 ? before0 : before1;
@@ -420,9 +473,179 @@ void escapeChangesNothing() {
     }
     CHECK(h.model.tab(0).draft == "more");
     CHECK((h.model.tab(0).queue == std::vector<std::string>{"draft"}));
-    // The prompt still has focus and takes typing after it.
+    // The prompt still has focus and takes typing after them.
     h.type("!");
     CHECK(h.model.tab(0).draft == "more!");
+}
+
+// Windowed, nothing is connected to hide: Escape requests no hide and changes nothing.
+void escapeWindowedHidesNothing() {
+    Harness h;
+    h.view.hide = nullptr;
+    h.type("draft");
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 0 && h.stops == 0);
+    CHECK(h.active().draft == "draft");
+    CHECK(h.model.active() == 0);
+}
+
+// While an input method composes, Escape is the input method's (it cancels the composition): no hide.
+void escapeWhileComposingDoesNotHide() {
+    Harness h;
+    const char* kana = "\xE3\x81\x8B";
+    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = 'K', .code = PrAppKeyCode_KeyK});
+    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionUpdate, .text = PrStringView{kana, 3}});
+    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = 'K', .code = PrAppKeyCode_KeyK});
+    h.frame();
+    // macOS sends the KeyDown first, then the input method's cancel: CompositionEnd with no text.
+    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = PrAppKey_Escape, .code = PrAppKeyCode_Escape});
+    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionEnd, .text = PrStringView{}});
+    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = PrAppKey_Escape, .code = PrAppKeyCode_Escape});
+    h.frame();
+    CHECK(h.hides == 0);
+    CHECK(h.active().draft.empty());
+    // Composition over, Escape hides again.
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1);
+}
+
+// Four friends: f1 f2 f3 f4.
+std::vector<FriendInfo> fourFriends() {
+    return friendsNamed(4);
+}
+
+// A drag of the tab at position 3 to position 1 reorders the strip, keeps the active friend, and Command-1 then selects
+// the moved tab. Each tab shows its friend's name only.
+void dragMovesATab() {
+    Harness h(fourFriends());
+    h.commandDigit(2);                       // f2 active
+    CHECK(h.model.active() == 1);
+    h.dragTab(2, 0);
+    CHECK(h.order() == "f3 f1 f2 f4");
+    CHECK(h.active().name == "f2");          // the same friend, now at position 3
+    CHECK(h.model.active() == 2);
+    CHECK(h.hides == 0);
+    h.frame();
+    std::vector<PrLayoutNode> t = h.tabs();
+    CHECK(t.size() == 4);
+    for (std::size_t j = 0; j < t.size() && j < h.model.tab_count(); ++j) {
+        PrLayoutNode only = prLayoutNodeFirstChild(h.tree, t[j]);
+        CHECK(only != kPrLayoutNodeNone && prLayoutNodeNextSibling(h.tree, only) == kPrLayoutNodeNone);
+        PrStringView text = prLayoutNodeText(h.tree, only);
+        CHECK(std::string(text.data, text.size) == h.model.tab(j).name);
+    }
+    // The tabs stand left to right in the new order.
+    CHECK(t.size() == 4 && h.bounds(t[0]).right <= h.bounds(t[1]).left + 0.5f);
+    h.commandDigit(1);
+    CHECK(h.active().name == "f3");
+    h.commandDigit(3);
+    CHECK(h.active().name == "f2");
+    // And back to the end.
+    h.dragTab(0, 3);
+    CHECK(h.order() == "f1 f2 f4 f3");
+    CHECK(h.active().name == "f2");
+}
+
+// A press and release that does not pass the threshold is a click: it selects the tab and moves nothing.
+void clickBelowThresholdSelects() {
+    Harness h(fourFriends());
+    PrVec2 at = h.centre(h.tabs()[2]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerMove, PrVec2{at.x + 2, at.y});
+    h.pointer(PrAppEventKind_PointerUp, PrVec2{at.x + 2, at.y});
+    h.frame();
+    CHECK(h.order() == "f1 f2 f3 f4");
+    CHECK(h.model.active() == 2);
+}
+
+// Escape during a drag cancels it: the order stays, the release drops nothing, and no hide is requested.
+void escapeCancelsADrag() {
+    Harness h(fourFriends());
+    h.dragTab(3, 0, false);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    PrVec2 end{h.bounds(h.tabs()[0]).left + 2, h.centre(h.tabs()[0]).y};
+    h.pointer(PrAppEventKind_PointerUp, end);
+    h.frame();
+    CHECK(h.order() == "f1 f2 f3 f4");
+    CHECK(h.hides == 0);
+    CHECK(h.model.active() == 0);
+    // After the drag, Escape hides again.
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1);
+}
+
+// Each friend's unsent text and transcript scroll go with its tab, not its position.
+void draftAndScrollStayWithTheirFriend() {
+    Harness h(fourFriends());
+    for (int i = 0; i < 40; ++i)
+        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+    h.frame();
+    h.frame();
+    h.type("for f1");
+    PrRect port = h.bounds(h.view.transcript);
+    PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+    h.push(PrAppEvent{.kind = PrAppEventKind_PointerMove, .position = middle});
+    h.push(PrAppEvent{.kind = PrAppEventKind_Scroll, .scrollUnit = PrAppScrollUnit_Pixel, .position = middle,
+        .delta = PrVec2{0, -400}});
+    h.frame();
+    h.frame();
+    const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
+    CHECK(scrolled < -100 || scrolled > 100);
+    h.commandDigit(2);
+    h.type("for f2");
+    h.dragTab(0, 3);                         // f1 to the end
+    CHECK(h.order() == "f2 f3 f4 f1");
+    CHECK(h.active().name == "f2" && h.active().draft == "for f2");
+    CHECK(prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y) == 0);
+    h.commandDigit(4);
+    h.frame();
+    CHECK(h.active().name == "f1" && h.active().draft == "for f1");
+    const float back = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
+    CHECK(back > scrolled - 0.5f && back < scrolled + 0.5f);
+    h.type("!");                             // the prompt edits f1's draft, at its end
+    CHECK(h.active().draft == "for f1!");
+    CHECK(h.model.tab(0).draft == "for f2");
+}
+
+// With one tab there is nowhere to move it: a drag changes nothing.
+void dragWithOneTabDoesNothing() {
+    Harness h(friendsNamed(1));
+    h.type("x");
+    h.dragTab(0, 0);
+    PrRect b = h.bounds(h.tabs()[0]);
+    h.pointer(PrAppEventKind_PointerDown, h.centre(h.tabs()[0]));
+    h.pointer(PrAppEventKind_PointerMove, PrVec2{b.right + 200, (b.top + b.bottom) / 2});
+    h.pointer(PrAppEventKind_PointerUp, PrVec2{b.right + 200, (b.top + b.bottom) / 2});
+    CHECK(h.order() == "f1");
+    CHECK(h.model.active() == 0);
+    CHECK(h.active().draft == "x");
+}
+
+// All text under `node`, with each text node's text on its own.
+void textsUnder(const Harness& h, PrLayoutNode node, std::vector<std::string>& out) {
+    if (prLayoutNodeKind(h.tree, node) == PrLayoutNodeKind_Text) {
+        PrStringView t = prLayoutNodeText(h.tree, node);
+        out.emplace_back(t.data, t.size);
+    }
+    for (PrLayoutNode c = prLayoutNodeFirstChild(h.tree, node); c != kPrLayoutNodeNone; c = prLayoutNodeNextSibling(h.tree, c))
+        textsUnder(h, c, out);
+}
+
+// The empty prompt shows no text (no placeholder), and an empty tab's transcript shows nothing (no hint). The prompt's
+// one text node is the edit's own: Prax shows an empty value as a single space, so the caret has a line
+// (ui_text_edit.cpp, "a space after it if it is empty").
+void emptyPromptAndTranscriptShowNoText() {
+    Harness h;
+    h.frame();
+    std::vector<std::string> texts;
+    textsUnder(h, h.view.promptBox, texts);
+    CHECK(texts.size() == 1);
+    for (const std::string& t : texts) {
+        if (t != " ")
+            std::fprintf(stderr, "  text in the empty prompt: %s\n", shown(t).c_str());
+        CHECK(t == " ");
+    }
+    CHECK(h.entries().empty());
 }
 
 bool inside(PrRect inner, PrRect outer) {
@@ -587,7 +810,15 @@ int main() {
     textKeysScaleTheTranscriptAndThePrompt();
     textScaleIsClamped();
     textKeysWorkWithCapsLock();
-    escapeChangesNothing();
+    escapeHidesAndCommandEscapeStops();
+    escapeWindowedHidesNothing();
+    escapeWhileComposingDoesNotHide();
+    dragMovesATab();
+    clickBelowThresholdSelects();
+    escapeCancelsADrag();
+    draftAndScrollStayWithTheirFriend();
+    dragWithOneTabDoesNothing();
+    emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     overlayKeepsAllButTheBackgroundOpaque();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);

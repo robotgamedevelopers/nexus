@@ -2,16 +2,18 @@
 // (WindowTraceData.tla) for models/WindowTrace.tla, under which TLC checks that the trace is a behaviour of
 // models/Window.tla.
 //
-//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue] <out.tla>
+//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move] <out.tla>
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
-// the clock or the OS. Each step calls one operation, with indices in range and out of it, drafts that are empty,
-// all whitespace or text, and entries of every kind. Each record holds the operation, its arguments, the value it
-// returned and the model's whole state after it, each tab's queue among it.
+// the clock or the OS. Each step calls one operation, with positions in range and out of it (move_tab's two among
+// them), drafts that are empty, all whitespace or text, and entries of every kind. Each record holds the operation,
+// its arguments, the value it returned and the model's whole state after it: the tabs' order (each position's
+// Tab::id) and, by position, each tab's friend, draft, transcript and queue.
 //
 // --faulty walks FaultyModel instead: a test-only subclass whose send accepts a draft that is all whitespace but
-// not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. TLC must reject
-// both one's traces; that is the negative check that shows the binding can fail.
+// not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. --faulty-move
+// walks FaultyMoveModel: its move_tab leaves active at the old position. TLC must reject each one's traces; that is
+// the negative check that shows the binding can fail.
 
 #include "model.h"
 
@@ -60,9 +62,24 @@ public:
     }
 };
 
+// The test-only move fault: move_tab reorders the tabs but leaves active at the old position, so another friend becomes
+// active. Hides Model::move_tab.
+class FaultyMoveModel : public Model {
+public:
+    using Model::Model;
+    bool move_tab(std::size_t from, std::size_t to) {
+        const std::size_t was = active();
+        if (!Model::move_tab(from, to))
+            return false;
+        select_tab(was);
+        return true;
+    }
+};
+
 template <class M>
 constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
-                             : std::is_same_v<M, FaultyQueueModel> ? ", faulty queue model" : "";
+                             : std::is_same_v<M, FaultyQueueModel> ? ", faulty queue model"
+                             : std::is_same_v<M, FaultyMoveModel> ? ", faulty move model" : "";
 
 struct Rng {
     std::uint64_t state;
@@ -120,7 +137,10 @@ const char* const kNoEntry = "[kind |-> \"None\", text |-> \"\"]";
 template <class M>
 std::string state(const M& m) {
     std::ostringstream o;
-    o << "friends |-> <<";
+    o << "order |-> <<";
+    for (std::size_t j = 0; j < m.tab_count(); ++j)
+        o << (j ? ", " : "") << m.tab(j).id;
+    o << ">>, friends |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
         o << (j ? ", " : "") << "[name |-> " << str(m.tab(j).name) << ", model |-> " << str(m.tab(j).model) << "]";
     o << ">>, active |-> " << m.active() << ", draft |-> <<";
@@ -146,10 +166,10 @@ std::string state(const M& m) {
     return o.str();
 }
 
-std::string record(const char* op, std::size_t i, const std::string& text, const std::string& ent, bool ret,
-                   const std::string& st) {
+std::string record(const char* op, std::size_t i, std::size_t j, const std::string& text, const std::string& ent,
+                   bool ret, const std::string& st) {
     std::ostringstream o;
-    o << "[op |-> \"" << op << "\", i |-> " << i << ", text |-> " << str(text) << ", entry |-> " << ent
+    o << "[op |-> \"" << op << "\", i |-> " << i << ", j |-> " << j << ", text |-> " << str(text) << ", entry |-> " << ent
       << ", ret |-> " << (ret ? "TRUE" : "FALSE") << ", " << st << "]";
     return o.str();
 }
@@ -162,15 +182,16 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
     const std::size_t index_count = friend_count + 2; // every tab, and two indices past the last
 
     std::vector<std::string> records;
-    records.push_back(record("init", 0, "", kNoEntry, true, state(m)));
+    records.push_back(record("init", 0, 0, "", kNoEntry, true, state(m)));
     std::size_t accepted = 0;
     for (std::size_t s = 0; s < steps; ++s) {
         const std::size_t i = rng.below(index_count);
+        std::size_t j = 0;
         bool ret = false;
         const char* op = "";
         std::string text;
         std::string ent = kNoEntry;
-        switch (rng.below(5)) {
+        switch (rng.below(6)) {
         case 0: op = "select"; ret = m.select_tab(i); break;
         case 1:
             op = "set_draft";
@@ -179,6 +200,11 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
             break;
         case 2: op = "send"; ret = m.send(i); break;
         case 3: op = "queue"; ret = m.queue(i); break;
+        case 4:
+            op = "move";
+            j = rng.below(index_count);
+            ret = m.move_tab(i, j);
+            break;
         default: {
             op = "append";
             const Entry& e = kEntries[rng.below(kEntries.size())];
@@ -188,7 +214,7 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         }
         }
         accepted += ret ? 1 : 0;
-        records.push_back(record(op, i, text, ent, ret, state(m)));
+        records.push_back(record(op, i, j, text, ent, ret, state(m)));
     }
 
     std::ofstream out(path);
@@ -241,22 +267,28 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     bool faulty = false;
     bool faultyQueue = false;
+    bool faultyMove = false;
     std::vector<std::string> rest;
     for (const std::string& a : args) {
         if (a == "--faulty")
             faulty = true;
         else if (a == "--faulty-queue")
             faultyQueue = true;
+        else if (a == "--faulty-move")
+            faultyMove = true;
         else
             rest.push_back(a);
     }
     std::uint64_t seed = 0, steps = 0, friend_count = 0;
     if (rest.size() != 4 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
-        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() || (faulty && faultyQueue)) {
-        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--faulty | --faulty-queue] <out.tla>\n",
-                     kFriends.size());
+        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() ||
+        int(faulty) + int(faultyQueue) + int(faultyMove) > 1) {
+        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> "
+                     "[--faulty | --faulty-queue | --faulty-move] <out.tla>\n", kFriends.size());
         return 2;
     }
+    if (faultyMove)
+        return walk<FaultyMoveModel>(seed, steps, friend_count, rest[3].c_str());
     if (faultyQueue)
         return walk<FaultyQueueModel>(seed, steps, friend_count, rest[3].c_str());
     if (faulty)

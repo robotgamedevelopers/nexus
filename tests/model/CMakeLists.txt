@@ -22,7 +22,7 @@ set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 set(models_dir "${PROJECT_SOURCE_DIR}/models")
 set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
 
-# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY send|queue])
+# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY send|queue|move])
 function(tlc_test name module cfg expect)
     cmake_parse_arguments(T "" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY" "" ${ARGN})
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
@@ -60,6 +60,13 @@ tlc_test(tlc_witness_append_drops_queued  WAppendDropsQueued  WAppendDropsQueued
 tlc_test(tlc_witness_set_draft_active_too WSetDraftActiveToo  WSetDraftActiveToo.cfg  action    PROPERTY SetDraftExact)
 tlc_test(tlc_witness_select_clears_draft  WSelectClearsDraft  WSelectClearsDraft.cfg  action    PROPERTY SelectExact)
 tlc_test(tlc_witness_append_wrong_tab     WAppendWrongTab     WAppendWrongTab.cfg     action    PROPERTY AppendExact)
+tlc_test(tlc_witness_move_drops_tab       WMoveDropsTab       WMoveDropsTab.cfg       invariant PROPERTY NoTabLost)
+tlc_test(tlc_witness_move_duplicates_tab  WMoveDuplicatesTab  WMoveDuplicatesTab.cfg  invariant PROPERTY NoTabDuplicated)
+tlc_test(tlc_witness_move_leaves_active   WMoveLeavesActive   WMoveLeavesActive.cfg   action    PROPERTY ActiveFriendKept)
+tlc_test(tlc_witness_move_leaves_draft    WMoveLeavesDraft    WMoveLeavesDraft.cfg    action    PROPERTY MoveKeepsTabs)
+tlc_test(tlc_witness_move_out_of_range    WMoveOutOfRange     WMoveOutOfRange.cfg     action    PROPERTY RefusedChangesNothing)
+tlc_test(tlc_witness_move_swaps           WMoveSwaps          WMoveSwaps.cfg          action    PROPERTY MovePlaces)
+tlc_test(tlc_witness_send_by_position     WSendByPosition     WSendByPosition.cfg     action    PROPERTY SendTouchesNoOtherTab)
 
 # Trace binding: the real model's random walks, each a behaviour of Window.tla.
 foreach(seed 1 2 3 4 5)
@@ -68,8 +75,10 @@ endforeach()
 tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 300 FRIENDS 2)
 tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 FRIENDS 0)
 
-# The binding can fail: a faulty model's trace must be rejected, with the fault in send and in queue.
+# The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
 tlc_test(tlc_trace_faulty_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY send)
 tlc_test(tlc_trace_faulty_queue_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY queue)
+tlc_test(tlc_trace_faulty_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 FAULTY move)

@@ -92,11 +92,6 @@ void showOverlay() {
         [window makeFirstResponder:overlay.view];
 }
 
-// Hiding the application keeps the window and everything in it, and gives the keyboard back to the app that had it.
-void hideOverlay() {
-    [NSApp hide:nil];
-}
-
 void toggleOverlay() {
     NSWindow* window = overlay.window;
     if (window == nil)
@@ -245,6 +240,11 @@ bool openOverlay(void* nsView, const OverlayConfig& config, bool show) {
     if (show)
         showOverlay();
     return true;
+}
+
+// Hiding the application keeps the window and everything in it, and gives the keyboard back to the app that had it.
+void hideOverlay() {
+    [NSApp hide:nil];
 }
 
 void closeOverlay() {

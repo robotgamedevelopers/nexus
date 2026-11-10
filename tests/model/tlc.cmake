@@ -9,7 +9,8 @@
 #   PROPERTY    with invariant or action: the property whose violation is expected
 #   WALK        optional: the trace_walk program; it is run first and writes WindowTraceData.tla into WORK
 #   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends
-#   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue
+#   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
+#               move the one whose move_tab leaves active behind
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at 60 s.
@@ -53,8 +54,10 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty)
     elseif(FAULTY STREQUAL "queue")
         list(APPEND walk_args --faulty-queue)
+    elseif(FAULTY STREQUAL "move")
+        list(APPEND walk_args --faulty-move)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send or queue")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue or move")
     endif()
     execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/WindowTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
@@ -75,7 +78,7 @@ execute_process(
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 60)
 file(WRITE "${WORK}/tlc.log" "${out}")
 
-string(REGEX MATCH "[0-9,]+ distinct states found" states "${out}")
+string(REGEX MATCH "generated, [0-9,]+ distinct states found" states "${out}")
 string(REGEX MATCH "Finished in [^\n]*" took "${out}")
 message("${MODULE} ${cfg_name}: exit ${rc}; ${states}; ${took}; log ${WORK}/tlc.log")
 

@@ -41,7 +41,7 @@ bool same_entry(const Entry& a, const Entry& b) {
 }
 
 bool same_tab(const Tab& a, const Tab& b) {
-    if (a.name != b.name || a.model != b.model || a.draft != b.draft || a.queue != b.queue ||
+    if (a.id != b.id || a.name != b.name || a.model != b.model || a.draft != b.draft || a.queue != b.queue ||
             a.transcript.size() != b.transcript.size())
         return false;
     for (std::size_t k = 0; k < a.transcript.size(); ++k) {
@@ -85,6 +85,7 @@ void empty_friend_list_refuses_everything() {
     CHECK(!m.send(0));
     CHECK(!m.queue(0));
     CHECK(!m.append(0, Entry{EntryKind::Friend, "x"}));
+    CHECK(!m.move_tab(0, 0));
     CHECK(m.tab_count() == 0);
     CHECK(m.active() == 0);
 }
@@ -298,6 +299,142 @@ void large_draft_round_trips() {
     CHECK(m.tab(0).transcript[0].text == big);
 }
 
+// the friends' names in tab order, joined by spaces
+std::string names(const Model& m) {
+    std::string out;
+    for (std::size_t j = 0; j < m.tab_count(); ++j)
+        out += (j ? " " : "") + m.tab(j).name;
+    return out;
+}
+
+std::vector<FriendInfo> five() {
+    return {{"a", "m"}, {"b", "m"}, {"c", "m"}, {"d", "m"}, {"e", "m"}};
+}
+
+void construct_gives_each_tab_its_friends_id() {
+    Model m(three());
+    for (std::size_t j = 0; j < 3; ++j)
+        CHECK(m.tab(j).id == j);
+}
+
+void move_first_to_last_and_last_to_first() {
+    Model m(five());
+    CHECK(m.move_tab(0, 4));
+    CHECK(names(m) == "b c d e a");
+    CHECK(m.move_tab(4, 0));
+    CHECK(names(m) == "a b c d e");
+    CHECK(m.move_tab(4, 0));
+    CHECK(names(m) == "e a b c d");
+}
+
+void move_shifts_the_tabs_between() {
+    Model m(five());
+    CHECK(m.move_tab(1, 3));    // b to position 3: c and d shift left
+    CHECK(names(m) == "a c d b e");
+    CHECK(m.move_tab(3, 1));    // and back
+    CHECK(names(m) == "a b c d e");
+    CHECK(m.move_tab(3, 0));    // d to the front: a, b, c shift right
+    CHECK(names(m) == "d a b c e");
+}
+
+void move_adjacent_swaps() {
+    Model m(three());
+    CHECK(m.move_tab(0, 1));
+    CHECK(names(m) == "bo ada cy");
+    CHECK(m.move_tab(2, 1));
+    CHECK(names(m) == "bo cy ada");
+    CHECK(m.move_tab(1, 2));
+    CHECK(names(m) == "bo ada cy");
+}
+
+void move_to_itself_is_true_and_changes_nothing() {
+    Model m(three());
+    m.set_draft(1, "x");
+    m.select_tab(1);
+    Model before = m;
+    for (std::size_t j = 0; j < 3; ++j)
+        CHECK(m.move_tab(j, j));
+    CHECK(same(m, before));
+}
+
+// Everything a tab holds goes with it: id, name, model, transcript, draft and queue.
+void move_carries_everything_the_tab_holds() {
+    Model m(three());
+    for (std::size_t j = 0; j < 3; ++j) {
+        m.append(j, Entry{EntryKind::Friend, "reply " + std::to_string(j)});
+        m.set_draft(j, "held " + std::to_string(j));
+        m.queue(j);
+        m.set_draft(j, "draft " + std::to_string(j));
+    }
+    const Model before = m;
+    CHECK(m.move_tab(2, 0));
+    CHECK(same_tab(m.tab(0), before.tab(2)));
+    CHECK(same_tab(m.tab(1), before.tab(0)));
+    CHECK(same_tab(m.tab(2), before.tab(1)));
+    // and operations by position now address the friend standing there
+    CHECK(m.send(0));
+    CHECK(m.tab(0).name == "cy" && m.tab(0).transcript.back().text == "draft 2");
+    CHECK(before.tab(0).transcript.size() == m.tab(1).transcript.size());
+}
+
+// The active tab stays the same friend, wherever it moves and whatever moves around it.
+void move_keeps_the_active_friend() {
+    for (std::size_t from = 0; from < 5; ++from) {
+        for (std::size_t to = 0; to < 5; ++to) {
+            for (std::size_t a = 0; a < 5; ++a) {
+                Model m(five());
+                m.select_tab(a);
+                const std::size_t id = m.tab(a).id;
+                CHECK(m.move_tab(from, to));
+                CHECK(m.tab(m.active()).id == id);
+            }
+        }
+    }
+}
+
+void repeated_moves_are_a_permutation() {
+    Model m(five());
+    m.select_tab(2);
+    const std::size_t moves[][2] = {{0, 4}, {3, 1}, {4, 0}, {2, 2}, {1, 3}, {0, 1}, {4, 2}, {2, 0}, {1, 4}};
+    for (const auto& mv : moves)
+        CHECK(m.move_tab(mv[0], mv[1]));
+    std::vector<bool> seen(5, false);
+    for (std::size_t j = 0; j < 5; ++j) {
+        CHECK(m.tab(j).id < 5 && !seen[m.tab(j).id]);
+        seen[m.tab(j).id] = true;
+        CHECK(m.tab(j).name == std::string(1, char('a' + m.tab(j).id)));
+    }
+    CHECK(m.tab(m.active()).name == "c");
+}
+
+void move_out_of_range_changes_nothing() {
+    Model m(three());
+    m.set_draft(0, "a");
+    m.select_tab(2);
+    Model before = m;
+    CHECK(!m.move_tab(3, 0));
+    CHECK(!m.move_tab(0, 3));
+    CHECK(!m.move_tab(3, 3));
+    CHECK(!m.move_tab(kHuge, 0));
+    CHECK(!m.move_tab(0, kHuge));
+    CHECK(!m.move_tab(kHuge, kHuge));
+    CHECK(same(m, before));
+}
+
+void move_with_one_tab_or_none() {
+    Model one({{"ada", "m1"}});
+    one.set_draft(0, "x");
+    Model before = one;
+    CHECK(one.move_tab(0, 0));
+    CHECK(!one.move_tab(0, 1));
+    CHECK(!one.move_tab(1, 0));
+    CHECK(same(one, before));
+    Model none({});
+    CHECK(!none.move_tab(0, 0));
+    CHECK(!none.move_tab(kHuge, kHuge));
+    CHECK(none.tab_count() == 0 && none.active() == 0);
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -322,6 +459,16 @@ const Case kCases[] = {
     {"transcripts_only_grow", transcripts_only_grow},
     {"large_transcript_keeps_order", large_transcript_keeps_order},
     {"large_draft_round_trips", large_draft_round_trips},
+    {"construct_gives_each_tab_its_friends_id", construct_gives_each_tab_its_friends_id},
+    {"move_first_to_last_and_last_to_first", move_first_to_last_and_last_to_first},
+    {"move_shifts_the_tabs_between", move_shifts_the_tabs_between},
+    {"move_adjacent_swaps", move_adjacent_swaps},
+    {"move_to_itself_is_true_and_changes_nothing", move_to_itself_is_true_and_changes_nothing},
+    {"move_carries_everything_the_tab_holds", move_carries_everything_the_tab_holds},
+    {"move_keeps_the_active_friend", move_keeps_the_active_friend},
+    {"repeated_moves_are_a_permutation", repeated_moves_are_a_permutation},
+    {"move_out_of_range_changes_nothing", move_out_of_range_changes_nothing},
+    {"move_with_one_tab_or_none", move_with_one_tab_or_none},
 };
 
 } // namespace

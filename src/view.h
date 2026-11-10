@@ -1,12 +1,13 @@
 // The window, declared each round as a Prax layout tree over lib/ui and Studio Kit: the tab strip (kit tabs), the
 // transcript and the prompt (a kit text area). Prax lays it out, paints it, routes input to it, edits the prompt's text
-// and keeps the transcript at its newest entry. The view keeps only what Prax does not: each tab's transcript scroll
+// and keeps the transcript at its newest entry. The view keeps only what Prax does not: each friend's transcript scroll
 // while another tab shows.
 
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,9 +37,12 @@ struct View {
     Look* look = nullptr;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
-    std::vector<float> scrolls;                 // each tab's transcript scroll, kept while another tab shows
-    std::size_t shown = ~std::size_t(0);        // the tab the transcript showed last round
-    std::size_t prompted = ~std::size_t(0);     // the tab whose draft the prompt edited last round
+    std::function<void()> hide;                 // Escape: hides the overlay (platform_mac.h hideOverlay); unset when
+                                                // windowed, where Escape does nothing
+    std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
+    std::vector<float> scrolls;                 // each friend's transcript scroll, by Tab::id, kept while another shows
+    std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
+    std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
@@ -53,8 +57,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts);
 bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
-// the round's input: tab clicks, Command-1 to Command-0, the text scale's keys, Escape (stop), the prompt's edits, and
-// its Enter and Command-Enter.
+// the round's input: tab clicks and drags (reordering), Command-1 to Command-0 (by position), the text scale's keys,
+// Escape (hide) and Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter.
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 // Runs one event through the event filter (input.h). Returns true if the window took it, having queued the event

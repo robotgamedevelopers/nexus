@@ -5,11 +5,11 @@ EXTENDS MCWindow
 
 BrokenSetDraft(i, t) ==
     IF i \in Tabs
-    THEN /\ draft' = [draft EXCEPT ![i] = t, ![active] = t]
+    THEN /\ draft' = [draft EXCEPT ![At(i)] = t, ![At(active)] = t]
          /\ last' = Did("set_draft", i, t, NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active, transcript, queue>>
+         /\ UNCHANGED <<friends, order, active, transcript, queue>>
     ELSE /\ last' = Did("set_draft", i, t, NoEntry, FALSE)
          /\ UNCHANGED model
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, BrokenSetDraft, Send, Queue, AppendEntry)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, BrokenSetDraft, Send, Queue, AppendEntry, MoveTab)]_vars
 =============================================================================

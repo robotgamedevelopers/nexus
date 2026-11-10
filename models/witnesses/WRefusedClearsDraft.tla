@@ -4,11 +4,11 @@
 EXTENDS MCWindow
 
 BrokenSend(i) ==
-    IF i \in Tabs /\ draft[i] \notin Blank
+    IF Sendable(i)
     THEN Send(i)
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
-         /\ draft' = (IF i \in Tabs THEN [draft EXCEPT ![i] = ""] ELSE draft)
-         /\ UNCHANGED <<friends, active, transcript, queue>>
+         /\ draft' = (IF i \in Tabs THEN [draft EXCEPT ![At(i)] = ""] ELSE draft)
+         /\ UNCHANGED <<friends, order, active, transcript, queue>>
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, Queue, AppendEntry)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, Queue, AppendEntry, MoveTab)]_vars
 =============================================================================

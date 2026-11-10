@@ -5,13 +5,13 @@ EXTENDS MCWindow
 
 BrokenSend(i) ==
     IF Sendable(i)
-    THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
-         /\ queue' = [queue EXCEPT ![i] = Append(@, draft[i])]
-         /\ draft' = [draft EXCEPT ![i] = ""]
+    THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
+         /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
+         /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active>>
+         /\ UNCHANGED <<friends, order, active>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, Queue, AppendEntry)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, Queue, AppendEntry, MoveTab)]_vars
 =============================================================================
