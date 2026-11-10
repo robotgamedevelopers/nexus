@@ -15,6 +15,7 @@
 | 5. Fleet: see the machines and what runs on each | ❌ |
 | 6. Sprint: see and deal cards without leaving the window | ❌ |
 | 7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it | ❌ |
+| Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon | ❌ |
 | complete | 0% |
 
 [Source data](roadmap.sexp)

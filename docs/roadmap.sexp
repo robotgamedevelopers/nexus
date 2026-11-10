@@ -14,6 +14,7 @@
      ("fleet" "5. Fleet: see the machines and what runs on each")
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
+     ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
      )
    :columns (("done" "done"))
    :cells (
@@ -24,6 +25,7 @@
      ("fleet" "done" "t-fleet")
      ("sprint" "done" "t-sprint")
      ("panels" "done" "t-panels")
+     ("one-app" "done" "t-one-app")
      ))
   (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
   (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :todo)
@@ -31,4 +33,5 @@
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)
-  (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)))
+  (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
+  (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)))
