@@ -333,7 +333,6 @@ int main(int argc, char** argv) {
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
     prFontSetSetDefaultFamily(a.fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
-    openLook(a.look);
 
     int code = 0;
     if (shot != nullptr) {
@@ -367,7 +366,6 @@ int main(int argc, char** argv) {
         closeOverlay();
         printStats(a.stats);
     }
-    closeLook(a.look);
     prFontSetDestroy(a.fonts);
     prFontSystemDestroy(system);
     return code;

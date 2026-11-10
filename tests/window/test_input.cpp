@@ -70,7 +70,6 @@ struct Harness {
         ui = prUiCreate(tree);
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
-        openLook(look);
         view.model = &model;
         view.look = &look;
         frame();
@@ -81,7 +80,6 @@ struct Harness {
         prKitDestroy(kit);
         prUiDestroy(ui);
         prLayoutTreeDestroy(tree);
-        closeLook(look);
         prTextShaperDestroy(shaper);
         prFontSetDestroy(fonts);
         prFontSystemDestroy(system);
@@ -395,6 +393,80 @@ void textKeysWorkWithCapsLock() {
     CHECK(h.active().draft.empty());
 }
 
+// Escape is stop, which has nothing to stop in this layer: it types nothing and changes no draft, transcript, queue or
+// tab.
+void escapeChangesNothing() {
+    Harness h;
+    h.type("draft");
+    h.enter(PrAppModifierFlag_Super);
+    h.type("more");
+    h.model.append(0, Entry{EntryKind::Friend, "a reply"});
+    h.commandDigit(2);
+    h.type("other");
+    h.commandDigit(1);
+    const Tab before0 = h.model.tab(0);
+    const Tab before1 = h.model.tab(1);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_CapsLock);
+    CHECK(h.model.active() == 0);
+    for (std::size_t i = 0; i < 2; ++i) {
+        const Tab& was = i == 0 ? before0 : before1;
+        const Tab& now = h.model.tab(i);
+        CHECK(now.draft == was.draft);
+        CHECK(now.queue == was.queue);
+        CHECK(now.transcript.size() == was.transcript.size());
+    }
+    CHECK(h.model.tab(0).draft == "more");
+    CHECK((h.model.tab(0).queue == std::vector<std::string>{"draft"}));
+    // The prompt still has focus and takes typing after it.
+    h.type("!");
+    CHECK(h.model.tab(0).draft == "more!");
+}
+
+bool inside(PrRect inner, PrRect outer) {
+    return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top &&
+        inner.bottom <= outer.bottom;
+}
+
+// The prompt's box at the current text scale: its corners rounded by the scaled radius, with the plus (its first child)
+// and the text area inside it, the plus at its left, and nothing after the area.
+void checkPromptBox(const Harness& h) {
+    const float k = style::textScale(h.look.textSteps);
+    PrLayoutNode box = h.view.promptBox;
+    CHECK(box != kPrLayoutNodeNone);
+    PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, box));
+    PrLayoutDecorationStyle d = prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]);
+    const PrLayoutLength radius = prLayoutLengthPx(style::kPromptRadius * k);
+    for (PrLayoutLength r : d.radii)
+        CHECK(r.bits == radius.bits);
+    PrRect outer = h.bounds(box);
+    PrLayoutNode plus = prLayoutNodeFirstChild(h.tree, box);
+    CHECK(plus != kPrLayoutNodeNone && plus != h.view.prompt);
+    CHECK(prLayoutNodeNextSibling(h.tree, plus) == h.view.prompt);
+    CHECK(prLayoutNodeNextSibling(h.tree, h.view.prompt) == kPrLayoutNodeNone);
+    PrRect p = h.bounds(plus);
+    PrRect area = h.bounds(h.view.prompt);
+    CHECK(inside(p, outer));
+    CHECK(inside(area, outer));
+    CHECK(p.right <= area.left);
+    CHECK(p.left > outer.left + 0.5f * style::kPromptPadX * k);
+    // One line: the box is kPromptHeight tall.
+    CHECK(near(outer.bottom - outer.top, style::kPromptHeight * k));
+    // The area draws no frame of its own: no fill, no border, no focus ring.
+    PrLayoutStyle areaRecord = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, h.view.prompt));
+    CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
+}
+
+void promptIsARoundedBoxHoldingThePlus() {
+    Harness h;
+    h.frame();
+    checkPromptBox(h);
+    h.larger();
+    h.frame();
+    CHECK(h.look.textSteps == 1);
+    checkPromptBox(h);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -467,6 +539,8 @@ int main() {
     textKeysScaleTheTranscriptAndThePrompt();
     textScaleIsClamped();
     textKeysWorkWithCapsLock();
+    escapeChangesNothing();
+    promptIsARoundedBoxHoldingThePlus();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {

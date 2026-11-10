@@ -4,7 +4,6 @@
 #include <cmath>
 #include <string_view>
 
-#include "pr/draw.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
@@ -25,8 +24,9 @@ using namespace style;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
-// bubbles, and the rows that place the kit's parts. One part per kind of node, and one recipe per group kind that
-// switches on the part. Their text is the kit's (labels in the theme's roles), so no record here sets a font.
+// bubbles, the prompt's rounded box, and the rows that place the kit's parts. One part per kind of node, and one recipe
+// per group kind that switches on the part. Their text is the kit's (labels in the theme's roles), so no record here
+// sets a font.
 
 enum class Part : unsigned char {
     Window,
@@ -37,26 +37,20 @@ enum class Part : unsigned char {
     Bubble,
     BubbleQueued,
     Footer,
-    PromptRow,
+    Prompt,
     LabelRow,
-    Ring,
 };
 
-// The kit's icons' sides, and the ring's, at text scale `k`.
-float plusSide(float k) {
-    return 0.7f * kU * k;
-}
-float stopSide(float k) {
-    return 0.72f * kU * k;
-}
-float ringSide(float k) {
-    return 0.76f * kLabelSize * k + 3;
-}
-
-// The height of the kit text area with one line at text scale `k`, which the icons beside it centre on: the line, the
+// The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
 // area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale.
 float oneLineArea(float k) {
     return kLinePitch * k + 2 * 4 + 2;
+}
+
+// The prompt box's padding above and below the text area, inside its 1 px border, so that with one line it is
+// kPromptHeight tall.
+float promptPadY(float k) {
+    return (kPromptHeight * k - oneLineArea(k)) / 2 - 1;
 }
 
 PrColor faded(PrColor c, float alpha) {
@@ -127,18 +121,18 @@ struct BoxRecipe {
                 box.display = PrLayoutDisplay_Flex;
                 padding(box, kU * k, 0, 0, 0);
                 break;
-            case Part::PromptRow:
+            case Part::Prompt:
                 box.display = PrLayoutDisplay_Flex;
                 box.width = prLayoutLengthPercent(kPromptPercent);
+                padding(box, promptPadY(k), kPromptPadX * k, promptPadY(k), kPromptPadX * k);
+                for (PrLayoutUnit& b : box.border)
+                    b = prLayoutUnitFromPx(1);
                 break;
             case Part::LabelRow:
                 box.display = PrLayoutDisplay_Flex;
                 box.width = prLayoutLengthPercent(kPromptPercent);
                 box.height = px(kPromptBottom * k);
                 padding(box, 0, 0.7f * kU * k, (kLabelBaseline - 0.32f * kLabelSize) * k, 0);
-                break;
-            case Part::Ring:
-                box.margin[PrRectSide_Left] = px(kLabelSize * k);
                 break;
         }
     }
@@ -162,6 +156,14 @@ struct DecorationRecipe {
             case Part::BubbleQueued:
                 d.background = prColor16FromColor(faded(kBubble, kQueuedFill));
                 radius(d, kBubbleRadius * k);
+                break;
+            case Part::Prompt:
+                d.background = prColor16FromColor(kPromptFill);
+                for (int side = 0; side < PrRectSide_Count; ++side) {
+                    d.borderColor[side] = prColor16FromColor(kPromptBorder);
+                    d.borderStyle[side] = PrDrawBorderStyle_Solid;
+                }
+                radius(d, kPromptRadius * k);
                 break;
             default:
                 break;
@@ -202,18 +204,16 @@ struct FlexRecipe {
                 flex.alignItems = PrLayoutAlignment_Center;
                 flex.shrink = 0;
                 break;
-            case Part::PromptRow:
+            case Part::Prompt:
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
-                flex.columnGap = px(0.8f * kU * k);
+                flex.columnGap = px(kPromptGap * k);
+                flex.shrink = 0;
                 break;
             case Part::LabelRow:
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
-                break;
-            case Part::Ring:
-                flex.shrink = 0;
                 break;
             default:
                 break;
@@ -224,18 +224,6 @@ struct FlexRecipe {
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
     signed char s = static_cast<signed char>(look.textSteps);
     return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
-}
-
-// The context ring beside the model label, at text scale `k`: no kit part or icon shows a ring.
-PrDrawList* drawRing(float k) {
-    PrDrawList* list = prDrawListCreate();
-    PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = 2.2f * k;
-    float r = 0.38f * kLabelSize * k;
-    float side = ringSide(k);
-    prDrawListEllipse(list, PrVec2{side / 2, side / 2}, PrVec2{r, r}, 0,
-        PrDrawPaint{.color = kRing, .stroke = &stroke});
-    return list;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -288,15 +276,30 @@ struct Builder {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
 
-    void icon(PrLayoutNode parent, PrKitIconKind kind, float side) {
-        PrLayoutNode node = prKitIcon(kit, parent, PrKitIcon{.key = 0, .icon = kind},
+    // The kit's plus, centred on the prompt's last line, where the box aligns its items at the bottom.
+    void plus(PrLayoutNode box) {
+        const float side = kPlusSide * k();
+        PrLayoutNode node = prKitIcon(kit, box, PrKitIcon{.key = 0, .icon = PrKitIconKind_Plus},
             PrKitIconStyle{.size = side, .tone = PrKitTone_Primary, ._pad = {}});
-        // Centred on the prompt's first line, where the row aligns its items at the bottom.
         PrKitPlace place{};
         place.margin.bottom = (oneLineArea(k()) - side) / 2;
         place.flex = PrKitFlex_Fixed;
         prKitPlace(kit, node, &place);
     }
+
+    // Takes the kit text area's own frame off: the kit draws a text area with a square frame (3 px corners), a border in
+    // the accent while focused and a focus ring, and offers no option to round it, quiet it or leave it out (the bare
+    // style is not honoured by text areas), so the prompt's rounded box draws the frame and the area's decoration is
+    // the default: no fill, no border, no ring. Its box (rows, padding, scrolling) and all its editing stay the kit's.
+    void frameless(PrLayoutNode area) {
+        PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, area));
+        record.groups[PrLayoutGroup_Decoration] = 0;
+        prLayoutTreeFrameSetStyle(tree, area, prLayoutStyleIntern(tree, &record));
+    }
+
+    // Stop: Escape. Nothing runs in this layer that could be stopped; later layers connect this to stopping the
+    // friend's work.
+    void stop() {}
 
     void strip(PrLayoutNode window) {
         PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = false},
@@ -398,26 +401,29 @@ struct Builder {
 
     void prompt(PrLayoutNode footer) {
         std::size_t active = model.active();
-        // Enter sends and Command-Enter queues. Captured on the row that holds the text area, so the area never sees
-        // them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
-        PrLayoutNode row = element(footer, Part::PromptRow);
-        bool send = prUiKeyCaptured(ui, row, PrAppKey_Enter, 0);
-        bool queue = prUiKeyCaptured(ui, row, PrAppKey_Enter, PrAppModifierFlag_Super);
+        // The prompt's rounded box, holding the plus and the text area: the kit has no rounded text area and no slot
+        // for an icon inside one (frameless). Enter sends and Command-Enter queues, captured on the box, so the area
+        // never sees them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
+        PrLayoutNode box = element(footer, Part::Prompt);
+        view.promptBox = box;
+        bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
+        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, PrAppModifierFlag_Super);
         // While an input method composes, its Enter commits the composition (CompositionEnd, then Text, after the
         // KeyDown): read before the area takes this round's events.
         bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
         view.promptRows = promptRows();
 
-        icon(row, PrKitIconKind_Plus, plusSide(k()));
+        plus(box);
         PrKitTextArea area{};
         area.key = prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6});
         area.text = sv(model.tab(active).draft);
         area.placeholder = sv(kPlaceholderText);
         area.rows = view.promptRows;
-        PrLayoutNode edit = prKitTextArea(kit, row, area, PrKitFieldStyle{});
+        PrLayoutNode edit = prKitTextArea(kit, box, area, PrKitFieldStyle{});
         PrKitPlace fill{};
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, &fill);
+        frameless(edit);
         view.prompt = edit;
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
@@ -434,17 +440,9 @@ struct Builder {
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
         }
-        icon(row, PrKitIconKind_Stop, stopSide(k()));
 
         PrLayoutNode labels = element(footer, Part::LabelRow);
         label(labels, model.tab(active).model, textStyle(PrKitTextRole_BodySmall, PrKitTone_Primary));
-        PrLayoutNode ring = prLayoutTreeFrameReplaced(tree, labels, 0, style(ui, look, Part::Ring));
-        prLayoutTreeFrameSetNaturalSize(tree, ring,
-            PrLayoutNaturalSize{prLayoutUnitFromPx(ringSide(k())), prLayoutUnitFromPx(ringSide(k())), 0});
-        PrLayoutContent content{};
-        content.kind = PrLayoutContentKind_DrawList;
-        content.list = look.ring;
-        prLayoutTreeFrameSetContent(tree, ring, &content);
     }
 
     void build(PrLayoutNode parent) {
@@ -461,6 +459,9 @@ struct Builder {
             if (prUiKeyPressed(ui, window, t.key, t.modifiers))
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
+        // Escape is stop, claimed the same way; the text area does not claim it, so it never types or edits.
+        if (prUiKeyPressed(ui, window, PrAppKey_Escape, 0))
+            stop();
         strip(window);
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
@@ -471,24 +472,14 @@ struct Builder {
 
 } // namespace
 
-void openLook(Look& look) {
-    look.ring = drawRing(textScale(look.textSteps));
-}
-
-void closeLook(Look& look) {
-    prDrawListRelease(look.ring);
-    look = Look{};
-}
-
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
     PrKitPalette& p = theme.palette;
     p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
     p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip
-    p.bg2 = kPromptFill;                                                    // the prompt's fill, a tab under the pointer
+    p.bg2 = kPromptFill;                                                    // a tab under the pointer
     p.line2 = kStripLine;                                                   // the strip's rule
-    p.line3 = kPromptBorder;                                                // the prompt's border under the pointer
     p.text1 = kInk;
     p.text3 = kNotice;
     p.text4 = kPlaceholder;
@@ -513,8 +504,6 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     if (look.textSteps == view.askedTextSteps)
         return false;
     look.textSteps = view.askedTextSteps;
-    prDrawListRelease(look.ring);
-    look.ring = drawRing(textScale(look.textSteps));
     PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps);
     prKitSetTheme(kit, &theme);
     return true;

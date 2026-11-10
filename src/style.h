@@ -28,6 +28,9 @@ constexpr float kBubbleRadius = 0.9f * kU;
 constexpr float kBubbleMaxPercent = 83;       // of the column
 constexpr float kPromptHeight = 2.9f * kU;    // the prompt box with one line of text
 constexpr float kPromptRadius = 0.72f * kU;
+constexpr float kPromptPadX = 0.8f * kU;      // the box's sides to the plus and to the text's end
+constexpr float kPromptGap = 0.72f * kU;      // the plus to the text field
+constexpr float kPlusSide = 1.3f * kU;        // the plus icon's box; the kit draws its glyph inset in it
 constexpr float kPromptBottom = 2.75f * kU;   // window bottom to the prompt box's bottom
 constexpr float kLabelBaseline = 0.9f * kU;   // window bottom to the label row's baseline
 constexpr float kPromptMaxLines = 8;          // the prompt grows to this many lines, then scrolls
@@ -66,7 +69,6 @@ constexpr PrColor kPlaceholder = rgb(0x8c8c8c);
 constexpr PrColor kMeta = rgb(0x707070);
 constexpr PrColor kPromptFill = rgb(0x303030);
 constexpr PrColor kPromptBorder = rgb(0x3a3a3a);
-constexpr PrColor kRing = rgb(0x404c55);
 constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in the reference)
 
 // The queued bubble's fill and text, as alphas of kBubble and kInk.
