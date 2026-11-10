@@ -77,6 +77,9 @@ struct View {
                                                 // windowed, where Escape does nothing
     std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
+    std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
+                                                // first round included: saves the selection (tab_order.h)
+    std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
     // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
     // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
     KitTabs pinnedTabs{prKitTabsCreate()};

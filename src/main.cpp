@@ -13,7 +13,9 @@
 // screenshot show one after a command has printed.
 //
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
-// (sprint.h) or NEXUS_SPRINT_URL. It is the tab shown at launch (--tab 1). --backdrop draws the screenshot see-through,
+// (sprint.h) or NEXUS_SPRINT_URL. The window opens on the tab selected when it last quit (tab_order.h), or the sprint
+// tab if that tab is gone, was a terminal, or nothing is saved; --tab N opens tab N, and a screenshot without --tab
+// shows the sprint tab. --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
@@ -376,6 +378,7 @@ void seedDemo(Model& model, std::size_t tab) {
 int main(int argc, char** argv) {
     const char* shot = nullptr;
     std::size_t tab = 1;
+    bool tabGiven = false;
     bool demo = false;
     bool demoTerminal = false;
     bool backdrop = false;
@@ -389,6 +392,7 @@ int main(int argc, char** argv) {
             shot = argv[++i];
         } else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) {
             tab = std::size_t(std::strtoul(argv[++i], nullptr, 10));
+            tabGiven = true;
         } else if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) {
             bench = unsigned(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--demo") == 0) {
@@ -431,6 +435,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
     // The sprint tab first, then the friends.
     static Model model(friends.friends, true);
+    // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
+    // is (tab_order.h), or the sprint tab. A screenshot without --tab shows the sprint tab, whatever was saved.
+    static const TabOrderStore selection = fileSelectedTabStore();
+    const bool live = shot == nullptr;
+    if (!tabGiven && live) {
+        std::string selectionWarning;
+        tab = loadSelectedTab(selection, model, &selectionWarning) + 1;
+        if (!selectionWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", selectionWarning.c_str());
+    }
     if (tab < 1 || !model.select_tab(tab - 1)) {
         std::fprintf(stderr, "nexus: no tab %zu (there are %zu)\n", tab, model.tab_count());
         return 2;
@@ -454,6 +468,15 @@ int main(int argc, char** argv) {
         if (!saveTabOrder(order, model, &error))
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
     };
+    // Each change of the selected tab is saved as it happens, so a quit of any kind leaves it saved. A screenshot saves
+    // nothing.
+    if (live) {
+        a.view.selected = [] {
+            std::string error;
+            if (!saveSelectedTab(selection, model, &error))
+                std::fprintf(stderr, "nexus: %s\n", error.c_str());
+        };
+    }
     a.bench = bench;
     a.demoTerminal = demoTerminal;
     a.backdrop = backdrop && shot != nullptr;

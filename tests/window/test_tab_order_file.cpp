@@ -1,4 +1,5 @@
-// Functional test of the tab order's file store (src/tab_order.h): a real file, inside this test's working directory.
+// Functional test of the tab order's and the selected tab's file stores (src/tab_order.h): real files, inside this
+// test's working directory.
 
 #include <cstdio>
 #include <string>
@@ -44,6 +45,16 @@ int main() {
     CHECK(!saveTabOrder(bad, model, &error));
     std::fprintf(stderr, "  expected failure: %s\n", error.c_str());
     CHECK(error.find("/dev/null/nexus/tab-order.txt") != std::string::npos);
+    // The selected tab, in a file beside it: saved by name, and found again after the order changed.
+    const std::string selectedPath = "tab-order-test/nexus/selected-tab.txt";
+    prFileRemove(PrStringView{selectedPath.data(), selectedPath.size()});
+    TabOrderStore selected = fileTabOrderStore(selectedPath);
+    Model sprint(loaded, true);
+    CHECK(loadSelectedTab(selected, sprint, &warning) == 0 && warning.empty());        // no file yet: the sprint tab
+    CHECK(sprint.select_tab(1) && sprint.move_tab(1, 3));                              // "a" selected, then last
+    CHECK(saveSelectedTab(selected, sprint, &error));
+    Model relaunched(loadTabOrder(store, loaded, &warning), true);
+    CHECK(relaunched.tab(3).name == "a" && loadSelectedTab(selected, relaunched, &warning) == 3 && warning.empty());
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

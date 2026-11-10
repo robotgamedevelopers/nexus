@@ -402,6 +402,9 @@ struct Builder {
     // will land, Escape cancels it, and the drop is made through the model (mirrorMove). A press released before the
     // threshold is a click that selects the tab. Each tab is keyed by its Tab::id, so its node (focus, pointer state)
     // goes with it when it moves.
+    // The tabs' nodes by position, as the strips declared them this round.
+    std::vector<PrLayoutNode> tabNodes;
+
     void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, bool reorderable,
             PrKitFlex flex) {
         syncTabs(tabs, first, end);
@@ -424,6 +427,7 @@ struct Builder {
                 tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
             prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(label(model.tab(i)))});
+            tabNodes[i] = tab;
         }
         // A click on a tab, or Left or Right on a focused one, selects in the kit: made through the model's select_tab.
         // Right on the last tab selects kNoTab, which selects nothing: the next round puts the selection back.
@@ -438,13 +442,29 @@ struct Builder {
     // tab of a reorderable strip): a request for Prax. The two strips stand side by side, so their rules meet as one.
     void strips(PrLayoutNode window) {
         const std::size_t pinned = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint ? 1 : 0;
+        tabNodes.assign(model.tab_count(), kPrLayoutNodeNone);
         if (pinned == 0) {
             strip(window, view.movableTabs.get(), 0, model.tab_count(), true, PrKitFlex_Fixed);
-            return;
+        } else {
+            PrLayoutNode row = element(window, Part::StripRow);
+            strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
+            strip(row, view.movableTabs.get(), pinned, model.tab_count(), true, PrKitFlex_Fill);
         }
-        PrLayoutNode row = element(window, Part::StripRow);
-        strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
-        strip(row, view.movableTabs.get(), pinned, model.tab_count(), true, PrKitFlex_Fill);
+        keepFocusOnTheActiveTab();
+    }
+
+    // A press focuses the tab it lands on (ui.cpp PointerDown), a drag included, and the sprint tab has no prompt to
+    // take the focus back: left there, the focus ring stood on the dragged tab once a key made the focus visible (an
+    // Escape that hid the overlay), and Enter or Space reaching the tree selected it. So the keyboard focus never rests
+    // on a tab other than the active one: it goes to the active tab, and the prompt or a terminal takes it from there
+    // later in the round, as each does every round.
+    void keepFocusOnTheActiveTab() {
+        const std::size_t active = model.active();
+        for (std::size_t i = 0; i < tabNodes.size(); ++i) {
+            if (i != active && tabNodes[i] != kPrLayoutNodeNone && prUiFocus(ui) == tabNodes[i] &&
+                    active < tabNodes.size() && tabNodes[active] != kPrLayoutNodeNone)
+                prUiSetFocus(ui, tabNodes[active]);
+        }
     }
 
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
@@ -715,6 +735,11 @@ struct Builder {
             view.stop();
         strips(window);
         // the strip may have selected or moved a tab: read the active tab again
+        if (model.tab_count() != 0 && model.tab(model.active()).id != view.selectedId) {
+            view.selectedId = model.tab(model.active()).id;
+            if (view.selected)
+                view.selected();
+        }
         const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
         if (!onSprint && view.board != nullptr)
             view.board->hidden();
@@ -784,7 +809,7 @@ bool windowWantsFrame(const View& view) {
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
-    Builder b{view, kit, kit->ui, kit->tree, *view.look, *view.model};
+    Builder b{view, kit, kit->ui, kit->tree, *view.look, *view.model, {}};
     b.build(parent);
 }
 
