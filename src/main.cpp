@@ -34,6 +34,7 @@
 #include "model.h"
 #include "platform_mac.h"
 #include "style.h"
+#include "tab_order.h"
 #include "view.h"
 
 namespace {
@@ -312,6 +313,12 @@ int main(int argc, char** argv) {
         std::printf("nexus: %zu friends from nova-config\n", friends.friends.size());
     else
         std::fprintf(stderr, "nexus: %s\n", friends.error.c_str());
+    // The friend tabs in the order the person last left them (tab_order.h).
+    static const TabOrderStore order = fileTabOrderStore();
+    std::string orderWarning;
+    friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
+    if (!orderWarning.empty())
+        std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
     static Model model(friends.friends);
     if (model.tab_count() != 0 && (tab < 1 || !model.select_tab(tab - 1))) {
         std::fprintf(stderr, "nexus: no tab %zu (there are %zu)\n", tab, model.tab_count());
@@ -331,6 +338,11 @@ int main(int argc, char** argv) {
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
         a.view.hide = hideOverlay;
+    a.view.moved = [] {
+        std::string error;
+        if (!saveTabOrder(order, model, &error))
+            std::fprintf(stderr, "nexus: %s\n", error.c_str());
+    };
     a.bench = bench;
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);

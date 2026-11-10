@@ -321,8 +321,8 @@ struct Builder {
         }
         uint32_t from = 0;
         uint32_t to = 0;
-        if (prKitMoved(kit, row, &from, &to))
-            model.move_tab(from, to);
+        if (prKitMoved(kit, row, &from, &to) && model.move_tab(from, to) && view.moved)
+            view.moved();
     }
 
     // Each friend keeps its scroll while another shows, wherever its tab stands. Offsets count from the scroller's

@@ -40,6 +40,7 @@ struct View {
     std::function<void()> hide;                 // Escape: hides the overlay (platform_mac.h hideOverlay); unset when
                                                 // windowed, where Escape does nothing
     std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
+    std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::vector<float> scrolls;                 // each friend's transcript scroll, by Tab::id, kept while another shows
     std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round

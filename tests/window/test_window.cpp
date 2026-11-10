@@ -7,6 +7,7 @@
 
 #include "friends.h"
 #include "input.h"
+#include "tab_order.h"
 
 namespace {
 
@@ -152,9 +153,114 @@ void timeoutSaysSo() {
     CHECK(has(list.error, kShown) && has(list.error, "within 5 seconds") && has(list.error, "run it in a terminal"));
 }
 
+// The tab order (src/tab_order.h). ----------------------------------------------------------------------------------
+
+std::vector<FriendInfo> named(std::vector<std::string> names) {
+    std::vector<FriendInfo> out;
+    for (const std::string& n : names)
+        out.push_back(FriendInfo{n, "m-" + n});
+    return out;
+}
+
+std::string namesOf(const std::vector<FriendInfo>& friends) {
+    std::string out;
+    for (const FriendInfo& f : friends)
+        out += (out.empty() ? "" : " ") + f.name;
+    return out;
+}
+
+void savedOrderIsApplied() {
+    const std::vector<FriendInfo> loaded = named({"a", "b", "c", "d"});
+    CHECK(namesOf(applyTabOrder(loaded, {})) == "a b c d");                       // nothing saved: loaded order
+    CHECK(namesOf(applyTabOrder(loaded, {"c", "a", "d", "b"})) == "c a d b");
+    CHECK(namesOf(applyTabOrder(loaded, {"c", "a"})) == "c a b d");              // unsaved friends follow, in order
+    CHECK(namesOf(applyTabOrder(loaded, {"gone", "d", "old"})) == "d a b c");     // vanished names dropped
+    CHECK(namesOf(applyTabOrder(loaded, {"b", "b", "a", "b"})) == "b a c d");     // a duplicate counts once
+    CHECK(applyTabOrder({}, {"a"}).empty());
+    std::vector<FriendInfo> applied = applyTabOrder(loaded, {"d"});
+    CHECK(applied.size() == 4 && applied[0].model == "m-d");                      // each friend keeps its model
+}
+
+void tabOrderTextRoundTrips() {
+    std::vector<std::string> names;
+    std::string error;
+    CHECK(parseTabOrder(formatTabOrder({"emma", "alex", "zhi yǎ"}), &names, &error));
+    CHECK((names == std::vector<std::string>{"emma", "alex", "zhi yǎ"}));
+    CHECK(parseTabOrder(formatTabOrder({}), &names, &error) && names.empty());
+    CHECK(!parseTabOrder("alex\nemma\n", &names, &error) && has(error, "first line"));
+    CHECK(!parseTabOrder("", &names, &error));
+    CHECK(!parseTabOrder(std::string("nexus tab order 1\na\0b\n", 22), &names, &error) && has(error, "NUL"));
+}
+
+// An in-memory store: no file.
+struct MemoryStore {
+    bool saved = false;
+    std::string text;
+    std::string readError;
+    std::string writeError;
+    int writes = 0;
+    TabOrderStore store() {
+        return TabOrderStore{"/fake/tab-order.txt",
+            [this](std::string* t, std::string* e) {
+                *e = readError;
+                if (!saved || !readError.empty())
+                    return false;
+                *t = text;
+                return true;
+            },
+            [this](const std::string& t, std::string* e) {
+                ++writes;
+                if (!writeError.empty()) {
+                    *e = writeError;
+                    return false;
+                }
+                saved = true;
+                text = t;
+                return true;
+            }};
+    }
+};
+
+void storeSavesAndRestores() {
+    const std::vector<FriendInfo> loaded = named({"a", "b", "c"});
+    MemoryStore mem;
+    std::string warning;
+    CHECK(namesOf(loadTabOrder(mem.store(), loaded, &warning)) == "a b c" && warning.empty());   // nothing saved
+    Model model(loaded);
+    CHECK(model.move_tab(2, 0));
+    std::string error;
+    CHECK(saveTabOrder(mem.store(), model, &error) && error.empty());
+    // A relaunch: the store's friends in the saved order, and Command-1's tab is the first saved friend.
+    Model again(loadTabOrder(mem.store(), loaded, &warning));
+    CHECK(warning.empty());
+    CHECK(again.tab_count() == 3 && again.tab(0).name == "c" && again.tab(1).name == "a" && again.tab(2).name == "b");
+}
+
+void badStoreUsesTheLoadedOrderAndSaysSo() {
+    const std::vector<FriendInfo> loaded = named({"a", "b"});
+    MemoryStore mem;
+    mem.saved = true;
+    mem.text = "not a tab order\nb\n";
+    std::string warning;
+    CHECK(namesOf(loadTabOrder(mem.store(), loaded, &warning)) == "a b");
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "first line") && has(warning, "deleting it resets"));
+    mem.readError = "it cannot be read";
+    CHECK(namesOf(loadTabOrder(mem.store(), loaded, &warning)) == "a b");
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "cannot be read") && has(warning, "deleting it resets"));
+    mem.writeError = "Permission denied";
+    Model model(loaded);
+    std::string error;
+    CHECK(!saveTabOrder(mem.store(), model, &error));
+    CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
 } // namespace
 
 int main() {
+    savedOrderIsApplied();
+    tabOrderTextRoundTrips();
+    storeSavesAndRestores();
+    badStoreUsesTheLoadedOrderAndSaysSo();
     capsLockIsStripped();
     parsesEnabledFriendsInOrder();
     reportsWhatIsWrong();

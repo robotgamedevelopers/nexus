@@ -15,6 +15,7 @@
 
 #include "model.h"
 #include "style.h"
+#include "tab_order.h"
 #include "view.h"
 
 namespace {
@@ -61,6 +62,7 @@ struct Harness {
     double time = 1000;
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
     int stops = 0;      // stop requests (View::stop)
+    int saves = 0;      // tab order saves asked for after a move (View::moved)
 
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
@@ -78,6 +80,7 @@ struct Harness {
         view.look = &look;
         view.hide = [this] { ++hides; };
         view.stop = [this] { ++stops; };
+        view.moved = [this] { ++saves; };
         frame();
         frame();
     }
@@ -520,8 +523,10 @@ void dragMovesATab() {
     Harness h(fourFriends());
     h.commandDigit(2);                       // f2 active
     CHECK(h.model.active() == 1);
+    CHECK(h.saves == 0);
     h.dragTab(2, 0);
     CHECK(h.order() == "f3 f1 f2 f4");
+    CHECK(h.saves == 1);                     // a move asks for the order to be saved, once
     CHECK(h.active().name == "f2");          // the same friend, now at position 3
     CHECK(h.model.active() == 2);
     CHECK(h.hides == 0);
@@ -556,6 +561,29 @@ void clickBelowThresholdSelects() {
     h.frame();
     CHECK(h.order() == "f1 f2 f3 f4");
     CHECK(h.model.active() == 2);
+    CHECK(h.saves == 0);                     // a click moves nothing and saves nothing
+}
+
+// A click without any movement selects the tab.
+void clickSelectsATab() {
+    Harness h(fourFriends());
+    PrVec2 at = h.centre(h.tabs()[3]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerUp, at);
+    h.frame();
+    CHECK(h.model.active() == 3);
+    CHECK(h.order() == "f1 f2 f3 f4");
+    CHECK(h.saves == 0);
+}
+
+// A relaunch: the friends come in the saved order (tab_order.h), so Command-1 selects the first saved friend.
+void savedOrderOnRelaunch() {
+    std::vector<FriendInfo> saved = applyTabOrder(fourFriends(), {"f3", "f1"});
+    Harness h(saved);
+    CHECK(h.order() == "f3 f1 f2 f4");
+    h.commandDigit(2);
+    h.commandDigit(1);
+    CHECK(h.active().name == "f3");
 }
 
 // Escape during a drag cancels it: the order stays, the release drops nothing, and no hide is requested.
@@ -568,6 +596,7 @@ void escapeCancelsADrag() {
     h.frame();
     CHECK(h.order() == "f1 f2 f3 f4");
     CHECK(h.hides == 0);
+    CHECK(h.saves == 0);                     // a cancelled drag saves nothing
     CHECK(h.model.active() == 0);
     // After the drag, Escape hides again.
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -619,6 +648,7 @@ void dragWithOneTabDoesNothing() {
     CHECK(h.order() == "f1");
     CHECK(h.model.active() == 0);
     CHECK(h.active().draft == "x");
+    CHECK(h.saves == 0);
 }
 
 // All text under `node`, with each text node's text on its own.
@@ -815,6 +845,8 @@ int main() {
     escapeWhileComposingDoesNotHide();
     dragMovesATab();
     clickBelowThresholdSelects();
+    clickSelectsATab();
+    savedOrderOnRelaunch();
     escapeCancelsADrag();
     draftAndScrollStayWithTheirFriend();
     dragWithOneTabDoesNothing();
