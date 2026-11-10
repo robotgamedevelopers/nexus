@@ -1,7 +1,7 @@
 // Unit tests of nexus::Model. Logic only: no time, no sockets, no network, no files.
 //
 //   model_test            runs every case
-//   model_test <case>     runs one (ctest registers each case on its own)
+//   model_test <case>     runs one, by hand (ctest runs them all as the one test model_unit)
 
 #include "model.h"
 

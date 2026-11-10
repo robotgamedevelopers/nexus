@@ -68,6 +68,11 @@ tlc_test(tlc_witness_move_leaves_draft    WMoveLeavesDraft    WMoveLeavesDraft.c
 tlc_test(tlc_witness_move_out_of_range    WMoveOutOfRange     WMoveOutOfRange.cfg     action    PROPERTY RefusedChangesNothing)
 tlc_test(tlc_witness_move_swaps           WMoveSwaps          WMoveSwaps.cfg          action    PROPERTY MovePlaces)
 tlc_test(tlc_witness_send_by_position     WSendByPosition     WSendByPosition.cfg     action    PROPERTY SendTouchesNoOtherTab)
+tlc_test(tlc_witness_set_draft_outside    WSetDraftOutsideDrafts WSetDraftOutsideDrafts.cfg invariant PROPERTY TypeOK)
+tlc_test(tlc_witness_send_appends_twice   WSendAppendsTwice   WSendAppendsTwice.cfg   action    PROPERTY SendAppendsOne)
+tlc_test(tlc_witness_queue_appends_twice  WQueueAppendsTwice  WQueueAppendsTwice.cfg  action    PROPERTY QueueAppendsOne)
+tlc_test(tlc_witness_select_reorders      WSelectReorders     WSelectReorders.cfg     action    PROPERTY OnlyMoveReorders)
+tlc_test(tlc_witness_append_renames       WAppendRenamesFriend WAppendRenamesFriend.cfg action  PROPERTY FriendsFixed)
 # Terminal tabs: added, closed, and kept in their zone after the friends.
 tlc_test(tlc_witness_close_removes_friend WCloseRemovesFriend WCloseRemovesFriend.cfg invariant PROPERTY NoTabLost)
 tlc_test(tlc_witness_close_wrong_tab      WCloseWrongTab      WCloseWrongTab.cfg      action    PROPERTY CloseRemovesExactly)
@@ -84,11 +89,13 @@ tlc_test(tlc_witness_move_friend_behind_terminal WMoveFriendBehindTerminal WMove
          PROPERTY ZonesOrdered)
 tlc_test(tlc_witness_move_cross_zone_moves WMoveCrossZoneMoves WMoveCrossZoneMoves.cfg action    PROPERTY RefusedChangesNothing)
 
-# Trace binding: the real model's random walks, each a behaviour of Window.tla.
+# Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
+# four prompts (trace_walk prints the longest).
 foreach(seed 1 2 3 4 5)
-    tlc_test(tlc_trace_seed_${seed} WindowTrace WindowTrace.cfg pass SEED ${seed} STEPS 300 FRIENDS 3)
+    tlc_test(tlc_trace_seed_${seed} WindowTrace WindowTrace.cfg pass SEED ${seed} STEPS 1000 FRIENDS 3)
 endforeach()
-tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 300 FRIENDS 2)
+tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 FRIENDS 2)
+tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 FRIENDS 1)
 tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 FRIENDS 0)
 
 # The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
@@ -98,5 +105,14 @@ tlc_test(tlc_trace_faulty_queue_rejected WindowTrace WindowTrace.cfg invariant P
          SEED 1 STEPS 300 FRIENDS 3 FAULTY queue)
 tlc_test(tlc_trace_faulty_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY move)
+# And with the queue dropping its oldest prompt past four, and send stripping trailing spaces.
+tlc_test(tlc_trace_faulty_queue_cap_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 1000 FRIENDS 3 FAULTY queue-cap)
+tlc_test(tlc_trace_faulty_send_trim_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 1000 FRIENDS 3 FAULTY send-trim)
+# And with a send of the text just sent appending nothing (a hole the walk had before it sent equal text twice).
+tlc_test(tlc_trace_faulty_send_dedup_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 1000 FRIENDS 3 FAULTY send-dedup)
+# And with close removing a friend's tab.
 tlc_test(tlc_trace_faulty_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY close)

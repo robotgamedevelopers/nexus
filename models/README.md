@@ -98,6 +98,11 @@ Each module in `witnesses/` extends `MCWindow` and passes one broken action to `
 | `WMoveOutOfRange` | a move past the last tab returns false but moves the tab to the end | `RefusedChangesNothing` |
 | `WMoveSwaps` | move swaps the two tabs instead of shifting those between (three tabs) | `MovePlaces` |
 | `WSendByPosition` | send and queue take the position as the friend, as if no tab had moved | `SendTouchesNoOtherTab` |
+| `WSetDraftOutsideDrafts` | set_draft stores a text it was not given | `TypeOK` |
+| `WSendAppendsTwice` | send appends the `Person` entry twice | `SendAppendsOne` |
+| `WQueueAppendsTwice` | queue appends the draft twice | `QueueAppendsOne` |
+| `WSelectReorders` | select brings the selected tab to the front | `OnlyMoveReorders` |
+| `WAppendRenamesFriend` | append also rewrites the friend's model | `FriendsFixed` |
 | `WCloseRemovesFriend` | close removes a friend's tab too | `NoTabLost` |
 | `WCloseWrongTab` | close removes the last tab instead of the one named | `CloseRemovesExactly` |
 | `WCloseActivePastEnd` | closing the active last tab leaves `active` past the end | `ActiveValid` |
@@ -111,13 +116,15 @@ Each module in `witnesses/` extends `MCWindow` and passes one broken action to `
 | `WMoveFriendBehindTerminal` | move lets a friend go behind a terminal | `ZonesOrdered` |
 | `WMoveCrossZoneMoves` | a move across zones returns false but moves the tab | `RefusedChangesNothing` |
 
+Every property in the table above has a witness.
+
 ## The binding: code traces checked against the spec
 
-`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move | --faulty-close] <out.tla>`). The random numbers come from the seed alone. Each step calls one operation (adding and closing terminals among them, at most three open), with positions in range and two past the last tab (a move draws both, so moves across zones are tried and refused), drafts that are empty, all whitespace (including tab, newline, carriage return and form feed), or text with quotes and backslashes, and entries of every kind. The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it: the order (each position's `Tab::id`) and, by position, each tab's kind, friend, draft, transcript and queue.
+`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close] <out.tla>`). The random numbers come from the seed alone. Each step calls one operation (adding and closing terminals among them, at most three open), with positions in range and two past the last tab (a move draws both, so moves across zones are tried and refused), drafts that are empty, all whitespace (including tab, newline, vertical tab, carriage return and form feed), text with quotes and backslashes, and text with whitespace before, after and around it, and entries of every kind. Two kinds of step repeat the last accepted send or queue with the same text to the same tab (a `set_draft`, then the `send` or `queue`), so that equal sends follow each other and queues grow long; the walk prints the longest queue (dozens of prompts at 1000 steps). The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it: the order (each position's `Tab::id`) and, by position, each tab's kind, friend, draft, transcript and queue.
 
 `WindowTrace.tla` instantiates `Window` with those domains. Each of its steps takes the `Window` action the record names, with the record's arguments, and the invariant `TraceMatches` requires the spec's state and return value to equal the code's: the order equal, and the tab at each position holding the state of the friend the spec has there. A step whose arguments lie outside the spec's domains has no successor and TLC reports a deadlock. The property `WindowSpec` checks the whole behaviour against `Window`'s `Init` and `Next`, and every `Window` property is checked on the trace too.
 
-The binding is shown to fail, four times: `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, `--faulty-move` one whose `move_tab` leaves `active` at the old position, and `--faulty-close` one whose `close_tab` also removes a friend's tab. TLC must report `TraceMatches` violated at the first such send, at the first accepted queue, at the first move that shifts the active tab, and at the first close of a friend.
+The binding is shown to fail, seven times: `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, `--faulty-move` one whose `move_tab` leaves `active` at the old position, `--faulty-queue-cap` one whose queue drops its oldest prompt past four, `--faulty-send-trim` one whose `send` strips trailing spaces, `--faulty-send-dedup` one whose `send` of the text just sent appends nothing, and `--faulty-close` one whose `close_tab` also removes a friend's tab. TLC must report `TraceMatches` violated at the first step where each fault shows.
 
 ## Running the checks
 
@@ -130,7 +137,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j4
 ```
 
-The `model` label runs the four instances, the thirty-three witnesses, seven code traces (seeds 1 to 5 on three friends and 300 steps, seed 6 on two friends, seed 7 with no friends) and the four faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+The `model` label runs the four instances, the thirty-eight witnesses, eight code traces (seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps; seed 7 with no friends) and the seven faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 

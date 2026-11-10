@@ -33,6 +33,24 @@ Early, and not yet usable. macOS only. nexus is built in layers, one secured bef
 layer 1 (the window: tabs, transcript and prompt draw and take input) is in progress. The layers are in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## The window today
+
+nexus runs as an overlay: a see-through window over the whole screen, above other apps and their fullscreen
+Spaces, with no Dock icon. Command plus the tilde key (the key left of 1) shows it and hides it, from any app.
+Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
+`--windowed` it is a normal window instead.
+
+Each friend listed by `nova-config friend list` has a tab. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
+reorder the tabs; the order is kept across launches. Enter sends the prompt, Command-Enter queues it, and
+Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller.
+
+Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it, and it
+closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends,
+and their order is not kept. On a terminal tab every key that is not a Command chord, Escape included, goes to the
+shell.
+
+nexus finds `nova-config` on the PATH your login shell gives, or at the full path in `NEXUS_NOVA_CONFIG`.
+
 ## What it builds on
 
 - [Prax](https://github.com/pdoane/prax), the UI library, pinned.
@@ -45,6 +63,10 @@ layer 1 (the window: tabs, transcript and prompt draw and take input) is in prog
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
+open build/nexus.app
 ```
+
+Tests: `ctest --test-dir build -L unit`, `-L functional`, and `-L model` (needs Java and `TLA2TOOLS_JAR`; see
+[models/README.md](models/README.md)).
 
 License: GNU AGPL v3.

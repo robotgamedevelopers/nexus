@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,8 +21,40 @@ struct FriendList {
 // the friends whose `enabled` is true. Pure: no OS.
 FriendList parseFriendList(std::string_view json);
 
-// Runs `nova-config friend list --json` with this process's environment and parses what it prints. On a failure the
-// error carries the command's own text from its standard error.
+// The program to run and its arguments, and the command line as a person would type it, for messages.
+struct Command {
+    std::string program;
+    std::vector<std::string> arguments;
+    std::string shown;
+};
+
+// What running a command gave: how it ended, its status or signal, and what it printed.
+struct CommandResult {
+    enum class End { Exited, Signaled, NotFound, NotStarted, TimedOut };
+    End end = End::NotStarted;
+    int code = 0;               // the exit status, or the signal
+    std::string out;
+    std::string err;
+};
+
+// Runs a command, giving up after `timeoutSeconds`. The seam that tests fill with a fake: no test spawns a process.
+using CommandRunner = std::function<CommandResult(const Command& command, int timeoutSeconds)>;
+
+// How long loadFriends waits for the command. It runs before the window opens.
+constexpr int kFriendListTimeoutSeconds = 5;
+
+// The command that lists the friends. With `override` (NEXUS_NOVA_CONFIG, a full path to nova-config), that program is
+// run directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if unset) as a login shell, so that it
+// is found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH.
+Command friendListCommand(const char* override, const char* shell);
+
+// Runs `command` with `run` and parses what it prints. Every error names the command, what happened and what to do.
+FriendList loadFriends(const Command& command, const CommandRunner& run);
+
+// Runs a command as a child process (Prax's lib/process), with this process's environment.
+CommandResult runCommand(const Command& command, int timeoutSeconds);
+
+// loadFriends with friendListCommand(NEXUS_NOVA_CONFIG, SHELL) and runCommand.
 FriendList loadFriends();
 
 } // namespace nexus

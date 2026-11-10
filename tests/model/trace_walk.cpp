@@ -2,7 +2,8 @@
 // (WindowTraceData.tla) for models/WindowTrace.tla, under which TLC checks that the trace is a behaviour of
 // models/Window.tla.
 //
-//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move | --faulty-close] <out.tla>
+//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap |
+//              --faulty-send-trim | --faulty-send-dedup | --faulty-close] <out.tla>
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
 // the clock or the OS. Each step calls one operation, with positions in range and out of it (move_tab's two among
@@ -13,9 +14,11 @@
 //
 // --faulty walks FaultyModel instead: a test-only subclass whose send accepts a draft that is all whitespace but
 // not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. --faulty-move
-// walks FaultyMoveModel: its move_tab leaves active at the old position. --faulty-close walks FaultyCloseModel: its
-// close_tab removes a friend's tab too. TLC must reject each one's traces; that is the negative check that shows the
-// binding can fail.
+// walks FaultyMoveModel: its move_tab leaves active at the old position. --faulty-queue-cap walks FaultyQueueCapModel:
+// past four queued prompts its queue drops the oldest. --faulty-send-trim walks FaultySendTrimModel: its send strips
+// trailing spaces. --faulty-send-dedup walks FaultySendDedupModel: a send of the text just sent appends nothing.
+// --faulty-close walks FaultyCloseModel: its close_tab removes a friend's tab too. TLC must reject each one's traces;
+// that is the negative check that shows the binding can fail.
 
 #include "model.h"
 
@@ -93,10 +96,58 @@ public:
     }
 };
 
+// The test-only queue-length fault: past four queued prompts, the queue drops its oldest. Hides Model::queue.
+class FaultyQueueCapModel : public Model {
+public:
+    using Model::Model;
+    bool queue(std::size_t i) {
+        if (!Model::queue(i))
+            return false;
+        // The model offers no way to take from a queue, so the fault writes the tab directly (it is not const).
+        std::vector<std::string>& q = const_cast<nexus::Tab&>(tab(i)).queue;
+        if (q.size() > 4)
+            q.erase(q.begin());
+        return true;
+    }
+};
+
+// The test-only trim fault: send strips trailing spaces from the draft. Hides Model::send.
+class FaultySendTrimModel : public Model {
+public:
+    using Model::Model;
+    bool send(std::size_t i) {
+        if (i < tab_count()) {
+            std::string draft = tab(i).draft;
+            while (!draft.empty() && draft.back() == ' ')
+                draft.pop_back();
+            set_draft(i, draft);
+        }
+        return Model::send(i);
+    }
+};
+
+// The test-only repeat fault: a send whose text equals the tab's last Person entry clears the draft and returns true
+// but appends nothing. Hides Model::send.
+class FaultySendDedupModel : public Model {
+public:
+    using Model::Model;
+    bool send(std::size_t i) {
+        if (i < tab_count() && !tab(i).transcript.empty() && tab(i).transcript.back().kind == EntryKind::Person &&
+                tab(i).transcript.back().text == tab(i).draft) {
+            set_draft(i, "");
+            return true;
+        }
+        return Model::send(i);
+    }
+};
+
 template <class M>
 constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
                              : std::is_same_v<M, FaultyQueueModel> ? ", faulty queue model"
                              : std::is_same_v<M, FaultyMoveModel> ? ", faulty move model"
+                             : std::is_same_v<M, FaultyQueueCapModel> ? ", faulty queue-length model"
+                             : std::is_same_v<M, FaultySendTrimModel> ? ", faulty send-trim model"
+                             : std::is_same_v<M, FaultySendDedupModel> ? ", faulty send-dedup model"
                              : std::is_same_v<M, FaultyCloseModel> ? ", faulty close model" : "";
 
 struct Rng {
@@ -110,9 +161,11 @@ struct Rng {
     std::size_t below(std::size_t n) { return static_cast<std::size_t>(next() % n); }
 };
 
-// The argument domains. TraceDrafts, TraceBlank and TraceEntries in the trace are these.
-const std::vector<std::string> kDrafts = {"", " ", " \t\n", "\r\f", "hi", "two words", "say \"hi\" \\ ok"};
-const std::vector<std::string> kBlank = {"", " ", " \t\n", "\r\f"};
+// The argument domains. TraceDrafts, TraceBlank and TraceEntries in the trace are these. Text with whitespace before,
+// after and around it shows a send or queue that trims; drawing from few texts repeats equal sends.
+const std::vector<std::string> kDrafts = {"", " ", " \t\n", "\r\f", "\v", "hi", "two words", "say \"hi\" \\ ok",
+    " hi", "hi ", "\thi \n", "hi  "};
+const std::vector<std::string> kBlank = {"", " ", " \t\n", "\r\f", "\v"};
 const std::vector<Entry> kEntries = {
     {EntryKind::Friend, "ok"},
     {EntryKind::Notice, ""},
@@ -206,20 +259,25 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
     std::vector<std::string> records;
     records.push_back(record("init", 0, 0, "", kNoEntry, true, 0, state(m)));
     std::size_t accepted = 0;
+    std::size_t longest = 0;    // the longest queue the walk reached
+    std::size_t sentTab = 0;    // where the last accepted send went, and its text: for sending the same text again
+    std::string sentText;
+    std::size_t queuedTab = 0;  // and the same for the last accepted queue
+    std::string queuedText;
     for (std::size_t s = 0; s < steps; ++s) {
         // every tab, and two positions past the last
         const std::size_t index_count = m.tab_count() + 2;
-        const std::size_t i = rng.below(index_count);
+        std::size_t i = rng.below(index_count);
         std::size_t j = 0;
         std::size_t id = 0;
         bool ret = false;
         const char* op = "";
         std::string text;
         std::string ent = kNoEntry;
-        std::size_t kind = rng.below(8);
+        std::size_t kind = rng.below(10);
         // At most kMaxTerminals terminals at once: an add beyond that is a close instead.
         if (kind == 5 && m.tab_count() >= friend_count + kMaxTerminals)
-            kind = 6;
+            kind = 8;
         switch (kind) {
         case 0: op = "select"; ret = m.select_tab(i); break;
         case 1:
@@ -227,8 +285,40 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
             text = kDrafts[rng.below(kDrafts.size())];
             ret = m.set_draft(i, text);
             break;
-        case 2: op = "send"; ret = m.send(i); break;
-        case 3: op = "queue"; ret = m.queue(i); break;
+        case 6:
+            // The same text again, to the same tab, at once: set_draft as its own step, then the send below.
+            i = sentTab;
+            ret = m.set_draft(i, sentText);
+            last_index = std::max(last_index, i);
+            records.push_back(record("set_draft", i, 0, sentText, kNoEntry, ret, 0, state(m)));
+            accepted += ret ? 1 : 0;
+            ++s;
+            [[fallthrough]];
+        case 2:
+            op = "send";
+            ret = m.send(i);
+            if (ret) {
+                sentTab = i;
+                sentText = m.tab(i).transcript.back().text;
+            }
+            break;
+        case 7:
+            // The same prompt queued again, to the same tab: queues grow long.
+            i = queuedTab;
+            ret = m.set_draft(i, queuedText);
+            last_index = std::max(last_index, i);
+            records.push_back(record("set_draft", i, 0, queuedText, kNoEntry, ret, 0, state(m)));
+            accepted += ret ? 1 : 0;
+            ++s;
+            [[fallthrough]];
+        case 3:
+            op = "queue";
+            ret = m.queue(i);
+            if (ret) {
+                queuedTab = i;
+                queuedText = m.tab(i).queue.back();
+            }
+            break;
         case 4:
             op = "move";
             j = rng.below(index_count);
@@ -239,7 +329,7 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
             id = m.add_terminal();
             ret = true;
             break;
-        case 6: op = "close"; ret = m.close_tab(i); break;
+        case 8: op = "close"; ret = m.close_tab(i); break;
         default: {
             op = "append";
             const Entry& e = kEntries[rng.below(kEntries.size())];
@@ -250,6 +340,8 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         }
         accepted += ret ? 1 : 0;
         last_index = std::max(last_index, std::max(i, j));
+        for (std::size_t t = 0; t < m.tab_count(); ++t)
+            longest = std::max(longest, m.tab(t).queue.size());
         records.push_back(record(op, i, j, text, ent, ret, id, state(m)));
     }
 
@@ -286,8 +378,9 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         std::fprintf(stderr, "trace_walk: writing %s failed\n", path);
         return 1;
     }
-    std::printf("trace_walk: seed %llu, %zu steps, %zu friends%s: %zu accepted, %zu refused -> %s\n",
-                static_cast<unsigned long long>(seed), steps, friend_count, kFault<M>, accepted, steps - accepted, path);
+    std::printf("trace_walk: seed %llu, %zu steps, %zu friends%s: %zu accepted, %zu refused, longest queue %zu -> %s\n",
+                static_cast<unsigned long long>(seed), records.size() - 1, friend_count, kFault<M>, accepted, records.size() - 1 - accepted,
+                longest, path);
     return 0;
 }
 
@@ -301,38 +394,42 @@ bool parse(const char* s, std::uint64_t& v) {
 
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
-    bool faulty = false;
-    bool faultyQueue = false;
-    bool faultyMove = false;
-    bool faultyClose = false;
+    const std::vector<std::string> faults = {"--faulty", "--faulty-queue", "--faulty-move", "--faulty-queue-cap",
+        "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close"};
+    std::string fault;
+    int faultCount = 0;
     std::vector<std::string> rest;
     for (const std::string& a : args) {
-        if (a == "--faulty")
-            faulty = true;
-        else if (a == "--faulty-close")
-            faultyClose = true;
-        else if (a == "--faulty-queue")
-            faultyQueue = true;
-        else if (a == "--faulty-move")
-            faultyMove = true;
-        else
+        if (std::find(faults.begin(), faults.end(), a) != faults.end()) {
+            fault = a;
+            ++faultCount;
+        } else {
             rest.push_back(a);
+        }
     }
     std::uint64_t seed = 0, steps = 0, friend_count = 0;
     if (rest.size() != 4 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
-        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() ||
-        int(faulty) + int(faultyQueue) + int(faultyMove) + int(faultyClose) > 1) {
-        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> "
-                     "[--faulty | --faulty-queue | --faulty-move | --faulty-close] <out.tla>\n", kFriends.size());
+        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() || faultCount > 1) {
+        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--faulty | --faulty-queue | "
+                     "--faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | "
+                     "--faulty-close] <out.tla>\n",
+                     kFriends.size());
         return 2;
     }
-    if (faultyClose)
-        return walk<FaultyCloseModel>(seed, steps, friend_count, rest[3].c_str());
-    if (faultyMove)
-        return walk<FaultyMoveModel>(seed, steps, friend_count, rest[3].c_str());
-    if (faultyQueue)
-        return walk<FaultyQueueModel>(seed, steps, friend_count, rest[3].c_str());
-    if (faulty)
-        return walk<FaultyModel>(seed, steps, friend_count, rest[3].c_str());
-    return walk<Model>(seed, steps, friend_count, rest[3].c_str());
+    const char* out = rest[3].c_str();
+    if (fault == "--faulty-close")
+        return walk<FaultyCloseModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty-send-dedup")
+        return walk<FaultySendDedupModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty-queue-cap")
+        return walk<FaultyQueueCapModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty-send-trim")
+        return walk<FaultySendTrimModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty-move")
+        return walk<FaultyMoveModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty-queue")
+        return walk<FaultyQueueModel>(seed, steps, friend_count, out);
+    if (fault == "--faulty")
+        return walk<FaultyModel>(seed, steps, friend_count, out);
+    return walk<Model>(seed, steps, friend_count, out);
 }
