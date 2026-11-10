@@ -1,14 +1,14 @@
---------------------------- MODULE WQueueAsPerson ---------------------------
-\* Reversed witness: queue appends its entry with kind Person instead of
-\* Queued. SendAppendsOne must reject it.
+--------------------------- MODULE WQueuePrepends ---------------------------
+\* Reversed witness: queue puts the draft at the front of the tab's queue,
+\* reordering the prompts already there. QueuesOnlyGrow must reject it.
 EXTENDS MCWindow
 
 BrokenQueue(i) ==
-    IF i \in Tabs /\ draft[i] \notin Blank
-    THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
+    IF Sendable(i)
+    THEN /\ queue' = [queue EXCEPT ![i] = <<draft[i]>> \o @]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active>>
+         /\ UNCHANGED <<friends, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

@@ -3,17 +3,23 @@
 \* (the empty draft among them). SendResult must reject it.
 EXTENDS MCWindow
 
-BrokenSubmit(op, i) ==
+BrokenSend(i) ==
     IF i \in Tabs
-    THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> KindOf(op), text |-> draft[i]])]
+    THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
          /\ draft' = [draft EXCEPT ![i] = ""]
-         /\ last' = Did(op, i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active>>
-    ELSE /\ last' = Did(op, i, "", NoEntry, FALSE)
+         /\ last' = Did("send", i, "", NoEntry, TRUE)
+         /\ UNCHANGED <<friends, active, queue>>
+    ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
-BrokenSend(i) == BrokenSubmit("send", i)
-BrokenQueue(i) == BrokenSubmit("queue", i)
+BrokenQueue(i) ==
+    IF i \in Tabs
+    THEN /\ queue' = [queue EXCEPT ![i] = Append(@, draft[i])]
+         /\ draft' = [draft EXCEPT ![i] = ""]
+         /\ last' = Did("queue", i, "", NoEntry, TRUE)
+         /\ UNCHANGED <<friends, active, transcript>>
+    ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
+         /\ UNCHANGED model
 
 BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, BrokenQueue, AppendEntry)]_vars
 =============================================================================

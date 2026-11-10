@@ -348,26 +348,17 @@ struct Builder {
         keepScroll(scroller, active);
         view.transcript = scroller;
         const Tab& tab = model.tab(active);
-        if (tab.transcript.empty()) {
+        if (tab.transcript.empty() && tab.queue.empty()) {
             PrLayoutNode centered = element(column, Part::Centered);
             std::string hint = "Say something to " + tab.name;
             label(centered, hint, textStyle(PrKitTextRole_Body, PrKitTone_Faint, PrKitTextAlign_Center));
         }
         for (const Entry& e : tab.transcript) {
             switch (e.kind) {
-                case EntryKind::Person:
-                case EntryKind::Queued: {
-                    bool queued = e.kind == EntryKind::Queued;
+                case EntryKind::Person: {
                     PrLayoutNode entry = element(column, Part::Entry);
-                    PrLayoutNode bubble = element(entry, queued ? Part::BubbleQueued : Part::Bubble);
-                    label(bubble, e.text, textStyle(PrKitTextRole_Body, queued ? PrKitTone_Muted : PrKitTone_Primary));
-                    if (queued) {
-                        PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
-                        PrKitPlace place{};
-                        place.margin.top = 0.3f * kMetaSize * k();
-                        place.margin.right = 6 * k();
-                        prKitPlace(kit, tag, &place);
-                    }
+                    PrLayoutNode bubble = element(entry, Part::Bubble);
+                    label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 }
                 case EntryKind::Friend:
@@ -377,6 +368,18 @@ struct Builder {
                     label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
             }
+        }
+        // The tab's queue, after its transcript and apart from it: each prompt held for later, oldest first, in a
+        // dimmer bubble marked "queued".
+        for (const std::string& text : tab.queue) {
+            PrLayoutNode entry = element(column, Part::Entry);
+            PrLayoutNode bubble = element(entry, Part::BubbleQueued);
+            label(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
+            PrKitPlace place{};
+            place.margin.top = 0.3f * kMetaSize * k();
+            place.margin.right = 6 * k();
+            prKitPlace(kit, tag, &place);
         }
     }
 

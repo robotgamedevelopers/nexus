@@ -215,10 +215,14 @@ void commandEnterQueues() {
     Harness h;
     h.type("later");
     h.enter(PrAppModifierFlag_Super);
-    CHECK(h.active().transcript.size() == 1);
-    CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].kind == EntryKind::Queued);
-    CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == "later");
+    CHECK((h.active().queue == std::vector<std::string>{"later"}));
+    CHECK(h.active().transcript.empty());     // the queue, not the transcript
     CHECK(h.active().draft.empty());
+    CHECK(h.model.tab(1).queue.empty());
+    h.type("then this");
+    h.enter(PrAppModifierFlag_Super);
+    CHECK((h.active().queue == std::vector<std::string>{"later", "then this"}));
+    CHECK(h.active().transcript.empty());
 }
 
 void shiftEnterInsertsOneLineFeed() {
@@ -246,6 +250,7 @@ void blankDraftsSendNothing() {
     h.enter();
     h.enter(PrAppModifierFlag_Super);
     CHECK(h.active().transcript.empty());
+    CHECK(h.active().queue.empty());
     CHECK(h.active().draft == "   ");
 }
 
@@ -288,7 +293,8 @@ void capsLockKeepsTheBindings() {
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == "hi");
     h.type("x", PrAppModifierFlag_CapsLock);
     h.enter(PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_CapsLock));
-    CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].kind == EntryKind::Queued);
+    CHECK(h.active().transcript.size() == 1);
+    CHECK((h.active().queue == std::vector<std::string>{"x"}));
     h.commandDigit(2, PrAppModifierFlag_CapsLock);
     CHECK(h.model.active() == 1);
     h.commandDigit(1, PrAppModifierFlag_CapsLock);
@@ -389,22 +395,31 @@ void textKeysWorkWithCapsLock() {
     CHECK(h.active().draft.empty());
 }
 
-void appendsFollowAtTheBottomAndHoldAViewScrolledUp() {
+// With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
+// prompt if there is one, else the newest entry.
+void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     Harness h;
     for (int i = 0; i < 30; ++i)
         h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+    for (std::size_t q = 0; q < queued; ++q) {
+        h.model.set_draft(0, "held " + std::to_string(q));
+        h.model.queue(0);
+    }
+    h.frame();
     h.frame();
     PrRect port = h.bounds(h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
-    CHECK(e.size() == 30);
-    // At the bottom: the newest entry shows, at the foot of the transcript.
+    CHECK(e.size() == 30 + queued);
+    // At the bottom: the last item shows, at the foot of the transcript.
     CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
     CHECK(!e.empty() && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
     h.model.append(0, Entry{EntryKind::Friend, "newest"});
     h.frame();
     e = h.entries();
-    CHECK(e.size() == 31 && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
-    CHECK(e.size() == 31 && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
+    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
+    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
+    // A new entry goes above the queued prompts; still at the bottom.
+    CHECK(e.size() == 31 + queued && h.bounds(e[30]).bottom < h.bounds(e.back()).bottom + 0.5f);
 
     // Scrolled up: an entry in view stays where it is on screen while entries arrive below.
     PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
@@ -427,6 +442,8 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp() {
     float before = h.bounds(seen).top;
     h.model.append(0, Entry{EntryKind::Friend, "another"});
     h.model.append(0, Entry{EntryKind::Person, "and one more"});
+    h.model.set_draft(0, "held later");
+    h.model.queue(0);
     h.frame();
     float after = h.bounds(seen).top;
     if (after != before)
@@ -450,7 +467,8 @@ int main() {
     textKeysScaleTheTranscriptAndThePrompt();
     textScaleIsClamped();
     textKeysWorkWithCapsLock();
-    appendsFollowAtTheBottomAndHoldAViewScrolledUp();
+    appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
+    appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

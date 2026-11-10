@@ -8,7 +8,7 @@ BrokenSelect(i) ==
     THEN /\ active' = i
          /\ draft' = [draft EXCEPT ![active] = ""]
          /\ last' = Did("select", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, transcript>>
+         /\ UNCHANGED <<friends, transcript, queue>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

@@ -1,8 +1,8 @@
 ------------------------------ MODULE MCWindow ------------------------------
 (***************************************************************************)
 (* The instance TLC checks Window.tla on: the constants as values, and a   *)
-(* bound on transcript length. MCWindow.cfg is two tabs, MCWindow3.cfg     *)
-(* three, MCWindowEmpty.cfg none.                                          *)
+(* bound on transcript and queue length. MCWindow.cfg is two tabs,         *)
+(* MCWindow3.cfg three, MCWindowEmpty.cfg none.                            *)
 (***************************************************************************)
 EXTENDS Window
 
@@ -18,6 +18,8 @@ MCIdx3 == 0 .. 3
 
 \* the empty draft, two all-whitespace drafts and one with text
 MCDrafts == {"", " ", " \t\n", "hi"}
+\* and a second text, for a witness that needs an order of queued prompts to show
+MCDraftsTwoTexts == MCDrafts \cup {"yo"}
 MCBlank == {"", " ", " \t\n"}
 
 \* a friend's reply, an empty notice, and an all-whitespace Person entry
@@ -26,11 +28,11 @@ MCAppendEntries == {[kind |-> "Friend", text |-> "ok"],
                     [kind |-> "Notice", text |-> ""],
                     [kind |-> "Person", text |-> " "]}
 
-\* the longest transcript TLC explores (set in each .cfg)
+\* the longest transcript, and the longest queue, TLC explores (set in each .cfg)
 CONSTANT MaxLen
 
 \* the state constraint that keeps the instance finite
-Bounded == \A j \in Tabs : Len(transcript[j]) <= MaxLen
+Bounded == \A j \in Tabs : Len(transcript[j]) <= MaxLen /\ Len(queue[j]) <= MaxLen
 
 \* TLC tells states apart by the model variables alone. Sound because no
 \* action reads `last` and no property reads it unprimed: two states that

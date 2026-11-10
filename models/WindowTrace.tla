@@ -10,7 +10,8 @@
 (*     draws from, and                                                     *)
 (*   Trace: one record per step. Trace[1] is the constructed model (op     *)
 (*     "init"); each later record is the operation called, its arguments,  *)
-(*     the value the code returned, and the code's whole state after it.   *)
+(*     the value the code returned, and the code's whole state after it,   *)
+(*     each tab's queue among it.                                          *)
 (*                                                                         *)
 (* Each step of this spec takes the Window action the record names, with   *)
 (* the record's arguments. The invariant TraceMatches then requires the    *)
@@ -22,7 +23,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, WindowTraceData
 
-VARIABLES friends, active, transcript, draft, last, l
+VARIABLES friends, active, transcript, draft, queue, last, l
 
 W == INSTANCE Window WITH FriendList <- TraceFriends, Idx <- TraceIdx, Drafts <- TraceDrafts,
                           Blank <- TraceBlank, AppendEntries <- TraceEntries
@@ -39,6 +40,7 @@ Matches(k) ==
     /\ active = s.active
     /\ draft = AsTabs(s.draft)
     /\ transcript = AsTabs(s.transcript)
+    /\ queue = AsTabs(s.queue)
     /\ last.op = s.op
     /\ last.ok = s.ret
 
@@ -54,7 +56,7 @@ Step(s) ==
          [] s.op = "append"    -> s.entry \in TraceEntries /\ W!AppendEntry(s.i, s.entry)
          [] OTHER              -> FALSE
 
-traceVars == <<friends, active, transcript, draft, last, l>>
+traceVars == <<friends, active, transcript, draft, queue, last, l>>
 
 TraceInit == l = 1 /\ W!Init
 
@@ -76,11 +78,15 @@ SelectExact == W!SelectExact
 SetDraftExact == W!SetDraftExact
 SendResult == W!SendResult
 SendAppendsOne == W!SendAppendsOne
+QueueAppendsOne == W!QueueAppendsOne
+QueueLeavesTranscripts == W!QueueLeavesTranscripts
+OnlyQueueTouchesQueues == W!OnlyQueueTouchesQueues
 SendClearsOnlyItsDraft == W!SendClearsOnlyItsDraft
 SendTouchesNoOtherTab == W!SendTouchesNoOtherTab
 AppendExact == W!AppendExact
 RefusedChangesNothing == W!RefusedChangesNothing
 TranscriptsOnlyGrow == W!TranscriptsOnlyGrow
+QueuesOnlyGrow == W!QueuesOnlyGrow
 FriendsFixed == W!FriendsFixed
 
 =============================================================================

@@ -4,11 +4,11 @@
 EXTENDS MCWindow
 
 BrokenSend(i) ==
-    IF i \in Tabs /\ draft[i] \notin Blank
+    IF Sendable(i)
     THEN /\ transcript' = [transcript EXCEPT ![active] = Append(@, [kind |-> "Person", text |-> draft[i]])]
          /\ draft' = [draft EXCEPT ![i] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active>>
+         /\ UNCHANGED <<friends, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

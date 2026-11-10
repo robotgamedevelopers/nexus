@@ -2,15 +2,16 @@
 // (WindowTraceData.tla) for models/WindowTrace.tla, under which TLC checks that the trace is a behaviour of
 // models/Window.tla.
 //
-//   trace_walk <seed> <steps> <friends> [--faulty] <out.tla>
+//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue] <out.tla>
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
 // the clock or the OS. Each step calls one operation, with indices in range and out of it, drafts that are empty,
 // all whitespace or text, and entries of every kind. Each record holds the operation, its arguments, the value it
-// returned and the model's whole state after it.
+// returned and the model's whole state after it, each tab's queue among it.
 //
 // --faulty walks FaultyModel instead: a test-only subclass whose send accepts a draft that is all whitespace but
-// not empty. TLC must reject its traces; that is the negative check that shows the binding can fail.
+// not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. TLC must reject
+// both one's traces; that is the negative check that shows the binding can fail.
 
 #include "model.h"
 
@@ -46,6 +47,23 @@ public:
     }
 };
 
+// The test-only queue fault: queue also appends the draft to the transcript, as a Person entry. Hides Model::queue.
+class FaultyQueueModel : public Model {
+public:
+    using Model::Model;
+    bool queue(std::size_t i) {
+        const std::string text = i < tab_count() ? tab(i).draft : std::string();
+        if (!Model::queue(i))
+            return false;
+        append(i, Entry{EntryKind::Person, text});
+        return true;
+    }
+};
+
+template <class M>
+constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
+                             : std::is_same_v<M, FaultyQueueModel> ? ", faulty queue model" : "";
+
 struct Rng {
     std::uint64_t state;
     std::uint64_t next() {
@@ -64,14 +82,13 @@ const std::vector<Entry> kEntries = {
     {EntryKind::Friend, "ok"},
     {EntryKind::Notice, ""},
     {EntryKind::Person, " "},
-    {EntryKind::Queued, "later"},
+    {EntryKind::Friend, "later"},
 };
 const std::vector<FriendInfo> kFriends = {{"ada", "m1"}, {"bo", "m2"}, {"cy", "m3"}};
 
 const char* kind_name(EntryKind k) {
     switch (k) {
     case EntryKind::Person: return "Person";
-    case EntryKind::Queued: return "Queued";
     case EntryKind::Friend: return "Friend";
     case EntryKind::Notice: return "Notice";
     }
@@ -115,6 +132,14 @@ std::string state(const M& m) {
         const auto& t = m.tab(j).transcript;
         for (std::size_t k = 0; k < t.size(); ++k)
             o << (k ? ", " : "") << entry(t[k]);
+        o << ">>";
+    }
+    o << ">>, queue |-> <<";
+    for (std::size_t j = 0; j < m.tab_count(); ++j) {
+        o << (j ? ", " : "") << "<<";
+        const auto& q = m.tab(j).queue;
+        for (std::size_t k = 0; k < q.size(); ++k)
+            o << (k ? ", " : "") << str(q[k]);
         o << ">>";
     }
     o << ">>";
@@ -173,7 +198,7 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
     }
     out << "---- MODULE WindowTraceData ----\n";
     out << "\\* Written by tests/model/trace_walk: seed " << seed << ", " << steps << " steps, " << friend_count
-        << " friends" << (std::is_same_v<M, FaultyModel> ? ", FAULTY model" : "") << ".\n";
+        << " friends" << kFault<M> << ".\n";
     out << "EXTENDS Integers\n";
     out << "TraceFriends == <<";
     for (std::size_t j = 0; j < friends.size(); ++j)
@@ -200,8 +225,7 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         return 1;
     }
     std::printf("trace_walk: seed %llu, %zu steps, %zu friends%s: %zu accepted, %zu refused -> %s\n",
-                static_cast<unsigned long long>(seed), steps, friend_count,
-                std::is_same_v<M, FaultyModel> ? ", faulty model" : "", accepted, steps - accepted, path);
+                static_cast<unsigned long long>(seed), steps, friend_count, kFault<M>, accepted, steps - accepted, path);
     return 0;
 }
 
@@ -216,20 +240,25 @@ bool parse(const char* s, std::uint64_t& v) {
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     bool faulty = false;
+    bool faultyQueue = false;
     std::vector<std::string> rest;
     for (const std::string& a : args) {
         if (a == "--faulty")
             faulty = true;
+        else if (a == "--faulty-queue")
+            faultyQueue = true;
         else
             rest.push_back(a);
     }
     std::uint64_t seed = 0, steps = 0, friend_count = 0;
     if (rest.size() != 4 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
-        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size()) {
-        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--faulty] <out.tla>\n",
+        !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() || (faulty && faultyQueue)) {
+        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--faulty | --faulty-queue] <out.tla>\n",
                      kFriends.size());
         return 2;
     }
+    if (faultyQueue)
+        return walk<FaultyQueueModel>(seed, steps, friend_count, rest[3].c_str());
     if (faulty)
         return walk<FaultyModel>(seed, steps, friend_count, rest[3].c_str());
     return walk<Model>(seed, steps, friend_count, rest[3].c_str());

@@ -1,4 +1,5 @@
-// The window's state without drawing: one tab per friend, the active tab, each tab's transcript and unsent draft.
+// The window's state without drawing: one tab per friend, the active tab, each tab's transcript, unsent draft and
+// queue of prompts held for later.
 // Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
 // tests/model/trace_walk.cpp checks that this code's behaviours are behaviours of that spec.
 
@@ -25,7 +26,7 @@ bool blank(const std::string& text) {
 Model::Model(const std::vector<FriendInfo>& friends) {
     tabs_.reserve(friends.size());
     for (const FriendInfo& f : friends)
-        tabs_.push_back(Tab{f.name, f.model, {}, {}});
+        tabs_.push_back(Tab{f.name, f.model, {}, {}, {}});
 }
 
 std::size_t Model::tab_count() const {
@@ -54,21 +55,26 @@ bool Model::set_draft(std::size_t i, std::string text) {
     return true;
 }
 
-bool Model::submit(std::size_t i, EntryKind kind) {
-    if (i >= tabs_.size() || blank(tabs_[i].draft))
+bool Model::sendable(std::size_t i) const {
+    return i < tabs_.size() && !blank(tabs_[i].draft);
+}
+
+bool Model::send(std::size_t i) {
+    if (!sendable(i))
         return false;
     Tab& t = tabs_[i];
-    t.transcript.push_back(Entry{kind, std::move(t.draft)});
+    t.transcript.push_back(Entry{EntryKind::Person, std::move(t.draft)});
     t.draft.clear();
     return true;
 }
 
-bool Model::send(std::size_t i) {
-    return submit(i, EntryKind::Person);
-}
-
 bool Model::queue(std::size_t i) {
-    return submit(i, EntryKind::Queued);
+    if (!sendable(i))
+        return false;
+    Tab& t = tabs_[i];
+    t.queue.push_back(std::move(t.draft));
+    t.draft.clear();
+    return true;
 }
 
 bool Model::append(std::size_t i, Entry e) {

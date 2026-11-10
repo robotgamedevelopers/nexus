@@ -41,7 +41,8 @@ bool same_entry(const Entry& a, const Entry& b) {
 }
 
 bool same_tab(const Tab& a, const Tab& b) {
-    if (a.name != b.name || a.model != b.model || a.draft != b.draft || a.transcript.size() != b.transcript.size())
+    if (a.name != b.name || a.model != b.model || a.draft != b.draft || a.queue != b.queue ||
+            a.transcript.size() != b.transcript.size())
         return false;
     for (std::size_t k = 0; k < a.transcript.size(); ++k) {
         if (!same_entry(a.transcript[k], b.transcript[k]))
@@ -71,6 +72,7 @@ void construct_one_tab_per_friend_in_order() {
     for (std::size_t j = 0; j < 3; ++j) {
         CHECK(m.tab(j).transcript.empty());
         CHECK(m.tab(j).draft.empty());
+        CHECK(m.tab(j).queue.empty());
     }
 }
 
@@ -146,15 +148,38 @@ void send_appends_person_and_clears_that_draft() {
     CHECK(m.tab(2).transcript.empty());
     CHECK(m.tab(0).transcript.empty());
     CHECK(m.active() == 0); // the named tab, not the active one
+    for (std::size_t j = 0; j < 3; ++j)
+        CHECK(m.tab(j).queue.empty()); // a send never touches a queue
 }
 
-void queue_appends_queued() {
+void queue_appends_to_that_tabs_queue_not_the_transcript() {
     Model m(three());
-    m.set_draft(0, "later");
-    CHECK(m.queue(0));
-    CHECK(m.tab(0).transcript.size() == 1);
-    CHECK(same_entry(m.tab(0).transcript[0], Entry{EntryKind::Queued, "later"}));
-    CHECK(m.tab(0).draft.empty());
+    m.append(1, Entry{EntryKind::Friend, "earlier"});
+    m.set_draft(2, "other");
+    m.set_draft(1, "later");
+    CHECK(m.queue(1));
+    m.set_draft(1, "after that");
+    CHECK(m.queue(1));
+    CHECK((m.tab(1).queue == std::vector<std::string>{"later", "after that"})); // in order
+    CHECK(m.tab(1).draft.empty());
+    CHECK(m.tab(1).transcript.size() == 1);   // the transcript is as it was
+    CHECK(same_entry(m.tab(1).transcript[0], Entry{EntryKind::Friend, "earlier"}));
+    CHECK(m.tab(0).queue.empty() && m.tab(2).queue.empty());
+    CHECK(m.tab(2).draft == "other");
+    CHECK(m.active() == 0);
+}
+
+void only_queue_touches_a_queue() {
+    Model m(three());
+    m.set_draft(0, "held");
+    m.queue(0);
+    const std::vector<std::string> held = m.tab(0).queue;
+    m.set_draft(0, "now");
+    m.send(0);
+    m.append(0, Entry{EntryKind::Friend, "reply"});
+    m.select_tab(2);
+    m.set_draft(0, "draft");
+    CHECK(m.tab(0).queue == held);
 }
 
 void send_keeps_surrounding_whitespace() {
@@ -184,7 +209,8 @@ void non_ascii_whitespace_is_text() {
     // a single non-whitespace byte among whitespace is text
     m.set_draft(0, " \t.\n");
     CHECK(m.queue(0));
-    CHECK(m.tab(0).transcript.size() == 2);
+    CHECK(m.tab(0).transcript.size() == 1);
+    CHECK(m.tab(0).queue.size() == 1);
 }
 
 void send_out_of_range_changes_nothing() {
@@ -233,10 +259,12 @@ void transcripts_only_grow() {
     m.select_tab(1);
     m.set_draft(0, " ");
     m.send(0);
-    CHECK(m.tab(0).transcript.size() == 4);
+    m.queue(0);
+    CHECK(m.tab(0).transcript.size() == 3);
     for (std::size_t k = 0; k < first.size(); ++k)
         CHECK(same_entry(m.tab(0).transcript[k], first[k]));
-    CHECK(same_entry(m.tab(0).transcript[3], Entry{EntryKind::Person, "four"}));
+    CHECK(same_entry(m.tab(0).transcript[2], Entry{EntryKind::Person, "four"}));
+    CHECK((m.tab(0).queue == std::vector<std::string>{"three"}));
 }
 
 void large_transcript_keeps_order() {
@@ -283,7 +311,8 @@ const Case kCases[] = {
     {"set_draft_changes_only_that_draft", set_draft_changes_only_that_draft},
     {"set_draft_out_of_range_changes_nothing", set_draft_out_of_range_changes_nothing},
     {"send_appends_person_and_clears_that_draft", send_appends_person_and_clears_that_draft},
-    {"queue_appends_queued", queue_appends_queued},
+    {"queue_appends_to_that_tabs_queue_not_the_transcript", queue_appends_to_that_tabs_queue_not_the_transcript},
+    {"only_queue_touches_a_queue", only_queue_touches_a_queue},
     {"send_keeps_surrounding_whitespace", send_keeps_surrounding_whitespace},
     {"whitespace_drafts_are_refused", whitespace_drafts_are_refused},
     {"non_ascii_whitespace_is_text", non_ascii_whitespace_is_text},
