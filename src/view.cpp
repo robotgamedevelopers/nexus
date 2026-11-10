@@ -228,6 +228,9 @@ PrStringView sv(std::string_view s) {
     return PrStringView{s.data(), s.size()};
 }
 
+// The digits that select tabs with Command, in tab order: the keyboard's number row.
+constexpr std::string_view kTabKeys = "1234567890";
+
 constexpr std::string_view kPlaceholderText = "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later";
 
 PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
@@ -278,8 +281,9 @@ struct Builder {
             prKitPlace(kit, tab, &tabPlace);
             if (prKitActivated(kit, tab))
                 model.select_tab(i);
-            std::string number = std::to_string(i + 1);
-            label(tab, number, textStyle(PrKitTextRole_Body, PrKitTone_Faint));
+            // The tab's key, Command and this digit; a tab past the tenth has none and is reached by clicking.
+            if (i < kTabKeys.size())
+                label(tab, kTabKeys.substr(i, 1), textStyle(PrKitTextRole_Body, PrKitTone_Faint));
             prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(model.tab(i).name)});
         }
     }
@@ -407,6 +411,13 @@ struct Builder {
 
     void build(PrLayoutNode parent) {
         PrLayoutNode window = element(parent, Part::Window);
+        // Command-1 to Command-0 select tabs 1 to 10, in the keyboard row's order, claimed on the window, an ancestor
+        // of the focused prompt. A key whose tab does not exist is refused by the model and changes nothing. macOS
+        // types no text for a Command chord.
+        for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
+            if (prUiKeyPressed(ui, window, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super))
+                model.select_tab(n);
+        }
         strip(window);
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
@@ -458,19 +469,14 @@ void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
     b.build(parent);
 }
 
-bool takeEvent(View& view, PrUi* ui, const PrAppEvent& event) {
-    Filtered f = filterEvent(view.input, event.kind, event.key, event.code, event.modifiers);
-    if (f.action == Action::SelectTab)
-        view.model->select_tab(f.tab);
-    if (f.consume)
-        return true;
-    if (f.modifiers != event.modifiers) {
-        PrAppEvent copy = event;
-        copy.modifiers = f.modifiers;
-        prUiPushEvent(ui, &copy);
-        return true;
-    }
-    return false;
+bool takeEvent(PrUi* ui, const PrAppEvent& event) {
+    PrAppModifierFlags modifiers = withoutCapsLock(event.modifiers);
+    if (modifiers == event.modifiers)
+        return false;
+    PrAppEvent copy = event;
+    copy.modifiers = modifiers;
+    prUiPushEvent(ui, &copy);
+    return true;
 }
 
 } // namespace nexus

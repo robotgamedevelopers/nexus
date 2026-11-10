@@ -101,8 +101,8 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
     }
 }
 
-bool event(void* context, PrStudioWindow* window, const PrAppEvent* e) {
-    return takeEvent(appOf(context).view, prStudioWindowUi(window), *e);
+bool event(void*, PrStudioWindow* window, const PrAppEvent* e) {
+    return takeEvent(prStudioWindowUi(window), *e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2) {

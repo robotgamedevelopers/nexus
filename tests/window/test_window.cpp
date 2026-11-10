@@ -1,4 +1,4 @@
-// Unit tests of the window's pure logic: the key bindings (src/input.h) and the friend list's parsing (src/friends.h).
+// Unit tests of the window's pure logic: the event filter (src/input.h) and the friend list's parsing (src/friends.h).
 // No OS, no clock, no window.
 
 #include <cstdio>
@@ -22,64 +22,15 @@ void check(bool ok, const char* what, int line) {
 
 #define CHECK(x) check((x), #x, __LINE__)
 
-constexpr PrAppModifierFlags kAlt = PrAppModifierFlag_Alt;
 constexpr PrAppModifierFlags kShift = PrAppModifierFlag_Shift;
 constexpr PrAppModifierFlags kCmd = PrAppModifierFlag_Super;
 constexpr PrAppModifierFlags kCaps = PrAppModifierFlag_CapsLock;
 
-Filtered keyDown(InputState& s, PrAppKey key, PrAppKeyCode code, PrAppModifierFlags m) {
-    return filterEvent(s, PrAppEventKind_KeyDown, key, code, m);
-}
-
-Filtered textEvent(InputState& s) {
-    return filterEvent(s, PrAppEventKind_Text, PrAppKey_Unknown, PrAppKeyCode_Unidentified, 0);
-}
-
-void optionDigitsSelectTabs() {
-    for (int n = 0; n < 9; ++n) {
-        InputState s;
-        Filtered f = keyDown(s, PrAppKey_Unknown, PrAppKeyCode(PrAppKeyCode_Digit1 + n), kAlt);
-        CHECK(f.action == Action::SelectTab);
-        CHECK(f.tab == std::size_t(n));
-        CHECK(f.consume);
-    }
-    // Caps Lock does not stop it.
-    InputState s;
-    Filtered f = keyDown(s, PrAppKey_Unknown, PrAppKeyCode_Digit3, PrAppModifierFlags(kAlt | kCaps));
-    CHECK(f.action == Action::SelectTab && f.tab == 2);
-}
-
-void otherDigitsDoNot() {
-    InputState s;
-    CHECK(keyDown(s, '0', PrAppKeyCode_Digit0, kAlt).action == Action::None);    // Option-0: no tab 0
-    CHECK(keyDown(s, '1', PrAppKeyCode_Digit1, 0).action == Action::None);       // plain 1 types
-    CHECK(!keyDown(s, '1', PrAppKeyCode_Digit1, 0).consume);
-    CHECK(keyDown(s, '1', PrAppKeyCode_Digit1, PrAppModifierFlags(kAlt | kShift)).action == Action::None);
-    CHECK(keyDown(s, '1', PrAppKeyCode_Digit1, kCmd).action == Action::None);
-    CHECK(keyDown(s, PrAppKey_Unknown, PrAppKeyCode_Numpad1, kAlt).action == Action::None);
-}
-
-void optionDigitSwallowsItsCharacter() {
-    InputState s;
-    keyDown(s, PrAppKey_Unknown, PrAppKeyCode_Digit2, kAlt);
-    CHECK(textEvent(s).consume);          // the character macOS types for Option-2
-    CHECK(!textEvent(s).consume);         // only that one
-}
-
-void aNewKeyEndsTheSwallow() {
-    InputState s;
-    keyDown(s, PrAppKey_Unknown, PrAppKeyCode_Digit2, kAlt);
-    keyDown(s, 'A', PrAppKeyCode_KeyA, 0);  // a chord that typed nothing, then a plain key
-    CHECK(!textEvent(s).consume);
-}
-
 void capsLockIsStripped() {
-    InputState s;
-    Filtered f = keyDown(s, PrAppKey_Left, PrAppKeyCode_ArrowLeft, PrAppModifierFlags(kShift | kCaps));
-    CHECK(!f.consume);
-    CHECK(f.modifiers == kShift);
-    f = filterEvent(s, PrAppEventKind_PointerDown, PrAppKey_Unknown, PrAppKeyCode_Unidentified, kCaps);
-    CHECK(f.modifiers == 0);
+    CHECK(withoutCapsLock(PrAppModifierFlags(kShift | kCaps)) == kShift);
+    CHECK(withoutCapsLock(PrAppModifierFlags(kCmd | kCaps)) == kCmd);
+    CHECK(withoutCapsLock(kCaps) == 0);
+    CHECK(withoutCapsLock(kCmd) == kCmd);
 }
 
 void parsesEnabledFriendsInOrder() {
@@ -107,10 +58,6 @@ void reportsWhatIsWrong() {
 } // namespace
 
 int main() {
-    optionDigitsSelectTabs();
-    otherDigitsDoNot();
-    optionDigitSwallowsItsCharacter();
-    aNewKeyEndsTheSwallow();
     capsLockIsStripped();
     parsesEnabledFriendsInOrder();
     reportsWhatIsWrong();

@@ -38,7 +38,6 @@ struct View {
     Model* model = nullptr;
     const Look* look = nullptr;
     std::string notice;                         // shown in place of the transcript when there are no tabs
-    InputState input;                           // the event filter's state (input.h)
     std::vector<float> scrolls;                 // each tab's transcript scroll, kept while another tab shows
     std::size_t shown = ~std::size_t(0);        // the tab the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the tab whose draft the prompt edited last round
@@ -48,11 +47,11 @@ struct View {
 };
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
-// the round's input: tab clicks, the prompt's edits, and its Enter and Command-Enter.
+// the round's input: tab clicks, Command-1 to Command-0, the prompt's edits, and its Enter and Command-Enter.
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
-// Runs one event through the event filter (input.h). Returns true if the window took it, having queued what the UI
-// context should see in its place, if anything; false if the caller should queue the event as it is.
-bool takeEvent(View& view, PrUi* ui, const PrAppEvent& event);
+// Runs one event through the event filter (input.h). Returns true if the window took it, having queued the event
+// without Caps Lock in its place; false if the caller should queue the event as it is.
+bool takeEvent(PrUi* ui, const PrAppEvent& event);
 
 } // namespace nexus

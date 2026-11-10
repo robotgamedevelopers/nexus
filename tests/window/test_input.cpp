@@ -39,9 +39,17 @@ std::string shown(const std::string& s) {
     return out + "\"";
 }
 
-// A window with no window: the view, its model of two friends, and a kit over a UI context over a layout tree.
+std::vector<FriendInfo> friendsNamed(std::size_t count) {
+    std::vector<FriendInfo> out;
+    for (std::size_t i = 0; i < count; ++i)
+        out.push_back(FriendInfo{"f" + std::to_string(i + 1), "m"});
+    return out;
+}
+
+// A window with no window: the view, its model of two friends (or as many as asked), and a kit over a UI context over
+// a layout tree.
 struct Harness {
-    Model model{{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}};
+    Model model;
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -52,7 +60,9 @@ struct Harness {
     View view;
     double time = 1000;
 
-    Harness() {
+    Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
+
+    explicit Harness(const std::vector<FriendInfo>& friends) : model(friends) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -96,7 +106,7 @@ struct Harness {
     // Queues an event as the window does: through the event filter first.
     void push(PrAppEvent e) {
         e.time = time;
-        if (!takeEvent(view, ui, e))
+        if (!takeEvent(ui, e))
             prUiPushEvent(ui, &e);
     }
 
@@ -122,9 +132,10 @@ struct Harness {
         key(PrAppKey_Enter, PrAppKeyCode_Enter, modifiers);
     }
 
-    // Option-digit as macOS sends it: key Unknown (the layout's character), the digit's code, and the character typed.
-    void optionDigit(int n) {
-        key(PrAppKey_Unknown, PrAppKeyCode(PrAppKeyCode_Digit1 + n - 1), PrAppModifierFlag_Alt, "\xC2\xA1");
+    // Command-digit as macOS sends it: the digit as the key, its code, and no text (a Command chord types none).
+    void commandDigit(int digit, PrAppModifierFlags extra = 0) {
+        PrAppKeyCode code = digit == 0 ? PrAppKeyCode_Digit0 : PrAppKeyCode(PrAppKeyCode_Digit1 + digit - 1);
+        key(PrAppKey('0' + digit), code, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
     }
 
     const Tab& active() const {
@@ -208,16 +219,36 @@ void blankDraftsSendNothing() {
     CHECK(h.active().draft == "   ");
 }
 
-void optionDigitSelectsATabAndTypesNothing() {
+void commandDigitSelectsATabAndTypesNothing() {
     Harness h;
-    h.optionDigit(2);
+    h.commandDigit(2);
     CHECK(h.model.active() == 1);
-    h.optionDigit(1);
+    h.commandDigit(1);
     CHECK(h.model.active() == 0);
-    h.optionDigit(9);       // no tab 9
-    CHECK(h.model.active() == 0);
+    for (int d : {3, 4, 5, 6, 7, 8, 9, 0}) {   // no such tab: nothing changes
+        h.commandDigit(d);
+        CHECK(h.model.active() == 0);
+    }
     CHECK(h.model.tab(0).draft.empty());
     CHECK(h.model.tab(1).draft.empty());
+}
+
+void commandZeroSelectsTheTenthTab() {
+    Harness ten(friendsNamed(10));
+    ten.commandDigit(0);
+    CHECK(ten.model.active() == 9);
+    ten.commandDigit(9);
+    CHECK(ten.model.active() == 8);
+    Harness eleven(friendsNamed(11));
+    eleven.commandDigit(0);
+    CHECK(eleven.model.active() == 9);   // the eleventh tab has no key
+    Harness nine(friendsNamed(9));
+    nine.commandDigit(9);
+    CHECK(nine.model.active() == 8);
+    nine.commandDigit(0);
+    CHECK(nine.model.active() == 8);     // no tenth tab: nothing changes
+    for (std::size_t j = 0; j < nine.model.tab_count(); ++j)
+        CHECK(nine.model.tab(j).draft.empty());
 }
 
 void capsLockKeepsTheBindings() {
@@ -228,22 +259,23 @@ void capsLockKeepsTheBindings() {
     h.type("x", PrAppModifierFlag_CapsLock);
     h.enter(PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_CapsLock));
     CHECK(h.active().transcript.size() == 2 && h.active().transcript[1].kind == EntryKind::Queued);
-    h.optionDigit(2);
-    h.key(PrAppKey_Unknown, PrAppKeyCode_Digit1, PrAppModifierFlags(PrAppModifierFlag_Alt | PrAppModifierFlag_CapsLock));
+    h.commandDigit(2, PrAppModifierFlag_CapsLock);
+    CHECK(h.model.active() == 1);
+    h.commandDigit(1, PrAppModifierFlag_CapsLock);
     CHECK(h.model.active() == 0);
 }
 
 void eachTabKeepsItsDraft() {
     Harness h;
     h.type("one");
-    h.optionDigit(2);
+    h.commandDigit(2);
     h.type("two");
-    h.optionDigit(1);
+    h.commandDigit(1);
     CHECK(h.model.tab(0).draft == "one");
     CHECK(h.model.tab(1).draft == "two");
     h.type("!");            // the caret comes back at the draft's end
     CHECK(h.model.tab(0).draft == "one!");
-    h.optionDigit(2);
+    h.commandDigit(2);
     h.enter();
     CHECK(h.model.tab(1).transcript.size() == 1 && h.model.tab(1).transcript[0].text == "two");
     CHECK(h.model.tab(0).transcript.empty());
@@ -322,7 +354,8 @@ int main() {
     commandEnterQueues();
     shiftEnterInsertsOneLineFeed();
     blankDraftsSendNothing();
-    optionDigitSelectsATabAndTypesNothing();
+    commandDigitSelectsATabAndTypesNothing();
+    commandZeroSelectsTheTenthTab();
     capsLockKeepsTheBindings();
     eachTabKeepsItsDraft();
     enterWhileComposingCommitsOnly();
