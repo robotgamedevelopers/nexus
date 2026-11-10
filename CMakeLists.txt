@@ -119,7 +119,7 @@ if(NEXUS_LINK)
 endif()
 # The name the user sees is nexus everywhere: the bundle's name and display name (cmake/Info.plist.in, CMake's
 # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app menu's
-# About, Hide and Quit), the window's title (main.cpp) and the sprint tab's label (view.cpp).
+# About, Hide and Quit), the window's title (main.cpp) and the sprint board's header (sprint.h kSprintBrandStyle).
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus

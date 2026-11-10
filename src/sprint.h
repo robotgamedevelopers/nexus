@@ -93,7 +93,8 @@ std::string sprintPageStyle(const SpendFit& fit);
 // writes the word into the wordmark element (kSprintWordmarkId). The logo keeps its height, at no width and unseen,
 // since the board's script centres its header on the logo's box (app.js fitMetaChips); the word stays when the header
 // is narrow, and the script hides the chips beside it instead. The footer's link to nova-sprint's repository is not
-// shown (the owner 2026-11-10: "remove the link to nova sprint github"), matched by its address, not its place.
+// shown (the owner 2026-11-10: "remove the link to nova sprint github"), matched by its address, not its place; a
+// footer that holds nothing else is not shown either, so no empty space is left where it was.
 constexpr std::string_view kSprintBrandStyle =
     "#logo { visibility: hidden !important; width: 0 !important; min-width: 0 !important; margin: 0 !important; "
     "padding: 0 !important; border: 0 !important; }\n"
@@ -101,7 +102,9 @@ constexpr std::string_view kSprintBrandStyle =
     "#wordmark, #wordmark.nofit { display: inline !important; font-family: system-ui, -apple-system, sans-serif "
     "!important; font-weight: 600 !important; letter-spacing: -0.02em !important; text-transform: none !important; }\n"
     "a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"], a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"] "
-    "{ display: none !important; }\n";
+    "{ display: none !important; }\n"
+    "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "
+    "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"]:only-child) { display: none !important; }\n";
 
 // The board's wordmark element (nova-sprint's index.html: <span class="wordmark" id="wordmark">), and the word it shows
 // in nexus.

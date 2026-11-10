@@ -136,7 +136,8 @@ alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="
 <div class="meta"><span class="chip">epoch <b>3</b></span></div></div>
 <div class="right"><span class="live" id="live">Live</span></div></header>
 <p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
-<footer><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
+<footer id="foot"><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
+<footer id="more"><span id="note">made by the sprint</span> <a id="repo2" href="https://github.com/mas-bandwidth/nova-sprint/">repo</a></footer>
 </body></html>)HTML";
 
 // What the fixture server answers, and what it was asked.
@@ -649,6 +650,11 @@ void theBoardShowsAsNexus() {
     CHECK(m.x < 40);                                                // where the logo stood, inside the header's padding
     const PrDomRect repo = h.rect("repo");
     CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
+    const PrDomRect foot = h.rect("foot");
+    CHECK(foot.width == 0 && foot.height == 0);                     // its footer held nothing else: not rendered
+    const PrDomRect repo2 = h.rect("repo2");
+    CHECK(repo2.width == 0 && repo2.height == 0);                   // in a footer with more: the link alone goes
+    CHECK(h.rect("more").height > 0 && h.rect("note").width > 0);
     const PrDomRect other = h.rect("other");
     CHECK(other.width > 0 && other.height > 0);
     h.click("other");
