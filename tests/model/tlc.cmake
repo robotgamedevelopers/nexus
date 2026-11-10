@@ -96,13 +96,21 @@ endif()
 if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
     set(CAP 60)
 endif()
+# The JVM's own threads, sized to the run. Left alone, each JVM starts a garbage collector thread for most cores and
+# several compiler threads, and ctest runs one JVM per core: on a busy machine those threads, not TLC, use the cores.
+if(WORKERS GREATER 2)
+    set(jvm -XX:+UseParallelGC -XX:ParallelGCThreads=${WORKERS})
+else()
+    # A witness or a trace check runs for a second or two: the client compiler alone and the serial collector.
+    set(jvm -XX:+UseSerialGC -XX:TieredStopAtLevel=1)
+endif()
 set(flags -workers ${WORKERS} -metadir "${WORK}/meta" -config "${cfg_name}")
 if(NOCHECK_DEADLOCK)
     list(APPEND flags -deadlock)
 endif()
 
 execute_process(
-    COMMAND "${java}" -XX:+UseParallelGC "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
+    COMMAND "${java}" ${jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
 file(WRITE "${WORK}/tlc.log" "${out}")

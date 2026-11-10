@@ -69,8 +69,8 @@ tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass)
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
 # runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers: 8 s in a login
 # session, 31 to 38 s at the utility QoS, which reproduces the CI runs' timings), so these two do not fit a 60 s cap
-# beside the other tests. Even alone they do not: the two together at the utility QoS took 65 s each. 300 s still stops
-# a state space that runs away.
+# beside the other tests (105 s each at the utility QoS beside them). Even apart they do not: the two together at the
+# utility QoS took 65 s each. 300 s still stops a state space that runs away.
 tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass WORKERS 8 NIGHTLY)
 
