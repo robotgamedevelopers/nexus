@@ -1,9 +1,7 @@
 // Functional test of the server's durable state on the real filesystem, in the test's own working directory (ctest
-// sets it to build/tests/store/functional): open, change, reopen; a blob uploaded and placed; then a child process
-// that commits as fast as it can is killed with SIGKILL, and every change it had acknowledged must be there when the
-// store is opened again.
+// sets it to build/tests/store/functional): open, commit, reopen; then a child process that commits as fast as it can
+// is killed with SIGKILL, and every step it had committed must be there when the store is opened again.
 
-#include "store/codec.h"
 #include "store/fs.h"
 #include "store/store.h"
 
@@ -15,6 +13,7 @@
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -39,60 +38,45 @@ int failures = 0;
         }                                                                                                    \
     } while (0)
 
-const std::uint64_t kNow = 2000000000;
-
-std::span<const std::uint8_t> span_of(const std::string& s) {
-    return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(s.data()), s.size());
+std::vector<Change> prompt(const std::string& text) {
+    Change c;
+    c.entry = Entry{0, text, true};
+    return {c};
 }
 
 void basic(Fs& fs) {
     std::unique_ptr<Store> s;
     OpenReport rep;
-    CHECK_OK(Store::open(fs, "basic", kNow, {}, s, &rep));
+    CHECK_OK(Store::open(fs, "basic", {}, s, &rep));
     if (!s)
         return;
     CHECK(rep.fresh);
-    CHECK_OK(s->send(1, "hello"));
-    CHECK_OK(s->open_entry(1, "wor"));
-    CHECK_OK(s->grow(1, "ld"));
-    CHECK_OK(s->enqueue(1, "queued"));
-    std::string content(100000, 'z');
-    Hash h = sha256(span_of(content));
-    BlobState b;
-    CHECK_OK(s->offer(h, content.size(), b));
-    CHECK_OK(s->chunk(h, 0, 0, span_of(content.substr(0, 40000)), b));
+    CHECK_OK(s->commit("ada", prompt("hello"), "w", 1));
+    Change q;
+    q.kind = Change::Kind::Enqueue;
+    q.prompt = "queued";
+    CHECK_OK(s->commit("ada", std::vector<Change>{q}, "w", 2));
     s.reset();
-    CHECK_OK(Store::open(fs, "basic", kNow, {}, s, &rep));
+    CHECK_OK(Store::open(fs, "basic", {}, s, &rep));
     if (!s)
         return;
-    CHECK(!rep.fresh && !rep.restored && s->incarnation() == kNow + 1);
-    Snap sn = s->snapshot(1, 10);
-    CHECK(sn.version == 4 && sn.entries.size() == 2 && sn.entries[1].text == "world" && sn.queue.size() == 1);
-    b = s->blob(h);
-    CHECK(b.held == 40000);
-    CHECK_OK(s->chunk(h, 0, 40000, span_of(content.substr(40000)), b));
-    CHECK(b.complete);
-    ClientId c{};
-    c[0] = 1;
-    ActResult r;
-    std::vector<Action> acts = {{1, 2, Action::Kind::Send, "attached", h, "big file.bin"}};
-    CHECK_OK(s->apply(c, acts, r));
-    CHECK(r.applied == 1);
-    CHECK(std::filesystem::file_size("basic/incoming/2/big_file.bin") == content.size());
-    CHECK(!std::filesystem::exists("basic/incoming/2/.nexus-big_file.bin.tmp"));
+    CHECK(!rep.fresh && rep.records == 2);
+    CHECK(s->applied("w") == 2);
+    const Tab* t = s->tab("ada");
+    CHECK(t != nullptr && t->transcript.size() == 1 && t->transcript[0].text == "hello" && t->queue.size() == 1);
 }
 
-// The child: opens the store and sends "m<i>" to tab 1 for i = 1, 2, ... forever, writing i to the pipe after each
-// send returns Ok (the acknowledgement).
+// The child: opens the store and commits "m<i>" to tab ada as window w's action i, for i = 1, 2, ... forever, writing
+// i to the pipe after each commit returns Ok (what the server would then acknowledge).
 [[noreturn]] void child(int fd) {
     std::unique_ptr<Fs> fs = make_posix_fs();
     std::unique_ptr<Store> s;
     StoreOptions options;
     options.compact_bytes = 2000;  // compactions happen while it runs, so a kill can land in one
-    if (!Store::open(*fs, "killed", kNow, options, s).is_ok())
+    if (!Store::open(*fs, "killed", options, s).is_ok())
         _exit(3);
     for (std::uint64_t i = 1;; ++i) {
-        if (!s->send(1, "m" + std::to_string(i)).is_ok())
+        if (!s->commit("ada", prompt("m" + std::to_string(i)), "w", i).is_ok())
             _exit(4);
         if (write(fd, &i, sizeof i) != sizeof i)
             _exit(5);
@@ -112,7 +96,7 @@ void kill_and_reopen() {
         close(fds[1]);
         std::uint64_t acked = 0;
         std::uint64_t got = 0;
-        // past 30 + 20 * round acknowledgements, kill it wherever it is
+        // past 30 + 20 * round commits, kill it wherever it is
         while (acked < 30 + 20 * std::uint64_t(round) && read(fds[0], &got, sizeof got) == sizeof got)
             acked = got;
         kill(pid, SIGKILL);
@@ -126,19 +110,18 @@ void kill_and_reopen() {
         StoreOptions options;
         options.compact_bytes = 2000;
         OpenReport rep;
-        CHECK_OK(Store::open(*fs, "killed", kNow, options, s, &rep));
+        CHECK_OK(Store::open(*fs, "killed", options, s, &rep));
         if (!s)
             return;
-        CHECK(!rep.restored);
-        Snap sn = s->snapshot(1, 100000);
-        // every acknowledged send is there, in order, from the start; nothing else is
-        CHECK(sn.entries.size() >= acked);
-        for (std::size_t i = 0; i < sn.entries.size(); ++i)
-            CHECK(sn.entries[i].text == "m" + std::to_string(i + 1));
-        std::printf("round %d: %llu acknowledged, %zu recovered, %llu bytes of torn tail cut\n", round,
-                    static_cast<unsigned long long>(acked), sn.entries.size(),
-                    static_cast<unsigned long long>(rep.store_cut));
-        // the next round's child appends after these; start the numbering again from a fresh store
+        // every committed step is there, in order, from the start, and the counter agrees with the transcript
+        const Tab* t = s->tab("ada");
+        std::size_t n = t == nullptr ? 0 : t->transcript.size();
+        CHECK(n >= acked);
+        CHECK(s->applied("w") == n);
+        for (std::size_t i = 0; i < n; ++i)
+            CHECK(t->transcript[i].text == "m" + std::to_string(i + 1));
+        std::printf("round %d: %llu committed, %zu recovered, %llu bytes of torn tail cut\n", round,
+                    static_cast<unsigned long long>(acked), n, static_cast<unsigned long long>(rep.cut_bytes));
         s.reset();
         std::filesystem::remove_all("killed");
     }

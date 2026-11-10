@@ -21,6 +21,8 @@
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "server/durable.h"
+#include "store/fs.h"
 #include "sync/hub.h"
 
 extern char** environ;
@@ -129,27 +131,65 @@ bool ensureDir(const std::string& dir, std::string* why) {
     return true;
 }
 
+// "new", or "new <client> <next>" with a valid id and a number from 1.
+bool parseNew(const std::string& request, Client* out) {
+    if (request == "new")
+        return true;
+    if (request.compare(0, 4, "new ") != 0)
+        return false;
+    const std::size_t space = request.find(' ', 4);
+    if (space == std::string::npos)
+        return false;
+    const std::string id = request.substr(4, space - 4);
+    const std::string num = request.substr(space + 1);
+    if (!validClientId(id) || num.empty() || num.size() > 19 ||
+            num.find_first_not_of("0123456789") != std::string::npos)
+        return false;
+    const std::uint64_t next = std::strtoull(num.c_str(), nullptr, 10);
+    if (next == 0)
+        return false;
+    out->id = id;
+    out->next = next;
+    return true;
+}
+
 struct Session {
     std::uint64_t id;
+    std::string client;     // empty: a session that did not name its client
     std::unique_ptr<link::ServerSession> link;
 };
 
 class Server {
 public:
-    explicit Server(const Paths& p) : paths_(p), hub_(store_) {}
+    explicit Server(const Paths& p) : paths_(p) {}
     int run();
 
 private:
+    bool openStore(std::string* why);
     bool listenControl(std::string* why);
     void control(int fd);
     Paths paths_;
-    sync::MemoryStore store_;
-    sync::Hub hub_;
+    std::unique_ptr<store::Fs> fs_;
+    DurableStore store_;
+    std::unique_ptr<sync::Hub> hub_;
     std::vector<Session> sessions_;
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
     bool stopping_ = false;
 };
+
+bool Server::openStore(std::string* why) {
+    fs_ = store::make_posix_fs();
+    if (!store_.open(*fs_, paths_.store, why))
+        return false;
+    hub_ = std::make_unique<sync::Hub>(store_);
+    const store::OpenReport& r = store_.report();
+    std::fprintf(stderr, "nexus-server: store %s: %s, %zu tab%s, %llu record%s replayed, %llu bytes of torn tail cut\n",
+        paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
+        static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
+        static_cast<unsigned long long>(r.cut_bytes));
+    return true;
+}
 
 bool Server::listenControl(std::string* why) {
     sockaddr_un addr;
@@ -199,24 +239,40 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
-    if (request != "new") {
-        writeAll(fd, "ERROR unknown request; the requests are new and stop\n");
+    Client client;
+    if (!parseNew(request, &client)) {
+        writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>` and `stop`\n");
         return;
+    }
+    // A client's new session ends its earlier one: the window has left it.
+    if (!client.id.empty()) {
+        sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(),
+            [&](const Session& s) { return s.client == client.id; }), sessions_.end());
     }
     if (sessions_.size() >= kMaxSessions) {
         writeAll(fd, "ERROR the server holds " + std::to_string(kMaxSessions) + " sessions, its limit\n");
         return;
     }
+    const std::uint64_t applied = client.id.empty() ? 0 : store_.applied(client.id);
+    if (client.next > applied + 1) {
+        // The client holds no action numbered applied + 1 .. next - 1, so they could never arrive.
+        writeAll(fd, "ERROR client " + client.id + ": the server has applied its actions up to " +
+            std::to_string(applied) + ", so a session from action " + std::to_string(client.next) +
+            " would skip those in between; start from action " + std::to_string(applied + 1) + " or before\n");
+        return;
+    }
     try {
-        Session s{nextId_++, std::make_unique<link::ServerSession>(hub_.state())};
+        Session s{nextId_++, client.id,
+            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next)};
         // The key goes on this one line to `nexus-server new`, and nowhere else.
         if (!writeAll(fd, link::connectLine(s.link->port(), s.link->key()) + "\n")) {
             std::fprintf(stderr, "nexus-server: session %llu: the CONNECT line could not be written; dropped\n",
                 static_cast<unsigned long long>(s.id));
             return;
         }
-        std::fprintf(stderr, "nexus-server: session %llu on UDP port %s\n", static_cast<unsigned long long>(s.id),
-            s.link->port().c_str());
+        std::fprintf(stderr, "nexus-server: session %llu on UDP port %s%s%s, from action %llu (applied %llu)\n",
+            static_cast<unsigned long long>(s.id), s.link->port().c_str(), s.client.empty() ? "" : ", client ",
+            s.client.c_str(), static_cast<unsigned long long>(client.next), static_cast<unsigned long long>(applied));
         sessions_.push_back(std::move(s));
     } catch (const std::exception& e) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
@@ -226,11 +282,13 @@ void Server::control(int fd) {
 
 int Server::run() {
     std::string why;
-    if (!ensureDir(paths_.dir, &why) || !listenControl(&why)) {
+    // The store opens before the control socket listens, so no session is made on a state not yet read.
+    if (!ensureDir(paths_.dir, &why) || !openStore(&why) || !listenControl(&why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
     std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
+    int status = 0;
     while (!stopping_ && !gStop) {
         link::freezeClock();
         for (Session& s : sessions_) {
@@ -262,14 +320,6 @@ int Server::run() {
             break;
         }
         link::freezeClock();
-        if (fds[0].revents & POLLIN) {
-            const int fd = accept(listen_, nullptr, nullptr);
-            if (fd >= 0) {
-                fcntl(fd, F_SETFL, 0);
-                control(fd);
-                close(fd);
-            }
-        }
         bool changed = false;
         for (std::size_t k = 1; k < fds.size(); ++k) {
             if (!(fds[k].revents & POLLIN))
@@ -281,29 +331,50 @@ int Server::run() {
                 continue;
             }
             std::string problem;
+            // Each action is durable (with the client's counter) before the next tick can acknowledge it.
             for (const sync::Action& a : s.link->take(&problem)) {
                 std::string refused;
-                hub_.apply(a, &refused);
+                hub_->apply(a, &refused, s.client);
                 changed = true;
                 if (!refused.empty())
                     std::fprintf(stderr, "nexus-server: session %llu, action %llu: %s\n",
                         static_cast<unsigned long long>(s.id), static_cast<unsigned long long>(a.num),
                         refused.c_str());
+                if (hub_->failed())
+                    break;
             }
             if (!problem.empty())
                 std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(s.id),
                     problem.c_str());
+            if (hub_->failed())
+                break;
+        }
+        if (hub_->failed()) {
+            // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store
+            // from what is durable, and the windows reconnect.
+            std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
+            status = 1;
+            break;
         }
         if (changed) {
             for (Session& s : sessions_)
-                s.link->setState(hub_.state());
+                s.link->setState(hub_->state());
+        }
+        // The control socket last: a new session may end an earlier one, and the sessions' fds above are by index.
+        if (fds[0].revents & POLLIN) {
+            const int fd = accept(listen_, nullptr, nullptr);
+            if (fd >= 0) {
+                fcntl(fd, F_SETFL, 0);
+                control(fd);
+                close(fd);
+            }
         }
     }
     close(listen_);
     unlink(paths_.socket.c_str());
     std::fprintf(stderr, "nexus-server: stopped, %zu session%s open\n", sessions_.size(),
         sessions_.size() == 1 ? "" : "s");
-    return 0;
+    return status;
 }
 
 // Starts `self serve --dir <dir>` as a server of its own: a new session (no terminal), standard input from /dev/null,
@@ -385,6 +456,7 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     out->dir = d;
     out->socket = d + "/server.sock";
     out->log = d + "/server.log";
+    out->store = d + "/store";
     sockaddr_un addr;
     if (!socketAddress(out->socket, &addr)) {
         *why = out->socket + " is longer than a Unix socket's address holds (" + std::to_string(sizeof addr.sun_path - 1) +
@@ -405,12 +477,26 @@ int serve(const Paths& p) {
     return server.run();
 }
 
-int newSession(const Paths& p, const std::string& self) {
+bool validClientId(const std::string& id) {
+    if (id.empty() || id.size() > 64)
+        return false;
+    for (char c : id) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+            c == '_';
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
+int newSession(const Paths& p, const std::string& self, const Client& client) {
     umask(077);
     signal(SIGPIPE, SIG_IGN);
     std::string reply;
     std::string why;
-    if (!ask(p, "new", self, &reply, &why)) {
+    const std::string request = client.id.empty() ? std::string("new") :
+        "new " + client.id + " " + std::to_string(client.next);
+    if (!ask(p, request, self, &reply, &why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }

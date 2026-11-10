@@ -122,9 +122,6 @@ public:
     std::map<std::string, std::uint64_t> sizes(const std::string& dir) const;  // each name's size now
     // Damages one byte of a file's durable copy and its live copy (a disk fault the store must report, not hide).
     void corrupt(const std::string& path, std::uint64_t off);
-    // A restore from a backup: every directory at or under `prefix` is replaced by `from`'s, as it reads now, and is
-    // durable.
-    void restore_tree(const MemFs& from, const std::string& prefix);
 
 private:
     struct File {

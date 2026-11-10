@@ -26,6 +26,8 @@ std::string encode(std::uint64_t start, const std::vector<Action>& held, std::si
 
 Actions::Actions() : held_(std::make_shared<const std::vector<Action>>()) {}
 
+Actions::Actions(std::uint64_t next) : first_(next == 0 ? 1 : next), held_(std::make_shared<const std::vector<Action>>()) {}
+
 std::uint64_t Actions::add(ActionKind kind, std::string tab, std::string text) {
     auto held = std::make_shared<std::vector<Action>>(*held_);
     const std::uint64_t num = next();
@@ -47,7 +49,7 @@ std::string Actions::diff_from(const Actions& existing) const {
 }
 
 std::string Actions::init_diff() const {
-    return diff_from(Actions());
+    return held_->empty() ? std::string() : encode(first_, *held_, 0);
 }
 
 std::vector<Action> Actions::parse(const std::string& diff) {

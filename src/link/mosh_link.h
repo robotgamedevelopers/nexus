@@ -24,8 +24,11 @@ void freezeClock();
 class ServerSession {
 public:
     // Binds a UDP port (mosh's range, 60001 to 60999, every interface) and makes the session's key. Throws
-    // std::runtime_error, saying why, when no port can be bound.
-    explicit ServerSession(const sync::Tabs& state);
+    // std::runtime_error, saying why, when no port can be bound. `applied` is the client's applied counter before this
+    // session (the store's), and `next` the number the client's first action in this session has (its ClientSession's
+    // `next`): a window reconnecting sends again, under their own numbers, the actions it has no acknowledgement for,
+    // and those at or below `applied` are skipped.
+    ServerSession(const sync::Tabs& state, std::uint64_t applied = 0, std::uint64_t next = 1);
     ~ServerSession();
     ServerSession(const ServerSession&) = delete;
     ServerSession& operator=(const ServerSession&) = delete;
@@ -54,8 +57,9 @@ private:
 // The window's end.
 class ClientSession {
 public:
-    // `ip` is numeric. Throws std::runtime_error, saying why, for a bad key, address or port.
-    ClientSession(const std::string& key, const std::string& ip, const std::string& port);
+    // `ip` is numeric. Throws std::runtime_error, saying why, for a bad key, address or port. `next` is the number the
+    // first action added gets (the server's session must be made with the same).
+    ClientSession(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next = 1);
     ~ClientSession();
     ClientSession(const ClientSession&) = delete;
     ClientSession& operator=(const ClientSession&) = delete;

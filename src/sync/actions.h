@@ -32,6 +32,9 @@ struct Action {
 class Actions {
 public:
     Actions();
+    // An empty list whose next action is numbered `next` (1 if 0): the state 0 both ends of a session start from when
+    // a window, reconnecting, goes on with its numbers (link/mosh_link.h). Both ends must be given the same number.
+    explicit Actions(std::uint64_t next);
 
     // The client's one write: appends an action with the next number and returns that number.
     std::uint64_t add(ActionKind kind, std::string tab, std::string text);
@@ -69,6 +72,8 @@ private:
 // nothing is applied, and `refused` (when given) says why.
 class Applier {
 public:
+    // `applied`: the number of the client's last action applied before this session (the store's counter).
+    explicit Applier(std::uint64_t applied = 0) : applied_(applied) {}
     std::uint64_t applied() const { return applied_; }
     std::vector<Action> apply(const std::vector<Action>& actions, std::string* refused = nullptr);
 

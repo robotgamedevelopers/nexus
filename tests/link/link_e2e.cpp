@@ -14,6 +14,10 @@
 //   link_e2e <nexus-server> <dir> soak <clients> <prompts>
 //       several windows at once, prompts from each to random friends: every window ends holding the server's state,
 //       each prompt applied once, each window's prompts in its order, and every window's transcripts agree
+//   link_e2e <nexus-server> <dir> restart
+//       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
+//       session of the same window (its client id) finds every tab and queue there, sends all its actions again under
+//       the same numbers, and only the new one is applied; a session that would skip actions is refused
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -21,8 +25,15 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
+#include <spawn.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+#include <algorithm>
 
 #include <chrono>
 #include <cstdio>
@@ -43,6 +54,8 @@
 #include "model.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
+
+extern char** environ;
 
 namespace {
 
@@ -494,6 +507,136 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     return failures == 0 ? 0 : 1;
 }
 
+// ---- restart ----
+
+// `nexus-server serve --dir <dir>` as this test's child, its output to the server's log, so the test can kill it.
+pid_t startServe(const std::string& binary, const std::string& dir) {
+    posix_spawn_file_actions_t files;
+    posix_spawn_file_actions_init(&files);
+    posix_spawn_file_actions_addopen(&files, 0, "/dev/null", O_RDONLY, 0);
+    const std::string log = dir + "/server.log";
+    posix_spawn_file_actions_addopen(&files, 1, log.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+    posix_spawn_file_actions_adddup2(&files, 1, 2);
+    std::vector<std::string> args = {binary, "serve", "--dir", dir};
+    std::vector<char*> argv;
+    for (std::string& a : args)
+        argv.push_back(a.data());
+    argv.push_back(nullptr);
+    pid_t pid = -1;
+    if (posix_spawn(&pid, binary.c_str(), &files, nullptr, argv.data(), environ) != 0)
+        pid = -1;
+    posix_spawn_file_actions_destroy(&files);
+    return pid;
+}
+
+// A server answers on the socket: a `new` from now on reaches it rather than starting another.
+bool answering(const std::string& dir) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    const std::string path = dir + "/server.sock";
+    std::memcpy(addr.sun_path, path.c_str(), std::min(path.size() + 1, sizeof addr.sun_path));
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    const bool ok = connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0;
+    close(fd);
+    return ok;
+}
+
+// The server is killed with SIGKILL while a window is connected, and started again; a new session of the same window
+// (its client id) sends every one of its actions again, under the same numbers, with one new one after them. Every tab,
+// queue and applied counter came through the kill: the state is all there, and only the new action is applied.
+int restart(const std::string& binary, const std::string& dir) {
+    Server server(binary, dir);
+    mkdir(dir.c_str(), 0700);
+    pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, 10));
+    const std::vector<std::pair<std::string, std::string>> before = {{"ada", "one"}, {"bo", "later"}, {"ada", "two"},
+                                                                    {"ada", "three"}};
+    auto session = [&](std::uint64_t next, Window* w) {
+        link::Bootstrap b = server.bootstrap("localhost");
+        b.command.insert(b.command.end(), {"--client", "window-1", "--next", std::to_string(next)});
+        link::Connect connect;
+        std::string why;
+        if (!link::bootstrap(b, runCommand, &connect, &why)) {
+            std::fprintf(stderr, "link_e2e: %s\n", why.c_str());
+            return false;
+        }
+        w->session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", connect.port, next);
+        return true;
+    };
+    auto add = [](Window& w, const std::pair<std::string, std::string>& a) {
+        w.session->add(a.first == "bo" ? sync::ActionKind::Queue : sync::ActionKind::Send, a.first, a.second);
+    };
+    auto settle = [](Window& w, int seconds, const std::function<bool()>& done) {
+        std::vector<Window*> ws{&w};
+        const auto deadline = Clock::now() + std::chrono::seconds(seconds);
+        while (Clock::now() < deadline && !done())
+            step(ws, nullptr, 20);
+        return done();
+    };
+    auto adaTexts = [](const sync::Tabs& tabs) {
+        std::vector<std::string> out;
+        if (const sync::TabView* v = tabs.find("ada"))
+            for (const sync::EntryRef& e : v->entries)
+                out.push_back(e->text);
+        return out;
+    };
+    {
+        Window w;
+        if (!session(1, &w))
+            return 1;
+        for (std::size_t i = 0; i < 3; ++i)
+            add(w, before[i]);
+        CHECK(settle(w, 10, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
+        // The fourth is sent and the server killed at once: applied and durable, or not applied at all.
+        add(w, before[3]);
+        settle(w, 1, [&] { return false; });
+    }
+    CHECK(kill(pid, SIGKILL) == 0);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    std::printf("server killed with SIGKILL\n");
+
+    pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, 10));
+    Window w;
+    if (!session(1, &w))
+        return 1;
+    // The fresh sync: what was acknowledged before the kill is there before the window sends anything.
+    CHECK(settle(w, 10, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 4; }));
+    const std::vector<std::string> first = adaTexts(w.session->state());
+    std::printf("after the restart the server holds %zu entries in ada\n", first.size());
+    CHECK(first.size() == 4 || first.size() == 6);
+    const sync::TabView* bo = w.session->state().find("bo");
+    CHECK(bo != nullptr && bo->queue == std::vector<std::string>{"later"});
+    // Every action again, under its own number, and a fifth.
+    for (const auto& a : before)
+        add(w, a);
+    add(w, {"ada", "four"});
+    const std::vector<std::string> want = {"one", sync::kReceived, "two", sync::kReceived, "three", sync::kReceived,
+                                           "four", sync::kReceived};
+    CHECK(settle(w, 15, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
+    CHECK(adaTexts(w.session->state()) == want);
+    bo = w.session->state().find("bo");
+    CHECK(bo != nullptr && bo->queue == std::vector<std::string>{"later"});
+    CHECK(w.model.tab(tabOf(w.model, "ada")).transcript.size() == want.size());
+    // A session that starts past what the server applied would skip actions: refused.
+    {
+        link::Bootstrap b = server.bootstrap("localhost");
+        b.command.insert(b.command.end(), {"--client", "window-1", "--next", "9"});
+        link::Connect connect;
+        std::string why;
+        CHECK(!link::bootstrap(b, runCommand, &connect, &why));
+        CHECK(why.find("applied its actions up to 5") != std::string::npos);
+    }
+    w.session->shutdown();
+    settle(w, 3, [&] { return w.session->shutdownDone(); });
+    std::printf("restart: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server stops the restarted server
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -509,7 +652,10 @@ int main(int argc, char** argv) {
         return outage(argv[1], argv[2]);
     if (argc == 6 && std::strcmp(argv[3], "soak") == 0)
         return soak(argv[1], argv[2], std::atoi(argv[4]), std::atoi(argv[5]));
-    std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> | outage | soak <clients> <prompts>\n"
+    if (argc == 4 && std::strcmp(argv[3], "restart") == 0)
+        return restart(argv[1], argv[2]);
+    std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> | outage | soak <clients> <prompts> | "
+                         "restart\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

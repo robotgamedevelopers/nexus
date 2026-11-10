@@ -52,14 +52,15 @@ struct ServerSession::Impl {
     sync::Actions initialRemote;
     ServerTransport transport;
     sync::Applier applier;
-    explicit Impl(const sync::Tabs& state) : transport(initialMine, initialRemote, nullptr, nullptr) {
+    Impl(const sync::Tabs& state, std::uint64_t applied, std::uint64_t next)
+        : initialRemote(next), transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
         transport.set_current_state(state);
     }
 };
 
-ServerSession::ServerSession(const sync::Tabs& state) {
+ServerSession::ServerSession(const sync::Tabs& state, std::uint64_t applied, std::uint64_t next) {
     std::string why;
-    if (!guarded([&] { impl_ = std::make_unique<Impl>(state); }, &why))
+    if (!guarded([&] { impl_ = std::make_unique<Impl>(state, applied, next); }, &why))
         throw std::runtime_error("no UDP port for the session (mosh binds one of 60001 to 60999): " + why);
 }
 
@@ -118,13 +119,14 @@ struct ClientSession::Impl {
     sync::Actions initialMine;
     sync::Tabs initialRemote;
     ClientTransport transport;
-    Impl(const std::string& key, const std::string& ip, const std::string& port)
-        : transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
+    Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next)
+        : initialMine(next), transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
 };
 
-ClientSession::ClientSession(const std::string& key, const std::string& ip, const std::string& port) {
+ClientSession::ClientSession(const std::string& key, const std::string& ip, const std::string& port,
+                             std::uint64_t next) {
     std::string why;
-    if (!guarded([&] { impl_ = std::make_unique<Impl>(key, ip, port); }, &why))
+    if (!guarded([&] { impl_ = std::make_unique<Impl>(key, ip, port, next); }, &why))
         throw std::runtime_error("cannot start the session with " + ip + " port " + port + ": " + why);
 }
 

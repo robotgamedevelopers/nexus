@@ -45,12 +45,18 @@ target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model)
 
-# The server's durable state (layer 2): tabs, sessions and blobs over a crash-safe journal, behind a filesystem seam
-# (src/store/fs.h) so that its tests run in memory. No Prax.
+# nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
+# filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
 add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/posix_fs.cpp
     src/store/store.cpp)
 target_include_directories(nexus_store PUBLIC src)
 target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
+
+# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link).
+add_library(nexus_durable STATIC src/server/durable.cpp)
+target_include_directories(nexus_durable PUBLIC src)
+target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
 # The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
 # tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
@@ -91,7 +97,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus-server PRIVATE nexus_link)
+    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable)
 endif()
 
 # The app, as a real bundle: nexus.app.

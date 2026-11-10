@@ -1,6 +1,8 @@
 # Tests of the server's durable state (src/store/), with four labels:
 #   unit           store_test: the journal, the store and MemFs, in memory, crashes injected at every write and sync;
-#                  no time, no sockets, no files (one ctest entry per group, so they run in parallel)
+#                  no time, no sockets, no files (one ctest entry per group, so they run in parallel); durable_test:
+#                  nexus-server's Hub over the store the same way (a restart, a reconnecting window's resent actions,
+#                  a crash at every write and sync)
 #   functional     store_functional_test: the store on the real filesystem in its own working directory, a process
 #                  killed while it commits and the store reopened
 #   model          TLC: models/store/Journal.tla on two instances, every reversed witness rejected, code traces
@@ -14,6 +16,10 @@ add_executable(store_test store_test.cpp)
 target_link_libraries(store_test PRIVATE nexus_store)
 target_compile_options(store_test PRIVATE ${warnings})
 
+add_executable(durable_test durable_test.cpp)
+target_link_libraries(durable_test PRIVATE nexus_durable)
+target_compile_options(durable_test PRIVATE ${warnings})
+
 add_executable(journal_walk journal_walk.cpp)
 target_link_libraries(journal_walk PRIVATE nexus_store)
 target_compile_options(journal_walk PRIVATE ${warnings})
@@ -24,12 +30,16 @@ target_compile_options(store_functional_test PRIVATE ${warnings})
 
 # The programs the unit and model tests run, built with the model's (cmake --build <dir> --target model_checks), so
 # the sanitizer and model jobs build them without the app.
-add_custom_target(store_checks DEPENDS store_test journal_walk)
+add_custom_target(store_checks DEPENDS store_test durable_test journal_walk)
 add_dependencies(model_checks store_checks)
 
-foreach(group codec memfs journal journal_crash store store_crash blob session restore)
+foreach(group codec memfs journal journal_crash store store_crash)
     add_test(NAME store_unit_${group} COMMAND store_test ${group})
     set_tests_properties(store_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
+endforeach()
+foreach(group restart resend crash)
+    add_test(NAME durable_unit_${group} COMMAND durable_test ${group})
+    set_tests_properties(durable_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()
 
 set(functional_dir "${CMAKE_CURRENT_BINARY_DIR}/functional")

@@ -15,15 +15,43 @@ const StoredTab* MemoryStore::find(const std::string& name) const {
     return it == tabs_.end() ? nullptr : &it->second;
 }
 
-void MemoryStore::append(const std::string& name, EntryRef entry) {
-    tabs_[name].transcript.push_back(std::move(entry));
+std::vector<std::string> MemoryStore::names() const {
+    std::vector<std::string> out;
+    for (const auto& [name, tab] : tabs_)
+        out.push_back(name);
+    return out;
 }
 
-void MemoryStore::enqueue(const std::string& name, std::string prompt) {
-    tabs_[name].queue.push_back(std::move(prompt));
+bool MemoryStore::commit(const std::string& name, const std::vector<TabChange>& changes, const std::string& client,
+                         std::uint64_t num, std::string* why) {
+    if (!client.empty() && num != applied(client) + 1) {
+        if (why != nullptr)
+            *why = "client " + client + ": action " + std::to_string(num) + " after " + std::to_string(applied(client));
+        return false;
+    }
+    if (!changes.empty()) {
+        StoredTab& t = tabs_[name];
+        for (const TabChange& c : changes) {
+            if (c.entry)
+                t.transcript.push_back(c.entry);
+            else
+                t.queue.push_back(c.prompt);
+        }
+    }
+    if (!client.empty())
+        applied_[client] = num;
+    return true;
 }
 
-Hub::Hub(TabStore& store, Limits limits) : store_(store), limits_(limits) {}
+std::uint64_t MemoryStore::applied(const std::string& client) const {
+    auto it = applied_.find(client);
+    return it == applied_.end() ? 0 : it->second;
+}
+
+Hub::Hub(TabStore& store, Limits limits) : store_(store), limits_(limits) {
+    for (const std::string& name : store_.names())
+        refresh(name);
+}
 
 namespace {
 
@@ -37,9 +65,20 @@ std::string kib(std::size_t bytes) {
 
 } // namespace
 
-bool Hub::apply(const Action& action, std::string* why) {
+bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    std::string failed;
+    auto commit = [&](const std::string& name, const std::vector<TabChange>& changes) {
+        if (store_.commit(name, changes, client, action.num, &failed))
+            return true;
+        if (why != nullptr)
+            *why = "tab " + action.tab + ": the action was not applied: " + failed;
+        return false;
+    };
     const StoredTab* tab = store_.find(action.tab);
     if (tab == nullptr && store_.size() >= limits_.tabs) {
+        // Refused, and counted: the client's counter moves, so the action is never taken again.
+        if (!client.empty() && !commit(std::string(), {}))
+            return false;
         if (why != nullptr)
             *why = "no tab " + action.tab + " made: the server holds " + std::to_string(limits_.tabs) +
                 " tabs, its limit";
@@ -61,18 +100,22 @@ bool Hub::apply(const Action& action, std::string* why) {
             refused = "A prompt was not queued: the queue would hold more than " + kib(limits_.queueBytes) + ".";
     }
     if (!refused.empty()) {
-        store_.append(action.tab, entry(EntryKind::Notice, refused));
+        if (!commit(action.tab, {TabChange{entry(EntryKind::Notice, refused), {}}}))
+            return false;
         refresh(action.tab);
         if (why != nullptr)
             *why = "tab " + action.tab + ": " + refused;
         return false;
     }
+    std::vector<TabChange> changes;
     if (action.kind == ActionKind::Send) {
-        store_.append(action.tab, entry(EntryKind::Person, action.text));
-        store_.append(action.tab, entry(EntryKind::Friend, kReceived));
+        changes.push_back(TabChange{entry(EntryKind::Person, action.text), {}});
+        changes.push_back(TabChange{entry(EntryKind::Friend, kReceived), {}});
     } else {
-        store_.enqueue(action.tab, action.text);
+        changes.push_back(TabChange{nullptr, action.text});
     }
+    if (!commit(action.tab, changes))
+        return false;
     refresh(action.tab);
     return true;
 }

@@ -1,5 +1,4 @@
 #pragma once
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -9,28 +8,10 @@
 namespace nexus::store {
 
 using Bytes = std::vector<std::uint8_t>;
-using Hash = std::array<std::uint8_t, 32>;  // SHA-256
 
 // CRC-32C (Castagnoli), as in iSCSI and ext4: the checksum of every log record and snapshot. `crc` continues an
 // earlier one; start at 0.
 std::uint32_t crc32c(std::span<const std::uint8_t> data, std::uint32_t crc = 0);
-
-// SHA-256 of `data`; a blob is named by it.
-class Sha256 {
-public:
-    Sha256();
-    void update(std::span<const std::uint8_t> data);
-    Hash finish();
-
-private:
-    void block(const std::uint8_t* p);
-    std::uint32_t h_[8];
-    std::uint8_t buf_[64];
-    std::size_t used_ = 0;
-    std::uint64_t total_ = 0;
-};
-Hash sha256(std::span<const std::uint8_t> data);
-std::string to_hex(std::span<const std::uint8_t> data);
 
 // Little-endian encoding of the store's records and snapshots.
 class Writer {

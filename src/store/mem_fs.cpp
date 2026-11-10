@@ -363,33 +363,6 @@ std::map<std::string, std::uint64_t> MemFs::sizes(const std::string& dir) const 
     return out;
 }
 
-void MemFs::restore_tree(const MemFs& from, const std::string& prefix) {
-    auto under = [&](const std::string& p) {
-        return p == prefix || (p.size() > prefix.size() && p.compare(0, prefix.size(), prefix) == 0 &&
-                               p[prefix.size()] == '/');
-    };
-    for (auto it = dirs_.begin(); it != dirs_.end();) {
-        if (under(it->first))
-            it = dirs_.erase(it);
-        else
-            ++it;
-    }
-    collect();
-    for (const auto& [path, d] : from.dirs_) {
-        if (!under(path))
-            continue;
-        Dir copy;
-        for (const auto& [n, ino] : d.now) {
-            int mine = new_file();
-            files_[std::size_t(mine)].data = from.files_[std::size_t(ino)].data;
-            files_[std::size_t(mine)].dur = from.files_[std::size_t(ino)].data;
-            copy.now[n] = mine;
-        }
-        copy.dur = copy.now;
-        dirs_[path] = copy;
-    }
-}
-
 void MemFs::corrupt(const std::string& path, std::uint64_t off) {
     File* f = file(path);
     if (f == nullptr)
