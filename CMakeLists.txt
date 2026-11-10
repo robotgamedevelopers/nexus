@@ -34,3 +34,6 @@ target_compile_options(nexus PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(nexus PRIVATE nexus_model
     prax::app prax::draw prax::gpu prax::font prax::text prax::image prax::compress prax::core_cpp
     "-framework AppKit")
+
+enable_testing()
+add_subdirectory(tests/model)
