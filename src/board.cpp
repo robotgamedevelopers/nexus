@@ -6,6 +6,8 @@
 #include <thread>
 
 #include "pr/compress.h"
+#include "pr/css.h"
+#include "pr/css_view.h"
 #include "pr/dom.h"
 #include "pr/fetch.h"
 #include "pr/html.h"
@@ -345,9 +347,39 @@ void PraxBoard::addPageStyle() {
     if (prDomElementCreate(document, PrStringView{"style", 5}, nullptr, &style) != PrStatus_Ok)
         return;
     prDomElementSetAttribute(style, PrStringView{"id", 2}, sv(kSprintStyleId));
-    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle()));
+    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spendTop_)));
     prDomNodeAppendChild(prDomElementAsNode(head), prDomElementAsNode(style));
     prDomNodeRelease(prDomElementAsNode(style));
+}
+
+double PraxBoard::measureSpendTop() {
+    PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
+    if (document == nullptr)
+        return -1;
+    PrDomElement* spend = nullptr;
+    if (prCssNodeQuerySelector(prDomDocumentAsNode(document), sv(kSpendSelector), &spend) != PrStatus_Ok ||
+        spend == nullptr)
+        return -1;
+    // The top in the viewport, plus the page's scroll: the top in the document, wherever the page is scrolled.
+    PrDomElement* scrolling = prCssDocumentScrollingElement(document);
+    double scrolled = scrolling != nullptr ? prCssElementScrollTop(scrolling) : 0;
+    return prCssElementGetBoundingClientRect(spend).y + scrolled;
+}
+
+void PraxBoard::fitSpend() {
+    double top = measureSpendTop();
+    // Half a pixel either way is the same screen: no restyle, so a rounding never repaints in a loop. The panel's top
+    // does not depend on its own height, so one restyle settles it.
+    if (std::fabs(top - spendTop_) < 0.5)
+        return;
+    spendTop_ = top;
+    PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
+    PrDomElement* style = document != nullptr
+        ? prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) : nullptr;
+    if (style == nullptr)
+        return;
+    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spendTop_)));
+    dirty_ = true;
 }
 
 void PraxBoard::paint(PrVec2 extent) {
@@ -371,6 +403,9 @@ void PraxBoard::paint(PrVec2 extent) {
     prDrawListRelease(recorded_);
     recorded_ = list;
     dirty_ = false;
+    // The Cost breakdown's top as laid out in this paint: if it moved, the style is set again and the next frame paints
+    // the panel to the bottom of the screen.
+    fitSpend();
 }
 
 bool PraxBoard::show(PrLayoutNode parent, PrVec2 extent, std::string* problem) {

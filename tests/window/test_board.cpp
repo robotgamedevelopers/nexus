@@ -5,12 +5,15 @@
 // toLocaleTimeString, toLocaleString on Number and BigInt, session storage and a reload on a new build. Text is set in
 // the system's fonts and scripts run in QuickJS: a functional test.
 
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <regex>
 #include <string>
 #include <vector>
 
+#include "pr/css_view.h"
 #include "pr/dom.h"
 #include "pr/font_set.h"
 #include "pr/html.h"
@@ -79,9 +82,30 @@ function poll() {
 tick(); poll(); setInterval(function () { tick(); poll(); }, 1000);
 </script></body></html>)HTML";
 
+// The served board's first screen in its shape: a header and a row of tiles, then the Cost breakdown panel (the pie in
+// a column of its own beside the table) and the next block below it, sized in rem as the board sizes them.
+constexpr const char* kSpendPage = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>spend</title>
+<style>html, body { margin: 0; } body { padding: 2rem 2rem 4rem; }
+.top { height: 7.5rem; margin-bottom: 2rem; } .hero { height: 10rem; margin-bottom: 2rem; }
+.panel { border: 1px solid #333; border-radius: 1.5rem; overflow: hidden; }
+.panel-head { padding: 2rem 3rem 1rem; } .panel.folded > .scroll { display: none; }
+.spend { margin-bottom: 4rem; }
+.spend-body { display: grid; grid-template-columns: 3fr 7fr; align-items: stretch; }
+.pie-wrap { display: flex; align-items: flex-start; justify-content: center; padding: 2rem 3rem; }
+.pie { width: 100%; max-width: 12rem; aspect-ratio: 1 / 1; height: auto; }
+.next { height: 20rem; } .rest { height: 3000px; }</style></head>
+<body><header class="top">board</header><section class="hero">tiles</section>
+<section class="panel spend" id="spend"><div class="panel-head"><h2>Cost breakdown</h2></div>
+<div class="scroll spend-body"><div class="pie-wrap"><svg class="pie" id="pie" viewBox="0 0 100 100"></svg></div>
+<div class="rows toprows"><div>stream</div><div>a</div><div>b</div></div></div></section>
+<section class="next" id="next">cards by state</section><section class="rest">work</section>
+</body></html>)HTML";
+
 // What the fixture server answers, and what it was asked.
 struct Server {
     bool down = false;              // every request fails as a refused connection
+    const char* page = kPage;       // the page's HTML
     std::string build = "b1";
     int pages = 0;                  // requests for the page
     int polls = 0;                  // requests for /api/sprint
@@ -98,7 +122,7 @@ struct Server {
         uint16_t status = 200;
         if (url == kUrl) {
             ++s.pages;
-            s.body = kPage;
+            s.body = s.page;
         } else if (has(url, "/api/sprint")) {
             ++s.polls;
             type.value = PrStringView{"application/json", 16};
@@ -142,6 +166,7 @@ struct Harness {
     PraxBoard* board = nullptr;
     bool visible = true;
     double time = 1000;
+    PrVec2 extent{1000, 780};       // the window's, px
 
     explicit Harness(std::function<SprintBoardAddress()> find = nullptr) {
         prFontSetSetSystem(fonts, system);
@@ -168,7 +193,7 @@ struct Harness {
         view.model = &model;
         view.look = &look;
         view.board = board;
-        view.extent = PrVec2{1000, 780};
+        view.extent = extent;
     }
 
     ~Harness() {
@@ -186,7 +211,8 @@ struct Harness {
         time += 0.05;
         clock.ms += 50;
         board->frame(time, prAppDisplayDefault());
-        PrUiFrameDesc desc{.time = time, .delta = 0.05, .extent = PrVec2{1000, 780}, .maxRounds = 4,
+        view.extent = extent;
+        PrUiFrameDesc desc{.time = time, .delta = 0.05, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
             Harness& h = *static_cast<Harness*>(context);
@@ -209,6 +235,18 @@ struct Harness {
         return prDomNodeGetElementById(prDomDocumentAsNode(d), PrStringView{kSprintStyleId.data(),
             kSprintStyleId.size()}) != nullptr;
     }
+
+    PrDomDocument* document() { return prHtmlWindowDocument(prHtmlPageWindow(board->page())); }
+
+    PrDomElement* byId(const char* id) {
+        return prDomNodeGetElementById(prDomDocumentAsNode(document()), PrStringView{id, std::strlen(id)});
+    }
+
+    // An element's border box in the viewport, CSS px, as laid out now.
+    PrDomRect rect(const char* id) { return prCssElementGetBoundingClientRect(byId(id)); }
+
+    // The viewport's height, CSS px: the page's pane below the tab strip.
+    double viewportHeight() { return prCssElementClientHeight(prCssDocumentScrollingElement(document())); }
 };
 
 // The page loads, its first answer paints, and the board's script runs: the digits grouped, the clock in en-US with
@@ -310,6 +348,42 @@ void aFoundAddressLoads() {
     CHECK(h.board->settled() && h.server.pages == 1);
 }
 
+// The Cost breakdown reaches the bottom of the first screen at a tall window and a short one, so the next block starts
+// below it; the pie keeps its size; scrolling does not move it; folded, the panel takes its own height again.
+void theCostBreakdownFillsTheFirstScreen() {
+    // At 900 px the panel's own content is some 60 px short of the screen's bottom; at 1600, some 770.
+    for (float height : {1600.0f, 900.0f}) {
+        Harness h;
+        h.server.page = kSpendPage;
+        h.extent = PrVec2{1200, height};
+        h.frames(10);
+        CHECK(h.board->settled());
+        double viewport = h.viewportHeight();
+        PrDomRect spend = h.rect("spend");
+        PrDomRect pie = h.rect("pie");
+        CHECK(viewport > 300 && viewport < height);
+        CHECK(std::fabs(spend.y + spend.height - viewport) < 1);
+        CHECK(h.rect("next").y >= viewport);
+        CHECK(std::fabs(pie.width - 192) < 1 && std::fabs(pie.height - pie.width) < 1);
+        if (failures != 0)
+            std::fprintf(stderr, "window %.0f: viewport %.1f, spend %.1f+%.1f, pie %.1fx%.1f\n", double(height),
+                viewport, spend.y, spend.height, pie.width, pie.height);
+
+        // Scrolled down and back: the panel's height stays.
+        prCssElementSetScrollTop(prCssDocumentScrollingElement(h.document()), 400);
+        h.frames(3);
+        CHECK(std::fabs(h.rect("spend").height - spend.height) < 1);
+        prCssElementSetScrollTop(prCssDocumentScrollingElement(h.document()), 0);
+        h.frames(3);
+        CHECK(std::fabs(h.rect("spend").y + h.rect("spend").height - viewport) < 1);
+
+        // Folded: the head alone.
+        prDomElementSetAttribute(h.byId("spend"), PrStringView{"class", 5}, PrStringView{"panel spend folded", 18});
+        h.frames(3);
+        CHECK(h.rect("spend").height < 200);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -319,6 +393,7 @@ int main() {
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();
     aFoundAddressLoads();
+    theCostBreakdownFillsTheFirstScreen();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

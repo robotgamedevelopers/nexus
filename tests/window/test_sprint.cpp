@@ -189,10 +189,23 @@ void preludeCarriesTheZonesAndEscapesThem() {
 }
 
 void styleMakesOnlyThePageSeeThrough() {
-    std::string s(sprintPageStyle());
+    std::string s = sprintPageStyle(-1);
     CHECK(has(s, "--bg: transparent !important") && has(s, "background: transparent !important"));
     CHECK(has(s, ":root") && has(s, "body"));
     CHECK(!has(s, "--surface"));
+    // Not measured yet: the Cost breakdown keeps its own height.
+    CHECK(!has(s, "spend") && !has(s, "min-height"));
+}
+
+// Measured: the open Cost breakdown reaches the viewport's bottom from its top, and its body takes the height; folded,
+// it is left alone.
+void styleStretchesTheOpenCostBreakdown() {
+    std::string s = sprintPageStyle(547.5);
+    CHECK(has(s, "--bg: transparent !important"));
+    CHECK(has(s, ".panel.spend:not(.folded) { display: flex; flex-direction: column; box-sizing: border-box; "
+        "min-height: calc(100vh - 547.50px); }"));
+    CHECK(has(s, ".panel.spend:not(.folded) > .spend-body { flex: 1 1 auto; }"));
+    CHECK(has(sprintPageStyle(0), "calc(100vh - 0.00px)"));
 }
 
 } // namespace
@@ -210,6 +223,7 @@ int main() {
     eventsAreRouted();
     preludeCarriesTheZonesAndEscapesThem();
     styleMakesOnlyThePageSeeThrough();
+    styleStretchesTheOpenCostBreakdown();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

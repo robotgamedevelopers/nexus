@@ -1,5 +1,6 @@
 #include "sprint.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <vector>
 
@@ -301,8 +302,19 @@ void replace(std::string& text, std::string_view mark, const std::string& with) 
 
 } // namespace
 
-std::string_view sprintPageStyle() {
-    return kPageStyle;
+std::string sprintPageStyle(double spendTop) {
+    std::string style(kPageStyle);
+    if (spendTop < 0)
+        return style;
+    // The open panel a column whose body takes the height to spare: the body's grid row stretches, so the pie's column
+    // and its divider reach the bottom while the pie stays at the top.
+    char height[64];
+    std::snprintf(height, sizeof height, "%.2f", spendTop);
+    const std::string open = std::string(kSpendSelector) + ":not(.folded)";
+    style += open + " { display: flex; flex-direction: column; box-sizing: border-box; min-height: calc(100vh - " +
+        height + "px); }\n";
+    style += open + " > .spend-body { flex: 1 1 auto; }\n";
+    return style;
 }
 
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone) {

@@ -64,10 +64,18 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
 // replaces.
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone);
 
-// The style sheet that makes the page's own background see-through, so that the window's fill shows behind it: the
-// root and body backgrounds and the board's --bg colour. The page's tiles, panels and tables keep their own fills.
-// board.h adds it to each document's head, as a style element with the id kSprintStyleId, before the document paints.
-std::string_view sprintPageStyle();
+// The style sheet nexus adds to the board's page. It makes the page's own background see-through, so that the window's
+// fill shows behind it: the root and body backgrounds and the board's --bg colour. The page's tiles, panels and tables
+// keep their own fills. And it stretches the Cost breakdown panel (kSpendSelector), while it is open, down to the
+// bottom of the first screen, so that the next block starts below it: at least the viewport's height (100vh) less
+// `spendTop`, the panel's top in the document in CSS px, which board.h measures from the laid-out page (the page gives
+// no other way to know how tall the header and tiles above it are). The pie keeps its own size at the top of its
+// column. A negative `spendTop` (not measured yet) leaves the panel its own height.
+// board.h adds it to each document's head, as a style element with the id kSprintStyleId, before the document paints,
+// and sets it again when the panel's top moves.
+std::string sprintPageStyle(double spendTop);
 constexpr std::string_view kSprintStyleId = "nexus-see-through";
+// The Cost breakdown panel in nova-sprint's index.html: <section class="panel spend">.
+constexpr std::string_view kSpendSelector = ".panel.spend";
 
 } // namespace nexus
