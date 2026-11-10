@@ -768,6 +768,48 @@ void overlayKeepsAllButTheBackgroundOpaque() {
         CHECK(h.kit->looks[id].text.a == 1);
 }
 
+// The widest right edge, and the leftmost left edge, of `node` and everything under it, at the last layout.
+void extent(const Harness& h, PrLayoutNode node, float* left, float* right) {
+    PrRect b = h.bounds(node);
+    *left = std::min(*left, b.left);
+    *right = std::max(*right, b.right);
+    for (PrLayoutNode c = prLayoutNodeFirstChild(h.tree, node); c != kPrLayoutNodeNone;
+            c = prLayoutNodeNextSibling(h.tree, c))
+        extent(h, c, left, right);
+}
+
+bool within(const Harness& h, PrLayoutNode node, PrRect outer) {
+    float left = 1e9f;
+    float right = -1e9f;
+    extent(h, node, &left, &right);
+    if (left < outer.left - 0.5f || right > outer.right + 0.5f) {
+        std::fprintf(stderr, "  laid out %.1f..%.1f, room %.1f..%.1f\n", double(left), double(right),
+            double(outer.left), double(outer.right));
+        return false;
+    }
+    return true;
+}
+
+// A long URL or token with no break opportunity wraps inside the column, the bubble and the prompt.
+void longUnbrokenTextWraps() {
+    Harness h;
+    const std::string token = "https://example.com/" + std::string(580, 'x');
+    h.model.append(0, Entry{EntryKind::Friend, token});
+    h.model.append(0, Entry{EntryKind::Person, token});
+    h.model.set_draft(0, token);
+    h.frame();
+    h.frame();
+    PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 2);
+    for (PrLayoutNode entry : e)
+        CHECK(within(h, entry, column));
+    CHECK(within(h, h.view.prompt, h.bounds(h.view.promptBox)));
+    // It wrapped rather than shrank: each is several lines tall.
+    CHECK(e.size() == 2 && h.height(e[0]) > 3 * style::kLinePitch);
+    CHECK(e.size() == 2 && h.height(e[1]) > 3 * style::kLinePitch);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -853,6 +895,7 @@ int main() {
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     overlayKeepsAllButTheBackgroundOpaque();
+    longUnbrokenTextWraps();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {

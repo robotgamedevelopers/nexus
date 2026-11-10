@@ -295,6 +295,25 @@ struct Builder {
         prLayoutTreeFrameSetStyle(tree, area, prLayoutStyleIntern(tree, &record));
     }
 
+    // Lets the text under `node` break anywhere when nothing else breaks it (CSS overflow-wrap: anywhere), so a long URL
+    // or token wraps inside its box instead of running past it. Prax's layout has the option (PrLayoutFontStyle
+    // overflowWrap); the kit offers none (PrKitTextStyle wrap is wrap, nowrap or clip, and PrKitTextArea has no wrap
+    // option), so the node's font group is rewritten, as frameless rewrites the decoration.
+    void breakAnywhere(PrLayoutNode node) {
+        PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        PrLayoutFontStyle font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
+        font.overflowWrap = PrTextOverflowWrap_Anywhere;
+        record.groups[PrLayoutGroup_Font] = prLayoutFontStyleIntern(tree, &font);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // A transcript's text: a kit label that breaks anywhere.
+    PrLayoutNode text(PrLayoutNode parent, std::string_view s, PrKitTextStyle style) {
+        PrLayoutNode node = label(parent, s, style);
+        breakAnywhere(node);
+        return node;
+    }
+
     // The kit's reorderable tab strip: a tab pressed and dragged past the kit's threshold is carried, an accent caret
     // marks where it will land, Escape cancels it, and the drop is reported by prKitMoved, which the model applies. A
     // press released before the threshold is a click that selects the tab. Each tab is keyed by its friend, so its node
@@ -354,14 +373,14 @@ struct Builder {
                 case EntryKind::Person: {
                     PrLayoutNode entry = element(column, Part::Entry);
                     PrLayoutNode bubble = element(entry, Part::Bubble);
-                    label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    text(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 }
                 case EntryKind::Friend:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 case EntryKind::Notice:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
             }
         }
@@ -370,7 +389,7 @@ struct Builder {
         for (const std::string& text : tab.queue) {
             PrLayoutNode entry = element(column, Part::Entry);
             PrLayoutNode bubble = element(entry, Part::BubbleQueued);
-            label(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            this->text(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
             PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
             PrKitPlace place{};
             place.margin.top = 0.3f * kMetaSize * k();
@@ -415,6 +434,12 @@ struct Builder {
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, &fill);
         frameless(edit);
+        // The area's text is the element the kit makes as its first child (kit_input.cpp editedText), which carries its
+        // own font group, so it is restyled there. No public call names that element: it is found in the last round's
+        // tree, whose node this round continues (pr/layout_frame.h), and only if this round created it under the area.
+        PrLayoutNode value = prLayoutNodeFirstChild(tree, edit);
+        if (value != kPrLayoutNodeNone && prLayoutTreeFrameParent(tree, value) == edit)
+            breakAnywhere(value);
         view.prompt = edit;
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
