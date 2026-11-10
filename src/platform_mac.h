@@ -1,4 +1,4 @@
-// The two things the tracer needs from macOS that Prax's lib/app does not offer: entering fullscreen, and the size of
+// The two things the window needs from macOS that Prax's lib/app does not offer: entering fullscreen, and the size of
 // the main display without a window.
 
 #pragma once
