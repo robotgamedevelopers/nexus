@@ -302,13 +302,13 @@ struct DecorationRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
     Part part;
 
-    void make(const Look&, PrLayoutDecorationStyle& d) const {
+    void make(const Look& look, PrLayoutDecorationStyle& d) const {
         switch (part) {
             case Part::Window:
-                d.background = prColor16FromColor(kBackground);
+                d.background = prColor16FromColor(look.overlay ? faded(kBackground, kOverlayOpacity) : kBackground);
                 break;
             case Part::Strip:
-                d.background = prColor16FromColor(kStrip);
+                d.background = prColor16FromColor(look.overlay ? faded(kStrip, kOverlayStripFill) : kStrip);
                 borderColor(d, PrRectSide_Bottom, kStripLine);
                 break;
             case Part::TabActive:
