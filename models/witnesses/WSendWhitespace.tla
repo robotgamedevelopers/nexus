@@ -5,21 +5,21 @@ EXTENDS MCWindow
 
 BrokenSend(i) ==
     IF i \in Tabs
-    THEN /\ transcript' = [transcript EXCEPT ![i] = Append(@, [kind |-> "Person", text |-> draft[i]])]
-         /\ draft' = [draft EXCEPT ![i] = ""]
+    THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
+         /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active, queue>>
+         /\ UNCHANGED <<friends, order, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
 BrokenQueue(i) ==
     IF i \in Tabs
-    THEN /\ queue' = [queue EXCEPT ![i] = Append(@, draft[i])]
-         /\ draft' = [draft EXCEPT ![i] = ""]
+    THEN /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
+         /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active, transcript>>
+         /\ UNCHANGED <<friends, order, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, BrokenQueue, AppendEntry)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, BrokenSend, BrokenQueue, AppendEntry, MoveTab)]_vars
 =============================================================================

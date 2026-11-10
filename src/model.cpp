@@ -5,6 +5,8 @@
 
 #include "model.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <utility>
 
 namespace nexus {
@@ -26,7 +28,7 @@ bool blank(const std::string& text) {
 Model::Model(const std::vector<FriendInfo>& friends) {
     tabs_.reserve(friends.size());
     for (const FriendInfo& f : friends)
-        tabs_.push_back(Tab{f.name, f.model, {}, {}, {}});
+        tabs_.push_back(Tab{tabs_.size(), f.name, f.model, {}, {}, {}});
 }
 
 std::size_t Model::tab_count() const {
@@ -81,6 +83,24 @@ bool Model::append(std::size_t i, Entry e) {
     if (i >= tabs_.size())
         return false;
     tabs_[i].transcript.push_back(std::move(e));
+    return true;
+}
+
+// Window.tla's MoveTab: the order is Moved (a rotation of the tabs from `from` to `to`), and active_ is MovedIndex.
+bool Model::move_tab(std::size_t from, std::size_t to) {
+    if (from >= tabs_.size() || to >= tabs_.size())
+        return false;
+    auto at = [this](std::size_t i) { return tabs_.begin() + static_cast<std::ptrdiff_t>(i); };
+    if (from < to)
+        std::rotate(at(from), at(from + 1), at(to + 1));
+    else if (to < from)
+        std::rotate(at(to), at(from), at(from + 1));
+    if (active_ == from)
+        active_ = to;
+    else if (from < active_ && active_ <= to)
+        --active_;
+    else if (to <= active_ && active_ < from)
+        ++active_;
     return true;
 }
 

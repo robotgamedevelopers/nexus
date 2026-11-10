@@ -12,6 +12,7 @@ enum class EntryKind { Person, Friend, Notice };
 struct Entry { EntryKind kind; std::string text; };
 
 struct Tab {
+    std::size_t id;     // the friend's place in the constructor's list: who the tab is, wherever it stands
     std::string name;
     std::string model;
     std::vector<Entry> transcript;
@@ -32,6 +33,9 @@ public:
     bool queue(std::size_t i);  // draft not all-whitespace: append the draft to that tab's queue, clear that draft, true;
                                 // else false, no change. Never touches a transcript.
     bool append(std::size_t i, Entry e);         // false and no change when i >= tab_count()
+    bool move_tab(std::size_t from, std::size_t to); // false and no change unless both < tab_count(); else the tab at
+                                                     // `from` ends at `to`, the tabs between shift by one, everything
+                                                     // the tab holds goes with it, and active() follows its friend
 
 private:
     bool sendable(std::size_t i) const;

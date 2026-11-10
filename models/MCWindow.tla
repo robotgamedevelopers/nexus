@@ -28,11 +28,17 @@ MCAppendEntries == {[kind |-> "Friend", text |-> "ok"],
                     [kind |-> "Notice", text |-> ""],
                     [kind |-> "Person", text |-> " "]}
 
+\* Three tabs have six orders: there the drafts and entries are fewer, to keep the instance to seconds.
+\* The empty draft, one all-whitespace draft and one with text; one reply.
+MCDrafts3 == {"", " ", "hi"}
+MCBlank3 == {"", " "}
+MCAppendEntries3 == {[kind |-> "Friend", text |-> "ok"]}
+
 \* the longest transcript, and the longest queue, TLC explores (set in each .cfg)
 CONSTANT MaxLen
 
 \* the state constraint that keeps the instance finite
-Bounded == \A j \in Tabs : Len(transcript[j]) <= MaxLen /\ Len(queue[j]) <= MaxLen
+Bounded == \A f \in Ids : Len(transcript[f]) <= MaxLen /\ Len(queue[f]) <= MaxLen
 
 \* TLC tells states apart by the model variables alone. Sound because no
 \* action reads `last` and no property reads it unprimed: two states that

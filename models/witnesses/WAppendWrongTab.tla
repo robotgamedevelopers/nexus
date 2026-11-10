@@ -5,11 +5,11 @@ EXTENDS MCWindow
 
 BrokenAppend(i, e) ==
     IF i \in Tabs
-    THEN /\ transcript' = [transcript EXCEPT ![(i + 1) % N] = Append(@, e)]
+    THEN /\ transcript' = [transcript EXCEPT ![At((i + 1) % N)] = Append(@, e)]
          /\ last' = Did("append", i, "", e, TRUE)
-         /\ UNCHANGED <<friends, active, draft, queue>>
+         /\ UNCHANGED <<friends, order, active, draft, queue>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)
          /\ UNCHANGED model
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, Send, Queue, BrokenAppend)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, Send, Queue, BrokenAppend, MoveTab)]_vars
 =============================================================================

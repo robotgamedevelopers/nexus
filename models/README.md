@@ -6,13 +6,16 @@ Every state machine in nexus has a TLA+ module here. TLC checks each module on a
 
 `Window.tla` is the state the window owns, `nexus::Model` in `src/model.h`:
 
-- `friends`: one tab per friend, fixed when the model is built;
-- `active`: the active tab, 0 when there are no tabs;
-- `transcript`: each tab's entries, kinds `Person`, `Friend`, `Notice`;
-- `draft`: each tab's unsent text;
-- `queue`: each tab's prompts held for later, oldest first. The queue is apart from the transcript: it is the state the server will hold, and no operation takes from it yet (delivery belongs to a later layer).
+- `friends`: one tab per friend, fixed when the model is built. A friend is named by its place in that list, its id (`Tab::id` in the code), which never changes;
+- `order`: the tabs' order, each position's friend. Positions count from 0, as in the code, and only `move_tab` changes them;
+- `active`: the active tab's position, 0 when there are no tabs;
+- `transcript`: each friend's entries, kinds `Person`, `Friend`, `Notice`;
+- `draft`: each friend's unsent text;
+- `queue`: each friend's prompts held for later, oldest first. The queue is apart from the transcript: it is the state the server will hold, and no operation takes from it yet (delivery belongs to a later layer).
 
-Tabs are indexed from 0, as in the code. The actions are the model's operations, with the arguments a caller passes, in range and out of it: `SelectTab(i)`, `SetDraft(i, t)`, `Send(i)` (the draft becomes a `Person` entry at the end of the tab's transcript), `Queue(i)` (the draft goes to the end of the tab's queue), `AppendEntry(i, e)`. A refused operation changes no model state.
+Transcripts, drafts and queues are indexed by friend, so they go with the tab when it moves; operations take positions, as the code's do, and act on `At(i)`, the friend at position i. The actions are the model's operations, with the arguments a caller passes, in range and out of it: `SelectTab(i)`, `SetDraft(i, t)`, `Send(i)` (the draft becomes a `Person` entry at the end of the tab's transcript), `Queue(i)` (the draft goes to the end of the tab's queue), `AppendEntry(i, e)`, `MoveTab(from, to)` (the tab at `from` ends at `to` and the tabs between shift by one). A refused operation changes no model state.
+
+`MoveTab` carries the code's index arithmetic, not only its result: the order is `Moved` (the code's `std::rotate`) and `active` is `MovedIndex` (the code's three-way adjustment of `active_`). The properties then state what that arithmetic must give in terms of friends: the same friend active, every friend kept once, the others in their relative order.
 
 `last` is a history variable, not model state: the operation just performed, its arguments and the value it returned. The action properties are stated through it, and a code trace's return values are checked against it.
 
@@ -24,29 +27,35 @@ All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, f
 |---|---|---|
 | `TypeOK` | invariant | every variable has its type; the friends are the ones the model was built with |
 | `ActiveValid` | invariant | `active` is a tab, or 0 when there are none |
+| `NoTabLost` | invariant | every friend has a tab in the order |
+| `NoTabDuplicated` | invariant | no friend has two |
 | `SelectExact` | action | select returns true exactly for a tab, and changes only `active`, to that tab |
-| `SetDraftExact` | action | set_draft returns true exactly for a tab, and changes only that tab's draft, to the text given |
-| `SendResult` | action | send and queue return true exactly for a tab whose draft is not all whitespace |
-| `SendAppendsOne` | action | a send that returns true appends one `Person` entry, with the draft's text, to that tab's transcript |
-| `QueueAppendsOne` | action | a queue that returns true appends exactly the draft's text to that tab's queue |
+| `SetDraftExact` | action | set_draft returns true exactly for a tab, and changes only that friend's draft, to the text given |
+| `SendResult` | action | send and queue return true exactly for a tab whose friend's draft is not all whitespace |
+| `SendAppendsOne` | action | a send that returns true appends one `Person` entry, with the draft's text, to that friend's transcript |
+| `QueueAppendsOne` | action | a queue that returns true appends exactly the draft's text to that friend's queue |
 | `QueueLeavesTranscripts` | action | a queue never changes any transcript |
-| `OnlyQueueTouchesQueues` | action | send, select, set_draft and append never change a queue |
-| `SendClearsOnlyItsDraft` | action | a send or queue that returns true clears that tab's draft and no other |
-| `SendTouchesNoOtherTab` | action | it changes no other tab's transcript, draft or queue, nor `active`, nor the friends |
-| `AppendExact` | action | append returns true exactly for a tab, appends exactly that entry to that tab, and changes nothing else |
-| `RefusedChangesNothing` | action | an operation that returns false changes no model state |
+| `OnlyQueueTouchesQueues` | action | send, select, set_draft, append and move never change a queue |
+| `SendClearsOnlyItsDraft` | action | a send or queue that returns true clears that friend's draft and no other |
+| `SendTouchesNoOtherTab` | action | it changes no other friend's transcript, draft or queue, nor the order, `active` or the friends |
+| `AppendExact` | action | append returns true exactly for a tab, appends exactly that entry to that friend, and changes nothing else |
+| `MovePlaces` | action | move returns true exactly when both positions are tabs; then the friend from `from` stands at `to` and the others keep their relative order |
+| `MoveKeepsTabs` | action | a move changes no friend's transcript, draft or queue, nor the friends: they go with the tab |
+| `OnlyMoveReorders` | action | no operation but move changes the order |
+| `ActiveFriendKept` | action | every operation but select keeps the same friend active, wherever its tab now stands |
+| `RefusedChangesNothing` | action | an operation that returns false changes no model state (a refused move among them) |
 | `TranscriptsOnlyGrow` | action | entries are only appended: existing entries never change, move or go |
 | `QueuesOnlyGrow` | action | queued prompts are only appended: they never change, move or go |
 | `FriendsFixed` | action | the friends never change |
 
 ### Instances
 
-`MCWindow.tla` gives the constants values and bounds transcript and queue length (`MaxLen`, a state constraint). The drafts are `""`, `" "`, `" \t\n"` and `"hi"` (one witness adds `"yo"`, so that an order of queued prompts shows); the appended entries are a friend's reply, an empty notice and an all-whitespace `Person` entry (append takes any entry). Indices run to one past the last tab. TLC tells states apart by the model variables alone (`VIEW ModelView`), which is sound because no action reads `last` and no property reads it unprimed.
+`MCWindow.tla` gives the constants values and bounds transcript and queue length (`MaxLen`, a state constraint). The drafts are `""`, `" "`, `" \t\n"` and `"hi"` (one witness adds `"yo"`, so that an order of queued prompts shows); the appended entries are a friend's reply, an empty notice and an all-whitespace `Person` entry (append takes any entry). The checked instances use fewer (`MCDrafts3`: `""`, `" "`, `"hi"`; on three tabs `MCAppendEntries3`: the reply only), because every order multiplies the states: the spec does not compute whitespace, so a second all-whitespace draft adds only states. Positions run to one past the last tab, for both of a move's. TLC tells states apart by the model variables alone (`VIEW ModelView`), which is sound because no action reads `last` and no property reads it unprimed.
 
 | Config | Instance |
 |---|---|
-| `MCWindow.cfg` | two tabs, transcripts and queues up to 2 entries: 127,008 distinct states, about 10 s |
-| `MCWindow3.cfg` | three tabs, transcripts and queues up to 1 entry: 192,000 distinct states, about 22 s |
+| `MCWindow.cfg` | two tabs in both orders, transcripts and queues up to 2 entries: 142,884 distinct states, about 17 s |
+| `MCWindow3.cfg` | three tabs in all six orders, transcripts and queues up to 1 entry: 104,976 distinct states, about 17 s |
 | `MCWindowEmpty.cfg` | no friends, so no tabs: every operation is refused (1 state) |
 
 ## Reversed witnesses
@@ -69,14 +78,21 @@ Each module in `witnesses/` extends `MCWindow` and passes one broken action to `
 | `WSetDraftActiveToo` | set_draft writes the active tab's draft too | `SetDraftExact` |
 | `WSelectClearsDraft` | select clears the draft of the tab it leaves | `SelectExact` |
 | `WAppendWrongTab` | append puts the entry on the next tab | `AppendExact` |
+| `WMoveDropsTab` | move takes the tab out and never puts it back | `NoTabLost` |
+| `WMoveDuplicatesTab` | move puts the tab in at `to` without taking it out at `from` | `NoTabDuplicated` |
+| `WMoveLeavesActive` | move leaves `active` at the old position, so another friend becomes active | `ActiveFriendKept` |
+| `WMoveLeavesDraft` | move carries the friend but leaves each draft at its position | `MoveKeepsTabs` |
+| `WMoveOutOfRange` | a move past the last tab returns false but moves the tab to the end | `RefusedChangesNothing` |
+| `WMoveSwaps` | move swaps the two tabs instead of shifting those between (three tabs) | `MovePlaces` |
+| `WSendByPosition` | send and queue take the position as the friend, as if no tab had moved | `SendTouchesNoOtherTab` |
 
 ## The binding: code traces checked against the spec
 
-`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue] <out.tla>`). The random numbers come from the seed alone. Each step calls one operation, with indices in range and two past the last tab, drafts that are empty, all whitespace (including tab, newline, carriage return and form feed), or text with quotes and backslashes, and entries of every kind. The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it, each tab's queue among it.
+`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move] <out.tla>`). The random numbers come from the seed alone. Each step calls one operation, with positions in range and two past the last tab (a move draws both), drafts that are empty, all whitespace (including tab, newline, carriage return and form feed), or text with quotes and backslashes, and entries of every kind. The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it: the order (each position's `Tab::id`) and, by position, each tab's friend, draft, transcript and queue.
 
-`WindowTrace.tla` instantiates `Window` with those domains. Each of its steps takes the `Window` action the record names, with the record's arguments, and the invariant `TraceMatches` requires the spec's state and return value to equal the code's. A step whose arguments lie outside the spec's domains has no successor and TLC reports a deadlock. The property `WindowSpec` checks the whole behaviour against `Window`'s `Init` and `Next`, and every `Window` property is checked on the trace too.
+`WindowTrace.tla` instantiates `Window` with those domains. Each of its steps takes the `Window` action the record names, with the record's arguments, and the invariant `TraceMatches` requires the spec's state and return value to equal the code's: the order equal, and the tab at each position holding the state of the friend the spec has there. A step whose arguments lie outside the spec's domains has no successor and TLC reports a deadlock. The property `WindowSpec` checks the whole behaviour against `Window`'s `Init` and `Next`, and every `Window` property is checked on the trace too.
 
-The binding is shown to fail, twice: `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, and `--faulty-queue` one whose `queue` also puts the draft in the transcript. TLC must report `TraceMatches` violated at the first such send, and at the first accepted queue.
+The binding is shown to fail, three times: `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, and `--faulty-move` one whose `move_tab` leaves `active` at the old position. TLC must report `TraceMatches` violated at the first such send, at the first accepted queue, and at the first move that shifts the active tab.
 
 ## Running the checks
 
@@ -89,7 +105,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j4
 ```
 
-The `model` label runs the three instances, the fourteen witnesses, seven code traces (seeds 1 to 5 on three tabs and 300 steps, seed 6 on two tabs, seed 7 with no tabs) and the two faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+The `model` label runs the three instances, the twenty-one witnesses, seven code traces (seeds 1 to 5 on three tabs and 300 steps, seed 6 on two tabs, seed 7 with no tabs) and the three faulty traces. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers and a 60 second cap; its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 

@@ -249,8 +249,6 @@ constexpr TextKey kTextKeys[] = {
     {'-', PrAppModifierFlag_Super, -1},
 };
 
-constexpr std::string_view kPlaceholderText = "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later";
-
 PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
     return PrKitTextStyle{.role = role, .tone = tone, .wrap = PrKitWrap_Auto, .align = align, .preserve = true};
 }
@@ -297,19 +295,19 @@ struct Builder {
         prLayoutTreeFrameSetStyle(tree, area, prLayoutStyleIntern(tree, &record));
     }
 
-    // Stop: Escape. Nothing runs in this layer that could be stopped; later layers connect this to stopping the
-    // friend's work.
-    void stop() {}
-
+    // The kit's reorderable tab strip: a tab pressed and dragged past the kit's threshold is carried, an accent caret
+    // marks where it will land, Escape cancels it, and the drop is reported by prKitMoved, which the model applies. A
+    // press released before the threshold is a click that selects the tab. Each tab is keyed by its friend, so its node
+    // (focus, pointer state) goes with it when it moves.
     void strip(PrLayoutNode window) {
-        PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = false},
+        PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = true},
             PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
         rowPlace.height = prKitPx(kStripHeight * k() + 1);
         rowPlace.flex = PrKitFlex_Fixed;
         prKitPlace(kit, row, &rowPlace);
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
-            PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, i),
+            PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, model.tab(i).id),
                 .selected = i == model.active(), .disabled = false});
             PrKitPlace tabPlace{};
             tabPlace.height = prKitPx(1.75f * kTabSize * k());
@@ -319,23 +317,24 @@ struct Builder {
             prKitPlace(kit, tab, &tabPlace);
             if (prKitActivated(kit, tab))
                 model.select_tab(i);
-            // The tab's key, Command and this digit; a tab past the tenth has none and is reached by clicking.
-            if (i < kTabKeys.size())
-                label(tab, kTabKeys.substr(i, 1), textStyle(PrKitTextRole_Body, PrKitTone_Faint));
             prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(model.tab(i).name)});
         }
+        uint32_t from = 0;
+        uint32_t to = 0;
+        if (prKitMoved(kit, row, &from, &to))
+            model.move_tab(from, to);
     }
 
-    // Each tab keeps its scroll while another shows. Offsets count from the scroller's origin, its bottom, so a tab
-    // never scrolled stays at its newest entry.
-    void keepScroll(PrLayoutNode scroller, std::size_t active) {
+    // Each friend keeps its scroll while another shows, wherever its tab stands. Offsets count from the scroller's
+    // origin, its bottom, so a tab never scrolled stays at its newest entry.
+    void keepScroll(PrLayoutNode scroller, std::size_t id) {
         view.scrolls.resize(model.tab_count(), 0);
-        if (view.shown == active)
+        if (view.shown == id)
             return;
         if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone)
             view.scrolls[view.shown] = prLayoutUnitToPx(prLayoutNodeScroll(tree, view.transcript).y);
-        view.shown = active;
-        prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(view.scrolls[active])});
+        view.shown = id;
+        prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(view.scrolls[id])});
     }
 
     void transcript(PrLayoutNode window) {
@@ -347,15 +346,9 @@ struct Builder {
             view.transcript = scroller;
             return;
         }
-        std::size_t active = model.active();
-        keepScroll(scroller, active);
+        const Tab& tab = model.tab(model.active());
+        keepScroll(scroller, tab.id);
         view.transcript = scroller;
-        const Tab& tab = model.tab(active);
-        if (tab.transcript.empty() && tab.queue.empty()) {
-            PrLayoutNode centered = element(column, Part::Centered);
-            std::string hint = "Say something to " + tab.name;
-            label(centered, hint, textStyle(PrKitTextRole_Body, PrKitTone_Faint, PrKitTextAlign_Center));
-        }
         for (const Entry& e : tab.transcript) {
             switch (e.kind) {
                 case EntryKind::Person: {
@@ -399,7 +392,8 @@ struct Builder {
         return uint32_t(std::clamp(lines, 1.0f, kPromptMaxLines));
     }
 
-    void prompt(PrLayoutNode footer) {
+    // `composing`: an input method was composing in the prompt before this round's events (read in build).
+    void prompt(PrLayoutNode footer, bool composing) {
         std::size_t active = model.active();
         // The prompt's rounded box, holding the plus and the text area: the kit has no rounded text area and no slot
         // for an icon inside one (frameless). Enter sends and Command-Enter queues, captured on the box, so the area
@@ -408,16 +402,13 @@ struct Builder {
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
         bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, PrAppModifierFlag_Super);
-        // While an input method composes, its Enter commits the composition (CompositionEnd, then Text, after the
-        // KeyDown): read before the area takes this round's events.
-        bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
         view.promptRows = promptRows();
 
         plus(box);
+        // No placeholder: the empty prompt shows the plus and the caret only.
         PrKitTextArea area{};
         area.key = prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6});
         area.text = sv(model.tab(active).draft);
-        area.placeholder = sv(kPlaceholderText);
         area.rows = view.promptRows;
         PrLayoutNode edit = prKitTextArea(kit, box, area, PrKitFieldStyle{});
         PrKitPlace fill{};
@@ -434,9 +425,9 @@ struct Builder {
             model.send(active);
         if (!composing && queue)
             model.queue(active);
-        // A tab's draft comes back with the caret at its end.
-        if (view.prompted != active) {
-            view.prompted = active;
+        // A friend's draft comes back with the caret at its end.
+        if (view.prompted != model.tab(active).id) {
+            view.prompted = model.tab(active).id;
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
         }
@@ -447,7 +438,8 @@ struct Builder {
 
     void build(PrLayoutNode parent) {
         PrLayoutNode window = element(parent, Part::Window);
-        // Command-1 to Command-0 select tabs 1 to 10, in the keyboard row's order, claimed on the window, an ancestor
+        // Command-1 to Command-0 select the tabs at positions 1 to 10 in the strip's current order, in the keyboard
+        // row's order, claimed on the window, an ancestor
         // of the focused prompt. A key whose tab does not exist is refused by the model and changes nothing. macOS
         // types no text for a Command chord.
         for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
@@ -459,14 +451,23 @@ struct Builder {
             if (prUiKeyPressed(ui, window, t.key, t.modifiers))
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
-        // Escape is stop, claimed the same way; the text area does not claim it, so it never types or edits.
-        if (prUiKeyPressed(ui, window, PrAppKey_Escape, 0))
-            stop();
+        // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
+        // first, then CompositionEnd): read before the area takes this round's events.
+        const bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
+        // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed on the window
+        // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
+        // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
+        if (prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing && view.hide)
+            view.hide();
+        // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
+        // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
+        if (prUiKeyPressed(ui, window, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
+            view.stop();
         strip(window);
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
         if (model.tab_count() != 0)
-            prompt(footer);
+            prompt(footer, composing);
     }
 };
 
@@ -482,7 +483,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     p.line2 = kStripLine;                                                   // the strip's rule
     p.text1 = kInk;
     p.text3 = kNotice;
-    p.text4 = kPlaceholder;
+    p.text4 = kFaint;
     p.textSelection = kSelection;
     auto type = [&](PrKitTextRole role, float size, float lineHeight) {
         PrKitType& t = theme.types[role];

@@ -10,8 +10,9 @@
 (*     draws from, and                                                     *)
 (*   Trace: one record per step. Trace[1] is the constructed model (op     *)
 (*     "init"); each later record is the operation called, its arguments,  *)
-(*     the value the code returned, and the code's whole state after it,   *)
-(*     each tab's queue among it.                                          *)
+(*     the value the code returned, and the code's whole state after it:   *)
+(*     the order (each position's Tab::id) and, by position, each tab's    *)
+(*     friend, draft, transcript and queue.                                *)
 (*                                                                         *)
 (* Each step of this spec takes the Window action the record names, with   *)
 (* the record's arguments. The invariant TraceMatches then requires the    *)
@@ -23,24 +24,29 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, WindowTraceData
 
-VARIABLES friends, active, transcript, draft, queue, last, l
+VARIABLES friends, order, active, transcript, draft, queue, last, l
 
 W == INSTANCE Window WITH FriendList <- TraceFriends, Idx <- TraceIdx, Drafts <- TraceDrafts,
                           Blank <- TraceBlank, AppendEntries <- TraceEntries
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
-\* the code's per-tab sequences (1-based) as the spec's functions on tab indices (0-based)
-AsTabs(s) == [j \in W!Tabs |-> s[j + 1]]
+\* the code's per-position sequence (1-based) as a function on positions (0-based)
+AsTabs(s) == [p \in W!Tabs |-> s[p + 1]]
 
-\* the spec's state equals the state the code recorded at step k, and so does the return value
+\* the spec's state equals the state the code recorded at step k, and so does the return value. The code records its
+\* tabs by position: the order (each position's friend) must be the spec's, and the tab at each position must hold
+\* the spec's state of the friend the spec has there.
 Matches(k) ==
     LET s == Trace[k] IN
-    /\ friends = s.friends
+    /\ order = AsTabs(s.order)
     /\ active = s.active
-    /\ draft = AsTabs(s.draft)
-    /\ transcript = AsTabs(s.transcript)
-    /\ queue = AsTabs(s.queue)
+    /\ friends = TraceFriends
+    /\ \A p \in W!Tabs :
+        /\ friends[order[p] + 1] = s.friends[p + 1]
+        /\ draft[order[p]] = s.draft[p + 1]
+        /\ transcript[order[p]] = s.transcript[p + 1]
+        /\ queue[order[p]] = s.queue[p + 1]
     /\ last.op = s.op
     /\ last.ok = s.ret
 
@@ -54,9 +60,10 @@ Step(s) ==
          [] s.op = "send"      -> W!Send(s.i)
          [] s.op = "queue"     -> W!Queue(s.i)
          [] s.op = "append"    -> s.entry \in TraceEntries /\ W!AppendEntry(s.i, s.entry)
+         [] s.op = "move"      -> s.j \in TraceIdx /\ W!MoveTab(s.i, s.j)
          [] OTHER              -> FALSE
 
-traceVars == <<friends, active, transcript, draft, queue, last, l>>
+traceVars == <<friends, order, active, transcript, draft, queue, last, l>>
 
 TraceInit == l = 1 /\ W!Init
 
@@ -84,6 +91,12 @@ OnlyQueueTouchesQueues == W!OnlyQueueTouchesQueues
 SendClearsOnlyItsDraft == W!SendClearsOnlyItsDraft
 SendTouchesNoOtherTab == W!SendTouchesNoOtherTab
 AppendExact == W!AppendExact
+NoTabLost == W!NoTabLost
+NoTabDuplicated == W!NoTabDuplicated
+MovePlaces == W!MovePlaces
+MoveKeepsTabs == W!MoveKeepsTabs
+OnlyMoveReorders == W!OnlyMoveReorders
+ActiveFriendKept == W!ActiveFriendKept
 RefusedChangesNothing == W!RefusedChangesNothing
 TranscriptsOnlyGrow == W!TranscriptsOnlyGrow
 QueuesOnlyGrow == W!QueuesOnlyGrow

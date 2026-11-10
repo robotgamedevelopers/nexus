@@ -5,7 +5,7 @@
 // window (pr/studio_window.h) or lays the same tree out offscreen and writes one frame to a PNG (--screenshot).
 //
 // The window is the overlay (platform_mac.h): see-through, over the whole screen, shown and hidden by a global hotkey
-// (style.h). --windowed gives a normal opaque window. --print-window-config makes the overlay window hidden, prints its
+// (style.h), and hidden by Escape. --windowed gives a normal opaque window, where Escape does nothing. --print-window-config makes the overlay window hidden, prints its
 // configuration and exits.
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES] [--print-window-config]
@@ -328,6 +328,9 @@ int main(int argc, char** argv) {
     // The screenshot stays opaque: an offscreen frame has nothing behind it to show through.
     a.overlay = !windowed && shot == nullptr;
     a.look.overlay = a.overlay;
+    // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
+    if (a.overlay)
+        a.view.hide = hideOverlay;
     a.bench = bench;
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);

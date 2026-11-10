@@ -24,6 +24,10 @@ struct OverlayConfig {
 // it (and takes keyboard focus) if `show`. Call once. Returns false if the view has no window.
 bool openOverlay(void* nsView, const OverlayConfig& config, bool show);
 
+// Hides the overlay: the hotkey's hide and Escape's. The window and everything in it are kept, and the keyboard goes
+// back to the app that had it.
+void hideOverlay();
+
 // Unregisters the hotkey.
 void closeOverlay();
 

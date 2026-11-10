@@ -5,12 +5,12 @@ EXTENDS MCWindow
 
 BrokenQueue(i) ==
     IF Sendable(i)
-    THEN /\ queue' = [queue EXCEPT ![i] = <<draft[i]>> \o @]
-         /\ draft' = [draft EXCEPT ![i] = ""]
+    THEN /\ queue' = [queue EXCEPT ![At(i)] = <<draft[At(i)]>> \o @]
+         /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, active, transcript>>
+         /\ UNCHANGED <<friends, order, active, transcript>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
-BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, Send, BrokenQueue, AppendEntry)]_vars
+BrokenSpec == Init /\ [][NextWith(SelectTab, SetDraft, Send, BrokenQueue, AppendEntry, MoveTab)]_vars
 =============================================================================
