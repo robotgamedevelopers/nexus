@@ -28,6 +28,7 @@ struct Look {
     PrDrawList* stop = nullptr;
     PrDrawList* mic = nullptr;
     PrDrawList* ring = nullptr;
+    bool overlay = false;       // the window background and tab strip are see-through (style::kOverlayOpacity)
 };
 
 // Makes the look's fonts in the system UI family of `fonts`, which must outlive the look, and draws its icons.

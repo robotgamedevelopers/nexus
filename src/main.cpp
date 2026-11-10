@@ -4,7 +4,11 @@
 // main() is the composition root: it reads the friends, makes the model, and either runs the window in Prax's Studio
 // window (pr/studio_window.h) or lays the same tree out offscreen and writes one frame to a PNG (--screenshot).
 //
-// Usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES]
+// The window is the overlay (platform_mac.h): see-through, over the whole screen, shown and hidden by a global hotkey
+// (style.h). --windowed gives a normal opaque window. --print-window-config makes the overlay window hidden, prints its
+// configuration and exits.
+//
+// Usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES] [--print-window-config]
 
 #include <algorithm>
 #include <cstdio>
@@ -52,8 +56,8 @@ struct App {
     Look look;
     InputState input;
     PrFontSet* fonts = nullptr;
-    bool fullScreen = true;
-    bool fullScreenAsked = false;
+    bool overlay = true;            // the overlay window (platform_mac.h); --windowed gives Prax's own window
+    bool overlayOpened = false;
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
 };
@@ -62,10 +66,23 @@ App& appOf(void* context) {
     return *static_cast<App*>(context);
 }
 
-// The kit only draws the root's background, which is the canvas: give it the window's colour.
+OverlayConfig overlayConfig() {
+    return OverlayConfig{
+        .hotKeyCode = style::kOverlayHotKeyCode,
+        .hotKeyModifiers = style::kOverlayHotKeyModifiers,
+        .blur = style::kOverlayBlur,
+        .accessory = style::kOverlayAccessory,
+    };
+}
+
+// The kit only draws the root's background, which is the canvas: give it the window's colour. The window clears to
+// the canvas with its alpha, so the overlay's background is see-through and what is drawn on it is not.
 bool open(void* context, PrStudioWindow* window) {
-    PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, appOf(context).fonts);
+    App& a = appOf(context);
+    PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, a.fonts);
     theme.palette.bg0 = style::kBackground;
+    if (a.overlay)
+        theme.palette.bg0.a = style::kOverlayOpacity;
     prKitSetTheme(prStudioWindowKit(window), &theme);
     return true;
 }
@@ -77,12 +94,15 @@ PrKitThemeVariant theme(void*, PrStudioWindow*, const PrAppUserPreferences*) {
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
     App& a = appOf(context);
-    if (a.fullScreen && !a.fullScreenAsked) {
-        // Prax's lib/app has no fullscreen call; go through the window behind its NSView.
-        a.fullScreenAsked = true;
+    if (a.overlay && !a.overlayOpened) {
+        // Prax's lib/app has no window styles; go through the window behind its NSView. Shown once at launch.
+        a.overlayOpened = true;
         PrAppSurface surface{};
-        if (prAppSurface(prStudioWindowApp(window), &surface) == PrStatus_Ok && surface.kind == PrAppSurfaceKind_NsView)
-            enterNativeFullScreen(surface.handle);
+        if (prAppSurface(prStudioWindowApp(window), &surface) == PrStatus_Ok &&
+                surface.kind == PrAppSurfaceKind_NsView && openOverlay(surface.handle, overlayConfig(), true))
+            std::printf("nexus: overlay window\n%s", describeOverlay().c_str());
+        else
+            std::fprintf(stderr, "nexus: no NSView behind the window; the overlay is not set up\n");
     }
 }
 
@@ -264,6 +284,7 @@ int main(int argc, char** argv) {
     std::size_t tab = 1;
     bool demo = false;
     bool windowed = false;
+    bool printConfig = false;
     unsigned bench = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--windowed") == 0) {
@@ -276,10 +297,25 @@ int main(int argc, char** argv) {
             bench = unsigned(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--demo") == 0) {
             demo = true;
+        } else if (std::strcmp(argv[i], "--print-window-config") == 0) {
+            printConfig = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES]\n");
+            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png] [--bench FRAMES] "
+                "[--print-window-config]\n");
             return 2;
         }
+    }
+
+    if (printConfig) {
+        std::string text = describeHiddenOverlay(overlayConfig());
+        if (text.empty()) {
+            std::fprintf(stderr, "nexus: no screen to make the overlay window on\n");
+            return 1;
+        }
+        std::printf("nexus: overlay window (made hidden, as Prax's backend makes its window)\n%s"
+            "background alpha: %.2f; tab strip fill alpha: %.2f; blur: %s\n", text.c_str(),
+            double(style::kOverlayOpacity), double(style::kOverlayStripFill), style::kOverlayBlur ? "on" : "off");
+        return 0;
     }
 
     FriendList friends = loadFriends();
@@ -300,7 +336,9 @@ int main(int argc, char** argv) {
     a.view.model = &model;
     a.view.look = &a.look;
     a.view.notice = "No friends to show.\n" + friends.error;
-    a.fullScreen = !windowed;
+    // The screenshot stays opaque: an offscreen frame has nothing behind it to show through.
+    a.overlay = !windowed && shot == nullptr;
+    a.look.overlay = a.overlay;
     a.bench = bench;
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
@@ -337,6 +375,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "nexus: no GPU device to render with\n");
             code = 1;
         }
+        closeOverlay();
         printStats(a.stats);
     }
     closeLook(a.look);

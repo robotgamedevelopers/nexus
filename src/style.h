@@ -60,4 +60,16 @@ constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in t
 constexpr float kQueuedFill = 0.5f;
 constexpr float kQueuedInk = 0.55f;
 
+// The overlay window (macOS, the default; --windowed gives a normal opaque window instead): borderless, over the whole
+// screen that has the pointer (menu bar included), above other apps and their fullscreen Spaces, shown and hidden by a
+// global hotkey, in the manner of iTerm2's hotkey window.
+constexpr float kOverlayOpacity = 0.88f;      // alpha of the window background; what is behind shows through, dimmed
+constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
+constexpr bool kOverlayBlur = false;          // true blurs what is behind (an NSVisualEffectView); off: plain alpha
+constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
+// The hotkey, as Carbon's virtual key code and modifier mask (Carbon/HIToolbox Events.h). Control-backtick by default.
+// Modifiers: cmdKey 0x0100, shiftKey 0x0200, optionKey 0x0800, controlKey 0x1000; add them to combine.
+constexpr unsigned kOverlayHotKeyCode = 0x32;         // kVK_ANSI_Grave, the backtick key
+constexpr unsigned kOverlayHotKeyModifiers = 0x1000;  // controlKey
+
 } // namespace nexus::style

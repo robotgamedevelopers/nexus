@@ -44,7 +44,7 @@ target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_window_logic
     prax::studio_window prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw
     prax::gpu prax::image prax::compress prax::app prax::core_cpp
-    "-framework AppKit")
+    "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
     MACOSX_BUNDLE_BUNDLE_NAME nexus
