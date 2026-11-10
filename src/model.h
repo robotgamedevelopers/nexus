@@ -29,6 +29,11 @@ public:
     bool send(std::size_t i);   // draft not all-whitespace: append {Person, draft}, clear that draft, true; else false, no change
     bool queue(std::size_t i);  // same, with kind Queued
     bool append(std::size_t i, Entry e);         // false and no change when i >= tab_count()
+
+private:
+    bool submit(std::size_t i, EntryKind kind);
+    std::vector<Tab> tabs_;
+    std::size_t active_ = 0;
 };
 
 } // namespace nexus

@@ -1,98 +1,80 @@
-// The window's stand-in for the model: the simplest code that keeps the frozen interface in model.h, so the window
-// builds. The model worker's model.cpp replaces this file.
-//
-// The frozen header declares no data members, so the state of each Model lives in a table keyed by its address. A Model
-// is therefore never copied or moved, and its entry stays for the life of the process (the window makes one).
+// The window's state without drawing: one tab per friend, the active tab, each tab's transcript and unsent draft.
+// Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
+// tests/model/trace_walk.cpp checks that this code's behaviours are behaviours of that spec.
 
 #include "model.h"
 
-#include <unordered_map>
+#include <utility>
 
 namespace nexus {
 
 namespace {
 
-struct State {
-    std::vector<Tab> tabs;
-    std::size_t active = 0;
-};
-
-std::unordered_map<const Model*, State>& states() {
-    static std::unordered_map<const Model*, State> table;
-    return table;
-}
-
-State& of(const Model* model) {
-    return states()[model];
-}
-
+// All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, form feed or carriage return.
+// The empty string is all-whitespace.
 bool blank(const std::string& text) {
     for (char c : text) {
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v')
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\v' && c != '\f' && c != '\r')
             return false;
     }
-    return true;
-}
-
-bool post(const Model* model, std::size_t i, EntryKind kind) {
-    State& s = of(model);
-    if (i >= s.tabs.size() || blank(s.tabs[i].draft))
-        return false;
-    s.tabs[i].transcript.push_back(Entry{kind, std::move(s.tabs[i].draft)});
-    s.tabs[i].draft.clear();
     return true;
 }
 
 } // namespace
 
 Model::Model(const std::vector<FriendInfo>& friends) {
-    State& s = of(this);
-    s = State{};
+    tabs_.reserve(friends.size());
     for (const FriendInfo& f : friends)
-        s.tabs.push_back(Tab{f.name, f.model, {}, {}});
+        tabs_.push_back(Tab{f.name, f.model, {}, {}});
 }
 
 std::size_t Model::tab_count() const {
-    return of(this).tabs.size();
+    return tabs_.size();
 }
 
 std::size_t Model::active() const {
-    return of(this).active;
+    return active_;
 }
 
 const Tab& Model::tab(std::size_t i) const {
-    return of(this).tabs[i];
+    return tabs_.at(i);
 }
 
 bool Model::select_tab(std::size_t i) {
-    State& s = of(this);
-    if (i >= s.tabs.size())
+    if (i >= tabs_.size())
         return false;
-    s.active = i;
+    active_ = i;
     return true;
 }
 
 bool Model::set_draft(std::size_t i, std::string text) {
-    State& s = of(this);
-    if (i >= s.tabs.size())
+    if (i >= tabs_.size())
         return false;
-    s.tabs[i].draft = std::move(text);
+    tabs_[i].draft = std::move(text);
+    return true;
+}
+
+bool Model::submit(std::size_t i, EntryKind kind) {
+    if (i >= tabs_.size() || blank(tabs_[i].draft))
+        return false;
+    Tab& t = tabs_[i];
+    t.transcript.push_back(Entry{kind, std::move(t.draft)});
+    t.draft.clear();
     return true;
 }
 
 bool Model::send(std::size_t i) {
-    return post(this, i, EntryKind::Person);
+    return submit(i, EntryKind::Person);
 }
 
 bool Model::queue(std::size_t i) {
-    return post(this, i, EntryKind::Queued);
+    return submit(i, EntryKind::Queued);
 }
 
 bool Model::append(std::size_t i, Entry e) {
-    State& s = of(this);
-    if (i >= s.tabs.size())
+    if (i >= tabs_.size())
         return false;
-    s.tabs[i].transcript.push_back(std::move(e));
+    tabs_[i].transcript.push_back(std::move(e));
     return true;
 }
 

@@ -52,4 +52,5 @@ set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
 
 enable_testing()
+add_subdirectory(tests/model)
 add_subdirectory(tests/window)
