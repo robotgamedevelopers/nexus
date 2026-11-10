@@ -15,6 +15,7 @@
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
      ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
+     ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -26,6 +27,7 @@
      ("sprint" "done" "t-sprint")
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
+     ("ios-client" "done" "t-ios-client")
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
@@ -53,4 +55,5 @@
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
-  (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)))
+  (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)
+  (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)))
