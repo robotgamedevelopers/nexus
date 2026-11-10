@@ -187,6 +187,7 @@ bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
 }
 
 // Lays the window out at `extent` px for a display of `ratio`, renders it on the GPU into memory, and writes a PNG.
+// A workaround: Prax has no public offscreen render of a UI tree (only its test fixture, tools/harness/kit_fixture.h).
 int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
     PrLayoutTreeDesc treeDesc{.shaper = shaper, .targetPixelRatio = ratio};
