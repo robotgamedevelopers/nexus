@@ -39,6 +39,8 @@ enum class Part : unsigned char {
     Footer,
     Prompt,
     LabelRow,
+    StripRow,
+    BoardBox,
 };
 
 // The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
@@ -135,6 +137,16 @@ struct BoxRecipe {
                 box.height = px(kPromptBottom * k);
                 padding(box, 0, 0.7f * kU * k, (kLabelBaseline - 0.32f * kLabelSize) * k, 0);
                 break;
+            case Part::StripRow:
+                box.display = PrLayoutDisplay_Flex;
+                box.height = px(kStripHeight * k + 1);
+                break;
+            case Part::BoardBox:
+                box.display = PrLayoutDisplay_Flex;
+                box.minHeight = px(0);
+                box.overflowX = PrLayoutOverflow_Hidden;
+                box.overflowY = PrLayoutOverflow_Hidden;
+                break;
         }
     }
 };
@@ -215,6 +227,15 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
+                break;
+            case Part::StripRow:
+                flex.direction = PrLayoutFlexDirection_Row;
+                flex.shrink = 0;
+                break;
+            case Part::BoardBox:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.grow = 1;
+                flex.basis = px(0);
                 break;
             default:
                 break;
@@ -317,18 +338,19 @@ struct Builder {
         return node;
     }
 
-    // The kit's reorderable tab strip: a tab pressed and dragged past the kit's threshold is carried, an accent caret
-    // marks where it will land, Escape cancels it, and the drop is reported by prKitMoved, which the model applies. A
-    // press released before the threshold is a click that selects the tab. Each tab is keyed by its friend, so its node
-    // (focus, pointer state) goes with it when it moves.
-    void strip(PrLayoutNode window) {
-        PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = true},
-            PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
+    // One of the kit's tab strips, holding the tabs at positions `first` to `end` less one; reorderable or not. In a
+    // reorderable strip, a tab pressed and dragged past the kit's threshold is carried, an accent caret marks where it
+    // will land, Escape cancels it, and the drop is reported by prKitMoved, which the model applies. A press released
+    // before the threshold is a click that selects the tab. Each tab is keyed by its Tab::id, so its node (focus,
+    // pointer state) goes with it when it moves.
+    void strip(PrLayoutNode parent, std::size_t first, std::size_t end, bool reorderable, PrKitFlex flex) {
+        PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = 0, .disabled = false,
+            .reorderable = reorderable}, PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
         rowPlace.height = prKitPx(kStripHeight * k() + 1);
-        rowPlace.flex = PrKitFlex_Fixed;
+        rowPlace.flex = flex;
         prKitPlace(kit, row, &rowPlace);
-        for (std::size_t i = 0; i < model.tab_count(); ++i) {
+        for (std::size_t i = first; i < end; ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, model.tab(i).id),
                 .selected = i == model.active(), .disabled = false});
             PrKitPlace tabPlace{};
@@ -345,14 +367,32 @@ struct Builder {
         // and changes nothing: the kit's strip has no way to keep its caret out of another zone.
         uint32_t from = 0;
         uint32_t to = 0;
-        if (prKitMoved(kit, row, &from, &to) && model.move_tab(from, to) && view.moved)
+        if (reorderable && prKitMoved(kit, row, &from, &to) && model.move_tab(first + from, first + to) && view.moved)
             view.moved();
     }
 
-    // A friend's tab shows the friend's name; a terminal's the title its shell set, or "terminal".
+    // The tab strip. The sprint tab, if there is one, is first, in a strip of its own that is not reorderable: it is
+    // never carried, and the other strip's caret never stands before it. The kit has no per-tab way to pin a tab
+    // (PrKitTab has no such field; kit_choice.cpp prKitTab starts a drag for every tab of a reorderable strip): a
+    // request for Prax. The two strips stand side by side, so their rules meet as one.
+    void strips(PrLayoutNode window) {
+        const std::size_t pinned = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint ? 1 : 0;
+        if (pinned == 0) {
+            strip(window, 0, model.tab_count(), true, PrKitFlex_Fixed);
+            return;
+        }
+        PrLayoutNode row = element(window, Part::StripRow);
+        strip(row, 0, pinned, false, PrKitFlex_Fixed);
+        strip(row, pinned, model.tab_count(), true, PrKitFlex_Fill);
+    }
+
+    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
+    // "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend)
             return tab.name;
+        if (tab.kind == TabKind::Sprint)
+            return "sprint";
         std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
         return title.empty() ? std::string("terminal") : title;
     }
@@ -388,6 +428,42 @@ struct Builder {
         view.promptBox = kPrLayoutNodeNone;
         const float below = std::max(0.0f, view.extent.y - (kStripHeight * k() + 1));
         view.terminals->show(tab.id, window, PrVec2{view.extent.x, below});
+    }
+
+    // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
+    // is no page to show, the line that says why. With no friends, the reason there are none is a faint line beneath.
+    // Like a terminal tab, it leaves the friend shown before with its scroll and its draft.
+    void sprint(PrLayoutNode window) {
+        if (view.shown != ~std::size_t(0))
+            leaveTranscript();
+        view.shown = ~std::size_t(0);
+        view.prompted = ~std::size_t(0);
+        view.transcript = kPrLayoutNodeNone;
+        view.prompt = kPrLayoutNodeNone;
+        view.promptBox = kPrLayoutNodeNone;
+        // The box takes the room the strip and any notice leave; the page is laid out at the box's extent from the last
+        // layout (the strip's height beneath the window's in the first).
+        PrLayoutNode box = element(window, Part::BoardBox);
+        PrVec2 extent{view.extent.x, std::max(0.0f, view.extent.y - (kStripHeight * k() + 1))};
+        if (view.boardBox != kPrLayoutNodeNone) {
+            PrRect last = prLayoutRectToPx(prLayoutNodeBounds(tree, view.boardBox, PrLayoutCoordinates_Layout));
+            if (last.right - last.left >= 1 && last.bottom - last.top >= 1)
+                extent = PrVec2{last.right - last.left, last.bottom - last.top};
+        }
+        view.boardBox = box;
+        std::string problem = "this build has no sprint board";
+        if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
+            PrLayoutNode column = element(box, Part::Column);
+            PrLayoutNode centered = element(column, Part::Centered);
+            text(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
+        }
+        bool friends = false;
+        for (std::size_t i = 0; i < model.tab_count() && !friends; ++i)
+            friends = model.tab(i).kind == TabKind::Friend;
+        if (!friends && !view.notice.empty()) {
+            PrLayoutNode footer = element(window, Part::Footer);
+            text(footer, view.notice, textStyle(PrKitTextRole_BodySmall, PrKitTone_Faint, PrKitTextAlign_Center));
+        }
     }
 
     // Each round: a terminal whose shell ended closes; every other terminal that does not show is serviced, so that
@@ -547,23 +623,33 @@ struct Builder {
         }
         serviceTerminals();
         // On a terminal tab, Escape and Command-Escape are not claimed: the terminal claims Escape for its shell, and
-        // Command-Escape does nothing there.
-        const bool onFriend = model.tab_count() == 0 || model.tab(model.active()).kind == TabKind::Friend;
+        // Command-Escape does nothing there. On the sprint tab Escape hides, and Command-Escape does nothing.
+        const TabKind activeKind = model.tab_count() == 0 ? TabKind::Friend : model.tab(model.active()).kind;
+        const bool onFriend = activeKind == TabKind::Friend;
+        const bool hides = activeKind != TabKind::Terminal;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
         // first, then CompositionEnd): read before the area takes this round's events.
         const bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
         // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed on the window
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
-        if (onFriend && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing &&
+        if (hides && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, window, PrAppKey_Escape, 0) && !composing &&
                 view.hide)
             view.hide();
         // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
         // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
         if (onFriend && prUiKeyPressed(ui, window, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
             view.stop();
-        strip(window);
+        strips(window);
         // the strip may have selected or moved a tab: read the active tab again
+        const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
+        if (!onSprint && view.board != nullptr)
+            view.board->hidden();
+        if (onSprint) {
+            sprint(window);
+            return;
+        }
+        view.boardBox = kPrLayoutNodeNone;
         if (model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Terminal) {
             terminal(window, model.tab(model.active()));
             return;
@@ -615,6 +701,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     prKitSetTheme(kit, &theme);
     if (view.terminals != nullptr)
         view.terminals->setTextScale(textScale(look.textSteps));
+    if (view.board != nullptr)
+        view.board->setTextScale(textScale(look.textSteps));
     return true;
 }
 

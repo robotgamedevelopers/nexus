@@ -43,9 +43,12 @@ using CommandRunner = std::function<CommandResult(const Command& command, int ti
 // How long loadFriends waits for the command. It runs before the window opens.
 constexpr int kFriendListTimeoutSeconds = 5;
 
-// The command that lists the friends. With `override` (NEXUS_NOVA_CONFIG, a full path to nova-config), that program is
-// run directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if unset) as a login shell, so that it
-// is found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH.
+// nova-config with `arguments`. With `override` (NEXUS_NOVA_CONFIG, a full path to nova-config), that program is run
+// directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if unset) as a login shell, so that it is
+// found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH.
+Command novaConfigCommand(const char* override, const char* shell, const std::vector<std::string>& arguments);
+
+// The command that lists the friends: novaConfigCommand with `friend list --json`.
 Command friendListCommand(const char* override, const char* shell);
 
 // Runs `command` with `run` and parses what it prints. Every error names the command, what happened and what to do.

@@ -11,17 +11,19 @@ enum class EntryKind { Person, Friend, Notice };
 
 struct Entry { EntryKind kind; std::string text; };
 
-// What a tab is. Friend tabs come from the friend list and are never closed; terminal tabs come and go.
-enum class TabKind { Friend, Terminal };
+// What a tab is. The sprint tab, when the model has one, is first and never moves or closes; friend tabs come from the
+// friend list and are never closed; terminal tabs come and go.
+enum class TabKind { Sprint, Friend, Terminal };
 
 // The zone a tab of `kind` stands in: the strip holds the zones in ascending order, and a tab moves only inside its own.
-// Friends are zone 1 and terminals zone 2, leaving zone 0 for a pinned first tab.
+// The sprint tab is zone 0, alone; friends are zone 1 and terminals zone 2.
 int zone(TabKind kind);
 
 struct Tab {
-    std::size_t id;     // who the tab is, wherever it stands, never reused: a friend's place in the constructor's list,
-                        // or for a terminal the next id after every one handed out before
-    std::string name;   // a friend's; empty for a terminal
+    std::size_t id;     // who the tab is, wherever it stands, never reused: a friend's place in the constructor's list;
+                        // the sprint tab's the number of friends; for a terminal the next id after every one handed out
+                        // before
+    std::string name;   // a friend's; empty for the sprint tab and a terminal
     std::string model;
     std::vector<Entry> transcript;   // a terminal's stays empty
     std::string draft;
@@ -31,7 +33,10 @@ struct Tab {
 
 class Model {
 public:
-    explicit Model(const std::vector<FriendInfo>& friends); // one tab per friend, in order; active tab 0; may be empty
+    // With `sprint`, the sprint tab first, then one tab per friend, in order; without, the friend tabs alone. Active tab
+    // 0. The friend list may be empty. The window always makes its model with the sprint tab (main.cpp); the model's
+    // tests make it both ways, and models/Window.tla checks both (its constant Sprint).
+    explicit Model(const std::vector<FriendInfo>& friends, bool sprint = false);
     std::size_t tab_count() const;
     std::size_t active() const;                  // 0 when there are no tabs
     const Tab& tab(std::size_t i) const;         // i < tab_count()
@@ -47,8 +52,8 @@ public:
                                                      // ends at `to`, the tabs between shift by one, everything the tab
                                                      // holds goes with it, and active() follows its friend
     std::size_t add_terminal();  // appends a terminal tab at the end, makes it active, returns its new id
-    bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, true; a friend's tab or
-                                   // i >= tab_count(): false, no change. If it was active, the tab now at i is active,
+    bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, true; the sprint tab, a
+                                   // friend's tab or i >= tab_count(): false, no change. If it was active, the tab now at i is active,
                                    // or the last tab if it was the last, or none (0) if no tabs remain.
 
 protected:

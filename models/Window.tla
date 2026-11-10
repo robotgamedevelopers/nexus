@@ -6,18 +6,23 @@
 (* The queue is apart from the transcript: it is the state a server will  *)
 (* hold.                                                                   *)
 (*                                                                         *)
-(* A tab is a friend's or a terminal's. Each tab has an id that never     *)
-(* changes and is never reused: a friend's is its place in the            *)
-(* constructor's list, from 0; a terminal's is `nextId` when it is added, *)
-(* and `nextId` then grows. Friend tabs are made at the start and never   *)
-(* closed; terminal tabs are added at the end and closed by position. A   *)
-(* terminal has no transcript, draft or queue: the per-friend state is    *)
-(* indexed by friend, so it moves with the tab.                            *)
+(* A tab is the sprint tab, a friend's or a terminal's. Each tab has an   *)
+(* id that never changes and is never reused: a friend's is its place in  *)
+(* the constructor's list, from 0; the sprint tab's is N, the number of   *)
+(* friends (SprintId); a terminal's is `nextId` when it is added, and     *)
+(* `nextId` then grows. The sprint tab exists when the constant Sprint is *)
+(* TRUE, as it always is in the window (main.cpp); FALSE is the model's   *)
+(* form without it, which its tests and the older witnesses use. The      *)
+(* sprint tab and the friend tabs are made at the start and never closed; *)
+(* terminal tabs are added at the end and closed by position. The sprint  *)
+(* tab and a terminal have no transcript, draft or queue: the per-friend  *)
+(* state is indexed by friend, so it moves with the tab.                   *)
 (*                                                                         *)
-(* The strip is in zones: every friend's tab stands before every          *)
-(* terminal's, and a move stays inside its zone. Zone(id) is a number, and *)
-(* the zones stand in ascending order (ZonesOrdered); a pinned zone in     *)
-(* front would be one more value of Zone, below the friends'.             *)
+(* The strip is in zones: the sprint tab alone in zone 0, then every      *)
+(* friend's tab, then every terminal's, and a move stays inside its zone. *)
+(* Zone(id) is a number, and the zones stand in ascending order            *)
+(* (ZonesOrdered). So the sprint tab stays first: nothing moves into its  *)
+(* zone, and it moves only onto itself.                                    *)
 (*                                                                         *)
 (* A tab's position is its place in the strip, from 0, as in the code.    *)
 (* `order` maps each position to the id of the tab there. `active` is a  *)
@@ -41,9 +46,10 @@ CONSTANTS
     Idx,            \* the positions the operations are tried with, in range and out of it
     Drafts,         \* the draft texts set_draft is tried with
     Blank,          \* the members of Drafts that are all whitespace (the empty string among them)
-    AppendEntries   \* the entries append is tried with
+    AppendEntries,  \* the entries append is tried with
+    Sprint          \* TRUE: the strip starts with the sprint tab (the window's model always does)
 
-ASSUME Blank \subseteq Drafts /\ "" \in Blank
+ASSUME Blank \subseteq Drafts /\ "" \in Blank /\ Sprint \in BOOLEAN
 
 VARIABLES friends, order, active, transcript, draft, queue, nextId, last
 
@@ -52,6 +58,8 @@ vars == <<friends, order, active, transcript, draft, queue, nextId, last>>
 
 N == Len(FriendList)
 Ids == 0 .. (N - 1)         \* friends, by their place in FriendList
+SprintId == N               \* the sprint tab's id, when there is one: the first after the friends'
+Pinned == IF Sprint THEN 1 ELSE 0   \* the tabs before the friends at the start
 Tabs == DOMAIN order        \* positions in the strip
 Count == Cardinality(Tabs)  \* how many tabs stand in it
 Kinds == {"Person", "Friend", "Notice"}
@@ -60,11 +68,12 @@ Entry == [kind : Kinds, text : Texts]
 NoEntry == [kind |-> "None", text |-> ""]
 Ops == {"init", "select", "set_draft", "send", "queue", "append", "move", "add", "close"}
 
-\* a tab's kind, by its id: the friends' ids are theirs, every later id a terminal's
-TabKind(id) == IF id \in Ids THEN "Friend" ELSE "Terminal"
+\* a tab's kind, by its id: the friends' ids are theirs, SprintId the sprint tab's if there is one, every later id a
+\* terminal's
+TabKind(id) == IF id \in Ids THEN "Friend" ELSE IF Sprint /\ id = SprintId THEN "Sprint" ELSE "Terminal"
 
-\* the zone a tab stands in, by its id: friends 1, terminals 2 (0 is left for a pinned tab in front)
-Zone(id) == IF TabKind(id) = "Friend" THEN 1 ELSE 2
+\* the zone a tab stands in, by its id: the sprint tab 0, friends 1, terminals 2
+Zone(id) == CASE TabKind(id) = "Sprint" -> 0 [] TabKind(id) = "Friend" -> 1 [] OTHER -> 2
 
 Did(op, i, t, e, ok) == [op |-> op, i |-> i, j |-> 0, text |-> t, entry |-> e, ok |-> ok, id |-> 0]
 DidMove(from, to, ok) == [op |-> "move", i |-> from, j |-> to, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> 0]
@@ -106,14 +115,15 @@ ClosedIndex(a, i, n) ==
 
 -----------------------------------------------------------------------------
 
+\* The sprint tab first if there is one, then the friends in their order; the first tab active.
 Init ==
     /\ friends = FriendList
-    /\ order = [p \in Ids |-> p]
+    /\ order = [p \in 0 .. (N + Pinned - 1) |-> IF Sprint /\ p = 0 THEN SprintId ELSE p - Pinned]
     /\ active = 0
     /\ transcript = [f \in Ids |-> <<>>]
     /\ draft = [f \in Ids |-> ""]
     /\ queue = [f \in Ids |-> <<>>]
-    /\ nextId = N
+    /\ nextId = N + Pinned
     /\ last = Did("init", 0, "", NoEntry, TRUE)
 
 \* select_tab(i)
@@ -219,7 +229,7 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
     /\ friends = FriendList
-    /\ nextId \in Int /\ nextId >= N
+    /\ nextId \in Int /\ nextId >= N + Pinned
     /\ Tabs = 0 .. (Count - 1)
     /\ \A p \in Tabs : order[p] \in Int
     /\ active \in Int
@@ -246,8 +256,11 @@ NoTabDuplicated == \A p, q \in Tabs : p /= q => order[p] /= order[q]
 \* every id that stands was handed out: below nextId
 IdsHandedOut == \A p \in Tabs : 0 <= order[p] /\ order[p] < nextId
 
-\* the zones stand in ascending order: every friend's tab before every terminal's
+\* the zones stand in ascending order: the sprint tab before every friend's, every friend's before every terminal's
 ZonesOrdered == \A p, q \in Tabs : p < q => Zone(order[p]) <= Zone(order[q])
+
+\* with the sprint tab, it is always there, always first, and always has its one id
+SprintFirst == Sprint => (0 \in Tabs /\ order[0] = SprintId)
 
 -----------------------------------------------------------------------------
 (* Action properties: what each operation does to the state, checked on   *)
@@ -279,6 +292,19 @@ SendResult ==
 TerminalTakesNoText ==
     [][(last'.op \in {"set_draft", "send", "queue", "append"} /\ last'.i \in Tabs /\
         TabKind(At(last'.i)) = "Terminal") => ~last'.ok]_vars
+
+\* the sprint tab takes no text: set_draft, send, queue and append addressed to it return false
+SprintTakesNoText ==
+    [][(last'.op \in {"set_draft", "send", "queue", "append"} /\ last'.i \in Tabs /\
+        TabKind(At(last'.i)) = "Sprint") => ~last'.ok]_vars
+
+\* the sprint tab never moves: a move from or to its position leaves the order and the active tab as they were
+SprintNeverMoves ==
+    [][(Sprint /\ last'.op = "move" /\ (last'.i = 0 \/ last'.j = 0)) => UNCHANGED <<order, active>>]_vars
+
+\* the sprint tab never closes: close addressed to it returns false
+SprintNeverCloses ==
+    [][(last'.op = "close" /\ last'.i \in Tabs /\ TabKind(At(last'.i)) = "Sprint") => ~last'.ok]_vars
 
 \* a send that returns true appends exactly one Person entry, with the draft's text, to that friend's transcript
 SendAppendsOne ==

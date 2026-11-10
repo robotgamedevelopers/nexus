@@ -3,7 +3,8 @@
 (* The instance TLC checks Window.tla on: the constants as values, and     *)
 (* bounds on transcript and queue length and on the terminals ever added.  *)
 (* MCWindow.cfg is two friends, MCWindow3.cfg three, MCWindowEmpty.cfg     *)
-(* none; each adds terminals.                                              *)
+(* none, each after the sprint tab; MCWindowNoSprint.cfg is two friends    *)
+(* without it. The witnesses run without it, as they were written.         *)
 (***************************************************************************)
 EXTENDS Window
 
@@ -48,9 +49,15 @@ MCIdxT0 == 0 .. 2           \* no friends, up to two terminals
 MCIdxT2 == 0 .. 4           \* two friends, up to two terminals
 MCIdxT3 == 0 .. 4           \* three friends, up to one terminal
 
+\* and with the sprint tab in front (Sprint = TRUE), one more
+MCIdxS2T2 == 0 .. 5         \* the sprint tab, two friends, up to two terminals
+MCIdxS3T1 == 0 .. 5         \* the sprint tab, three friends, up to one terminal
+MCIdxS2 == 0 .. 3           \* the sprint tab, two friends, no terminals
+MCIdxST0 == 0 .. 3          \* the sprint tab, no friends, up to two terminals
+
 \* the state constraint that keeps the instance finite
 Bounded == /\ \A f \in Ids : Len(transcript[f]) <= MaxLen /\ Len(queue[f]) <= MaxLen
-           /\ nextId <= N + MaxTerms
+           /\ nextId <= N + Pinned + MaxTerms
 
 \* TLC tells states apart by the model variables alone. Sound because no
 \* action reads `last` and no property reads it unprimed: two states that

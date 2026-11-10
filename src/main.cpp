@@ -11,8 +11,12 @@
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
 // screenshot show one after a command has printed.
 //
-// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png] [--bench FRAMES]
-//              [--print-window-config]
+// The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
+// (sprint.h) or NEXUS_SPRINT_URL. It is the tab shown at launch (--tab 1). --backdrop draws the screenshot see-through,
+// as the overlay is, over coloured stripes in place of the screen behind it.
+//
+// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
+//              [--bench FRAMES] [--print-window-config]
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +41,7 @@
 #include "pr/studio_window.h"
 #include "pr/text.h"
 
+#include "board.h"
 #include "friends.h"
 #include "model.h"
 #include "platform_mac.h"
@@ -66,7 +71,9 @@ struct App {
     bool overlay = true;            // the overlay window (platform_mac.h); --windowed gives Prax's own window
     bool overlayOpened = false;
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
+    bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
+    std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
 };
@@ -93,12 +100,25 @@ bool open(void* context, PrStudioWindow* window) {
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         a.overlay);
     a.view.terminals = a.terminals.get();
+    PraxBoard::Desc board;
+    board.kit = prStudioWindowKit(window);
+    board.fonts = a.fonts;
+    board.app = prStudioWindowApp(window);
+    if (a.overlay) {
+        board.visible = overlayVisible;
+        setOverlayShown([](void* app) { prAppWake(static_cast<PrApp*>(app)); }, prStudioWindowApp(window));
+    }
+    a.board = std::make_unique<PraxBoard>(board);
+    a.view.board = a.board.get();
     return true;
 }
 
-// The terminals end with the window, while its kit still exists.
+// The terminals and the board end with the window, while its kit still exists.
 void closeWindow(void* context, PrStudioWindow*) {
     App& a = appOf(context);
+    setOverlayShown(nullptr, nullptr);
+    a.view.board = nullptr;
+    a.board.reset();
     a.view.terminals = nullptr;
     a.terminals.reset();
 }
@@ -108,9 +128,11 @@ PrKitThemeVariant theme(void*, PrStudioWindow*, const PrAppUserPreferences*) {
     return PrKitThemeVariant_Dark;
 }
 
-void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
+void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
+    if (a.board != nullptr)
+        a.board->frame(f->time, f->display);
     if (a.overlay && !a.overlayOpened) {
         // Prax's lib/app has no window styles; go through the window behind its NSView. Shown once at launch.
         a.overlayOpened = true;
@@ -123,7 +145,12 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
     }
 }
 
-bool event(void*, PrStudioWindow* window, const PrAppEvent* e) {
+// While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
+// window's tree.
+bool event(void* context, PrStudioWindow* window, const PrAppEvent* e) {
+    App& a = appOf(context);
+    if (a.board != nullptr && a.board->event(*e))
+        return true;
     return takeEvent(prStudioWindowUi(window), *e);
 }
 
@@ -215,22 +242,41 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
     PrLayoutTreeDesc treeDesc{.shaper = shaper, .targetPixelRatio = ratio};
     PrLayoutTree* tree = prLayoutTreeCreate(&treeDesc);
-    prLayoutTreeSetCanvasColor(tree, prColor16FromColor(style::kBackground));
+    // With --backdrop the window is drawn as the overlay draws it, see-through; otherwise opaque, since an offscreen
+    // frame has nothing behind it to show through.
+    PrKitTheme theme = windowTheme(a.fonts, a.backdrop);
+    prLayoutTreeSetCanvasColor(tree, prColor16FromColor(theme.palette.bg0));
     PrUi* ui = prUiCreate(tree);
-    PrKitTheme theme = windowTheme(a.fonts, false);
     PrKit* kit = prKitCreate(ui, &theme);
     Offscreen off{&a, kit};
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
     a.view.extent = extent;
-    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, false);
+    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, a.backdrop);
     a.view.terminals = terminals.get();
+    PraxBoard::Desc boardDesc;
+    boardDesc.kit = kit;
+    boardDesc.fonts = a.fonts;
+    auto board = std::make_unique<PraxBoard>(boardDesc);
+    a.view.board = board.get();
     int frames = 0;
     auto frame = [&] {
-        PrUiFrameDesc desc{.time = 1000.0 + frames++ / 60.0, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
+        const double time = 1000.0 + frames++ / 60.0;
+        board->frame(time, display);
+        PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
             .display = display, .preferences = {}};
         prUiFrame(ui, &desc, buildOffscreen, &off);
     };
+    if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Sprint) {
+        // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
+        // it has none.
+        for (int i = 0; i < 1000 && !board->settled(); ++i) {
+            frame();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!board->settled())
+            std::fprintf(stderr, "nexus: the sprint board did not settle: %s\n", board->problem().c_str());
+    }
     if (a.demoTerminal) {
         // A terminal tab running /bin/sh in the home directory, after a command has printed, within 10 s.
         terminals->program = "/bin/sh";
@@ -260,6 +306,16 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     options.scrollCount = uint32_t(scrolls.size());
     PrDrawList* list = prDrawListCreate();
     prDrawListPushTransformAffine2(list, prAffine2Scale(PrVec2{ratio, ratio}));
+    if (a.backdrop) {
+        // Stripes of four colours, 160 px wide, in place of the screen behind the overlay.
+        const PrColor stripes[] = {{0.93f, 0.45f, 0.18f, 1}, {0.16f, 0.62f, 0.56f, 1}, {0.86f, 0.86f, 0.82f, 1},
+            {0.55f, 0.35f, 0.85f, 1}};
+        for (int i = 0; float(i) * 160 < extent.x; ++i) {
+            PrDrawPaint paint{};
+            paint.color = prColor16FromColor(stripes[i % 4]);
+            prDrawListRect(list, PrRect{float(i) * 160, 0, float(i + 1) * 160, extent.y}, paint);
+        }
+    }
     prLayoutScenePlay(scene, list, &options);
     prDrawListPopTransform(list);
     prLayoutSceneRelease(scene);
@@ -283,6 +339,8 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prDrawRendererDestroy(renderer);
     prGpuDeviceDestroy(device);
     prDrawListRelease(list);
+    a.view.board = nullptr;
+    board.reset();
     a.view.terminals = nullptr;
     terminals.reset();
     prKitDestroy(kit);
@@ -315,6 +373,7 @@ int main(int argc, char** argv) {
     std::size_t tab = 1;
     bool demo = false;
     bool demoTerminal = false;
+    bool backdrop = false;
     bool windowed = false;
     bool printConfig = false;
     unsigned bench = 0;
@@ -331,11 +390,13 @@ int main(int argc, char** argv) {
             demo = true;
         } else if (std::strcmp(argv[i], "--demo-terminal") == 0) {
             demoTerminal = true;
+        } else if (std::strcmp(argv[i], "--backdrop") == 0) {
+            backdrop = true;
         } else if (std::strcmp(argv[i], "--print-window-config") == 0) {
             printConfig = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png] "
-                "[--bench FRAMES] [--print-window-config]\n");
+            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
+                "[--backdrop]] [--bench FRAMES] [--print-window-config]\n");
             return 2;
         }
     }
@@ -363,12 +424,13 @@ int main(int argc, char** argv) {
     friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
     if (!orderWarning.empty())
         std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
-    static Model model(friends.friends);
-    if (model.tab_count() != 0 && (tab < 1 || !model.select_tab(tab - 1))) {
+    // The sprint tab first, then the friends.
+    static Model model(friends.friends, true);
+    if (tab < 1 || !model.select_tab(tab - 1)) {
         std::fprintf(stderr, "nexus: no tab %zu (there are %zu)\n", tab, model.tab_count());
         return 2;
     }
-    if (demo && model.tab_count() != 0)
+    if (demo && model.tab(model.active()).kind == TabKind::Friend)
         seedDemo(model, model.active());
 
     static App a;
@@ -389,6 +451,9 @@ int main(int argc, char** argv) {
     };
     a.bench = bench;
     a.demoTerminal = demoTerminal;
+    a.backdrop = backdrop && shot != nullptr;
+    if (a.backdrop)
+        a.look.overlay = true;
     a.fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);

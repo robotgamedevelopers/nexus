@@ -86,6 +86,8 @@ struct Overlay {
     id resignActive = nil;          // observers that put the overlay away (observeDeactivation)
     id resignKey = nil;
     OverlayConfig config{};
+    void (*shown)(void*) = nullptr; // called each time the overlay is shown (setOverlayShown)
+    void* shownContext = nullptr;
 };
 
 Overlay overlay;
@@ -146,6 +148,8 @@ void showOverlay() {
     [window makeKeyAndOrderFront:nil];
     if (overlay.view != nil)
         [window makeFirstResponder:overlay.view];
+    if (overlay.shown != nullptr)
+        overlay.shown(overlay.shownContext);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
         NSWindow* shown = overlay.window;
         if (shown != nil && shown.isVisible && (!NSApp.isActive || !shown.isKeyWindow)) {
@@ -335,6 +339,16 @@ bool openOverlay(void* nsView, const OverlayConfig& config, bool show) {
 // Hiding the application keeps the window and everything in it, and gives the keyboard back to the app that had it.
 void hideOverlay() {
     [NSApp hide:nil];
+}
+
+bool overlayVisible() {
+    NSWindow* window = overlay.window;
+    return window == nil || (window.isVisible && !NSApp.isHidden);
+}
+
+void setOverlayShown(void (*shown)(void* context), void* context) {
+    overlay.shown = shown;
+    overlay.shownContext = context;
 }
 
 void closeOverlay() {

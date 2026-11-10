@@ -13,7 +13,6 @@ namespace nexus {
 namespace {
 
 constexpr const char* kCommand = "nova-config friend list --json";
-constexpr const char* kArguments = "friend list --json";
 
 std::string_view view(PrStringView s) {
     return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
@@ -106,14 +105,20 @@ FriendList parseFriendList(std::string_view json) {
     return list;
 }
 
-Command friendListCommand(const char* override, const char* shell) {
-    std::vector<std::string> arguments = {"friend", "list", "--json"};
+Command novaConfigCommand(const char* override, const char* shell, const std::vector<std::string>& arguments) {
+    std::string joined;
+    for (const std::string& a : arguments)
+        joined += (joined.empty() ? "" : " ") + a;
     if (override != nullptr && *override != 0)
-        return Command{override, arguments, std::string(override) + " " + kArguments};
+        return Command{override, arguments, std::string(override) + " " + joined};
     std::string program = shell != nullptr && *shell != 0 ? shell : "/bin/sh";
     // exec: the shell becomes nova-config, so a timeout's kill reaches it.
-    std::string line = std::string("exec ") + kCommand;
+    std::string line = "exec nova-config " + joined;
     return Command{program, {"-l", "-c", line}, program + " -l -c '" + line + "'"};
+}
+
+Command friendListCommand(const char* override, const char* shell) {
+    return novaConfigCommand(override, shell, {"friend", "list", "--json"});
 }
 
 FriendList loadFriends(const Command& command, const CommandRunner& run) {

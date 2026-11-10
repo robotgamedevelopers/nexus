@@ -22,9 +22,9 @@ set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 set(models_dir "${PROJECT_SOURCE_DIR}/models")
 set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
 
-# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY send|queue|move])
+# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT])
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY" "" ${ARGN})
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect})
     if(T_PROPERTY)
@@ -36,6 +36,9 @@ function(tlc_test name module cfg expect)
     if(T_FAULTY)
         list(APPEND defs -DFAULTY=${T_FAULTY})
     endif()
+    if(T_NOSPRINT)
+        list(APPEND defs -DNOSPRINT=ON)
+    endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
     set_tests_properties(${name} PROPERTIES LABELS model TIMEOUT 90)
 endfunction()
@@ -45,6 +48,8 @@ tlc_test(tlc_spec_two_tabs   MCWindow MCWindow.cfg      pass)
 tlc_test(tlc_spec_three_tabs MCWindow MCWindow3.cfg     pass)
 tlc_test(tlc_spec_no_friends MCWindow MCWindowEmpty.cfg pass)
 tlc_test(tlc_spec_long       MCWindow MCWindowLong.cfg  pass)
+tlc_test(tlc_spec_no_sprint  MCWindow MCWindowNoSprint.cfg pass)
+tlc_test(tlc_spec_three_behind_sprint MCWindow MCWindow3Sprint.cfg pass)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_witness_send_clears_all      WSendClearsAll      WSendClearsAll.cfg      action    PROPERTY SendClearsOnlyItsDraft)
@@ -88,6 +93,11 @@ tlc_test(tlc_witness_move_terminal_before_friend WMoveTerminalBeforeFriend WMove
 tlc_test(tlc_witness_move_friend_behind_terminal WMoveFriendBehindTerminal WMoveFriendBehindTerminal.cfg invariant
          PROPERTY ZonesOrdered)
 tlc_test(tlc_witness_move_cross_zone_moves WMoveCrossZoneMoves WMoveCrossZoneMoves.cfg action    PROPERTY RefusedChangesNothing)
+# The sprint tab: always first, never moved, never closed, never takes text.
+tlc_test(tlc_witness_move_before_sprint   WMoveBeforeSprint   WMoveBeforeSprint.cfg   invariant PROPERTY SprintFirst)
+tlc_test(tlc_witness_move_sprint          WMoveSprint         WMoveSprint.cfg         action    PROPERTY SprintNeverMoves)
+tlc_test(tlc_witness_close_sprint         WCloseSprint        WCloseSprint.cfg        action    PROPERTY SprintNeverCloses)
+tlc_test(tlc_witness_send_to_sprint       WSendToSprint       WSendToSprint.cfg       action    PROPERTY SprintTakesNoText)
 
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
@@ -97,12 +107,14 @@ endforeach()
 tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 FRIENDS 2)
 tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 FRIENDS 1)
 tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 FRIENDS 0)
+# Every walk above starts with the sprint tab, as the window does; this one is the model without it.
+tlc_test(tlc_trace_no_sprint WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 FRIENDS 3 NOSPRINT)
 
 # The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
 tlc_test(tlc_trace_faulty_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY send)
 tlc_test(tlc_trace_faulty_queue_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
-         SEED 1 STEPS 300 FRIENDS 3 FAULTY queue)
+         SEED 1 STEPS 1000 FRIENDS 3 FAULTY queue)
 tlc_test(tlc_trace_faulty_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY move)
 # And with the queue dropping its oldest prompt past four, and send stripping trailing spaces.
@@ -116,3 +128,8 @@ tlc_test(tlc_trace_faulty_send_dedup_rejected WindowTrace WindowTrace.cfg invari
 # And with close removing a friend's tab.
 tlc_test(tlc_trace_faulty_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY close)
+# And with the sprint tab moved among the friends, and closed.
+tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-move)
+tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-close)

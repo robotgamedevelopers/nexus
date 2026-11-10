@@ -46,10 +46,22 @@ struct Terminals {
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
 };
 
+// The sprint tab's page: nova-sprint's served board. Our own seam, as Terminals is, so that the tab logic runs in tests
+// without a page; board.h is the one over Prax's HTML view (pr/html_view.h).
+struct Board {
+    virtual ~Board() = default;
+    // Declares the page under `parent`, `extent` px, if there is one to show, and returns true. Otherwise declares
+    // nothing, writes to `problem` one line that says what is happening or what failed and what to do, and returns false.
+    virtual bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) = 0;
+    virtual void hidden() = 0;                  // the sprint tab does not show this round
+    virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
+};
+
 struct View {
     Model* model = nullptr;
     Look* look = nullptr;
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
+    Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
@@ -64,6 +76,7 @@ struct View {
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
+    PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
 };
 
 // Called at the start of each frame, before its rounds: applies a text scale the keys asked for in the last frame to the
@@ -75,9 +88,11 @@ bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
 // the round's input: tab clicks and drags (reordering), Command-1 to Command-0 (by position), the text scale's keys,
-// Command-T (a terminal tab) and Command-W (closes a terminal tab), and on a friend's tab Escape (hide),
-// Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter. A terminal tab shows its terminal in
-// place of the transcript and the prompt; terminals that do not show are serviced, and one whose shell ended closes.
+// Command-T (a terminal tab) and Command-W (closes a terminal tab), on a friend's or the sprint tab Escape (hide), and
+// on a friend's tab Command-Escape (stop), the prompt's edits, and its Enter and Command-Enter. The sprint tab stands
+// first in a strip of its own, which nothing is dragged into or out of, and shows its page (or the line that says why
+// there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
+// that do not show are serviced, and one whose shell ended closes.
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 // Runs one event through the event filter (input.h). Returns true if the window took it, having queued the event
