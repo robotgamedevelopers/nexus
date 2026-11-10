@@ -1,7 +1,9 @@
 // Functional test of a terminal tab: the window's view over a Prax UI context with no window and no GPU, with the real
 // terminal (terminals.h) running /bin/sh on a pseudoterminal in a directory under the test's working directory. It
 // opens a tab with Command-T, types a command that prints a marker, waits for the marker on the screen, types exit,
-// and waits for the tab to close by itself. Real processes and real time (bounded waits): a functional test.
+// and waits for the tab to close by itself. Then a relaunch's round trip: a terminal saved with its shell's directory,
+// to a file under the test's working directory, comes back there. Real processes, files and time (bounded waits): a
+// functional test.
 
 #include <chrono>
 #include <cstdio>
@@ -10,13 +12,16 @@
 #include <thread>
 #include <vector>
 
+#include "pr/file.h"
 #include "pr/font_set.h"
 #include "pr/kit.h"
 #include "pr/layout_tree.h"
+#include "pr/raw_string.h"
 #include "pr/text.h"
 #include "pr/ui.h"
 
 #include "model.h"
+#include "tab_order.h"
 #include "terminals.h"
 #include "view.h"
 
@@ -160,10 +165,70 @@ void aShellRunsAndItsTabClosesWhenItExits() {
     CHECK(h.terminals->text(id).empty());   // destroyed
 }
 
+// A relaunch's round trip: a shell changes directory, its terminal is saved with the directory it is in (to a real file
+// under the test's working directory), and a new terminal opened from that file starts there. A saved directory that
+// is gone starts the shell in the home directory.
+void aTerminalComesBackInItsDirectory() {
+    const std::filesystem::path dir = std::filesystem::absolute("terminal-keep");
+    std::filesystem::create_directories(dir / "sub");
+    std::filesystem::remove_all(dir / "gone");
+    const std::string file = (dir / "terminals.txt").string();
+    std::filesystem::remove(file);
+    {
+        Harness h;
+        h.terminals->program = "/bin/sh";
+        const std::size_t id = h.model.add_terminal();
+        CHECK(h.terminals->openIn(id, dir.string()));
+        CHECK(h.until([&] { return h.terminals->text(id).find('$') != std::string::npos; }));
+        h.typeLine("cd sub && echo moved-$((40+2))");
+        CHECK(h.until([&] { return h.terminals->text(id).find("moved-42") != std::string::npos; }));
+        const std::string sub = std::filesystem::canonical(dir / "sub").string();
+        const bool there = h.until([&] {
+            const std::string now = h.terminals->workingDirectory(id);
+            return !now.empty() && std::filesystem::exists(now) && std::filesystem::canonical(now).string() == sub;
+        });
+        if (!there)
+            std::fprintf(stderr, "  working directory: %s\n", h.terminals->workingDirectory(id).c_str());
+        CHECK(there);
+        std::string error;
+        CHECK(saveTerminals(fileTabOrderStore(file), terminalDirectories(h.model,
+            [&](std::size_t t) { return h.terminals->workingDirectory(t); }), &error));
+    }
+    std::string warning;
+    std::vector<std::string> saved = loadTerminals(fileTabOrderStore(file), &warning);
+    CHECK(saved.size() == 1 && warning.empty());
+    if (saved.size() != 1)
+        return;
+    saved.push_back((dir / "gone").string());
+    Harness h;
+    h.terminals->program = "/bin/sh";
+    const std::size_t first = h.model.add_terminal();
+    const std::size_t second = h.model.add_terminal();
+    CHECK(h.terminals->openIn(first, saved[0]) && h.terminals->openIn(second, saved[1]));
+    CHECK(h.until([&] { return h.terminals->text(second).find('$') != std::string::npos; }));
+    PrRawString home = prFileUserDirectory(PrFileUserDirectory_Home);
+    PrStringView hv = prRawStringView(&home);
+    const std::string homeName = std::filesystem::path(std::string(hv.data, hv.size)).filename().string();
+    prRawStringReset(&home);
+    h.typeLine("echo at-$(basename \"$(pwd)\")");
+    const bool inHome = h.until([&] { return h.terminals->text(second).find("at-" + homeName) != std::string::npos; });
+    if (!inHome)
+        std::fprintf(stderr, "  screen:\n%s\n", h.terminals->text(second).c_str());
+    CHECK(inHome);
+    CHECK(h.model.select_tab(1) && h.model.tab(1).id == first);
+    CHECK(h.until([&] { return h.terminals->text(first).find('$') != std::string::npos; }));
+    h.typeLine("echo at-$(basename \"$(pwd)\")");
+    const bool inSub = h.until([&] { return h.terminals->text(first).find("at-sub") != std::string::npos; });
+    if (!inSub)
+        std::fprintf(stderr, "  screen:\n%s\n", h.terminals->text(first).c_str());
+    CHECK(inSub);
+}
+
 } // namespace
 
 int main() {
     aShellRunsAndItsTabClosesWhenItExits();
+    aTerminalComesBackInItsDirectory();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

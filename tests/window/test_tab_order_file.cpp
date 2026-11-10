@@ -1,5 +1,5 @@
-// Functional test of the tab order's, the selected tab's and the text scale's file stores (src/tab_order.h): real
-// files, inside this test's working directory.
+// Functional test of the tab order's, the selected tab's, the text scale's and the terminals' file stores
+// (src/tab_order.h): real files, inside this test's working directory.
 
 #include <cstdint>
 #include <cstdio>
@@ -68,6 +68,23 @@ int main() {
     CHECK(prFileWrite(PrStringView{scalePath.data(), scalePath.size()},
         PrByteView{reinterpret_cast<const uint8_t*>(garbage.data()), garbage.size()}));
     CHECK(loadTextScale(scale, -5, 10, &warning) == 0 && warning.find(scalePath) != std::string::npos);
+    // The terminal tabs and a selected terminal, in files beside them: nothing saved reopens none; saved terminals come
+    // back in order, and the selected one by its place among them.
+    const std::string terminalsPath = "tab-order-test/nexus/terminals.txt";
+    prFileRemove(PrStringView{terminalsPath.data(), terminalsPath.size()});
+    TabOrderStore terminals = fileTabOrderStore(terminalsPath);
+    CHECK(loadTerminals(terminals, &warning).empty() && warning.empty());
+    Model open(loaded, true);
+    open.add_terminal();
+    open.add_terminal();
+    CHECK(saveTerminals(terminals, {"/tmp", ""}, &error) && saveSelectedTab(selected, open, &error));
+    const std::vector<std::string> reopened = loadTerminals(terminals, &warning);
+    CHECK(reopened == (std::vector<std::string>{"/tmp", ""}) && warning.empty());
+    Model back(loaded, true);
+    for (std::size_t k = 0; k < reopened.size(); ++k)
+        back.add_terminal();
+    CHECK(back.tab_count() == 6);
+    CHECK(loadSelectedTab(selected, back, &warning) == 5 && warning.empty());
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

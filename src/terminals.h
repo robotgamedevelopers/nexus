@@ -38,7 +38,10 @@ public:
     std::string program;
     std::string directory;
 
-    bool open(std::size_t id) override;
+    bool open(std::size_t id) override;         // in `directory`
+    // Starts the shell of the tab `id` in `dir`, empty for the home directory. A `dir` that is no longer a directory
+    // starts it in the home directory, with one line on stderr saying so. False, having printed why, if it cannot start.
+    bool openIn(std::size_t id, const std::string& dir);
     void close(std::size_t id) override;
     void show(std::size_t id, PrLayoutNode parent) override;
     void update(std::size_t id) override;
@@ -49,6 +52,9 @@ public:
     void closeAll();
     // The text of the terminal's scrollback and screen, a line feed after each line; empty for no such terminal.
     std::string text(std::size_t id);
+    // The directory the terminal's shell works in, as Prax tells it (prTerminalWorkingDirectory: the shell's own report,
+    // else its foreground process's directory, else where it started); empty if it names none, or for no such terminal.
+    std::string workingDirectory(std::size_t id);
 
 private:
     PrTerminal* find(std::size_t id) const;

@@ -10,12 +10,13 @@
 // configuration and exits.
 //
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
-// screenshot show one after a command has printed.
+// screenshot show one after a command has printed. The terminal tabs open at quit come back at launch, in their order,
+// each a new login shell in the directory its shell last worked in (tab_order.h).
 //
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
 // (sprint.h) or NEXUS_SPRINT_URL. The window opens on the tab selected when it last quit (tab_order.h), or the sprint
-// tab if that tab is gone, was a terminal, or nothing is saved; --tab N opens tab N, and a screenshot without --tab
-// shows the sprint tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes back at launch.
+// tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot without --tab shows the sprint
+// tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes back at launch.
 // --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
@@ -30,6 +31,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "pr/compress.h"
@@ -81,7 +83,48 @@ struct App {
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
+    // Kept across launches (tab_order.h); a screenshot keeps nothing. The terminal tabs reopened at launch, by Tab::id,
+    // with the directory each starts in, are opened with the window.
+    bool keep = false;
+    const TabOrderStore* terminalStore = nullptr;
+    const TabOrderStore* selectionStore = nullptr;
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    std::string savedTerminals;     // the text last written to each file, so that only a change is written
+    std::string savedSelection;
 };
+
+// Saves the selected tab if its text changed: a new selection, or a selected terminal whose place among the terminals
+// changed.
+void keepSelection(App& a) {
+    if (!a.keep)
+        return;
+    std::string text = formatSelectedTab(*a.model);
+    if (text == a.savedSelection)
+        return;
+    a.savedSelection = text;
+    std::string error;
+    if (!saveSelectedTab(*a.selectionStore, *a.model, &error))
+        std::fprintf(stderr, "nexus: %s\n", error.c_str());
+}
+
+// Saves the terminal tabs, each with the directory its shell works in now, if that changed (a terminal opened, closed or
+// moved, or a shell changed directory), and the selection with them. Called at each frame's start and as the window
+// closes, so a quit of any kind leaves them saved.
+void keepTerminals(App& a) {
+    if (!a.keep || a.terminals == nullptr)
+        return;
+    PraxTerminals* terminals = a.terminals.get();
+    std::vector<std::string> directories = terminalDirectories(*a.model,
+        [terminals](std::size_t id) { return terminals->workingDirectory(id); });
+    std::string text = formatTerminals(directories);
+    if (text != a.savedTerminals) {
+        a.savedTerminals = text;
+        std::string error;
+        if (!saveTerminals(*a.terminalStore, directories, &error))
+            std::fprintf(stderr, "nexus: %s\n", error.c_str());
+    }
+    keepSelection(a);
+}
 
 App& appOf(void* context) {
     return *static_cast<App*>(context);
@@ -105,6 +148,19 @@ bool open(void* context, PrStudioWindow* window) {
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window), a.overlay);
     a.view.terminals = a.terminals.get();
+    // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
+    // closes, as one opened with Command-T does.
+    for (const auto& [id, dir] : a.reopen) {
+        if (a.terminals->openIn(id, dir))
+            continue;
+        for (std::size_t i = 0; i < a.model->tab_count(); ++i) {
+            if (a.model->tab(i).id == id) {
+                a.model->close_tab(i);
+                break;
+            }
+        }
+    }
+    a.reopen.clear();
     PraxBoard::Desc board;
     board.kit = prStudioWindowKit(window);
     board.fonts = a.fonts;
@@ -122,6 +178,7 @@ bool open(void* context, PrStudioWindow* window) {
 // The terminals and the board end with the window, while its kit still exists.
 void closeWindow(void* context, PrStudioWindow*) {
     App& a = appOf(context);
+    keepTerminals(a);
     setOverlayShown(nullptr, nullptr);
     a.view.board = nullptr;
     a.board.reset();
@@ -138,6 +195,7 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
+    keepTerminals(a);
     beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
     if (a.board != nullptr)
         a.board->frame(f->time, f->display);
@@ -436,10 +494,22 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
     // The sprint tab first, then the friends.
     static Model model(friends.friends, true);
-    // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
-    // is (tab_order.h), or the sprint tab. A screenshot without --tab shows the sprint tab, whatever was saved.
-    static const TabOrderStore selection = fileSelectedTabStore();
+    // The terminal tabs open when nexus last quit, after the friends in the order they stood, each to start a new shell
+    // in its directory when the window opens (tab_order.h). A screenshot reopens none.
     const bool live = shot == nullptr;
+    static const TabOrderStore terminalStore = fileTerminalsStore();
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    if (live) {
+        std::string terminalsWarning;
+        for (const std::string& dir : loadTerminals(terminalStore, &terminalsWarning))
+            reopen.emplace_back(model.add_terminal(), dir);
+        if (!terminalsWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+    }
+    // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
+    // is or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A screenshot without
+    // --tab shows the sprint tab, whatever was saved.
+    static const TabOrderStore selection = fileSelectedTabStore();
     if (!tabGiven && live) {
         std::string selectionWarning;
         tab = loadSelectedTab(selection, model, &selectionWarning) + 1;
@@ -469,14 +539,14 @@ int main(int argc, char** argv) {
         if (!saveTabOrder(order, model, &error))
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
     };
-    // Each change of the selected tab is saved as it happens, so a quit of any kind leaves it saved. A screenshot saves
-    // nothing.
+    // Each change of the selected tab, and of the terminal tabs, is saved as it happens, so a quit of any kind leaves
+    // them saved. A screenshot saves nothing.
     if (live) {
-        a.view.selected = [] {
-            std::string error;
-            if (!saveSelectedTab(selection, model, &error))
-                std::fprintf(stderr, "nexus: %s\n", error.c_str());
-        };
+        a.keep = true;
+        a.terminalStore = &terminalStore;
+        a.selectionStore = &selection;
+        a.reopen = std::move(reopen);
+        a.view.selected = [] { keepSelection(a); };
     }
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
