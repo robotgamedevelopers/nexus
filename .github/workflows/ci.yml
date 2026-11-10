@@ -92,7 +92,8 @@ jobs:
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
-  # the first report: the unit tests, and the trace walks on every friend count and every fault (no TLC).
+  # the first report: the unit tests, and the trace walks (the window's on every friend count, the overlay's) with every
+  # fault (no TLC).
   sanitizers:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
@@ -122,7 +123,14 @@ jobs:
         run: |
           set -euo pipefail
           build/tests/model/model_test
+          build/tests/model/overlay_test
           mkdir -p walks
+          for seed in 1 2 3; do
+            build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
+          done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
               build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
@@ -182,7 +190,7 @@ jobs:
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
-      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The two largest instances, label
+      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The three largest instances, label
       # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
