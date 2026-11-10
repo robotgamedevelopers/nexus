@@ -1,6 +1,7 @@
 #include "friends.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <mutex>
 
@@ -12,6 +13,7 @@ namespace nexus {
 namespace {
 
 constexpr const char* kCommand = "nova-config friend list --json";
+constexpr const char* kArguments = "friend list --json";
 
 std::string_view view(PrStringView s) {
     return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
@@ -64,19 +66,21 @@ FriendList parseFriendList(std::string_view json) {
     size_t at = 0;
     if (!prJsonParse(doc, pr(json), &at)) {
         list.error = std::string(kCommand) + " printed something that is not JSON (stopped at byte " +
-            std::to_string(at) + ")";
+            std::to_string(at) + "); run it in a terminal to see what it prints";
         prJsonDestroy(doc);
         return list;
     }
     PrJsonValueIndex status = prJsonMember(doc, prJsonMember(doc, 0, pr("result")), pr("status"));
     if (prJsonKind(doc, status) == PrJsonKind_String && view(prJsonString(doc, status)) != "ok") {
-        list.error = std::string(kCommand) + " answered status " + std::string(view(prJsonString(doc, status)));
+        list.error = std::string(kCommand) + " answered status " + std::string(view(prJsonString(doc, status))) +
+            "; run it in a terminal to see why";
         prJsonDestroy(doc);
         return list;
     }
     PrJsonValueIndex items = prJsonMember(doc, 0, pr("items"));
     if (prJsonKind(doc, items) != PrJsonKind_Array) {
-        list.error = std::string(kCommand) + " printed no list of friends (no \"items\" array)";
+        list.error = std::string(kCommand) + " printed no list of friends (no \"items\" array); run it in a terminal "
+            "to see what it prints";
         prJsonDestroy(doc);
         return list;
     }
@@ -97,23 +101,70 @@ FriendList parseFriendList(std::string_view json) {
     }
     prJsonDestroy(doc);
     if (list.friends.empty())
-        list.error = std::string(kCommand) + " listed no enabled friends";
+        list.error = std::string(kCommand) + " listed no enabled friends; add one with `nova-config friend add`, or "
+            "enable one with `nova-config friend set <name> --enabled true`";
     return list;
 }
 
-FriendList loadFriends() {
+Command friendListCommand(const char* override, const char* shell) {
+    std::vector<std::string> arguments = {"friend", "list", "--json"};
+    if (override != nullptr && *override != 0)
+        return Command{override, arguments, std::string(override) + " " + kArguments};
+    std::string program = shell != nullptr && *shell != 0 ? shell : "/bin/sh";
+    // exec: the shell becomes nova-config, so a timeout's kill reaches it.
+    std::string line = std::string("exec ") + kCommand;
+    return Command{program, {"-l", "-c", line}, program + " -l -c '" + line + "'"};
+}
+
+FriendList loadFriends(const Command& command, const CommandRunner& run) {
+    CommandResult r = run(command, kFriendListTimeoutSeconds);
+    const std::string cmd = "`" + command.shown + "`";
+    const std::string fix = "set NEXUS_NOVA_CONFIG to the full path of nova-config, or install nova-tools so that "
+        "nova-config is on your login shell's PATH";
     FriendList list;
-    PrProcessLauncher* launcher = prProcessLauncherCreate(PrProcessBackend_Default);
-    if (launcher == nullptr) {
-        list.error = std::string("cannot run ") + kCommand + ": this build has no process launcher";
+    switch (r.end) {
+        case CommandResult::End::NotFound:
+            list.error = "cannot run " + cmd + ": " + command.program + " was not found; " + fix;
+            return list;
+        case CommandResult::End::NotStarted:
+            list.error = "cannot run " + cmd + ": the process could not start; " + fix;
+            return list;
+        case CommandResult::End::TimedOut:
+            list.error = cmd + " did not finish within " + std::to_string(kFriendListTimeoutSeconds) +
+                " seconds and was stopped; run it in a terminal to see where it waits (the friend store may be "
+                "unreachable)";
+            return list;
+        case CommandResult::End::Signaled:
+            list.error = cmd + " was ended by signal " + std::to_string(r.code) + "; run it in a terminal to see why";
+            return list;
+        case CommandResult::End::Exited:
+            break;
+    }
+    if (r.code != 0) {
+        std::string why = trimmed(r.err);
+        list.error = cmd + " exited with status " + std::to_string(r.code);
+        if (r.code == 127)
+            list.error += " (command not found)";
+        list.error += why.empty() ? " and printed nothing on standard error" : ": " + why;
+        list.error += r.code == 127 ? "; " + fix : "; run it in a terminal to see more";
         return list;
     }
+    return parseFriendList(r.out);
+}
+
+CommandResult runCommand(const Command& command, int timeoutSeconds) {
+    CommandResult result;
+    PrProcessLauncher* launcher = prProcessLauncherCreate(PrProcessBackend_Default);
+    if (launcher == nullptr)
+        return result;
     Waker waker;
-    const PrStringView arguments[] = {pr("friend"), pr("list"), pr("--json")};
+    std::vector<PrStringView> arguments;
+    for (const std::string& a : command.arguments)
+        arguments.push_back(pr(a));
     PrProcessDesc desc{};
-    desc.program = pr("nova-config");
-    desc.arguments = arguments;
-    desc.argumentCount = 3;
+    desc.program = pr(command.program);
+    desc.arguments = arguments.data();
+    desc.argumentCount = uint32_t(arguments.size());
     desc.streams = PrProcessStreams_Pipes;
     desc.errors = PrProcessErrors_Pipe;
     desc.wake = &Waker::wake;
@@ -121,41 +172,36 @@ FriendList loadFriends() {
     PrProcess* process = nullptr;
     PrStatus launched = prProcessLaunch(launcher, &desc, &process);
     if (launched != PrStatus_Ok || process == nullptr) {
-        list.error = std::string("cannot run ") + kCommand + (launched == PrStatus_NotFound ?
-            ": nova-config is not on the PATH" : ": the process could not start");
+        result.end = launched == PrStatus_NotFound ? CommandResult::End::NotFound : CommandResult::End::NotStarted;
         prProcessLauncherDestroy(launcher);
-        return list;
+        return result;
     }
-    std::string out;
-    std::string err;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     PrProcessInfo info{};
     for (;;) {
-        drain(process, PrProcessStream_Output, out);
-        drain(process, PrProcessStream_Error, err);
+        drain(process, PrProcessStream_Output, result.out);
+        drain(process, PrProcessStream_Error, result.err);
         info = prProcessInfo(process);
         if (info.exited && info.outputEnded)
             break;
         if (std::chrono::steady_clock::now() > deadline) {
             prProcessDestroy(process);
             prProcessLauncherDestroy(launcher);
-            list.error = std::string(kCommand) + " did not finish within 30 seconds";
-            return list;
+            result.end = CommandResult::End::TimedOut;
+            return result;
         }
         waker.wait();
     }
-    drain(process, PrProcessStream_Error, err);
+    drain(process, PrProcessStream_Error, result.err);
     prProcessDestroy(process);
     prProcessLauncherDestroy(launcher);
-    if (info.signaled || info.code != 0) {
-        std::string why = trimmed(err);
-        if (why.empty())
-            why = info.signaled ? "ended by signal " + std::to_string(info.code) :
-                "exited with status " + std::to_string(info.code);
-        list.error = why;
-        return list;
-    }
-    return parseFriendList(out);
+    result.end = info.signaled ? CommandResult::End::Signaled : CommandResult::End::Exited;
+    result.code = info.code;
+    return result;
+}
+
+FriendList loadFriends() {
+    return loadFriends(friendListCommand(std::getenv("NEXUS_NOVA_CONFIG"), std::getenv("SHELL")), runCommand);
 }
 
 } // namespace nexus
