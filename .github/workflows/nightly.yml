@@ -1,7 +1,7 @@
 # Nightly for nexus: the TLA+ instances too large for the per-commit model job (ctest label model_nightly), on the same
 # runners as ci.yml's model job. ci.yml checks every property on every pull request, on the smaller instances, with
-# every witness and trace check; this workflow adds the two largest instances (tests/model/CMakeLists.txt says which and
-# why). Nightlies have no 2-minute limit.
+# every witness and trace check; this workflow adds the largest instances (tests/model/CMakeLists.txt and
+# tests/sync/CMakeLists.txt say which and why). Nightlies have no 2-minute limit.
 #
 # Java and the TLC jar come from the runner's machine, as in ci.yml.
 
@@ -62,8 +62,9 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: The largest instances

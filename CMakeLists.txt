@@ -25,10 +25,25 @@ FetchContent_MakeAvailable(prax)
 
 set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 
+# The link between the window and nexus-server: mosh's transport (cmake/mosh.cmake), which needs protobuf. OFF builds
+# without nexus-server and without the window's --server; the model checks need neither.
+option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)" ON)
+if(NEXUS_LINK)
+    include(cmake/mosh.cmake)
+endif()
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue. No OS, no time.
 add_library(nexus_model STATIC src/model.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
+
+# The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
+# down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
+add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/actions.cpp src/sync/tabs.cpp src/sync/hub.cpp
+    src/sync/mirror.cpp src/sync/client.cpp)
+target_include_directories(nexus_sync PUBLIC src)
+target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_sync PUBLIC nexus_model)
 
 # The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
 # tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
@@ -59,6 +74,19 @@ target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickj
     prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
     prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
 
+if(NEXUS_LINK)
+    # The link over mosh's transport: its sessions (both ends), the ssh bootstrap, and the window's link thread.
+    add_library(nexus_link STATIC src/link/mosh_link.cpp src/link/bootstrap.cpp src/link/client.cpp)
+    target_include_directories(nexus_link PUBLIC src)
+    target_compile_options(nexus_link PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
+
+    # The server the window talks to with --server: headless, on the machine that keeps going.
+    add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
+    target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus-server PRIVATE nexus_link)
+endif()
+
 # The app, as a real bundle: nexus.app.
 add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
 set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -66,6 +94,10 @@ target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
     prax::studio_app prax::gpu prax::image prax::compress
     "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
+if(NEXUS_LINK)
+    target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
+    target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
+endif()
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
     MACOSX_BUNDLE_BUNDLE_NAME nexus
@@ -74,4 +106,8 @@ set_target_properties(nexus PROPERTIES
 
 enable_testing()
 add_subdirectory(tests/model)
+add_subdirectory(tests/sync)
 add_subdirectory(tests/window)
+if(NEXUS_LINK)
+    add_subdirectory(tests/link)
+endif()

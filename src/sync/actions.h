@@ -1,0 +1,79 @@
+// Up, client to server: the person's actions as an append-only numbered list, the state mosh's Transport carries from
+// the window to nexus-server (src/link). The client is its only writer. Each action gets the next number, 1, 2, 3 and
+// so on, and keeps it; the server applies each number once, in order (Applier), however often or out of order mosh
+// delivers the diffs that carry it. models/Link.tla is the model; tests/sync/link_walk.cpp binds this code to it.
+//
+// mosh's interface (src/network/transportsender-impl.h, networktransport-impl.h in mosh 1.4.0): the transport copies
+// whole states all the time, so a copy is one shared pointer; it calls subtract(acknowledged state) on every state it
+// keeps, so a state holds only the actions not yet known to be received, while its numbers stay absolute.
+
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace nexus::sync {
+
+enum class ActionKind : std::uint8_t {
+    Send = 1,   // a prompt sent to a friend's tab: it goes in the transcript
+    Queue = 2,  // a prompt queued in a friend's tab, for later
+};
+
+struct Action {
+    std::uint64_t num = 0;  // its place in the list, from 1, never reused
+    ActionKind kind = ActionKind::Send;
+    std::string tab;        // the friend's name, which names the tab on both sides
+    std::string text;
+    bool operator==(const Action&) const = default;
+};
+
+class Actions {
+public:
+    Actions();
+
+    // The client's one write: appends an action with the next number and returns that number.
+    std::uint64_t add(ActionKind kind, std::string tab, std::string text);
+
+    std::uint64_t first() const { return first_; }              // the number of the oldest action held
+    std::uint64_t next() const { return first_ + held_->size(); } // the number the next action gets
+    const std::vector<Action>& held() const { return *held_; }  // actions first() .. next() - 1
+
+    // mosh's state interface.
+    // The actions numbered existing.next() .. next() - 1, encoded; empty when there are none. Throws std::logic_error
+    // if this state no longer holds them (existing is from before what this state subtracted) or existing is ahead of
+    // this state: mosh never asks either (its sender diffs from states it sent after the one it subtracted).
+    std::string diff_from(const Actions& existing) const;
+    std::string init_diff() const;
+    // Appends the actions a diff carries that this state lacks; skips those it already passed. Throws BadDiff, changing
+    // nothing, on malformed bytes or a diff that starts after next() (a gap).
+    void apply_string(const std::string& diff);
+    bool operator==(const Actions& x) const;
+    bool compare(const Actions& x) const { return !(*this == x); } // mosh's verbose check: true when they differ
+    // Forgets the actions numbered below prefix->next(); the numbers of the rest stay.
+    void subtract(const Actions* prefix);
+    void reset_input() {}
+
+    // The actions a diff carries, for the server, which reads them out of mosh's get_remote_diff(). Throws BadDiff.
+    static std::vector<Action> parse(const std::string& diff);
+
+private:
+    std::uint64_t first_ = 1;
+    std::shared_ptr<const std::vector<Action>> held_;
+};
+
+// The server's side of one client's list: applies each action exactly once, in number order. apply() takes the actions
+// a diff carried (Actions::parse); those numbered at or below applied() were applied before and are skipped. Returns the
+// actions newly applied, in order. A list that starts past applied() + 1 would skip an action: it is refused whole,
+// nothing is applied, and `refused` (when given) says why.
+class Applier {
+public:
+    std::uint64_t applied() const { return applied_; }
+    std::vector<Action> apply(const std::vector<Action>& actions, std::string* refused = nullptr);
+
+private:
+    std::uint64_t applied_ = 0;
+};
+
+} // namespace nexus::sync
