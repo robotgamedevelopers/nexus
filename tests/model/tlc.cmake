@@ -17,8 +17,10 @@
 #               sprint tab
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
+#   WORKERS     optional: TLC's worker count (-workers), 2 unless given
+#   CAP         optional: the cap on the TLC run in seconds, 60 unless given
 #
-# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at 60 s.
+# The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -88,15 +90,29 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     endif()
 endif()
 
-set(flags -workers 2 -metadir "${WORK}/meta" -config "${cfg_name}")
+if(NOT DEFINED WORKERS OR "${WORKERS}" STREQUAL "")
+    set(WORKERS 2)
+endif()
+if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
+    set(CAP 60)
+endif()
+# The JVM's own threads, sized to the run. Left alone, each JVM starts a garbage collector thread for most cores and
+# several compiler threads, and ctest runs one JVM per core: on a busy machine those threads, not TLC, use the cores.
+if(WORKERS GREATER 2)
+    set(jvm -XX:+UseParallelGC -XX:ParallelGCThreads=${WORKERS})
+else()
+    # A witness or a trace check runs for a second or two: the client compiler alone and the serial collector.
+    set(jvm -XX:+UseSerialGC -XX:TieredStopAtLevel=1)
+endif()
+set(flags -workers ${WORKERS} -metadir "${WORK}/meta" -config "${cfg_name}")
 if(NOCHECK_DEADLOCK)
     list(APPEND flags -deadlock)
 endif()
 
 execute_process(
-    COMMAND "${java}" -XX:+UseParallelGC "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
+    COMMAND "${java}" ${jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC ${flags} "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
-    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 60)
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
 file(WRITE "${WORK}/tlc.log" "${out}")
 
 string(REGEX MATCH "generated, [0-9,]+ distinct states found" states "${out}")
