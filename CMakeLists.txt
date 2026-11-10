@@ -45,6 +45,13 @@ target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model)
 
+# The server's durable state (layer 2): tabs, sessions and blobs over a crash-safe journal, behind a filesystem seam
+# (src/store/fs.h) so that its tests run in memory. No Prax.
+add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/posix_fs.cpp
+    src/store/store.cpp)
+target_include_directories(nexus_store PUBLIC src)
+target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
+
 # The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
 # tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
 add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/tab_order.cpp)
@@ -108,6 +115,7 @@ enable_testing()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
 add_subdirectory(tests/window)
+add_subdirectory(tests/store)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()

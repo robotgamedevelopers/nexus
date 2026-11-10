@@ -101,8 +101,8 @@ jobs:
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
   # the first report: the unit tests, and the trace walks on every friend count and every fault (no TLC); the same for
-  # the link's states (src/sync) and their walks. Configured without the link's transport (NEXUS_LINK=OFF: mosh and
-  # protobuf), which these programs do not use, so any macOS runner will do.
+  # the link's states (src/sync) and their walks, and the store (store_test and journal_walk). Configured without the
+  # link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs do not use, so any macOS runner will do.
   sanitizers:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
@@ -150,6 +150,14 @@ jobs:
           done
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
+          done
+          # the store: every unit group (MemFs, crashes at every write and sync), then the journal's walks
+          build/tests/store/store_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
 
   model:
