@@ -113,6 +113,7 @@ private:
     void runTasks();
     void paint(PrVec2 extent);
     void addPageStyle();
+    void brand();
     SpendFit measureSpend();
     void fitSpend();
     bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);

@@ -470,6 +470,16 @@ void PraxBoard::addPageStyle() {
     prDomNodeRelease(prDomElementAsNode(style));
 }
 
+// The board's wordmark says nexus (sprint.h kSprintBrandStyle), written again if the page writes its own.
+void PraxBoard::brand() {
+    PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
+    PrDomElement* mark = document != nullptr
+        ? prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintWordmarkId)) : nullptr;
+    if (mark == nullptr || taken(prDomNodeTextContent(prDomElementAsNode(mark))) == kSprintBrand)
+        return;
+    prDomNodeSetTextContent(prDomElementAsNode(mark), sv(kSprintBrand));
+}
+
 SpendFit PraxBoard::measureSpend() {
     SpendFit fit;
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
@@ -525,6 +535,7 @@ void PraxBoard::paint(PrVec2 extent) {
     if (!dirty_ || prHtmlPageIsRenderBlocked(page_))
         return;
     addPageStyle();
+    brand();
     PrDrawList* list = prDrawListCreate();
     // Past an end, the page is drawn rubber-banded (scroll_glide.h): moved by how far past, over its own background.
     const float over = float(scroller_.overscroll());
