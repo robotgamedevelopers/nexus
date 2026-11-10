@@ -37,13 +37,19 @@ target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
 
+# The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
+add_library(nexus_view STATIC src/view.cpp)
+target_include_directories(nexus_view PUBLIC src)
+target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_view PUBLIC nexus_window_logic
+    prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
+
 # The app, as a real bundle: nexus.app.
-add_executable(nexus MACOSX_BUNDLE src/main.cpp src/view.cpp src/platform_mac.mm)
+add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
 set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus PRIVATE nexus_window_logic
-    prax::studio_window prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw
-    prax::gpu prax::image prax::compress prax::app prax::core_cpp
+target_link_libraries(nexus PRIVATE nexus_view
+    prax::studio_window prax::gpu prax::image prax::compress
     "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus

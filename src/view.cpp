@@ -1,16 +1,20 @@
 #include "view.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 
 #include "pr/draw.h"
+#include "pr/kit_choice.h"
+#include "pr/kit_icon.h"
+#include "pr/kit_input.h"
+#include "pr/kit_text.h"
 #include "pr/layout_frame.h"
 #include "pr/layout_query.h"
 #include "pr/layout_style.h"
 #include "pr/ui_records.h"
 #include "pr/ui_text_edit.h"
 
-#include "input.h"
 #include "style.h"
 
 namespace nexus {
@@ -19,76 +23,33 @@ namespace {
 
 using namespace style;
 
-constexpr float kPi = 3.14159265358979f;
-
-// Far below any transcript: a scroll offset that layout clamps to the bottom.
-constexpr float kFar = 1.0e6f;
-
 // ---------------------------------------------------------------------------------------------------------------------
-// Records: one part per kind of node, and one recipe per group kind that switches on the part. Parts that hold text set
-// the font and color groups; the others inherit them.
+// Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
+// bubbles, and the rows that place the kit's parts. One part per kind of node, and one recipe per group kind that
+// switches on the part. Their text is the kit's (labels in the theme's roles), so no record here sets a font.
 
 enum class Part : unsigned char {
     Window,
-    Strip,
-    Tab,
-    TabActive,
-    TabNumber,
-    TabName,
-    TabNameActive,
     Transcript,
     Column,
     Centered,
     Entry,
     Bubble,
     BubbleQueued,
-    QueuedLabel,
-    FriendText,
-    NoticeText,
     Footer,
-    Prompt,
-    PromptScroll,
-    PromptText,
-    Placeholder,
-    Plus,
-    Stop,
-    Mic,
+    PromptRow,
     LabelRow,
-    Label,
     Ring,
 };
 
-// The icons' natural sizes.
+// The kit's icons' sides, and the ring's.
 constexpr float kPlusSide = 0.7f * kU;
 constexpr float kStopSide = 0.72f * kU;
-constexpr float kMicWidth = 0.7f * kU;
-constexpr float kMicHeight = 1.2f * kU;
 constexpr float kRingSide = 0.76f * kLabelSize + 3;
 
-// The prompt's padding: one line of text in a box of kPromptHeight, between 1 px borders.
-constexpr float kPromptPadY = (kPromptHeight - 2 - kLinePitch) / 2;
-constexpr float kPromptPadX = 0.8f * kU;
-
-bool ownsText(Part p) {
-    switch (p) {
-        case Part::Window:
-        case Part::TabNumber:
-        case Part::TabName:
-        case Part::TabNameActive:
-        case Part::Centered:
-        case Part::Bubble:
-        case Part::BubbleQueued:
-        case Part::QueuedLabel:
-        case Part::FriendText:
-        case Part::NoticeText:
-        case Part::PromptText:
-        case Part::Placeholder:
-        case Part::Label:
-            return true;
-        default:
-            return false;
-    }
-}
+// The height of the kit text area with one line, which the icons beside it centre on: the line, the area's padding
+// of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders.
+constexpr float kOneLineArea = kLinePitch + 2 * 4 + 2;
 
 PrColor faded(PrColor c, float alpha) {
     c.a = alpha;
@@ -97,15 +58,6 @@ PrColor faded(PrColor c, float alpha) {
 
 PrLayoutLength px(float v) {
     return prLayoutLengthPx(v);
-}
-
-void border(PrLayoutBoxStyle& box, int side, float width) {
-    box.border[side] = prLayoutUnitFromPx(width);
-}
-
-void borderColor(PrLayoutDecorationStyle& d, int side, PrColor c) {
-    d.borderColor[side] = prColor16FromColor(c);
-    d.borderStyle[side] = PrDrawBorderStyle_Solid;
 }
 
 void radius(PrLayoutDecorationStyle& d, float r) {
@@ -120,67 +72,6 @@ void padding(PrLayoutBoxStyle& box, float top, float right, float bottom, float 
     box.padding[PrRectSide_Left] = px(left);
 }
 
-struct FontRecipe {
-    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Font;
-    Part part;
-
-    void make(const Look& look, PrLayoutFontStyle& font) const {
-        font.font = look.body;
-        font.lineHeight = prLayoutLineHeightPx(kLinePitch);
-        font.whiteSpaceCollapse = PrLayoutWhiteSpaceCollapse_Preserve;
-        font.textWrapMode = PrLayoutTextWrapMode_Wrap;
-        font.overflowWrap = PrTextOverflowWrap_BreakWord;
-        switch (part) {
-            case Part::TabNumber:
-            case Part::TabName:
-            case Part::TabNameActive:
-                font.font = look.tab;
-                font.lineHeight = prLayoutLineHeightPx(1.2f * kTabSize);
-                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
-                break;
-            case Part::Label:
-                font.font = look.label;
-                font.lineHeight = prLayoutLineHeightPx(1.2f * kLabelSize);
-                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
-                break;
-            case Part::QueuedLabel:
-                font.font = look.meta;
-                font.lineHeight = prLayoutLineHeightPx(1.3f * kMetaSize);
-                break;
-            case Part::Centered:
-                font.textAlign = font.textAlignLast = PrLayoutTextAlign_Center;
-                break;
-            case Part::Placeholder:
-                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
-                break;
-            default:
-                break;
-        }
-    }
-};
-
-struct ColorRecipe {
-    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Color;
-    Part part;
-
-    void make(const Look&, PrLayoutColorStyle& color) const {
-        PrColor c = kInk;
-        switch (part) {
-            case Part::TabNumber: c = kPlaceholder; break;
-            case Part::TabName: c = kNotice; break;
-            case Part::BubbleQueued: c = faded(kInk, kQueuedInk); break;
-            case Part::QueuedLabel: c = kMeta; break;
-            case Part::NoticeText: c = kNotice; break;
-            case Part::Centered: c = kPlaceholder; break;
-            case Part::Placeholder: c = kPlaceholder; break;
-            default: break;
-        }
-        color.color = prColor16FromColor(c);
-        if (part == Part::Placeholder)
-            color.pointerEvents = PrLayoutPointerEvents_None;
-    }
-};
-
 struct BoxRecipe {
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
     Part part;
@@ -193,20 +84,8 @@ struct BoxRecipe {
                 box.width = prLayoutLengthPercent(100);
                 box.height = prLayoutLengthPercent(100);
                 break;
-            case Part::Strip:
-                box.display = PrLayoutDisplay_Flex;
-                box.height = px(kStripHeight + 1);
-                border(box, PrRectSide_Bottom, 1);
-                padding(box, 0, 0, 0, 0.8f * kU);
-                break;
-            case Part::Tab:
-            case Part::TabActive:
-                box.display = PrLayoutDisplay_Flex;
-                box.height = px(1.75f * kTabSize);
-                padding(box, 0, 0.6f * kTabSize, 0, 0.6f * kTabSize);
-                break;
             case Part::Transcript:
-                box.display = PrLayoutDisplay_Block;
+                box.display = PrLayoutDisplay_Flex;
                 box.minHeight = px(0);
                 box.overflowX = PrLayoutOverflow_Hidden;
                 box.overflowY = PrLayoutOverflow_Scroll;
@@ -233,55 +112,13 @@ struct BoxRecipe {
                 box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
                 padding(box, kBubblePadY, kBubblePadX, kBubblePadY, kBubblePadX);
                 break;
-            case Part::QueuedLabel:
-                box.display = PrLayoutDisplay_Block;
-                box.margin[PrRectSide_Top] = px(0.3f * kMetaSize);
-                box.margin[PrRectSide_Right] = px(6);
-                break;
-            case Part::FriendText:
-            case Part::NoticeText:
-                box.display = PrLayoutDisplay_Block;
-                break;
             case Part::Footer:
                 box.display = PrLayoutDisplay_Flex;
                 padding(box, kU, 0, 0, 0);
                 break;
-            case Part::Prompt:
+            case Part::PromptRow:
                 box.display = PrLayoutDisplay_Flex;
                 box.width = prLayoutLengthPercent(kPromptPercent);
-                box.minHeight = px(kPromptHeight);
-                for (int side = 0; side < PrRectSide_Count; ++side)
-                    border(box, side, 1);
-                padding(box, kPromptPadY, kPromptPadX, kPromptPadY, kPromptPadX);
-                break;
-            case Part::PromptScroll:
-                box.display = PrLayoutDisplay_Block;
-                box.minWidth = px(0);
-                box.maxHeight = px(kPromptMaxLines * kLinePitch);
-                box.overflowX = PrLayoutOverflow_Hidden;
-                box.overflowY = PrLayoutOverflow_Scroll;
-                break;
-            case Part::PromptText:
-                box.display = PrLayoutDisplay_Block;
-                box.position = PrLayoutPosition_Relative;
-                break;
-            case Part::Placeholder:
-                box.display = PrLayoutDisplay_Block;
-                box.position = PrLayoutPosition_Absolute;
-                box.inset[PrRectSide_Top] = px(0);
-                box.inset[PrRectSide_Left] = px(0);
-                break;
-            case Part::Plus:
-                box.margin[PrRectSide_Right] = px(0.8f * kU);
-                box.margin[PrRectSide_Bottom] = px((kLinePitch - kPlusSide) / 2);
-                break;
-            case Part::Stop:
-                box.margin[PrRectSide_Left] = px(0.8f * kU);
-                box.margin[PrRectSide_Bottom] = px((kLinePitch - kStopSide) / 2);
-                break;
-            case Part::Mic:
-                box.margin[PrRectSide_Left] = px(1.9f * kU - kStopSide / 2 - kMicWidth / 2);
-                box.margin[PrRectSide_Bottom] = px((kLinePitch - kMicHeight) / 2);
                 break;
             case Part::LabelRow:
                 box.display = PrLayoutDisplay_Flex;
@@ -291,8 +128,6 @@ struct BoxRecipe {
                 break;
             case Part::Ring:
                 box.margin[PrRectSide_Left] = px(kLabelSize);
-                break;
-            default:
                 break;
         }
     }
@@ -307,14 +142,6 @@ struct DecorationRecipe {
             case Part::Window:
                 d.background = prColor16FromColor(look.overlay ? faded(kBackground, kOverlayOpacity) : kBackground);
                 break;
-            case Part::Strip:
-                d.background = prColor16FromColor(look.overlay ? faded(kStrip, kOverlayStripFill) : kStrip);
-                borderColor(d, PrRectSide_Bottom, kStripLine);
-                break;
-            case Part::TabActive:
-                d.background = prColor16FromColor(kBubble);
-                radius(d, 1.75f * kTabSize * 0.3f);
-                break;
             case Part::Bubble:
                 d.background = prColor16FromColor(kBubble);
                 radius(d, kBubbleRadius);
@@ -322,12 +149,6 @@ struct DecorationRecipe {
             case Part::BubbleQueued:
                 d.background = prColor16FromColor(faded(kBubble, kQueuedFill));
                 radius(d, kBubbleRadius);
-                break;
-            case Part::Prompt:
-                d.background = prColor16FromColor(kPromptFill);
-                for (int side = 0; side < PrRectSide_Count; ++side)
-                    borderColor(d, side, kPromptBorder);
-                radius(d, kPromptRadius);
                 break;
             default:
                 break;
@@ -344,19 +165,10 @@ struct FlexRecipe {
             case Part::Window:
                 flex.direction = PrLayoutFlexDirection_Column;
                 break;
-            case Part::Strip:
-                flex.direction = PrLayoutFlexDirection_Row;
-                flex.alignItems = PrLayoutAlignment_Center;
-                flex.columnGap = px(0.3f * kTabSize);
-                flex.shrink = 0;
-                break;
-            case Part::Tab:
-            case Part::TabActive:
-                flex.direction = PrLayoutFlexDirection_Row;
-                flex.alignItems = PrLayoutAlignment_Center;
-                flex.columnGap = px(0.45f * kTabSize);
-                break;
             case Part::Transcript:
+                // Reversed, the scroller's origin is its bottom (css-overflow-3 scroll origin): it starts at the newest
+                // entry and stays there as entries arrive, and scroll anchoring holds a view scrolled up in place.
+                flex.direction = PrLayoutFlexDirection_ColumnReverse;
                 flex.grow = 1;
                 flex.basis = px(0);
                 break;
@@ -364,6 +176,7 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.rowGap = px(kGap);
+                flex.shrink = 0;
                 break;
             case Part::Entry:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -374,24 +187,18 @@ struct FlexRecipe {
                 flex.alignItems = PrLayoutAlignment_Center;
                 flex.shrink = 0;
                 break;
-            case Part::Prompt:
+            case Part::PromptRow:
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
-                break;
-            case Part::PromptScroll:
-                flex.grow = 1;
-                flex.basis = px(0);
-                flex.alignSelf = PrLayoutAlignment_Center;
-                break;
-            case Part::Plus:
-            case Part::Stop:
-            case Part::Mic:
-                flex.shrink = 0;
+                flex.columnGap = px(0.8f * kU);
                 break;
             case Part::LabelRow:
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
+                break;
+            case Part::Ring:
+                flex.shrink = 0;
                 break;
             default:
                 break;
@@ -400,55 +207,10 @@ struct FlexRecipe {
 };
 
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
-    if (ownsText(p))
-        return pr::uiStyle(ui, look, FontRecipe{p}, ColorRecipe{p}, BoxRecipe{p}, DecorationRecipe{p}, FlexRecipe{p});
     return pr::uiStyle(ui, look, BoxRecipe{p}, DecorationRecipe{p}, FlexRecipe{p});
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Icons, drawn once into lists in their natural coordinates.
-
-void line(PrDrawList* list, PrVec2 a, PrVec2 b, PrColor color, float width) {
-    PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = width;
-    stroke.shape.startCap = PrPathCap_Round;
-    stroke.shape.endCap = PrPathCap_Round;
-    prDrawListLine(list, a, b, PrDrawPaint{.color = color, .stroke = &stroke});
-}
-
-PrDrawList* drawPlus() {
-    PrDrawList* list = prDrawListCreate();
-    float c = kPlusSide / 2;
-    float arm = 0.32f * kU;
-    line(list, PrVec2{c - arm, c}, PrVec2{c + arm, c}, kInk, 2);
-    line(list, PrVec2{c, c - arm}, PrVec2{c, c + arm}, kInk, 2);
-    return list;
-}
-
-PrDrawList* drawStop() {
-    PrDrawList* list = prDrawListCreate();
-    PrCornerRect shape{};
-    shape.rect = PrRect{0, 0, kStopSide, kStopSide};
-    for (PrCorner& corner : shape.corners)
-        corner = PrCorner{PrVec2{kStopSide * 0.15f, kStopSide * 0.15f}, 1};
-    prDrawListCornerRect(list, shape, PrDrawPaint{.color = kStop});
-    return list;
-}
-
-PrDrawList* drawMic() {
-    PrDrawList* list = prDrawListCreate();
-    float x = kMicWidth / 2;
-    float m = 0.2f * kU;
-    float mid = kMicHeight * 0.45f;
-    PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = 2;
-    prDrawListCapsule(list, PrVec2{x, mid - m * 2}, PrVec2{x, mid + m * 0.2f}, m * 1.1f,
-        PrDrawPaint{.color = kInk, .stroke = &stroke});
-    prDrawListSector(list, PrVec2{x, mid + m * 0.2f}, m * 1.8f, m * 1.8f + 2, 0, kPi, PrDrawPaint{.color = kInk});
-    line(list, PrVec2{x, mid + m * 2.0f}, PrVec2{x, mid + m * 2.8f}, kInk, 2);
-    return list;
-}
-
+// The context ring beside the model label: no kit part or icon shows a ring.
 PrDrawList* drawRing() {
     PrDrawList* list = prDrawListCreate();
     PrDrawStroke stroke = prDrawStrokeDefault();
@@ -457,14 +219,6 @@ PrDrawList* drawRing() {
     prDrawListEllipse(list, PrVec2{kRingSide / 2, kRingSide / 2}, PrVec2{r, r}, 0,
         PrDrawPaint{.color = kRing, .stroke = &stroke});
     return list;
-}
-
-PrTextFont* font(PrFontSet* set, float size) {
-    PrFontFamily family = prFontFamilyGeneric(PrFontGeneric_SystemUi);
-    PrFontStyle s = prFontStyleDefault();
-    s.size = size;
-    PrTextFontDesc desc{.set = set, .families = &family, .familyCount = 1, .style = s};
-    return prTextFontCreate(&desc);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -476,8 +230,13 @@ PrStringView sv(std::string_view s) {
 
 constexpr std::string_view kPlaceholderText = "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later";
 
+PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
+    return PrKitTextStyle{.role = role, .tone = tone, .wrap = PrKitWrap_Auto, .align = align, .preserve = true};
+}
+
 struct Builder {
     View& view;
+    PrKit* kit;
     PrUi* ui;
     PrLayoutTree* tree;
     const Look& look;
@@ -487,74 +246,73 @@ struct Builder {
         return prUiElement(ui, parent, key, style(ui, look, p), flags);
     }
 
-    PrLayoutNode text(PrLayoutNode parent, Part p, PrStringView value) {
-        PrLayoutNode node = element(parent, p);
-        prLayoutTreeFrameText(tree, node, 0, value);
-        return node;
+    PrLayoutNode label(PrLayoutNode parent, std::string_view text, PrKitTextStyle s) {
+        return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
 
-    void icon(PrLayoutNode parent, Part p, PrDrawList* list, float width, float height) {
-        PrLayoutNode node = prLayoutTreeFrameReplaced(tree, parent, 0, style(ui, look, p));
-        prLayoutTreeFrameSetNaturalSize(tree, node,
-            PrLayoutNaturalSize{prLayoutUnitFromPx(width), prLayoutUnitFromPx(height), 0});
-        PrLayoutContent content{};
-        content.kind = PrLayoutContentKind_DrawList;
-        content.list = list;
-        prLayoutTreeFrameSetContent(tree, node, &content);
+    void icon(PrLayoutNode parent, PrKitIconKind kind, float side) {
+        PrLayoutNode node = prKitIcon(kit, parent, PrKitIcon{.key = 0, .icon = kind},
+            PrKitIconStyle{.size = side, .tone = PrKitTone_Primary, ._pad = {}});
+        // Centred on the prompt's first line, where the row aligns its items at the bottom.
+        PrKitPlace place{};
+        place.margin.bottom = (kOneLineArea - side) / 2;
+        place.flex = PrKitFlex_Fixed;
+        prKitPlace(kit, node, &place);
     }
 
     void strip(PrLayoutNode window) {
-        PrLayoutNode row = element(window, Part::Strip);
+        PrLayoutNode row = prKitTabStrip(kit, window, PrKitTabStrip{.key = 0, .disabled = false, .reorderable = false},
+            PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
+        PrKitPlace rowPlace{};
+        rowPlace.height = prKitPx(kStripHeight + 1);
+        rowPlace.flex = PrKitFlex_Fixed;
+        prKitPlace(kit, row, &rowPlace);
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
-            PrLayoutNode tab = element(row, Part::Tab, PrUiFlag_Pressable, prUiKeyIndex(ui, row, i));
-            if (prUiClicked(ui, tab, 0))
+            PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, i),
+                .selected = i == model.active(), .disabled = false});
+            PrKitPlace tabPlace{};
+            tabPlace.height = prKitPx(1.75f * kTabSize);
+            tabPlace.align = PrKitAlign_Center;
+            if (i == 0)
+                tabPlace.margin.left = 0.8f * kU;
+            prKitPlace(kit, tab, &tabPlace);
+            if (prKitActivated(kit, tab))
                 model.select_tab(i);
-            bool active = i == model.active();
-            prLayoutTreeFrameSetStyle(tree, tab, style(ui, look, active ? Part::TabActive : Part::Tab));
             std::string number = std::to_string(i + 1);
-            text(tab, Part::TabNumber, sv(number));
-            text(tab, active ? Part::TabNameActive : Part::TabName, sv(model.tab(i).name));
+            label(tab, number, textStyle(PrKitTextRole_Body, PrKitTone_Faint));
+            prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(model.tab(i).name)});
         }
     }
 
-    // Keeps each tab's scroll while another shows, and keeps a following transcript at its newest entry.
-    void scroll(PrLayoutNode scroller, std::size_t active) {
-        PrLayoutScrollInfo info{};
-        bool laid = prLayoutNodeScrollInfo(tree, scroller, &info) && info.scrollContainer;
-        float stored = prLayoutUnitToPx(prLayoutNodeScroll(tree, scroller).y);
-        float bottom = laid ? prLayoutUnitToPx(info.range.bottom) : 0;
-        TabView& tv = view.tabs[active];
-        if (view.shown != active) {
-            if (view.shown < view.tabs.size() && laid)
-                view.tabs[view.shown].scroll = std::min(stored, bottom);
-            view.shown = active;
-            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0),
-                prLayoutUnitFromPx(tv.follow ? kFar : tv.scroll)});
-        } else if (laid) {
-            tv.follow = stored >= bottom - 0.5f;
-        }
-        std::size_t count = model.tab(active).transcript.size();
-        if (count != tv.seen) {
-            tv.seen = count;
-            tv.follow = true;
-        }
-        if (tv.follow && stored < kFar)
-            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(kFar)});
+    // Each tab keeps its scroll while another shows. Offsets count from the scroller's origin, its bottom, so a tab
+    // never scrolled stays at its newest entry.
+    void keepScroll(PrLayoutNode scroller, std::size_t active) {
+        view.scrolls.resize(model.tab_count(), 0);
+        if (view.shown == active)
+            return;
+        if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone)
+            view.scrolls[view.shown] = prLayoutUnitToPx(prLayoutNodeScroll(tree, view.transcript).y);
+        view.shown = active;
+        prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(view.scrolls[active])});
     }
 
     void transcript(PrLayoutNode window) {
         PrLayoutNode scroller = element(window, Part::Transcript, PrUiFlag_Scrollable);
         PrLayoutNode column = element(scroller, Part::Column);
         if (model.tab_count() == 0) {
-            text(column, Part::Centered, sv(view.notice));
+            PrLayoutNode centered = element(column, Part::Centered);
+            label(centered, view.notice, textStyle(PrKitTextRole_Body, PrKitTone_Faint, PrKitTextAlign_Center));
+            view.transcript = scroller;
             return;
         }
         std::size_t active = model.active();
-        scroll(scroller, active);
+        keepScroll(scroller, active);
+        view.transcript = scroller;
         const Tab& tab = model.tab(active);
         if (tab.transcript.empty()) {
+            PrLayoutNode centered = element(column, Part::Centered);
             std::string hint = "Say something to " + tab.name;
-            text(column, Part::Centered, sv(hint));
+            label(centered, hint, textStyle(PrKitTextRole_Body, PrKitTone_Faint, PrKitTextAlign_Center));
         }
         for (const Entry& e : tab.transcript) {
             switch (e.kind) {
@@ -562,87 +320,92 @@ struct Builder {
                 case EntryKind::Queued: {
                     bool queued = e.kind == EntryKind::Queued;
                     PrLayoutNode entry = element(column, Part::Entry);
-                    text(entry, queued ? Part::BubbleQueued : Part::Bubble, sv(e.text));
-                    if (queued)
-                        text(entry, Part::QueuedLabel, PrStringView{"queued", 6});
+                    PrLayoutNode bubble = element(entry, queued ? Part::BubbleQueued : Part::Bubble);
+                    label(bubble, e.text, textStyle(PrKitTextRole_Body, queued ? PrKitTone_Muted : PrKitTone_Primary));
+                    if (queued) {
+                        PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
+                        PrKitPlace place{};
+                        place.margin.top = 0.3f * kMetaSize;
+                        place.margin.right = 6;
+                        prKitPlace(kit, tag, &place);
+                    }
                     break;
                 }
                 case EntryKind::Friend:
-                    text(column, Part::FriendText, sv(e.text));
+                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 case EntryKind::Notice:
-                    text(column, Part::NoticeText, sv(e.text));
+                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
             }
         }
     }
 
-    // Shift-Enter: a line feed in place of the selection, with the caret after it.
-    void newline(PrLayoutNode prompt, std::size_t active) {
-        std::string draft = model.tab(active).draft;
-        PrUiTextSelection sel = prUiTextEditSelection(ui, prompt);
-        std::size_t lo = std::min<std::size_t>(std::min(sel.anchor, sel.caret), draft.size());
-        std::size_t hi = std::min<std::size_t>(std::max(sel.anchor, sel.caret), draft.size());
-        draft.replace(lo, hi - lo, "\n");
-        model.set_draft(active, std::move(draft));
-        uint32_t at = uint32_t(lo + 1);
-        prUiTextEditSetSelection(ui, prompt, PrUiTextSelection{at, at});
+    // The kit's text area has a fixed number of rows; the prompt grows with its text up to kPromptMaxLines, so the rows
+    // come from how tall the text was at the last layout. A workaround for the area's missing auto height.
+    uint32_t promptRows() {
+        if (view.prompt == kPrLayoutNodeNone)
+            return 1;
+        PrLayoutNode text = prLayoutNodeFirstChild(tree, view.prompt);
+        if (text == kPrLayoutNodeNone)
+            return view.promptRows;
+        PrLayoutRect box = prLayoutNodeBounds(tree, text, PrLayoutCoordinates_Layout);
+        float lines = std::round(prLayoutUnitToPx(box.bottom - box.top) / kLinePitch);
+        return uint32_t(std::clamp(lines, 1.0f, kPromptMaxLines));
     }
 
     void prompt(PrLayoutNode footer) {
         std::size_t active = model.active();
-        PrLayoutNode box = element(footer, Part::Prompt, PrUiFlag_Pressable | PrUiFlag_Focusable,
-            prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6}));
-        prUiSetCursor(ui, box, PrAppCursor_Text);
-        if (prUiFocus(ui) != box)
-            prUiSetFocus(ui, box);
-        icon(box, Part::Plus, look.plus, kPlusSide, kPlusSide);
-        PrLayoutNode scroller = element(box, Part::PromptScroll, PrUiFlag_Scrollable);
-        PrLayoutNode holder = element(scroller, Part::PromptText);
+        // Enter sends and Command-Enter queues. Captured on the row that holds the text area, so the area never sees
+        // them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
+        PrLayoutNode row = element(footer, Part::PromptRow);
+        bool send = prUiKeyCaptured(ui, row, PrAppKey_Enter, 0);
+        bool queue = prUiKeyCaptured(ui, row, PrAppKey_Enter, PrAppModifierFlag_Super);
+        // While an input method composes, its Enter commits the composition (CompositionEnd, then Text, after the
+        // KeyDown): read before the area takes this round's events.
+        bool composing = view.prompt != kPrLayoutNodeNone && prUiTextEditIsComposing(ui, view.prompt);
+        view.promptRows = promptRows();
 
+        icon(row, PrKitIconKind_Plus, kPlusSide);
+        PrKitTextArea area{};
+        area.key = prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6});
+        area.text = sv(model.tab(active).draft);
+        area.placeholder = sv(kPlaceholderText);
+        area.rows = view.promptRows;
+        PrLayoutNode edit = prKitTextArea(kit, row, area, PrKitFieldStyle{});
+        PrKitPlace fill{};
+        fill.flex = PrKitFlex_Fill;
+        prKitPlace(kit, edit, &fill);
+        view.prompt = edit;
+        if (prUiFocus(ui) != edit)
+            prUiSetFocus(ui, edit);
+        PrStringView changed{};
+        if (prKitTextChanged(kit, edit, &changed))
+            model.set_draft(active, std::string(changed.data, changed.size));
+        if (!composing && send)
+            model.send(active);
+        if (!composing && queue)
+            model.queue(active);
         // A tab's draft comes back with the caret at its end.
-        const std::string& draft = model.tab(active).draft;
         if (view.prompted != active) {
             view.prompted = active;
-            uint32_t end = uint32_t(draft.size());
-            prUiTextEditSetSelection(ui, box, PrUiTextSelection{end, end});
+            uint32_t end = uint32_t(model.tab(active).draft.size());
+            prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
         }
-        PrUiTextEditDesc edit{};
-        edit.control = box;
-        edit.parent = holder;
-        edit.value = sv(draft);
-        edit.flags = PrUiTextEditFlag_Multiline;
-        edit.selection = prColor16FromColor(kSelection);
-        edit.caret = prColor16FromColor(kInk);
-        prUiTextEdit(ui, &edit);
-        PrStringView changed{};
-        if (prUiTextEditChanged(ui, box, &changed))
-            model.set_draft(active, std::string(changed.data, changed.size));
-
-        std::size_t count = 0;
-        const PromptKey* keys = promptKeys(&count);
-        for (std::size_t i = 0; i < count; ++i) {
-            if (!prUiKeyCaptured(ui, box, keys[i].key, keys[i].modifiers))
-                continue;
-            switch (keys[i].action) {
-                case Action::Send: model.send(active); break;
-                case Action::Queue: model.queue(active); break;
-                case Action::Newline: newline(box, active); break;
-                default: break;
-            }
-        }
-        if (model.tab(active).draft.empty() && !prUiTextEditIsComposing(ui, box))
-            text(holder, Part::Placeholder, sv(kPlaceholderText));
-        icon(box, Part::Stop, look.stop, kStopSide, kStopSide);
-        icon(box, Part::Mic, look.mic, kMicWidth, kMicHeight);
+        icon(row, PrKitIconKind_Stop, kStopSide);
 
         PrLayoutNode labels = element(footer, Part::LabelRow);
-        text(labels, Part::Label, sv(model.tab(active).model));
-        icon(labels, Part::Ring, look.ring, kRingSide, kRingSide);
+        label(labels, model.tab(active).model, textStyle(PrKitTextRole_BodySmall, PrKitTone_Primary));
+        PrLayoutNode ring = prLayoutTreeFrameReplaced(tree, labels, 0, style(ui, look, Part::Ring));
+        prLayoutTreeFrameSetNaturalSize(tree, ring,
+            PrLayoutNaturalSize{prLayoutUnitFromPx(kRingSide), prLayoutUnitFromPx(kRingSide), 0});
+        PrLayoutContent content{};
+        content.kind = PrLayoutContentKind_DrawList;
+        content.list = look.ring;
+        prLayoutTreeFrameSetContent(tree, ring, &content);
     }
 
     void build(PrLayoutNode parent) {
-        view.tabs.resize(model.tab_count());
         PrLayoutNode window = element(parent, Part::Window);
         strip(window);
         transcript(window);
@@ -654,32 +417,60 @@ struct Builder {
 
 } // namespace
 
-void openLook(Look& look, PrFontSet* fonts) {
-    look.body = font(fonts, kBodySize);
-    look.tab = font(fonts, kTabSize);
-    look.label = font(fonts, kLabelSize);
-    look.meta = font(fonts, kMetaSize);
-    look.plus = drawPlus();
-    look.stop = drawStop();
-    look.mic = drawMic();
+void openLook(Look& look) {
     look.ring = drawRing();
 }
 
 void closeLook(Look& look) {
-    prTextFontRelease(look.body);
-    prTextFontRelease(look.tab);
-    prTextFontRelease(look.label);
-    prTextFontRelease(look.meta);
-    prDrawListRelease(look.plus);
-    prDrawListRelease(look.stop);
-    prDrawListRelease(look.mic);
     prDrawListRelease(look.ring);
     look = Look{};
 }
 
-void buildWindow(View& view, PrUi* ui, PrLayoutNode parent) {
-    Builder b{view, ui, prUiTree(ui), *view.look, *view.model};
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay) {
+    PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
+    PrKitPalette& p = theme.palette;
+    p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
+    p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip
+    p.bg2 = kPromptFill;                                                    // the prompt's fill, a tab under the pointer
+    p.line2 = kStripLine;                                                   // the strip's rule
+    p.line3 = kPromptBorder;                                                // the prompt's border under the pointer
+    p.text1 = kInk;
+    p.text3 = kNotice;
+    p.text4 = kPlaceholder;
+    p.textSelection = kSelection;
+    auto type = [&](PrKitTextRole role, float size, float lineHeight) {
+        PrKitType& t = theme.types[role];
+        t.mono = false;
+        t.italic = false;
+        t.size = size;
+        t.weight = 400;
+        t.lineHeight = lineHeight;
+        t.letterSpacing = 0;
+    };
+    type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
+    type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the model label
+    type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
+    return theme;
+}
+
+void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
+    Builder b{view, kit, kit->ui, kit->tree, *view.look, *view.model};
     b.build(parent);
+}
+
+bool takeEvent(View& view, PrUi* ui, const PrAppEvent& event) {
+    Filtered f = filterEvent(view.input, event.kind, event.key, event.code, event.modifiers);
+    if (f.action == Action::SelectTab)
+        view.model->select_tab(f.tab);
+    if (f.consume)
+        return true;
+    if (f.modifiers != event.modifiers) {
+        PrAppEvent copy = event;
+        copy.modifiers = f.modifiers;
+        prUiPushEvent(ui, &copy);
+        return true;
+    }
+    return false;
 }
 
 } // namespace nexus

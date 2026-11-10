@@ -52,7 +52,6 @@ constexpr PrColor kPlaceholder = rgb(0x8c8c8c);
 constexpr PrColor kMeta = rgb(0x707070);
 constexpr PrColor kPromptFill = rgb(0x303030);
 constexpr PrColor kPromptBorder = rgb(0x3a3a3a);
-constexpr PrColor kStop = rgb(0xf1f1f1);
 constexpr PrColor kRing = rgb(0x404c55);
 constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in the reference)
 

@@ -1,11 +1,12 @@
-// The window's key bindings, as pure functions of an event's fields: no OS, no clock, no UI context. The window calls
-// them; tests/window/ checks them.
+// The window's event filter, as a pure function of an event's fields: no OS, no clock, no UI context. The window runs
+// every event through it before Prax's UI context sees it; tests/window/ checks it.
 //
-// Two places take keys. The event filter sees every event before Prax's UI context does, and takes what the context
-// cannot: Option-1..9 (whose key is the character the layout types, so only its code names the digit), the character
-// macOS types for that chord, Enter while an input method composes, and the Caps Lock flag, which the context's exact
-// modifier match would otherwise let break every binding. The prompt's keys are captured on the prompt in the build,
-// in the order the context routes them, so a send always takes the text typed before it.
+// Each thing it does works around something Prax's UI context does not offer:
+// - Option-1..9 selects a tab. A key claim matches the logical key only, and an Option-digit arrives as key Unknown (its
+//   key is the character the layout types), so only the event's code names the digit. The character macOS types for
+//   the chord is dropped with it.
+// - Caps Lock is taken off the modifiers. A claim compares modifiers exactly (ui.cpp claimOf), so with Caps Lock on no
+//   binding (Enter, Command-Enter, the text edit's own keys) would match.
 
 #pragma once
 
@@ -18,14 +19,10 @@ namespace nexus {
 enum class Action : unsigned char {
     None,
     SelectTab,      // select tab `tab`
-    Send,           // the prompt's text goes into the transcript
-    Queue,          // the same, marked to be sent later
-    Newline,        // a line feed at the caret
 };
 
 // What the event filter keeps between events.
 struct InputState {
-    bool composing = false;     // an input method has marked text
     bool dropText = false;      // the next Text event belongs to a key the filter took
 };
 
@@ -40,18 +37,5 @@ struct Filtered {
 // Filters one event. `key`, `code` and `modifiers` are the event's (zero where its kind has none).
 Filtered filterEvent(InputState& state, PrAppEventKind kind, PrAppKey key, PrAppKeyCode code,
     PrAppModifierFlags modifiers);
-
-// A key the prompt captures, and what it does.
-struct PromptKey {
-    PrAppKey key;
-    PrAppModifierFlags modifiers;
-    Action action;
-};
-
-// The prompt's keys: Enter sends, Shift-Enter inserts a line feed, Command-Enter queues. Writes the count.
-const PromptKey* promptKeys(std::size_t* count);
-
-// Returns the prompt's action for a key and its modifiers (Caps Lock ignored), or None.
-Action promptAction(PrAppKey key, PrAppModifierFlags modifiers);
 
 } // namespace nexus

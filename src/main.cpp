@@ -31,7 +31,6 @@
 #include "pr/text.h"
 
 #include "friends.h"
-#include "input.h"
 #include "model.h"
 #include "platform_mac.h"
 #include "style.h"
@@ -54,7 +53,6 @@ struct App {
     Model* model = nullptr;
     View view;
     Look look;
-    InputState input;
     PrFontSet* fonts = nullptr;
     bool overlay = true;            // the overlay window (platform_mac.h); --windowed gives Prax's own window
     bool overlayOpened = false;
@@ -75,14 +73,11 @@ OverlayConfig overlayConfig() {
     };
 }
 
-// The kit only draws the root's background, which is the canvas: give it the window's colour. The window clears to
-// the canvas with its alpha, so the overlay's background is see-through and what is drawn on it is not.
+// The window's kit theme (view.h). Its bg0 is the canvas, which the window clears to with its alpha, so the overlay's
+// background is see-through and what is drawn on it is not.
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
-    PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, a.fonts);
-    theme.palette.bg0 = style::kBackground;
-    if (a.overlay)
-        theme.palette.bg0.a = style::kOverlayOpacity;
+    PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     return true;
 }
@@ -107,24 +102,12 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame*) {
 }
 
 bool event(void* context, PrStudioWindow* window, const PrAppEvent* e) {
-    App& a = appOf(context);
-    Filtered f = filterEvent(a.input, e->kind, e->key, e->code, e->modifiers);
-    if (f.action == Action::SelectTab)
-        a.model->select_tab(f.tab);
-    if (f.consume)
-        return true;
-    if (f.modifiers != e->modifiers) {
-        PrAppEvent copy = *e;
-        copy.modifiers = f.modifiers;
-        prUiPushEvent(prStudioWindowUi(window), &copy);
-        return true;
-    }
-    return false;
+    return takeEvent(appOf(context).view, prStudioWindowUi(window), *e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2) {
     App& a = appOf(context);
-    buildWindow(a.view, prStudioWindowUi(window), root);
+    buildWindow(a.view, prStudioWindowKit(window), root);
 }
 
 bool laidOut(void* context, PrStudioWindow* window) {
@@ -160,11 +143,12 @@ void printStats(const FrameStats& s) {
 
 struct Offscreen {
     App* app;
+    PrKit* kit;
 };
 
-void buildOffscreen(void* context, PrUi* ui, const PrUiRound*) {
-    App& a = *static_cast<Offscreen*>(context)->app;
-    buildWindow(a.view, ui, kPrLayoutNodeNone);
+void buildOffscreen(void* context, PrUi*, const PrUiRound*) {
+    Offscreen& off = *static_cast<Offscreen*>(context);
+    buildWindow(off.app->view, off.kit, kPrLayoutNodeNone);
 }
 
 bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
@@ -209,7 +193,9 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrLayoutTree* tree = prLayoutTreeCreate(&treeDesc);
     prLayoutTreeSetCanvasColor(tree, prColor16FromColor(style::kBackground));
     PrUi* ui = prUiCreate(tree);
-    Offscreen off{&a};
+    PrKitTheme theme = windowTheme(a.fonts, false);
+    PrKit* kit = prKitCreate(ui, &theme);
+    Offscreen off{&a, kit};
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
     // Enough frames for every query to read a layout: the first round routes nothing, and scrolling reads the last one.
@@ -255,6 +241,7 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prDrawRendererDestroy(renderer);
     prGpuDeviceDestroy(device);
     prDrawListRelease(list);
+    prKitDestroy(kit);
     prUiDestroy(ui);
     prLayoutTreeDestroy(tree);
     prTextShaperDestroy(shaper);
@@ -344,7 +331,7 @@ int main(int argc, char** argv) {
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
     prFontSetSetDefaultFamily(a.fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
-    openLook(a.look, a.fonts);
+    openLook(a.look);
 
     int code = 0;
     if (shot != nullptr) {

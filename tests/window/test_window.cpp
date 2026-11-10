@@ -73,16 +73,6 @@ void aNewKeyEndsTheSwallow() {
     CHECK(!textEvent(s).consume);
 }
 
-void enterWhileComposingIsSwallowed() {
-    InputState s;
-    filterEvent(s, PrAppEventKind_CompositionUpdate, PrAppKey_Unknown, PrAppKeyCode_Unidentified, 0);
-    CHECK(keyDown(s, PrAppKey_Enter, PrAppKeyCode_Enter, 0).consume);
-    CHECK(keyDown(s, PrAppKey_Enter, PrAppKeyCode_Enter, kCmd).consume);
-    CHECK(!keyDown(s, 'A', PrAppKeyCode_KeyA, 0).consume);
-    filterEvent(s, PrAppEventKind_CompositionEnd, PrAppKey_Unknown, PrAppKeyCode_Unidentified, 0);
-    CHECK(!keyDown(s, PrAppKey_Enter, PrAppKeyCode_Enter, 0).consume);
-}
-
 void capsLockIsStripped() {
     InputState s;
     Filtered f = keyDown(s, PrAppKey_Left, PrAppKeyCode_ArrowLeft, PrAppModifierFlags(kShift | kCaps));
@@ -90,21 +80,6 @@ void capsLockIsStripped() {
     CHECK(f.modifiers == kShift);
     f = filterEvent(s, PrAppEventKind_PointerDown, PrAppKey_Unknown, PrAppKeyCode_Unidentified, kCaps);
     CHECK(f.modifiers == 0);
-}
-
-void promptKeysMap() {
-    CHECK(promptAction(PrAppKey_Enter, 0) == Action::Send);
-    CHECK(promptAction(PrAppKey_Enter, kShift) == Action::Newline);
-    CHECK(promptAction(PrAppKey_Enter, kCmd) == Action::Queue);
-    CHECK(promptAction(PrAppKey_Enter, PrAppModifierFlags(kCmd | kCaps)) == Action::Queue);
-    CHECK(promptAction(PrAppKey_Enter, PrAppModifierFlags(kCmd | kShift)) == Action::None);
-    CHECK(promptAction(PrAppKey_Enter, kAlt) == Action::None);
-    CHECK(promptAction('A', 0) == Action::None);
-    std::size_t count = 0;
-    const PromptKey* keys = promptKeys(&count);
-    CHECK(count == 3);
-    for (std::size_t i = 0; i < count; ++i)
-        CHECK(promptAction(keys[i].key, keys[i].modifiers) == keys[i].action);
 }
 
 void parsesEnabledFriendsInOrder() {
@@ -136,9 +111,7 @@ int main() {
     otherDigitsDoNot();
     optionDigitSwallowsItsCharacter();
     aNewKeyEndsTheSwallow();
-    enterWhileComposingIsSwallowed();
     capsLockIsStripped();
-    promptKeysMap();
     parsesEnabledFriendsInOrder();
     reportsWhatIsWrong();
     if (failures != 0) {
