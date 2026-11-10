@@ -58,14 +58,14 @@ target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
-# The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
-# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.
 add_library(nexus_scroll STATIC src/scroll_glide.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
+# The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
+# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
 add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
@@ -117,7 +117,11 @@ if(NEXUS_LINK)
     target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
     target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
 endif()
+# The name the user sees is nexus everywhere: the bundle's name and display name (cmake/Info.plist.in, CMake's
+# template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app menu's
+# About, Hide and Quit), the window's title (main.cpp) and the sprint tab's label (view.cpp).
 set_target_properties(nexus PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
     MACOSX_BUNDLE_BUNDLE_NAME nexus
     MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0

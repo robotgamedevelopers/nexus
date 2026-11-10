@@ -16,6 +16,7 @@
 #include "pr/ui_records.h"
 #include "pr/ui_text_edit.h"
 
+#include "sprint.h"
 #include "style.h"
 
 namespace nexus {
@@ -455,13 +456,14 @@ struct Builder {
         }
     }
 
-    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
-    // "terminal".
+    // A friend's tab shows the friend's name; the sprint tab "nexus", the app's name, as its board's header now says
+    // (sprint.h kSprintBrand; the owner 2026-11-10: "I want to brand the app as 'nexus'"); a terminal's the title its
+    // shell set, or "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend)
             return tab.name;
         if (tab.kind == TabKind::Sprint)
-            return "sprint";
+            return std::string(kSprintBrand);
         std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
         return title.empty() ? std::string("terminal") : title;
     }
