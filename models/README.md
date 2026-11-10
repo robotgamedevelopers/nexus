@@ -2,6 +2,8 @@
 
 Every state machine in nexus has a TLA+ module here. TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
+This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`.
+
 ## What is modelled
 
 `Window.tla` is the state the window owns, `nexus::Model` in `src/model.h`:

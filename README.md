@@ -68,9 +68,14 @@ tab's transcript and queue. A window that was away for long sees "N earlier entr
 missed (the server sends each transcript's newest 16 entries, so that a diff stays small however far behind a window
 is). The friend list still comes from `nova-config` on the window's machine.
 
-`nexus-server` keeps everything in memory: a restart loses it. It listens on a Unix socket only its user can use,
-`~/.nexus/server.sock` (mode 0600, in a directory of mode 0700), logs to `~/.nexus/server.log` (never a key), and
-takes UDP on ports 60001 to 60999, one per window. `nexus-server stop` stops it.
+`nexus-server` keeps every tab's transcript and queue, and how far it has applied each window's actions, in
+`~/.nexus/store/`: each action is written and synced there before any window sees it, so a restart, or the server
+killed, loses nothing a window was shown. A window that names itself (`nexus-server new --client <id> --next <n>`)
+can open a new session after a restart and send its actions again from action n under the same numbers; the server
+applies only those it had not, and refuses a session that would skip some. It listens on a Unix socket only its user
+can use, `~/.nexus/server.sock` (mode 0600, in a directory of mode 0700), logs to `~/.nexus/server.log` (never a key),
+and takes UDP on ports 60001 to 60999, one per window. `nexus-server stop` stops it. If the disk fails under the
+store, the server stops; started again, it opens the store from what is durable.
 
 To try it, with `studio` a machine you can `ssh studio` to without a password prompt, and its UDP ports above
 reachable from yours (over the tailnet they are):
@@ -87,8 +92,8 @@ cmake --build build -j "$(sysctl -n hw.ncpu)"
 open -n build/nexus.app --args --server studio
 ```
 
-Not yet: the server's state lasting across a restart (the store layer); a window reattaching to a restarted server
-(today it says it has had no contact); the friends' AIs answering (layer 3); the plus button's upload; iOS.
+Not yet: the window reattaching to a restarted server by itself (today it says it has had no contact; the server
+side of it is there); the friends' AIs answering (layer 3); the plus button's upload; iOS.
 
 ## What it builds on
 
