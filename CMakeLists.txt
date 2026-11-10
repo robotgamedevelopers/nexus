@@ -60,8 +60,9 @@ target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
 # The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
 # tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it, and
-# how its scroll glides).
-add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/scroll_glide.cpp src/tab_order.cpp)
+# how its scroll glides and how held Up and Down drive it).
+add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/scroll_glide.cpp src/scroll_hold.cpp
+    src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)

@@ -307,8 +307,13 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     }
     if (!onScreen) {
         endGlide(true);
+        hold_ = holdBlur(hold_);
         return;
     }
+    // The window without the keyboard holds no key. Prax sends the held keys' KeyUp when the window loses the keyboard
+    // (app_cocoa.mm windowDidResignKey, releaseHeld); this does not count on it.
+    if (desc_.window != nullptr && !prAppWindowIsActive(desc_.window))
+        hold_ = holdBlur(hold_);
     takeAddress();
     if (url_.empty()) {
         if (!finding_.valid() && frameTime_ >= findAgainAt_) {
@@ -330,6 +335,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
         navigate();
     }
     stepGlide();
+    stepHeld();
     runTasks();
 }
 
@@ -480,7 +486,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     // The next frame: now if the page has work due, at its next timer, or none.
     if (onScreen && agent_ != nullptr) {
         double delay = prDomAgentNextTaskDelay(agent_);
-        if (delay == 0 || dirty_ || glide_.active)
+        if (delay == 0 || dirty_ || glide_.active || holdDirection(hold_) != 0)
             prUiRequestFrame(ui);
         else if (delay > 0)
             prUiRequestFrameAt(ui, frameTime_ + delay / 1000);
@@ -490,6 +496,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
 
 void PraxBoard::hidden() {
     endGlide(true);
+    hold_ = holdBlur(hold_);
     shown_ = false;
     pressInPage_ = false;
 }
@@ -515,7 +522,18 @@ bool PraxBoard::event(const PrAppEvent& e) {
         return false;
     // In the page's CSS px: its position from the pane's corner, and a trackpad's pixel deltas, over the text scale.
     PrAppEvent copy = prAppEventPlaced(&e, PrVec2{pane_.left, pane_.top}, zoom_);
-    if (e.kind == PrAppEventKind_KeyDown ||
+    HoldKey key{};
+    const bool arrow = arrowKey(e, &key);
+    const bool plain = (e.modifiers & (PrAppModifierFlag_Super | PrAppModifierFlag_Control | PrAppModifierFlag_Alt)) == 0;
+    if (arrow && e.kind == PrAppEventKind_KeyDown && e.keyboard.repeat && isHeld(hold_, key)) {
+        // A repeat of a held key: the key's down state drives the scroll, and the page does not see the repeat.
+        hold_ = holdRepeat(hold_, key);
+    } else if (arrow && e.kind == PrAppEventKind_KeyDown && !e.keyboard.repeat && plain) {
+        pressHeld(copy, key);
+    } else if (arrow && e.kind == PrAppEventKind_KeyUp) {
+        hold_ = holdRelease(hold_, key, frameTime_);
+        prHtmlViewEvent(view_, &copy, 0);
+    } else if (e.kind == PrAppEventKind_KeyDown ||
             (e.kind == PrAppEventKind_Scroll && e.scroll.unit == PrAppScrollUnit_Line)) {
         glideThrough(copy);
     } else {
@@ -543,6 +561,76 @@ double maxScroll(PrDomElement* scroller) {
 }
 
 } // namespace
+
+// Up and Down, going down or up: the keys a hold drives.
+bool PraxBoard::arrowKey(const PrAppEvent& e, HoldKey* key) {
+    if (e.kind != PrAppEventKind_KeyDown && e.kind != PrAppEventKind_KeyUp)
+        return false;
+    if (e.keyboard.key == PrAppKey_Up)
+        *key = HoldKey::Up;
+    else if (e.keyboard.key == PrAppKey_Down)
+        *key = HoldKey::Down;
+    else
+        return false;
+    return true;
+}
+
+bool PraxBoard::isHeld(const Hold& h, HoldKey key) {
+    return key == HoldKey::Up ? h.up : h.down;
+}
+
+// A press of Up or Down. Prax's view takes it as it would (its keydown, a form control's use of the key, a listener that
+// cancels it), from a place where the page's own scroll has room to move the key's way. If that moved the page's scroll,
+// the page scrolls by its keys: the scroll goes back to where the page shows, and the hold drives it from the next
+// frame. If not (a form control took the key, a listener cancelled it, or the page cannot scroll), the key does what
+// Prax made of it, and no hold starts.
+void PraxBoard::pressHeld(const PrAppEvent& e, HoldKey key) {
+    PrDomElement* s = scroller();
+    if (s == nullptr) {
+        prHtmlViewEvent(view_, &e, 0);
+        return;
+    }
+    endGlide(false);
+    const double max = maxScroll(s);
+    const double shown = prCssElementScrollTop(s);
+    if (max >= 1)
+        prCssElementSetScrollTop(s, key == HoldKey::Down ? std::min(shown, max - 1) : std::max(shown, 1.0));
+    const double before = prCssElementScrollTop(s);
+    prHtmlViewEvent(view_, &e, 0);
+    const double after = prCssElementScrollTop(s);
+    prCssElementSetScrollTop(s, shown);
+    applied_ = prCssElementScrollTop(s);
+    if (after == before)
+        return;
+    hold_ = holdPress(hold_, key, frameTime_);
+    heldAt_ = shown;
+}
+
+// Each frame while one key is held: the page's scroll moves by the hold's step, clamped to the page's range. A glide
+// (another key, a wheel's notch) owns the scroll while it runs, and the hold carries on from where it ends; a page that
+// scrolled itself, or a trackpad, moves the place the hold carries on from. The page's own scroll only: a box of the
+// page that scrolls by itself is not held.
+void PraxBoard::stepHeld() {
+    if (holdDirection(hold_) == 0)
+        return;
+    PrDomElement* s = scroller();
+    if (s == nullptr) {
+        hold_ = holdBlur(hold_);
+        return;
+    }
+    if (glide_.active) {
+        hold_ = holdSkip(hold_, frameTime_);
+        return;
+    }
+    // The hold keeps its place to a fraction of a pixel; the page's scroll is that place as Prax rounds it.
+    if (std::fabs(prCssElementScrollTop(s) - heldAt_) > 1)
+        heldAt_ = prCssElementScrollTop(s);
+    const double step = holdStep(&hold_, frameTime_, kHoldSpeed / zoom_);
+    heldAt_ = std::clamp(heldAt_ + step, 0.0, maxScroll(s));
+    prCssElementSetScrollTop(s, heldAt_);
+    applied_ = prCssElementScrollTop(s);
+    dirty_ = true;
+}
 
 // Prax's view takes the event as it would (its keydown, its wheel, and the scroll each does by default, which a form
 // control or a listener that cancels keeps from happening), from the glide's target, so that held keys and a spun wheel

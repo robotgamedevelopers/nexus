@@ -2,7 +2,7 @@
 
 Every state machine in nexus has a TLA+ module here. TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
-This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`.
+This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`. The sprint board's held Up and Down keys have theirs: `scroll/` (below).
 
 ## What is modelled
 
@@ -178,6 +178,23 @@ Reversed witnesses (`witnesses/WLink*.tla`), each rejected by TLC:
 The binding: `tests/sync/link_walk.cpp` (`link_walk <seed> <steps> <windows> [--faulty-applier | --faulty-mirror | --faulty-tail] <out.tla>`) runs the real `sync::Actions`, `Applier`, `Hub` over a `MemoryStore`, `Tabs`, `Mirror` and `nexus::Model` through `tests/sync/fake_mosh.h`, a copy of mosh 1.4.0's sender and receiver bookkeeping, with datagrams lost, repeated and reordered from the seed. Now and then it also hands the Applier a range mosh would not: one already applied, or one past a gap. It records each window action, each range the Applier is given and each state a window mirrors, with the code's whole state after it, and ends by letting everything through. `LinkTrace.tla` takes the `Link` action each record names, and `TraceMatches` requires the spec's state to equal the code's; every `Link` safety property is checked on the trace, and its last state must be `Settled`. The binding is shown to fail three times: `--faulty-applier` applies a whole range even where it was applied before, `--faulty-mirror` mirrors with a new `Mirror` each time, and `--faulty-tail` makes the server's tail one entry longer than the spec's; TLC must report `TraceMatches` violated.
 
 Per commit (`-L '^model$'`): the two small instances, the seven witnesses, six traces (seeds 1 to 4 on two windows and seed 5 on one, 400 steps each; seed 6 on three windows, 600 steps) and the three faulty traces: under 26 s of TLC in all, 7 s on eight cores.
+
+## scroll/ScrollHold.tla: the sprint board's held Up and Down
+
+`ScrollHold.tla` is `nexus::Hold` in `src/scroll_hold.h`: `up` and `down`, which of the two keys is down; `dir`, the direction the page scrolls in (1 down, -1 up, 0 still: idle, holding down, holding up); `moved`, the sign of the last frame's move; `last`, the step just taken. Actions: `Press(k)`, `Release(k)`, `Repeat(k)` (of either key, held or not), `Blur` (the window lost the keyboard, or the page left the screen) and `Frame`. Time, the speed's ease and the clamp at the page's ends are not modelled: a frame moves by the direction's sign.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | every variable has its type |
+| `DirFromKeys` | invariant | one key alone scrolls its way; both or neither stand still |
+| `RepeatKeepsVelocity` | invariant | after a repeat the keys and the direction are what they were |
+| `ReleaseStops` | invariant | after a release the page never moves the released key's way, and with no key down it is idle |
+| `BlurIdles` | invariant | after a blur no key is down and the page is still |
+| `NoInitialDelay` | invariant | while exactly one key is down, every frame moves the page its way, the first after the press included |
+
+Reversed witnesses (`scroll/witnesses/H*.cfg`, each a value of the constant `Bug`): `HRepeatDriven` (a press sets the key but the first repeat sets the direction: the scroll as it was, which waits for the first repeat) is rejected by `NoInitialDelay`; `HRepeatChanges` (a repeat sets its key's direction) by `RepeatKeepsVelocity`; `HReleaseKeeps` (a release keeps the direction) by `ReleaseStops`; `HBlurKeeps` (a blur lets go of nothing) by `BlurIdles`; `HBothLatest` (both keys down follow the latest press) by `DirFromKeys`.
+
+The binding: `tests/window/hold_walk.cpp` (`hold_walk <seed> <steps> [--fault repeat-driven | --fault repeat-changes] <out.tla>`) walks the real hold with presses, releases (some of keys not down), repeats (some of keys not down), blurs and frames 4 to 33 ms apart, and writes `ScrollHoldTraceData.tla`; `ScrollHoldTrace.tla` takes the action each record names and `TraceMatches` requires the spec's state to be the code's, with every invariant checked on the trace. Both faults must be rejected by `TraceMatches`. The checks run with `ctest -L model` (tests/window/CMakeLists.txt, through `tests/store/tlc.cmake`): the spec, the five witnesses, four seeds of 1000 steps and the two faulty traces.
 
 ## Running the checks
 

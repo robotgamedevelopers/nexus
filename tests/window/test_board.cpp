@@ -24,6 +24,7 @@
 
 #include "board.h"
 #include "model.h"
+#include "scroll_hold.h"
 #include "view.h"
 
 namespace {
@@ -416,48 +417,39 @@ void keysAndTheWheelGlide() {
     // Settles the glide: enough frames for the longest.
     auto settle = [&] { for (int i = 0; i < 40; ++i) h.frame(frame); };
 
-    // Down: no jump at the event, then a line over the key's glide, one way, ending where Prax's line ends.
+    // Page Down: no jump at the event, then a page less a line of overlap in a glide, one way, ending where Prax's page
+    // ends.
     CHECK(top() == 0);
-    send(keyDown(PrAppKey_Down, 0, false));
+    const double page = h.viewportHeight() - 40;
+    send(keyDown(PrAppKey_PageDown, 0, false));
     CHECK(top() == 0);
     std::vector<double> seen;
     for (int i = 0; i < 40; ++i) {
         h.frame(frame);
         seen.push_back(top());
     }
-    CHECK(seen.back() == 40);
-    CHECK(seen[2] > 0 && seen[2] < 40);
+    CHECK(std::fabs(seen.back() - page) < 1);
+    CHECK(seen[2] > 0 && seen[2] < page);
     for (std::size_t i = 1; i < seen.size(); ++i)
         CHECK(seen[i] >= seen[i - 1]);
     std::size_t moving = 0;
-    while (moving < seen.size() && seen[moving] < 40)
+    while (moving < seen.size() && std::fabs(seen[moving] - page) >= 1)
         ++moving;
     CHECK(moving >= 15 && moving <= 25);       // some 180 ms at 120 frames a second
 
-    // Page Down: a page less a line of overlap, in a glide.
-    const double page = h.viewportHeight() - 40;
-    send(keyDown(PrAppKey_PageDown, 0, false));
-    h.frame(frame);
-    h.frame(frame);
-    CHECK(top() > 40 && top() < 40 + page);
-    settle();
-    CHECK(std::fabs(top() - (40 + page)) < 1);
-
-    // A held Down: each repeat from the target, so three lines in all, with no step back.
+    // A held Page Down: each repeat from the target, so two pages in all, with no step back.
     const double from = top();
-    send(keyDown(PrAppKey_Down, 0, false));
+    send(keyDown(PrAppKey_PageDown, 0, false));
     double last = top();
-    for (int r = 0; r < 2; ++r) {
-        for (int i = 0; i < 4; ++i) {
-            h.frame(frame);
-            CHECK(top() >= last);
-            last = top();
-        }
-        send(keyDown(PrAppKey_Down, 0, true));
-        CHECK(top() == last);
+    for (int i = 0; i < 4; ++i) {
+        h.frame(frame);
+        CHECK(top() >= last);
+        last = top();
     }
+    send(keyDown(PrAppKey_PageDown, 0, true));
+    CHECK(top() == last);
     settle();
-    CHECK(std::fabs(top() - (from + 120)) < 1);
+    CHECK(std::fabs(top() - (from + 2 * page)) < 1);
 
     // Command-Up: to the top; End: to the bottom; both glide, and stop at the end.
     send(keyDown(PrAppKey_Up, PrAppModifierFlag_Super, false));
@@ -470,7 +462,7 @@ void keysAndTheWheelGlide() {
     settle();
     const double bottom = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
     CHECK(std::fabs(top() - bottom) < 1);
-    send(keyDown(PrAppKey_Down, 0, false));
+    send(keyDown(PrAppKey_PageDown, 0, false));
     settle();
     CHECK(std::fabs(top() - bottom) < 1);
     send(keyDown(PrAppKey_Home, 0, false));
@@ -490,11 +482,11 @@ void keysAndTheWheelGlide() {
     CHECK(top() == 120);
 
     // A trackpad's pixels: at once, and they stop a glide where it shows.
-    send(keyDown(PrAppKey_Down, 0, false));
+    send(keyDown(PrAppKey_PageDown, 0, false));
     h.frame(frame);
     h.frame(frame);
     const double mid = top();
-    CHECK(mid > 120 && mid < 160);
+    CHECK(mid > 120 && mid < 120 + page);
     PrAppEvent pixels = wheel;
     pixels.scroll.delta = PrVec2{0, 10};
     pixels.scroll.unit = PrAppScrollUnit_Pixel;
@@ -511,6 +503,155 @@ void keysAndTheWheelGlide() {
     CHECK(std::fabs(top() - (scaled + 5)) < 1);
 }
 
+// Held Up and Down: the page scrolls at every frame from the first after the press, at a steady speed, until the
+// release; key repeats change nothing; both keys stand still and a reversal follows the key left down; the ends clamp;
+// another tab, or the overlay hidden, lets go. Frames come while a key is held with no events.
+void heldUpAndDownScrollEveryFrame() {
+    Harness h;
+    h.server.page = kSpendPage;
+    h.extent = PrVec2{1200, 900};
+    h.frames(10);
+    CHECK(h.board->settled());
+    PrDomElement* s = prCssDocumentScrollingElement(h.document());
+    auto top = [&] { return prCssElementScrollTop(s); };
+    auto key = [&](PrAppEventKind kind, PrAppKey k, PrAppModifierFlags modifiers, bool repeat) {
+        PrAppEvent e{};
+        e.kind = kind;
+        e.modifiers = modifiers;
+        e.keyboard.key = k;
+        e.keyboard.repeat = repeat;
+        CHECK(h.board->event(e));
+    };
+    auto press = [&](PrAppKey k) { key(PrAppEventKind_KeyDown, k, 0, false); };
+    auto repeat = [&](PrAppKey k) { key(PrAppEventKind_KeyDown, k, 0, true); };
+    auto release = [&](PrAppKey k) { key(PrAppEventKind_KeyUp, k, 0, false); };
+    const double frame = 1.0 / 120;
+    const double bottom = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
+    // The frames of `seconds`, each frame's place.
+    auto run = [&](double seconds) {
+        std::vector<double> at;
+        for (int i = 0; i < int(std::lround(seconds / frame)); ++i) {
+            h.frame(frame);
+            at.push_back(top());
+        }
+        return at;
+    };
+
+    // Down: nothing at the press; the first frame moves, and each after it, half a second at a steady speed, with the
+    // system's repeats coming from 225 ms on (each one changes nothing, and the page does not see it).
+    CHECK(top() == 0);
+    press(PrAppKey_Down);
+    CHECK(top() == 0);
+    std::vector<double> seen;
+    for (int i = 0; i < 60; ++i) {
+        h.frame(frame);
+        CHECK(top() > (seen.empty() ? 0 : seen.back()));
+        // The next frame is asked for, with no event.
+        CHECK(prUiOutput(h.ui).wantsFrame);
+        seen.push_back(top());
+        if (i >= 27 && i % 4 == 3) {
+            repeat(PrAppKey_Down);
+            CHECK(top() == seen.back());
+        }
+    }
+    CHECK(seen[0] > 0 && seen[0] < 10);
+    CHECK(std::fabs(seen.back() - holdDistance(0.5, kHoldSpeed)) < 1);
+    // Past the ease, every frame moves the speed's frame, to Prax's rounding of the page's scroll.
+    for (std::size_t i = 10; i < seen.size(); ++i)
+        CHECK(std::fabs((seen[i] - seen[i - 1]) - kHoldSpeed * frame) < 1);
+    // Released: it stops where it is.
+    release(PrAppKey_Down);
+    const double stopped = top();
+    for (double y : run(0.25))
+        CHECK(y == stopped);
+
+    // A tap: a short way.
+    press(PrAppKey_Down);
+    run(0.08);
+    release(PrAppKey_Down);
+    run(0.1);
+    CHECK(top() - stopped > 20 && top() - stopped < 100);
+
+    // Both held: still. Down let go: Up drives. Up let go: still.
+    const double here = top();
+    press(PrAppKey_Down);
+    run(0.1);
+    press(PrAppKey_Up);
+    const double both = top();
+    for (double y : run(0.1))
+        CHECK(y == both);
+    CHECK(both > here);
+    release(PrAppKey_Down);
+    std::vector<double> up = run(0.1);
+    CHECK(up[0] < both);
+    for (std::size_t i = 1; i < up.size(); ++i)
+        CHECK(up[i] < up[i - 1]);
+    release(PrAppKey_Up);
+    const double left = top();
+    for (double y : run(0.1))
+        CHECK(y == left);
+
+    // The top clamps: Up held at the top stays at 0.
+    for (int i = 0; i < 2; ++i) {
+        press(PrAppKey_Up);
+        run(1.5);
+        CHECK(top() == 0);
+        release(PrAppKey_Up);
+    }
+    // The bottom clamps: End, then Down held stays at the bottom; Up from the bottom moves.
+    press(PrAppKey_End);
+    run(0.5);
+    CHECK(std::fabs(top() - bottom) < 1);
+    press(PrAppKey_Down);
+    for (double y : run(0.2))
+        CHECK(std::fabs(y - bottom) < 1);
+    release(PrAppKey_Down);
+    press(PrAppKey_Up);
+    run(0.1);
+    CHECK(top() < bottom - 10);
+    release(PrAppKey_Up);
+
+    // Command-Up still glides to the top, and is not held.
+    key(PrAppEventKind_KeyDown, PrAppKey_Up, PrAppModifierFlag_Super, false);
+    run(0.5);
+    CHECK(top() == 0);
+    key(PrAppEventKind_KeyUp, PrAppKey_Up, PrAppModifierFlag_Super, false);
+
+    // Another tab lets go: no KeyUp comes, and the page does not move when the sprint tab shows again.
+    press(PrAppKey_Down);
+    run(0.1);
+    CHECK(top() > 0);
+    CHECK(h.model.select_tab(1));
+    h.frame(frame);
+    CHECK(h.model.select_tab(0));
+    h.frame(frame);
+    const double back = top();
+    for (double y : run(0.2))
+        CHECK(y == back);
+
+    // The overlay hidden lets go too.
+    press(PrAppKey_Down);
+    run(0.1);
+    h.visible = false;
+    h.frame(frame);
+    h.visible = true;
+    h.frame(frame);
+    const double shown = top();
+    for (double y : run(0.2))
+        CHECK(y == shown);
+
+    // Scaled text: the speed is the window's px, so the page moves half as far in its own px at twice the scale.
+    press(PrAppKey_Home);
+    run(0.5);
+    CHECK(top() == 0);
+    h.board->setTextScale(2);
+    h.frames(3);
+    press(PrAppKey_Down);
+    run(0.5);
+    release(PrAppKey_Down);
+    CHECK(std::fabs(top() - holdDistance(0.5, kHoldSpeed / 2)) < 1);
+}
+
 } // namespace
 
 int main() {
@@ -522,6 +663,7 @@ int main() {
     aFoundAddressLoads();
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelGlide();
+    heldUpAndDownScrollEveryFrame();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

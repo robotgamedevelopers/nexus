@@ -1,14 +1,15 @@
-# Runs one TLC check of the store's models and judges its outcome. Invoked by ctest as `cmake -D... -P tlc.cmake`;
-# tests/model/tlc.cmake is the window's, and this one follows it.
+# Runs one TLC check of the store's models, or of the sprint board's held keys (models/scroll), and judges its outcome.
+# Invoked by ctest as `cmake -D... -P tlc.cmake`; tests/model/tlc.cmake is the window's, and this one follows it.
 #
 #   WORK        a directory of its own for this run (emptied first); TLC runs on a copy of the models there
-#   MODELS      models/store of the checkout (its *.tla and *.cfg, and witnesses/*.cfg, are copied)
-#   MODULE      the module TLC checks (Journal, or JournalTrace)
+#   MODELS      models/store or models/scroll of the checkout (its *.tla and *.cfg, and witnesses/*.cfg, are copied)
+#   MODULE      the module TLC checks (Journal, JournalTrace, ScrollHold or ScrollHoldTrace)
 #   CFG         the configuration file, relative to MODELS
 #   EXPECT      pass | invariant | deadlock
 #   PROPERTY    with invariant: the invariant whose violation is expected
-#   WALK        optional: the journal_walk program, run first with WALK_ARGS (comma-separated) and
-#               WORK/JournalTraceData.tla
+#   WALK        optional: the walk program (journal_walk, hold_walk), run first with WALK_ARGS (comma-separated) and
+#               WORK/<DATA>
+#   DATA        with WALK: the trace module the walk writes, JournalTraceData.tla unless given
 #   WORKERS     optional: TLC's worker count, 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
 #
@@ -48,11 +49,14 @@ get_filename_component(cfg_name "${CFG}" NAME)
 
 if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     string(REPLACE "," ";" walk_args "${WALK_ARGS}")
-    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/JournalTraceData.tla"
+    if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
+        set(DATA JournalTraceData.tla)
+    endif()
+    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${DATA}"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
-        message(FATAL_ERROR "journal_walk failed (${walk_rc}): ${walk_out}")
+        message(FATAL_ERROR "${WALK} failed (${walk_rc}): ${walk_out}")
     endif()
 endif()
 

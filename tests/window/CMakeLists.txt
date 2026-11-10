@@ -20,6 +20,53 @@ target_link_libraries(nexus_scroll_glide_tests PRIVATE nexus_window_logic)
 add_test(NAME scroll_glide_unit COMMAND nexus_scroll_glide_tests)
 set_tests_properties(scroll_glide_unit PROPERTIES LABELS unit)
 
+# The sprint board's held Up and Down (src/scroll_hold.h): a press moves on the first frame, repeats change nothing,
+# release and blur stop it, and a repeat-driven scroll waits for the first repeat (reversed). Time is an argument.
+add_executable(nexus_scroll_hold_tests test_scroll_hold.cpp)
+target_compile_options(nexus_scroll_hold_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_scroll_hold_tests PRIVATE nexus_window_logic)
+add_test(NAME scroll_hold_unit COMMAND nexus_scroll_hold_tests)
+set_tests_properties(scroll_hold_unit PROPERTIES LABELS unit)
+
+# The held keys' model (models/scroll/ScrollHold.tla), label model: the spec, every reversed witness rejected, code
+# traces from hold_walk checked against the spec over several seeds, and faulty holds' traces rejected. Run by
+# tests/store/tlc.cmake, which takes any model directory. Needs TLA2TOOLS_JAR and java.
+# The hold is pure and needs nothing else, so the walk builds without Prax, with the model's checks (model_checks).
+add_executable(hold_walk hold_walk.cpp ${PROJECT_SOURCE_DIR}/src/scroll_hold.cpp)
+target_include_directories(hold_walk PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_options(hold_walk PRIVATE ${NEXUS_WARNINGS})
+add_dependencies(model_checks hold_walk)
+
+function(hold_tlc_test name module cfg expect)
+    cmake_parse_arguments(T "" "PROPERTY" "WALK" ${ARGN})
+    set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${PROJECT_SOURCE_DIR}/models/scroll
+             -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=1)
+    if(T_PROPERTY)
+        list(APPEND defs -DPROPERTY=${T_PROPERTY})
+    endif()
+    if(T_WALK)
+        string(REPLACE ";" "," walk_args "${T_WALK}")
+        list(APPEND defs -DWALK=$<TARGET_FILE:hold_walk> -DWALK_ARGS=${walk_args} -DDATA=ScrollHoldTraceData.tla)
+    endif()
+    add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${PROJECT_SOURCE_DIR}/tests/store/tlc.cmake)
+    set_tests_properties(${name} PROPERTIES LABELS model TIMEOUT 90 PROCESSORS 1)
+endfunction()
+
+hold_tlc_test(tlc_hold_spec ScrollHold ScrollHold.cfg pass)
+hold_tlc_test(tlc_hold_witness_repeat_driven  ScrollHold witnesses/HRepeatDriven.cfg  invariant PROPERTY NoInitialDelay)
+hold_tlc_test(tlc_hold_witness_repeat_changes ScrollHold witnesses/HRepeatChanges.cfg invariant
+              PROPERTY RepeatKeepsVelocity)
+hold_tlc_test(tlc_hold_witness_release_keeps  ScrollHold witnesses/HReleaseKeeps.cfg  invariant PROPERTY ReleaseStops)
+hold_tlc_test(tlc_hold_witness_blur_keeps     ScrollHold witnesses/HBlurKeeps.cfg     invariant PROPERTY BlurIdles)
+hold_tlc_test(tlc_hold_witness_both_latest    ScrollHold witnesses/HBothLatest.cfg    invariant PROPERTY DirFromKeys)
+foreach(seed 1 2 3 4)
+    hold_tlc_test(tlc_hold_trace_seed_${seed} ScrollHoldTrace ScrollHoldTrace.cfg pass WALK ${seed} 1000)
+endforeach()
+hold_tlc_test(tlc_hold_trace_repeat_driven_rejected ScrollHoldTrace ScrollHoldTrace.cfg invariant
+              PROPERTY TraceMatches WALK 1 1000 --fault repeat-driven)
+hold_tlc_test(tlc_hold_trace_repeat_changes_rejected ScrollHoldTrace ScrollHoldTrace.cfg invariant
+              PROPERTY TraceMatches WALK 1 1000 --fault repeat-changes)
+
 # The sprint tab's page (src/board.h) headless over Prax's HTML stack: a fixture board served from memory on Prax's null
 # network (no socket), QuickJS scripts and the system's fonts, with made-up clocks. A functional test, in a working
 # directory of its own.

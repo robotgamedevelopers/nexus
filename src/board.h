@@ -31,6 +31,7 @@
 #include "pr/text.h"
 
 #include "scroll_glide.h"
+#include "scroll_hold.h"
 #include "sprint.h"
 #include "view.h"
 
@@ -42,7 +43,8 @@ public:
         PrKit* kit = nullptr;                   // the window's kit, whose tree shows the page
         PrFontSet* fonts = nullptr;             // the window's fonts; the page's set is a child with aliases
         PrApp* app = nullptr;                   // woken when the page has work, and when the address is found; may be null
-        PrAppWindow* window = nullptr;          // whose clipboard the page's text controls use; may be null
+        PrAppWindow* window = nullptr;          // whose clipboard the page's text controls use, and whose keyboard a held
+                                            // key needs; may be null
         // The board's address. Empty: `find` on a thread of its own (findSprintBoard if unset).
         std::string url;
         std::function<SprintBoardAddress()> find;
@@ -69,7 +71,9 @@ public:
 
     // An event while the sprint tab shows (sprint.h routeBoardEvent). Returns true if the page took it and the window
     // should not see it. A key or a wheel's notch that scrolls the page glides its scroll there over the next frames
-    // (scroll_glide.h); a trackpad's pixels scroll it at once.
+    // (scroll_glide.h); a trackpad's pixels scroll it at once. Up and Down (without Command, Control or Option) scroll
+    // the page every frame while they are down, from the frame after the press to the release, and their repeats are
+    // dropped (scroll_hold.h).
     bool event(const PrAppEvent& event);
 
     bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) override;
@@ -99,6 +103,10 @@ private:
     void glideThrough(const PrAppEvent& event);
     void stepGlide();
     void endGlide(bool atTarget);
+    static bool arrowKey(const PrAppEvent& event, HoldKey* key);
+    static bool isHeld(const Hold& hold, HoldKey key);
+    void pressHeld(const PrAppEvent& event, HoldKey key);
+    void stepHeld();
 
     static double clockNow(void* context);
     static double clockWallNow(void* context);
@@ -157,6 +165,9 @@ private:
     // to last, which tells whether the page scrolled itself since.
     Glide glide_;
     double applied_ = 0;
+    // Up or Down held (scroll_hold.h), and the place the hold has moved the page's scroll to, to a fraction of a pixel.
+    Hold hold_;
+    double heldAt_ = 0;
     double frameTime_ = 0;
 };
 
