@@ -24,6 +24,8 @@
 #               mirror, tail
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
+#   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
+#               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
@@ -88,6 +90,19 @@ elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "link_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "hide-unkeyed" OR FAULTY STREQUAL "hotkey-hides")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not hide-unkeyed or hotkey-hides")
+    endif()
+    execute_process(COMMAND "${OVERLAYWALK}" ${walk_args} "${WORK}/OverlayTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")

@@ -100,9 +100,10 @@ jobs:
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
-  # the first report: the unit tests, and the trace walks on every friend count and every fault (no TLC); the same for
-  # the link's states (src/sync) and their walks, and the store (store_test, durable_test and journal_walk). Configured without the
-  # link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs do not use, so any macOS runner will do.
+  # the first report: the unit tests, and the trace walks (the window's on every friend count, the overlay's) with every
+  # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
+  # and journal_walk). Configured without the link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs
+  # do not use, so any macOS runner will do.
   sanitizers:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
@@ -132,7 +133,14 @@ jobs:
         run: |
           set -euo pipefail
           build/tests/model/model_test
+          build/tests/model/overlay_test
           mkdir -p walks
+          for seed in 1 2 3; do
+            build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
+          done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
               build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla

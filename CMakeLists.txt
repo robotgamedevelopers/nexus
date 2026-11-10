@@ -32,8 +32,9 @@ if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()
 
-# The non-drawing logic: tabs, transcripts, drafts, send and queue. No OS, no time.
-add_library(nexus_model STATIC src/model.cpp)
+# The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
+# No OS, no time.
+add_library(nexus_model STATIC src/model.cpp src/overlay.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
@@ -113,7 +114,7 @@ set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fob
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
     prax::studio_app prax::gpu prax::image prax::compress
-    "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
+    "-framework AppKit")
 if(NEXUS_LINK)
     target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
     target_link_libraries(nexus PRIVATE nexus_link nexus_sync)

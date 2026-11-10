@@ -1,6 +1,6 @@
 # models: the TLA+ specifications of nexus
 
-Every state machine in nexus has a TLA+ module here. TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
+Every state machine in nexus has a TLA+ module here (`Overlay.tla`, when the overlay shows and hides, among them). TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
 This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`.
 
@@ -244,6 +244,28 @@ Per commit (`-L '^model$'`): the two small instances, the seven witnesses, six t
 
 The binding: `tests/model/glide_walk.cpp` (`glide_walk <seed> <steps> [--faulty-keyup] <out.tla>`) drives the real `GlideScroller` over a fake page in whole px (2000 of scroll, 800 high, lines of 40) with a seeded walk of presses, repeats, releases, page and end keys, notches, trackpad scrolls, clicks, the page's own scrolls, hides and frames of 4 to 33 ms, in time it counts itself. `GlideTrace.tla` pins each step's next state to the record (scroll, band, motion, target, cap left, hold) and takes the `Glide` action it names; a step the spec cannot take is a deadlock. Five seeds of 1000 steps run per commit; `--faulty-keyup` walks a scroller that loses the arrow's release, and TLC must report the deadlock.
 
+## Overlay.tla: when the overlay shows and hides
+
+`Overlay.tla` is when the overlay shows and hides: `nexus::OverlayRules` in `src/overlay.h`, with the window that carries out its answers (`main.cpp` `carryOut`, through Prax) and the OS around it. Variables: `visible` (`prAppWindowIsVisible`), `active` (`prAppWindowIsActive`: the overlay has the keyboard), `keyed` (the rules' note that it has had the keyboard since it was last shown), `armed` (the key check after a show is pending, a Prax timer), `last`, the input just handled and the act answered, and `held`, whether nexus holds the window (`main.cpp` `a.window`): `carryOut` acts only on a window it holds. Inputs: `Hotkey`, `Escape`, `Observe` (a frame; a change of `visible` or `active` asks for one) and `KeyCheck`. The OS: a show gets the keyboard or not, `Lose` (Command-Tab, a click on another app), `Click` (a click on the overlay gives it back). Prax: `Open`, the window's open, which comes only with a frame of a shown window (a hidden window has no frames). `start()` creates the overlay window itself, so `Init` holds it from the start. `Spec` has weak fairness on `Observe` and `KeyCheck`: the frames and the check that a change asks for do come.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | every variable has its type, and every act is one the window knows |
+| `KeyedOnlyVisible` | invariant | only a shown overlay has had the keyboard |
+| `UnkeyedIsChecked` | invariant | a shown overlay that has not had the keyboard always has a key check coming |
+| `HotkeyShows` | action | the hotkey shows the overlay from every state but up with the keyboard (after Command-Tab the next press shows it, not merely re-activates it) |
+| `HotkeyHides` | action | the hotkey hides an overlay that is up with the keyboard |
+| `EscapeHides` | action | Escape hides it |
+| `NoHideWhileActive` | action | a frame or the key check never hides an overlay that has the keyboard (an input method's window or the emoji picker, which leave it the keyboard, cannot hide it) |
+| `NoHideBeforeKey` | action | a frame never hides an overlay that has not had the keyboard since it was shown |
+| `LossHides` | action | once it has had the keyboard, the frame that sees it lost hides it |
+| `RefusedShowHides` | action | the key check hides an overlay shown without the keyboard |
+| `NeverStranded` | temporal | a shown overlay without the keyboard is in time hidden or has it again |
+
+`Overlay.cfg` checks every property on the whole state space (19 states). Each property has a witness in `witnesses/` (`WOverlay*`): `WOverlayActName` (Escape answers an unknown act: `TypeOK`), `WOverlayEscapeKeepsKeyed` (`KeyedOnlyVisible`), `WOverlayShowUnchecked` (a show arms no check: `UnkeyedIsChecked`), `WOverlayHotkeyHidesUnkeyed` (`HotkeyShows`), `WOverlayHotkeyOnlyShows` (`HotkeyHides`), `WOverlayEscapeIgnored` (`EscapeHides`), `WOverlayHideWhileActive` (`NoHideWhileActive`), `WOverlayHideBeforeKey` (`NoHideBeforeKey`), `WOverlayLossKept` (`LossHides`), `WOverlayRefusedKept` (`RefusedShowHides`), `WOverlayStranded` (neither a frame nor the check hides: `NeverStranded`, expected as a temporal violation) and `WOverlayHeldAfterOpen` (nexus holds the window only from its open, as the first lib/app overlay did, so a window that starts hidden is never held and the hotkey shows nothing: `HotkeyShows`).
+
+The binding: `tests/model/overlay_walk.cpp` (`overlay_walk <seed> <steps> [--faulty-hide-unkeyed | --faulty-hotkey-hides] <out.tla>`) drives the real rules with a seeded random walk over a stand-in window that carries out their answers as `carryOut` does, and writes `OverlayTraceData.tla`. `OverlayTrace.tla` takes the `Overlay` action each record names, with the OS's answer to a show from the record, and `TraceMatches` requires the spec's state and act to equal the code's; every `Overlay` safety property is checked on the trace. Three seeds of 1000 steps run per commit; `--faulty-hide-unkeyed` (a frame hides any shown overlay without the keyboard) and `--faulty-hotkey-hides` (the hotkey hides any shown overlay) must each be rejected with `TraceMatches` violated. `held` is not in the walk: its stand-in window exists from the start, as `start()`'s does, and the trace check requires `held` throughout; that `start()` creates the window is read from the code, not traced.
+
 ## Running the checks
 
 TLC needs Java 11 or newer and `tla2tools.jar`. The tests find the jar through `TLA2TOOLS_JAR`, and java through `JAVA` or `PATH`. Without `TLA2TOOLS_JAR` every `model` test fails and says what to set.
@@ -255,7 +277,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j "$(sysctl -n hw.ncpu)"
 ```
 
-`-L model` matches two labels: `model` runs four instances (`MCWindowSprint`, `MCWindowEmpty`, `MCWindowNoSprint`, `MCWindow3Sprint`), the forty-eight witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the ten faulty traces; `model_nightly` runs the three largest instances, `MCWindow`, `MCWindow3` and `MCWindowLong`. CI's per-commit job runs `-L '^model$'` and the nightly workflow `-L '^model_nightly$'`: every property is still checked on every commit, on the smaller instances. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on every instance but `MCWindowEmpty`, which ctest counts as eight of its `-j` slots) and a 60 second cap (300 on the nightly instances); its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+`-L model` matches two labels: `model` runs four instances (`MCWindowSprint`, `MCWindowEmpty`, `MCWindowNoSprint`, `MCWindow3Sprint`), the forty-eight witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the ten faulty traces; for the overlay, `Overlay.cfg`, its twelve witnesses, three code traces and two faulty traces; `model_nightly` runs the three largest instances, `MCWindow`, `MCWindow3` and `MCWindowLong`. CI's per-commit job runs `-L '^model$'` and the nightly workflow `-L '^model_nightly$'`: every property is still checked on every commit, on the smaller instances. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on every instance but `MCWindowEmpty`, which ctest counts as eight of its `-j` slots) and a 60 second cap (300 on the nightly instances); its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 
