@@ -31,7 +31,8 @@
 | Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W | ✅ |
 | Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it | ❌ |
 | The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
-| complete | 33% |
+| Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt (later) | ❌ |
+| complete | 25% |
 
 [Source data](roadmap.sexp)
 

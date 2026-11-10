@@ -878,6 +878,21 @@ void checkPromptBox(const Harness& h) {
     CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
 }
 
+// Nothing is shown under the prompt: no model name (the owner 2026-11-10; choosing a friend's model and effort by hotkey
+// is roadmap work). The footer holds the prompt's box alone, one unit above the window's bottom.
+void noModelUnderThePrompt() {
+    Harness h;
+    h.frame();
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), "m1"));
+    PrLayoutNode footer = prLayoutNodeParent(h.tree, h.view.promptBox);
+    CHECK(prLayoutNodeFirstChild(h.tree, footer) == h.view.promptBox);
+    CHECK(prLayoutNodeNextSibling(h.tree, h.view.promptBox) == kPrLayoutNodeNone);
+    PrRect window = h.bounds(prLayoutNodeParent(h.tree, footer));
+    CHECK(near(window.bottom - h.bounds(h.view.promptBox).bottom, style::kU));
+    h.commandDigit(2);
+    CHECK(h.active().name == "emma" && !h.hasText(prLayoutTreeRoot(h.tree), "m2"));
+}
+
 void promptIsARoundedBoxHoldingThePlus() {
     Harness h;
     h.frame();
@@ -1049,8 +1064,8 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
 
 // ---- Terminal tabs ----
 
-// Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt, no
-// model label and no transcript; its label is "terminal" until its shell sets a title.
+// Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt and
+// no transcript; its label is "terminal" until its shell sets a title.
 void commandTAddsAndShowsATerminal() {
     Harness h;
     h.type("draft");
@@ -1475,6 +1490,7 @@ int main() {
     dragWithOneTabDoesNothing();
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
+    noModelUnderThePrompt();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();

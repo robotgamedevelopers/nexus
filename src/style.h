@@ -14,7 +14,7 @@ namespace nexus::style {
 // Type sizes.
 constexpr float kBodySize = 28;        // transcript, bubbles, prompt, dim notices
 constexpr float kTabSize = 26;         // tab labels (the reference's title row)
-constexpr float kLabelSize = 24;       // model label under the prompt
+constexpr float kLabelSize = 24;       // the notice when there are no friends
 constexpr float kMetaSize = 21;        // "queued" (not in the reference; one step below the label)
 constexpr float kTerminalSize = 21;    // a terminal tab's monospaced cells (not in the reference; a guess, at 0.75 of
                                        // the body size, where Prax's terminal app sets 13 px in a smaller window)
@@ -33,8 +33,6 @@ constexpr float kPromptRadius = 0.72f * kU;
 constexpr float kPromptPadX = 0.8f * kU;      // the box's sides to the plus and to the text's end
 constexpr float kPromptGap = 0.72f * kU;      // the plus to the text field
 constexpr float kPlusSide = 1.3f * kU;        // the plus icon's box; the kit draws its glyph inset in it
-constexpr float kPromptBottom = 2.75f * kU;   // window bottom to the prompt box's bottom
-constexpr float kLabelBaseline = 0.9f * kU;   // window bottom to the label row's baseline
 constexpr float kPromptMaxLines = 8;          // the prompt grows to this many lines, then scrolls
 constexpr float kColumnInset = 0.6f * kU;     // above the first transcript entry
 

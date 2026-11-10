@@ -40,7 +40,6 @@ enum class Part : unsigned char {
     BubbleQueued,
     Footer,
     Prompt,
-    LabelRow,
     StripRow,
     BoardBox,
 };
@@ -124,7 +123,7 @@ struct BoxRecipe {
                 break;
             case Part::Footer:
                 box.display = PrLayoutDisplay_Flex;
-                padding(box, kU * k, 0, 0, 0);
+                padding(box, kU * k, 0, kU * k, 0);
                 break;
             case Part::Prompt:
                 box.display = PrLayoutDisplay_Flex;
@@ -132,12 +131,6 @@ struct BoxRecipe {
                 padding(box, promptPadY(k), kPromptPadX * k, promptPadY(k), kPromptPadX * k);
                 for (PrLayoutUnit& b : box.border)
                     b = prLayoutUnitFromPx(1);
-                break;
-            case Part::LabelRow:
-                box.display = PrLayoutDisplay_Flex;
-                box.width = prLayoutLengthPercent(kPromptPercent);
-                box.height = px(kPromptBottom * k);
-                padding(box, 0, 0.7f * kU * k, (kLabelBaseline - 0.32f * kLabelSize) * k, 0);
                 break;
             case Part::StripRow:
                 box.display = PrLayoutDisplay_Flex;
@@ -224,11 +217,6 @@ struct FlexRecipe {
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
                 flex.columnGap = px(kPromptGap * k);
                 flex.shrink = 0;
-                break;
-            case Part::LabelRow:
-                flex.direction = PrLayoutFlexDirection_Row;
-                flex.justifyContent = PrLayoutAlignment_FlexEnd;
-                flex.alignItems = PrLayoutAlignment_FlexEnd;
                 break;
             case Part::StripRow:
                 flex.direction = PrLayoutFlexDirection_Row;
@@ -676,9 +664,6 @@ struct Builder {
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
         }
-
-        PrLayoutNode labels = element(footer, Part::LabelRow);
-        label(labels, model.tab(active).model, textStyle(PrKitTextRole_BodySmall, PrKitTone_Primary));
     }
 
     void build(PrLayoutNode parent) {
@@ -785,7 +770,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
         t.letterSpacing = 0;
     };
     type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
-    type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the model label
+    type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no friends
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
     return theme;
 }
