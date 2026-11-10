@@ -121,39 +121,40 @@ Command friendListCommand(const char* override, const char* shell) {
     return novaConfigCommand(override, shell, {"friend", "list", "--json"});
 }
 
-FriendList loadFriends(const Command& command, const CommandRunner& run) {
-    CommandResult r = run(command, kFriendListTimeoutSeconds);
+std::string commandProblem(const Command& command, const CommandResult& r, int timeoutSeconds) {
     const std::string cmd = "`" + command.shown + "`";
     const std::string fix = "set NEXUS_NOVA_CONFIG to the full path of nova-config, or install nova-tools so that "
         "nova-config is on your login shell's PATH";
-    FriendList list;
     switch (r.end) {
         case CommandResult::End::NotFound:
-            list.error = "cannot run " + cmd + ": " + command.program + " was not found; " + fix;
-            return list;
+            return "cannot run " + cmd + ": " + command.program + " was not found; " + fix;
         case CommandResult::End::NotStarted:
-            list.error = "cannot run " + cmd + ": the process could not start; " + fix;
-            return list;
+            return "cannot run " + cmd + ": the process could not start; " + fix;
         case CommandResult::End::TimedOut:
-            list.error = cmd + " did not finish within " + std::to_string(kFriendListTimeoutSeconds) +
-                " seconds and was stopped; run it in a terminal to see where it waits (the friend store may be "
-                "unreachable)";
-            return list;
+            return cmd + " did not finish within " + std::to_string(timeoutSeconds) + " seconds and was stopped; run "
+                "it in a terminal to see where it waits (the store may be unreachable)";
         case CommandResult::End::Signaled:
-            list.error = cmd + " was ended by signal " + std::to_string(r.code) + "; run it in a terminal to see why";
-            return list;
+            return cmd + " was ended by signal " + std::to_string(r.code) + "; run it in a terminal to see why";
         case CommandResult::End::Exited:
             break;
     }
-    if (r.code != 0) {
-        std::string why = trimmed(r.err);
-        list.error = cmd + " exited with status " + std::to_string(r.code);
-        if (r.code == 127)
-            list.error += " (command not found)";
-        list.error += why.empty() ? " and printed nothing on standard error" : ": " + why;
-        list.error += r.code == 127 ? "; " + fix : "; run it in a terminal to see more";
+    if (r.code == 0)
+        return {};
+    std::string why = trimmed(r.err);
+    std::string problem = cmd + " exited with status " + std::to_string(r.code);
+    if (r.code == 127)
+        problem += " (command not found)";
+    problem += why.empty() ? " and printed nothing on standard error" : ": " + why;
+    problem += r.code == 127 ? "; " + fix : "; run it in a terminal to see more";
+    return problem;
+}
+
+FriendList loadFriends(const Command& command, const CommandRunner& run) {
+    CommandResult r = run(command, kFriendListTimeoutSeconds);
+    FriendList list;
+    list.error = commandProblem(command, r, kFriendListTimeoutSeconds);
+    if (!list.error.empty())
         return list;
-    }
     return parseFriendList(r.out);
 }
 

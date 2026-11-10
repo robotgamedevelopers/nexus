@@ -14,8 +14,13 @@ add_executable(trace_walk trace_walk.cpp)
 target_link_libraries(trace_walk PRIVATE nexus_model)
 target_compile_options(trace_walk PRIVATE ${warnings})
 
+# TabLabel's walk (src/remote.h), for TabLabelTrace.tla.
+add_executable(label_walk label_walk.cpp)
+target_link_libraries(label_walk PRIVATE nexus_window_logic)
+target_compile_options(label_walk PRIVATE ${warnings})
+
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk label_walk)
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -24,13 +29,14 @@ set(models_dir "${PROJECT_SOURCE_DIR}/models")
 set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [WORKERS w] [NIGHTLY])
+#          [WORKERS w] [NIGHTLY] [LABEL])
+# LABEL walks TabLabel with label_walk (FRIENDS is then its number of remotes) in place of the window's trace_walk.
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LABEL" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
     if(NOT T_WORKERS)
         set(T_WORKERS 2)
     endif()
@@ -46,7 +52,10 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(DEFINED T_SEED)
+    if(DEFINED T_SEED AND T_LABEL)
+        list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
+             -DFRIENDS=${T_FRIENDS})
+    elseif(DEFINED T_SEED)
         list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFRIENDS=${T_FRIENDS})
     endif()
     if(T_FAULTY)
@@ -169,3 +178,17 @@ tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg inva
 # And with closing the active tab ignoring the selection history.
 tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY close-fallback)
+
+# A terminal tab's label across ssh sessions (src/remote.h TabLabel): TabLabel.tla, its reversed witnesses, and the code's
+# random walks checked against it, with a faulty walk that must be rejected.
+tlc_test(tlc_label_spec TabLabel TabLabel.cfg pass)
+tlc_test(tlc_witness_label_no_mask         WLabelNoMask        WLabelNoMask.cfg        action PROPERTY EndRestores)
+tlc_test(tlc_witness_label_mask_sticks     WLabelMaskSticks    WLabelMaskSticks.cfg    action PROPERTY MaskEnds)
+tlc_test(tlc_witness_label_before_at_start WLabelBeforeAtStart WLabelBeforeAtStart.cfg action PROPERTY BeforeIsOwn)
+tlc_test(tlc_witness_label_no_tail         WLabelNoTail        WLabelNoTail.cfg        action PROPERTY TailRestores)
+foreach(seed 1 2 3)
+    tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
+endforeach()
+tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
+tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
+         LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
