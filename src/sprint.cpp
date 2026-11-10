@@ -148,7 +148,7 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
             return pressInPage ? BoardRoute::Page : BoardRoute::Window;
         case PrAppEventKind_KeyDown:
         case PrAppEventKind_KeyUp:
-            if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.key == PrAppKey_Escape)
+            if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.keyboard.key == PrAppKey_Escape)
                 return BoardRoute::Window;
             return BoardRoute::Page;
         case PrAppEventKind_Text:

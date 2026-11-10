@@ -8,16 +8,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "pr/font_set.h"
 #include "pr/kit.h"
+#include "pr/kit_choice.h"
 #include "pr/kit_theme.h"
 #include "pr/layout_tree.h"
 #include "pr/ui.h"
 
-#include "input.h"
 #include "model.h"
 
 namespace nexus {
@@ -38,8 +39,9 @@ struct Terminals {
     virtual ~Terminals() = default;
     virtual bool open(std::size_t id) = 0;      // starts a new tab's shell; false, having printed why, if it cannot
     virtual void close(std::size_t id) = 0;     // ends its shell and frees it
-    // Declares the one that shows this round under `parent`, `extent` px, and gives it focus.
-    virtual void show(std::size_t id, PrLayoutNode parent, PrVec2 extent) = 0;
+    // Declares the one that shows this round under `parent`, filling the room the parent's other children leave, and
+    // gives it focus.
+    virtual void show(std::size_t id, PrLayoutNode parent) = 0;
     virtual void update(std::size_t id) = 0;    // services one that does not show this round
     virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read
     virtual std::string title(std::size_t id) = 0;  // the title its shell set, or empty
@@ -57,6 +59,12 @@ struct Board {
     virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
 };
 
+// The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.
+struct KitTabsFree {
+    void operator()(PrKitTabs* tabs) const { prKitTabsDestroy(tabs); }
+};
+using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
+
 struct View {
     Model* model = nullptr;
     Look* look = nullptr;
@@ -69,7 +77,14 @@ struct View {
                                                 // windowed, where Escape does nothing
     std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
-    std::vector<float> scrolls;                 // each friend's transcript scroll, by Tab::id, kept while another shows
+    // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
+    // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
+    KitTabs pinnedTabs{prKitTabsCreate()};
+    KitTabs movableTabs{prKitTabsCreate()};
+    // Each friend's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed
+    // its newest entry, where it follows what arrives.
+    static constexpr float kAtEnd = -1;
+    std::vector<float> scrolls;
     std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
@@ -94,9 +109,5 @@ bool windowWantsFrame(const View& view);
 // there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
 // that do not show are serviced, and one whose shell ended closes.
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
-
-// Runs one event through the event filter (input.h). Returns true if the window took it, having queued the event
-// without Caps Lock in its place; false if the caller should queue the event as it is.
-bool takeEvent(PrUi* ui, const PrAppEvent& event);
 
 } // namespace nexus

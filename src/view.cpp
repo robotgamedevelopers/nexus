@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include "pr/kit_choice.h"
 #include "pr/kit_icon.h"
@@ -196,9 +198,9 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Column;
                 break;
             case Part::Transcript:
-                // Reversed, the scroller's origin is its bottom (css-overflow-3 scroll origin): it starts at the newest
-                // entry and stays there as entries arrive, and scroll anchoring holds a view scrolled up in place.
-                flex.direction = PrLayoutFlexDirection_ColumnReverse;
+                // It starts at the newest entry and stays there as entries arrive (prUiFollowEnd, in transcript()), and
+                // scroll anchoring holds a view scrolled up in place.
+                flex.direction = PrLayoutFlexDirection_Column;
                 flex.grow = 1;
                 flex.basis = px(0);
                 break;
@@ -254,6 +256,9 @@ PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
 PrStringView sv(std::string_view s) {
     return PrStringView{s.data(), s.size()};
 }
+
+// The kit's id of the tab each strip holds but no round declares (syncTabs).
+constexpr uint64_t kNoTab = ~uint64_t(0);
 
 // The digits that select tabs with Command, in tab order: the keyboard's number row.
 constexpr std::string_view kTabKeys = "1234567890";
@@ -319,71 +324,127 @@ struct Builder {
         prLayoutTreeFrameSetStyle(tree, area, prLayoutStyleIntern(tree, &record));
     }
 
-    // Lets the text under `node` break anywhere when nothing else breaks it (CSS overflow-wrap: anywhere), so a long URL
-    // or token wraps inside its box instead of running past it. Prax's layout has the option (PrLayoutFontStyle
-    // overflowWrap); the kit offers none (PrKitTextStyle wrap is wrap, nowrap or clip, and PrKitTextArea has no wrap
-    // option), so the node's font group is rewritten, as frameless rewrites the decoration.
-    void breakAnywhere(PrLayoutNode node) {
-        PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
-        PrLayoutFontStyle font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
-        font.overflowWrap = PrTextOverflowWrap_Anywhere;
-        record.groups[PrLayoutGroup_Font] = prLayoutFontStyleIntern(tree, &font);
-        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    // The kit's id of a tab: its Tab::id plus one, since the kit's ids are nonzero.
+    static uint64_t kitId(const Tab& tab) {
+        return uint64_t(tab.id) + 1;
     }
 
-    // A transcript's text: a kit label that breaks anywhere.
-    PrLayoutNode text(PrLayoutNode parent, std::string_view s, PrKitTextStyle style) {
-        PrLayoutNode node = label(parent, s, style);
-        breakAnywhere(node);
-        return node;
+    // Copies the model's tabs at positions `first` to `end` less one, their order and the selection, into the kit's tabs
+    // of their strip. The kit selects a tab in every strip that holds one, and has no strip with none selected
+    // (kit_choice.h PrKitTabs; kit_choice.cpp prKitTabsInsert 640-647, prKitTabsRemove 649-659): so each strip also
+    // holds kNoTab, last, which no round declares, and which is selected while the active tab stands in the other
+    // strip, so that only the active tab shows as selected. A request for Prax: a strip with no selected tab.
+    void syncTabs(PrKitTabs* tabs, std::size_t first, std::size_t end) {
+        for (uint32_t j = prKitTabsCount(tabs); j-- > 0;) {
+            const uint64_t id = prKitTabsAt(tabs, j);
+            bool held = id == kNoTab;
+            for (std::size_t i = first; i < end && !held; ++i)
+                held = kitId(model.tab(i)) == id;
+            if (!held)
+                prKitTabsRemove(tabs, id);
+        }
+        for (std::size_t i = first; i < end; ++i) {
+            const uint32_t at = uint32_t(i - first);
+            const uint64_t id = kitId(model.tab(i));
+            if (prKitTabsAt(tabs, at) == id)
+                continue;
+            if (prKitTabsIndex(tabs, id) == prKitTabsCount(tabs))
+                prKitTabsInsert(tabs, id, at);
+            else
+                prKitTabsMove(tabs, tabs, id, at);
+        }
+        if (prKitTabsIndex(tabs, kNoTab) == prKitTabsCount(tabs))
+            prKitTabsInsert(tabs, kNoTab, uint32_t(end - first));
+        const std::size_t active = model.active();
+        prKitTabsSelect(tabs, active >= first && active < end ? kitId(model.tab(active)) : kNoTab);
+    }
+
+    // A drop within a strip is applied by the kit as the strip is declared, and is not reported (kit_choice.cpp
+    // prKitTabStrip 738-746; prKitTabMoved reports only moves between strips): it is read back here from the kit's
+    // order, and made through the model's move_tab. The model refuses a move across zones (a terminal among the
+    // friends, or a friend among the terminals: the kit has no way to keep its caret out of another zone, and no per-tab
+    // drop limit), and the kit's tabs are then put back as the model has them, as they are after an accepted move too,
+    // so that the drop leaves the active tab as it was. A request for Prax: a report of a move within a strip, and a
+    // per-tab drop limit.
+    void mirrorMove(PrKitTabs* tabs, std::size_t first, std::size_t end) {
+        std::vector<uint64_t> shown;
+        for (uint32_t j = 0; j < prKitTabsCount(tabs); ++j) {
+            if (prKitTabsAt(tabs, j) != kNoTab)
+                shown.push_back(prKitTabsAt(tabs, j));
+        }
+        const std::size_t n = end - first;
+        if (shown.size() != n)
+            return;
+        std::size_t lo = 0;
+        while (lo < n && shown[lo] == kitId(model.tab(first + lo)))
+            ++lo;
+        if (lo == n) {
+            syncTabs(tabs, first, end);
+            return;
+        }
+        std::size_t hi = n - 1;
+        while (shown[hi] == kitId(model.tab(first + hi)))
+            --hi;
+        // One tab moved: from the last differing place to the first, or from the first to the last.
+        std::size_t from = hi;
+        std::size_t to = lo;
+        if (shown[lo] != kitId(model.tab(first + hi))) {
+            from = lo;
+            to = hi;
+        }
+        if (model.move_tab(first + from, first + to) && view.moved)
+            view.moved();
+        syncTabs(tabs, first, end);
     }
 
     // One of the kit's tab strips, holding the tabs at positions `first` to `end` less one; reorderable or not. In a
     // reorderable strip, a tab pressed and dragged past the kit's threshold is carried, an accent caret marks where it
-    // will land, Escape cancels it, and the drop is reported by prKitMoved, which the model applies. A press released
-    // before the threshold is a click that selects the tab. Each tab is keyed by its Tab::id, so its node (focus,
-    // pointer state) goes with it when it moves.
-    void strip(PrLayoutNode parent, std::size_t first, std::size_t end, bool reorderable, PrKitFlex flex) {
-        PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = 0, .disabled = false,
-            .reorderable = reorderable}, PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
+    // will land, Escape cancels it, and the drop is made through the model (mirrorMove). A press released before the
+    // threshold is a click that selects the tab. Each tab is keyed by its Tab::id, so its node (focus, pointer state)
+    // goes with it when it moves.
+    void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, bool reorderable,
+            PrKitFlex flex) {
+        syncTabs(tabs, first, end);
+        PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = 0, .tabs = tabs, .group = 0,
+            .reorderable = reorderable, .collapsesSingle = false, .disabled = false},
+            PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
         rowPlace.height = prKitPx(kStripHeight * k() + 1);
         rowPlace.flex = flex;
         prKitPlace(kit, row, &rowPlace);
+        if (reorderable)
+            mirrorMove(tabs, first, end);
+        const uint64_t selected = prKitTabsSelected(tabs);
         for (std::size_t i = first; i < end; ++i) {
-            PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.key = prUiKeyIndex(ui, row, model.tab(i).id),
-                .selected = i == model.active(), .disabled = false});
+            PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.id = kitId(model.tab(i)), .disabled = false});
             PrKitPlace tabPlace{};
             tabPlace.height = prKitPx(1.75f * kTabSize * k());
             tabPlace.align = PrKitAlign_Center;
             if (i == 0)
                 tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
-            if (prKitActivated(kit, tab))
-                model.select_tab(i);
             prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(label(model.tab(i)))});
         }
-        // A drop across zones (a terminal among the friends, or a friend among the terminals) is refused by the model
-        // and changes nothing: the kit's strip has no way to keep its caret out of another zone.
-        uint32_t from = 0;
-        uint32_t to = 0;
-        if (reorderable && prKitMoved(kit, row, &from, &to) && model.move_tab(first + from, first + to) && view.moved)
-            view.moved();
+        // A click on a tab, or Left or Right on a focused one, selects in the kit: made through the model's select_tab.
+        // Right on the last tab selects kNoTab, which selects nothing: the next round puts the selection back.
+        const uint64_t now = prKitTabsSelected(tabs);
+        if (now != selected && now != kNoTab)
+            model.select_tab(first + prKitTabsIndex(tabs, now));
     }
 
     // The tab strip. The sprint tab, if there is one, is first, in a strip of its own that is not reorderable: it is
     // never carried, and the other strip's caret never stands before it. The kit has no per-tab way to pin a tab
-    // (PrKitTab has no such field; kit_choice.cpp prKitTab starts a drag for every tab of a reorderable strip): a
-    // request for Prax. The two strips stand side by side, so their rules meet as one.
+    // (PrKitTab is only an id and disabled, kit_choice.h 132-135; kit_choice.cpp prKitTab 817-820 starts a drag for every
+    // tab of a reorderable strip): a request for Prax. The two strips stand side by side, so their rules meet as one.
     void strips(PrLayoutNode window) {
         const std::size_t pinned = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint ? 1 : 0;
         if (pinned == 0) {
-            strip(window, 0, model.tab_count(), true, PrKitFlex_Fixed);
+            strip(window, view.movableTabs.get(), 0, model.tab_count(), true, PrKitFlex_Fixed);
             return;
         }
         PrLayoutNode row = element(window, Part::StripRow);
-        strip(row, 0, pinned, false, PrKitFlex_Fixed);
-        strip(row, pinned, model.tab_count(), true, PrKitFlex_Fill);
+        strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
+        strip(row, view.movableTabs.get(), pinned, model.tab_count(), true, PrKitFlex_Fill);
     }
 
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
@@ -397,22 +458,34 @@ struct Builder {
         return title.empty() ? std::string("terminal") : title;
     }
 
-    // Each friend keeps its scroll while another shows, wherever its tab stands. Offsets count from the scroller's
-    // origin, its bottom, so a tab never scrolled stays at its newest entry.
-    void keepScroll(PrLayoutNode scroller, std::size_t id) {
+    // Each friend keeps its scroll while another shows, wherever its tab stands: a friend that showed its newest entry
+    // (and one never shown) comes back at its newest entry, and one scrolled up comes back at the same offset from the
+    // top, where the same entries show, since entries only arrive at the end. Returns false if the transcript should not
+    // follow its end this round: it put back a view scrolled up, and the last layout was another friend's.
+    bool keepScroll(PrLayoutNode scroller, std::size_t id) {
         if (view.shown == id)
-            return;
+            return true;
         leaveTranscript();
         view.shown = id;
+        if (view.scrolls[id] == View::kAtEnd) {
+            // An offset past the end, which layout clamps to the end of the content this round makes, as prUiFollowEnd
+            // sets it (ui.cpp 2488-2493): prUiFollowEnd itself reads the last layout, which was another friend's.
+            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), PrLayoutUnit{INT32_MAX}});
+            return true;
+        }
         prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(view.scrolls[id])});
+        return false;
     }
 
     // Keeps the scroll of the friend the transcript showed last round (by Tab::id; the friends' ids are 0 to the number
     // of friends less one, below tab_count()).
     void leaveTranscript() {
-        view.scrolls.resize(model.tab_count(), 0);
-        if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone)
-            view.scrolls[view.shown] = prLayoutUnitToPx(prLayoutNodeScroll(tree, view.transcript).y);
+        view.scrolls.resize(model.tab_count(), View::kAtEnd);
+        PrLayoutScrollInfo info{};
+        if (view.shown < view.scrolls.size() && view.transcript != kPrLayoutNodeNone &&
+                prLayoutNodeScrollInfo(tree, view.transcript, &info) && info.scrollContainer)
+            view.scrolls[view.shown] =
+                info.offset.y.raw < info.range.bottom.raw ? prLayoutUnitToPx(info.offset.y) : View::kAtEnd;
     }
 
     // A terminal tab: its terminal fills the window's width and the height below the strip, with no prompt. The
@@ -426,8 +499,7 @@ struct Builder {
         view.transcript = kPrLayoutNodeNone;
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
-        const float below = std::max(0.0f, view.extent.y - (kStripHeight * k() + 1));
-        view.terminals->show(tab.id, window, PrVec2{view.extent.x, below});
+        view.terminals->show(tab.id, window);
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
@@ -455,14 +527,14 @@ struct Builder {
         if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
-            text(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
+            label(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
         }
         bool friends = false;
         for (std::size_t i = 0; i < model.tab_count() && !friends; ++i)
             friends = model.tab(i).kind == TabKind::Friend;
         if (!friends && !view.notice.empty()) {
             PrLayoutNode footer = element(window, Part::Footer);
-            text(footer, view.notice, textStyle(PrKitTextRole_BodySmall, PrKitTone_Faint, PrKitTextAlign_Center));
+            label(footer, view.notice, textStyle(PrKitTextRole_BodySmall, PrKitTone_Faint, PrKitTextAlign_Center));
         }
     }
 
@@ -495,21 +567,24 @@ struct Builder {
             return;
         }
         const Tab& tab = model.tab(model.active());
-        keepScroll(scroller, tab.id);
+        if (keepScroll(scroller, tab.id))
+            prUiFollowEnd(ui, scroller);
         view.transcript = scroller;
+        // The kit's labels and text area wrap, breaking inside a word that fits no line (PrKitWrap_Wrap, kit_theme.h
+        // 99), so a long URL or token wraps inside its box instead of running past it.
         for (const Entry& e : tab.transcript) {
             switch (e.kind) {
                 case EntryKind::Person: {
                     PrLayoutNode entry = element(column, Part::Entry);
                     PrLayoutNode bubble = element(entry, Part::Bubble);
-                    text(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 }
                 case EntryKind::Friend:
-                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 case EntryKind::Notice:
-                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
             }
         }
@@ -518,7 +593,7 @@ struct Builder {
         for (const std::string& text : tab.queue) {
             PrLayoutNode entry = element(column, Part::Entry);
             PrLayoutNode bubble = element(entry, Part::BubbleQueued);
-            this->text(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            label(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
             PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
             PrKitPlace place{};
             place.margin.top = 0.3f * kMetaSize * k();
@@ -565,12 +640,6 @@ struct Builder {
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, &fill);
         frameless(edit);
-        // The area's text is the element the kit makes as its first child (kit_input.cpp editedText), which carries its
-        // own font group, so it is restyled there. No public call names that element: it is found in the last round's
-        // tree, whose node this round continues (pr/layout_frame.h), and only if this round created it under the area.
-        PrLayoutNode value = prLayoutNodeFirstChild(tree, edit);
-        if (value != kPrLayoutNodeNone && prLayoutTreeFrameParent(tree, value) == edit)
-            breakAnywhere(value);
         view.prompt = edit;
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
@@ -717,16 +786,6 @@ bool windowWantsFrame(const View& view) {
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
     Builder b{view, kit, kit->ui, kit->tree, *view.look, *view.model};
     b.build(parent);
-}
-
-bool takeEvent(PrUi* ui, const PrAppEvent& event) {
-    PrAppModifierFlags modifiers = withoutCapsLock(event.modifiers);
-    if (modifiers == event.modifiers)
-        return false;
-    PrAppEvent copy = event;
-    copy.modifiers = modifiers;
-    prUiPushEvent(ui, &copy);
-    return true;
 }
 
 } // namespace nexus

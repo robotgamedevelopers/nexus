@@ -1,8 +1,9 @@
 // nexus: one person and several AIs ("friends") in one window. Layer 1 is the window only: tabs, transcripts and the
 // prompt, with nothing connected to any AI yet.
 //
-// main() is the composition root: it reads the friends, makes the model, and either runs the window in Prax's Studio
-// window (pr/studio_window.h) or lays the same tree out offscreen and writes one frame to a PNG (--screenshot).
+// main() is the composition root: it reads the friends, makes the model, and either runs the window as a Prax Studio
+// application of one Studio window (pr/studio_app.h, pr/studio_window.h) or lays the same tree out offscreen and writes
+// one frame to a PNG (--screenshot).
 //
 // The window is the overlay (platform_mac.h): see-through, over the whole screen, shown and hidden by a global hotkey
 // (style.h), and hidden by Escape. --windowed gives a normal opaque window, where Escape does nothing. --print-window-config makes the overlay window hidden, prints its
@@ -38,6 +39,7 @@
 #include "pr/kit.h"
 #include "pr/kit_theme.h"
 #include "pr/layout_scene.h"
+#include "pr/studio_app.h"
 #include "pr/studio_window.h"
 #include "pr/text.h"
 
@@ -98,12 +100,13 @@ bool open(void* context, PrStudioWindow* window) {
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
-        a.overlay);
+        prStudioWindowAppWindow(window), a.overlay);
     a.view.terminals = a.terminals.get();
     PraxBoard::Desc board;
     board.kit = prStudioWindowKit(window);
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
+    board.window = prStudioWindowAppWindow(window);
     if (a.overlay) {
         board.visible = overlayVisible;
         setOverlayShown([](void* app) { prAppWake(static_cast<PrApp*>(app)); }, prStudioWindowApp(window));
@@ -123,9 +126,11 @@ void closeWindow(void* context, PrStudioWindow*) {
     a.terminals.reset();
 }
 
-// Always the dark variant, so the window never puts Studio's own theme back over the one set in open().
-PrKitThemeVariant theme(void*, PrStudioWindow*, const PrAppUserPreferences*) {
-    return PrKitThemeVariant_Dark;
+// The kit's own palette, the one open() and the text scale's keys set: the window gives the kit Studio's theme again
+// whenever the palette this returns differs from the kit's (studio_window.cpp renderFrame 404-412), which would put
+// Studio's type sizes back over the window's scaled ones.
+void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPalette* out) {
+    *out = prStudioWindowKit(window)->theme.palette;
 }
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
@@ -137,7 +142,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
         // Prax's lib/app has no window styles; go through the window behind its NSView. Shown once at launch.
         a.overlayOpened = true;
         PrAppSurface surface{};
-        if (prAppSurface(prStudioWindowApp(window), &surface) == PrStatus_Ok &&
+        if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok &&
                 surface.kind == PrAppSurfaceKind_NsView && openOverlay(surface.handle, overlayConfig(), true))
             std::printf("nexus: overlay window\n%s", describeOverlay().c_str());
         else
@@ -147,11 +152,9 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
 
 // While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
-bool event(void* context, PrStudioWindow* window, const PrAppEvent* e) {
+bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     App& a = appOf(context);
-    if (a.board != nullptr && a.board->event(*e))
-        return true;
-    return takeEvent(prStudioWindowUi(window), *e);
+    return a.board != nullptr && a.board->event(*e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
@@ -252,7 +255,7 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
     a.view.extent = extent;
-    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, a.backdrop);
+    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr, a.backdrop);
     a.view.terminals = terminals.get();
     PraxBoard::Desc boardDesc;
     boardDesc.kit = kit;
@@ -288,8 +291,10 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         for (int i = 0; i < 500 && terminals->text(id).find("Darwin") == std::string::npos; ++i) {
             frame();
             if (!typed && i == 10) {
-                PrAppEvent e{.kind = PrAppEventKind_Text, .text = PrStringView{command, std::strlen(command)}};
-                prUiPushEvent(ui, &e);
+                PrAppEvent e{};
+                e.kind = PrAppEventKind_Text;
+                e.input.text = PrStringView{command, std::strlen(command)};
+                prUiPushEvent(ui, kPrUiViewportMain, &e);
                 typed = true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -470,12 +475,11 @@ int main(int argc, char** argv) {
             code = screenshot(a, shot, PrVec2{w, h}, scale);
         }
     } else {
-        PrStudioWindowDesc desc{
+        PrStudioWindowDesc window{
             .title = "nexus",
             .extent = {1000, 780},
-            .fonts = a.fonts,
             .open = open,
-            .theme = theme,
+            .palette = palette,
             .beginFrame = beginFrame,
             .event = event,
             .build = build,
@@ -484,7 +488,8 @@ int main(int argc, char** argv) {
             .trace = trace,
             .context = &a,
         };
-        PrStatus status = prStudioWindowRun(&desc);
+        PrStudioAppDesc desc{.fonts = a.fonts, .window = &window, .lastWindow = PrStudioAppLastWindow_Stop};
+        PrStatus status = prStudioAppRun(&desc);
         if (status == PrStatus_NotSupported) {
             std::fprintf(stderr, "nexus: no GPU device to render with\n");
             code = 1;

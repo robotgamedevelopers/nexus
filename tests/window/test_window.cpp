@@ -1,12 +1,11 @@
-// Unit tests of the window's pure logic: the event filter (src/input.h), and the friend list's parsing and loading
-// (src/friends.h) through a fake command runner. No OS, no clock, no window, no process.
+// Unit tests of the window's pure logic: the friend list's parsing and loading (src/friends.h) through a fake command
+// runner. No OS, no clock, no window, no process.
 
 #include <cstdio>
 #include <string>
 #include <vector>
 
 #include "friends.h"
-#include "input.h"
 #include "tab_order.h"
 
 namespace {
@@ -23,17 +22,6 @@ void check(bool ok, const char* what, int line) {
 }
 
 #define CHECK(x) check((x), #x, __LINE__)
-
-constexpr PrAppModifierFlags kShift = PrAppModifierFlag_Shift;
-constexpr PrAppModifierFlags kCmd = PrAppModifierFlag_Super;
-constexpr PrAppModifierFlags kCaps = PrAppModifierFlag_CapsLock;
-
-void capsLockIsStripped() {
-    CHECK(withoutCapsLock(PrAppModifierFlags(kShift | kCaps)) == kShift);
-    CHECK(withoutCapsLock(PrAppModifierFlags(kCmd | kCaps)) == kCmd);
-    CHECK(withoutCapsLock(kCaps) == 0);
-    CHECK(withoutCapsLock(kCmd) == kCmd);
-}
 
 void parsesEnabledFriendsInOrder() {
     FriendList list = parseFriendList(R"({"result":{"verb":"friend list","status":"ok","exit":0},"items":[
@@ -286,7 +274,6 @@ int main() {
     terminalTabsAreNeverSaved();
     sprintTabIsNeverSavedAndStaysFirst();
     badStoreUsesTheLoadedOrderAndSaysSo();
-    capsLockIsStripped();
     parsesEnabledFriendsInOrder();
     reportsWhatIsWrong();
     commandIsTheLoginShellOrTheOverride();

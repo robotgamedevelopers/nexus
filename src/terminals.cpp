@@ -28,8 +28,8 @@ PrStringView view(const std::string& s) {
 
 } // namespace
 
-PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, bool overlay)
-    : kit_(kit), fonts_(fonts), app_(app),
+PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window, bool overlay)
+    : kit_(kit), fonts_(fonts), app_(app), window_(window),
       background_{channel(style::kBackground.r), channel(style::kBackground.g), channel(style::kBackground.b),
           channel(overlay ? style::kOverlayOpacity : 1.0f)},
       launcher_(prProcessLauncherCreate(PrProcessBackend_Default)) {}
@@ -65,7 +65,6 @@ bool PraxTerminals::open(std::size_t id) {
     if (directory.empty())
         home = prFileUserDirectory(PrFileUserDirectory_Home);
     PrTerminalDesc desc{};
-    desc.kit = kit_;
     desc.font = font();
     desc.app = app_;
     desc.launcher = launcher_;
@@ -108,7 +107,7 @@ bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
     return changed;
 }
 
-void PraxTerminals::show(std::size_t id, PrLayoutNode parent, PrVec2 extent) {
+void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     PrTerminal* terminal = find(id);
     if (terminal == nullptr)
         return;
@@ -117,7 +116,7 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent, PrVec2 extent) {
     applyBackground(terminal);
     PrLayoutTree* tree = kit_->tree;
     const PrLayoutStyleIndex before = prLayoutTreeFrameStyle(tree, parent);
-    prTerminalFrame(terminal, parent, extent, PrTerminalBackground_Parent);
+    prTerminalFrame(terminal, kit_, parent, PrTerminalBackground_Parent);
     // A frame in which Prax reset the colour drew with the theme's opaque one: the window keeps its own background
     // this frame, and the next frame draws with the window's colour.
     if (applyBackground(terminal))
@@ -126,7 +125,7 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent, PrVec2 extent) {
 
 void PraxTerminals::update(std::size_t id) {
     if (PrTerminal* terminal = find(id))
-        prTerminalUpdate(terminal);
+        prTerminalService(terminal, window_);
 }
 
 bool PraxTerminals::ended(std::size_t id) {
