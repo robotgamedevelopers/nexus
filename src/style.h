@@ -88,10 +88,11 @@ constexpr float kOverlayOpacity = 0.80f;     // alpha of the window background; 
 constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
 constexpr bool kOverlayBlur = false;          // true blurs what is behind (an NSVisualEffectView); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
-// The hotkey, as Carbon's virtual key code and modifier mask (Carbon/HIToolbox Events.h). Option-backtick (the key
+// The hotkey, as Carbon's virtual key code and modifier mask (Carbon/HIToolbox Events.h). Command-backtick (the key
 // that also types the tilde, without Shift) by default.
 // Modifiers: cmdKey 0x0100, shiftKey 0x0200, optionKey 0x0800, controlKey 0x1000; add them to combine.
 constexpr unsigned kOverlayHotKeyCode = 0x32;         // kVK_ANSI_Grave, the backtick key
-constexpr unsigned kOverlayHotKeyModifiers = 0x0800;  // optionKey
+// cmdKey: Command-backtick is macOS's "move focus to next window" key, which this registration takes over while it runs.
+constexpr unsigned kOverlayHotKeyModifiers = 0x0100;
 
 } // namespace nexus::style
