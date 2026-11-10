@@ -1,5 +1,6 @@
 #include "sprint.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -162,10 +163,6 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
 
 namespace {
 
-// The page's see-through background. --bg is the board's page colour (its index.html :root).
-constexpr std::string_view kPageStyle =
-    ":root, html, body { --bg: transparent !important; background: transparent !important; }\n";
-
 // The prelude, with @STD@ and @DST@ for the zone names, each a JavaScript string literal.
 constexpr std::string_view kPrelude = R"JS((function () {
   "use strict";
@@ -302,17 +299,19 @@ void replace(std::string& text, std::string_view mark, const std::string& with) 
 
 } // namespace
 
-std::string sprintPageStyle(double spendTop) {
-    std::string style(kPageStyle);
-    if (spendTop < 0)
+std::string sprintPageStyle(const SpendFit& fit) {
+    std::string style;
+    if (fit.top < 0)
         return style;
     // The open panel a column whose body takes the height to spare: the body's grid row stretches, so the pie's column
     // and its divider reach the bottom while the pie stays at the top.
-    char height[64];
-    std::snprintf(height, sizeof height, "%.2f", spendTop);
+    char above[64];
+    char margin[64];
+    std::snprintf(above, sizeof above, "%.2f", fit.top + std::max(fit.gap, 0.0));
+    std::snprintf(margin, sizeof margin, "%.2f", std::max({fit.gap, fit.below, 0.0}));
     const std::string open = std::string(kSpendSelector) + ":not(.folded)";
     style += open + " { display: flex; flex-direction: column; box-sizing: border-box; min-height: calc(100vh - " +
-        height + "px); }\n";
+        above + "px); margin-bottom: " + margin + "px; }\n";
     style += open + " > .spend-body { flex: 1 1 auto; }\n";
     return style;
 }

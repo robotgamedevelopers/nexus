@@ -64,17 +64,27 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
 // replaces.
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone);
 
-// The style sheet nexus adds to the board's page. It makes the page's own background see-through, so that the window's
-// fill shows behind it: the root and body backgrounds and the board's --bg colour. The page's tiles, panels and tables
-// keep their own fills. And it stretches the Cost breakdown panel (kSpendSelector), while it is open, down to the
-// bottom of the first screen, so that the next block starts below it: at least the viewport's height (100vh) less
-// `spendTop`, the panel's top in the document in CSS px, which board.h measures from the laid-out page (the page gives
-// no other way to know how tall the header and tiles above it are). The pie keeps its own size at the top of its
-// column. A negative `spendTop` (not measured yet) leaves the panel its own height.
+// The Cost breakdown panel as laid out, in CSS px, which board.h measures from the page after each paint (the page gives
+// no other way to know how tall the header and tiles above it are): its top in the document; the gap above it, from the
+// block before it, which is the page's gap between blocks; and the gap below it, to the block after it. A negative top
+// is not measured yet.
+struct SpendFit {
+    double top = -1;
+    double gap = 0;
+    double below = 0;
+};
+
+// The style sheet nexus adds to the board's page. The page keeps its own opaque background, as nova-sprint serves it
+// (the owner 2026-11-10: a see-through page is hard to read). The sheet stretches the Cost breakdown panel
+// (kSpendSelector), while it is open, down to one gap above the bottom of the first screen, so that its border and
+// rounded corners show with the page's own gap below them, and the next block starts at or below the screen's bottom
+// (the owner 2026-11-10: not flush to the bottom, but no panel peeking in below it): a min-height of the viewport's
+// height (100vh) less the top and the gap, and a bottom margin of at least the gap. The pie keeps its own size at the
+// top of its column. Not measured yet, the sheet is empty, which leaves the panel its own height.
 // board.h adds it to each document's head, as a style element with the id kSprintStyleId, before the document paints,
-// and sets it again when the panel's top moves.
-std::string sprintPageStyle(double spendTop);
-constexpr std::string_view kSprintStyleId = "nexus-see-through";
+// and sets it again when the measures move.
+std::string sprintPageStyle(const SpendFit& fit);
+constexpr std::string_view kSprintStyleId = "nexus-sprint-style";
 // The Cost breakdown panel in nova-sprint's index.html: <section class="panel spend">.
 constexpr std::string_view kSpendSelector = ".panel.spend";
 

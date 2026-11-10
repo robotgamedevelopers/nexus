@@ -2,9 +2,9 @@
 // incremental example host a page. One DOM agent, one QuickJS engine and one page, run on the window's thread: each
 // frame runs the page's due tasks for a few milliseconds, records the page into a frozen draw list in CSS pixels
 // (prHtmlViewPaint), and the window's tree shows it in a replaced node whose painter embeds the list, as the incremental
-// example's pane does. The page's own background is see-through (sprint.h sprintPageStyle) over the window's fill, and
-// after each paint the Cost breakdown panel's top is measured, so that the style stretches the panel to the bottom of
-// the first screen.
+// example's pane does. The list fills the page's canvas with its own background, so the page is opaque edge to edge over
+// the window's see-through fill. After each paint the Cost breakdown panel's place is measured, so that nexus's style
+// (sprint.h sprintPageStyle) stretches the panel to one gap above the bottom of the first screen.
 //
 // The address comes from the sprint's record (sprint.h findSprintBoard), looked up on a thread of its own so that the
 // window never waits on it. Until there is a page to show, show() gives one line that says what is happening or what
@@ -78,6 +78,8 @@ public:
     bool settled();
     std::string bodyText();
     std::string problem() const { return said_; }
+    // The page's canvas colour at the last paint, which the recorded list fills edge to edge.
+    PrColor canvas() const { return canvas_; }
     PrHtmlPage* page() const { return page_; }
 
 private:
@@ -87,7 +89,7 @@ private:
     void runTasks();
     void paint(PrVec2 extent);
     void addPageStyle();
-    double measureSpendTop();
+    SpendFit measureSpend();
     void fitSpend();
     bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
 
@@ -134,9 +136,10 @@ private:
     std::string problem_;               // why the address lookup failed
     std::string said_;                  // the line show() gave last, or empty if it showed the page
     PrDrawList* recorded_ = nullptr;    // the page as last painted, frozen; the painter's context
+    PrColor canvas_{};                  // the page's canvas colour at the last paint
     bool dirty_ = true;
     PrVec2 viewport_{};                 // the extent the page was last painted at, in CSS px
-    double spendTop_ = -1;              // the Cost breakdown's top in the document, CSS px, as last styled; -1 none
+    SpendFit spend_;                    // the Cost breakdown as last styled; its top -1 for none
     float zoom_ = 1;
     PrAppDisplay display_ = prAppDisplayDefault();
     PrRect pane_{};                     // the page's rectangle in the window, px, at the last layout

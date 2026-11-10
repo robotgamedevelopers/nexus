@@ -188,24 +188,25 @@ void preludeCarriesTheZonesAndEscapesThem() {
     CHECK(has(odd, "\"a\\\"b\\u003c/script>\"") && has(odd, "\"c\\\\d\\n\""));
 }
 
-void styleMakesOnlyThePageSeeThrough() {
-    std::string s = sprintPageStyle(-1);
-    CHECK(has(s, "--bg: transparent !important") && has(s, "background: transparent !important"));
-    CHECK(has(s, ":root") && has(s, "body"));
-    CHECK(!has(s, "--surface"));
-    // Not measured yet: the Cost breakdown keeps its own height.
-    CHECK(!has(s, "spend") && !has(s, "min-height"));
+// The page keeps its own background: nothing in the sheet touches a background or --bg, and before the Cost breakdown's
+// top is measured the sheet is empty, so the panel keeps its own height.
+void styleLeavesThePageBackgroundAlone() {
+    CHECK(sprintPageStyle(SpendFit{}).empty());
+    std::string s = sprintPageStyle(SpendFit{547.5, 32, 64});
+    CHECK(!has(s, "background") && !has(s, "--bg") && !has(s, "transparent"));
 }
 
-// Measured: the open Cost breakdown reaches the viewport's bottom from its top, and its body takes the height; folded,
-// it is left alone.
+// Measured: the open Cost breakdown reaches one gap above the viewport's bottom from its top, its body takes the
+// height, and the margin below it is at least the gap, so the next block starts at or below the bottom; folded, it is
+// left alone.
 void styleStretchesTheOpenCostBreakdown() {
-    std::string s = sprintPageStyle(547.5);
-    CHECK(has(s, "--bg: transparent !important"));
+    std::string s = sprintPageStyle(SpendFit{547.5, 32, 64});
     CHECK(has(s, ".panel.spend:not(.folded) { display: flex; flex-direction: column; box-sizing: border-box; "
-        "min-height: calc(100vh - 547.50px); }"));
+        "min-height: calc(100vh - 579.50px); margin-bottom: 64.00px; }"));
     CHECK(has(s, ".panel.spend:not(.folded) > .spend-body { flex: 1 1 auto; }"));
-    CHECK(has(sprintPageStyle(0), "calc(100vh - 0.00px)"));
+    // A page whose gap below is smaller than its gap between blocks: the margin grows to the gap.
+    CHECK(has(sprintPageStyle(SpendFit{100, 32, 8}), "calc(100vh - 132.00px); margin-bottom: 32.00px;"));
+    CHECK(has(sprintPageStyle(SpendFit{0, 0, 0}), "calc(100vh - 0.00px); margin-bottom: 0.00px;"));
 }
 
 } // namespace
@@ -222,7 +223,7 @@ int main() {
     failuresCarryWhatTheCommandSaid();
     eventsAreRouted();
     preludeCarriesTheZonesAndEscapesThem();
-    styleMakesOnlyThePageSeeThrough();
+    styleLeavesThePageBackgroundAlone();
     styleStretchesTheOpenCostBreakdown();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);

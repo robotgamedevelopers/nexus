@@ -95,7 +95,7 @@ constexpr const char* kSpendPage = R"HTML(<!doctype html>
 .pie-wrap { display: flex; align-items: flex-start; justify-content: center; padding: 2rem 3rem; }
 .pie { width: 100%; max-width: 12rem; aspect-ratio: 1 / 1; height: auto; }
 .next { height: 20rem; } .rest { height: 3000px; }</style></head>
-<body><header class="top">board</header><section class="hero">tiles</section>
+<body><header class="top">board</header><section class="hero" id="hero">tiles</section>
 <section class="panel spend" id="spend"><div class="panel-head"><h2>Cost breakdown</h2></div>
 <div class="scroll spend-body"><div class="pie-wrap"><svg class="pie" id="pie" viewBox="0 0 100 100"></svg></div>
 <div class="rows toprows"><div>stream</div><div>a</div><div>b</div></div></div></section>
@@ -270,6 +270,11 @@ void loadsPollsAndFormats() {
     CHECK(has(t, "first"));
     CHECK(!zone.empty() && has(t, zone));
     CHECK(h.hasStyle());
+    // The page is opaque: its canvas is the page's own --bg (#0d0f12), which the recorded list fills edge to edge.
+    PrColor canvas = h.board->canvas();
+    CHECK(canvas.a == 1.0f);
+    CHECK(std::fabs(canvas.r - 0x0d / 255.0f) < 0.01f && std::fabs(canvas.g - 0x0f / 255.0f) < 0.01f &&
+        std::fabs(canvas.b - 0x12 / 255.0f) < 0.01f);
     // A second's frames: the 1 s poll runs again.
     int polls = h.server.polls;
     h.frames(22);
@@ -348,8 +353,9 @@ void aFoundAddressLoads() {
     CHECK(h.board->settled() && h.server.pages == 1);
 }
 
-// The Cost breakdown reaches the bottom of the first screen at a tall window and a short one, so the next block starts
-// below it; the pie keeps its size; scrolling does not move it; folded, the panel takes its own height again.
+// The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the
+// page leaves between the tiles and the panel, and the next block starts at or below the bottom; the pie keeps its
+// size; scrolling does not move it; folded, the panel takes its own height again.
 void theCostBreakdownFillsTheFirstScreen() {
     // At 900 px the panel's own content is some 60 px short of the screen's bottom; at 1600, some 770.
     for (float height : {1600.0f, 900.0f}) {
@@ -361,8 +367,11 @@ void theCostBreakdownFillsTheFirstScreen() {
         double viewport = h.viewportHeight();
         PrDomRect spend = h.rect("spend");
         PrDomRect pie = h.rect("pie");
+        PrDomRect hero = h.rect("hero");
+        double gap = spend.y - (hero.y + hero.height);
         CHECK(viewport > 300 && viewport < height);
-        CHECK(std::fabs(spend.y + spend.height - viewport) < 1);
+        CHECK(std::fabs(gap - 32) < 1);     // the fixture's 2rem between the tiles and the panel
+        CHECK(std::fabs(spend.y + spend.height - (viewport - gap)) < 1);
         CHECK(h.rect("next").y >= viewport);
         CHECK(std::fabs(pie.width - 192) < 1 && std::fabs(pie.height - pie.width) < 1);
         if (failures != 0)
@@ -375,7 +384,7 @@ void theCostBreakdownFillsTheFirstScreen() {
         CHECK(std::fabs(h.rect("spend").height - spend.height) < 1);
         prCssElementSetScrollTop(prCssDocumentScrollingElement(h.document()), 0);
         h.frames(3);
-        CHECK(std::fabs(h.rect("spend").y + h.rect("spend").height - viewport) < 1);
+        CHECK(std::fabs(h.rect("spend").y + h.rect("spend").height - (viewport - gap)) < 1);
 
         // Folded: the head alone.
         prDomElementSetAttribute(h.byId("spend"), PrStringView{"class", 5}, PrStringView{"panel spend folded", 18});

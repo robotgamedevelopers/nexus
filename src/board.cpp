@@ -232,8 +232,9 @@ void PraxBoard::openPage() {
     host.wallNow = desc_.wallNow != nullptr ? clockWallNow : nullptr;
     PrHtmlHost scripted = prJsHtmlEngineHost(engine_, &host, PrJsHtmlScripting_Enabled);
     page_ = prHtmlPageCreate(&scripted);
-    // The window fills beneath the page (the see-through style), so the view records no canvas fill.
-    PrHtmlViewDesc view{.page = page_, .compositor = nullptr, .jobBudget = 0, .canvasFilled = true,
+    // The view records the page's canvas fill (the board's own --bg), so the page is opaque over the window's
+    // see-through background (the owner 2026-11-10: a see-through page is hard to read).
+    PrHtmlViewDesc view{.page = page_, .compositor = nullptr, .jobBudget = 0, .canvasFilled = false,
         .updated = nullptr, .updatedContext = nullptr};
     view_ = prHtmlViewCreate(&view);
     if (app_ != nullptr)
@@ -347,38 +348,50 @@ void PraxBoard::addPageStyle() {
     if (prDomElementCreate(document, PrStringView{"style", 5}, nullptr, &style) != PrStatus_Ok)
         return;
     prDomElementSetAttribute(style, PrStringView{"id", 2}, sv(kSprintStyleId));
-    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spendTop_)));
+    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spend_)));
     prDomNodeAppendChild(prDomElementAsNode(head), prDomElementAsNode(style));
     prDomNodeRelease(prDomElementAsNode(style));
 }
 
-double PraxBoard::measureSpendTop() {
+SpendFit PraxBoard::measureSpend() {
+    SpendFit fit;
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
     if (document == nullptr)
-        return -1;
+        return fit;
     PrDomElement* spend = nullptr;
     if (prCssNodeQuerySelector(prDomDocumentAsNode(document), sv(kSpendSelector), &spend) != PrStatus_Ok ||
         spend == nullptr)
-        return -1;
+        return fit;
     // The top in the viewport, plus the page's scroll: the top in the document, wherever the page is scrolled.
     PrDomElement* scrolling = prCssDocumentScrollingElement(document);
     double scrolled = scrolling != nullptr ? prCssElementScrollTop(scrolling) : 0;
-    return prCssElementGetBoundingClientRect(spend).y + scrolled;
+    PrDomRect box = prCssElementGetBoundingClientRect(spend);
+    fit.top = box.y + scrolled;
+    // The gaps to the blocks before and after it, as the page lays them out.
+    if (PrDomElement* before = prDomNodePreviousElementSibling(prDomElementAsNode(spend))) {
+        PrDomRect r = prCssElementGetBoundingClientRect(before);
+        fit.gap = box.y - (r.y + r.height);
+    }
+    if (PrDomElement* after = prDomNodeNextElementSibling(prDomElementAsNode(spend)))
+        fit.below = prCssElementGetBoundingClientRect(after).y - (box.y + box.height);
+    return fit;
 }
 
 void PraxBoard::fitSpend() {
-    double top = measureSpendTop();
-    // Half a pixel either way is the same screen: no restyle, so a rounding never repaints in a loop. The panel's top
-    // does not depend on its own height, so one restyle settles it.
-    if (std::fabs(top - spendTop_) < 0.5)
+    SpendFit fit = measureSpend();
+    // Half a pixel either way is the same screen: no restyle, so a rounding never repaints in a loop. None of the
+    // measures depends on the panel's height, and the gap below is at least the margin the style gives, so one restyle
+    // settles them.
+    if (std::fabs(fit.top - spend_.top) < 0.5 && std::fabs(fit.gap - spend_.gap) < 0.5 &&
+        std::fabs(fit.below - spend_.below) < 0.5)
         return;
-    spendTop_ = top;
+    spend_ = fit;
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
     PrDomElement* style = document != nullptr
         ? prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) : nullptr;
     if (style == nullptr)
         return;
-    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spendTop_)));
+    prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spend_)));
     dirty_ = true;
 }
 
@@ -397,14 +410,14 @@ void PraxBoard::paint(PrVec2 extent) {
     addPageStyle();
     PrDrawList* list = prDrawListCreate();
     prDrawListPushTransformAffine2(list, prAffine2Scale(PrVec2{zoom_, zoom_}));
-    prHtmlViewPaint(view_, list);
+    canvas_ = prHtmlViewPaint(view_, list);
     prDrawListPopTransform(list);
     prDrawListFreeze(list);
     prDrawListRelease(recorded_);
     recorded_ = list;
     dirty_ = false;
-    // The Cost breakdown's top as laid out in this paint: if it moved, the style is set again and the next frame paints
-    // the panel to the bottom of the screen.
+    // The Cost breakdown's place as laid out in this paint: if it moved, the style is set again and the next frame paints
+    // the panel down to one gap above the bottom of the screen.
     fitSpend();
 }
 
