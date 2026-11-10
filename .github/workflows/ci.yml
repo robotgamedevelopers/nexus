@@ -139,7 +139,7 @@ jobs:
             done
             build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
           done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close; do
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
           done
           build/tests/sync/sync_test
@@ -212,7 +212,7 @@ jobs:
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
-      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The two largest instances, label
-      # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
+      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
+      # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure

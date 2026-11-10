@@ -508,22 +508,98 @@ void close_removes_exactly_that_tab() {
     CHECK(m.active() == 1 && m.tab(1).id == 3);   // the active tab, shifted left with it
 }
 
-void close_active_takes_the_next_or_the_last() {
+std::string history(const Model& m) {
+    std::string out;
+    for (std::size_t id : m.selection_history())
+        out += (out.empty() ? "" : " ") + std::to_string(id);
+    return out;
+}
+
+void close_active_goes_back_to_the_tab_selected_before() {
     Model m(friendsOne());
     m.add_terminal();   // 1
     m.add_terminal();   // 2
     m.add_terminal();   // 3
     m.select_tab(2);    // id 2, in the middle
+    CHECK(history(m) == "0 1 3 2");
     CHECK(m.close_tab(2));
-    CHECK(ids(m) == "0 1 3" && m.active() == 2 && m.tab(2).id == 3);   // the tab now at its position
-    CHECK(m.close_tab(2));   // the active tab is the last
+    CHECK(ids(m) == "0 1 3" && m.active() == 2 && m.tab(2).id == 3);   // id 3 was selected before it
+    CHECK(m.close_tab(2));
     CHECK(ids(m) == "0 1" && m.active() == 1);
     CHECK(m.close_tab(1));
-    CHECK(ids(m) == "0" && m.active() == 0);
+    CHECK(ids(m) == "0" && m.active() == 0 && history(m) == "0");
     Model none({});
     none.add_terminal();
     CHECK(none.close_tab(0));
-    CHECK(none.tab_count() == 0 && none.active() == 0);   // none left
+    CHECK(none.tab_count() == 0 && none.active() == 0 && history(none).empty());   // none left
+}
+
+// The owner's case: friend, terminal, sprint, terminal; each close goes back to the tab selected before, whatever its
+// kind and wherever it stands, not to the tab beside it.
+void close_goes_back_across_kinds() {
+    Model m(three(), true);   // sprint 3, then friends 0 1 2
+    CHECK(history(m) == "3");
+    m.select_tab(1);          // friend ada, id 0
+    m.add_terminal();         // terminal 1, id 4, at 4
+    m.select_tab(0);          // the sprint tab
+    m.add_terminal();         // terminal 2, id 5, at 5
+    CHECK(history(m) == "0 4 3 5");
+    CHECK(m.close_tab(5));
+    CHECK(m.active() == 0 && m.tab(0).kind == TabKind::Sprint);   // not friend cy, beside it
+    CHECK(m.select_tab(4));
+    CHECK(m.close_tab(4));
+    CHECK(m.active() == 0);   // the sprint tab again: selected after ada
+    CHECK(history(m) == "0 3");
+    m.add_terminal();         // id 6
+    m.select_tab(1);          // ada again
+    CHECK(m.select_tab(4));   // the terminal
+    CHECK(history(m) == "3 0 6");
+    CHECK(m.close_tab(4));
+    CHECK(m.active() == 1 && m.tab(1).id == 0);   // ada, selected last before it
+}
+
+// A closed tab is skipped: it left the history when it closed.
+void close_skips_closed_tabs() {
+    Model m(friendsOne());
+    m.add_terminal();   // 1
+    m.add_terminal();   // 2
+    m.add_terminal();   // 3
+    m.select_tab(1);
+    m.select_tab(2);
+    m.select_tab(3);
+    CHECK(history(m) == "0 1 2 3");
+    CHECK(m.close_tab(2));    // id 2, not active
+    CHECK(m.active() == 2 && m.tab(2).id == 3);   // the active tab stays, shifted left
+    CHECK(history(m) == "0 1 3");
+    CHECK(m.close_tab(2));    // id 3, active
+    CHECK(m.active() == 1 && m.tab(1).id == 1);   // id 2 closed: back to id 1
+}
+
+// select puts its tab's id at the end and nowhere else; a refused select, set_draft, send, queue, append and move leave
+// the history as it was; the history's last id is the active tab's.
+void history_follows_selection_only() {
+    Model m(three(), true);
+    m.add_terminal();         // id 4
+    CHECK(history(m) == "3 4");
+    m.select_tab(2);          // id 1
+    m.select_tab(0);
+    m.select_tab(2);
+    CHECK(history(m) == "4 3 1");
+    CHECK(!m.select_tab(5) && !m.select_tab(kHuge));
+    m.set_draft(2, "hi");
+    m.send(2);
+    m.set_draft(2, "later");
+    m.queue(2);
+    m.append(2, Entry{EntryKind::Friend, "ok"});
+    CHECK(m.move_tab(2, 1));
+    CHECK(history(m) == "4 3 1");
+    CHECK(m.tab(m.active()).id == m.selection_history().back());
+    CHECK(m.select_tab(m.active()));   // selecting the active tab again changes nothing
+    CHECK(history(m) == "4 3 1");
+    Model none({});
+    CHECK(history(none).empty());
+    Model friendsOnly(three());
+    CHECK(history(friendsOnly) == "0");
 }
 
 void a_terminal_takes_no_text() {
@@ -607,7 +683,7 @@ void sprint_tab_never_closes() {
     CHECK(m.add_terminal() == 4);   // the first id after the friends' and the sprint tab's
     CHECK(m.add_terminal() == 5);
     CHECK(m.close_tab(5) && m.close_tab(4));
-    CHECK(ids(m) == "3 0 1 2" && m.active() == 3);
+    CHECK(ids(m) == "3 0 1 2" && m.active() == 0);   // back to the sprint tab, selected before both terminals
     CHECK(!m.close_tab(0));
 }
 
@@ -659,7 +735,10 @@ const Case kCases[] = {
     {"ids_are_never_reused", ids_are_never_reused},
     {"close_refuses_a_friend_and_out_of_range", close_refuses_a_friend_and_out_of_range},
     {"close_removes_exactly_that_tab", close_removes_exactly_that_tab},
-    {"close_active_takes_the_next_or_the_last", close_active_takes_the_next_or_the_last},
+    {"close_active_goes_back_to_the_tab_selected_before", close_active_goes_back_to_the_tab_selected_before},
+    {"close_goes_back_across_kinds", close_goes_back_across_kinds},
+    {"close_skips_closed_tabs", close_skips_closed_tabs},
+    {"history_follows_selection_only", history_follows_selection_only},
     {"a_terminal_takes_no_text", a_terminal_takes_no_text},
     {"moves_stay_in_their_zone", moves_stay_in_their_zone},
     {"sprint_tab_is_first_and_active_with_the_friends_after", sprint_tab_is_first_and_active_with_the_friends_after},

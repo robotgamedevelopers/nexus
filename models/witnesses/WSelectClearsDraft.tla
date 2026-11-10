@@ -6,6 +6,7 @@ EXTENDS MCWindow
 BrokenSelect(i) ==
     IF i \in Tabs
     THEN /\ active' = i
+         /\ history' = Touch(history, At(i))
          /\ draft' = [draft EXCEPT ![At(active)] = ""]
          /\ last' = Did("select", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, order, transcript, queue>>

@@ -34,6 +34,15 @@
 (* are all whitespace; a refused operation changes no model state. No     *)
 (* operation takes from a queue: delivery belongs to a later layer.       *)
 (*                                                                         *)
+(* `history` is the selection history: the ids of the tabs selected, most  *)
+(* recent last, each once. The tab active at the start is its first entry; *)
+(* select and add put their tab's id at the end (moving it there if it was *)
+(* in it already), and close takes the closed tab's id out. Closing the    *)
+(* active tab makes the last id left in it active: the tab selected before *)
+(* it, of those still open. With none left, the rule before it: the tab   *)
+(* now at the closed one's position, or the last. History is per run: the *)
+(* code saves none of it.                                                  *)
+(*                                                                         *)
 (* `last` is not model state. It is a history variable: the operation     *)
 (* just performed, its arguments and the value it returned. It lets the   *)
 (* per-operation guarantees below be stated as action properties, and it  *)
@@ -51,10 +60,10 @@ CONSTANTS
 
 ASSUME Blank \subseteq Drafts /\ "" \in Blank /\ Sprint \in BOOLEAN
 
-VARIABLES friends, order, active, transcript, draft, queue, nextId, last
+VARIABLES friends, order, active, transcript, draft, queue, nextId, history, last
 
-model == <<friends, order, active, transcript, draft, queue, nextId>>
-vars == <<friends, order, active, transcript, draft, queue, nextId, last>>
+model == <<friends, order, active, transcript, draft, queue, nextId, history>>
+vars == <<friends, order, active, transcript, draft, queue, nextId, history, last>>
 
 N == Len(FriendList)
 Ids == 0 .. (N - 1)         \* friends, by their place in FriendList
@@ -113,9 +122,24 @@ ClosedIndex(a, i, n) ==
     ELSE IF a = i /\ i = n - 1 THEN (IF n = 1 THEN 0 ELSE i - 1)
     ELSE a
 
+\* The selection history without id f: the code's std::remove.
+Forget(h, f) == SelectSeq(h, LAMBDA g : g /= f)
+
+\* The selection history with id f at its end, and nowhere else.
+Touch(h, f) == Append(Forget(h, f), f)
+
+\* The position of the tab with id f in the order o (f stands in it).
+PosOf(o, f) == CHOOSE p \in DOMAIN o : o[p] = f
+
+\* The active position after the tab at i is closed, of the order o, with the history h that is left: the last id in h
+\* if the closed tab was active and h holds one, else ClosedIndex. The code's close_tab.
+ClosedActive(a, i, o, h) ==
+    IF a = i /\ h /= <<>> THEN PosOf(Removed(o, i), h[Len(h)]) ELSE ClosedIndex(a, i, Cardinality(DOMAIN o))
+
 -----------------------------------------------------------------------------
 
-\* The sprint tab first if there is one, then the friends in their order; the first tab active.
+\* The sprint tab first if there is one, then the friends in their order; the first tab active, and the first entry of
+\* the selection history.
 Init ==
     /\ friends = FriendList
     /\ order = [p \in 0 .. (N + Pinned - 1) |-> IF Sprint /\ p = 0 THEN SprintId ELSE p - Pinned]
@@ -124,12 +148,14 @@ Init ==
     /\ draft = [f \in Ids |-> ""]
     /\ queue = [f \in Ids |-> <<>>]
     /\ nextId = N + Pinned
+    /\ history = IF Sprint THEN <<SprintId>> ELSE IF N > 0 THEN <<0>> ELSE <<>>
     /\ last = Did("init", 0, "", NoEntry, TRUE)
 
-\* select_tab(i)
+\* select_tab(i): its tab active, and its id at the end of the history
 SelectTab(i) ==
     IF i \in Tabs
     THEN /\ active' = i
+         /\ history' = Touch(history, At(i))
          /\ last' = Did("select", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, order, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
@@ -140,7 +166,7 @@ SetDraft(i, t) ==
     IF FriendTab(i)
     THEN /\ draft' = [draft EXCEPT ![At(i)] = t]
          /\ last' = Did("set_draft", i, t, NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript, queue, nextId>>
+         /\ UNCHANGED <<friends, order, active, transcript, queue, nextId, history>>
     ELSE /\ last' = Did("set_draft", i, t, NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -150,7 +176,7 @@ Send(i) ==
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, queue, nextId>>
+         /\ UNCHANGED <<friends, order, active, queue, nextId, history>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -160,7 +186,7 @@ Queue(i) ==
     THEN /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, transcript, nextId>>
+         /\ UNCHANGED <<friends, order, active, transcript, nextId, history>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -169,7 +195,7 @@ AppendEntry(i, e) ==
     IF FriendTab(i)
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, e)]
          /\ last' = Did("append", i, "", e, TRUE)
-         /\ UNCHANGED <<friends, order, active, draft, queue, nextId>>
+         /\ UNCHANGED <<friends, order, active, draft, queue, nextId, history>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)
          /\ UNCHANGED model
 
@@ -180,38 +206,42 @@ MoveTab(from, to) ==
     THEN /\ order' = Moved(order, from, to)
          /\ active' = MovedIndex(active, from, to)
          /\ last' = DidMove(from, to, TRUE)
-         /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<friends, transcript, draft, queue, nextId, history>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 
-\* add_terminal(): a terminal's tab at the end, active, with the next id
+\* add_terminal(): a terminal's tab at the end, active, with the next id, which goes to the end of the history
 AddTerminal ==
     /\ order' = [p \in 0 .. Count |-> IF p < Count THEN order[p] ELSE nextId]
     /\ active' = Count
     /\ nextId' = nextId + 1
+    /\ history' = Touch(history, nextId)
     /\ last' = DidAdd(nextId)
     /\ UNCHANGED <<friends, transcript, draft, queue>>
 
-\* close_tab(i): only a terminal's tab closes
+\* close_tab(i): only a terminal's tab closes; its id leaves the history, and if it was active the tab selected before
+\* it is (ClosedActive)
 CloseTab(i) ==
     IF i \in Tabs /\ TabKind(At(i)) = "Terminal"
     THEN /\ order' = Removed(order, i)
-         /\ active' = ClosedIndex(active, i, Count)
+         /\ history' = Forget(history, At(i))
+         /\ active' = ClosedActive(active, i, order, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
 \* The next-state relation over any set of the eight actions. The witnesses (witnesses/*.tla) pass a broken action in
-\* place of one of these. The first six never change nextId: the conjunct says so for a broken one that leaves it out.
+\* place of one of these. The first six never change nextId, and of them only select changes the history: the conjuncts
+\* say so for a broken one that leaves them out.
 NextWithAll(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _), Add, Cls(_)) ==
     \/ /\ \E i \in Idx :
             \/ Sel(i)
-            \/ \E t \in Drafts : SetD(i, t)
-            \/ Snd(i)
-            \/ Que(i)
-            \/ \E e \in AppendEntries : App(i, e)
-            \/ \E j \in Idx : Mov(i, j)
+            \/ \E t \in Drafts : SetD(i, t) /\ UNCHANGED history
+            \/ Snd(i) /\ UNCHANGED history
+            \/ Que(i) /\ UNCHANGED history
+            \/ \E e \in AppendEntries : App(i, e) /\ UNCHANGED history
+            \/ \E j \in Idx : Mov(i, j) /\ UNCHANGED history
        /\ UNCHANGED nextId
     \/ Add
     \/ \E i \in Idx : Cls(i)
@@ -236,6 +266,7 @@ TypeOK ==
     /\ transcript \in [Ids -> Seq(Entry)]
     /\ draft \in [Ids -> Drafts]
     /\ queue \in [Ids -> Seq(Drafts \ Blank)]
+    /\ history \in Seq(Int)
     /\ last.op \in Ops
     /\ last.i \in Idx \cup {0}
     /\ last.j \in Idx \cup {0}
@@ -261,6 +292,15 @@ ZonesOrdered == \A p, q \in Tabs : p < q => Zone(order[p]) <= Zone(order[q])
 
 \* with the sprint tab, it is always there, always first, and always has its one id
 SprintFirst == Sprint => (0 \in Tabs /\ order[0] = SprintId)
+
+\* the history holds only ids of tabs that stand: never a closed tab's, never one not handed out
+HistoryOpen == \A k \in 1 .. Len(history) : \E p \in Tabs : order[p] = history[k]
+
+\* the history holds each id once
+HistoryOnce == \A k, m \in 1 .. Len(history) : k /= m => history[k] /= history[m]
+
+\* the history's last id is the active tab's, whenever there is a tab
+HistoryEndsActive == Count > 0 => (history /= <<>> /\ history[Len(history)] = order[active])
 
 -----------------------------------------------------------------------------
 (* Action properties: what each operation does to the state, checked on   *)
@@ -404,14 +444,31 @@ CloseRemovesExactly ==
 CloseKeepsFriends ==
     [][last'.op = "close" => UNCHANGED <<friends, transcript, draft, queue, nextId>>]_vars
 
-\* after a close, the same tab is active if another was; if the closed tab was active, the tab now at its position
-\* is, or the last tab if it was the last, or none (0) if no tabs remain
+\* after a close, the same tab is active if another was; if the closed tab was active, the tab selected most recently
+\* before it, of those still open: the last id in the history once the closed tab's is taken out. With none there, the
+\* tab now at its position is, or the last tab if it was the last, or none (0) if no tabs remain
 CloseActiveRule ==
     [][(last'.op = "close" /\ last'.ok) =>
-        LET n == Cardinality(DOMAIN order') IN
+        LET n == Cardinality(DOMAIN order')
+            h == Forget(history, order[last'.i]) IN
         IF active /= last'.i
         THEN order'[active'] = order[active]
+        ELSE IF h /= <<>>
+        THEN order'[active'] = h[Len(h)]
         ELSE active' = (IF n = 0 THEN 0 ELSE IF last'.i < n THEN last'.i ELSE n - 1)]_vars
+
+\* a select that returns true, and every add, puts its tab's id at the end of the history and takes it out of where it
+\* stood; the other ids keep their order
+SelectMovesToEnd ==
+    [][((last'.op = "select" /\ last'.ok) \/ last'.op = "add") =>
+        LET f == IF last'.op = "add" THEN last'.id ELSE order[last'.i] IN
+        /\ history' /= <<>>
+        /\ history'[Len(history')] = f
+        /\ SubSeq(history', 1, Len(history') - 1) = Forget(history, f)]_vars
+
+\* a close that returns true takes the closed tab's id out of the history, and nothing else
+CloseForgets ==
+    [][(last'.op = "close" /\ last'.ok) => history' = Forget(history, order[last'.i])]_vars
 
 \* an operation that returns false changes no model state
 RefusedChangesNothing ==

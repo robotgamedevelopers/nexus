@@ -57,19 +57,30 @@ PrTextFontDesc PraxTerminals::font() const {
 }
 
 bool PraxTerminals::open(std::size_t id) {
+    return openIn(id, directory);
+}
+
+bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
     if (launcher_ == nullptr) {
         std::fprintf(stderr, "nexus: no process launcher on this platform, so no terminal can start\n");
         return false;
     }
+    std::string where = dir;
+    PrFileInfo info{};
+    if (!where.empty() && (!prFileInfo(view(where), &info) || info.kind != PrFileKind_Directory)) {
+        std::fprintf(stderr, "nexus: %s is no longer a directory; the terminal starts in the home directory\n",
+            where.c_str());
+        where.clear();
+    }
     PrRawString home = prRawStringNull();
-    if (directory.empty())
+    if (where.empty())
         home = prFileUserDirectory(PrFileUserDirectory_Home);
     PrTerminalDesc desc{};
     desc.font = font();
     desc.app = app_;
     desc.launcher = launcher_;
     desc.program = view(program);
-    desc.directory = directory.empty() ? prRawStringView(&home) : view(directory);
+    desc.directory = where.empty() ? prRawStringView(&home) : view(where);
     desc.scrollback = kPrTerminalScrollbackDefault;
     desc.notificationTag = id + 1;
     PrTerminal* terminal = nullptr;
@@ -168,6 +179,20 @@ std::string PraxTerminals::text(std::size_t id) {
     PrStringView v = prRawStringView(&out);
     std::string result(v.data != nullptr ? v.data : "", v.size);
     prRawStringReset(&out);
+    return result;
+}
+
+std::string PraxTerminals::workingDirectory(std::size_t id) {
+    PrTerminal* terminal = find(id);
+    if (terminal == nullptr)
+        return {};
+    PrRawString dir = prTerminalWorkingDirectory(terminal);
+    std::string result;
+    if (!prRawStringIsNull(&dir)) {
+        PrStringView v = prRawStringView(&dir);
+        result.assign(v.data != nullptr ? v.data : "", v.size);
+    }
+    prRawStringReset(&dir);
     return result;
 }
 

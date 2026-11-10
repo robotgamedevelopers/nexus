@@ -43,12 +43,15 @@ Escape hides it too, and so does switching away: Command-Tab, a click on another
 
 Each friend listed by `nova-config friend list` has a tab. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. Enter sends the prompt, Command-Enter queues it, and
-Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller.
+Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
+and the size is kept across launches.
 
-Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it, and it
-closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends,
-and their order is not kept. On a terminal tab every key that is not a Command chord, Escape included, goes to the
-shell.
+Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it and goes back to
+the tab selected before it, and it closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends. The
+terminal tabs open at quit come back at the next launch, in the same order, each a new login shell in the directory
+its shell was last in (the home directory if that is gone); what a terminal showed, and any program running in it, do
+not come back. On a terminal tab every key that is not a Command chord, Escape included, goes to the shell. The
+window opens on the tab that was selected when it quit, a terminal tab included.
 
 nexus finds `nova-config` on the PATH your login shell gives, or at the full path in `NEXUS_NOVA_CONFIG`.
 
