@@ -303,7 +303,7 @@ void replace(std::string& text, std::string_view mark, const std::string& with) 
 } // namespace
 
 std::string sprintPageStyle(const SpendFit& fit) {
-    std::string style(kSprintBrandStyle);
+    std::string style(kSprintRepoLinkStyle);
     if (fit.top < 0)
         return style;
     // The open panel a column whose body takes the height to spare: the body's grid row stretches, so the pie's column

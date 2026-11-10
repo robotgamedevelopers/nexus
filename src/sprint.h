@@ -83,33 +83,17 @@ struct SpendFit {
 // height (100vh) less the top and the gap, and a bottom margin of at least the gap. The pie keeps its own size at the
 // top of its column. Not measured yet, the sheet has no rule for the panel, which leaves it its own height.
 // board.h adds it to each document's head, as a style element with the id kSprintStyleId, before the document paints,
-// and sets it again when the measures move. The sheet starts with the brand (kSprintBrandStyle), measured or not.
+// and sets it again when the measures move. The sheet starts with kSprintRepoLinkStyle, measured or not.
 std::string sprintPageStyle(const SpendFit& fit);
 
-// The app is nexus (the owner 2026-11-10: "I want to brand the app as 'nexus'"), and the board shows as part of it:
-// the board's logo and its "nova-sprint" wordmark give way to the word nexus, in the place and at the height of the
-// wordmark, in the face of nexus's own tabs and prompt (the system's UI font, SF Pro on macOS, which the board's font
-// set gives system-ui and -apple-system), at weight 600 and slightly tight, in the board's own text colour. board.h
-// writes the word into the wordmark element (kSprintWordmarkId). The logo keeps its height, at no width and unseen,
-// since the board's script centres its header on the logo's box (app.js fitMetaChips); the word stays when the header
-// is narrow, and the script hides the chips beside it instead. The footer's link to nova-sprint's repository is not
-// shown (the owner 2026-11-10: "remove the link to nova sprint github"), matched by its address, not its place; a
-// footer that holds nothing else is not shown either, so no empty space is left where it was.
-constexpr std::string_view kSprintBrandStyle =
-    "#logo { visibility: hidden !important; width: 0 !important; min-width: 0 !important; margin: 0 !important; "
-    "padding: 0 !important; border: 0 !important; }\n"
-    ".brand h1 { gap: 0 !important; }\n"
-    "#wordmark, #wordmark.nofit { display: inline !important; font-family: system-ui, -apple-system, sans-serif "
-    "!important; font-weight: 600 !important; letter-spacing: -0.02em !important; text-transform: none !important; }\n"
+// The footer's link to nova-sprint's repository is not shown (the owner 2026-11-10: "remove the link to nova sprint
+// github"), matched by its address, not its place; a footer that holds nothing else is not shown either, so no empty
+// space is left where it was. The board's own header, its logo and its "nova-sprint" title, shows as served.
+constexpr std::string_view kSprintRepoLinkStyle =
     "a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"], a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"] "
     "{ display: none !important; }\n"
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"]:only-child) { display: none !important; }\n";
-
-// The board's wordmark element (nova-sprint's index.html: <span class="wordmark" id="wordmark">), and the word it shows
-// in nexus.
-constexpr std::string_view kSprintWordmarkId = "wordmark";
-constexpr std::string_view kSprintBrand = "nexus";
 
 // Whether a click on a link would take the sprint tab off the board, so that board.h opens the link in the system's
 // browser instead and the tab stays on the board. `href` is the link's URL as the page resolves it, `document` the

@@ -197,7 +197,7 @@ void preludeCarriesTheZonesAndEscapesThem() {
 // The page keeps its own background: nothing in the sheet touches a background or --bg, and before the Cost breakdown's
 // top is measured the sheet is the brand alone, so the panel keeps its own height.
 void styleLeavesThePageBackgroundAlone() {
-    CHECK(sprintPageStyle(SpendFit{}) == kSprintBrandStyle);
+    CHECK(sprintPageStyle(SpendFit{}) == kSprintRepoLinkStyle);
     std::string s = sprintPageStyle(SpendFit{547.5, 32, 64});
     CHECK(!has(s, "background") && !has(s, "--bg") && !has(s, "transparent"));
 }

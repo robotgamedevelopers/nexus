@@ -132,7 +132,7 @@ img#logo.logo-tile { width: 6rem; height: 6rem; flex: none; border-radius: 22.5%
 footer { margin-top: 3rem; font-size: 1.5rem; line-height: 2.25rem; text-align: center; }
 a { display: inline-block; }</style></head>
 <body><header class="top"><div class="brand"><h1><img id="logo" class="logo-tile" width="120" height="120"
-alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark nofit" id="wordmark">nova-sprint</span></h1>
+alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark" id="wordmark">nova-sprint</span></h1>
 <div class="meta"><span class="chip">epoch <b>3</b></span></div></div>
 <div class="right"><span class="live" id="live">Live</span></div></header>
 <p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
@@ -622,32 +622,27 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
 }
 
-// The board shows as nexus: its header says "nexus" where the logo and the "nova-sprint" wordmark stood, at the
-// wordmark's height, in the system's UI font (the face nexus's own tabs and prompt use), even where the board's
-// script would hide the wordmark for want of room; the logo keeps its height but takes no width and is not seen; the
-// footer's link to nova-sprint's repository is not rendered, and another link still is, and still opens in the
-// browser.
-void theBoardShowsAsNexus() {
+// The board's header shows as served: its logo and its "nova-sprint" title. The footer's link to nova-sprint's
+// repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
+// Another link still renders, and still opens in the browser.
+void theRepositoryLinkIsHidden() {
     Harness h;
     h.server.page = kBrandPage;
     h.frames(10);
     CHECK(h.board->settled());
-    PrDomElement* mark = h.byId("wordmark");
     std::string word;
     {
-        PrRawString t = prDomNodeTextContent(prDomElementAsNode(mark));
+        PrRawString t = prDomNodeTextContent(prDomElementAsNode(h.byId("wordmark")));
         PrStringView v = prRawStringView(&t);
         word.assign(v.data != nullptr ? v.data : "", v.size);
         prRawStringReset(&t);
     }
-    CHECK(word == "nexus");
-    // The page's text (its text content, hidden parts included) has the word and not the old one beside it.
-    CHECK(has(h.text(), "nexus") && !has(h.text(), "nexusnova-sprint") && !has(h.text(), "nova-sprintnexus"));
-    const PrDomRect m = h.rect("wordmark");
+    CHECK(word == "nova-sprint");
+    const PrDomRect mark = h.rect("wordmark");
     const PrDomRect logo = h.rect("logo");
-    CHECK(m.width > 50 && m.height > 80 && m.height < 110);         // 5.5rem type on a 6rem line
-    CHECK(logo.width == 0 && logo.height > 90);                     // the 6rem tile, at no width
-    CHECK(m.x < 40);                                                // where the logo stood, inside the header's padding
+    CHECK(mark.width > 50 && mark.height > 80);
+    CHECK(logo.width > 90 && logo.height > 90);                     // the 6rem tile
+    CHECK(mark.x > logo.x + logo.width);                            // the title beside it
     const PrDomRect repo = h.rect("repo");
     CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
     const PrDomRect foot = h.rect("foot");
@@ -659,24 +654,6 @@ void theBoardShowsAsNexus() {
     CHECK(other.width > 0 && other.height > 0);
     h.click("other");
     CHECK((h.opened == std::vector<std::string>{"https://github.com/mas-bandwidth/nova-tools"}));
-
-    // The face: the word is as wide in the system UI family named outright as in the sheet's system-ui, and not as
-    // wide in a serif face, so it is the system's UI font that shapes it and not a fallback.
-    const PrStringView family = prFontSetGenericFamily(h.fonts, PrFontGeneric_SystemUi);
-    CHECK(family.size != 0);
-    auto widthIn = [&](const std::string& face) {
-        const std::string style = "font-family: " + face + " !important";
-        prDomElementSetAttribute(mark, PrStringView{"style", 5}, PrStringView{style.data(), style.size()});
-        h.frames(2);
-        return h.rect("wordmark").width;
-    };
-    const double sheet = m.width;
-    const double named = widthIn("\"" + std::string(family.data, family.size) + "\"");
-    const double serif = widthIn("serif");
-    CHECK(std::fabs(sheet - named) < 0.5);
-    CHECK(std::fabs(sheet - serif) > 1);
-    std::printf("board: the wordmark is set in %.*s, %.1f px wide (serif %.1f)\n", int(family.size), family.data, sheet,
-        serif);
 }
 
 } // namespace
@@ -691,7 +668,7 @@ int main() {
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelScrollSmoothly();
     linksThatLeaveTheBoardOpenInTheBrowser();
-    theBoardShowsAsNexus();
+    theRepositoryLinkIsHidden();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;
