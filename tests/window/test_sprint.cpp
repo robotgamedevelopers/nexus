@@ -1,0 +1,219 @@
+// Unit tests of the sprint tab's logic without a page (src/sprint.h): reading the board's address from the sprint's
+// record through a fake command runner, every way that lookup fails, the routing of events between the page and the
+// window, and the script and style nexus adds to the page. No OS, no clock, no window, no process, no network.
+
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include "sprint.h"
+
+namespace {
+
+using namespace nexus;
+
+int failures = 0;
+
+void check(bool ok, const char* what, int line) {
+    if (!ok) {
+        std::fprintf(stderr, "FAIL line %d: %s\n", line, what);
+        ++failures;
+    }
+}
+
+#define CHECK(x) check((x), #x, __LINE__)
+
+bool has(const std::string& s, const char* part) {
+    return s.find(part) != std::string::npos;
+}
+
+// What `nova-config service show sprint-run --json` prints for a service whose argv is `argv` (a JSON array).
+std::string record(const std::string& argv) {
+    return R"({"result":{"verb":"service show","status":"ok","exit":0},"items":[{"kind":"service","fields":{)"
+        R"("name":"sprint-run","machine":"studio","argv":)" + argv + "}}]}";
+}
+
+void parsesTheListenAddress() {
+    SprintBoardAddress a = parseSprintRun(record(R"(["nova-sprint","run","--listen","100.76.29.55:8080"])"));
+    CHECK(a.error.empty() && a.url == "http://100.76.29.55:8080/");
+    a = parseSprintRun(record(R"(["nova-sprint","run","--listen=10.0.0.2:9000"])"));
+    CHECK(a.error.empty() && a.url == "http://10.0.0.2:9000/");
+}
+
+// A service listening everywhere is reached on this machine.
+void listeningEverywhereIsReachedLocally() {
+    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","0.0.0.0:8080"])")).url == "http://127.0.0.1:8080/");
+    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen",":8080"])")).url == "http://127.0.0.1:8080/");
+    CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","[::]:8080"])")).url == "http://127.0.0.1:8080/");
+}
+
+void aRecordWithoutABoardSaysWhatToDo() {
+    SprintBoardAddress none = parseSprintRun(record(R"(["nova-sprint","run"])"));
+    CHECK(none.url.empty() && has(none.error, "no --listen") && has(none.error, "nova-sprint up"));
+    CHECK(has(none.error, "NEXUS_SPRINT_URL"));
+    SprintBoardAddress empty = parseSprintRun(R"({"result":{"status":"ok"},"items":[]})");
+    CHECK(empty.url.empty() && has(empty.error, "nova-sprint up") && has(empty.error, "NEXUS_SPRINT_URL"));
+    SprintBoardAddress refused = parseSprintRun(R"({"result":{"status":"refused"},"items":[]})");
+    CHECK(refused.url.empty() && has(refused.error, "status refused") && has(refused.error, "run it in a terminal"));
+    SprintBoardAddress junk = parseSprintRun("not json");
+    CHECK(junk.url.empty() && has(junk.error, "not JSON") && has(junk.error, "run it in a terminal"));
+}
+
+// A fake runner: records the command and gives back `result`. No process is spawned.
+struct FakeRun {
+    CommandResult result;
+    Command ran;
+    int timeout = 0;
+    int calls = 0;
+    CommandRunner runner() {
+        return [this](const Command& c, int seconds) {
+            ran = c;
+            timeout = seconds;
+            ++calls;
+            return result;
+        };
+    }
+};
+
+constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config service show sprint-run --json'";
+
+SprintBoardAddress findWith(CommandResult result, FakeRun* seen = nullptr, const char* override = nullptr) {
+    FakeRun fake{result, {}, 0, 0};
+    SprintBoardAddress a = findSprintBoard(override, sprintRunCommand(nullptr, "/bin/zsh"), fake.runner());
+    if (seen != nullptr)
+        *seen = fake;
+    return a;
+}
+
+void commandIsTheLoginShellOrTheOverride() {
+    Command shell = sprintRunCommand(nullptr, "/bin/zsh");
+    CHECK(shell.program == "/bin/zsh");
+    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config service show sprint-run --json"}));
+    CHECK(shell.shown == kShown);
+    CHECK(sprintRunCommand(nullptr, nullptr).program == "/bin/sh");
+    Command direct = sprintRunCommand("/opt/nova/nova-config", "/bin/zsh");
+    CHECK(direct.program == "/opt/nova/nova-config");
+    CHECK((direct.arguments == std::vector<std::string>{"service", "show", "sprint-run", "--json"}));
+}
+
+void theRecordGivesTheAddress() {
+    FakeRun seen;
+    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::Exited, 0,
+        record(R"(["nova-sprint","run","--listen","127.0.0.1:8080"])"), ""}, &seen);
+    CHECK(a.error.empty() && a.url == "http://127.0.0.1:8080/");
+    CHECK(seen.calls == 1 && seen.timeout == kSprintRunTimeoutSeconds);
+}
+
+// NEXUS_SPRINT_URL wins, and nothing is run; one that is not an http address says so.
+void theOverrideWinsWithoutRunningAnything() {
+    FakeRun seen;
+    SprintBoardAddress a = findWith(CommandResult{}, &seen, "http://board.test:8080/");
+    CHECK(a.error.empty() && a.url == "http://board.test:8080/" && seen.calls == 0);
+    a = findWith(CommandResult{}, &seen, "board.test:8080");
+    CHECK(a.url.empty() && has(a.error, "NEXUS_SPRINT_URL") && has(a.error, "not an http://") && seen.calls == 0);
+    // An empty override is unset.
+    a = findWith(CommandResult{CommandResult::End::Exited, 0, record(R"(["x","--listen","h:1"])"), ""}, &seen, "");
+    CHECK(a.url == "http://h:1/" && seen.calls == 1);
+}
+
+void notFoundSaysWhatToDo() {
+    SprintBoardAddress shell = findWith(CommandResult{CommandResult::End::Exited, 127, "", "zsh: command not found"});
+    CHECK(shell.url.empty() && has(shell.error, kShown) && has(shell.error, "status 127"));
+    CHECK(has(shell.error, "command not found") && has(shell.error, "NEXUS_NOVA_CONFIG"));
+    SprintBoardAddress missing = findWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
+    CHECK(has(missing.error, "/bin/zsh was not found") && has(missing.error, "NEXUS_NOVA_CONFIG"));
+    SprintBoardAddress unstarted = findWith(CommandResult{CommandResult::End::NotStarted, 0, "", ""});
+    CHECK(has(unstarted.error, "could not start") && has(unstarted.error, "NEXUS_SPRINT_URL"));
+}
+
+void timeoutSaysSo() {
+    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::TimedOut, 0, "", ""});
+    CHECK(a.url.empty() && has(a.error, kShown) && has(a.error, "within 5 seconds") && has(a.error, "run it in a terminal"));
+}
+
+void failuresCarryWhatTheCommandSaid() {
+    SprintBoardAddress a = findWith(CommandResult{CommandResult::End::Exited, 1, "", "no service sprint-run\n"});
+    CHECK(has(a.error, "status 1: no service sprint-run;") && has(a.error, "nova-sprint up"));
+    a = findWith(CommandResult{CommandResult::End::Exited, 3, "", ""});
+    CHECK(has(a.error, "status 3") && has(a.error, "nothing on standard error"));
+    a = findWith(CommandResult{CommandResult::End::Signaled, 9, "", ""});
+    CHECK(has(a.error, "signal 9") && has(a.error, "NEXUS_SPRINT_URL"));
+}
+
+PrAppEvent key(PrAppKey k, PrAppModifierFlags modifiers) {
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_KeyDown;
+    e.key = k;
+    e.modifiers = modifiers;
+    return e;
+}
+
+PrAppEvent pointer(PrAppEventKind kind) {
+    PrAppEvent e{};
+    e.kind = kind;
+    return e;
+}
+
+// Every Command chord and Escape stay with the window; other keys and text go to the page; the pointer's presses and
+// the wheel go where the pointer is, a release where its press went, and a move to both.
+void eventsAreRouted() {
+    constexpr PrAppModifierFlags kCmd = PrAppModifierFlag_Super;
+    for (char digit : std::string("1234567890"))
+        CHECK(routeBoardEvent(key(PrAppKey(digit), kCmd), true, false) == BoardRoute::Window);
+    for (PrAppKey k : {PrAppKey('T'), PrAppKey('W'), PrAppKey('='), PrAppKey('-'), PrAppKey('`')})
+        CHECK(routeBoardEvent(key(k, kCmd), true, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(key('+', PrAppModifierFlags(kCmd | PrAppModifierFlag_Shift)), true, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(key(PrAppKey_Escape, 0), true, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(key(PrAppKey_Down, 0), true, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey(' '), 0), false, false) == BoardRoute::Page);
+    PrAppEvent text = pointer(PrAppEventKind_Text);
+    CHECK(routeBoardEvent(text, false, false) == BoardRoute::Page);
+    text.modifiers = kCmd;
+    CHECK(routeBoardEvent(text, false, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_PointerMove), false, false) == BoardRoute::Both);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_PointerDown), true, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_PointerDown), false, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_Scroll), true, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_Scroll), false, false) == BoardRoute::Window);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_PointerUp), false, true) == BoardRoute::Page);
+    CHECK(routeBoardEvent(pointer(PrAppEventKind_PointerUp), true, false) == BoardRoute::Window);
+}
+
+void preludeCarriesTheZonesAndEscapesThem() {
+    std::string p = sprintPrelude("EST", "EDT");
+    CHECK(has(p, "STANDARD = \"EST\", DAYLIGHT = \"EDT\""));
+    CHECK(!has(p, "@STD@") && !has(p, "@DST@"));
+    CHECK(has(p, "DateTimeFormat") && has(p, "formatToParts") && has(p, "toLocaleTimeString"));
+    std::string odd = sprintPrelude("a\"b</script>", "c\\d\n");
+    CHECK(has(odd, "\"a\\\"b\\u003c/script>\"") && has(odd, "\"c\\\\d\\n\""));
+}
+
+void styleMakesOnlyThePageSeeThrough() {
+    std::string s(sprintPageStyle());
+    CHECK(has(s, "--bg: transparent !important") && has(s, "background: transparent !important"));
+    CHECK(has(s, ":root") && has(s, "body"));
+    CHECK(!has(s, "--surface"));
+}
+
+} // namespace
+
+int main() {
+    parsesTheListenAddress();
+    listeningEverywhereIsReachedLocally();
+    aRecordWithoutABoardSaysWhatToDo();
+    commandIsTheLoginShellOrTheOverride();
+    theRecordGivesTheAddress();
+    theOverrideWinsWithoutRunningAnything();
+    notFoundSaysWhatToDo();
+    timeoutSaysSo();
+    failuresCarryWhatTheCommandSaid();
+    eventsAreRouted();
+    preludeCarriesTheZonesAndEscapesThem();
+    styleMakesOnlyThePageSeeThrough();
+    if (failures != 0) {
+        std::fprintf(stderr, "%d checks failed\n", failures);
+        return 1;
+    }
+    std::printf("sprint unit tests passed\n");
+    return 0;
+}

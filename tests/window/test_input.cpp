@@ -81,8 +81,28 @@ struct FakeTerminals final : Terminals {
     void setTextScale(float k) override { scale = k; }
 };
 
+// The sprint tab's page with no page: it records what the view asks of it, and shows a page or gives `problem`.
+struct FakeBoard final : Board {
+    bool page = true;                           // show() declares a page; otherwise it gives `problem`
+    std::string problem = "the board is down; run `nova-sprint up`";
+    int shows = 0;                              // rounds the sprint tab showed
+    int hiddens = 0;                            // rounds it did not
+    PrVec2 extent{};                            // the extent the last show was given
+    float scale = 1;
+
+    bool show(PrLayoutNode, PrVec2 e, std::string* why) override {
+        ++shows;
+        extent = e;
+        if (!page)
+            *why = problem;
+        return page;
+    }
+    void hidden() override { ++hiddens; }
+    void setTextScale(float k) override { scale = k; }
+};
+
 // A window with no window: the view, its model of two friends (or as many as asked), and a kit over a UI context over
-// a layout tree.
+// a layout tree. With `sprint`, the sprint tab stands first, as in the app.
 struct Harness {
     Model model;
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
@@ -93,6 +113,7 @@ struct Harness {
     PrKit* kit = nullptr;
     Look look;
     FakeTerminals terminals;
+    FakeBoard board;
     View view;
     double time = 1000;
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
@@ -102,7 +123,8 @@ struct Harness {
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
     // With `overlay`, the window is drawn as the see-through overlay is.
-    explicit Harness(const std::vector<FriendInfo>& friends, bool overlay = false) : model(friends) {
+    explicit Harness(const std::vector<FriendInfo>& friends, bool overlay = false, bool sprint = false)
+            : model(friends, sprint) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -114,6 +136,7 @@ struct Harness {
         view.model = &model;
         view.look = &look;
         view.terminals = &terminals;
+        view.board = &board;
         view.extent = PrVec2{1000, 780};
         view.hide = [this] { ++hides; };
         view.stop = [this] { ++stops; };
@@ -220,12 +243,37 @@ struct Harness {
     PrLayoutNode strip() const {
         return prLayoutNodeFirstChild(tree, prLayoutTreeRoot(tree));
     }
+    // With the sprint tab, the window's first child is a row of two strips: the sprint tab's, then the others'.
     std::vector<PrLayoutNode> tabs() const {
         std::vector<PrLayoutNode> out;
-        for (PrLayoutNode n = prLayoutNodeFirstChild(tree, strip()); n != kPrLayoutNodeNone;
-                n = prLayoutNodeNextSibling(tree, n))
-            out.push_back(n);
+        const bool sprint = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint;
+        std::vector<PrLayoutNode> strips;
+        if (sprint) {
+            for (PrLayoutNode s = prLayoutNodeFirstChild(tree, strip()); s != kPrLayoutNodeNone;
+                    s = prLayoutNodeNextSibling(tree, s))
+                strips.push_back(s);
+        } else {
+            strips.push_back(strip());
+        }
+        for (PrLayoutNode s : strips) {
+            for (PrLayoutNode n = prLayoutNodeFirstChild(tree, s); n != kPrLayoutNodeNone;
+                    n = prLayoutNodeNextSibling(tree, n))
+                out.push_back(n);
+        }
         return out;
+    }
+
+    // True if some text under `node` at the last layout is `text`.
+    bool hasText(PrLayoutNode node, const std::string& text) const {
+        PrStringView t = prLayoutNodeText(tree, node);
+        if (t.data != nullptr && std::string(t.data, t.size) == text)
+            return true;
+        for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
+                n = prLayoutNodeNextSibling(tree, n)) {
+            if (hasText(n, text))
+                return true;
+        }
+        return false;
     }
     PrVec2 centre(PrLayoutNode node) const {
         PrRect b = bounds(node);
@@ -1116,9 +1164,112 @@ void dragsStayInTheirZone() {
     CHECK(h.active().id == 3);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The sprint tab, first, as the app runs.
+
+Harness withSprint(std::size_t friends = 2) {
+    return Harness(friendsNamed(friends), false, true);
+}
+
+// The sprint tab is first, labelled "sprint", shown at launch and Command-1; the friends are Command-2 onward, and the
+// terminals follow them. Its page shows, below the strip, and no prompt.
+void sprintTabIsFirstAndCommandOne() {
+    Harness h = withSprint();
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "f1", "f2"}));
+    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.board.shows > 0 && h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
+    CHECK(h.board.extent.x == 1000 && h.board.extent.y > 600 && h.board.extent.y < 780);
+    h.commandDigit(2);
+    CHECK(h.active().name == "f1" && h.view.prompt != kPrLayoutNodeNone);
+    int hidden = h.board.hiddens;
+    h.frame();
+    CHECK(h.board.hiddens > hidden);
+    h.commandT();
+    CHECK(h.model.tab(3).kind == TabKind::Terminal && h.active().kind == TabKind::Terminal);
+    h.commandDigit(4);
+    CHECK(h.active().kind == TabKind::Terminal);
+    h.commandDigit(1);
+    CHECK(h.active().kind == TabKind::Sprint);
+}
+
+// Typing, Enter and Command-Enter on the sprint tab change no draft and send nothing.
+void sprintTabTakesNoText() {
+    Harness h = withSprint();
+    h.type("hello");
+    h.enter();
+    h.enter(PrAppModifierFlag_Super);
+    for (std::size_t i = 0; i < h.model.tab_count(); ++i) {
+        CHECK(h.model.tab(i).draft.empty() && h.model.tab(i).transcript.empty() && h.model.tab(i).queue.empty());
+    }
+    CHECK(h.view.prompt == kPrLayoutNodeNone);
+}
+
+// The sprint tab is never carried, nothing lands before it, and the friends still reorder behind it.
+void sprintTabNeverMoves() {
+    Harness h = withSprint(3);
+    h.dragTab(0, 2);
+    CHECK(h.ids() == "3 0 1 2" && h.saves == 0);
+    h.dragTab(2, 0);
+    CHECK(h.model.tab(0).kind == TabKind::Sprint && h.saves == 0);
+    h.dragTab(1, 3);
+    CHECK(h.ids() == "3 1 2 0" && h.saves == 1);
+    CHECK((h.labels() == std::vector<std::string>{"sprint", "f2", "f3", "f1"}));
+}
+
+// Command-W leaves the sprint tab; Escape hides the overlay there; Command-Escape stops nothing.
+void sprintTabKeysCloseNothing() {
+    Harness h = withSprint();
+    h.commandW();
+    CHECK(h.model.tab_count() == 3 && h.active().kind == TabKind::Sprint);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 1);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    CHECK(h.stops == 0);
+}
+
+// With no page to show, the tab says why: never a blank tab.
+void sprintTabSaysWhyThereIsNoPage() {
+    Harness h = withSprint();
+    h.board.page = false;
+    h.frame();
+    h.frame();
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), h.board.problem));
+    h.view.board = nullptr;
+    h.frame();
+    h.frame();
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no sprint board"));
+}
+
+// The text scale's keys zoom the page.
+void textKeysZoomTheBoard() {
+    Harness h = withSprint();
+    h.larger();
+    CHECK(h.board.scale > 1);
+    h.smaller();
+    h.smaller();
+    CHECK(h.board.scale < 1);
+}
+
+// With no friends, the sprint tab still shows, and the reason there are none is beneath it.
+void sprintTabWithoutFriendsShowsTheNotice() {
+    Harness h(std::vector<FriendInfo>{}, false, true);
+    h.view.notice = "No friends to show.\nnova-config failed";
+    h.frame();
+    h.frame();
+    CHECK(h.model.tab_count() == 1 && h.board.shows > 0);
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
+}
+
 } // namespace
 
 int main() {
+    sprintTabIsFirstAndCommandOne();
+    sprintTabTakesNoText();
+    sprintTabNeverMoves();
+    sprintTabKeysCloseNothing();
+    sprintTabSaysWhyThereIsNoPage();
+    textKeysZoomTheBoard();
+    sprintTabWithoutFriendsShowsTheNotice();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
     commandEnterQueues();

@@ -5,9 +5,9 @@
 (*                                                                         *)
 (* tests/model/trace_walk.cpp drives the code with a seeded random walk    *)
 (* and writes WindowTraceData.tla beside this module. It defines           *)
-(*   TraceFriends, TraceIdx, TraceDrafts, TraceBlank, TraceEntries: the    *)
-(*     friends the walk constructed the model with and the arguments it    *)
-(*     draws from, and                                                     *)
+(*   TraceSprint, TraceFriends, TraceIdx, TraceDrafts, TraceBlank,         *)
+(*     TraceEntries: whether the walk made the model with the sprint tab,  *)
+(*     the friends it made it with, and the arguments it draws from, and   *)
 (*   Trace: one record per step. Trace[1] is the constructed model (op     *)
 (*     "init"); each later record is the operation called, its arguments,  *)
 (*     the value the code returned, and the code's whole state after it:   *)
@@ -28,7 +28,7 @@ EXTENDS Integers, Sequences, TLC, WindowTraceData
 VARIABLES friends, order, active, transcript, draft, queue, nextId, last, l
 
 W == INSTANCE Window WITH FriendList <- TraceFriends, Idx <- TraceIdx, Drafts <- TraceDrafts,
-                          Blank <- TraceBlank, AppendEntries <- TraceEntries
+                          Blank <- TraceBlank, AppendEntries <- TraceEntries, Sprint <- TraceSprint
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
@@ -37,7 +37,8 @@ AsTabs(s) == [p \in 0 .. (Len(s) - 1) |-> s[p + 1]]
 
 \* the spec's state equals the state the code recorded at step k, and so does the return value. The code records its
 \* tabs by position: the order (each position's id) must be the spec's, each tab's kind the kind of its id, a friend's
-\* tab must hold the spec's state of that friend, and a terminal's tab no name, model, draft, transcript or queue.
+\* tab must hold the spec's state of that friend, and the sprint tab's or a terminal's no name, model, draft, transcript
+\* or queue.
 Matches(k) ==
     LET s == Trace[k] IN
     /\ order = AsTabs(s.order)
@@ -105,7 +106,11 @@ NoTabLost == W!NoTabLost
 NoTabDuplicated == W!NoTabDuplicated
 IdsHandedOut == W!IdsHandedOut
 ZonesOrdered == W!ZonesOrdered
+SprintFirst == W!SprintFirst
 TerminalTakesNoText == W!TerminalTakesNoText
+SprintTakesNoText == W!SprintTakesNoText
+SprintNeverMoves == W!SprintNeverMoves
+SprintNeverCloses == W!SprintNeverCloses
 AddAppends == W!AddAppends
 AddFreshId == W!AddFreshId
 NextIdGrows == W!NextIdGrows

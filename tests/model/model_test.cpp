@@ -557,6 +557,70 @@ void moves_stay_in_their_zone() {
     CHECK(m.tab(m.active()).id == 1);
 }
 
+// ---- The sprint tab ----
+
+void sprint_tab_is_first_and_active_with_the_friends_after() {
+    Model m(three(), true);
+    CHECK(m.tab_count() == 4);
+    CHECK(m.active() == 0);
+    CHECK(m.tab(0).kind == TabKind::Sprint && m.tab(0).id == 3);
+    CHECK(m.tab(0).name.empty() && m.tab(0).model.empty() && m.tab(0).transcript.empty() && m.tab(0).queue.empty());
+    CHECK(ids(m) == "3 0 1 2");
+    CHECK(m.tab(1).name == "ada" && m.tab(2).name == "bo" && m.tab(3).name == "cy");
+    CHECK(m.tab(1).kind == TabKind::Friend);
+}
+
+void sprint_tab_takes_no_text() {
+    Model m(three(), true);
+    m.set_draft(1, "ada's");
+    const Model before = m;
+    CHECK(!m.set_draft(0, "hi"));
+    CHECK(!m.send(0));
+    CHECK(!m.queue(0));
+    CHECK(!m.append(0, Entry{EntryKind::Friend, "x"}));
+    CHECK(same(m, before));
+    CHECK(m.send(1));   // the friend after it still sends
+}
+
+void sprint_tab_never_moves() {
+    Model m(three(), true);
+    m.add_terminal();   // 4
+    m.select_tab(2);
+    const Model before = m;
+    CHECK(!m.move_tab(0, 1));   // dragged onto a friend
+    CHECK(!m.move_tab(0, 3));
+    CHECK(!m.move_tab(0, 4));   // onto a terminal
+    CHECK(!m.move_tab(1, 0));   // a friend dropped in front of it
+    CHECK(!m.move_tab(4, 0));   // a terminal dropped in front of it
+    CHECK(same(m, before));
+    CHECK(m.move_tab(0, 0));    // onto itself: in its zone, and nothing changes
+    CHECK(same(m, before));
+    CHECK(m.move_tab(1, 3));    // the friends still move among themselves behind it
+    CHECK(ids(m) == "3 1 2 0 4" && m.tab(m.active()).id == 1);
+}
+
+void sprint_tab_never_closes() {
+    Model m(three(), true);
+    const Model before = m;
+    CHECK(!m.close_tab(0));
+    CHECK(same(m, before));
+    CHECK(m.add_terminal() == 4);   // the first id after the friends' and the sprint tab's
+    CHECK(m.add_terminal() == 5);
+    CHECK(m.close_tab(5) && m.close_tab(4));
+    CHECK(ids(m) == "3 0 1 2" && m.active() == 3);
+    CHECK(!m.close_tab(0));
+}
+
+void sprint_tab_alone_without_friends() {
+    Model m({}, true);
+    CHECK(m.tab_count() == 1 && m.tab(0).kind == TabKind::Sprint && m.tab(0).id == 0 && m.active() == 0);
+    CHECK(m.add_terminal() == 1);
+    CHECK(ids(m) == "0 1" && m.active() == 1);
+    CHECK(m.close_tab(1));
+    CHECK(ids(m) == "0" && m.active() == 0);   // closing the last terminal leaves the sprint tab active
+    CHECK(!m.close_tab(0) && !m.set_draft(0, "x") && m.select_tab(0));
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -598,6 +662,11 @@ const Case kCases[] = {
     {"close_active_takes_the_next_or_the_last", close_active_takes_the_next_or_the_last},
     {"a_terminal_takes_no_text", a_terminal_takes_no_text},
     {"moves_stay_in_their_zone", moves_stay_in_their_zone},
+    {"sprint_tab_is_first_and_active_with_the_friends_after", sprint_tab_is_first_and_active_with_the_friends_after},
+    {"sprint_tab_takes_no_text", sprint_tab_takes_no_text},
+    {"sprint_tab_never_moves", sprint_tab_never_moves},
+    {"sprint_tab_never_closes", sprint_tab_never_closes},
+    {"sprint_tab_alone_without_friends", sprint_tab_alone_without_friends},
 };
 
 } // namespace

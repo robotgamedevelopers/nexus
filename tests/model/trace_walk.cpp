@@ -2,8 +2,11 @@
 // (WindowTraceData.tla) for models/WindowTrace.tla, under which TLC checks that the trace is a behaviour of
 // models/Window.tla.
 //
-//   trace_walk <seed> <steps> <friends> [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap |
-//              --faulty-send-trim | --faulty-send-dedup | --faulty-close] <out.tla>
+//   trace_walk <seed> <steps> <friends> [--no-sprint] [--faulty | --faulty-queue | --faulty-move |
+//              --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close |
+//              --faulty-sprint-move | --faulty-sprint-close] <out.tla>
+//
+// The model is made with the sprint tab first, as the window makes it, unless --no-sprint.
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
 // the clock or the OS. Each step calls one operation, with positions in range and out of it (move_tab's two among
@@ -17,7 +20,9 @@
 // walks FaultyMoveModel: its move_tab leaves active at the old position. --faulty-queue-cap walks FaultyQueueCapModel:
 // past four queued prompts its queue drops the oldest. --faulty-send-trim walks FaultySendTrimModel: its send strips
 // trailing spaces. --faulty-send-dedup walks FaultySendDedupModel: a send of the text just sent appends nothing.
-// --faulty-close walks FaultyCloseModel: its close_tab removes a friend's tab too. TLC must reject each one's traces;
+// --faulty-close walks FaultyCloseModel: its close_tab removes a friend's tab too. --faulty-sprint-move walks
+// FaultySprintMoveModel: its move_tab puts the sprint tab in the friends' zone. --faulty-sprint-close walks
+// FaultySprintCloseModel: its close_tab removes the sprint tab too. TLC must reject each one's traces;
 // that is the negative check that shows the binding can fail.
 
 #include "model.h"
@@ -96,6 +101,52 @@ public:
     }
 };
 
+// The test-only sprint move fault: the move rule takes the sprint tab's zone for the friends', so a friend dropped on
+// position 0 goes in front of the sprint tab, and the sprint tab can be dragged among the friends. Hides
+// Model::move_tab.
+class FaultySprintMoveModel : public Model {
+public:
+    using Model::Model;
+    bool move_tab(std::size_t from, std::size_t to) {
+        auto zoneOf = [this](std::size_t i) {
+            return tab(i).kind == nexus::TabKind::Sprint ? nexus::zone(nexus::TabKind::Friend) : nexus::zone(tab(i).kind);
+        };
+        if (from >= tab_count() || to >= tab_count() || zoneOf(from) != zoneOf(to))
+            return false;
+        if (zoneOf(from) == nexus::zone(tab(from).kind) && zoneOf(to) == nexus::zone(tab(to).kind))
+            return Model::move_tab(from, to);
+        auto at = [this](std::size_t i) { return tabs_.begin() + static_cast<std::ptrdiff_t>(i); };
+        if (from < to)
+            std::rotate(at(from), at(from + 1), at(to + 1));
+        else if (to < from)
+            std::rotate(at(to), at(from), at(from + 1));
+        if (active_ == from)
+            active_ = to;
+        else if (from < active_ && active_ <= to)
+            --active_;
+        else if (to <= active_ && active_ < from)
+            ++active_;
+        return true;
+    }
+};
+
+// The test-only sprint close fault: close_tab takes out the sprint tab too, as Command-W would if it checked only
+// "not a friend's tab". Hides Model::close_tab.
+class FaultySprintCloseModel : public Model {
+public:
+    using Model::Model;
+    bool close_tab(std::size_t i) {
+        if (i >= tab_count() || tab(i).kind != nexus::TabKind::Sprint)
+            return Model::close_tab(i);
+        tabs_.erase(tabs_.begin() + static_cast<std::ptrdiff_t>(i));
+        if (active_ > i)
+            --active_;
+        else if (active_ == i && active_ == tabs_.size())
+            active_ = tabs_.empty() ? 0 : tabs_.size() - 1;
+        return true;
+    }
+};
+
 // The test-only queue-length fault: past four queued prompts, the queue drops its oldest. Hides Model::queue.
 class FaultyQueueCapModel : public Model {
 public:
@@ -148,7 +199,18 @@ constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
                              : std::is_same_v<M, FaultyQueueCapModel> ? ", faulty queue-length model"
                              : std::is_same_v<M, FaultySendTrimModel> ? ", faulty send-trim model"
                              : std::is_same_v<M, FaultySendDedupModel> ? ", faulty send-dedup model"
-                             : std::is_same_v<M, FaultyCloseModel> ? ", faulty close model" : "";
+                             : std::is_same_v<M, FaultyCloseModel> ? ", faulty close model"
+                             : std::is_same_v<M, FaultySprintMoveModel> ? ", faulty sprint-move model"
+                             : std::is_same_v<M, FaultySprintCloseModel> ? ", faulty sprint-close model" : "";
+
+const char* tab_kind_name(nexus::TabKind k) {
+    switch (k) {
+    case nexus::TabKind::Sprint: return "\"Sprint\"";
+    case nexus::TabKind::Friend: return "\"Friend\"";
+    case nexus::TabKind::Terminal: return "\"Terminal\"";
+    }
+    return "\"?\"";
+}
 
 struct Rng {
     std::uint64_t state;
@@ -214,7 +276,7 @@ std::string state(const M& m) {
         o << (j ? ", " : "") << m.tab(j).id;
     o << ">>, kind |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
-        o << (j ? ", " : "") << (m.tab(j).kind == nexus::TabKind::Friend ? "\"Friend\"" : "\"Terminal\"");
+        o << (j ? ", " : "") << tab_kind_name(m.tab(j).kind);
     o << ">>, friends |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
         o << (j ? ", " : "") << "[name |-> " << str(m.tab(j).name) << ", model |-> " << str(m.tab(j).model) << "]";
@@ -250,11 +312,12 @@ std::string record(const char* op, std::size_t i, std::size_t j, const std::stri
 }
 
 template <class M>
-int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const char* path) {
+int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, bool sprint, const char* path) {
     std::vector<FriendInfo> friends(kFriends.begin(), kFriends.begin() + static_cast<std::ptrdiff_t>(friend_count));
-    M m(friends);
+    M m(friends, sprint);
     Rng rng{seed};
-    std::size_t last_index = friend_count + 1; // the largest position drawn: TraceIdx runs to it
+    const std::size_t fixed_tabs = friend_count + (sprint ? 1 : 0);   // the tabs no close can take out
+    std::size_t last_index = fixed_tabs + 1; // the largest position drawn: TraceIdx runs to it
 
     std::vector<std::string> records;
     records.push_back(record("init", 0, 0, "", kNoEntry, true, 0, state(m)));
@@ -276,7 +339,7 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         std::string ent = kNoEntry;
         std::size_t kind = rng.below(10);
         // At most kMaxTerminals terminals at once: an add beyond that is a close instead.
-        if (kind == 5 && m.tab_count() >= friend_count + kMaxTerminals)
+        if (kind == 5 && m.tab_count() >= fixed_tabs + kMaxTerminals)
             kind = 8;
         switch (kind) {
         case 0: op = "select"; ret = m.select_tab(i); break;
@@ -352,8 +415,9 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
     }
     out << "---- MODULE WindowTraceData ----\n";
     out << "\\* Written by tests/model/trace_walk: seed " << seed << ", " << steps << " steps, " << friend_count
-        << " friends" << kFault<M> << ".\n";
+        << " friends" << (sprint ? "" : ", no sprint tab") << kFault<M> << ".\n";
     out << "EXTENDS Integers\n";
+    out << "TraceSprint == " << (sprint ? "TRUE" : "FALSE") << "\n";
     out << "TraceFriends == <<";
     for (std::size_t j = 0; j < friends.size(); ++j)
         out << (j ? ", " : "") << "[name |-> " << str(friends[j].name) << ", model |-> " << str(friends[j].model)
@@ -378,9 +442,9 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, const 
         std::fprintf(stderr, "trace_walk: writing %s failed\n", path);
         return 1;
     }
-    std::printf("trace_walk: seed %llu, %zu steps, %zu friends%s: %zu accepted, %zu refused, longest queue %zu -> %s\n",
-                static_cast<unsigned long long>(seed), records.size() - 1, friend_count, kFault<M>, accepted, records.size() - 1 - accepted,
-                longest, path);
+    std::printf("trace_walk: seed %llu, %zu steps, %zu friends%s%s: %zu accepted, %zu refused, longest queue %zu -> %s\n",
+                static_cast<unsigned long long>(seed), records.size() - 1, friend_count, sprint ? "" : ", no sprint tab",
+                kFault<M>, accepted, records.size() - 1 - accepted, longest, path);
     return 0;
 }
 
@@ -395,12 +459,15 @@ bool parse(const char* s, std::uint64_t& v) {
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     const std::vector<std::string> faults = {"--faulty", "--faulty-queue", "--faulty-move", "--faulty-queue-cap",
-        "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close"};
+        "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close", "--faulty-sprint-move", "--faulty-sprint-close"};
     std::string fault;
     int faultCount = 0;
+    bool sprint = true;
     std::vector<std::string> rest;
     for (const std::string& a : args) {
-        if (std::find(faults.begin(), faults.end(), a) != faults.end()) {
+        if (a == "--no-sprint") {
+            sprint = false;
+        } else if (std::find(faults.begin(), faults.end(), a) != faults.end()) {
             fault = a;
             ++faultCount;
         } else {
@@ -410,26 +477,30 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0, friend_count = 0;
     if (rest.size() != 4 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) ||
         !parse(rest[2].c_str(), friend_count) || friend_count > kFriends.size() || faultCount > 1) {
-        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--faulty | --faulty-queue | "
-                     "--faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | "
-                     "--faulty-close] <out.tla>\n",
+        std::fprintf(stderr, "usage: trace_walk <seed> <steps> <friends 0..%zu> [--no-sprint] [--faulty | "
+                     "--faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | "
+                     "--faulty-close | --faulty-sprint-move | --faulty-sprint-close] <out.tla>\n",
                      kFriends.size());
         return 2;
     }
     const char* out = rest[3].c_str();
+    if (fault == "--faulty-sprint-move")
+        return walk<FaultySprintMoveModel>(seed, steps, friend_count, sprint, out);
+    if (fault == "--faulty-sprint-close")
+        return walk<FaultySprintCloseModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-close")
-        return walk<FaultyCloseModel>(seed, steps, friend_count, out);
+        return walk<FaultyCloseModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-send-dedup")
-        return walk<FaultySendDedupModel>(seed, steps, friend_count, out);
+        return walk<FaultySendDedupModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-queue-cap")
-        return walk<FaultyQueueCapModel>(seed, steps, friend_count, out);
+        return walk<FaultyQueueCapModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-send-trim")
-        return walk<FaultySendTrimModel>(seed, steps, friend_count, out);
+        return walk<FaultySendTrimModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-move")
-        return walk<FaultyMoveModel>(seed, steps, friend_count, out);
+        return walk<FaultyMoveModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty-queue")
-        return walk<FaultyQueueModel>(seed, steps, friend_count, out);
+        return walk<FaultyQueueModel>(seed, steps, friend_count, sprint, out);
     if (fault == "--faulty")
-        return walk<FaultyModel>(seed, steps, friend_count, out);
-    return walk<Model>(seed, steps, friend_count, out);
+        return walk<FaultyModel>(seed, steps, friend_count, sprint, out);
+    return walk<Model>(seed, steps, friend_count, sprint, out);
 }

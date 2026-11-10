@@ -12,7 +12,10 @@
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
 #               move the one whose move_tab leaves active behind, queue-cap the one whose queue drops its oldest past
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
-#               text just sent appends nothing, close the one whose close_tab removes a friend
+#               text just sent appends nothing, close the one whose close_tab removes a friend, sprint-move the one
+#               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
+#               sprint tab
+#   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at 60 s.
@@ -66,9 +69,16 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-send-dedup)
     elseif(FAULTY STREQUAL "close")
         list(APPEND walk_args --faulty-close)
+    elseif(FAULTY STREQUAL "sprint-move")
+        list(APPEND walk_args --faulty-sprint-move)
+    elseif(FAULTY STREQUAL "sprint-close")
+        list(APPEND walk_args --faulty-sprint-close)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR
-            "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup or close")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
+            "close, sprint-move or sprint-close")
+    endif()
+    if(NOSPRINT)
+        list(APPEND walk_args --no-sprint)
     endif()
     execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/WindowTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

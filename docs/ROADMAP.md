@@ -21,3 +21,18 @@
 [Source data](roadmap.sexp)
 
 <!-- nova-work:layers:end -->
+
+## Window features
+
+<!-- nova-work:window-features:start -->
+
+| feature | done |
+|---|:---:|
+| Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W | ✅ |
+| Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; see-through page, opaque tiles | ❌ |
+| The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3) (later) | ❌ |
+| complete | 33% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:window-features:end -->

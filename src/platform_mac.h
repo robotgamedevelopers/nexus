@@ -30,6 +30,14 @@ bool openOverlay(void* nsView, const OverlayConfig& config, bool show);
 // back to the app that had it.
 void hideOverlay();
 
+// True while the overlay is on screen: its window is visible and the app not hidden. True with no overlay (a normal
+// window, or none). Call on the main thread.
+bool overlayVisible();
+
+// Calls `shown` with `context` each time the overlay is shown (the hotkey), after it takes the keyboard: the window
+// asks for a frame there, so that what waited while it was hidden catches up at once.
+void setOverlayShown(void (*shown)(void* context), void* context);
+
 // Unregisters the hotkey.
 void closeOverlay();
 

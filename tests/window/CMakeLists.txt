@@ -5,6 +5,24 @@ target_link_libraries(nexus_window_tests PRIVATE nexus_window_logic)
 add_test(NAME window_unit COMMAND nexus_window_tests)
 set_tests_properties(window_unit PROPERTIES LABELS unit)
 
+# The sprint tab's logic (src/sprint.h): the board's address from the sprint's record through a fake command runner,
+# event routing, and the page's prelude and style as text. Pure logic.
+add_executable(nexus_sprint_tests test_sprint.cpp)
+target_compile_options(nexus_sprint_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_sprint_tests PRIVATE nexus_window_logic)
+add_test(NAME sprint_unit COMMAND nexus_sprint_tests)
+set_tests_properties(sprint_unit PROPERTIES LABELS unit)
+
+# The sprint tab's page (src/board.h) headless over Prax's HTML stack: a fixture board served from memory on Prax's null
+# network (no socket), QuickJS scripts and the system's fonts, with made-up clocks. A functional test, in a working
+# directory of its own.
+add_executable(nexus_board_tests test_board.cpp)
+target_compile_options(nexus_board_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_board_tests PRIVATE nexus_board nexus_view)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/board_work)
+add_test(NAME sprint_board COMMAND nexus_board_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/board_work)
+set_tests_properties(sprint_board PROPERTIES LABELS functional TIMEOUT 60)
+
 # Running a command (src/friends.h runCommand): real child processes and a real clock.
 add_executable(nexus_command_tests test_command.cpp)
 target_compile_options(nexus_command_tests PRIVATE ${NEXUS_WARNINGS})

@@ -1,4 +1,5 @@
-// The window's state without drawing: one tab per friend, then the terminal tabs that come and go, the active tab, and
+// The window's state without drawing: the sprint tab, one tab per friend, then the terminal tabs that come and go, the
+// active tab, and
 // each friend's transcript, unsent draft and queue of prompts held for later.
 // Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
 // tests/model/trace_walk.cpp checks that this code's behaviours are behaviours of that spec.
@@ -26,14 +27,23 @@ bool blank(const std::string& text) {
 } // namespace
 
 int zone(TabKind kind) {
-    return kind == TabKind::Friend ? 1 : 2;
+    switch (kind) {
+        case TabKind::Sprint: return 0;
+        case TabKind::Friend: return 1;
+        case TabKind::Terminal: return 2;
+    }
+    return 2;
 }
 
-Model::Model(const std::vector<FriendInfo>& friends) {
-    tabs_.reserve(friends.size());
-    for (const FriendInfo& f : friends)
-        tabs_.push_back(Tab{tabs_.size(), f.name, f.model, {}, {}, {}, TabKind::Friend});
-    next_id_ = tabs_.size();
+// Window.tla's Init: the sprint tab, if any, at position 0 with the id after the friends', then the friends by their
+// place in the list.
+Model::Model(const std::vector<FriendInfo>& friends, bool sprint) {
+    tabs_.reserve(friends.size() + (sprint ? 1 : 0));
+    if (sprint)
+        tabs_.push_back(Tab{friends.size(), {}, {}, {}, {}, {}, TabKind::Sprint});
+    for (std::size_t f = 0; f < friends.size(); ++f)
+        tabs_.push_back(Tab{f, friends[f].name, friends[f].model, {}, {}, {}, TabKind::Friend});
+    next_id_ = friends.size() + (sprint ? 1 : 0);
 }
 
 bool Model::friend_tab(std::size_t i) const {

@@ -2,9 +2,9 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers"))
+ :page (:roadmaps ("layers" "window-features"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers"))
+ ((:id "goal" :type :work-set :children ("layers" "window-features"))
   (:id "layers" :type :roadmap :title "Layers"
    :rows (
      ("window" "1. Window: tabs, transcript and prompt draw and take input (in progress)")
@@ -27,6 +27,22 @@
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
      ))
+  (:id "window-features" :type :roadmap :title "Window features"
+   :rows (
+     ("terminal-tabs" "Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W")
+     ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; see-through page, opaque tiles")
+     ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("terminal-tabs" "done" "t-terminal-tabs")
+     ("sprint-tab" "done" "t-sprint-tab")
+     ("upload" "done" "t-upload")
+     ))
+  (:id "t-terminal-tabs" :type :task :title "Terminal tabs: a shell per tab after the friends" :state :done
+   :evidence ("tests/window/test_terminal.cpp" "tests/model: tlc_witness_add_before_friend, tlc_trace_faulty_close_rejected"))
+  (:id "t-sprint-tab" :type :task :title "Sprint tab: nova-sprint's board, first and Cmd-1, pinned" :state :doing)
+  (:id "t-upload" :type :task :title "Upload: the plus button sends a file to the selected AI's incoming/, images to the chat too" :state :todo)
   (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
   (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :todo)
   (:id "t-friends" :type :task :title "Friends: a real conversation per tab over nova-bus, driven by the server" :state :todo)

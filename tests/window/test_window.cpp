@@ -230,10 +230,25 @@ void storeSavesAndRestores() {
     CHECK(model.move_tab(2, 0));
     std::string error;
     CHECK(saveTabOrder(mem.store(), model, &error) && error.empty());
-    // A relaunch: the store's friends in the saved order, and Command-1's tab is the first saved friend.
+    // A relaunch: the store's friends in the saved order, the first friend's tab first among them.
     Model again(loadTabOrder(mem.store(), loaded, &warning));
     CHECK(warning.empty());
     CHECK(again.tab_count() == 3 && again.tab(0).name == "c" && again.tab(1).name == "a" && again.tab(2).name == "b");
+}
+
+// Behind the sprint tab, as the app runs: the sprint tab is never saved, and stays first after a relaunch, so the first
+// saved friend is Command-2's tab.
+void sprintTabIsNeverSavedAndStaysFirst() {
+    const std::vector<FriendInfo> loaded = named({"a", "b", "c"});
+    MemoryStore mem;
+    Model model(loaded, true);
+    CHECK(model.move_tab(3, 1));
+    CHECK(friendTabNames(model) == (std::vector<std::string>{"c", "a", "b"}));
+    std::string error;
+    CHECK(saveTabOrder(mem.store(), model, &error));
+    std::string warning;
+    Model again(loadTabOrder(mem.store(), loaded, &warning), true);
+    CHECK(again.tab_count() == 4 && again.tab(0).kind == TabKind::Sprint && again.tab(1).name == "c");
 }
 
 void terminalTabsAreNeverSaved() {
@@ -269,6 +284,7 @@ int main() {
     tabOrderTextRoundTrips();
     storeSavesAndRestores();
     terminalTabsAreNeverSaved();
+    sprintTabIsNeverSavedAndStaysFirst();
     badStoreUsesTheLoadedOrderAndSaysSo();
     capsLockIsStripped();
     parsesEnabledFriendsInOrder();
