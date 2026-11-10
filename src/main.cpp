@@ -20,10 +20,16 @@
 // --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
+// --server HOST makes the friend tabs the server's: the window runs `nexus-server new` on HOST over ssh and keeps in
+// step with it over mosh's transport (link/client.h). A prompt goes to the server, and the transcripts and queues show
+// what the server holds (sync/mirror.h). Until the server is first heard there is no prompt, only the line that says
+// the window is connecting (or why it could not); afterwards that line shows only while the server is not heard.
+//
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
-//              [--bench FRAMES] [--print-window-config]
+//              [--bench FRAMES] [--print-window-config] [--server HOST]
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +62,13 @@
 #include "tab_order.h"
 #include "terminals.h"
 #include "view.h"
+
+#if NEXUS_LINK
+#include "link/client.h"
+#include "sync/client.h"
+#include "sync/hub.h"
+#include "sync/mirror.h"
+#endif
 
 namespace {
 
@@ -91,6 +104,13 @@ struct App {
     std::vector<std::pair<std::size_t, std::string>> reopen;
     std::string savedTerminals;     // the text last written to each file, so that only a change is written
     std::string savedSelection;
+    std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
+#if NEXUS_LINK
+    std::string host;                       // --server
+    std::unique_ptr<link::ClientLink> link;
+    sync::Mirror mirror;
+    std::string promptProblem;              // why the last prompt was not sent, until one is
+#endif
 };
 
 // Saves the selected tab if its text changed: a new selection, or a selected terminal whose place among the terminals
@@ -125,6 +145,21 @@ void keepTerminals(App& a) {
     }
     keepSelection(a);
 }
+
+#if NEXUS_LINK
+// Each frame: the server's latest tabs into the model, and the link's state into the line where the prompt stands.
+// The prompt opens once the server is first heard, and stays.
+void pollLink(App& a) {
+    link::ClientLink::Snapshot s;
+    if (a.link == nullptr || !a.link->poll(&s))
+        return;
+    a.mirror.apply(*a.model, s.tabs);
+    if (s.phase == sync::LinkPhase::Connected)
+        a.view.promptOpen = true;
+    const std::string status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
+    a.view.status = status.empty() ? a.promptProblem : status;
+}
+#endif
 
 App& appOf(void* context) {
     return *static_cast<App*>(context);
@@ -172,6 +207,8 @@ bool open(void* context, PrStudioWindow* window) {
     }
     a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
+    a.wakeApp = prStudioWindowApp(window);
+    prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
     return true;
 }
 
@@ -179,6 +216,7 @@ bool open(void* context, PrStudioWindow* window) {
 void closeWindow(void* context, PrStudioWindow*) {
     App& a = appOf(context);
     keepTerminals(a);
+    a.wakeApp = nullptr;
     setOverlayShown(nullptr, nullptr);
     a.view.board = nullptr;
     a.board.reset();
@@ -196,6 +234,9 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     keepTerminals(a);
+#if NEXUS_LINK
+    pollLink(a);
+#endif
     beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
     if (a.board != nullptr)
         a.board->frame(f->time, f->display);
@@ -444,8 +485,11 @@ int main(int argc, char** argv) {
     bool windowed = false;
     bool printConfig = false;
     unsigned bench = 0;
+    const char* server = nullptr;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--windowed") == 0) {
+        if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
+            server = argv[++i];
+        } else if (std::strcmp(argv[i], "--windowed") == 0) {
             windowed = true;
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             shot = argv[++i];
@@ -464,9 +508,21 @@ int main(int argc, char** argv) {
             printConfig = true;
         } else {
             std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
-                "[--backdrop]] [--bench FRAMES] [--print-window-config]\n");
+                "[--backdrop]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
             return 2;
         }
+    }
+    if (server != nullptr) {
+#if NEXUS_LINK
+        if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
+            std::fprintf(stderr, "nexus: --server runs the live window only, without --screenshot, --demo, "
+                "--demo-terminal, --bench or --print-window-config\n");
+            return 2;
+        }
+#else
+        std::fprintf(stderr, "nexus: this build has no --server (it was configured with -DNEXUS_LINK=OFF)\n");
+        return 2;
+#endif
     }
 
     if (printConfig) {
@@ -562,6 +618,33 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
+#if NEXUS_LINK
+    if (server != nullptr) {
+        a.host = server;
+        a.view.promptOpen = false;
+        a.view.status = sync::linkStatus(sync::LinkPhase::Connecting, a.host, 0, "");
+        a.view.submit = [](std::size_t i, bool queue) {
+            std::string text;
+            std::string why;
+            if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
+                a.promptProblem.clear();
+                a.link->send(queue ? sync::ActionKind::Queue : sync::ActionKind::Send, model.tab(i).name,
+                    std::move(text));
+            } else if (!why.empty()) {
+                a.promptProblem = why;
+                if (a.view.status.empty())
+                    a.view.status = why;
+            }
+        };
+        link::ClientLink::Options options;
+        options.bootstrap.host = a.host;
+        options.wake = [] {
+            if (PrApp* app = a.wakeApp.load())
+                prAppWake(app);
+        };
+        a.link = std::make_unique<link::ClientLink>(std::move(options));
+    }
+#endif
     a.bench = bench;
     a.demoTerminal = demoTerminal;
     a.backdrop = backdrop && shot != nullptr;
@@ -586,6 +669,12 @@ int main(int argc, char** argv) {
         PrStudioWindowDesc window{
             .title = "nexus",
             .extent = {1000, 780},
+            // Frames come from Prax's display link at the display's own rate (120 Hz on a ProMotion or XDR display)
+            // and only when one is asked for, so the idle overlay draws nothing. The swap chain stays SDR: the window,
+            // the board and the terminals draw only sRGB colours at or below SDR white, and Prax's HDR path presents
+            // every pixel opaque (lib/draw/src/draw_display.slang convertPixel), which would cover the screen behind
+            // the see-through overlay. HDR waits on that (docs/roadmap.sexp "hdr").
+            .intent = PrGpuSwapChainIntent_Sdr,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
@@ -603,6 +692,9 @@ int main(int argc, char** argv) {
             code = 1;
         }
         closeOverlay();
+#if NEXUS_LINK
+        a.link.reset();     // mosh's shutdown, so the server ends this session
+#endif
         printStats(a.stats);
     }
     prFontSetDestroy(a.fonts);

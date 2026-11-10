@@ -5,8 +5,9 @@
 #   MODELS      the models/ directory of the checkout (its *.tla and witnesses/*.tla are copied)
 #   MODULE      the module TLC checks (e.g. MCWindow)
 #   CFG         the configuration file, relative to MODELS (e.g. MCWindow.cfg or witnesses/WSendToActive.cfg)
-#   EXPECT      pass | invariant | action | deadlock
-#   PROPERTY    with invariant or action: the property whose violation is expected
+#   EXPECT      pass | invariant | action | liveness | deadlock
+#   PROPERTY    with invariant or action: the property whose violation is expected (TLC does not name the temporal
+#               property it found violated, so with liveness the cfg names the one temporal property it checks)
 #   WALK        optional: the trace_walk program; it is run first and writes WindowTraceData.tla into WORK
 #   SEED, STEPS, FRIENDS   with WALK: the walk's seed, step count and number of friends
 #   FAULTY      with WALK: send walks the test-only model with a faulty send, queue the one with a faulty queue,
@@ -16,6 +17,9 @@
 #               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
 #               sprint tab, close-fallback the one whose close of the active tab ignores the selection history
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
+#   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
+#               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
+#               mirror, tail
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
@@ -55,7 +59,20 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
+if(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")
+    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror or tail")
+    endif()
+    execute_process(COMMAND "${LINKWALK}" ${walk_args} "${WORK}/LinkTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "link_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
     if(FAULTY STREQUAL "send")
         list(APPEND walk_args --faulty)
@@ -133,11 +150,15 @@ elseif(EXPECT STREQUAL "action")
     if(NOT out MATCHES "Action property ${PROPERTY} [^\n]*is violated")
         message(FATAL_ERROR "expected action property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
     endif()
+elseif(EXPECT STREQUAL "liveness")
+    if(NOT out MATCHES "Temporal properties were violated")
+        message(FATAL_ERROR "expected a temporal property to be violated, TLC exit ${rc}:\n${out}")
+    endif()
 elseif(EXPECT STREQUAL "deadlock")
     if(NOT out MATCHES "Deadlock reached")
         message(FATAL_ERROR "expected a deadlock, TLC exit ${rc}:\n${out}")
     endif()
 else()
-    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action or deadlock")
+    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, action, liveness or deadlock")
 endif()
 message("${MODULE} ${cfg_name}: as expected (${EXPECT} ${PROPERTY})")

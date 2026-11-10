@@ -1,0 +1,31 @@
+/* mosh's config.h for the files nexus builds from it (cmake/mosh.cmake), from the checks its configure.ac makes. */
+#ifndef NEXUS_MOSH_CONFIG_H
+#define NEXUS_MOSH_CONFIG_H
+
+#cmakedefine HAVE_SYS_UIO_H 1
+#cmakedefine HAVE_ENDIAN_H 1
+#cmakedefine HAVE_SYS_ENDIAN_H 1
+#cmakedefine HAVE_STRINGS_H 1
+#cmakedefine HAVE_IP_MTU_DISCOVER 1
+#cmakedefine HAVE_IP_RECVTOS 1
+#cmakedefine HAVE_CLOCK_GETTIME 1
+#cmakedefine HAVE_MACH_ABSOLUTE_TIME 1
+#cmakedefine HAVE_GETTIMEOFDAY 1
+#cmakedefine HAVE_POSIX_MEMALIGN 1
+#cmakedefine HAVE_OSX_SWAP 1
+
+#define HAVE_DECL_FFS @HAVE_DECL_FFS@
+#define HAVE_DECL_BE64TOH @HAVE_DECL_BE64TOH@
+#define HAVE_DECL_BETOH64 @HAVE_DECL_BETOH64@
+#define HAVE_DECL_BSWAP64 @HAVE_DECL_BSWAP64@
+#define HAVE_DECL___BUILTIN_CTZ @HAVE_DECL___BUILTIN_CTZ@
+#define HAVE_DECL___BUILTIN_BSWAP64 @HAVE_DECL___BUILTIN_BSWAP64@
+
+/* C++20: <memory> and std::shared_ptr */
+#define HAVE_MEMORY 1
+#define HAVE_STD_SHARED_PTR 1
+
+/* --with-crypto-library=apple-common-crypto: mosh's own OCB over CommonCrypto's AES */
+#define USE_APPLE_COMMON_CRYPTO_AES 1
+
+#endif
