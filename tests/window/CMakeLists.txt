@@ -13,6 +13,13 @@ target_link_libraries(nexus_sprint_tests PRIVATE nexus_window_logic)
 add_test(NAME sprint_unit COMMAND nexus_sprint_tests)
 set_tests_properties(sprint_unit PROPERTIES LABELS unit)
 
+# The sprint board's scroll glide (src/scroll_glide.h): the ease, new targets, the ends, held keys. Time is an argument.
+add_executable(nexus_scroll_glide_tests test_scroll_glide.cpp)
+target_compile_options(nexus_scroll_glide_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_scroll_glide_tests PRIVATE nexus_window_logic)
+add_test(NAME scroll_glide_unit COMMAND nexus_scroll_glide_tests)
+set_tests_properties(scroll_glide_unit PROPERTIES LABELS unit)
+
 # The sprint tab's page (src/board.h) headless over Prax's HTML stack: a fixture board served from memory on Prax's null
 # network (no socket), QuickJS scripts and the system's fonts, with made-up clocks. A functional test, in a working
 # directory of its own.

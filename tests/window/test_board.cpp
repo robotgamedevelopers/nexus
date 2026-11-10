@@ -206,13 +206,13 @@ struct Harness {
         prFontSystemDestroy(system);
     }
 
-    // One frame, 50 ms after the last on both clocks.
-    void frame() {
-        time += 0.05;
-        clock.ms += 50;
+    // One frame, `seconds` (50 ms) after the last on both clocks.
+    void frame(double seconds = 0.05) {
+        time += seconds;
+        clock.ms += seconds * 1000;
         board->frame(time, prAppDisplayDefault());
         view.extent = extent;
-        PrUiFrameDesc desc{.time = time, .delta = 0.05, .extent = extent, .maxRounds = 4,
+        PrUiFrameDesc desc{.time = time, .delta = seconds, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
             Harness& h = *static_cast<Harness*>(context);
@@ -393,6 +393,124 @@ void theCostBreakdownFillsTheFirstScreen() {
     }
 }
 
+// A key or a wheel's notch glides the page's scroll over a few frames, from where it shows to where Prax's view sends
+// it; a trackpad's pixels scroll at once.
+void keysAndTheWheelGlide() {
+    Harness h;
+    h.server.page = kSpendPage;
+    h.extent = PrVec2{1200, 900};
+    h.frames(10);
+    CHECK(h.board->settled());
+    PrDomElement* s = prCssDocumentScrollingElement(h.document());
+    auto top = [&] { return prCssElementScrollTop(s); };
+    auto send = [&](PrAppEvent e) { CHECK(h.board->event(e)); };
+    auto keyDown = [](PrAppKey k, PrAppModifierFlags modifiers, bool repeat) {
+        PrAppEvent e{};
+        e.kind = PrAppEventKind_KeyDown;
+        e.modifiers = modifiers;
+        e.keyboard.key = k;
+        e.keyboard.repeat = repeat;
+        return e;
+    };
+    const double frame = 1.0 / 120;
+    // Settles the glide: enough frames for the longest.
+    auto settle = [&] { for (int i = 0; i < 40; ++i) h.frame(frame); };
+
+    // Down: no jump at the event, then a line over the key's glide, one way, ending where Prax's line ends.
+    CHECK(top() == 0);
+    send(keyDown(PrAppKey_Down, 0, false));
+    CHECK(top() == 0);
+    std::vector<double> seen;
+    for (int i = 0; i < 40; ++i) {
+        h.frame(frame);
+        seen.push_back(top());
+    }
+    CHECK(seen.back() == 40);
+    CHECK(seen[2] > 0 && seen[2] < 40);
+    for (std::size_t i = 1; i < seen.size(); ++i)
+        CHECK(seen[i] >= seen[i - 1]);
+    std::size_t moving = 0;
+    while (moving < seen.size() && seen[moving] < 40)
+        ++moving;
+    CHECK(moving >= 15 && moving <= 25);       // some 180 ms at 120 frames a second
+
+    // Page Down: a page less a line of overlap, in a glide.
+    const double page = h.viewportHeight() - 40;
+    send(keyDown(PrAppKey_PageDown, 0, false));
+    h.frame(frame);
+    h.frame(frame);
+    CHECK(top() > 40 && top() < 40 + page);
+    settle();
+    CHECK(std::fabs(top() - (40 + page)) < 1);
+
+    // A held Down: each repeat from the target, so three lines in all, with no step back.
+    const double from = top();
+    send(keyDown(PrAppKey_Down, 0, false));
+    double last = top();
+    for (int r = 0; r < 2; ++r) {
+        for (int i = 0; i < 4; ++i) {
+            h.frame(frame);
+            CHECK(top() >= last);
+            last = top();
+        }
+        send(keyDown(PrAppKey_Down, 0, true));
+        CHECK(top() == last);
+    }
+    settle();
+    CHECK(std::fabs(top() - (from + 120)) < 1);
+
+    // Command-Up: to the top; End: to the bottom; both glide, and stop at the end.
+    send(keyDown(PrAppKey_Up, PrAppModifierFlag_Super, false));
+    h.frame(frame);
+    h.frame(frame);
+    CHECK(top() > 0);
+    settle();
+    CHECK(top() == 0);
+    send(keyDown(PrAppKey_End, 0, false));
+    settle();
+    const double bottom = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
+    CHECK(std::fabs(top() - bottom) < 1);
+    send(keyDown(PrAppKey_Down, 0, false));
+    settle();
+    CHECK(std::fabs(top() - bottom) < 1);
+    send(keyDown(PrAppKey_Home, 0, false));
+    settle();
+    CHECK(top() == 0);
+
+    // A wheel's notch over the page: three lines of Prax's 40 px, in a glide.
+    PrAppEvent wheel{};
+    wheel.kind = PrAppEventKind_Scroll;
+    wheel.scroll = PrAppScrollEvent{.position = PrVec2{600, 450}, .delta = PrVec2{0, 3}, .unit = PrAppScrollUnit_Line};
+    send(wheel);
+    CHECK(top() == 0);
+    h.frame(frame);
+    h.frame(frame);
+    CHECK(top() > 0 && top() < 120);
+    settle();
+    CHECK(top() == 120);
+
+    // A trackpad's pixels: at once, and they stop a glide where it shows.
+    send(keyDown(PrAppKey_Down, 0, false));
+    h.frame(frame);
+    h.frame(frame);
+    const double mid = top();
+    CHECK(mid > 120 && mid < 160);
+    PrAppEvent pixels = wheel;
+    pixels.scroll.delta = PrVec2{0, 10};
+    pixels.scroll.unit = PrAppScrollUnit_Pixel;
+    send(pixels);
+    CHECK(std::fabs(top() - (mid + 10)) < 1);
+    settle();
+    CHECK(std::fabs(top() - (mid + 10)) < 1);
+
+    // Scaled text: a trackpad's pixels are the window's, so the page moves by them over the scale.
+    h.board->setTextScale(2);
+    h.frames(3);
+    const double scaled = top();
+    send(pixels);
+    CHECK(std::fabs(top() - (scaled + 5)) < 1);
+}
+
 } // namespace
 
 int main() {
@@ -403,6 +521,7 @@ int main() {
     aFailedLookupIsTheLine();
     aFoundAddressLoads();
     theCostBreakdownFillsTheFirstScreen();
+    keysAndTheWheelGlide();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

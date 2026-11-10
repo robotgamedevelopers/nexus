@@ -51,7 +51,8 @@ enum class BoardRoute {
 
 // The route of `event` while the sprint tab shows. `inPage` is true if the pointer is over the page's rectangle;
 // `pressInPage` is true if the button now held was pressed over the page. Every Command chord (Command-1 to Command-0,
-// Command-T, Command-W, the text scale's keys) and Escape (which hides the overlay) stay with the window; other keys,
+// Command-T, Command-W, the text scale's keys) and Escape (which hides the overlay) stay with the window, but for
+// Command-Up and Command-Down, which scroll the page to its top and its bottom as on macOS; other keys,
 // text and input-method composition go to the page; the pointer's presses and the wheel go where the pointer is, and a
 // release where its press went.
 BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPage);

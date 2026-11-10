@@ -30,6 +30,7 @@
 #include "pr/kit.h"
 #include "pr/text.h"
 
+#include "scroll_glide.h"
 #include "sprint.h"
 #include "view.h"
 
@@ -67,7 +68,8 @@ public:
     void frame(double seconds, const PrAppDisplay& display);
 
     // An event while the sprint tab shows (sprint.h routeBoardEvent). Returns true if the page took it and the window
-    // should not see it.
+    // should not see it. A key or a wheel's notch that scrolls the page glides its scroll there over the next frames
+    // (scroll_glide.h); a trackpad's pixels scroll it at once.
     bool event(const PrAppEvent& event);
 
     bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) override;
@@ -93,6 +95,10 @@ private:
     SpendFit measureSpend();
     void fitSpend();
     bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
+    PrDomElement* scroller();
+    void glideThrough(const PrAppEvent& event);
+    void stepGlide();
+    void endGlide(bool atTarget);
 
     static double clockNow(void* context);
     static double clockWallNow(void* context);
@@ -147,6 +153,10 @@ private:
     bool pressInPage_ = false;
     bool shown_ = false;                // the sprint tab showed at the last round
     bool hiddenSet_ = false;            // the page's visibility is hidden
+    // The page's scroll gliding to where a wheel's notch or a key sent it (scroll_glide.h), and the scroll it was set
+    // to last, which tells whether the page scrolled itself since.
+    Glide glide_;
+    double applied_ = 0;
     double frameTime_ = 0;
 };
 

@@ -166,6 +166,12 @@ void eventsAreRouted() {
     CHECK(routeBoardEvent(key(PrAppKey_Escape, 0), true, false) == BoardRoute::Window);
     CHECK(routeBoardEvent(key(PrAppKey_Down, 0), true, false) == BoardRoute::Page);
     CHECK(routeBoardEvent(key(PrAppKey(' '), 0), false, false) == BoardRoute::Page);
+    // The keys that scroll the page go to it; Command-Up and Command-Down too (to its top and its bottom).
+    for (PrAppKey k : {PrAppKey_Up, PrAppKey_Down, PrAppKey_PageUp, PrAppKey_PageDown, PrAppKey_Home, PrAppKey_End})
+        CHECK(routeBoardEvent(key(k, 0), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey(' '), PrAppModifierFlag_Shift), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey_Up, kCmd), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey_Down, kCmd), false, false) == BoardRoute::Page);
     PrAppEvent text = pointer(PrAppEventKind_Text);
     CHECK(routeBoardEvent(text, false, false) == BoardRoute::Page);
     text.modifiers = kCmd;

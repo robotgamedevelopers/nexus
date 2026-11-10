@@ -305,8 +305,10 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
         prHtmlPageSetVisibility(page_, onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden);
         hiddenSet_ = !onScreen;
     }
-    if (!onScreen)
+    if (!onScreen) {
+        endGlide(true);
         return;
+    }
     takeAddress();
     if (url_.empty()) {
         if (!finding_.valid() && frameTime_ >= findAgainAt_) {
@@ -327,6 +329,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     } else if (load_ == Load::Failed && frameTime_ >= retryAt_) {
         navigate();
     }
+    stepGlide();
     runTasks();
 }
 
@@ -477,7 +480,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     // The next frame: now if the page has work due, at its next timer, or none.
     if (onScreen && agent_ != nullptr) {
         double delay = prDomAgentNextTaskDelay(agent_);
-        if (delay == 0 || dirty_)
+        if (delay == 0 || dirty_ || glide_.active)
             prUiRequestFrame(ui);
         else if (delay > 0)
             prUiRequestFrameAt(ui, frameTime_ + delay / 1000);
@@ -486,6 +489,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
 }
 
 void PraxBoard::hidden() {
+    endGlide(true);
     shown_ = false;
     pressInPage_ = false;
 }
@@ -509,14 +513,94 @@ bool PraxBoard::event(const PrAppEvent& e) {
         pressInPage_ = route == BoardRoute::Page;
     if (route == BoardRoute::Window)
         return false;
-    PrAppEvent copy = e;
-    if (positioned)
-        prAppEventSetPosition(&copy, PrVec2{(at.x - pane_.left) / zoom_, (at.y - pane_.top) / zoom_});
-    prHtmlViewEvent(view_, &copy, 0);
+    // In the page's CSS px: its position from the pane's corner, and a trackpad's pixel deltas, over the text scale.
+    PrAppEvent copy = prAppEventPlaced(&e, PrVec2{pane_.left, pane_.top}, zoom_);
+    if (e.kind == PrAppEventKind_KeyDown ||
+            (e.kind == PrAppEventKind_Scroll && e.scroll.unit == PrAppScrollUnit_Line)) {
+        glideThrough(copy);
+    } else {
+        // A trackpad's scroll, or a press (on a scroll bar, say), takes the page from where it shows.
+        if (e.kind == PrAppEventKind_Scroll || e.kind == PrAppEventKind_PointerDown)
+            endGlide(false);
+        prHtmlViewEvent(view_, &copy, 0);
+    }
     if (e.kind == PrAppEventKind_PointerUp)
         pressInPage_ = false;
     dirty_ = true;
     return route == BoardRoute::Page;
+}
+
+PrDomElement* PraxBoard::scroller() {
+    PrDomDocument* document = page_ != nullptr ? prHtmlWindowDocument(prHtmlPageWindow(page_)) : nullptr;
+    return document != nullptr ? prCssDocumentScrollingElement(document) : nullptr;
+}
+
+namespace {
+
+// How far the page's scroll can go down, CSS px.
+double maxScroll(PrDomElement* scroller) {
+    return std::max(0, prCssElementScrollHeight(scroller) - prCssElementClientHeight(scroller));
+}
+
+} // namespace
+
+// Prax's view takes the event as it would (its keydown, its wheel, and the scroll each does by default, which a form
+// control or a listener that cancels keeps from happening), from the glide's target, so that held keys and a spun wheel
+// add up. If that moved the page's scroll, the scroll goes back to where the page shows and glides to where the event
+// sent it; if not, it goes back to where the page shows. Only the page's own scroll glides: a box of the page that
+// scrolls by itself moves at once, as Prax moves it.
+void PraxBoard::glideThrough(const PrAppEvent& e) {
+    PrDomElement* s = scroller();
+    if (s == nullptr) {
+        prHtmlViewEvent(view_, &e, 0);
+        return;
+    }
+    const double max = maxScroll(s);
+    const bool gliding = glide_.active;
+    const double shown = gliding ? glidePosition(glide_, frameTime_, max) : prCssElementScrollTop(s);
+    if (gliding)
+        prCssElementSetScrollTop(s, glide_.to);
+    const double before = prCssElementScrollTop(s);
+    prHtmlViewEvent(view_, &e, 0);
+    const double after = prCssElementScrollTop(s);
+    if (after != before) {
+        const bool key = e.kind == PrAppEventKind_KeyDown;
+        glide_ = glideTo(glide_, frameTime_, shown, after, maxScroll(s), key ? kGlideKeySeconds : kGlideWheelSeconds,
+            key && !e.keyboard.repeat ? GlideKind::Press : GlideKind::Continue);
+    }
+    if (after != before || gliding) {
+        prCssElementSetScrollTop(s, shown);
+        applied_ = prCssElementScrollTop(s);
+    }
+}
+
+// Each frame: the page's scroll where the glide shows it now. A page that scrolled itself since the last frame (its
+// script, or a reload that puts its scroll back) keeps its own place.
+void PraxBoard::stepGlide() {
+    if (!glide_.active)
+        return;
+    PrDomElement* s = scroller();
+    if (s == nullptr || std::fabs(prCssElementScrollTop(s) - applied_) > 1) {
+        glide_ = Glide{};
+        return;
+    }
+    glide_ = glideFrame(glide_, frameTime_);
+    prCssElementSetScrollTop(s, glidePosition(glide_, frameTime_, maxScroll(s)));
+    applied_ = prCssElementScrollTop(s);
+    dirty_ = true;
+    if (glideDone(glide_, frameTime_))
+        glide_ = Glide{};
+}
+
+// Ends a glide: at its target (the page leaves the screen), or where it shows (the page scrolls from there).
+void PraxBoard::endGlide(bool atTarget) {
+    if (!glide_.active)
+        return;
+    if (PrDomElement* s = scroller()) {
+        prCssElementSetScrollTop(s, atTarget ? glide_.to : glidePosition(glide_, frameTime_, maxScroll(s)));
+        dirty_ = true;
+    }
+    glide_ = Glide{};
 }
 
 bool PraxBoard::settled() {

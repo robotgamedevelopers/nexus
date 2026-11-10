@@ -148,6 +148,9 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
             return pressInPage ? BoardRoute::Page : BoardRoute::Window;
         case PrAppEventKind_KeyDown:
         case PrAppEventKind_KeyUp:
+            // Command-Up and Command-Down scroll the page to its top and its bottom, as on macOS; nexus binds neither.
+            if (event.keyboard.key == PrAppKey_Up || event.keyboard.key == PrAppKey_Down)
+                return BoardRoute::Page;
             if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.keyboard.key == PrAppKey_Escape)
                 return BoardRoute::Window;
             return BoardRoute::Page;
