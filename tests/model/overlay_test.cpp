@@ -177,7 +177,17 @@ void hiddenFramesDoNothing() {
 
 } // namespace
 
+// A close before the window opened, outside shutdown, is Prax refusing the window (its swap chain): a failure. A close
+// after open, or at shutdown, is not.
+void closeBeforeOpenFails() {
+    CHECK(nexus::overlayCloseFailed(false, false));
+    CHECK(!nexus::overlayCloseFailed(true, false));
+    CHECK(!nexus::overlayCloseFailed(false, true));
+    CHECK(!nexus::overlayCloseFailed(true, true));
+}
+
 int main() {
+    closeBeforeOpenFails();
     launchShowsWithTheKeyboard();
     hotkeyToggles();
     losingTheKeyboardHides();

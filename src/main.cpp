@@ -78,6 +78,9 @@ struct App {
     bool overlay = true;            // the overlay window; --windowed gives a normal window
     PrStudioWindow* window = nullptr;   // from open() to close(); the overlay's from start()
     const PrStudioWindowDesc* overlayWindow = nullptr;  // the overlay's window, which start() creates
+    bool opened = false;            // open() ran for the window
+    bool stopping = false;          // the run's shutdown has begun
+    bool failed = false;            // Prax closed the overlay's window before it opened (overlayCloseFailed)
     OverlayRules rules;             // when the overlay shows and hides (overlay.h)
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
@@ -137,6 +140,7 @@ bool overlayActive(const App& a) {
 bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     a.window = window;
+    a.opened = true;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
@@ -154,9 +158,14 @@ bool open(void* context, PrStudioWindow* window) {
     return true;
 }
 
-// The terminals and the board end with the window, while its kit still exists.
+// The terminals and the board end with the window, while its kit still exists. An overlay window that Prax closes
+// before it opened could not draw (its swap chain): the run stops with it, as its last window, and fails.
 void closeWindow(void* context, PrStudioWindow*) {
     App& a = appOf(context);
+    if (a.overlay && overlayCloseFailed(a.opened, a.stopping)) {
+        std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
+        a.failed = true;
+    }
     a.window = nullptr;
     a.view.board = nullptr;
     a.board.reset();
@@ -202,6 +211,11 @@ bool start(void* context, PrStudioApp* studio) {
             int(status), status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
     carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
     return true;
+}
+
+// The run stops: the windows close after this, which is no failure of theirs.
+void shutdown(void* context, PrStudioApp*) {
+    appOf(context).stopping = true;
 }
 
 // The app's events: the hotkey, and the key check after a show.
@@ -611,12 +625,16 @@ int main(int argc, char** argv) {
         // start() creates the overlay's window itself, so that nexus holds it before its first frame.
         a.overlayWindow = a.overlay ? &window : nullptr;
         PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = a.overlay ? nullptr : &window,
-            .lastWindow = PrStudioAppLastWindow_Stop, .start = start, .event = appEvent, .context = &a};
+            .lastWindow = PrStudioAppLastWindow_Stop, .start = start, .event = appEvent, .shutdown = shutdown,
+            .context = &a};
         PrStatus status = prStudioAppRun(&desc);
-        if (status == PrStatus_NotSupported) {
+        if (status == PrStatus_NotSupported)
             std::fprintf(stderr, "nexus: no GPU device to render with\n");
+        else if (status != PrStatus_Ok)
+            std::fprintf(stderr, "nexus: the window could not open or the run could not start (status %d)\n",
+                int(status));
+        if (status != PrStatus_Ok || a.failed)
             code = 1;
-        }
         printStats(a.stats);
     }
     prFontSetDestroy(a.fonts);

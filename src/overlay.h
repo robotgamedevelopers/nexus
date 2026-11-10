@@ -46,4 +46,11 @@ private:
     bool keyed_ = false;
 };
 
+// Whether the overlay's window closing means it failed. Prax closes a window whose swap chain cannot be made before
+// the window's open, and tells a program that created the window itself only through its close, which comes whether
+// or not it opened (Prax 2908525 studio_window.cpp open 377-393, studio_window.h 91). nexus never closes the overlay,
+// and the run closes it only after shutdown: so a close before open, outside shutdown, is Prax refusing the window.
+// `opened`: main.cpp open() ran; `stopping`: the run's shutdown has begun.
+bool overlayCloseFailed(bool opened, bool stopping);
+
 } // namespace nexus

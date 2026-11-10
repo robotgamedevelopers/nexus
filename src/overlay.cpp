@@ -37,4 +37,8 @@ OverlayAct OverlayRules::keyCheck(bool visible, bool active) {
     return act(visible ? OverlayAct::Hide : OverlayAct::None);
 }
 
+bool overlayCloseFailed(bool opened, bool stopping) {
+    return !opened && !stopping;
+}
+
 } // namespace nexus
