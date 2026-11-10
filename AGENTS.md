@@ -32,7 +32,7 @@ Tabs
 - The friends' order is saved after every drag and restored at launch. Friends the saved order doesn't name follow in list order, and names that no longer exist are dropped.
 - Command-1 to Command-0 select tabs 1 to 10 in the strip's current order. Command-1 is the sprint tab, and pressing it also takes the board back home. A key with no tab does nothing.
 - Command-T opens a terminal tab at the end, running the login shell in the home directory, and shows it. A terminal that cannot start leaves the previous tab showing.
-- Command-W closes the tab showing if it is a terminal, and the tab selected before it shows again. On the sprint tab or a friend's tab, Command-W does nothing. A terminal whose shell exits closes the same way.
+- Command-W closes the tab showing if it is a terminal, and the tab selected before it shows again. On the sprint tab or a friend's tab, Command-W does nothing. Exiting the shell (`exit`, Control-D) does the same: the tab closes and the tab selected before it shows again.
 - A terminal tab that has ssh'd into a fleet machine is labelled with that machine's name for the whole ssh session.
 - Command-plus (with or without Shift) and Command-minus change the text scale for every tab at once, in steps of 0.1 from 0.5 upward. Everything scales together: text, spacing and radii.
 - These persist across relaunch: the text scale, the friends' order, the selected tab (the sprint tab if that tab is gone), and the open terminals. Terminals come back in their order, each a new login shell in the directory its shell last used.
