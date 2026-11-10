@@ -25,18 +25,20 @@ add_custom_target(model_checks DEPENDS model_test trace_walk label_walk)
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 
-set(models_dir "${PROJECT_SOURCE_DIR}/models")
-set(tlc_script "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
-
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [WORKERS w] [NIGHTLY] [LABEL])
-# LABEL walks TabLabel with label_walk (FRIENDS is then its number of remotes) in place of the window's trace_walk.
+#          [SEED s STEPS n WINDOWS w LINKWALK] [WORKERS w] [NIGHTLY] [LABEL])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
+# With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
+# (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
+# With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LABEL" "PROPERTY;SEED;STEPS;FRIENDS;FAULTY;WORKERS" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" ""
+        ${ARGN})
+    set(models_dir "${PROJECT_SOURCE_DIR}/models")
+    set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
         set(T_WORKERS 2)
     endif()
@@ -52,7 +54,9 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(DEFINED T_SEED AND T_LABEL)
+    if(T_LINKWALK)
+        list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
+    elseif(DEFINED T_SEED AND T_LABEL)
         list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
              -DFRIENDS=${T_FRIENDS})
     elseif(DEFINED T_SEED)

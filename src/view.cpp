@@ -654,10 +654,18 @@ struct Builder {
         PrStringView changed{};
         if (prKitTextChanged(kit, edit, &changed))
             model.set_draft(active, std::string(changed.data, changed.size));
-        if (!composing && send)
-            model.send(active);
-        if (!composing && queue)
-            model.queue(active);
+        if (!composing && send) {
+            if (view.submit)
+                view.submit(active, false);
+            else
+                model.send(active);
+        }
+        if (!composing && queue) {
+            if (view.submit)
+                view.submit(active, true);
+            else
+                model.queue(active);
+        }
         // A friend's draft comes back with the caret at its end.
         if (view.prompted != model.tab(active).id) {
             view.prompted = model.tab(active).id;
@@ -741,8 +749,16 @@ struct Builder {
         }
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
-        if (model.tab_count() != 0)
+        // The link's state, plainly, where the prompt stands; until the server is reached there is no prompt to type in.
+        if (!view.status.empty() && model.tab_count() != 0)
+            label(footer, view.status, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+        if (model.tab_count() != 0 && view.promptOpen) {
             prompt(footer, composing);
+        } else {
+            view.prompted = ~std::size_t(0);
+            view.prompt = kPrLayoutNodeNone;
+            view.promptBox = kPrLayoutNodeNone;
+        }
     }
 };
 

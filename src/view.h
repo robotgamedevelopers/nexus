@@ -77,6 +77,12 @@ struct View {
     std::function<void()> hide;                 // Escape: hides the overlay (platform_mac.h hideOverlay); unset when
                                                 // windowed, where Escape does nothing
     std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
+    // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
+    // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
+    std::function<void(std::size_t tab, bool queue)> submit;
+    bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
+    std::string status;                         // one plain line where the prompt stands (the link's state); empty,
+                                                // none
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)

@@ -2,6 +2,8 @@
 
 Every state machine in nexus has a TLA+ module here. TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
+This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`.
+
 ## What is modelled
 
 `Window.tla` is the state the window owns, `nexus::Model` in `src/model.h`:
@@ -171,6 +173,47 @@ The binding is shown to fail, ten times: `--faulty-close-fallback` walks a subcl
 `TabLabel.cfg` checks them on two remote labels and three titles (295 states). Its witnesses: `WLabelNoMask` (a session's end shows the title it left; `EndRestores`), `WLabelMaskSticks` (the mask never lifts; `MaskEnds`), `WLabelBeforeAtStart` (the label to return to is the title at a session's first observation, which ssh may already have set; `BeforeIsOwn`), `WLabelNoTail` (no tail, so a last title read after the process is seen gone shows; `TailRestores`).
 
 `tests/model/label_walk.cpp` (`label_walk <seed> <steps> <remotes> [--faulty-before] <out.tla>`) drives the real `TabLabel` with a seeded walk on a made-up clock (a frame or a pause a step): sessions start, run, switch and end, titles change, and frames fall inside tails and after them. It writes `TabLabelTraceData.tla`: one record per observation with its arguments, the code's state after it and the label the code draws for every title. `TabLabelTrace.tla` takes `Observe` with each record's arguments and `TraceMatches` requires the spec's state and every label to equal the code's; every `TabLabel` property is checked on the trace. Four traces run (seeds 1 to 3 on two remotes, seed 4 on three), and `--faulty-before`, which feeds the code an unrecorded observation before each session's first (the code then takes the label to return to from a title ssh may have set), must be rejected with `TraceMatches` violated.
+
+## Link.tla: what nexus adds on top of mosh
+
+`Link.tla` models the link between the windows and `nexus-server` (`src/sync`, `src/link`, `src/server`): what nexus puts on top of mosh's State Synchronization Protocol, not mosh. mosh is abstracted to the two things nexus relies on. Up, what reaches the server of a window's list is some range of it, which may repeat a range, come after a later one, or start past what the server has: `Deliver(c, first, last)` takes any range. Down, a window's receiver eventually holds the server's newest state, may skip states between, and never goes back to an older one (mosh numbers its states and keeps the newest): `Receive(c, j)` is window c receiving the server's j-th state, the same as before or a later one.
+
+- Up: `acts[c]`, window c's actions, numbered from 1 (`sync::Actions`); `applied[c]`, the server's `sync::Applier` for it; `done[c]`, a history variable, every number the server applied, in order. The Applier applies the numbers past `applied[c]` in a range, refuses one that starts past `applied[c] + 1`, and ignores one wholly applied.
+- The server: `tr[t]` and `q[t]`, each tab's transcript and queue (`sync::Hub` over its store). A send puts the prompt and a placeholder reply in the transcript; a queue puts the prompt in the queue. Each change makes a new state in `snaps`: each transcript's newest `W` entries from index `first` (`sync::tailOf`, by count; the byte budget is not modelled) and the whole queue.
+- Down: `last[c]`, the state window c's receiver holds; `view[c][t]`, `vq[c][t]`, the window's transcript and queue; `seen[c][t]`, its mirror (`sync::Mirror`): the transcript index it shows through and the number of queued prompts it shows. Receiving a state, the mirror appends a notice of how many entries left the tail before it saw them, then the entries it has not shown, then the queued prompts it has not shown.
+
+Entries are records: a prompt `[k |-> "P", text |-> <<c, n>>]` (action n of window c), its reply `[k |-> "F", text |-> <<>>]`, a notice of m entries not shown `[k |-> "N", text |-> <<m>>]`.
+
+Not modelled: mosh (sockets, crypto, fragments, timers, acknowledgements, its own correctness); the hub's limits (a refused action becomes a notice in the transcript, which the mirror shows like any entry); entries that grow while open (the server makes none yet).
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | counts and indices in range |
+| `ExactlyOnce` | invariant | the server applied window c's actions 1, 2, ..., `applied[c]`, each once, in order, none it was not given |
+| `ServerHoldsEach` | invariant | every applied action is in the server's tabs exactly once, where its kind puts it; none not applied is |
+| `ViewMatches` | invariant | a window's transcript, with each notice of m read as m holes, is the server's transcript through what it has seen: each entry at its index |
+| `QueueMatches` | invariant | a window's queue is the server's, through what it has seen |
+| `NoticesSound` | invariant | a notice stands for at least one entry, and two never follow each other |
+| `OnlyGrow` | action | the server's transcripts and queues, each window's, and the applied history only grow; a receiver never goes back |
+| `Converges` | liveness | under mosh's promise (fairness: a window's whole list reaches the server, the newest state reaches every window), every action is applied and every window shows all of every transcript and queue |
+
+Instances: `MCLink.cfg`, two windows sharing a tab, two actions each, a tail of one entry (16,641 states, 2 s on four workers); `MCLinkOne.cfg`, one window over two tabs, three actions, a tail of two (1,491 states); `MCLinkWide.cfg`, nightly, two windows over two tabs (183,177 states, 29 s on four workers).
+
+Reversed witnesses (`witnesses/WLink*.tla`), each rejected by TLC:
+
+| Witness | The break | Rejected by |
+|---|---|---|
+| `WLinkApplyAgain` | the Applier applies a range from its first number, not from `applied + 1` | `ExactlyOnce` |
+| `WLinkAcceptGap` | the Applier takes a range past a gap | `ExactlyOnce` |
+| `WLinkMirrorAgain` | the mirror appends the whole tail each time | `ViewMatches` |
+| `WLinkNoNotice` | the mirror skips the notice for entries it missed | `ViewMatches` |
+| `WLinkQueueAgain` | the mirror queues the whole queue each time | `QueueMatches` |
+| `WLinkTailMisaligned` | the server's tail names its first entry one early | `ViewMatches` |
+| `WLinkDeliverShort` | the Applier stops one short of each range | `Converges` |
+
+The binding: `tests/sync/link_walk.cpp` (`link_walk <seed> <steps> <windows> [--faulty-applier | --faulty-mirror | --faulty-tail] <out.tla>`) runs the real `sync::Actions`, `Applier`, `Hub` over a `MemoryStore`, `Tabs`, `Mirror` and `nexus::Model` through `tests/sync/fake_mosh.h`, a copy of mosh 1.4.0's sender and receiver bookkeeping, with datagrams lost, repeated and reordered from the seed. Now and then it also hands the Applier a range mosh would not: one already applied, or one past a gap. It records each window action, each range the Applier is given and each state a window mirrors, with the code's whole state after it, and ends by letting everything through. `LinkTrace.tla` takes the `Link` action each record names, and `TraceMatches` requires the spec's state to equal the code's; every `Link` safety property is checked on the trace, and its last state must be `Settled`. The binding is shown to fail three times: `--faulty-applier` applies a whole range even where it was applied before, `--faulty-mirror` mirrors with a new `Mirror` each time, and `--faulty-tail` makes the server's tail one entry longer than the spec's; TLC must report `TraceMatches` violated.
+
+Per commit (`-L '^model$'`): the two small instances, the seven witnesses, six traces (seeds 1 to 4 on two windows and seed 5 on one, 400 steps each; seed 6 on three windows, 600 steps) and the three faulty traces: under 26 s of TLC in all, 7 s on eight cores.
 
 ## Running the checks
 

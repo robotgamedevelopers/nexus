@@ -65,7 +65,10 @@ std::vector<std::string> foregroundArguments(int shell) {
         return {};
     // KERN_PROCARGS2: argc, the executable's path, padding, then argc arguments, each ended by a NUL, then the
     // environment.
-    std::vector<char> buffer(static_cast<std::size_t>(argmax));
+    // Kept between calls: it is read once a frame for each terminal, and is as large as the system's argument limit.
+    static thread_local std::vector<char> buffer;
+    if (buffer.size() < static_cast<std::size_t>(argmax))
+        buffer.resize(static_cast<std::size_t>(argmax));
     size = buffer.size();
     int mib[3] = {CTL_KERN, KERN_PROCARGS2, leader};
     if (sysctl(mib, 3, buffer.data(), &size, nullptr, 0) != 0 || size < sizeof(int))
