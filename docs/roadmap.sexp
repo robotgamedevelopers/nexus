@@ -33,6 +33,7 @@
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
      ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
      ("model-effort-keys" "Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt" :later t)
+     ("hdr" "HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white" :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -40,12 +41,14 @@
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
      ("model-effort-keys" "done" "t-model-effort-keys")
+     ("hdr" "done" "t-hdr")
      ))
   (:id "t-terminal-tabs" :type :task :title "Terminal tabs: a shell per tab after the friends" :state :done
    :evidence ("tests/window/test_terminal.cpp" "tests/model: tlc_witness_add_before_friend, tlc_trace_faulty_close_rejected"))
   (:id "t-sprint-tab" :type :task :title "Sprint tab: nova-sprint's board, first and Cmd-1, pinned" :state :doing)
   (:id "t-model-effort-keys" :type :task :title "Hotkeys to choose a friend's model and effort" :state :todo)
-  (:id "t-upload" :type :task :title "Upload: the plus button sends a file to the selected AI's incoming/, images to the chat too" :state :todo)
+  (:id "t-hdr" :type :task :title "HDR and wide gamut: Prax's HDR swap chain, once its display pass keeps a see-through window's alpha" :state :todo)
+  (:id "t-upload":type :task :title "Upload: the plus button sends a file to the selected AI's incoming/, images to the chat too" :state :todo)
   (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
   (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :doing)
   (:id "t-friends" :type :task :title "Friends: a real conversation per tab over nova-bus, driven by the server" :state :todo)
