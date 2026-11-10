@@ -21,7 +21,9 @@ struct OverlayConfig {
 };
 
 // Turns the window that holds `nsView` into the overlay and registers the global hotkey that shows and hides it. Shows
-// it (and takes keyboard focus) if `show`. Call once. Returns false if the view has no window.
+// it (and takes keyboard focus) if `show`. Call once. Returns false if the view has no window. The overlay puts itself
+// away when nexus stops being the active app or the overlay stops being the key window (Command-Tab, a click on
+// another app, Mission Control); the next hotkey press shows it again.
 bool openOverlay(void* nsView, const OverlayConfig& config, bool show);
 
 // Hides the overlay: the hotkey's hide and Escape's. The window and everything in it are kept, and the keyboard goes

@@ -42,7 +42,8 @@ enum class Part : unsigned char {
 };
 
 // The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
-// area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale.
+// area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale. The
+// numbers are the kit's own, copied: Prax has no public query for a text area's height or padding (a request).
 float oneLineArea(float k) {
     return kLinePitch * k + 2 * 4 + 2;
 }
@@ -289,10 +290,31 @@ struct Builder {
     // the accent while focused and a focus ring, and offers no option to round it, quiet it or leave it out (the bare
     // style is not honoured by text areas), so the prompt's rounded box draws the frame and the area's decoration is
     // the default: no fill, no border, no ring. Its box (rows, padding, scrolling) and all its editing stay the kit's.
+    // The public way would be PrKitFieldStyle.bare, which prKitTextArea ignores (kit_input.cpp prKitTextArea sets no
+    // PartFlag_Bare): a request for Prax.
     void frameless(PrLayoutNode area) {
         PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, area));
         record.groups[PrLayoutGroup_Decoration] = 0;
         prLayoutTreeFrameSetStyle(tree, area, prLayoutStyleIntern(tree, &record));
+    }
+
+    // Lets the text under `node` break anywhere when nothing else breaks it (CSS overflow-wrap: anywhere), so a long URL
+    // or token wraps inside its box instead of running past it. Prax's layout has the option (PrLayoutFontStyle
+    // overflowWrap); the kit offers none (PrKitTextStyle wrap is wrap, nowrap or clip, and PrKitTextArea has no wrap
+    // option), so the node's font group is rewritten, as frameless rewrites the decoration.
+    void breakAnywhere(PrLayoutNode node) {
+        PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, node));
+        PrLayoutFontStyle font = prLayoutFontStyleRecord(tree, record.groups[PrLayoutGroup_Font]);
+        font.overflowWrap = PrTextOverflowWrap_Anywhere;
+        record.groups[PrLayoutGroup_Font] = prLayoutFontStyleIntern(tree, &font);
+        prLayoutTreeFrameSetStyle(tree, node, prLayoutStyleIntern(tree, &record));
+    }
+
+    // A transcript's text: a kit label that breaks anywhere.
+    PrLayoutNode text(PrLayoutNode parent, std::string_view s, PrKitTextStyle style) {
+        PrLayoutNode node = label(parent, s, style);
+        breakAnywhere(node);
+        return node;
     }
 
     // The kit's reorderable tab strip: a tab pressed and dragged past the kit's threshold is carried, an accent caret
@@ -321,8 +343,8 @@ struct Builder {
         }
         uint32_t from = 0;
         uint32_t to = 0;
-        if (prKitMoved(kit, row, &from, &to))
-            model.move_tab(from, to);
+        if (prKitMoved(kit, row, &from, &to) && model.move_tab(from, to) && view.moved)
+            view.moved();
     }
 
     // Each friend keeps its scroll while another shows, wherever its tab stands. Offsets count from the scroller's
@@ -354,14 +376,14 @@ struct Builder {
                 case EntryKind::Person: {
                     PrLayoutNode entry = element(column, Part::Entry);
                     PrLayoutNode bubble = element(entry, Part::Bubble);
-                    label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    text(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 }
                 case EntryKind::Friend:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                     break;
                 case EntryKind::Notice:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                    text(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
             }
         }
@@ -370,7 +392,7 @@ struct Builder {
         for (const std::string& text : tab.queue) {
             PrLayoutNode entry = element(column, Part::Entry);
             PrLayoutNode bubble = element(entry, Part::BubbleQueued);
-            label(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            this->text(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
             PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
             PrKitPlace place{};
             place.margin.top = 0.3f * kMetaSize * k();
@@ -380,7 +402,9 @@ struct Builder {
     }
 
     // The kit's text area has a fixed number of rows; the prompt grows with its text up to kPromptMaxLines, so the rows
-    // come from how tall the text was at the last layout. A workaround for the area's missing auto height.
+    // come from how tall the text was at the last layout. A workaround for the area's missing auto height. It assumes the
+    // area's first child holds its text (kit_input.cpp editedText); Prax has no public auto-height area or query for
+    // the area's text element (a request).
     uint32_t promptRows() {
         if (view.prompt == kPrLayoutNodeNone)
             return 1;
@@ -415,6 +439,12 @@ struct Builder {
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, &fill);
         frameless(edit);
+        // The area's text is the element the kit makes as its first child (kit_input.cpp editedText), which carries its
+        // own font group, so it is restyled there. No public call names that element: it is found in the last round's
+        // tree, whose node this round continues (pr/layout_frame.h), and only if this round created it under the area.
+        PrLayoutNode value = prLayoutNodeFirstChild(tree, edit);
+        if (value != kPrLayoutNodeNone && prLayoutTreeFrameParent(tree, value) == edit)
+            breakAnywhere(value);
         view.prompt = edit;
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
@@ -476,6 +506,8 @@ struct Builder {
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
+    // The palette is public, but which slot each widget draws with (the tab strip bg1, a hovered tab bg2, the strip's
+    // rule line2) is read from the kit's source, not documented: Prax has no public per-widget colours (a request).
     PrKitPalette& p = theme.palette;
     p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
     p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip

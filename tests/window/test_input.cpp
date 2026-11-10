@@ -1,6 +1,6 @@
 // The window's input, headless: the nexus view built over a Prax UI context and Studio Kit with no window and no GPU,
 // fed events as the window would feed them (through takeEvent), with the model checked after each. Frames carry a
-// made-up clock (from 1000 s), never the real one. Text is set in the system's fonts.
+// made-up clock (from 1000 s), never the real one. Text is set in the system's fonts, so these are functional tests.
 
 #include <cstdio>
 #include <string>
@@ -15,6 +15,7 @@
 
 #include "model.h"
 #include "style.h"
+#include "tab_order.h"
 #include "view.h"
 
 namespace {
@@ -61,6 +62,7 @@ struct Harness {
     double time = 1000;
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
     int stops = 0;      // stop requests (View::stop)
+    int saves = 0;      // tab order saves asked for after a move (View::moved)
 
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
@@ -78,6 +80,7 @@ struct Harness {
         view.look = &look;
         view.hide = [this] { ++hides; };
         view.stop = [this] { ++stops; };
+        view.moved = [this] { ++saves; };
         frame();
         frame();
     }
@@ -520,8 +523,10 @@ void dragMovesATab() {
     Harness h(fourFriends());
     h.commandDigit(2);                       // f2 active
     CHECK(h.model.active() == 1);
+    CHECK(h.saves == 0);
     h.dragTab(2, 0);
     CHECK(h.order() == "f3 f1 f2 f4");
+    CHECK(h.saves == 1);                     // a move asks for the order to be saved, once
     CHECK(h.active().name == "f2");          // the same friend, now at position 3
     CHECK(h.model.active() == 2);
     CHECK(h.hides == 0);
@@ -556,6 +561,29 @@ void clickBelowThresholdSelects() {
     h.frame();
     CHECK(h.order() == "f1 f2 f3 f4");
     CHECK(h.model.active() == 2);
+    CHECK(h.saves == 0);                     // a click moves nothing and saves nothing
+}
+
+// A click without any movement selects the tab.
+void clickSelectsATab() {
+    Harness h(fourFriends());
+    PrVec2 at = h.centre(h.tabs()[3]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerUp, at);
+    h.frame();
+    CHECK(h.model.active() == 3);
+    CHECK(h.order() == "f1 f2 f3 f4");
+    CHECK(h.saves == 0);
+}
+
+// A relaunch: the friends come in the saved order (tab_order.h), so Command-1 selects the first saved friend.
+void savedOrderOnRelaunch() {
+    std::vector<FriendInfo> saved = applyTabOrder(fourFriends(), {"f3", "f1"});
+    Harness h(saved);
+    CHECK(h.order() == "f3 f1 f2 f4");
+    h.commandDigit(2);
+    h.commandDigit(1);
+    CHECK(h.active().name == "f3");
 }
 
 // Escape during a drag cancels it: the order stays, the release drops nothing, and no hide is requested.
@@ -568,6 +596,7 @@ void escapeCancelsADrag() {
     h.frame();
     CHECK(h.order() == "f1 f2 f3 f4");
     CHECK(h.hides == 0);
+    CHECK(h.saves == 0);                     // a cancelled drag saves nothing
     CHECK(h.model.active() == 0);
     // After the drag, Escape hides again.
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -619,6 +648,7 @@ void dragWithOneTabDoesNothing() {
     CHECK(h.order() == "f1");
     CHECK(h.model.active() == 0);
     CHECK(h.active().draft == "x");
+    CHECK(h.saves == 0);
 }
 
 // All text under `node`, with each text node's text on its own.
@@ -738,6 +768,71 @@ void overlayKeepsAllButTheBackgroundOpaque() {
         CHECK(h.kit->looks[id].text.a == 1);
 }
 
+// The widest right edge, and the leftmost left edge, of `node` and everything under it, at the last layout.
+void extent(const Harness& h, PrLayoutNode node, float* left, float* right) {
+    PrRect b = h.bounds(node);
+    *left = std::min(*left, b.left);
+    *right = std::max(*right, b.right);
+    for (PrLayoutNode c = prLayoutNodeFirstChild(h.tree, node); c != kPrLayoutNodeNone;
+            c = prLayoutNodeNextSibling(h.tree, c))
+        extent(h, c, left, right);
+}
+
+bool within(const Harness& h, PrLayoutNode node, PrRect outer) {
+    float left = 1e9f;
+    float right = -1e9f;
+    extent(h, node, &left, &right);
+    if (left < outer.left - 0.5f || right > outer.right + 0.5f) {
+        std::fprintf(stderr, "  laid out %.1f..%.1f, room %.1f..%.1f\n", double(left), double(right),
+            double(outer.left), double(outer.right));
+        return false;
+    }
+    return true;
+}
+
+// No friends: no tabs and no prompt; the transcript shows the notice (why there are none) and nothing else.
+void noFriendsShowsTheNotice() {
+    Harness h(std::vector<FriendInfo>{});
+    h.view.notice = "No friends to show.\nnova-config listed no enabled friends";
+    h.frame();
+    h.frame();
+    CHECK(h.tabs().empty());
+    CHECK(h.view.prompt == kPrLayoutNodeNone);
+    std::vector<std::string> texts;
+    textsUnder(h, h.view.transcript, texts);
+    CHECK(texts.size() == 1 && texts[0] == h.view.notice);
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 1);
+    PrRect port = h.bounds(h.view.transcript);
+    CHECK(e.size() == 1 && within(h, e[0], port));
+    CHECK(e.size() == 1 && h.height(e[0]) > style::kLinePitch);    // two lines
+    // Keys change nothing and nothing fails: a digit, Enter, a text key.
+    h.commandDigit(1);
+    h.enter();
+    h.type("x");
+    CHECK(h.model.tab_count() == 0);
+}
+
+// A long URL or token with no break opportunity wraps inside the column, the bubble and the prompt.
+void longUnbrokenTextWraps() {
+    Harness h;
+    const std::string token = "https://example.com/" + std::string(580, 'x');
+    h.model.append(0, Entry{EntryKind::Friend, token});
+    h.model.append(0, Entry{EntryKind::Person, token});
+    h.model.set_draft(0, token);
+    h.frame();
+    h.frame();
+    PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 2);
+    for (PrLayoutNode entry : e)
+        CHECK(within(h, entry, column));
+    CHECK(within(h, h.view.prompt, h.bounds(h.view.promptBox)));
+    // It wrapped rather than shrank: each is several lines tall.
+    CHECK(e.size() == 2 && h.height(e[0]) > 3 * style::kLinePitch);
+    CHECK(e.size() == 2 && h.height(e[1]) > 3 * style::kLinePitch);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -815,12 +910,16 @@ int main() {
     escapeWhileComposingDoesNotHide();
     dragMovesATab();
     clickBelowThresholdSelects();
+    clickSelectsATab();
+    savedOrderOnRelaunch();
     escapeCancelsADrag();
     draftAndScrollStayWithTheirFriend();
     dragWithOneTabDoesNothing();
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     overlayKeepsAllButTheBackgroundOpaque();
+    longUnbrokenTextWraps();
+    noFriendsShowsTheNotice();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {

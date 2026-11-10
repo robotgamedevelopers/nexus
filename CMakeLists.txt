@@ -32,7 +32,7 @@ target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
 # The window's logic that runs without a window: the key bindings, and the friend list's parsing (and the command that
 # prints it).
-add_library(nexus_window_logic STATIC src/input.cpp src/friends.cpp)
+add_library(nexus_window_logic STATIC src/input.cpp src/friends.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
