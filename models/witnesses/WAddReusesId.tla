@@ -11,6 +11,7 @@ BrokenAdd ==
     /\ order' = [p \in 0 .. Count |-> IF p < Count THEN order[p] ELSE Reused]
     /\ active' = Count
     /\ nextId' = IF Free = {} THEN nextId + 1 ELSE nextId
+    /\ history' = Touch(history, Reused)
     /\ last' = DidAdd(Reused)
     /\ UNCHANGED <<friends, transcript, draft, queue>>
 

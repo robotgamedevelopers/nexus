@@ -44,7 +44,8 @@ struct Terminals {
     virtual void show(std::size_t id, PrLayoutNode parent) = 0;
     virtual void update(std::size_t id) = 0;    // services one that does not show this round
     virtual bool ended(std::size_t id) = 0;     // its shell exited and all of its output was read
-    virtual std::string title(std::size_t id) = 0;  // the title its shell set, or empty
+    // Its tab's label, or empty: the title its shell set, or while ssh runs in it the machine it reaches (remote.h).
+    virtual std::string title(std::size_t id) = 0;
     virtual void setTextScale(float k) = 0;     // every terminal's font, at the text scale k
 };
 
@@ -89,6 +90,8 @@ struct View {
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)
     std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
+    std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
+                                                // the first one included: saves it (tab_order.h)
     // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
     // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
     KitTabs pinnedTabs{prKitTabsCreate()};

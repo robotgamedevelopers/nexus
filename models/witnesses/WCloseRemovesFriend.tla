@@ -6,7 +6,8 @@ EXTENDS MCWindow
 BrokenClose(i) ==
     IF i \in Tabs
     THEN /\ order' = Removed(order, i)
-         /\ active' = ClosedIndex(active, i, Count)
+         /\ history' = Forget(history, At(i))
+         /\ active' = ClosedActive(active, i, order, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)

@@ -455,8 +455,8 @@ struct Builder {
         }
     }
 
-    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's the title its shell set, or
-    // "terminal".
+    // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
+    // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend)
             return tab.name;
@@ -695,7 +695,9 @@ struct Builder {
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
-        // terminal's, and does nothing on a friend's. Claimed like the keys above: a terminal leaves
+        // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the
+        // sprint tab. A terminal that cannot start leaves the tab that showed before. Claimed like the keys above: a
+        // terminal leaves
         // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
         if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
@@ -807,6 +809,8 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
         view.terminals->setTextScale(textScale(look.textSteps));
     if (view.board != nullptr)
         view.board->setTextScale(textScale(look.textSteps));
+    if (view.scaled)
+        view.scaled();
     return true;
 }
 

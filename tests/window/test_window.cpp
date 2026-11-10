@@ -2,6 +2,7 @@
 // runner. No OS, no clock, no window, no process.
 
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -274,7 +275,24 @@ void selectedTabTextRoundTrips() {
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
     CHECK(saved.kind == TabKind::Friend && saved.name == "zhi yǎ");
     model.add_terminal();
-    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Terminal);
+    CHECK(formatSelectedTab(model) == "nexus selected tab 2\nterminal 1\n");
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Terminal &&
+        saved.terminal == 1);
+    model.add_terminal();
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.terminal == 2);
+    CHECK(model.move_tab(4, 3));   // dragged in front of the other: now the first terminal
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.terminal == 1);
+    // Version 1 named a terminal by no place; version 2 always gives one.
+    CHECK(parseSelectedTab("nexus selected tab 1\nterminal\n", &saved, &error) && saved.kind == TabKind::Terminal &&
+        saved.terminal == 0);
+    CHECK(parseSelectedTab("nexus selected tab 2\nterminal 12\n", &saved, &error) && saved.terminal == 12);
+    for (const char* bad : {"terminal", "terminal ", "terminal 0", "terminal 01", "terminal -1", "terminal x",
+            "terminal 1234567"}) {
+        CHECK(!parseSelectedTab(std::string("nexus selected tab 2\n") + bad + "\n", &saved, &error));
+        CHECK(has(error, bad));
+    }
+    CHECK(!parseSelectedTab("nexus selected tab 1\nterminal 1\n", &saved, &error) && has(error, "terminal 1"));
+    CHECK(!parseSelectedTab("nexus selected tab 3\nsprint\n", &saved, &error) && has(error, "first line"));
     CHECK(!parseSelectedTab("friend alex\n", &saved, &error) && has(error, "first line"));
     CHECK(!parseSelectedTab("nexus selected tab 1\n", &saved, &error) && has(error, "no tab"));
     CHECK(!parseSelectedTab("nexus selected tab 1\nwindow\n", &saved, &error) && has(error, "window"));
@@ -307,8 +325,8 @@ void selectedTabComesBackByIdentity() {
     CHECK(loadSelectedTab(selection.store(), reordered, &warning) == 3);
 }
 
-// Nothing saved, a terminal saved (terminals do not survive a quit), a friend no longer in the list, or a file that is
-// not a selection: the sprint tab. Only the bad file warns.
+// Nothing saved, a terminal saved that did not come back, a version 1 terminal (which names none), a friend no longer
+// in the list, or a file that is not a selection: the sprint tab. Only the bad file warns.
 void selectedTabFallsBackToTheSprintTab() {
     MemoryStore selection;
     Model model(named({"a", "b"}), true);
@@ -318,6 +336,11 @@ void selectedTabFallsBackToTheSprintTab() {
     std::string error;
     CHECK(saveSelectedTab(selection.store(), model, &error));
     Model again(named({"a", "b"}), true);
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
+    again.add_terminal();
+    selection.text = "nexus selected tab 1\nterminal\n";
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
+    selection.text = "nexus selected tab 2\nterminal 2\n";
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     selection.text = "nexus selected tab 1\nfriend gone\n";
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
@@ -331,9 +354,145 @@ void selectedTabFallsBackToTheSprintTab() {
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
 }
 
+void textScaleTextRoundTrips() {
+    int steps = 99;
+    std::string error;
+    for (int s : {0, 1, -1, 5, -5, 10, 123456, -123456}) {
+        CHECK(parseTextScale(formatTextScale(s), &steps, &error) && steps == s);
+    }
+    CHECK(formatTextScale(-3) == "nexus text scale 1\n-3\n");
+    CHECK(parseTextScale("nexus text scale 1\n4", &steps, &error) && steps == 4);   // no final line feed
+    CHECK(!parseTextScale("4\n", &steps, &error) && has(error, "first line") && steps == 0);
+    CHECK(!parseTextScale("nexus text scale 2\n4\n", &steps, &error) && has(error, "first line"));
+    CHECK(!parseTextScale("nexus text scale 1\n", &steps, &error) && has(error, "no scale"));
+    CHECK(!parseTextScale("nexus text scale 1", &steps, &error) && has(error, "no scale"));
+    for (const char* bad : {"1.5", "+2", "-", "two", " 2", "2 ", "1234567", "--1"}) {
+        CHECK(!parseTextScale(std::string("nexus text scale 1\n") + bad + "\n", &steps, &error));
+        CHECK(has(error, "whole number") && has(error, bad));
+    }
+    CHECK(!parseTextScale(std::string("nexus text scale 1\n2\0\n", 22), &steps, &error) && has(error, "NUL"));
+}
+
+// Nothing saved: the default scale, and no warning. A saved scale comes back; one outside the range is clamped into it
+// and says so; a bad or unreadable file warns and gives the default; a failed save names the file and why.
+void textScaleLoadsClampsAndWarns() {
+    MemoryStore mem;
+    std::string warning;
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0 && warning.empty());
+    std::string error;
+    CHECK(saveTextScale(mem.store(), 3, &error) && mem.text == "nexus text scale 1\n3\n");
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 3 && warning.empty());
+    CHECK(saveTextScale(mem.store(), -5, &error) && loadTextScale(mem.store(), -5, 10, &warning) == -5);
+    CHECK(warning.empty());
+    mem.text = "nexus text scale 1\n40\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 10);
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "40") && has(warning, "using 10"));
+    mem.text = "nexus text scale 1\n-9\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == -5 && has(warning, "using -5"));
+    mem.text = "nexus text scale 1\nbig\n";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0);
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "whole number") && has(warning, "deleting it resets"));
+    mem.readError = "it cannot be read";
+    CHECK(loadTextScale(mem.store(), -5, 10, &warning) == 0 && has(warning, "cannot be read"));
+    mem.writeError = "Permission denied";
+    CHECK(!saveTextScale(mem.store(), 1, &error));
+    CHECK(has(error, "text scale") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
+// The terminal tabs' directories, in the order the tabs stand, among friends and behind the sprint tab; a directory a
+// line cannot hold, or none, is the home directory.
+void terminalDirectoriesFollowTheStrip() {
+    Model model(named({"a", "b"}), true);
+    const std::size_t one = model.add_terminal();
+    const std::size_t two = model.add_terminal();
+    const std::size_t three = model.add_terminal();
+    std::map<std::size_t, std::string> dirs{{one, "/one"}, {two, std::string("/t\nwo")}, {three, ""}};
+    auto of = [&](std::size_t id) { return dirs[id]; };
+    CHECK(terminalDirectories(model, of) == (std::vector<std::string>{"/one", "", ""}));
+    dirs[two] = std::string("/t\0o", 4);
+    dirs[three] = "/a b/three";
+    CHECK(model.move_tab(5, 3));
+    CHECK(terminalDirectories(model, of) == (std::vector<std::string>{"/a b/three", "/one", ""}));
+    CHECK(terminalDirectories(Model(named({"a"}), true), of).empty());
+}
+
+void terminalsTextRoundTrips() {
+    std::vector<std::string> dirs;
+    std::string error;
+    const std::vector<std::string> saved{"/Users/x/src", "", "/a b/ünï", "/"};
+    CHECK(formatTerminals(saved) == "nexus terminals 1\nterminal /Users/x/src\nterminal\nterminal /a b/ünï\nterminal /\n");
+    CHECK(parseTerminals(formatTerminals(saved), &dirs, &error) && dirs == saved);
+    CHECK(parseTerminals(formatTerminals({}), &dirs, &error) && dirs.empty());
+    CHECK(parseTerminals("nexus terminals 1\n\nterminal /x", &dirs, &error) &&   // blank lines; no final line feed
+        dirs == (std::vector<std::string>{"/x"}));
+    CHECK(!parseTerminals("terminal /x\n", &dirs, &error) && has(error, "first line") && dirs.empty());
+    CHECK(!parseTerminals("nexus terminals 2\n", &dirs, &error) && has(error, "first line"));
+    for (const char* bad : {"terminal ", "terminals /x", "/x", "friend a"}) {
+        CHECK(!parseTerminals(std::string("nexus terminals 1\nterminal /ok\n") + bad + "\n", &dirs, &error));
+        CHECK(has(error, bad) && dirs.empty());
+    }
+    CHECK(!parseTerminals(std::string("nexus terminals 1\nterminal /a\0b\n", 32), &dirs, &error) && has(error, "NUL"));
+}
+
+// Nothing saved: no terminals, and no warning. Saved terminals come back in order; more than the most a launch reopens
+// are cut, with a warning; a bad or unreadable file warns and reopens none; a failed save names the file and why.
+void terminalsLoadAndFallBack() {
+    MemoryStore mem;
+    std::string warning;
+    CHECK(loadTerminals(mem.store(), &warning).empty() && warning.empty());
+    std::string error;
+    CHECK(saveTerminals(mem.store(), {"/b", "", "/a"}, &error));
+    CHECK(loadTerminals(mem.store(), &warning) == (std::vector<std::string>{"/b", "", "/a"}) && warning.empty());
+    mem.text = "nexus terminals 1\n";
+    for (std::size_t i = 0; i < kMaxSavedTerminals + 3; ++i)
+        mem.text += "terminal /" + std::to_string(i) + "\n";
+    std::vector<std::string> many = loadTerminals(mem.store(), &warning);
+    CHECK(many.size() == kMaxSavedTerminals && many.front() == "/0" && many.back() == "/31");
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "35") && has(warning, "first 32"));
+    mem.text = "nexus terminals 1\nshell /x\n";
+    CHECK(loadTerminals(mem.store(), &warning).empty());
+    CHECK(has(warning, "/fake/tab-order.txt") && has(warning, "shell /x") && has(warning, "deleting it reopens none"));
+    mem.readError = "it cannot be read";
+    CHECK(loadTerminals(mem.store(), &warning).empty() && has(warning, "cannot be read"));
+    mem.writeError = "Permission denied";
+    CHECK(!saveTerminals(mem.store(), {"/x"}, &error));
+    CHECK(has(error, "terminals") && has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
+// A relaunch as main.cpp runs it: the friends, the saved terminals added in order, then the saved selection. A selected
+// terminal comes back by its place among the terminals, wherever the friends now stand.
+void selectedTerminalComesBackByPlace() {
+    MemoryStore terminals;
+    MemoryStore selection;
+    Model model(named({"a", "b"}), true);
+    const std::size_t one = model.add_terminal();
+    const std::size_t two = model.add_terminal();
+    model.add_terminal();
+    std::map<std::size_t, std::string> dirs{{one, "/one"}, {two, "/two"}};
+    CHECK(model.select_tab(4));
+    std::string error;
+    CHECK(saveTerminals(terminals.store(), terminalDirectories(model, [&](std::size_t id) { return dirs[id]; }), &error));
+    CHECK(saveSelectedTab(selection.store(), model, &error));
+    std::string warning;
+    Model again(named({"a", "b", "c"}), true);
+    const std::vector<std::string> reopened = loadTerminals(terminals.store(), &warning);
+    CHECK(reopened == (std::vector<std::string>{"/one", "/two", ""}));
+    for (std::size_t k = 0; k < reopened.size(); ++k)
+        again.add_terminal();
+    CHECK(again.tab_count() == 7 && again.tab(5).kind == TabKind::Terminal);
+    CHECK(loadSelectedTab(selection.store(), again, &warning) == 5 && warning.empty());
+    CHECK(again.select_tab(5));
+}
+
 } // namespace
 
 int main() {
+    terminalDirectoriesFollowTheStrip();
+    terminalsTextRoundTrips();
+    terminalsLoadAndFallBack();
+    selectedTerminalComesBackByPlace();
+    textScaleTextRoundTrips();
+    textScaleLoadsClampsAndWarns();
     selectedTabTextRoundTrips();
     selectedTabComesBackByIdentity();
     selectedTabFallsBackToTheSprintTab();

@@ -12,6 +12,7 @@ This file covers the window's model. The server's durable state has its own dire
 - `order`: the tabs' order, each position's tab id. A friend tab's id is its friend's; a terminal tab's id is one handed out by `AddTerminal`. Positions count from 0, as in the code;
 - `nextId`: the next id `AddTerminal` hands out. Ids only grow, so no id is ever used twice;
 - `active`: the active tab's position, 0 when there are no tabs;
+- `history`: the selection history, `Model::selection_history()`: the ids of the tabs selected, most recent last, each once, open tabs only. The tab active at the start is its first entry; select and add put their tab's id at its end, and close takes the closed tab's id out. Closing the active tab makes the last id left in it active, the tab selected before it, whatever its kind; with none left, the rule before it (the tab now at its position, or the last). It is kept for the run only;
 - `transcript`: each friend's entries, kinds `Person`, `Friend`, `Notice`;
 - `draft`: each friend's unsent text;
 - `queue`: each friend's prompts held for later, oldest first. The queue is apart from the transcript: it is the state the server will hold, and no operation takes from it yet (delivery belongs to a later layer).
@@ -37,6 +38,9 @@ All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, f
 | `IdsHandedOut` | invariant | every tab's id is below `nextId` |
 | `ZonesOrdered` | invariant | the tabs stand in zone order: no friend before the sprint tab, no terminal before a friend |
 | `SprintFirst` | invariant | with the sprint tab, it is always there, always at position 0, always with its one id |
+| `HistoryOpen` | invariant | the history holds only ids of tabs that stand: never a closed tab's, never one not handed out |
+| `HistoryOnce` | invariant | the history holds each id once |
+| `HistoryEndsActive` | invariant | while there are tabs, the history's last id is the active tab's |
 | `SprintTakesNoText` | action | set_draft, send, queue and append return false on the sprint tab |
 | `SprintNeverMoves` | action | a move from or to the sprint tab's position changes neither the order nor `active` |
 | `SprintNeverCloses` | action | close returns false on the sprint tab |
@@ -60,7 +64,9 @@ All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, f
 | `NextIdGrows` | action | `nextId` never goes down |
 | `CloseRemovesExactly` | action | close returns true exactly for a terminal, and removes that tab and no other, the rest in their order |
 | `CloseKeepsFriends` | action | a close changes no friend's transcript, draft or queue |
-| `CloseActiveRule` | action | after a close the tab that was active stays active; if it was the one closed, the tab now at its position, else the last, else none |
+| `CloseActiveRule` | action | after a close the tab that was active stays active; if it was the one closed, the last id left in the history (the tab selected before it); with none left, the tab now at its position, else the last, else none |
+| `SelectMovesToEnd` | action | a select that returns true, and every add, puts its tab's id at the end of the history and takes it out of where it stood |
+| `CloseForgets` | action | a close that returns true takes the closed tab's id out of the history, and nothing else |
 | `RefusedChangesNothing` | action | an operation that returns false changes no model state (a refused move among them) |
 | `TranscriptsOnlyGrow` | action | entries are only appended: existing entries never change, move or go |
 | `QueuesOnlyGrow` | action | queued prompts are only appended: they never change, move or go |
@@ -70,13 +76,16 @@ All-whitespace means every byte is an ASCII space, tab, newline, vertical tab, f
 
 `MCWindow.tla` gives the constants values and bounds transcript and queue length (`MaxLen`, a state constraint). The drafts are `""`, `" "`, `" \t\n"` and `"hi"` (one witness adds `"yo"`, so that an order of queued prompts shows); the appended entries are a friend's reply, an empty notice and an all-whitespace `Person` entry (append takes any entry). The checked instances use fewer (`MCDrafts3`: `""`, `" "`, `"hi"`; on three tabs `MCAppendEntries3`: the reply only), because every order multiplies the states: the spec does not compute whitespace, so a second all-whitespace draft adds only states. Positions run to one past the last tab, for both of a move's. TLC tells states apart by the model variables alone (`VIEW ModelView`), which is sound because no action reads `last` and no property reads it unprimed.
 
+Every order of the selection history is a state of its own, so the history multiplies the instances with many tabs. The times are the studio's in a login session; CI's runners take about four times as long.
+
 | Config | Instance |
 |---|---|
-| `MCWindow.cfg` | the sprint tab, two friends and up to two terminals (`MaxTerms`, a bound on `nextId`), transcripts and queues up to 1 entry: 20,088 distinct states, about 8 s |
-| `MCWindowNoSprint.cfg` | the same without the sprint tab |
-| `MCWindow3Sprint.cfg` | the sprint tab, three friends in all six orders and up to one terminal, no entries: 2,106 distinct states, about 1 s |
-| `MCWindow3.cfg` | three friends in all six orders, no sprint tab, no terminals, transcripts and queues up to 1 entry: 104,976 distinct states, about 28 s on two workers, 8 s on eight |
-| `MCWindowLong.cfg` | two friends in both orders, no sprint tab, no terminals, transcripts and queues up to 2 entries: 142,884 distinct states, about 28 s on two workers, 8 s on eight |
+| `MCWindowSprint.cfg` | the sprint tab, two friends and up to two terminals (`MaxTerms`, a bound on `nextId`), no entries: 8,910 distinct states, about 7 s on two workers (it runs on eight) |
+| `MCWindow.cfg` | the same with transcripts and queues up to 1 entry: 320,760 distinct states, about 37 s on eight workers (nightly) |
+| `MCWindowNoSprint.cfg` | two friends and up to two terminals without the sprint tab, entries up to 1: 60,264 distinct states, about 5 s on eight workers |
+| `MCWindow3Sprint.cfg` | the sprint tab, three friends in all six orders and up to one terminal, no entries, two drafts (`MCDrafts2`: empty and text): 14,880 distinct states, about 12 s on two workers (it runs on eight) |
+| `MCWindow3.cfg` | three friends in all six orders, no sprint tab, no terminals, transcripts and queues up to 1 entry: 384,912 distinct states, about 27 s on eight workers (nightly) |
+| `MCWindowLong.cfg` | two friends in both orders, no sprint tab, no terminals, transcripts and queues up to 2 entries: 214,326 distinct states, about 12 s on eight workers (nightly) |
 | `MCWindowEmpty.cfg` | the sprint tab, no friends, up to two terminals: added, moved among themselves and closed |
 
 ## Reversed witnesses
@@ -114,7 +123,13 @@ Each module in `witnesses/` extends `MCWindow` and passes one broken action to `
 | `WCloseRemovesFriend` | close removes a friend's tab too | `NoTabLost` |
 | `WCloseWrongTab` | close removes the last tab instead of the one named | `CloseRemovesExactly` |
 | `WCloseActivePastEnd` | closing the active last tab leaves `active` past the end | `ActiveValid` |
-| `WCloseActiveWrong` | closing the active tab makes the tab before it active | `CloseActiveRule` |
+| `WCloseActiveWrong` | closing the active tab makes the tab before it in the strip active | `CloseActiveRule` |
+| `WCloseOldRule` | closing the active tab ignores the history: the tab now at its position, or the last, so closing the last terminal goes back to the last friend (with the sprint tab) | `CloseActiveRule` |
+| `WCloseKeepsHistory` | close leaves the closed tab's id in the history | `HistoryOpen` |
+| `WCloseForgetsAll` | close empties the whole history | `CloseForgets` |
+| `WSelectKeepsPlace` | select records its tab only the first time, so a tab selected again keeps its old place | `SelectMovesToEnd` |
+| `WSelectAppendsAgain` | select appends its tab's id without taking it out of where it stood | `HistoryOnce` |
+| `WSelectSkipsHistory` | select never records its tab | `HistoryEndsActive` |
 | `WCloseDropsDraft` | close also clears every friend's draft | `CloseKeepsFriends` |
 | `WAddReusesId` | add hands out the lowest id not in use, so a closed id comes back | `AddFreshId` |
 | `WAddAmongTerminals` | add puts the new terminal in front of the last terminal | `AddAppends` |
@@ -132,11 +147,32 @@ Every property in the table above has a witness.
 
 ## The binding: code traces checked against the spec
 
-`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--no-sprint] [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close | --faulty-sprint-move | --faulty-sprint-close] <out.tla>`). The model starts with the sprint tab, as the window's does, unless `--no-sprint`. The random numbers come from the seed alone. Each step calls one operation (adding and closing terminals among them, at most three open), with positions in range and two past the last tab (a move draws both, so moves across zones are tried and refused), drafts that are empty, all whitespace (including tab, newline, vertical tab, carriage return and form feed), text with quotes and backslashes, and text with whitespace before, after and around it, and entries of every kind. Two kinds of step repeat the last accepted send or queue with the same text to the same tab (a `set_draft`, then the `send` or `queue`), so that equal sends follow each other and queues grow long; the walk prints the longest queue (dozens of prompts at 1000 steps). The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it: the order (each position's `Tab::id`) and, by position, each tab's kind, friend, draft, transcript and queue.
+`tests/model/trace_walk.cpp` drives the real `nexus::Model` with a seeded random walk (`trace_walk <seed> <steps> <friends> [--no-sprint] [--faulty | --faulty-queue | --faulty-move | --faulty-queue-cap | --faulty-send-trim | --faulty-send-dedup | --faulty-close | --faulty-sprint-move | --faulty-sprint-close | --faulty-close-fallback] <out.tla>`). The model starts with the sprint tab, as the window's does, unless `--no-sprint`. The random numbers come from the seed alone. Each step calls one operation (adding and closing terminals among them, at most three open), with positions in range and two past the last tab (a move draws both, so moves across zones are tried and refused), drafts that are empty, all whitespace (including tab, newline, vertical tab, carriage return and form feed), text with quotes and backslashes, and text with whitespace before, after and around it, and entries of every kind. Two kinds of step repeat the last accepted send or queue with the same text to the same tab (a `set_draft`, then the `send` or `queue`), so that equal sends follow each other and queues grow long; the walk prints the longest queue (dozens of prompts at 1000 steps). The walk writes `WindowTraceData.tla`: the arguments' domains and `Trace`, one record per step, holding the operation, its arguments, the return value and the model's whole state after it: the order (each position's `Tab::id`), the selection history and, by position, each tab's kind, friend, draft, transcript and queue.
 
-`WindowTrace.tla` instantiates `Window` with those domains. Each of its steps takes the `Window` action the record names, with the record's arguments, and the invariant `TraceMatches` requires the spec's state and return value to equal the code's: the order equal, and the tab at each position holding the state of the friend the spec has there. A step whose arguments lie outside the spec's domains has no successor and TLC reports a deadlock. The property `WindowSpec` checks the whole behaviour against `Window`'s `Init` and `Next`, and every `Window` property is checked on the trace too.
+`WindowTrace.tla` instantiates `Window` with those domains. Each of its steps takes the `Window` action the record names, with the record's arguments, and the invariant `TraceMatches` requires the spec's state and return value to equal the code's: the order, the active position and the history equal, and the tab at each position holding the state of the friend the spec has there. A step whose arguments lie outside the spec's domains has no successor and TLC reports a deadlock. The property `WindowSpec` checks the whole behaviour against `Window`'s `Init` and `Next`, and every `Window` property is checked on the trace too.
 
-The binding is shown to fail, nine times: `--faulty-sprint-move` walks a subclass whose `move_tab` takes the sprint tab among the friends, `--faulty-sprint-close` one whose `close_tab` closes it; `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, `--faulty-move` one whose `move_tab` leaves `active` at the old position, `--faulty-queue-cap` one whose queue drops its oldest prompt past four, `--faulty-send-trim` one whose `send` strips trailing spaces, `--faulty-send-dedup` one whose `send` of the text just sent appends nothing, and `--faulty-close` one whose `close_tab` also removes a friend's tab. TLC must report `TraceMatches` violated at the first step where each fault shows.
+The binding is shown to fail, ten times: `--faulty-close-fallback` walks a subclass whose `close_tab` of the active tab ignores the history and keeps the rule before it (rejected at the first close of an active tab where the two rules differ); `--faulty-sprint-move` walks a subclass whose `move_tab` takes the sprint tab among the friends, `--faulty-sprint-close` one whose `close_tab` closes it; `--faulty` walks a test-only subclass whose `send` accepts a draft that is all whitespace but not empty, `--faulty-queue` one whose `queue` also puts the draft in the transcript, `--faulty-move` one whose `move_tab` leaves `active` at the old position, `--faulty-queue-cap` one whose queue drops its oldest prompt past four, `--faulty-send-trim` one whose `send` strips trailing spaces, `--faulty-send-dedup` one whose `send` of the text just sent appends nothing, and `--faulty-close` one whose `close_tab` also removes a friend's tab. TLC must report `TraceMatches` violated at the first step where each fault shows.
+
+## TabLabel.tla: a terminal tab's label across ssh sessions
+
+`TabLabel.tla` is `nexus::TabLabel` in `src/remote.h`: one terminal tab's label. Once a frame the window observes the terminal: the remote label of its foreground process (the fleet machine its ssh reaches, its host if not a fleet machine, or none when the foreground is not ssh), the program's title, and `late`, whether the frame comes after the tail of the last session to end (the code compares the frame's time with that end plus `kSessionTailSeconds`). Its state is the code's members: `remote`, `before` (the title at the last observation outside sessions and masks), `after` (the title a session left), `masking` and `tail`; `last` records the observation. `Label(t)` is the label drawn when the title is `t`.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | every variable has its type |
+| `TailMasks` | invariant | a tail is part of a mask |
+| `SessionNamed` | invariant | while a session is seen, the label is its remote label, whatever the title |
+| `TitleShows` | invariant | outside sessions and masks, the label is the title |
+| `SessionNamedAtOnce` | action | an observation of a session names it at once |
+| `EndRestores` | action | the observation that sees a session end gives back the label from before it, whatever title it left |
+| `TailRestores` | action | in the session's tail the label stays the one from before, whatever title arrives |
+| `MaskEnds` | action | past the tail, the first title other than the one the session left is shown: the label never sticks |
+| `BeforeIsOwn` | action | the label to return to only ever changes to a title observed outside sessions and masks |
+| `BeforeIsLatest` | action | and every such observation takes it |
+
+`TabLabel.cfg` checks them on two remote labels and three titles (295 states). Its witnesses: `WLabelNoMask` (a session's end shows the title it left; `EndRestores`), `WLabelMaskSticks` (the mask never lifts; `MaskEnds`), `WLabelBeforeAtStart` (the label to return to is the title at a session's first observation, which ssh may already have set; `BeforeIsOwn`), `WLabelNoTail` (no tail, so a last title read after the process is seen gone shows; `TailRestores`).
+
+`tests/model/label_walk.cpp` (`label_walk <seed> <steps> <remotes> [--faulty-before] <out.tla>`) drives the real `TabLabel` with a seeded walk on a made-up clock (a frame or a pause a step): sessions start, run, switch and end, titles change, and frames fall inside tails and after them. It writes `TabLabelTraceData.tla`: one record per observation with its arguments, the code's state after it and the label the code draws for every title. `TabLabelTrace.tla` takes `Observe` with each record's arguments and `TraceMatches` requires the spec's state and every label to equal the code's; every `TabLabel` property is checked on the trace. Four traces run (seeds 1 to 3 on two remotes, seed 4 on three), and `--faulty-before`, which feeds the code an unrecorded observation before each session's first (the code then takes the label to return to from a title ssh may have set), must be rejected with `TraceMatches` violated.
 
 ## Link.tla: what nexus adds on top of mosh
 
@@ -219,7 +255,7 @@ ctest --test-dir build -L unit
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -L model -j "$(sysctl -n hw.ncpu)"
 ```
 
-`-L model` matches two labels: `model` runs four instances (`MCWindow`, `MCWindowEmpty`, `MCWindowNoSprint`, `MCWindow3Sprint`), the forty-two witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the nine faulty traces; `model_nightly` runs the two largest instances, `MCWindow3` and `MCWindowLong`. CI's per-commit job runs `-L '^model$'` and the nightly workflow `-L '^model_nightly$'`: every property is still checked on every commit, on the smaller instances. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on the four instances with tens of thousands of states, which ctest counts as eight of its `-j` slots) and a 60 second cap (300 on the nightly instances); its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
+`-L model` matches two labels: `model` runs four instances (`MCWindowSprint`, `MCWindowEmpty`, `MCWindowNoSprint`, `MCWindow3Sprint`), the forty-eight witnesses, nine code traces (with the sprint tab first: seeds 1 to 5 on three friends, seed 6 on two friends and seed 8 on one, each 1000 steps, and seed 7 with no friends; without it: seed 9 on three friends), and the ten faulty traces; `model_nightly` runs the three largest instances, `MCWindow`, `MCWindow3` and `MCWindowLong`. CI's per-commit job runs `-L '^model$'` and the nightly workflow `-L '^model_nightly$'`: every property is still checked on every commit, on the smaller instances. Each TLC run gets its own directory under `build/tests/model/tlc/<test>/`, a copy of the models, its own `java.io.tmpdir`, two workers (eight on every instance but `MCWindowEmpty`, which ctest counts as eight of its `-j` slots) and a 60 second cap (300 on the nightly instances); its log is `tlc.log` there, and a trace run leaves its `WindowTraceData.tla` beside it.
 
 One check by hand:
 

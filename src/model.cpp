@@ -44,6 +44,17 @@ Model::Model(const std::vector<FriendInfo>& friends, bool sprint) {
     for (std::size_t f = 0; f < friends.size(); ++f)
         tabs_.push_back(Tab{f, friends[f].name, friends[f].model, {}, {}, {}, TabKind::Friend});
     next_id_ = friends.size() + (sprint ? 1 : 0);
+    if (!tabs_.empty())
+        history_.push_back(tabs_[0].id);
+}
+
+void Model::touch(std::size_t id) {
+    history_.erase(std::remove(history_.begin(), history_.end(), id), history_.end());
+    history_.push_back(id);
+}
+
+const std::vector<std::size_t>& Model::selection_history() const {
+    return history_;
 }
 
 bool Model::friend_tab(std::size_t i) const {
@@ -66,6 +77,7 @@ bool Model::select_tab(std::size_t i) {
     if (i >= tabs_.size())
         return false;
     active_ = i;
+    touch(tabs_[i].id);
     return true;
 }
 
@@ -129,18 +141,27 @@ std::size_t Model::add_terminal() {
     const std::size_t id = next_id_++;
     tabs_.push_back(Tab{id, {}, {}, {}, {}, {}, TabKind::Terminal});
     active_ = tabs_.size() - 1;
+    touch(id);
     return id;
 }
 
-// Window.tla's CloseTab: the order is Removed, and active_ is ClosedIndex.
+// Window.tla's CloseTab: the order is Removed, the history Forget, and active_ ClosedActive: the tab of the last id left
+// in the history if the closed tab was active, else (and with no id left) ClosedIndex.
 bool Model::close_tab(std::size_t i) {
     if (i >= tabs_.size() || tabs_[i].kind != TabKind::Terminal)
         return false;
+    const std::size_t id = tabs_[i].id;
     tabs_.erase(tabs_.begin() + static_cast<std::ptrdiff_t>(i));
-    if (active_ > i)
+    history_.erase(std::remove(history_.begin(), history_.end(), id), history_.end());
+    if (active_ == i && !history_.empty()) {
+        const std::size_t back = history_.back();
+        const auto at = std::find_if(tabs_.begin(), tabs_.end(), [back](const Tab& t) { return t.id == back; });
+        active_ = static_cast<std::size_t>(at - tabs_.begin());
+    } else if (active_ > i) {
         --active_;
-    else if (active_ == i && active_ == tabs_.size())
+    } else if (active_ == i && active_ == tabs_.size()) {
         active_ = tabs_.empty() ? 0 : tabs_.size() - 1;
+    }
     return true;
 }
 

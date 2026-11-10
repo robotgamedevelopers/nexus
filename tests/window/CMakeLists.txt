@@ -5,6 +5,14 @@ target_link_libraries(nexus_window_tests PRIVATE nexus_window_logic)
 add_test(NAME window_unit COMMAND nexus_window_tests)
 set_tests_properties(window_unit PROPERTIES LABELS unit)
 
+# A terminal tab's label in ssh (src/remote.h): the destination's parsing and matching, the machine list through a fake
+# command runner, and the label across sessions. Pure logic.
+add_executable(nexus_remote_tests test_remote.cpp)
+target_compile_options(nexus_remote_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_remote_tests PRIVATE nexus_window_logic)
+add_test(NAME remote_unit COMMAND nexus_remote_tests)
+set_tests_properties(remote_unit PROPERTIES LABELS unit)
+
 # The sprint tab's logic (src/sprint.h): the board's address from the sprint's record through a fake command runner,
 # event routing, and the page's prelude and style as text. Pure logic.
 add_executable(nexus_sprint_tests test_sprint.cpp)
@@ -56,9 +64,16 @@ set_tests_properties(window_input PROPERTIES LABELS functional TIMEOUT 60)
 
 # A terminal tab with a real shell on a pseudoterminal: a functional test (a process, real time). Its working directory
 # is its own, under the build tree.
+# A stand-in ssh, named ssh in a directory of its own, connects nowhere (fake_ssh.cpp): the test puts it first on the
+# PATH.
+add_executable(nexus_fake_ssh fake_ssh.cpp)
+target_compile_options(nexus_fake_ssh PRIVATE ${NEXUS_WARNINGS})
+set_target_properties(nexus_fake_ssh PROPERTIES OUTPUT_NAME ssh RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fake_ssh)
 add_executable(nexus_terminal_tests test_terminal.cpp)
 target_compile_options(nexus_terminal_tests PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_terminal_tests PRIVATE nexus_terminals)
+add_dependencies(nexus_terminal_tests nexus_fake_ssh)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
-add_test(NAME window_terminal COMMAND nexus_terminal_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
+add_test(NAME window_terminal COMMAND nexus_terminal_tests $<TARGET_FILE_DIR:nexus_fake_ssh>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
 set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)

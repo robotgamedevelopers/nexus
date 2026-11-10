@@ -11,6 +11,7 @@ BrokenAdd ==
     /\ order' = [p \in 0 .. Count |-> IF p < Slot THEN order[p] ELSE IF p = Slot THEN nextId ELSE order[p - 1]]
     /\ active' = Slot
     /\ nextId' = nextId + 1
+    /\ history' = Touch(history, nextId)
     /\ last' = DidAdd(nextId)
     /\ UNCHANGED <<friends, transcript, draft, queue>>
 
