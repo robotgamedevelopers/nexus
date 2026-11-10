@@ -13,10 +13,13 @@
 #
 # Builds use every core and tests run one job per core (`sysctl -n hw.ncpu`). Caches live outside the workspace, under
 # ~/Library/Caches/nexus-ci on the runner's machine, so a build is from scratch but Prax is not recompiled each time:
-#   ccache/                    compiled objects, shared by the machine's runners (ccache is safe to share), when the
-#                              machine has ccache; CCACHE_BASEDIR makes the runners' different workspaces hit
-#   <runner>/lto/              the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
-#                              everything it pulls in unless this cache holds it)
+#   ccache/                    compiled objects, when the machine has ccache; CCACHE_BASEDIR makes the runners'
+#                              different workspaces hit (it compiles with relative paths, so objects are identical)
+#   lto/                       the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
+#                              everything it pulls in unless this cache holds it); it hits across workspaces only
+#                              because ccache made the objects identical
+# Both are shared by the machine's runners: ccache and LLVM's LTO cache write each entry to a temporary file and rename
+# it into place, so concurrent jobs are safe.
 #   <runner>/prax-downloads/   Prax's download cache (PR_DOWNLOAD_DIR). One per runner, because Prax writes a download
 #                              straight to its final path and two jobs fetching one file at once corrupt it; a runner
 #                              runs one job at a time.
@@ -53,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           caches="$HOME/Library/Caches/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
           {
             echo "NEXUS_CACHES=$caches"
             echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
@@ -75,7 +78,7 @@ jobs:
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
-            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/$RUNNER_NAME/lto"
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto"
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
