@@ -75,10 +75,16 @@ constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in t
 constexpr float kQueuedFill = 0.5f;
 constexpr float kQueuedInk = 0.55f;
 
+// The queued bubble's fill: kBubble at kQueuedFill over kBackground, mixed here so that the bubble stays opaque in the
+// see-through overlay (only the window background and the tab strip let what is behind show through).
+constexpr PrColor kQueuedBubble = PrColor{kBackground.r + (kBubble.r - kBackground.r) * kQueuedFill,
+    kBackground.g + (kBubble.g - kBackground.g) * kQueuedFill, kBackground.b + (kBubble.b - kBackground.b) * kQueuedFill,
+    1};
+
 // The overlay window (macOS, the default; --windowed gives a normal opaque window instead): borderless, over the whole
 // screen that has the pointer (menu bar included), above other apps and their fullscreen Spaces, shown and hidden by a
 // global hotkey, in the manner of iTerm2's hotkey window.
-constexpr float kOverlayOpacity = 0.88f;      // alpha of the window background; what is behind shows through, dimmed
+constexpr float kOverlayOpacity = 0.80f;     // alpha of the window background; what is behind shows through, dimmed
 constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
 constexpr bool kOverlayBlur = false;          // true blurs what is behind (an NSVisualEffectView); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs

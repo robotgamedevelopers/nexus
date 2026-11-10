@@ -62,13 +62,15 @@ struct Harness {
 
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
-    explicit Harness(const std::vector<FriendInfo>& friends) : model(friends) {
+    // With `overlay`, the window is drawn as the see-through overlay is.
+    explicit Harness(const std::vector<FriendInfo>& friends, bool overlay = false) : model(friends) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
         tree = prLayoutTreeCreate(&desc);
         ui = prUiCreate(tree);
-        PrKitTheme theme = windowTheme(fonts, false);
+        look.overlay = overlay;
+        PrKitTheme theme = windowTheme(fonts, overlay);
         kit = prKitCreate(ui, &theme);
         view.model = &model;
         view.look = &look;
@@ -467,6 +469,45 @@ void promptIsARoundedBoxHoldingThePlus() {
     checkPromptBox(h);
 }
 
+// The fill of a node's own decoration, at the last layout.
+PrColor fillOf(const Harness& h, PrLayoutNode node) {
+    PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+    return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).background;
+}
+PrColor borderOf(const Harness& h, PrLayoutNode node, PrRectSide side) {
+    PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
+    return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).borderColor[side];
+}
+
+// In the see-through overlay only the window background and the tab strip's fill let what is behind show through:
+// the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
+void overlayKeepsAllButTheBackgroundOpaque() {
+    Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true);
+    h.type("sent");
+    h.enter();
+    h.type("held");
+    h.enter(PrAppModifierFlag_Super);
+    h.frame();
+    PrLayoutNode window = prLayoutNodeParent(h.tree, h.view.transcript);
+    CHECK(near(fillOf(h, window).a * 100, style::kOverlayOpacity * 100));
+    CHECK(near(h.kit->theme.palette.bg0.a * 100, style::kOverlayOpacity * 100));
+    CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
+    CHECK(fillOf(h, h.view.promptBox).a == 1);
+    for (int side = 0; side < PrRectSide_Count; ++side)
+        CHECK(borderOf(h, h.view.promptBox, PrRectSide(side)).a == 1);
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 2);
+    for (PrLayoutNode entry : e) {
+        PrLayoutNode bubble = prLayoutNodeFirstChild(h.tree, entry);
+        CHECK(fillOf(h, bubble).a == 1);
+    }
+    const PrKitPalette& p = h.kit->theme.palette;
+    for (PrColor c : {p.text1, p.text2, p.text3, p.text4, p.textSelection})
+        CHECK(c.a == 1);
+    for (PrKitLookId id : {PrKitLookId_Tab, PrKitLookId_TabChosen})
+        CHECK(h.kit->looks[id].text.a == 1);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -541,6 +582,7 @@ int main() {
     textKeysWorkWithCapsLock();
     escapeChangesNothing();
     promptIsARoundedBoxHoldingThePlus();
+    overlayKeepsAllButTheBackgroundOpaque();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     if (failures != 0) {

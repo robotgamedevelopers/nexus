@@ -154,7 +154,7 @@ struct DecorationRecipe {
                 radius(d, kBubbleRadius * k);
                 break;
             case Part::BubbleQueued:
-                d.background = prColor16FromColor(faded(kBubble, kQueuedFill));
+                d.background = prColor16FromColor(kQueuedBubble);
                 radius(d, kBubbleRadius * k);
                 break;
             case Part::Prompt:
