@@ -84,7 +84,7 @@ constexpr PrColor kQueuedBubble = PrColor{kBackground.r + (kBubble.r - kBackgrou
 // The overlay window (macOS, the default; --windowed gives a normal opaque window instead): borderless, over the whole
 // screen that has the pointer (menu bar included), above other apps and their fullscreen Spaces, shown and hidden by a
 // global hotkey, in the manner of iTerm2's hotkey window.
-constexpr float kOverlayOpacity = 0.80f;     // alpha of the window background; what is behind shows through, dimmed
+constexpr float kOverlayOpacity = 0.50f;    // alpha of the window background; what is behind shows through, dimmed
 constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
 constexpr bool kOverlayBlur = false;          // true blurs what is behind (an NSVisualEffectView); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
