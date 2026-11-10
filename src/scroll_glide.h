@@ -33,11 +33,12 @@ namespace nexus {
 // The speed a coast keeps each millisecond. UIScrollView's fast rate; its normal rate, 0.998, is for a finger's fling,
 // and coasts a key let go at 1000 px/s some 500 px on, over a second and a half.
 constexpr double kCoastDecayPerMs = 0.99;
-// A held Up or Down: a line of Prax's 40 px each 40 ms (the owner 2026-11-10: "Scroll on up/down is too slow. double
-// it", from 500). The ramp and the ease to rest keep their times, as kCoastDecayPerMs sets them.
-constexpr double kHoldPixelsPerSecond = 1000;
-// A key down for less than this is a tap: exactly one line.
-constexpr double kHoldTapSeconds = 0.15;
+// A held Up or Down: a line of Prax's 40 px each 20 ms (the owner 2026-11-10: "Scroll on up/down is too slow. double
+// it", 500 to 1000; then "still too slow", 1000 to 2000). The ramp and the ease to rest keep their times, as
+// kCoastDecayPerMs sets them.
+constexpr double kHoldPixelsPerSecond = 2000;
+// A key down for less than this is a tap: exactly one line. Shorter than macOS's repeat delay so a hold starts at once.
+constexpr double kHoldTapSeconds = 0.08;
 // The spring back from an end: critically damped, at this angular frequency (1/s).
 constexpr double kSpringOmega = 16;
 // How far past an end a key or a notch there aims, to bounce.

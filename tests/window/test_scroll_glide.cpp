@@ -170,11 +170,11 @@ void aHoldScrollsWhileHeldAndCoastsToRest() {
     }
     for (std::size_t i = 1; i < ys.size(); ++i)
         CHECK(ys[i] >= ys[i - 1]);
-    // At the hold's speed after its ramp: kHoldPixelsPerSecond, 1000 px/s, some 8 px a frame.
+    // At the hold's speed after its ramp: kHoldPixelsPerSecond, 2000 px/s, some 17 px a frame.
     const double late = ys[119] - ys[59];
     CHECK(near(late, kHoldPixelsPerSecond / 2, 15));
-    // Held for 1 s: the line, then 1000 px/s from the tap window on, less the follow's lag (the speed over k, 100 px).
-    CHECK(ys.back() > 720 && ys.back() < 880);
+    // Held for 1 s: the line, then 2000 px/s from the tap window on, less the follow's lag (the speed over k, 200 px).
+    CHECK(ys.back() > 1580 && ys.back() < 1780);
     // Up: it coasts on, at the speed it had, to rest.
     const double atRelease = r.page.y;
     const double speedBefore = glideSpeed(r.s.glide(), r.now);
@@ -184,7 +184,7 @@ void aHoldScrollsWhileHeldAndCoastsToRest() {
     CHECK(r.page.y == atRelease);
     r.frames(0.5);
     const double coasted = r.page.y - atRelease;
-    CHECK(coasted > 60 && coasted < 140);   // about the speed over k: 1000 / 10 px
+    CHECK(coasted > 150 && coasted < 250);   // about the speed over k: 2000 / 10 px
     r.settle();
     CHECK(!r.s.busy());
 }
@@ -324,7 +324,7 @@ void theEndsBounceAndSpringBack() {
         Rig r;
         r.page.y = r.page.range - 300;
         r.down(1);
-        r.frames(0.45);          // its target 340 px on, the page some 250
+        r.frames(0.25);          // its target 380 px on, the page short of the end
         CHECK(r.page.y < r.page.range);
         r.up(1);
         r.settle();
