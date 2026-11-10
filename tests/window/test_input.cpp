@@ -125,6 +125,7 @@ struct FakeBoard final : Board {
     int hiddens = 0;                            // rounds it did not
     PrVec2 extent{};                            // the extent the last show was given
     float scale = 1;
+    int homes = 0;                              // times the sprint tab was chosen (Board::home)
 
     bool show(PrLayoutNode, PrVec2 e, std::string* why) override {
         ++shows;
@@ -135,6 +136,7 @@ struct FakeBoard final : Board {
     }
     void hidden() override { ++hiddens; }
     void setTextScale(float k) override { scale = k; }
+    void home() override { ++homes; }
 };
 
 // A window with no window: the view, its model of two friends (or as many as asked), and a kit over a UI context over
@@ -1252,6 +1254,34 @@ void sprintTabIsFirstAndCommandOne() {
     CHECK(h.active().kind == TabKind::Sprint);
 }
 
+// Choosing the sprint tab takes its page back to the board: Command-1 from another tab and on the sprint tab itself, and
+// a click on its tab, selected already or not. Another tab's key, or a click on another tab, does not.
+void choosingTheSprintTabGoesHome() {
+    Harness h = withSprint();
+    CHECK(h.board.homes == 0);
+    h.commandDigit(1);
+    CHECK(h.board.homes == 1);
+    h.commandDigit(2);
+    CHECK(h.board.homes == 1);
+    h.commandDigit(1);
+    CHECK(h.board.homes == 2 && h.active().kind == TabKind::Sprint);
+    PrVec2 at = h.centre(h.tabs()[0]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerUp, at);
+    h.frame();
+    CHECK(h.board.homes == 3 && h.active().kind == TabKind::Sprint);
+    at = h.centre(h.tabs()[1]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerUp, at);
+    h.frame();
+    CHECK(h.board.homes == 3 && h.active().name == "f1");
+    at = h.centre(h.tabs()[0]);
+    h.pointer(PrAppEventKind_PointerDown, at);
+    h.pointer(PrAppEventKind_PointerUp, at);
+    h.frame();
+    CHECK(h.board.homes == 4 && h.active().kind == TabKind::Sprint);
+}
+
 // Command-digit selects by strip position from the sprint tab and from a friend's, at launch and after coming back to
 // the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
 void commandDigitsWorkFromTheSprintTab() {
@@ -1453,6 +1483,7 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 
 int main() {
     sprintTabIsFirstAndCommandOne();
+    choosingTheSprintTabGoesHome();
     commandDigitsWorkFromTheSprintTab();
     commandOneWithCapsLockSelectsTheSprintTab();
     onlyTheActiveTabShowsSelected();

@@ -85,6 +85,14 @@ struct SpendFit {
 // board.h adds it to each document's head, as a style element with the id kSprintStyleId, before the document paints,
 // and sets it again when the measures move.
 std::string sprintPageStyle(const SpendFit& fit);
+
+// Whether a click on a link would take the sprint tab off the board, so that board.h opens the link in the system's
+// browser instead and the tab stays on the board. `href` is the link's URL as the page resolves it, `document` the
+// board's document's URL, and `target` the link's target attribute. A link to another document leaves, wherever it
+// is (another site, or another page of the board's server); so does a link with target _blank, which a browser opens
+// in a new tab. A link to a place in the board's own document (the same URL but for its fragment) stays, as does a
+// link with no URL or a javascript: one, which runs in the page.
+bool linkLeavesBoard(std::string_view href, std::string_view document, std::string_view target);
 constexpr std::string_view kSprintStyleId = "nexus-sprint-style";
 // The Cost breakdown panel in nova-sprint's index.html: <section class="panel spend">.
 constexpr std::string_view kSpendSelector = ".panel.spend";

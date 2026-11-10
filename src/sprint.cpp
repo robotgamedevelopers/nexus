@@ -319,6 +319,33 @@ std::string sprintPageStyle(const SpendFit& fit) {
     return style;
 }
 
+namespace {
+
+std::string_view withoutFragment(std::string_view url) {
+    return url.substr(0, url.find('#'));
+}
+
+bool startsWithFold(std::string_view text, std::string_view prefix) {
+    if (text.size() < prefix.size())
+        return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const char c = text[i] >= 'A' && text[i] <= 'Z' ? char(text[i] - 'A' + 'a') : text[i];
+        if (c != prefix[i])
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool linkLeavesBoard(std::string_view href, std::string_view document, std::string_view target) {
+    if (href.empty() || startsWithFold(href, "javascript:"))
+        return false;
+    if (target.size() == 6 && startsWithFold(target, "_blank"))
+        return true;
+    return withoutFragment(href) != withoutFragment(document);
+}
+
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone) {
     std::string text(kPrelude);
     replace(text, "@STD@", literal(standardZone));

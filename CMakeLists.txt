@@ -59,12 +59,17 @@ target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
 # The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
-# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it, and
-# how its scroll glides).
-add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/scroll_glide.cpp src/tab_order.cpp)
+# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
+# The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
+# Prax, so that the model job builds its trace walk alone.
+add_library(nexus_scroll STATIC src/scroll_glide.cpp)
+target_include_directories(nexus_scroll PUBLIC src)
+target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
+
+add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
+target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
 
 # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
 add_library(nexus_view STATIC src/view.cpp)

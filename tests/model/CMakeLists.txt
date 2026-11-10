@@ -14,8 +14,12 @@ add_executable(trace_walk trace_walk.cpp)
 target_link_libraries(trace_walk PRIVATE nexus_model)
 target_compile_options(trace_walk PRIVATE ${warnings})
 
+add_executable(glide_walk glide_walk.cpp)
+target_link_libraries(glide_walk PRIVATE nexus_scroll)
+target_compile_options(glide_walk PRIVATE ${warnings})
+
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk glide_walk)
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -27,9 +31,11 @@ set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
-# (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
+# (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail); with GLIDEWALK, it is
+# glide_walk (the board's scroller), and FAULTY keyup its one fault. Called from tests/sync too.
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;GLIDEWALK" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" ""
+        ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -47,7 +53,9 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(T_LINKWALK)
+    if(T_GLIDEWALK)
+        list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_LINKWALK)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
     elseif(DEFINED T_SEED)
         list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFRIENDS=${T_FRIENDS})
@@ -159,3 +167,20 @@ tlc_test(tlc_trace_faulty_sprint_move_rejected WindowTrace WindowTrace.cfg invar
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-move)
 tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY sprint-close)
+
+# The board's scroller (src/scroll_glide.h): Glide.tla on its small instance, every property.
+tlc_test(tlc_glide_spec MCGlide MCGlide.cfg pass)
+# Its reversed witnesses.
+tlc_test(tlc_glide_witness_jump_back     WGlideJumpBack      WGlideJumpBack.cfg      action    PROPERTY NeverBack)
+tlc_test(tlc_glide_witness_clamp_top     WGlideClampTop      WGlideClampTop.cfg      invariant PROPERTY InRange)
+tlc_test(tlc_glide_witness_pad_keeps     WGlidePadKeeps      WGlidePadKeeps.cfg      action    PROPERTY PadStops)
+tlc_test(tlc_glide_witness_lost_key_up   WGlideLostKeyUp     WGlideLostKeyUp.cfg     liveness)
+tlc_test(tlc_glide_witness_spring_inside WGlideSpringInside  WGlideSpringInside.cfg  invariant PROPERTY SpringAtEnd)
+tlc_test(tlc_glide_witness_spring_forever WGlideSpringForever WGlideSpringForever.cfg liveness)
+# Its code traces, each a behaviour of Glide.tla; and a scroller that loses the arrow's release, rejected (no step of
+# the spec reaches its next state: a deadlock).
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_glide_trace_seed_${seed} GlideTrace GlideTrace.cfg pass SEED ${seed} STEPS 1000 GLIDEWALK)
+endforeach()
+tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadlock SEED 1 STEPS 1000 GLIDEWALK
+         FAULTY keyup)

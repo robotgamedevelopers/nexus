@@ -57,6 +57,9 @@ struct Board {
     virtual bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) = 0;
     virtual void hidden() = 0;                  // the sprint tab does not show this round
     virtual void setTextScale(float k) = 0;     // the page's zoom, at the text scale k
+    // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
+    // that has left the board goes back to it.
+    virtual void home() = 0;
 };
 
 // The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.

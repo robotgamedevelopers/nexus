@@ -215,6 +215,26 @@ void styleStretchesTheOpenCostBreakdown() {
     CHECK(has(sprintPageStyle(SpendFit{0, 0, 0}), "calc(100vh - 0.00px); margin-bottom: 0.00px;"));
 }
 
+// A link leaves the board for another document, or with target _blank; a place on the board, no URL, or a javascript:
+// link stays.
+void linksLeaveForAnotherDocument() {
+    const std::string_view board = "http://studio.local:7300/";
+    CHECK(linkLeavesBoard("https://github.com/mas-bandwidth/nova-sprint", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7300/cards/12", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7301/", board, ""));
+    CHECK(linkLeavesBoard("mailto:someone@example.test", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7300/#later", board, "_blank"));
+    CHECK(linkLeavesBoard("http://studio.local:7300/#later", board, "_BLANK"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#later", board, ""));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#later", board, "_self"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/", board, ""));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#", "http://studio.local:7300/#earlier", ""));
+    CHECK(!linkLeavesBoard("", board, "_blank"));
+    CHECK(!linkLeavesBoard("javascript:void(0)", board, ""));
+    CHECK(!linkLeavesBoard("JavaScript:go()", board, "_blank"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#a", "http://studio.local:7300/#b", "_top"));
+}
+
 } // namespace
 
 int main() {
@@ -231,6 +251,7 @@ int main() {
     preludeCarriesTheZonesAndEscapesThem();
     styleLeavesThePageBackgroundAlone();
     styleStretchesTheOpenCostBreakdown();
+    linksLeaveForAnotherDocument();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

@@ -20,6 +20,8 @@
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail
+#   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
+#               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
@@ -59,7 +61,20 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
+if(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "keyup")
+        list(APPEND walk_args --faulty-keyup)
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not keyup")
+    endif()
+    execute_process(COMMAND "${GLIDEWALK}" ${walk_args} "${WORK}/GlideTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "glide_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")
     if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail")
         list(APPEND walk_args "--faulty-${FAULTY}")
