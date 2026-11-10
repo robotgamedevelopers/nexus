@@ -9,22 +9,26 @@
 (*            last shown (OverlayRules::keyed)                             *)
 (*   armed    the key check after a show is pending (a Prax timer)         *)
 (*   last     history: the input just handled and the act answered         *)
+(*   held     nexus holds the window (main.cpp a.window): carryOut acts    *)
+(*            only on a window it holds                                    *)
 (*                                                                         *)
 (* Inputs: the hotkey, Escape, a frame (observe: a change of visible or    *)
 (* active asks for one), the key check firing. The OS: a show gets the     *)
 (* keyboard or not; the overlay loses it (Command-Tab, a click on another  *)
-(* app); a click on the overlay gives it back.                             *)
+(* app); a click on the overlay gives it back. Prax: the window's open,    *)
+(* which comes only with a frame of a shown window.                        *)
 (***************************************************************************)
 EXTENDS TLC
 
-VARIABLES visible, active, keyed, armed, last
+VARIABLES visible, active, keyed, armed, last, held
 
-vars == <<visible, active, keyed, armed, last>>
+vars == <<visible, active, keyed, armed, last, held>>
 
 Acts == {"None", "Show", "Hide"}
-Ops == {"init", "hotkey", "escape", "observe", "keycheck", "lose", "click"}
+Ops == {"init", "hotkey", "escape", "observe", "keycheck", "lose", "click", "open"}
 
-Did(op, a) == last' = [op |-> op, act |-> a]
+\* Each input and each act of the OS leaves nexus's hold on the window as it is: only Open changes it.
+Did(op, a) == last' = [op |-> op, act |-> a] /\ held' = held
 
 TypeOK ==
     /\ visible \in BOOLEAN
@@ -32,24 +36,34 @@ TypeOK ==
     /\ keyed \in BOOLEAN
     /\ armed \in BOOLEAN
     /\ last \in [op : Ops, act : Acts]
+    /\ held \in BOOLEAN
 
-Init ==
+\* `h`: whether nexus holds the window before the first input. main.cpp start creates the overlay window itself
+\* (prStudioWindowCreate returns it at once), so it does: Init.
+InitWith(h) ==
     /\ visible = FALSE
     /\ active = FALSE
     /\ keyed = FALSE
     /\ armed = FALSE
     /\ last = [op |-> "init", act |-> "None"]
+    /\ held = h
+
+Init == InitWith(TRUE)
 
 \* The window carrying out an act (main.cpp carryOut). Show covers the screen, shows the window and focuses it, which
-\* the OS may or may not answer with the keyboard (`granted`); Hide hides the window, which then has no keyboard.
+\* the OS may or may not answer with the keyboard (`granted`); Hide hides the window, which then has no keyboard. A
+\* window nexus does not hold is left as it is.
 Carry(a, granted) ==
-    CASE a = "Show" -> visible' = TRUE /\ active' = granted
+    CASE ~held      -> UNCHANGED <<visible, active>>
+      [] a = "Show" -> visible' = TRUE /\ active' = granted
       [] a = "Hide" -> visible' = FALSE /\ active' = FALSE
       [] OTHER      -> UNCHANGED <<visible, active>>
 
-\* The key check's timer: Show arms it (prAppTimerSet replaces a pending one), Hide cancels it.
+\* The key check's timer: Show arms it (prAppTimerSet replaces a pending one), Hide cancels it. carryOut sets no timer
+\* for a window it does not hold.
 Arm(a) ==
-    armed' = CASE a = "Show" -> TRUE
+    armed' = CASE ~held      -> armed
+               [] a = "Show" -> TRUE
                [] a = "Hide" -> FALSE
                [] OTHER      -> armed
 
@@ -97,8 +111,17 @@ Click ==
     /\ UNCHANGED <<visible, keyed, armed>>
     /\ Did("click", "None")
 
+\* Prax. A Studio window's open (main.cpp open, which sets a.window) comes with the window's first frame, and a hidden
+\* window has no frames (Prax 2908525: studio_window.h prStudioWindowCreate, app_window.h prAppWindowSetVisible). So
+\* a window nexus waits on open for is held only once something else has shown it.
+Open ==
+    /\ ~held /\ visible
+    /\ held' = TRUE
+    /\ UNCHANGED <<visible, active, keyed, armed>>
+    /\ last' = [op |-> "open", act |-> "None"]
+
 \* A witness passes its broken action in place of the real one.
-NextWith(H, E, O, K) == H \/ E \/ O \/ K \/ Lose \/ Click
+NextWith(H, E, O, K) == H \/ E \/ O \/ K \/ Lose \/ Click \/ Open
 
 Next == NextWith(Hotkey, Escape, Observe, KeyCheck)
 

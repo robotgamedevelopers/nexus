@@ -8,6 +8,7 @@ BrokenEscape ==
     /\ Arm(a)
     /\ keyed' = FALSE
     /\ last' = [op |-> "escape", act |-> "Close"]
+    /\ UNCHANGED held
 
 BrokenSpec == Init /\ [][NextWith(Hotkey, BrokenEscape, Observe, KeyCheck)]_vars
 =============================================================================

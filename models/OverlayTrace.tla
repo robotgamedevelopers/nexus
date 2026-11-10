@@ -18,7 +18,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, OverlayTraceData
 
-VARIABLES visible, active, keyed, armed, last, l
+VARIABLES visible, active, keyed, armed, last, held, l
 
 O == INSTANCE Overlay
 
@@ -31,6 +31,8 @@ Matches(k) ==
     /\ keyed = s.keyed
     /\ armed = s.armed
     /\ last = [op |-> s.op, act |-> s.act]
+    \* the walk's window exists from the start, as main.cpp start's does
+    /\ held
 
 TraceMatches == Matches(l)
 
@@ -45,7 +47,7 @@ Step(s) ==
          [] s.op = "click"    -> O!Click
          [] OTHER             -> FALSE
 
-traceVars == <<visible, active, keyed, armed, last, l>>
+traceVars == <<visible, active, keyed, armed, last, held, l>>
 
 TraceInit == l = 1 /\ O!Init
 

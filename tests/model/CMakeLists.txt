@@ -196,6 +196,8 @@ tlc_test(tlc_overlay_witness_loss_kept         WOverlayLossKept         WOverlay
 tlc_test(tlc_overlay_witness_refused_kept      WOverlayRefusedKept      WOverlayRefusedKept.cfg      action
          PROPERTY RefusedShowHides)
 tlc_test(tlc_overlay_witness_stranded          WOverlayStranded         WOverlayStranded.cfg         temporal)
+tlc_test(tlc_overlay_witness_held_after_open   WOverlayHeldAfterOpen    WOverlayHeldAfterOpen.cfg    action
+         PROPERTY HotkeyShows)
 foreach(seed 1 2 3)
     tlc_test(tlc_overlay_trace_seed_${seed} OverlayTrace OverlayTrace.cfg pass OVERLAY SEED ${seed} STEPS 1000)
 endforeach()

@@ -76,7 +76,8 @@ struct App {
     Look look;
     PrFontSet* fonts = nullptr;
     bool overlay = true;            // the overlay window; --windowed gives a normal window
-    PrStudioWindow* window = nullptr;   // from open() to close()
+    PrStudioWindow* window = nullptr;   // from open() to close(); the overlay's from start()
+    const PrStudioWindowDesc* overlayWindow = nullptr;  // the overlay's window, which start() creates
     OverlayRules rules;             // when the overlay shows and hides (overlay.h)
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
@@ -180,11 +181,20 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
         carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
 }
 
-// The overlay at launch: registers the hotkey and shows the overlay, as a press of the hotkey would.
+// The overlay at launch: creates its window, registers the hotkey and shows the overlay, as a press of the hotkey would.
+// nexus creates the window here rather than through the app's description because a Studio window's open comes with
+// its first frame and a hidden window has no frames (Prax 2908525 studio_window.h prStudioWindowCreate, app_window.h
+// prAppWindowSetVisible): waiting on open() for a.window, nothing ever showed the overlay (models/Overlay.tla held,
+// witnesses/WOverlayHeldAfterOpen).
 bool start(void* context, PrStudioApp* studio) {
     App& a = appOf(context);
     if (!a.overlay)
         return true;
+    PrStatus created = prStudioWindowCreate(studio, a.overlayWindow, &a.window);
+    if (created != PrStatus_Ok) {
+        std::fprintf(stderr, "nexus: the overlay window could not be created (status %d)\n", int(created));
+        return false;
+    }
     PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
     if (status != PrStatus_Ok)
         std::fprintf(stderr, "nexus: the overlay hotkey (Command-backtick) did not register (status %d: %s), so only "
@@ -598,7 +608,9 @@ int main(int argc, char** argv) {
         PrAppOptions options = prAppOptionsDefault();
         if (a.overlay && style::kOverlayAccessory)
             options.presence = PrAppPresence_Accessory;
-        PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = &window,
+        // start() creates the overlay's window itself, so that nexus holds it before its first frame.
+        a.overlayWindow = a.overlay ? &window : nullptr;
+        PrStudioAppDesc desc{.fonts = a.fonts, .options = &options, .window = a.overlay ? nullptr : &window,
             .lastWindow = PrStudioAppLastWindow_Stop, .start = start, .event = appEvent, .context = &a};
         PrStatus status = prStudioAppRun(&desc);
         if (status == PrStatus_NotSupported) {
