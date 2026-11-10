@@ -1,44 +1,57 @@
-// Draws the window from the model into a Prax draw list, in logical pixels. Immediate: every frame records the whole
-// window again. Keeps only what drawing needs between frames (scroll per tab, where the tabs were for clicks).
+// The window, declared each round as a Prax layout tree over lib/ui: the tab strip, the transcript and the prompt. Prax
+// lays it out, paints it, routes input to it, and edits the prompt's text (pr/ui_text_edit.h). The view keeps only what
+// the model does not: where each tab's transcript is scrolled, and whether it follows the newest entry.
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 #include "pr/draw_list.h"
-#include "pr/font.h"
-#include "pr/text.h"
+#include "pr/font_set.h"
+#include "pr/layout_tree.h"
+#include "pr/text_font.h"
+#include "pr/ui.h"
 
 #include "model.h"
 
 namespace nexus {
 
-struct Fonts {
-    const PrFont* regular = nullptr;
-    const PrFont* semibold = nullptr;
-    const PrFont* symbols = nullptr;   // fallback for code points the regular font lacks
-    PrTextShaper* shaper = nullptr;
-    PrTextGlyphBuffer* buffer = nullptr;
+// The fonts and icons the window draws with, made once. Its address owns the window's records (pr/ui_records.h).
+struct Look {
+    PrTextFont* body = nullptr;
+    PrTextFont* tab = nullptr;
+    PrTextFont* label = nullptr;
+    PrTextFont* meta = nullptr;
+    PrDrawList* plus = nullptr;
+    PrDrawList* stop = nullptr;
+    PrDrawList* mic = nullptr;
+    PrDrawList* ring = nullptr;
 };
 
-// Opens the system fonts. Returns false with `error` set if a font does not load.
-bool openFonts(Fonts& fonts, std::string& error);
-void closeFonts(Fonts& fonts);
+// Makes the look's fonts in the system UI family of `fonts`, which must outlive the look, and draws its icons.
+void openLook(Look& look, PrFontSet* fonts);
+void closeLook(Look& look);
 
-struct ViewState {
-    std::vector<float> scroll;        // per tab: px scrolled up from the bottom of the transcript
-    std::vector<PrRect> tabRects;     // where the last frame drew each tab
-    float maxScroll = 0;              // of the active tab, as of the last frame
-    bool caretOn = true;
+// A tab's transcript scroll, kept while another tab shows.
+struct TabView {
+    float scroll = 0;           // px from the top, while not following
+    bool follow = true;         // pinned to the newest entry
+    std::size_t seen = 0;       // entries when last shown, so a new one brings the newest back into view
 };
 
-void drawWindow(PrDrawList* list, const Model& model, ViewState& view, const Fonts& fonts, PrVec2 extent);
+struct View {
+    Model* model = nullptr;
+    const Look* look = nullptr;
+    std::string notice;                 // shown in place of the transcript when there are no tabs
+    std::vector<TabView> tabs;          // one per model tab
+    std::size_t shown = ~std::size_t(0);        // the tab the transcript showed last round
+    std::size_t prompted = ~std::size_t(0);     // the tab whose draft the prompt edited last round
+};
 
-// Returns the tab under `point`, or -1.
-int tabAt(const ViewState& view, PrVec2 point);
-
-// Scrolls the active tab's transcript by `dy` px (positive scrolls toward older entries).
-void scrollBy(const Model& model, ViewState& view, float dy);
+// Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies
+// the round's input: tab clicks, the prompt's edits, and its Enter, Shift-Enter and Command-Enter.
+void buildWindow(View& view, PrUi* ui, PrLayoutNode parent);
 
 } // namespace nexus

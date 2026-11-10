@@ -1,10 +1,16 @@
 #include "view.h"
 
 #include <algorithm>
-#include <cmath>
+#include <string_view>
 
 #include "pr/draw.h"
+#include "pr/layout_frame.h"
+#include "pr/layout_query.h"
+#include "pr/layout_style.h"
+#include "pr/ui_records.h"
+#include "pr/ui_text_edit.h"
 
+#include "input.h"
 #include "style.h"
 
 namespace nexus {
@@ -15,149 +21,392 @@ using namespace style;
 
 constexpr float kPi = 3.14159265358979f;
 
+// Far below any transcript: a scroll offset that layout clamps to the bottom.
+constexpr float kFar = 1.0e6f;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Records: one part per kind of node, and one recipe per group kind that switches on the part. Parts that hold text set
+// the font and color groups; the others inherit them.
+
+enum class Part : unsigned char {
+    Window,
+    Strip,
+    Tab,
+    TabActive,
+    TabNumber,
+    TabName,
+    TabNameActive,
+    Transcript,
+    Column,
+    Centered,
+    Entry,
+    Bubble,
+    BubbleQueued,
+    QueuedLabel,
+    FriendText,
+    NoticeText,
+    Footer,
+    Prompt,
+    PromptScroll,
+    PromptText,
+    Placeholder,
+    Plus,
+    Stop,
+    Mic,
+    LabelRow,
+    Label,
+    Ring,
+};
+
+// The icons' natural sizes.
+constexpr float kPlusSide = 0.7f * kU;
+constexpr float kStopSide = 0.72f * kU;
+constexpr float kMicWidth = 0.7f * kU;
+constexpr float kMicHeight = 1.2f * kU;
+constexpr float kRingSide = 0.76f * kLabelSize + 3;
+
+// The prompt's padding: one line of text in a box of kPromptHeight, between 1 px borders.
+constexpr float kPromptPadY = (kPromptHeight - 2 - kLinePitch) / 2;
+constexpr float kPromptPadX = 0.8f * kU;
+
+bool ownsText(Part p) {
+    switch (p) {
+        case Part::Window:
+        case Part::TabNumber:
+        case Part::TabName:
+        case Part::TabNameActive:
+        case Part::Centered:
+        case Part::Bubble:
+        case Part::BubbleQueued:
+        case Part::QueuedLabel:
+        case Part::FriendText:
+        case Part::NoticeText:
+        case Part::PromptText:
+        case Part::Placeholder:
+        case Part::Label:
+            return true;
+        default:
+            return false;
+    }
+}
+
 PrColor faded(PrColor c, float alpha) {
     c.a = alpha;
     return c;
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Text
-
-uint32_t decode(const std::string& s, size_t at, size_t* length) {
-    unsigned char c = static_cast<unsigned char>(s[at]);
-    uint32_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-    if (at + n > s.size())
-        n = 1;
-    uint32_t cp = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
-    for (uint32_t i = 1; i < n; ++i)
-        cp = (cp << 6) | (static_cast<unsigned char>(s[at + i]) & 0x3F);
-    *length = n;
-    return cp;
+PrLayoutLength px(float v) {
+    return prLayoutLengthPx(v);
 }
 
-struct Run {
-    const PrFont* font;
-    std::string text;
-};
-
-// Splits text into runs of the base font and of the symbol font, for code points the base font has no glyph for.
-// (Prax's font set does this fallback; this tracer shapes against single fonts, so it does its own.)
-std::vector<Run> splitRuns(const Fonts& fonts, const PrFont* base, const std::string& text) {
-    std::vector<Run> runs;
-    for (size_t at = 0; at < text.size();) {
-        size_t length = 1;
-        uint32_t cp = decode(text, at, &length);
-        const PrFont* font = base;
-        if (cp > 0x7F && prFontCodePointGlyph(base, cp) == 0 && fonts.symbols != nullptr &&
-                prFontCodePointGlyph(fonts.symbols, cp) != 0)
-            font = fonts.symbols;
-        if (runs.empty() || runs.back().font != font)
-            runs.push_back(Run{font, {}});
-        runs.back().text.append(text, at, length);
-        at += length;
-    }
-    return runs;
+void border(PrLayoutBoxStyle& box, int side, float width) {
+    box.border[side] = prLayoutUnitFromPx(width);
 }
 
-struct Shaped {
-    std::vector<PrFontGlyph> glyphs;
-    std::vector<PrAffine2> transforms;
-};
-
-float shapeRun(const Fonts& fonts, const PrFont* font, float size, const std::string& text, PrVec2 origin,
-        Shaped& out) {
-    out.glyphs.clear();
-    out.transforms.clear();
-    PrTextRun run{};
-    run.font = font;
-    run.text = PrStringView{text.data(), text.size()};
-    run.pixelsPerEm = size;
-    if (prTextShaperShape(fonts.shaper, &run, fonts.buffer) != PrStatus_Ok)
-        return 0;
-    uint32_t count = prTextGlyphBufferGlyphCount(fonts.buffer);
-    out.glyphs.resize(count);
-    out.transforms.resize(count);
-    PrVec2 pen = prTextGlyphBufferPlace(fonts.buffer, size, origin, out.glyphs.data(), out.transforms.data());
-    bool scaled = false;
-    for (const PrAffine2& t : out.transforms)
-        scaled = scaled || t.a != 1;
-    if (!scaled)
-        out.transforms.clear();
-    return pen.x - origin.x;
+void borderColor(PrLayoutDecorationStyle& d, int side, PrColor c) {
+    d.borderColor[side] = prColor16FromColor(c);
+    d.borderStyle[side] = PrDrawBorderStyle_Solid;
 }
 
-float measure(const Fonts& fonts, const PrFont* base, float size, const std::string& text) {
-    float width = 0;
-    Shaped shaped;
-    for (const Run& run : splitRuns(fonts, base, text))
-        width += shapeRun(fonts, run.font, size, run.text, PrVec2{width, 0}, shaped);
-    return width;
+void radius(PrLayoutDecorationStyle& d, float r) {
+    for (PrLayoutLength& l : d.radii)
+        l = px(r);
 }
 
-// Draws text with its baseline at `origin`. Returns the advance.
-float drawText(PrDrawList* list, const Fonts& fonts, const PrFont* base, float size, const std::string& text,
-        PrVec2 origin, PrColor color) {
-    float x = origin.x;
-    Shaped shaped;
-    for (const Run& run : splitRuns(fonts, base, text)) {
-        x += shapeRun(fonts, run.font, size, run.text, PrVec2{x, origin.y}, shaped);
-        if (shaped.glyphs.empty())
-            continue;
-        PrFontGlyphRun glyphs{};
-        glyphs.font = run.font;
-        glyphs.size = size;
-        glyphs.glyphs = shaped.glyphs.data();
-        glyphs.glyphCount = uint32_t(shaped.glyphs.size());
-        glyphs.transforms = shaped.transforms.empty() ? nullptr : shaped.transforms.data();
-        prDrawListGlyphs(list, &glyphs, PrVec2{}, PrDrawPaint{.color = color});
-    }
-    return x - origin.x;
+void padding(PrLayoutBoxStyle& box, float top, float right, float bottom, float left) {
+    box.padding[PrRectSide_Top] = px(top);
+    box.padding[PrRectSide_Right] = px(right);
+    box.padding[PrRectSide_Bottom] = px(bottom);
+    box.padding[PrRectSide_Left] = px(left);
 }
 
-// Greedy word wrap at spaces. (Prax's lib/text has line breaking; the tracer did not wire it in.)
-std::vector<std::string> wrap(const Fonts& fonts, const PrFont* font, float size, const std::string& text, float width) {
-    std::vector<std::string> lines;
-    std::string line;
-    size_t at = 0;
-    while (at <= text.size()) {
-        size_t space = text.find(' ', at);
-        if (space == std::string::npos)
-            space = text.size();
-        std::string word = text.substr(at, space - at);
-        std::string candidate = line.empty() ? word : line + " " + word;
-        if (!line.empty() && measure(fonts, font, size, candidate) > width) {
-            lines.push_back(line);
-            line = word;
-        } else {
-            line = candidate;
+struct FontRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Font;
+    Part part;
+
+    void make(const Look& look, PrLayoutFontStyle& font) const {
+        font.font = look.body;
+        font.lineHeight = prLayoutLineHeightPx(kLinePitch);
+        font.whiteSpaceCollapse = PrLayoutWhiteSpaceCollapse_Preserve;
+        font.textWrapMode = PrLayoutTextWrapMode_Wrap;
+        font.overflowWrap = PrTextOverflowWrap_BreakWord;
+        switch (part) {
+            case Part::TabNumber:
+            case Part::TabName:
+            case Part::TabNameActive:
+                font.font = look.tab;
+                font.lineHeight = prLayoutLineHeightPx(1.2f * kTabSize);
+                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
+                break;
+            case Part::Label:
+                font.font = look.label;
+                font.lineHeight = prLayoutLineHeightPx(1.2f * kLabelSize);
+                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
+                break;
+            case Part::QueuedLabel:
+                font.font = look.meta;
+                font.lineHeight = prLayoutLineHeightPx(1.3f * kMetaSize);
+                break;
+            case Part::Centered:
+                font.textAlign = font.textAlignLast = PrLayoutTextAlign_Center;
+                break;
+            case Part::Placeholder:
+                font.textWrapMode = PrLayoutTextWrapMode_Nowrap;
+                break;
+            default:
+                break;
         }
-        at = space + 1;
     }
-    lines.push_back(line);
-    return lines;
+};
+
+struct ColorRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Color;
+    Part part;
+
+    void make(const Look&, PrLayoutColorStyle& color) const {
+        PrColor c = kInk;
+        switch (part) {
+            case Part::TabNumber: c = kPlaceholder; break;
+            case Part::TabName: c = kNotice; break;
+            case Part::BubbleQueued: c = faded(kInk, kQueuedInk); break;
+            case Part::QueuedLabel: c = kMeta; break;
+            case Part::NoticeText: c = kNotice; break;
+            case Part::Centered: c = kPlaceholder; break;
+            case Part::Placeholder: c = kPlaceholder; break;
+            default: break;
+        }
+        color.color = prColor16FromColor(c);
+        if (part == Part::Placeholder)
+            color.pointerEvents = PrLayoutPointerEvents_None;
+    }
+};
+
+struct BoxRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    Part part;
+
+    void make(const Look&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        switch (part) {
+            case Part::Window:
+                box.display = PrLayoutDisplay_Flex;
+                box.width = prLayoutLengthPercent(100);
+                box.height = prLayoutLengthPercent(100);
+                break;
+            case Part::Strip:
+                box.display = PrLayoutDisplay_Flex;
+                box.height = px(kStripHeight + 1);
+                border(box, PrRectSide_Bottom, 1);
+                padding(box, 0, 0, 0, 0.8f * kU);
+                break;
+            case Part::Tab:
+            case Part::TabActive:
+                box.display = PrLayoutDisplay_Flex;
+                box.height = px(1.75f * kTabSize);
+                padding(box, 0, 0.6f * kTabSize, 0, 0.6f * kTabSize);
+                break;
+            case Part::Transcript:
+                box.display = PrLayoutDisplay_Block;
+                box.minHeight = px(0);
+                box.overflowX = PrLayoutOverflow_Hidden;
+                box.overflowY = PrLayoutOverflow_Scroll;
+                break;
+            case Part::Column:
+                box.display = PrLayoutDisplay_Flex;
+                box.width = prLayoutLengthPercent(kColumnPercent);
+                box.minHeight = prLayoutLengthPercent(100);
+                box.margin[PrRectSide_Left] = prLayoutLengthAuto();
+                box.margin[PrRectSide_Right] = prLayoutLengthAuto();
+                padding(box, kColumnInset, 0, 0, 0);
+                break;
+            case Part::Centered:
+                box.display = PrLayoutDisplay_Block;
+                box.margin[PrRectSide_Top] = prLayoutLengthAuto();
+                box.margin[PrRectSide_Bottom] = prLayoutLengthAuto();
+                break;
+            case Part::Entry:
+                box.display = PrLayoutDisplay_Flex;
+                break;
+            case Part::Bubble:
+            case Part::BubbleQueued:
+                box.display = PrLayoutDisplay_Block;
+                box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
+                padding(box, kBubblePadY, kBubblePadX, kBubblePadY, kBubblePadX);
+                break;
+            case Part::QueuedLabel:
+                box.display = PrLayoutDisplay_Block;
+                box.margin[PrRectSide_Top] = px(0.3f * kMetaSize);
+                box.margin[PrRectSide_Right] = px(6);
+                break;
+            case Part::FriendText:
+            case Part::NoticeText:
+                box.display = PrLayoutDisplay_Block;
+                break;
+            case Part::Footer:
+                box.display = PrLayoutDisplay_Flex;
+                padding(box, kU, 0, 0, 0);
+                break;
+            case Part::Prompt:
+                box.display = PrLayoutDisplay_Flex;
+                box.width = prLayoutLengthPercent(kPromptPercent);
+                box.minHeight = px(kPromptHeight);
+                for (int side = 0; side < PrRectSide_Count; ++side)
+                    border(box, side, 1);
+                padding(box, kPromptPadY, kPromptPadX, kPromptPadY, kPromptPadX);
+                break;
+            case Part::PromptScroll:
+                box.display = PrLayoutDisplay_Block;
+                box.minWidth = px(0);
+                box.maxHeight = px(kPromptMaxLines * kLinePitch);
+                box.overflowX = PrLayoutOverflow_Hidden;
+                box.overflowY = PrLayoutOverflow_Scroll;
+                break;
+            case Part::PromptText:
+                box.display = PrLayoutDisplay_Block;
+                box.position = PrLayoutPosition_Relative;
+                break;
+            case Part::Placeholder:
+                box.display = PrLayoutDisplay_Block;
+                box.position = PrLayoutPosition_Absolute;
+                box.inset[PrRectSide_Top] = px(0);
+                box.inset[PrRectSide_Left] = px(0);
+                break;
+            case Part::Plus:
+                box.margin[PrRectSide_Right] = px(0.8f * kU);
+                box.margin[PrRectSide_Bottom] = px((kLinePitch - kPlusSide) / 2);
+                break;
+            case Part::Stop:
+                box.margin[PrRectSide_Left] = px(0.8f * kU);
+                box.margin[PrRectSide_Bottom] = px((kLinePitch - kStopSide) / 2);
+                break;
+            case Part::Mic:
+                box.margin[PrRectSide_Left] = px(1.9f * kU - kStopSide / 2 - kMicWidth / 2);
+                box.margin[PrRectSide_Bottom] = px((kLinePitch - kMicHeight) / 2);
+                break;
+            case Part::LabelRow:
+                box.display = PrLayoutDisplay_Flex;
+                box.width = prLayoutLengthPercent(kPromptPercent);
+                box.height = px(kPromptBottom);
+                padding(box, 0, 0.7f * kU, kLabelBaseline - 0.32f * kLabelSize, 0);
+                break;
+            case Part::Ring:
+                box.margin[PrRectSide_Left] = px(kLabelSize);
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+struct DecorationRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
+    Part part;
+
+    void make(const Look&, PrLayoutDecorationStyle& d) const {
+        switch (part) {
+            case Part::Window:
+                d.background = prColor16FromColor(kBackground);
+                break;
+            case Part::Strip:
+                d.background = prColor16FromColor(kStrip);
+                borderColor(d, PrRectSide_Bottom, kStripLine);
+                break;
+            case Part::TabActive:
+                d.background = prColor16FromColor(kBubble);
+                radius(d, 1.75f * kTabSize * 0.3f);
+                break;
+            case Part::Bubble:
+                d.background = prColor16FromColor(kBubble);
+                radius(d, kBubbleRadius);
+                break;
+            case Part::BubbleQueued:
+                d.background = prColor16FromColor(faded(kBubble, kQueuedFill));
+                radius(d, kBubbleRadius);
+                break;
+            case Part::Prompt:
+                d.background = prColor16FromColor(kPromptFill);
+                for (int side = 0; side < PrRectSide_Count; ++side)
+                    borderColor(d, side, kPromptBorder);
+                radius(d, kPromptRadius);
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+struct FlexRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Flex;
+    Part part;
+
+    void make(const Look&, PrLayoutFlexStyle& flex) const {
+        switch (part) {
+            case Part::Window:
+                flex.direction = PrLayoutFlexDirection_Column;
+                break;
+            case Part::Strip:
+                flex.direction = PrLayoutFlexDirection_Row;
+                flex.alignItems = PrLayoutAlignment_Center;
+                flex.columnGap = px(0.3f * kTabSize);
+                flex.shrink = 0;
+                break;
+            case Part::Tab:
+            case Part::TabActive:
+                flex.direction = PrLayoutFlexDirection_Row;
+                flex.alignItems = PrLayoutAlignment_Center;
+                flex.columnGap = px(0.45f * kTabSize);
+                break;
+            case Part::Transcript:
+                flex.grow = 1;
+                flex.basis = px(0);
+                break;
+            case Part::Column:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.justifyContent = PrLayoutAlignment_FlexEnd;
+                flex.rowGap = px(kGap);
+                break;
+            case Part::Entry:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.alignItems = PrLayoutAlignment_FlexEnd;
+                break;
+            case Part::Footer:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.alignItems = PrLayoutAlignment_Center;
+                flex.shrink = 0;
+                break;
+            case Part::Prompt:
+                flex.direction = PrLayoutFlexDirection_Row;
+                flex.alignItems = PrLayoutAlignment_FlexEnd;
+                break;
+            case Part::PromptScroll:
+                flex.grow = 1;
+                flex.basis = px(0);
+                flex.alignSelf = PrLayoutAlignment_Center;
+                break;
+            case Part::Plus:
+            case Part::Stop:
+            case Part::Mic:
+                flex.shrink = 0;
+                break;
+            case Part::LabelRow:
+                flex.direction = PrLayoutFlexDirection_Row;
+                flex.justifyContent = PrLayoutAlignment_FlexEnd;
+                flex.alignItems = PrLayoutAlignment_FlexEnd;
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
+    if (ownsText(p))
+        return pr::uiStyle(ui, look, FontRecipe{p}, ColorRecipe{p}, BoxRecipe{p}, DecorationRecipe{p}, FlexRecipe{p});
+    return pr::uiStyle(ui, look, BoxRecipe{p}, DecorationRecipe{p}, FlexRecipe{p});
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Shapes
-
-PrCornerRect rounded(PrRect r, float radius) {
-    PrCornerRect shape{};
-    shape.rect = r;
-    for (PrCorner& corner : shape.corners)
-        corner = PrCorner{PrVec2{radius, radius}, 1};
-    return shape;
-}
-
-void fillRounded(PrDrawList* list, PrRect r, float radius, PrColor color) {
-    prDrawListCornerRect(list, rounded(r, radius), PrDrawPaint{.color = color});
-}
-
-void strokeRounded(PrDrawList* list, PrRect r, float radius, PrColor color, float width) {
-    PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = width;
-    stroke.align = PrDrawStrokeAlign_Inside;
-    prDrawListCornerRect(list, rounded(r, radius), PrDrawPaint{.color = color, .stroke = &stroke});
-}
+// Icons, drawn once into lists in their natural coordinates.
 
 void line(PrDrawList* list, PrVec2 a, PrVec2 b, PrColor color, float width) {
     PrDrawStroke stroke = prDrawStrokeDefault();
@@ -167,294 +416,270 @@ void line(PrDrawList* list, PrVec2 a, PrVec2 b, PrColor color, float width) {
     prDrawListLine(list, a, b, PrDrawPaint{.color = color, .stroke = &stroke});
 }
 
-void check(PrDrawList* list, PrVec2 at, float s, PrColor color, float width) {
-    line(list, PrVec2{at.x, at.y}, PrVec2{at.x + s * 0.35f, at.y + s * 0.35f}, color, width);
-    line(list, PrVec2{at.x + s * 0.35f, at.y + s * 0.35f}, PrVec2{at.x + s, at.y - s * 0.45f}, color, width);
+PrDrawList* drawPlus() {
+    PrDrawList* list = prDrawListCreate();
+    float c = kPlusSide / 2;
+    float arm = 0.32f * kU;
+    line(list, PrVec2{c - arm, c}, PrVec2{c + arm, c}, kInk, 2);
+    line(list, PrVec2{c, c - arm}, PrVec2{c, c + arm}, kInk, 2);
+    return list;
 }
 
-void circleStroke(PrDrawList* list, PrVec2 center, float radius, PrColor color, float width,
-        const float* dashes = nullptr, uint32_t dashCount = 0) {
+PrDrawList* drawStop() {
+    PrDrawList* list = prDrawListCreate();
+    PrCornerRect shape{};
+    shape.rect = PrRect{0, 0, kStopSide, kStopSide};
+    for (PrCorner& corner : shape.corners)
+        corner = PrCorner{PrVec2{kStopSide * 0.15f, kStopSide * 0.15f}, 1};
+    prDrawListCornerRect(list, shape, PrDrawPaint{.color = kStop});
+    return list;
+}
+
+PrDrawList* drawMic() {
+    PrDrawList* list = prDrawListCreate();
+    float x = kMicWidth / 2;
+    float m = 0.2f * kU;
+    float mid = kMicHeight * 0.45f;
     PrDrawStroke stroke = prDrawStrokeDefault();
-    stroke.shape.width = width;
-    stroke.shape.dashes = dashes;
-    stroke.shape.dashCount = dashCount;
-    prDrawListEllipse(list, center, PrVec2{radius, radius}, 0, PrDrawPaint{.color = color, .stroke = &stroke});
+    stroke.shape.width = 2;
+    prDrawListCapsule(list, PrVec2{x, mid - m * 2}, PrVec2{x, mid + m * 0.2f}, m * 1.1f,
+        PrDrawPaint{.color = kInk, .stroke = &stroke});
+    prDrawListSector(list, PrVec2{x, mid + m * 0.2f}, m * 1.8f, m * 1.8f + 2, 0, kPi, PrDrawPaint{.color = kInk});
+    line(list, PrVec2{x, mid + m * 2.0f}, PrVec2{x, mid + m * 2.8f}, kInk, 2);
+    return list;
+}
+
+PrDrawList* drawRing() {
+    PrDrawList* list = prDrawListCreate();
+    PrDrawStroke stroke = prDrawStrokeDefault();
+    stroke.shape.width = 2.2f;
+    float r = 0.38f * kLabelSize;
+    prDrawListEllipse(list, PrVec2{kRingSide / 2, kRingSide / 2}, PrVec2{r, r}, 0,
+        PrDrawPaint{.color = kRing, .stroke = &stroke});
+    return list;
+}
+
+PrTextFont* font(PrFontSet* set, float size) {
+    PrFontFamily family = prFontFamilyGeneric(PrFontGeneric_SystemUi);
+    PrFontStyle s = prFontStyleDefault();
+    s.size = size;
+    PrTextFontDesc desc{.set = set, .families = &family, .familyCount = 1, .style = s};
+    return prTextFontCreate(&desc);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Transcript
+// The tree.
 
-struct Column {
-    float left;
-    float right;
+PrStringView sv(std::string_view s) {
+    return PrStringView{s.data(), s.size()};
+}
+
+constexpr std::string_view kPlaceholderText = "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later";
+
+struct Builder {
+    View& view;
+    PrUi* ui;
+    PrLayoutTree* tree;
+    const Look& look;
+    Model& model;
+
+    PrLayoutNode element(PrLayoutNode parent, Part p, PrUiFlags flags = 0, PrUiKey key = 0) {
+        return prUiElement(ui, parent, key, style(ui, look, p), flags);
+    }
+
+    PrLayoutNode text(PrLayoutNode parent, Part p, PrStringView value) {
+        PrLayoutNode node = element(parent, p);
+        prLayoutTreeFrameText(tree, node, 0, value);
+        return node;
+    }
+
+    void icon(PrLayoutNode parent, Part p, PrDrawList* list, float width, float height) {
+        PrLayoutNode node = prLayoutTreeFrameReplaced(tree, parent, 0, style(ui, look, p));
+        prLayoutTreeFrameSetNaturalSize(tree, node,
+            PrLayoutNaturalSize{prLayoutUnitFromPx(width), prLayoutUnitFromPx(height), 0});
+        PrLayoutContent content{};
+        content.kind = PrLayoutContentKind_DrawList;
+        content.list = list;
+        prLayoutTreeFrameSetContent(tree, node, &content);
+    }
+
+    void strip(PrLayoutNode window) {
+        PrLayoutNode row = element(window, Part::Strip);
+        for (std::size_t i = 0; i < model.tab_count(); ++i) {
+            PrLayoutNode tab = element(row, Part::Tab, PrUiFlag_Pressable, prUiKeyIndex(ui, row, i));
+            if (prUiClicked(ui, tab, 0))
+                model.select_tab(i);
+            bool active = i == model.active();
+            prLayoutTreeFrameSetStyle(tree, tab, style(ui, look, active ? Part::TabActive : Part::Tab));
+            std::string number = std::to_string(i + 1);
+            text(tab, Part::TabNumber, sv(number));
+            text(tab, active ? Part::TabNameActive : Part::TabName, sv(model.tab(i).name));
+        }
+    }
+
+    // Keeps each tab's scroll while another shows, and keeps a following transcript at its newest entry.
+    void scroll(PrLayoutNode scroller, std::size_t active) {
+        PrLayoutScrollInfo info{};
+        bool laid = prLayoutNodeScrollInfo(tree, scroller, &info) && info.scrollContainer;
+        float stored = prLayoutUnitToPx(prLayoutNodeScroll(tree, scroller).y);
+        float bottom = laid ? prLayoutUnitToPx(info.range.bottom) : 0;
+        TabView& tv = view.tabs[active];
+        if (view.shown != active) {
+            if (view.shown < view.tabs.size() && laid)
+                view.tabs[view.shown].scroll = std::min(stored, bottom);
+            view.shown = active;
+            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0),
+                prLayoutUnitFromPx(tv.follow ? kFar : tv.scroll)});
+        } else if (laid) {
+            tv.follow = stored >= bottom - 0.5f;
+        }
+        std::size_t count = model.tab(active).transcript.size();
+        if (count != tv.seen) {
+            tv.seen = count;
+            tv.follow = true;
+        }
+        if (tv.follow && stored < kFar)
+            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), prLayoutUnitFromPx(kFar)});
+    }
+
+    void transcript(PrLayoutNode window) {
+        PrLayoutNode scroller = element(window, Part::Transcript, PrUiFlag_Scrollable);
+        PrLayoutNode column = element(scroller, Part::Column);
+        if (model.tab_count() == 0) {
+            text(column, Part::Centered, sv(view.notice));
+            return;
+        }
+        std::size_t active = model.active();
+        scroll(scroller, active);
+        const Tab& tab = model.tab(active);
+        if (tab.transcript.empty()) {
+            std::string hint = "Say something to " + tab.name;
+            text(column, Part::Centered, sv(hint));
+        }
+        for (const Entry& e : tab.transcript) {
+            switch (e.kind) {
+                case EntryKind::Person:
+                case EntryKind::Queued: {
+                    bool queued = e.kind == EntryKind::Queued;
+                    PrLayoutNode entry = element(column, Part::Entry);
+                    text(entry, queued ? Part::BubbleQueued : Part::Bubble, sv(e.text));
+                    if (queued)
+                        text(entry, Part::QueuedLabel, PrStringView{"queued", 6});
+                    break;
+                }
+                case EntryKind::Friend:
+                    text(column, Part::FriendText, sv(e.text));
+                    break;
+                case EntryKind::Notice:
+                    text(column, Part::NoticeText, sv(e.text));
+                    break;
+            }
+        }
+    }
+
+    // Shift-Enter: a line feed in place of the selection, with the caret after it.
+    void newline(PrLayoutNode prompt, std::size_t active) {
+        std::string draft = model.tab(active).draft;
+        PrUiTextSelection sel = prUiTextEditSelection(ui, prompt);
+        std::size_t lo = std::min<std::size_t>(std::min(sel.anchor, sel.caret), draft.size());
+        std::size_t hi = std::min<std::size_t>(std::max(sel.anchor, sel.caret), draft.size());
+        draft.replace(lo, hi - lo, "\n");
+        model.set_draft(active, std::move(draft));
+        uint32_t at = uint32_t(lo + 1);
+        prUiTextEditSetSelection(ui, prompt, PrUiTextSelection{at, at});
+    }
+
+    void prompt(PrLayoutNode footer) {
+        std::size_t active = model.active();
+        PrLayoutNode box = element(footer, Part::Prompt, PrUiFlag_Pressable | PrUiFlag_Focusable,
+            prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6}));
+        prUiSetCursor(ui, box, PrAppCursor_Text);
+        if (prUiFocus(ui) != box)
+            prUiSetFocus(ui, box);
+        icon(box, Part::Plus, look.plus, kPlusSide, kPlusSide);
+        PrLayoutNode scroller = element(box, Part::PromptScroll, PrUiFlag_Scrollable);
+        PrLayoutNode holder = element(scroller, Part::PromptText);
+
+        // A tab's draft comes back with the caret at its end.
+        const std::string& draft = model.tab(active).draft;
+        if (view.prompted != active) {
+            view.prompted = active;
+            uint32_t end = uint32_t(draft.size());
+            prUiTextEditSetSelection(ui, box, PrUiTextSelection{end, end});
+        }
+        PrUiTextEditDesc edit{};
+        edit.control = box;
+        edit.parent = holder;
+        edit.value = sv(draft);
+        edit.flags = PrUiTextEditFlag_Multiline;
+        edit.selection = prColor16FromColor(kSelection);
+        edit.caret = prColor16FromColor(kInk);
+        prUiTextEdit(ui, &edit);
+        PrStringView changed{};
+        if (prUiTextEditChanged(ui, box, &changed))
+            model.set_draft(active, std::string(changed.data, changed.size));
+
+        std::size_t count = 0;
+        const PromptKey* keys = promptKeys(&count);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (!prUiKeyCaptured(ui, box, keys[i].key, keys[i].modifiers))
+                continue;
+            switch (keys[i].action) {
+                case Action::Send: model.send(active); break;
+                case Action::Queue: model.queue(active); break;
+                case Action::Newline: newline(box, active); break;
+                default: break;
+            }
+        }
+        if (model.tab(active).draft.empty() && !prUiTextEditIsComposing(ui, box))
+            text(holder, Part::Placeholder, sv(kPlaceholderText));
+        icon(box, Part::Stop, look.stop, kStopSide, kStopSide);
+        icon(box, Part::Mic, look.mic, kMicWidth, kMicHeight);
+
+        PrLayoutNode labels = element(footer, Part::LabelRow);
+        text(labels, Part::Label, sv(model.tab(active).model));
+        icon(labels, Part::Ring, look.ring, kRingSide, kRingSide);
+    }
+
+    void build(PrLayoutNode parent) {
+        view.tabs.resize(model.tab_count());
+        PrLayoutNode window = element(parent, Part::Window);
+        strip(window);
+        transcript(window);
+        PrLayoutNode footer = element(window, Part::Footer);
+        if (model.tab_count() != 0)
+            prompt(footer);
+    }
 };
-
-// Draws a paragraph wrapped to `width`, with an optional bold run-in `lead`. Returns its height.
-float paragraph(PrDrawList* list, const Fonts& fonts, const std::string& lead, const std::string& text, float left,
-        float width, float top, PrColor ink) {
-    std::string whole = lead.empty() ? text : lead + " " + text;
-    std::vector<std::string> lines = wrap(fonts, fonts.regular, kBodySize, whole, width);
-    if (list != nullptr) {
-        for (size_t i = 0; i < lines.size(); ++i) {
-            PrVec2 at{left, top + kLinePitch * float(i) + kLinePitch * 0.72f};
-            if (i == 0 && !lead.empty() && lines[0].compare(0, lead.size(), lead) == 0) {
-                at.x += drawText(list, fonts, fonts.semibold, kBodySize, lead, at, ink);
-                drawText(list, fonts, fonts.regular, kBodySize, lines[0].substr(lead.size()), at, ink);
-            } else {
-                drawText(list, fonts, fonts.regular, kBodySize, lines[i], at, ink);
-            }
-        }
-    }
-    return float(lines.size()) * kLinePitch;
-}
-
-// Lays out one entry at `top`, drawing it if `list` is not null. Returns its height including the gap after it.
-float entry(PrDrawList* list, const Fonts& fonts, const Entry& e, bool newestPerson, Column c, float top) {
-    float width = c.right - c.left;
-    switch (e.kind) {
-        case EntryKind::Person: {
-            float maxText = width * kBubbleMaxFraction - kBubblePadX * 2;
-            std::vector<std::string> lines = wrap(fonts, fonts.regular, kBodySize, e.text, maxText);
-            float textWidth = 0;
-            for (const std::string& l : lines)
-                textWidth = std::max(textWidth, measure(fonts, fonts.regular, kBodySize, l));
-            float h = float(lines.size()) * kLinePitch + kBubblePadY * 2;
-            PrRect bubble{c.right - textWidth - kBubblePadX * 2, top, c.right, top + h};
-            float meta = (newestPerson || e.queued) ? kMetaSize * 1.6f : 0;
-            if (list != nullptr) {
-                fillRounded(list, bubble, kBubbleRadius, faded(kBubble, e.queued ? 0.5f : 1));
-                for (size_t i = 0; i < lines.size(); ++i)
-                    drawText(list, fonts, fonts.regular, kBodySize, lines[i],
-                        PrVec2{bubble.left + kBubblePadX, top + kBubblePadY + kLinePitch * float(i) + kLinePitch * 0.72f},
-                        faded(kInk, e.queued ? 0.55f : 1));
-                float baseline = bubble.bottom + kMetaSize * 1.3f;
-                if (e.queued) {
-                    float w = measure(fonts, fonts.regular, kMetaSize, "queued");
-                    drawText(list, fonts, fonts.regular, kMetaSize, "queued", PrVec2{c.right - w - 6, baseline}, kMeta);
-                } else if (newestPerson) {
-                    float w = measure(fonts, fonts.regular, kMetaSize, "Just now");
-                    float x = c.right - w - 6;
-                    drawText(list, fonts, fonts.regular, kMetaSize, "Just now", PrVec2{x, baseline}, kMeta);
-                    float s = kMetaSize * 0.55f;
-                    check(list, PrVec2{x - s * 3.1f, baseline - s * 0.45f}, s, kMeta, 1.6f);
-                    check(list, PrVec2{x - s * 2.3f, baseline - s * 0.45f}, s, kMeta, 1.6f);
-                }
-            }
-            return h + meta + kGap;
-        }
-        case EntryKind::Ai:
-            return paragraph(list, fonts, e.lead, e.text, c.left, width, top, kInk) + kGap;
-        case EntryKind::ToolSummary:
-            return paragraph(list, fonts, {}, e.text + "  \xE2\x80\xBA", c.left, width, top, kNotice) + kGap;
-        case EntryKind::TaskList: {
-            float h = kCardRow * float(e.tasks.size()) + kCardRow * 0.35f;
-            if (list != nullptr) {
-                strokeRounded(list, PrRect{c.left, top, c.right, top + h}, kCardRadius, kCardLine, 1);
-                for (size_t i = 0; i < e.tasks.size(); ++i) {
-                    const Task& t = e.tasks[i];
-                    float cy = top + kCardRow * 0.175f + kCardRow * float(i) + kCardRow / 2;
-                    PrVec2 center{c.left + kU * 1.0f, cy};
-                    PrColor ink = kInk;
-                    if (t.state == TaskState::Done) {
-                        prDrawListEllipse(list, center, PrVec2{kIcon, kIcon}, 0, PrDrawPaint{.color = kNotice});
-                        check(list, PrVec2{center.x - kIcon * 0.5f, center.y + kIcon * 0.05f}, kIcon, kBackground, 2.2f);
-                        ink = kNotice;
-                    } else if (t.state == TaskState::InProgress) {
-                        circleStroke(list, center, kIcon * 0.92f, kCardLine, 2.4f);
-                        prDrawListSector(list, center, kIcon * 0.8f, kIcon * 1.05f, -kPi / 2, kPi * 1.2f,
-                            PrDrawPaint{.color = kInk});
-                    } else {
-                        static const float dashes[] = {2.8f, 2.8f};
-                        circleStroke(list, center, kIcon * 0.92f, kNotice, 1.6f, dashes, 2);
-                        ink = faded(kInk, 0.85f);
-                    }
-                    drawText(list, fonts, fonts.regular, kBodySize, t.text,
-                        PrVec2{c.left + kU * 1.9f, cy + kBodySize * 0.35f}, ink);
-                }
-            }
-            return h + kGap;
-        }
-        case EntryKind::Status: {
-            if (list != nullptr) {
-                // Two small orange dots, then dim text, as in the reference.
-                float cy = top + kLinePitch * 0.72f - kBodySize * 0.33f;
-                float r = kBodySize * 0.12f;
-                prDrawListEllipse(list, PrVec2{c.left + r * 1.3f, cy}, PrVec2{r, r}, 0, PrDrawPaint{.color = kOrange});
-                prDrawListEllipse(list, PrVec2{c.left + r * 7.0f, cy}, PrVec2{r * 1.1f, r}, 0,
-                    PrDrawPaint{.color = kOrange});
-                drawText(list, fonts, fonts.regular, kBodySize, e.text,
-                    PrVec2{c.left + kBodySize * 1.7f, top + kLinePitch * 0.72f}, kNotice);
-            }
-            return kLinePitch + kGap;
-        }
-    }
-    return 0;
-}
 
 } // namespace
 
-// ---------------------------------------------------------------------------------------------------------------------
-
-bool openFonts(Fonts& fonts, std::string& error) {
-    if (prFontCreateFromFile("/System/Library/Fonts/SFNS.ttf", 0, nullptr, &fonts.regular) != PrStatus_Ok) {
-        error = "could not load /System/Library/Fonts/SFNS.ttf";
-        return false;
-    }
-    PrFontVariation weight{PR_FONT_TAG('w', 'g', 'h', 't'), 600};
-    PrFontDerivation derivation = prFontDerivationDefault();
-    derivation.variations = &weight;
-    derivation.variationCount = 1;
-    fonts.semibold = prFontCreateDerived(fonts.regular, &derivation);
-    if (prFontCreateFromFile("/System/Library/Fonts/Apple Symbols.ttf", 0, nullptr, &fonts.symbols) != PrStatus_Ok)
-        fonts.symbols = nullptr;
-    fonts.shaper = prTextShaperCreate(PrTextShaperBackend_Default);
-    fonts.buffer = prTextGlyphBufferCreate();
-    if (fonts.shaper == nullptr) {
-        error = "no text shaper in this build";
-        return false;
-    }
-    return true;
+void openLook(Look& look, PrFontSet* fonts) {
+    look.body = font(fonts, kBodySize);
+    look.tab = font(fonts, kTabSize);
+    look.label = font(fonts, kLabelSize);
+    look.meta = font(fonts, kMetaSize);
+    look.plus = drawPlus();
+    look.stop = drawStop();
+    look.mic = drawMic();
+    look.ring = drawRing();
 }
 
-void closeFonts(Fonts& fonts) {
-    prTextGlyphBufferDestroy(fonts.buffer);
-    prTextShaperDestroy(fonts.shaper);
-    prFontRelease(fonts.symbols);
-    prFontRelease(fonts.semibold);
-    prFontRelease(fonts.regular);
-    fonts = Fonts{};
+void closeLook(Look& look) {
+    prTextFontRelease(look.body);
+    prTextFontRelease(look.tab);
+    prTextFontRelease(look.label);
+    prTextFontRelease(look.meta);
+    prDrawListRelease(look.plus);
+    prDrawListRelease(look.stop);
+    prDrawListRelease(look.mic);
+    prDrawListRelease(look.ring);
+    look = Look{};
 }
 
-void drawWindow(PrDrawList* list, const Model& model, ViewState& view, const Fonts& fonts, PrVec2 extent) {
-    view.scroll.resize(model.tabs.size(), 0);
-    prDrawListRect(list, PrRect{0, 0, extent.x, extent.y}, PrDrawPaint{.color = kBackground});
-
-    // Tab strip, in the place and quiet style of the reference's title row.
-    prDrawListRect(list, PrRect{0, 0, extent.x, kStripHeight}, PrDrawPaint{.color = kStrip});
-    view.tabRects.assign(model.tabs.size(), PrRect{});
-    float x = kU * 0.8f;
-    float pillH = kTabSize * 1.75f;
-    float pillTop = (kStripHeight - pillH) / 2;
-    float tabBaseline = kStripHeight / 2 + kTabSize * 0.36f;
-    for (size_t i = 0; i < model.tabs.size(); ++i) {
-        bool active = i == model.active;
-        std::string number = std::to_string(i + 1);
-        const std::string& name = model.tabs[i].who.name;
-        float numberW = measure(fonts, fonts.regular, kTabSize, number);
-        float nameW = measure(fonts, fonts.regular, kTabSize, name);
-        float pad = kTabSize * 0.6f;
-        PrRect r{x, pillTop, x + pad + numberW + kTabSize * 0.45f + nameW + pad, pillTop + pillH};
-        view.tabRects[i] = r;
-        if (active)
-            fillRounded(list, r, pillH * 0.3f, kBubble);
-        drawText(list, fonts, fonts.regular, kTabSize, number, PrVec2{r.left + pad, tabBaseline}, kPlaceholder);
-        drawText(list, fonts, fonts.regular, kTabSize, name,
-            PrVec2{r.left + pad + numberW + kTabSize * 0.45f, tabBaseline}, active ? kInk : kNotice);
-        x = r.right + kTabSize * 0.3f;
-    }
-    prDrawListRect(list, PrRect{0, kStripHeight, extent.x, kStripHeight + 1}, PrDrawPaint{.color = kStripLine});
-
-    // The transcript column and the slightly wider prompt box, both centred.
-    float columnW = extent.x * kColumnFraction;
-    Column c{(extent.x - columnW) / 2, (extent.x + columnW) / 2};
-    float promptW = extent.x * kPromptFraction;
-
-    // Prompt box and the label row beneath it, pinned to the bottom.
-    const Tab& tab = activeTab(model);
-    PrRect box{(extent.x - promptW) / 2, extent.y - kPromptBottom - kPromptHeight, (extent.x + promptW) / 2,
-        extent.y - kPromptBottom};
-    fillRounded(list, box, kPromptRadius, kPromptFill);
-    strokeRounded(list, box, kPromptRadius, kPromptBorder, 1);
-    float mid = (box.top + box.bottom) / 2;
-    float plusX = box.left + kU * 1.15f;
-    float plus = kU * 0.32f;
-    line(list, PrVec2{plusX - plus, mid}, PrVec2{plusX + plus, mid}, kInk, 2);
-    line(list, PrVec2{plusX, mid - plus}, PrVec2{plusX, mid + plus}, kInk, 2);
-    float textX = box.left + kU * 2.3f;
-    float baseline = mid + kBodySize * 0.36f;
-    float caretH = kBodySize * 0.62f;
-    if (tab.prompt.empty()) {
-        drawText(list, fonts, fonts.regular, kBodySize, "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later",
-            PrVec2{textX, baseline}, kPlaceholder);
-        if (view.caretOn)
-            prDrawListRect(list, PrRect{textX - 3, mid - caretH, textX - 1, mid + caretH}, PrDrawPaint{.color = kInk});
-    } else {
-        drawText(list, fonts, fonts.regular, kBodySize, tab.prompt, PrVec2{textX, baseline}, kInk);
-        float caretX = textX + measure(fonts, fonts.regular, kBodySize, tab.prompt.substr(0, tab.caret));
-        if (view.caretOn)
-            prDrawListRect(list, PrRect{caretX, mid - caretH, caretX + 2, mid + caretH}, PrDrawPaint{.color = kInk});
-    }
-    // Stop square, then the microphone, at the right (the reference's order).
-    float micX = box.right - kU * 1.15f;
-    float stopX = micX - kU * 1.9f;
-    float stop = kU * 0.36f;
-    fillRounded(list, PrRect{stopX - stop, mid - stop, stopX + stop, mid + stop}, stop * 0.3f, kStop);
-    PrDrawStroke micStroke = prDrawStrokeDefault();
-    micStroke.shape.width = 2;
-    float m = kU * 0.2f;
-    prDrawListCapsule(list, PrVec2{micX, mid - m * 2}, PrVec2{micX, mid + m * 0.2f}, m * 1.1f,
-        PrDrawPaint{.color = kInk, .stroke = &micStroke});
-    prDrawListSector(list, PrVec2{micX, mid + m * 0.2f}, m * 1.8f, m * 1.8f + 2, 0, kPi, PrDrawPaint{.color = kInk});
-    line(list, PrVec2{micX, mid + m * 2.0f}, PrVec2{micX, mid + m * 2.8f}, kInk, 2);
-
-    // Model, effort, mode and a ring: right-aligned under the box.
-    float rowBase = extent.y - kLabelBaseline;
-    std::string modelName = tab.who.model.empty() ? std::string("model") : tab.who.model;
-    float space = kLabelSize * 0.5f;
-    float ringR = kLabelSize * 0.38f;
-    float wModel = measure(fonts, fonts.regular, kLabelSize, modelName);
-    float wHigh = measure(fonts, fonts.regular, kLabelSize, "High");
-    float wAuto = measure(fonts, fonts.regular, kLabelSize, "Auto");
-    float rx = box.right - kU * 0.7f - ringR * 2 - space * 2 - wAuto - space * 2 - wHigh - space - wModel;
-    rx += drawText(list, fonts, fonts.regular, kLabelSize, modelName, PrVec2{rx, rowBase}, kInk) + space;
-    rx += drawText(list, fonts, fonts.regular, kLabelSize, "High", PrVec2{rx, rowBase}, kNotice) + space * 2;
-    rx += drawText(list, fonts, fonts.regular, kLabelSize, "Auto", PrVec2{rx, rowBase}, kInk) + space * 2;
-    circleStroke(list, PrVec2{rx + ringR, rowBase - kLabelSize * 0.35f}, ringR, kRing, 2.2f);
-
-    // Transcript: everything between the strip and the box, bottom-anchored, scrolled, clipped.
-    PrRect area{0, kStripHeight + 1, extent.x, box.top - kU};
-    bool newestFound = false;
-    size_t newestPerson = tab.transcript.size();
-    for (size_t i = tab.transcript.size(); i-- > 0 && !newestFound;) {
-        if (tab.transcript[i].kind == EntryKind::Person && !tab.transcript[i].queued) {
-            newestPerson = i;
-            newestFound = true;
-        }
-    }
-    float inset = kU * 0.6f;
-    float total = inset;
-    for (size_t i = 0; i < tab.transcript.size(); ++i)
-        total += entry(nullptr, fonts, tab.transcript[i], i == newestPerson, c, 0);
-    float areaH = area.bottom - area.top;
-    view.maxScroll = std::max(0.0f, total - areaH);
-    float& scroll = view.scroll[model.active];
-    scroll = std::clamp(scroll, 0.0f, view.maxScroll);
-    float y = total > areaH ? area.bottom - total + scroll + inset : area.top + inset;
-    prDrawListPushClipRect(list, area, PrDrawEdges_Antialiased);
-    if (tab.transcript.empty()) {
-        std::string hint = "Say something to " + tab.who.name;
-        float w = measure(fonts, fonts.regular, kBodySize, hint);
-        drawText(list, fonts, fonts.regular, kBodySize, hint,
-            PrVec2{(extent.x - w) / 2, (area.top + area.bottom) / 2}, kPlaceholder);
-    }
-    for (size_t i = 0; i < tab.transcript.size(); ++i)
-        y += entry(list, fonts, tab.transcript[i], i == newestPerson, c, y);
-    prDrawListPopClip(list);
-}
-
-int tabAt(const ViewState& view, PrVec2 p) {
-    for (size_t i = 0; i < view.tabRects.size(); ++i) {
-        const PrRect& r = view.tabRects[i];
-        if (p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom)
-            return int(i);
-    }
-    return -1;
-}
-
-void scrollBy(const Model& model, ViewState& view, float dy) {
-    view.scroll.resize(model.tabs.size(), 0);
-    float& s = view.scroll[model.active];
-    s = std::clamp(s + dy, 0.0f, view.maxScroll);
+void buildWindow(View& view, PrUi* ui, PrLayoutNode parent) {
+    Builder b{view, ui, prUiTree(ui), *view.look, *view.model};
+    b.build(parent);
 }
 
 } // namespace nexus

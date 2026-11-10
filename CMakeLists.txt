@@ -1,4 +1,4 @@
-# nexus: tracer bullet for the first window. macOS only for now.
+# nexus: one person and several AIs in one window. macOS only for now.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
@@ -23,14 +23,33 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
-# The non-drawing logic: tabs, transcripts, prompt text, send and queue. No OS, no time.
+set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
+
+# The non-drawing logic: tabs, transcripts, drafts, send and queue. No OS, no time.
 add_library(nexus_model STATIC src/model.cpp)
 target_include_directories(nexus_model PUBLIC src)
-target_compile_options(nexus_model PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
-add_executable(nexus src/main.cpp src/view.cpp src/friends.cpp src/platform_mac.mm)
+# The window's logic that runs without a window: the key bindings, and the friend list's parsing (and the command that
+# prints it).
+add_library(nexus_window_logic STATIC src/input.cpp src/friends.cpp)
+target_include_directories(nexus_window_logic PUBLIC src)
+target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
+
+# The app, as a real bundle: nexus.app.
+add_executable(nexus MACOSX_BUNDLE src/main.cpp src/view.cpp src/platform_mac.mm)
 set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-target_compile_options(nexus PRIVATE -Wall -Wextra -Wpedantic -Werror)
-target_link_libraries(nexus PRIVATE nexus_model
-    prax::app prax::draw prax::gpu prax::font prax::text prax::image prax::compress prax::core_cpp
+target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus PRIVATE nexus_window_logic
+    prax::studio_window prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw
+    prax::gpu prax::image prax::compress prax::app prax::core_cpp
     "-framework AppKit")
+set_target_properties(nexus PROPERTIES
+    MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
+    MACOSX_BUNDLE_BUNDLE_NAME nexus
+    MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
+    MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
+
+enable_testing()
+add_subdirectory(tests/window)

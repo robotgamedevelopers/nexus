@@ -12,10 +12,10 @@
 namespace nexus::style {
 
 // Type sizes.
-constexpr float kBodySize = 28;        // transcript, bubbles, prompt, dim notices, status line
+constexpr float kBodySize = 28;        // transcript, bubbles, prompt, dim notices
 constexpr float kTabSize = 26;         // tab labels (the reference's title row)
-constexpr float kLabelSize = 24;       // model / effort / mode label under the prompt
-constexpr float kMetaSize = 21;        // "Just now", "queued" (not in the reference; one step below the label)
+constexpr float kLabelSize = 24;       // model label under the prompt
+constexpr float kMetaSize = 21;        // "queued" (not in the reference; one step below the label)
 
 // Spacing, as multiples of the body size.
 constexpr float kU = kBodySize;
@@ -25,18 +25,17 @@ constexpr float kStripHeight = 3.1f * kU;     // the tab row, where the referenc
 constexpr float kBubblePadX = 1.07f * kU;
 constexpr float kBubblePadY = 0.75f * kU;
 constexpr float kBubbleRadius = 0.9f * kU;
-constexpr float kBubbleMaxFraction = 0.83f;   // of the column
-constexpr float kPromptHeight = 2.9f * kU;
+constexpr float kBubbleMaxPercent = 83;       // of the column
+constexpr float kPromptHeight = 2.9f * kU;    // the prompt box with one line of text
 constexpr float kPromptRadius = 0.72f * kU;
 constexpr float kPromptBottom = 2.75f * kU;   // window bottom to the prompt box's bottom
 constexpr float kLabelBaseline = 0.9f * kU;   // window bottom to the label row's baseline
-constexpr float kCardRow = 1.75f * kU;
-constexpr float kCardRadius = 0.6f * kU;
-constexpr float kIcon = 0.36f * kU;           // radius of task icons
+constexpr float kPromptMaxLines = 8;          // the prompt grows to this many lines, then scrolls
+constexpr float kColumnInset = 0.6f * kU;     // above the first transcript entry
 
-// Widths, as fractions of the window width.
-constexpr float kColumnFraction = 0.541f;     // transcript: x 462..1544 of 2000
-constexpr float kPromptFraction = 0.5675f;    // prompt box: x 432..1567 of 2000
+// Widths, as percentages of the window width.
+constexpr float kColumnPercent = 54.1f;       // transcript: x 462..1544 of 2000
+constexpr float kPromptPercent = 56.75f;      // prompt box: x 432..1567 of 2000
 
 // Colours.
 constexpr PrColor rgb(unsigned hex) {
@@ -48,14 +47,17 @@ constexpr PrColor kStrip = rgb(0x1b1b1b);
 constexpr PrColor kStripLine = rgb(0x373737);
 constexpr PrColor kBubble = rgb(0x252525);
 constexpr PrColor kInk = rgb(0xf3f3f3);
-constexpr PrColor kNotice = rgb(0x9e9e9e);     // dim notices, status text, "High"
+constexpr PrColor kNotice = rgb(0x9e9e9e);     // dim notices
 constexpr PrColor kPlaceholder = rgb(0x8c8c8c);
 constexpr PrColor kMeta = rgb(0x707070);
-constexpr PrColor kCardLine = rgb(0x333333);
 constexpr PrColor kPromptFill = rgb(0x303030);
 constexpr PrColor kPromptBorder = rgb(0x3a3a3a);
 constexpr PrColor kStop = rgb(0xf1f1f1);
-constexpr PrColor kOrange = rgb(0xcc7f60);
 constexpr PrColor kRing = rgb(0x404c55);
+constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in the reference)
+
+// The queued bubble's fill and text, as alphas of kBubble and kInk.
+constexpr float kQueuedFill = 0.5f;
+constexpr float kQueuedInk = 0.55f;
 
 } // namespace nexus::style

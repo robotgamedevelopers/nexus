@@ -1,110 +1,99 @@
+// The window's stand-in for the model: the simplest code that keeps the frozen interface in model.h, so the window
+// builds. The model worker's model.cpp replaces this file.
+//
+// The frozen header declares no data members, so the state of each Model lives in a table keyed by its address. A Model
+// is therefore never copied or moved, and its entry stays for the life of the process (the window makes one).
+
 #include "model.h"
+
+#include <unordered_map>
 
 namespace nexus {
 
 namespace {
 
-bool isContinuation(unsigned char c) {
-    return (c & 0xC0) == 0x80;
+struct State {
+    std::vector<Tab> tabs;
+    std::size_t active = 0;
+};
+
+std::unordered_map<const Model*, State>& states() {
+    static std::unordered_map<const Model*, State> table;
+    return table;
+}
+
+State& of(const Model* model) {
+    return states()[model];
+}
+
+bool blank(const std::string& text) {
+    for (char c : text) {
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v')
+            return false;
+    }
+    return true;
+}
+
+bool post(const Model* model, std::size_t i, EntryKind kind) {
+    State& s = of(model);
+    if (i >= s.tabs.size() || blank(s.tabs[i].draft))
+        return false;
+    s.tabs[i].transcript.push_back(Entry{kind, std::move(s.tabs[i].draft)});
+    s.tabs[i].draft.clear();
+    return true;
 }
 
 } // namespace
 
-Model makeModel(const std::vector<Friend>& friends) {
-    Model model;
-    for (const Friend& f : friends)
-        model.tabs.push_back(Tab{.who = f, .transcript = {}, .prompt = {}, .caret = 0});
-    return model;
+Model::Model(const std::vector<FriendInfo>& friends) {
+    State& s = of(this);
+    s = State{};
+    for (const FriendInfo& f : friends)
+        s.tabs.push_back(Tab{f.name, f.model, {}, {}});
 }
 
-bool selectTab(Model& model, size_t index) {
-    if (index >= model.tabs.size() || index == model.active)
+std::size_t Model::tab_count() const {
+    return of(this).tabs.size();
+}
+
+std::size_t Model::active() const {
+    return of(this).active;
+}
+
+const Tab& Model::tab(std::size_t i) const {
+    return of(this).tabs[i];
+}
+
+bool Model::select_tab(std::size_t i) {
+    State& s = of(this);
+    if (i >= s.tabs.size())
         return false;
-    model.active = index;
+    s.active = i;
     return true;
 }
 
-Tab& activeTab(Model& model) {
-    return model.tabs[model.active];
-}
-
-const Tab& activeTab(const Model& model) {
-    return model.tabs[model.active];
-}
-
-void insertText(Model& model, const std::string& utf8) {
-    Tab& tab = activeTab(model);
-    tab.prompt.insert(tab.caret, utf8);
-    tab.caret += utf8.size();
-}
-
-void backspace(Model& model) {
-    Tab& tab = activeTab(model);
-    if (tab.caret == 0)
-        return;
-    size_t start = tab.caret - 1;
-    while (start > 0 && isContinuation(static_cast<unsigned char>(tab.prompt[start])))
-        --start;
-    tab.prompt.erase(start, tab.caret - start);
-    tab.caret = start;
-}
-
-void caretLeft(Model& model) {
-    Tab& tab = activeTab(model);
-    if (tab.caret == 0)
-        return;
-    --tab.caret;
-    while (tab.caret > 0 && isContinuation(static_cast<unsigned char>(tab.prompt[tab.caret])))
-        --tab.caret;
-}
-
-void caretRight(Model& model) {
-    Tab& tab = activeTab(model);
-    if (tab.caret >= tab.prompt.size())
-        return;
-    ++tab.caret;
-    while (tab.caret < tab.prompt.size() && isContinuation(static_cast<unsigned char>(tab.prompt[tab.caret])))
-        ++tab.caret;
-}
-
-bool submit(Model& model, bool queue) {
-    Tab& tab = activeTab(model);
-    if (tab.prompt.empty())
+bool Model::set_draft(std::size_t i, std::string text) {
+    State& s = of(this);
+    if (i >= s.tabs.size())
         return false;
-    Entry entry;
-    entry.kind = EntryKind::Person;
-    entry.text = tab.prompt;
-    entry.queued = queue;
-    tab.transcript.push_back(entry);
-    tab.prompt.clear();
-    tab.caret = 0;
+    s.tabs[i].draft = std::move(text);
     return true;
 }
 
-void seedSample(Tab& tab) {
-    auto add = [&](EntryKind kind, const char* text) {
-        Entry e;
-        e.kind = kind;
-        e.text = text;
-        tab.transcript.push_back(e);
-    };
-    add(EntryKind::Person, "Can you set up the repo for nexus?");
-    add(EntryKind::Ai, "Sure. I'll check who can create repos in the org first, then make it private and report back.");
-    add(EntryKind::ToolSummary, "Read org-settings.md, ran 1 command");
-    add(EntryKind::Ai, "Only org owners can create repos there. I'm not an owner, so I'll need you to create it.");
-    tab.transcript.back().lead = "What I found.";
-    add(EntryKind::Person, "Done, it's created. Go ahead.");
-    add(EntryKind::ToolSummary, "Read not-org-admin-by-design.md, ran 2 commands, 1 failed");
-    add(EntryKind::Ai, "Thanks. The first push was refused because the repo was still empty on my side; retrying on main now.");
-    Entry card;
-    card.kind = EntryKind::TaskList;
-    card.tasks = {
-        Task{"Check who can create the repo", TaskState::Done},
-        Task{"Create private nexus repo", TaskState::InProgress},
-        Task{"Report", TaskState::Pending},
-    };
-    tab.transcript.push_back(card);
-    add(EntryKind::Status, "29s \xC2\xB7 225 tokens");
+bool Model::send(std::size_t i) {
+    return post(this, i, EntryKind::Person);
+}
+
+bool Model::queue(std::size_t i) {
+    return post(this, i, EntryKind::Queued);
+}
+
+bool Model::append(std::size_t i, Entry e) {
+    State& s = of(this);
+    if (i >= s.tabs.size())
+        return false;
+    s.tabs[i].transcript.push_back(std::move(e));
+    return true;
 }
 
 } // namespace nexus
