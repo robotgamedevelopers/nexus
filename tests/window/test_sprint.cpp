@@ -166,6 +166,12 @@ void eventsAreRouted() {
     CHECK(routeBoardEvent(key(PrAppKey_Escape, 0), true, false) == BoardRoute::Window);
     CHECK(routeBoardEvent(key(PrAppKey_Down, 0), true, false) == BoardRoute::Page);
     CHECK(routeBoardEvent(key(PrAppKey(' '), 0), false, false) == BoardRoute::Page);
+    // The keys that scroll the page go to it; Command-Up and Command-Down too (to its top and its bottom).
+    for (PrAppKey k : {PrAppKey_Up, PrAppKey_Down, PrAppKey_PageUp, PrAppKey_PageDown, PrAppKey_Home, PrAppKey_End})
+        CHECK(routeBoardEvent(key(k, 0), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey(' '), PrAppModifierFlag_Shift), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey_Up, kCmd), false, false) == BoardRoute::Page);
+    CHECK(routeBoardEvent(key(PrAppKey_Down, kCmd), false, false) == BoardRoute::Page);
     PrAppEvent text = pointer(PrAppEventKind_Text);
     CHECK(routeBoardEvent(text, false, false) == BoardRoute::Page);
     text.modifiers = kCmd;
@@ -189,9 +195,9 @@ void preludeCarriesTheZonesAndEscapesThem() {
 }
 
 // The page keeps its own background: nothing in the sheet touches a background or --bg, and before the Cost breakdown's
-// top is measured the sheet is empty, so the panel keeps its own height.
+// top is measured the sheet is the brand alone, so the panel keeps its own height.
 void styleLeavesThePageBackgroundAlone() {
-    CHECK(sprintPageStyle(SpendFit{}).empty());
+    CHECK(sprintPageStyle(SpendFit{}) == kSprintRepoLinkStyle);
     std::string s = sprintPageStyle(SpendFit{547.5, 32, 64});
     CHECK(!has(s, "background") && !has(s, "--bg") && !has(s, "transparent"));
 }
@@ -207,6 +213,26 @@ void styleStretchesTheOpenCostBreakdown() {
     // A page whose gap below is smaller than its gap between blocks: the margin grows to the gap.
     CHECK(has(sprintPageStyle(SpendFit{100, 32, 8}), "calc(100vh - 132.00px); margin-bottom: 32.00px;"));
     CHECK(has(sprintPageStyle(SpendFit{0, 0, 0}), "calc(100vh - 0.00px); margin-bottom: 0.00px;"));
+}
+
+// A link leaves the board for another document, or with target _blank; a place on the board, no URL, or a javascript:
+// link stays.
+void linksLeaveForAnotherDocument() {
+    const std::string_view board = "http://studio.local:7300/";
+    CHECK(linkLeavesBoard("https://github.com/mas-bandwidth/nova-sprint", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7300/cards/12", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7301/", board, ""));
+    CHECK(linkLeavesBoard("mailto:someone@example.test", board, ""));
+    CHECK(linkLeavesBoard("http://studio.local:7300/#later", board, "_blank"));
+    CHECK(linkLeavesBoard("http://studio.local:7300/#later", board, "_BLANK"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#later", board, ""));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#later", board, "_self"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/", board, ""));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#", "http://studio.local:7300/#earlier", ""));
+    CHECK(!linkLeavesBoard("", board, "_blank"));
+    CHECK(!linkLeavesBoard("javascript:void(0)", board, ""));
+    CHECK(!linkLeavesBoard("JavaScript:go()", board, "_blank"));
+    CHECK(!linkLeavesBoard("http://studio.local:7300/#a", "http://studio.local:7300/#b", "_top"));
 }
 
 } // namespace
@@ -225,6 +251,7 @@ int main() {
     preludeCarriesTheZonesAndEscapesThem();
     styleLeavesThePageBackgroundAlone();
     styleStretchesTheOpenCostBreakdown();
+    linksLeaveForAnotherDocument();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

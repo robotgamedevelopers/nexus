@@ -683,10 +683,11 @@ struct Builder {
         const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
         // Command-1 to Command-0 select the tabs at positions 1 to 10 in the strip's current order, in the keyboard
         // row's order. A key whose tab does not exist is refused by the model and changes nothing. macOS types no text
-        // for a Command chord.
+        // for a Command chord. The sprint tab's key takes its page back to the board (Board::home).
         for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
-            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super))
-                model.select_tab(n);
+            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super) && model.select_tab(n) &&
+                    model.tab(n).kind == TabKind::Sprint && view.board != nullptr)
+                view.board->home();
         }
         // The text scale's keys, claimed the same way, ask for a new scale; the next frame applies it (beginWindowFrame).
         for (const TextKey& t : kTextKeys) {
@@ -729,6 +730,10 @@ struct Builder {
         if (onFriend && prUiKeyPressed(ui, keys, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
             view.stop();
         strips(window);
+        // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
+        if (view.board != nullptr && !tabNodes.empty() && model.tab(0).kind == TabKind::Sprint &&
+                prUiClicked(ui, tabNodes[0], 0))
+            view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
         if (model.tab_count() != 0 && model.tab(model.active()).id != view.selectedId) {
             view.selectedId = model.tab(model.active()).id;

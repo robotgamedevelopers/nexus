@@ -19,6 +19,11 @@ add_executable(label_walk label_walk.cpp)
 target_link_libraries(label_walk PRIVATE nexus_window_logic)
 target_compile_options(label_walk PRIVATE ${warnings})
 
+# The board scroller's walk (src/scroll_glide.h), for GlideTrace.tla.
+add_executable(glide_walk glide_walk.cpp)
+target_link_libraries(glide_walk PRIVATE nexus_scroll)
+target_compile_options(glide_walk PRIVATE ${warnings})
+
 # The overlay's rules (src/overlay.h): their unit tests, and the walk whose traces OverlayTrace.tla checks.
 add_executable(overlay_test overlay_test.cpp)
 target_link_libraries(overlay_test PRIVATE nexus_model)
@@ -29,7 +34,7 @@ target_link_libraries(overlay_walk PRIVATE nexus_model)
 target_compile_options(overlay_walk PRIVATE ${warnings})
 
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk label_walk overlay_test overlay_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk label_walk glide_walk overlay_test overlay_walk)
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -46,10 +51,10 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
-# (hide-unkeyed, hotkey-hides).
+# (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY" "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS"
-        "" ${ARGN})
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK"
+        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -67,7 +72,9 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(T_LINKWALK)
+    if(T_GLIDEWALK)
+        list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_LINKWALK)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
     elseif(DEFINED T_SEED AND T_OVERLAY)
         list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
@@ -211,6 +218,23 @@ endforeach()
 tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
 tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
          LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+
+# The board's scroller (src/scroll_glide.h): Glide.tla on its small instance, every property.
+tlc_test(tlc_glide_spec MCGlide MCGlide.cfg pass)
+# Its reversed witnesses.
+tlc_test(tlc_glide_witness_jump_back     WGlideJumpBack      WGlideJumpBack.cfg      action    PROPERTY NeverBack)
+tlc_test(tlc_glide_witness_clamp_top     WGlideClampTop      WGlideClampTop.cfg      invariant PROPERTY InRange)
+tlc_test(tlc_glide_witness_pad_keeps     WGlidePadKeeps      WGlidePadKeeps.cfg      action    PROPERTY PadStops)
+tlc_test(tlc_glide_witness_lost_key_up   WGlideLostKeyUp     WGlideLostKeyUp.cfg     liveness)
+tlc_test(tlc_glide_witness_spring_inside WGlideSpringInside  WGlideSpringInside.cfg  invariant PROPERTY SpringAtEnd)
+tlc_test(tlc_glide_witness_spring_forever WGlideSpringForever WGlideSpringForever.cfg liveness)
+# Its code traces, each a behaviour of Glide.tla; and a scroller that loses the arrow's release, rejected (no step of
+# the spec reaches its next state: a deadlock).
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_glide_trace_seed_${seed} GlideTrace GlideTrace.cfg pass SEED ${seed} STEPS 1000 GLIDEWALK)
+endforeach()
+tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadlock SEED 1 STEPS 1000 GLIDEWALK
+         FAULTY keyup)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
 tlc_test(tlc_overlay_spec Overlay Overlay.cfg pass)

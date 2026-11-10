@@ -215,6 +215,35 @@ The binding: `tests/sync/link_walk.cpp` (`link_walk <seed> <steps> <windows> [--
 
 Per commit (`-L '^model$'`): the two small instances, the seven witnesses, six traces (seeds 1 to 4 on two windows and seed 5 on one, 400 steps each; seed 6 on three windows, 600 steps) and the three faulty traces: under 26 s of TLC in all, 7 s on eight cores.
 
+## Glide.tla: the sprint board's scrolling
+
+`Glide.tla` models `nexus::GlideScroller` (`src/scroll_glide.h`), which animates the board's scroll for the keys and the mouse wheel. The page's scroll is `pos` in `0..Max`; the band drawn past an end is `over`. The motion is `mode`: `idle`, a `coast` easing to `target` (exponential decay), a `hold` running while an arrow is down, or a `spring` taking the band back to an end (critically damped). Time is frames of `Dts` ticks; a coast or a spring that has not settled by its cap (`CoastTicks`, `SpringTicks`) lands where it was going. The curves are abstracted: each frame moves the page any amount the right way, up to the target, so a curve that overshoots or turns back is caught by the properties. The actions are an arrow pressed (`Press`), its OS repeat (ignored), its release (`Release`; the window losing focus is a release too, as Prax sends a key-up for every held key on resign), another key (`Key(d)`: a page, an end), a notch (`Wheel(d)`), a trackpad's scroll or a press of the pointer (`Interrupt`), the page's own script scrolling (`Page(y)`), the board leaving the screen (`Hide`), and `Frame(dt)`.
+
+| Property | Kind | Says |
+|---|---|---|
+| `InRange` | invariant | the scroll is in its range, the band under the view's height |
+| `BandAtEnds` | invariant | the band only at an end, on its outer side |
+| `ShowsItself` | invariant | while a motion runs, the page shows what the scroller last set |
+| `SpringAtEnd` | invariant | a spring stays at its end and never swings into the page |
+| `HeldOnlyPressed`, `HoldIsHeld` | invariant | only an arrow held down holds |
+| `EventsKeepPlace` | action | an event never moves the page itself: what it starts moves from where the page shows |
+| `NeverBack` | action | a coast or a hold, and every event during one, never moves the page back against its way (a retarget never jumps back) |
+| `PadStops` | action | a trackpad's scroll or a click stops the motion and the hold |
+| `Settles` | liveness | once input stops, the page comes to rest and nothing is held |
+
+`MCGlide` is the instance: a page of 3, lines of 1 and keys of 2 or 3, 15,668 states in about 2 s.
+
+| Witness | Broken | Rejected by |
+|---|---|---|
+| `WGlideJumpBack` | a key restarts the motion from where it began | `NeverBack` |
+| `WGlideClampTop` | no clamp at the top | `InRange` |
+| `WGlidePadKeeps` | a trackpad's scroll leaves the motion running | `PadStops` |
+| `WGlideLostKeyUp` | a release is lost, so the hold runs on | `Settles` |
+| `WGlideSpringInside` | the spring overshoots into the page | `SpringAtEnd` |
+| `WGlideSpringForever` | the spring never settles | `Settles` |
+
+The binding: `tests/model/glide_walk.cpp` (`glide_walk <seed> <steps> [--faulty-keyup] <out.tla>`) drives the real `GlideScroller` over a fake page in whole px (2000 of scroll, 800 high, lines of 40) with a seeded walk of presses, repeats, releases, page and end keys, notches, trackpad scrolls, clicks, the page's own scrolls, hides and frames of 4 to 33 ms, in time it counts itself. `GlideTrace.tla` pins each step's next state to the record (scroll, band, motion, target, cap left, hold) and takes the `Glide` action it names; a step the spec cannot take is a deadlock. Five seeds of 1000 steps run per commit; `--faulty-keyup` walks a scroller that loses the arrow's release, and TLC must report the deadlock.
+
 ## Overlay.tla: when the overlay shows and hides
 
 `Overlay.tla` is when the overlay shows and hides: `nexus::OverlayRules` in `src/overlay.h`, with the window that carries out its answers (`main.cpp` `carryOut`, through Prax) and the OS around it. Variables: `visible` (`prAppWindowIsVisible`), `active` (`prAppWindowIsActive`: the overlay has the keyboard), `keyed` (the rules' note that it has had the keyboard since it was last shown), `armed` (the key check after a show is pending, a Prax timer), `last`, the input just handled and the act answered, and `held`, whether nexus holds the window (`main.cpp` `a.window`): `carryOut` acts only on a window it holds. Inputs: `Hotkey`, `Escape`, `Observe` (a frame; a change of `visible` or `active` asks for one) and `KeyCheck`. The OS: a show gets the keyboard or not, `Lose` (Command-Tab, a click on another app), `Click` (a click on the overlay gives it back). Prax: `Open`, the window's open, which comes only with a frame of a shown window (a hidden window has no frames). `start()` creates the overlay window itself, so `Init` holds it from the start. `Spec` has weak fairness on `Observe` and `KeyCheck`: the frames and the check that a change asks for do come.

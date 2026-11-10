@@ -102,6 +102,44 @@ constexpr const char* kSpendPage = R"HTML(<!doctype html>
 <section class="next" id="next">cards by state</section><section class="rest">work</section>
 </body></html>)HTML";
 
+// The board's links: one to another site (the repo's), one to another page of the board's server, one to a place on
+// the board but with target _blank, one to a place on the board, one the page's own script handles, and one to
+// another site that the page cancels itself.
+constexpr const char* kLinksPage = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>links</title>
+<style>html, body { margin: 0; } a { display: block; height: 40px; } .far { height: 3000px; }</style></head>
+<body><a id="repo" href="https://github.test/nova-sprint">nova-sprint</a>
+<a id="card" href="/cards/12">card 12</a>
+<a id="blank" href="#later" target="_blank">later, new tab</a>
+<a id="here" href="#later"><span id="inner">later</span></a>
+<a id="script" href="javascript:void(document.title='ran')">run</a>
+<a id="kept" href="https://github.test/kept">kept</a>
+<div class="far"></div><div id="later">later</div>
+<script>document.getElementById("kept").addEventListener("click", function (e) { e.preventDefault(); });</script>
+</body></html>)HTML";
+
+// The served board's header and footer in their shape (nova-sprint's index.html): the logo tile and the wordmark in the
+// brand's h1, the live clock on the right, the footer's link to the repository; and a link to another repository.
+constexpr const char* kBrandPage = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>nova-sprint</title>
+<style>:root { --text: #e6e8eb; } html, body { margin: 0; color: var(--text); }
+.top { display: flex; align-items: center; justify-content: space-between; padding: 2rem; }
+.brand, .meta, .right { display: contents; }
+.brand h1 { margin: 0 1rem 0 0; display: inline-flex; align-items: center; gap: 1rem; font-size: 2.5rem; line-height: 3rem; font-weight: 650; letter-spacing: -.01em; }
+img#logo.logo-tile { width: 6rem; height: 6rem; flex: none; border-radius: 22.5%; }
+.wordmark { font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif; font-weight: 800; font-size: 5.5rem; line-height: 6rem; letter-spacing: -.02em; color: var(--text); text-transform: lowercase; }
+.wordmark.nofit { display: none; }
+footer { margin-top: 3rem; font-size: 1.5rem; line-height: 2.25rem; text-align: center; }
+a { display: inline-block; }</style></head>
+<body><header class="top"><div class="brand"><h1><img id="logo" class="logo-tile" width="120" height="120"
+alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark" id="wordmark">nova-sprint</span></h1>
+<div class="meta"><span class="chip">epoch <b>3</b></span></div></div>
+<div class="right"><span class="live" id="live">Live</span></div></header>
+<p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
+<footer id="foot"><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
+<footer id="more"><span id="note">made by the sprint</span> <a id="repo2" href="https://github.com/mas-bandwidth/nova-sprint/">repo</a></footer>
+</body></html>)HTML";
+
 // What the fixture server answers, and what it was asked.
 struct Server {
     bool down = false;              // every request fails as a refused connection
@@ -109,6 +147,7 @@ struct Server {
     std::string build = "b1";
     int pages = 0;                  // requests for the page
     int polls = 0;                  // requests for /api/sprint
+    int cards = 0;                  // requests for a card's page, /cards/...
     std::string body;               // the last answer's body, kept while the fetch copies it
 
     static void answer(void* context, PrFetchInterceptRequest* request) {
@@ -127,6 +166,9 @@ struct Server {
             ++s.polls;
             type.value = PrStringView{"application/json", 16};
             s.body = R"({"landed": 1234567, "cents": "12345678901", "build": ")" + s.build + "\"}";
+        } else if (has(url, "/cards/")) {
+            ++s.cards;
+            s.body = "<!doctype html><title>card</title><p>a card</p>";
         } else {
             status = 404;
             s.body = "not here";
@@ -164,6 +206,7 @@ struct Harness {
     Look look;
     View view;
     PraxBoard* board = nullptr;
+    std::vector<std::string> opened;    // what the board gave the system to open: the test's opener, no browser
     bool visible = true;
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
@@ -189,6 +232,7 @@ struct Harness {
         b.wallNow = Clock::wall;
         b.clockContext = &clock;
         b.visible = [this] { return visible; };
+        b.open = [this](const std::string& url) { opened.push_back(url); };
         board = new PraxBoard(b);
         view.model = &model;
         view.look = &look;
@@ -206,13 +250,13 @@ struct Harness {
         prFontSystemDestroy(system);
     }
 
-    // One frame, 50 ms after the last on both clocks.
-    void frame() {
-        time += 0.05;
-        clock.ms += 50;
+    // One frame, `seconds` (50 ms) after the last on both clocks.
+    void frame(double seconds = 0.05) {
+        time += seconds;
+        clock.ms += seconds * 1000;
         board->frame(time, prAppDisplayDefault());
         view.extent = extent;
-        PrUiFrameDesc desc{.time = time, .delta = 0.05, .extent = extent, .maxRounds = 4,
+        PrUiFrameDesc desc{.time = time, .delta = seconds, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
             Harness& h = *static_cast<Harness*>(context);
@@ -247,6 +291,21 @@ struct Harness {
 
     // The viewport's height, CSS px: the page's pane below the tab strip.
     double viewportHeight() { return prCssElementClientHeight(prCssDocumentScrollingElement(document())); }
+
+    // A click of the primary button at the centre of the element, as the window passes it to the board, and a frame.
+    void click(const char* id) {
+        const PrDomRect r = rect(id);
+        const PrRect pane = board->pane();
+        PrAppEvent e{};
+        e.kind = PrAppEventKind_PointerDown;
+        e.pointer.position = PrVec2{pane.left + float(r.x + r.width / 2), pane.top + float(r.y + r.height / 2)};
+        e.pointer.primary = true;
+        e.pointer.clicks = 1;
+        board->event(e);
+        e.kind = PrAppEventKind_PointerUp;
+        board->event(e);
+        frames(3);
+    }
 };
 
 // The page loads, its first answer paints, and the board's script runs: the digits grouped, the clock in en-US with
@@ -393,6 +452,210 @@ void theCostBreakdownFillsTheFirstScreen() {
     }
 }
 
+// Keys and the wheel through Prax's view: a tap moves a line, a held Down scrolls while held (its repeats ignored) and
+// coasts to rest, Page Down a page less a line, the ends bounce and spring back, a notch three lines; a trackpad's
+// pixels scroll at once and stop any motion.
+void keysAndTheWheelScrollSmoothly() {
+    Harness h;
+    h.server.page = kSpendPage;
+    h.extent = PrVec2{1200, 900};
+    h.frames(10);
+    CHECK(h.board->settled());
+    PrDomElement* s = prCssDocumentScrollingElement(h.document());
+    auto top = [&] { return prCssElementScrollTop(s); };
+    auto send = [&](PrAppEvent e) { CHECK(h.board->event(e)); };
+    auto key = [](PrAppEventKind kind, PrAppKey k, PrAppModifierFlags modifiers, bool repeat) {
+        PrAppEvent e{};
+        e.kind = kind;
+        e.modifiers = modifiers;
+        e.keyboard.key = k;
+        e.keyboard.repeat = repeat;
+        return e;
+    };
+    auto down = [&](PrAppKey k, PrAppModifierFlags m = 0, bool repeat = false) {
+        send(key(PrAppEventKind_KeyDown, k, m, repeat));
+    };
+    auto up = [&](PrAppKey k) { send(key(PrAppEventKind_KeyUp, k, 0, false)); };
+    const double frame = 1.0 / 120;
+    auto run = [&](double seconds) { for (double t = 0; t < seconds; t += frame) h.frame(frame); };
+    const double bottom = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
+
+    // A tap of Down: no jump at the press, moving at the next frames, at rest exactly a line on.
+    CHECK(top() == 0);
+    down(PrAppKey_Down);
+    CHECK(top() == 0);
+    h.frame(frame);
+    h.frame(frame);
+    CHECK(top() > 0 && top() < 40);
+    run(0.05);
+    up(PrAppKey_Down);
+    run(2);
+    CHECK(top() == 40);
+
+    // Page Down: a page less a line of overlap, with momentum.
+    const double page = h.viewportHeight() - 40;
+    down(PrAppKey_PageDown);
+    run(0.03);
+    CHECK(top() > 40 && top() < 40 + page);
+    up(PrAppKey_PageDown);
+    run(2);
+    CHECK(std::fabs(top() - (40 + page)) < 1);
+
+    // Down held for a second, the OS's repeats ignored: a line, then 1000 px/s from 0.15 s on, every frame onward; then it coasts to rest.
+    const double from = top();
+    down(PrAppKey_Down);
+    double last = top();
+    for (int i = 0; i < 120; ++i) {
+        h.frame(frame);
+        if (i % 4 == 3)
+            down(PrAppKey_Down, 0, true);
+        CHECK(top() >= last);
+        last = top();
+    }
+    CHECK(top() - from > 720 && top() - from < 880);
+    up(PrAppKey_Down);
+    const double released = top();
+    run(2);
+    CHECK(top() > released + 60 && top() < released + 140);
+
+    // Command-Up: to the top. End: to the bottom, where it bounces past the end and comes back.
+    down(PrAppKey_Up, PrAppModifierFlag_Super);
+    run(2);
+    CHECK(top() == 0);
+    down(PrAppKey_End);
+    run(2);
+    CHECK(std::fabs(top() - bottom) < 1);
+    down(PrAppKey_Down);
+    up(PrAppKey_Down);
+    bool bounced = false;
+    for (double t = 0; t < 2; t += frame) {
+        h.frame(frame);
+        CHECK(std::fabs(top() - bottom) < 1);
+        bounced = bounced || h.board->overscroll() > 1;
+    }
+    CHECK(bounced && h.board->overscroll() == 0);
+    down(PrAppKey_Home);
+    run(2);
+    CHECK(top() == 0);
+
+    // A wheel's notch over the page: three lines of Prax's 40 px, with momentum.
+    PrAppEvent wheel{};
+    wheel.kind = PrAppEventKind_Scroll;
+    wheel.scroll = PrAppScrollEvent{.position = PrVec2{600, 450}, .delta = PrVec2{0, 3}, .unit = PrAppScrollUnit_Line};
+    send(wheel);
+    CHECK(top() == 0);
+    h.frame(frame);
+    h.frame(frame);
+    CHECK(top() > 0 && top() < 120);
+    run(2);
+    CHECK(top() == 120);
+
+    // A trackpad's pixels: at once, and they stop any motion where it shows.
+    send(wheel);
+    h.frame(frame);
+    h.frame(frame);
+    const double mid = top();
+    CHECK(mid > 120 && mid < 240);
+    PrAppEvent pixels = wheel;
+    pixels.scroll.delta = PrVec2{0, 10};
+    pixels.scroll.unit = PrAppScrollUnit_Pixel;
+    send(pixels);
+    CHECK(std::fabs(top() - (mid + 10)) < 1);
+    run(1);
+    CHECK(std::fabs(top() - (mid + 10)) < 1);
+
+    // Scaled text: a trackpad's pixels are the window's, so the page moves by them over the scale.
+    h.board->setTextScale(2);
+    h.frames(3);
+    const double scaled = top();
+    send(pixels);
+    CHECK(std::fabs(top() - (scaled + 5)) < 1);
+}
+
+// The tab always shows the board. A click on a link that would leave it opens the link through the opener (the
+// system's browser in the app; the test's records it) and the page stays on the board: a link to another site, to
+// another page of the board's server, and one with target _blank. A link to a place on the board scrolls there in the
+// tab, a click inside it included; a javascript: link and a link the page cancels itself open nothing. Whatever else
+// takes the page off the board, choosing the sprint tab (Board::home) brings it back; on the board, home loads nothing.
+void linksThatLeaveTheBoardOpenInTheBrowser() {
+    Harness h;
+    h.server.page = kLinksPage;
+    h.frames(10);
+    CHECK(h.board->settled());
+    CHECK(h.board->documentUrl() == kUrl);
+    PrDomElement* s = prCssDocumentScrollingElement(h.document());
+
+    h.click("repo");
+    CHECK((h.opened == std::vector<std::string>{"https://github.test/nova-sprint"}));
+    CHECK(h.board->documentUrl() == kUrl && h.server.pages == 1);
+
+    h.click("card");
+    CHECK(h.opened.size() == 2 && h.opened.back() == "http://board.test:8080/cards/12");
+    CHECK(h.board->documentUrl() == kUrl && h.server.cards == 0);
+
+    h.click("blank");
+    CHECK(h.opened.size() == 3 && h.opened.back() == "http://board.test:8080/#later");
+    CHECK(h.board->documentUrl() == kUrl && prCssElementScrollTop(s) == 0);
+
+    h.click("script");
+    CHECK(h.opened.size() == 3 && h.board->documentUrl() == kUrl);
+    h.click("kept");
+    CHECK(h.opened.size() == 3 && h.board->documentUrl() == kUrl);
+
+    h.click("inner");
+    CHECK(h.opened.size() == 3);
+    CHECK(h.board->documentUrl() == std::string(kUrl) + "#later" && prCssElementScrollTop(s) > 0);
+    CHECK(h.server.pages == 1);
+
+    // On the board, at one of its places: home loads nothing.
+    h.board->home();
+    h.frames(5);
+    CHECK(h.server.pages == 1 && h.board->documentUrl() == std::string(kUrl) + "#later");
+
+    // Off the board by another way (here the page navigated from outside, as a script setting location would): home
+    // brings it back.
+    CHECK(prHtmlPageNavigate(h.board->page(), PrStringView{"http://board.test:8080/cards/7", 30}) == PrStatus_Ok);
+    h.frames(10);
+    CHECK(h.server.cards == 1 && h.board->documentUrl() == "http://board.test:8080/cards/7");
+    h.board->home();
+    h.frames(10);
+    CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
+}
+
+// The board's header shows as served: its logo and its "nova-sprint" title. The footer's link to nova-sprint's
+// repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
+// Another link still renders, and still opens in the browser.
+void theRepositoryLinkIsHidden() {
+    Harness h;
+    h.server.page = kBrandPage;
+    h.frames(10);
+    CHECK(h.board->settled());
+    std::string word;
+    {
+        PrRawString t = prDomNodeTextContent(prDomElementAsNode(h.byId("wordmark")));
+        PrStringView v = prRawStringView(&t);
+        word.assign(v.data != nullptr ? v.data : "", v.size);
+        prRawStringReset(&t);
+    }
+    CHECK(word == "nova-sprint");
+    const PrDomRect mark = h.rect("wordmark");
+    const PrDomRect logo = h.rect("logo");
+    CHECK(mark.width > 50 && mark.height > 80);
+    CHECK(logo.width > 90 && logo.height > 90);                     // the 6rem tile
+    CHECK(mark.x > logo.x + logo.width);                            // the title beside it
+    const PrDomRect repo = h.rect("repo");
+    CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
+    const PrDomRect foot = h.rect("foot");
+    CHECK(foot.width == 0 && foot.height == 0);                     // its footer held nothing else: not rendered
+    const PrDomRect repo2 = h.rect("repo2");
+    CHECK(repo2.width == 0 && repo2.height == 0);                   // in a footer with more: the link alone goes
+    CHECK(h.rect("more").height > 0 && h.rect("note").width > 0);
+    const PrDomRect other = h.rect("other");
+    CHECK(other.width > 0 && other.height > 0);
+    h.click("other");
+    CHECK((h.opened == std::vector<std::string>{"https://github.com/mas-bandwidth/nova-tools"}));
+}
+
 } // namespace
 
 int main() {
@@ -403,6 +666,9 @@ int main() {
     aFailedLookupIsTheLine();
     aFoundAddressLoads();
     theCostBreakdownFillsTheFirstScreen();
+    keysAndTheWheelScrollSmoothly();
+    linksThatLeaveTheBoardOpenInTheBrowser();
+    theRepositoryLinkIsHidden();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

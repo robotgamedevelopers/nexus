@@ -10,6 +10,14 @@
 // window never waits on it. Until there is a page to show, show() gives one line that says what is happening or what
 // failed and what to do.
 //
+// The tab always shows the board. A click on a link that would leave it (sprint.h linkLeavesBoard) is canceled, and the
+// link opens in the system's browser (Desc::open); a link to a place on the board scrolls there in the tab. Prax gives a
+// host no say over a same-tab navigation (html_window.cpp htmlWindowFollowHyperlink, 903-921, goes to
+// prHtmlWindowSetLocation with no host hook), so the board listens for click on each window the page opens, and cancels
+// it after the page's own listeners, before the link's activation follows it. A page's script that opens a window asks
+// the host (PrHtmlHost::openWindow), which goes to the browser too. Whatever else moves the page off the board, choosing
+// the sprint tab brings it back (home).
+//
 // Off screen (another tab shows, or the overlay is hidden) the page runs nothing: no tasks, no timers, no fetches, no
 // frames asked for. Its visibility is hidden (visibilitychange fires), and the board's 1 s poll waits. When it shows
 // again, the overdue poll runs in the first frame, and its answer paints as soon as it arrives.
@@ -30,6 +38,7 @@
 #include "pr/kit.h"
 #include "pr/text.h"
 
+#include "scroll_glide.h"
 #include "sprint.h"
 #include "view.h"
 
@@ -55,6 +64,10 @@ public:
         void* clockContext = nullptr;
         // True while the window is on screen (the overlay is shown); unset, always.
         std::function<bool()> visible;
+        // Shows a link that would take the tab off the board (sprint.h linkLeavesBoard): unset, the system's handler
+        // for it, the default browser for a web address (pr/app_shell.h prAppOpenUrl over `app`). A test's opener
+        // records it.
+        std::function<void(const std::string& url)> open;
     };
 
     explicit PraxBoard(const Desc& desc);
@@ -67,12 +80,16 @@ public:
     void frame(double seconds, const PrAppDisplay& display);
 
     // An event while the sprint tab shows (sprint.h routeBoardEvent). Returns true if the page took it and the window
-    // should not see it.
+    // should not see it. Keys and the wheel move the page's scroll over the next frames, with momentum, a held arrow
+    // scrolls while it is held, and the page bounces at its ends (scroll_glide.h); a trackpad's pixels scroll it at
+    // once.
     bool event(const PrAppEvent& event);
 
     bool show(PrLayoutNode parent, PrVec2 extent, std::string* problem) override;
     void hidden() override;
     void setTextScale(float k) override;
+    // Loads the board again if the page shows another document, or is on its way to one.
+    void home() override;
 
     // For tests and the screenshot: true once the document has loaded and its first answers have painted, with nothing
     // due now; the text of the page's body; the line show() gives while there is no page.
@@ -81,7 +98,13 @@ public:
     std::string problem() const { return said_; }
     // The page's canvas colour at the last paint, which the recorded list fills edge to edge.
     PrColor canvas() const { return canvas_; }
+    // How far past an end the page is drawn now, CSS px (scroll_glide.h GlideScroller::overscroll).
+    double overscroll() const { return scroller_.overscroll(); }
     PrHtmlPage* page() const { return page_; }
+    // The page's rectangle in the window, px, at the last layout.
+    PrRect pane() const { return pane_; }
+    // The URL of the document the page shows, or empty before it has one.
+    std::string documentUrl() const;
 
 private:
     void takeAddress();
@@ -93,10 +116,18 @@ private:
     SpendFit measureSpend();
     void fitSpend();
     bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
+    PrDomElement* scroller();
+    bool scrollEvent(const PrAppEvent& event);
+    void endScroll();
 
     static double clockNow(void* context);
     static double clockWallNow(void* context);
+    void openLink(const std::string& url);
+
     static void loaded(void* context, PrHtmlPage* page, PrStatus status);
+    static void windowOpened(void* context, PrHtmlPage* page);
+    static void openWindow(void* context, PrHtmlPage* page, PrStringView url);
+    static void linkClicked(void* context, PrDomEvent* event);
     static void realmOpened(void* context, JSContext* ctx, PrHtmlPage* page);
     static void wake(void* context);
 
@@ -132,6 +163,8 @@ private:
     // The page's state on the window's side.
     enum class Load { None, Loading, Loaded, Failed };
     Load load_ = Load::None;
+    bool ownLoad_ = false;              // the load in flight is the board's own (navigate)
+    std::string home_;                  // the board's document's URL, without its fragment, as its own load ended
     std::string loadError_;
     double retryAt_ = 0;
     std::string problem_;               // why the address lookup failed
@@ -147,6 +180,8 @@ private:
     bool pressInPage_ = false;
     bool shown_ = false;                // the sprint tab showed at the last round
     bool hiddenSet_ = false;            // the page's visibility is hidden
+    // The page's scroll as keys and the wheel move it (scroll_glide.h).
+    GlideScroller scroller_;
     double frameTime_ = 0;
 };
 

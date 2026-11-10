@@ -148,6 +148,9 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
             return pressInPage ? BoardRoute::Page : BoardRoute::Window;
         case PrAppEventKind_KeyDown:
         case PrAppEventKind_KeyUp:
+            // Command-Up and Command-Down scroll the page to its top and its bottom, as on macOS; nexus binds neither.
+            if (event.keyboard.key == PrAppKey_Up || event.keyboard.key == PrAppKey_Down)
+                return BoardRoute::Page;
             if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.keyboard.key == PrAppKey_Escape)
                 return BoardRoute::Window;
             return BoardRoute::Page;
@@ -300,7 +303,7 @@ void replace(std::string& text, std::string_view mark, const std::string& with) 
 } // namespace
 
 std::string sprintPageStyle(const SpendFit& fit) {
-    std::string style;
+    std::string style(kSprintRepoLinkStyle);
     if (fit.top < 0)
         return style;
     // The open panel a column whose body takes the height to spare: the body's grid row stretches, so the pie's column
@@ -314,6 +317,33 @@ std::string sprintPageStyle(const SpendFit& fit) {
         above + "px); margin-bottom: " + margin + "px; }\n";
     style += open + " > .spend-body { flex: 1 1 auto; }\n";
     return style;
+}
+
+namespace {
+
+std::string_view withoutFragment(std::string_view url) {
+    return url.substr(0, url.find('#'));
+}
+
+bool startsWithFold(std::string_view text, std::string_view prefix) {
+    if (text.size() < prefix.size())
+        return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const char c = text[i] >= 'A' && text[i] <= 'Z' ? char(text[i] - 'A' + 'a') : text[i];
+        if (c != prefix[i])
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool linkLeavesBoard(std::string_view href, std::string_view document, std::string_view target) {
+    if (href.empty() || startsWithFold(href, "javascript:"))
+        return false;
+    if (target.size() == 6 && startsWithFold(target, "_blank"))
+        return true;
+    return withoutFragment(href) != withoutFragment(document);
 }
 
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone) {

@@ -59,13 +59,19 @@ target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
+# The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
+# Prax, so that the model job builds its trace walk alone.
+add_library(nexus_scroll STATIC src/scroll_glide.cpp)
+target_include_directories(nexus_scroll PUBLIC src)
+target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
+
 # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
 # them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
 # which events go to it, the script nexus adds to it).
 add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
+target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
 
 # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
 add_library(nexus_view STATIC src/view.cpp)
@@ -113,7 +119,11 @@ if(NEXUS_LINK)
     target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
     target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
 endif()
+# The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
+# template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app menu's
+# About, Hide and Quit) and the window's title (main.cpp).
 set_target_properties(nexus PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
     MACOSX_BUNDLE_BUNDLE_NAME nexus
     MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
