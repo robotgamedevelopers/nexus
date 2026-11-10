@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus LANGUAGES C CXX)
+project(nexus LANGUAGES C CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,9 @@ add_library(nexus_model STATIC src/model.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_executable(nexus src/main.cpp src/view.cpp src/friends.cpp)
+add_executable(nexus src/main.cpp src/view.cpp src/friends.cpp src/platform_mac.mm)
+set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(nexus PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(nexus PRIVATE nexus_model
-    prax::app prax::draw prax::gpu prax::font prax::text prax::image prax::compress prax::core_cpp)
+    prax::app prax::draw prax::gpu prax::font prax::text prax::image prax::compress prax::core_cpp
+    "-framework AppKit")

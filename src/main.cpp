@@ -22,6 +22,7 @@
 
 #include "friends.h"
 #include "model.h"
+#include "platform_mac.h"
 #include "view.h"
 
 namespace {
@@ -34,6 +35,7 @@ struct App {
     Fonts fonts;
     PrDrawList* list = nullptr;
     bool dropText = false;
+    bool fullScreen = true;
 
     PrApp* app = nullptr;
     PrGpuDevice* device = nullptr;
@@ -147,6 +149,10 @@ void start(void* context, PrApp* app, const PrAppFrame*) {
         prAppStop(app);
         return;
     }
+    // Prax's lib/app has no fullscreen call; go through the window behind its NSView.
+    PrAppSurface surface{};
+    if (a.fullScreen && prAppSurface(app, &surface) == PrStatus_Ok && surface.kind == PrAppSurfaceKind_NsView)
+        enterNativeFullScreen(surface.handle);
     prAppRequestFrame(app);
 }
 
@@ -304,15 +310,18 @@ int main(int argc, char** argv) {
     const char* shot = nullptr;
     size_t tab = 1;
     bool demo = false;
+    bool windowed = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+        if (std::strcmp(argv[i], "--windowed") == 0) {
+            windowed = true;
+        } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             shot = argv[++i];
         } else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) {
             tab = size_t(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--demo") == 0) {
             demo = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--tab N] [--demo] [--screenshot PATH.png]\n");
+            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--screenshot PATH.png]\n");
             return 2;
         }
     }
@@ -341,8 +350,15 @@ int main(int argc, char** argv) {
 
     int code = 0;
     if (shot != nullptr) {
-        code = screenshot(a, shot, PrVec2{1000, 780}, 2);
+        // A fullscreen-sized frame of the main display (a 1000x780 window with --windowed).
+        float w = 1000, h = 780, scale = 2;
+        if (!windowed && !mainDisplay(&w, &h, &scale)) {
+            std::fprintf(stderr, "nexus: no main display to size the screenshot by\n");
+            return 1;
+        }
+        code = screenshot(a, shot, PrVec2{w, h}, scale);
     } else {
+        a.fullScreen = !windowed;
         PrAppDesc desc{.title = "nexus", .extent = {1000, 780}};
         PrApp* app = prAppCreate(PrAppBackend_Default, &desc);
         if (app == nullptr) {
