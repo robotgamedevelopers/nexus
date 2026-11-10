@@ -1,5 +1,5 @@
 // The window's input, headless: the nexus view built over a Prax UI context and Studio Kit with no window and no GPU,
-// fed events as the window would feed them (through takeEvent), with the model checked after each. Frames carry a
+// fed events as the window would feed them, with the model checked after each. Frames carry a
 // made-up clock (from 1000 s), never the real one. Text is set in the system's fonts, so these are functional tests.
 
 #include <cstdio>
@@ -43,6 +43,41 @@ std::string shown(const std::string& s) {
     return out + "\"";
 }
 
+// Events as the window gets them: a key (KeyDown, KeyUp), text (Text, CompositionUpdate, CompositionEnd), a pointer at
+// `at`, and a scroll by `delta` px at `at`.
+PrAppEvent keyEvent(PrAppEventKind kind, PrAppKey key, PrAppKeyCode code = 0, PrAppModifierFlags modifiers = 0) {
+    PrAppEvent e{};
+    e.kind = kind;
+    e.modifiers = modifiers;
+    e.keyboard.key = key;
+    e.keyboard.code = code;
+    return e;
+}
+
+PrAppEvent textEvent(PrAppEventKind kind, PrStringView text, PrAppModifierFlags modifiers = 0) {
+    PrAppEvent e{};
+    e.kind = kind;
+    e.modifiers = modifiers;
+    e.input.text = text;
+    return e;
+}
+
+PrAppEvent pointerEvent(PrAppEventKind kind, PrVec2 at) {
+    PrAppEvent e{};
+    e.kind = kind;
+    e.pointer.position = at;
+    return e;
+}
+
+PrAppEvent scrollEvent(PrVec2 at, PrVec2 delta) {
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_Scroll;
+    e.scroll.position = at;
+    e.scroll.delta = delta;
+    e.scroll.unit = PrAppScrollUnit_Pixel;
+    return e;
+}
+
 std::vector<FriendInfo> friendsNamed(std::size_t count) {
     std::vector<FriendInfo> out;
     for (std::size_t i = 0; i < count; ++i)
@@ -58,7 +93,7 @@ struct FakeTerminals final : Terminals {
     std::map<std::size_t, int> updates;         // rounds each was serviced without showing
     std::set<std::size_t> finished;             // ids whose shell has ended
     std::map<std::size_t, std::string> titles;
-    PrVec2 extent{};                            // the extent the last show was given
+    PrLayoutNode parent = kPrLayoutNodeNone;    // the parent the last show was given
     float scale = 1;
     bool refuse = false;                        // open fails
 
@@ -72,9 +107,9 @@ struct FakeTerminals final : Terminals {
         running.erase(id);
         closed.push_back(id);
     }
-    void show(std::size_t id, PrLayoutNode, PrVec2 e) override {
+    void show(std::size_t id, PrLayoutNode p) override {
         shown.push_back(id);
-        extent = e;
+        parent = p;
     }
     void update(std::size_t id) override { ++updates[id]; }
     bool ended(std::size_t id) override { return finished.count(id) != 0; }
@@ -178,27 +213,26 @@ struct Harness {
         }, this);
     }
 
-    // Queues an event as the window does: through the event filter first.
+    // Queues an event as the window does: to the context's main viewport, as it arrives (Caps Lock and all).
     void push(PrAppEvent e) {
         e.time = time;
-        if (!takeEvent(ui, e))
-            prUiPushEvent(ui, &e);
+        prUiPushEvent(ui, kPrUiViewportMain, &e);
     }
 
     void key(PrAppKey k, PrAppKeyCode code, PrAppModifierFlags modifiers = 0, const char* text = nullptr) {
         PrStringView typed = text != nullptr ? PrStringView{text, std::char_traits<char>::length(text)} : PrStringView{};
-        push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .modifiers = modifiers, .key = k, .code = code});
+        push(keyEvent(PrAppEventKind_KeyDown, k, code, modifiers));
         if (typed.size != 0)
-            push(PrAppEvent{.kind = PrAppEventKind_Text, .modifiers = modifiers, .text = typed});
-        push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .modifiers = modifiers, .key = k, .code = code});
+            push(textEvent(PrAppEventKind_Text, typed, modifiers));
+        push(keyEvent(PrAppEventKind_KeyUp, k, code, modifiers));
         frame();
     }
 
     void type(const char* text, PrAppModifierFlags modifiers = 0) {
         for (const char* c = text; *c != 0; ++c) {
-            push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .modifiers = modifiers, .key = PrAppKey(*c)});
-            push(PrAppEvent{.kind = PrAppEventKind_Text, .modifiers = modifiers, .text = PrStringView{c, 1}});
-            push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .modifiers = modifiers, .key = PrAppKey(*c)});
+            push(keyEvent(PrAppEventKind_KeyDown, PrAppKey(*c), 0, modifiers));
+            push(textEvent(PrAppEventKind_Text, PrStringView{c, 1}, modifiers));
+            push(keyEvent(PrAppEventKind_KeyUp, PrAppKey(*c), 0, modifiers));
             frame();
         }
     }
@@ -292,7 +326,7 @@ struct Harness {
     }
 
     void pointer(PrAppEventKind kind, PrVec2 at) {
-        push(PrAppEvent{.kind = kind, .position = at});
+        push(pointerEvent(kind, at));
         frame();
     }
 
@@ -494,15 +528,15 @@ void eachTabKeepsItsDraft() {
 void enterWhileComposingCommitsOnly() {
     Harness h;
     const char* kana = "\xE3\x81\x8B";
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = 'K', .code = PrAppKeyCode_KeyK});
-    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionUpdate, .text = PrStringView{kana, 3}});
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = 'K', .code = PrAppKeyCode_KeyK});
+    h.push(keyEvent(PrAppEventKind_KeyDown, 'K', PrAppKeyCode_KeyK));
+    h.push(textEvent(PrAppEventKind_CompositionUpdate, PrStringView{kana, 3}));
+    h.push(keyEvent(PrAppEventKind_KeyUp, 'K', PrAppKeyCode_KeyK));
     h.frame();
     // macOS sends the KeyDown first, then the input method's commit: CompositionEnd, then the text.
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = PrAppKey_Enter, .code = PrAppKeyCode_Enter});
-    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionEnd, .text = PrStringView{kana, 3}});
-    h.push(PrAppEvent{.kind = PrAppEventKind_Text, .text = PrStringView{kana, 3}});
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = PrAppKey_Enter, .code = PrAppKeyCode_Enter});
+    h.push(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Enter, PrAppKeyCode_Enter));
+    h.push(textEvent(PrAppEventKind_CompositionEnd, PrStringView{kana, 3}));
+    h.push(textEvent(PrAppEventKind_Text, PrStringView{kana, 3}));
+    h.push(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Enter, PrAppKeyCode_Enter));
     h.frame();
     CHECK(h.active().transcript.empty());
     CHECK(h.active().draft == kana);
@@ -619,14 +653,14 @@ void escapeWindowedHidesNothing() {
 void escapeWhileComposingDoesNotHide() {
     Harness h;
     const char* kana = "\xE3\x81\x8B";
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = 'K', .code = PrAppKeyCode_KeyK});
-    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionUpdate, .text = PrStringView{kana, 3}});
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = 'K', .code = PrAppKeyCode_KeyK});
+    h.push(keyEvent(PrAppEventKind_KeyDown, 'K', PrAppKeyCode_KeyK));
+    h.push(textEvent(PrAppEventKind_CompositionUpdate, PrStringView{kana, 3}));
+    h.push(keyEvent(PrAppEventKind_KeyUp, 'K', PrAppKeyCode_KeyK));
     h.frame();
     // macOS sends the KeyDown first, then the input method's cancel: CompositionEnd with no text.
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .key = PrAppKey_Escape, .code = PrAppKeyCode_Escape});
-    h.push(PrAppEvent{.kind = PrAppEventKind_CompositionEnd, .text = PrStringView{}});
-    h.push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .key = PrAppKey_Escape, .code = PrAppKeyCode_Escape});
+    h.push(keyEvent(PrAppEventKind_KeyDown, PrAppKey_Escape, PrAppKeyCode_Escape));
+    h.push(textEvent(PrAppEventKind_CompositionEnd, PrStringView{}));
+    h.push(keyEvent(PrAppEventKind_KeyUp, PrAppKey_Escape, PrAppKeyCode_Escape));
     h.frame();
     CHECK(h.hides == 0);
     CHECK(h.active().draft.empty());
@@ -736,9 +770,8 @@ void draftAndScrollStayWithTheirFriend() {
     h.type("for f1");
     PrRect port = h.bounds(h.view.transcript);
     PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
-    h.push(PrAppEvent{.kind = PrAppEventKind_PointerMove, .position = middle});
-    h.push(PrAppEvent{.kind = PrAppEventKind_Scroll, .scrollUnit = PrAppScrollUnit_Pixel, .position = middle,
-        .delta = PrVec2{0, -400}});
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    h.push(scrollEvent(middle, PrVec2{0, -400}));
     h.frame();
     h.frame();
     const float scrolled = prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y);
@@ -748,7 +781,10 @@ void draftAndScrollStayWithTheirFriend() {
     h.dragTab(0, 3);                         // f1 to the end
     CHECK(h.order() == "f2 f3 f4 f1");
     CHECK(h.active().name == "f2" && h.active().draft == "for f2");
-    CHECK(prLayoutUnitToPx(prLayoutNodeScroll(h.tree, h.view.transcript).y) == 0);
+    // f2, never scrolled, shows its end (with no entries, the top), as laid out.
+    PrLayoutScrollInfo info{};
+    CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &info) && info.offset.y.raw == info.range.bottom.raw);
+    CHECK(info.offset.y.raw == 0);
     h.commandDigit(4);
     h.frame();
     CHECK(h.active().name == "f1" && h.active().draft == "for f1");
@@ -984,9 +1020,8 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
 
     // Scrolled up: an entry in view stays where it is on screen while entries arrive below.
     PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
-    h.push(PrAppEvent{.kind = PrAppEventKind_PointerMove, .position = middle});
-    h.push(PrAppEvent{.kind = PrAppEventKind_Scroll, .scrollUnit = PrAppScrollUnit_Pixel, .position = middle,
-        .delta = PrVec2{0, -400}});
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    h.push(scrollEvent(middle, PrVec2{0, -400}));
     h.frame();
     h.frame();
     e = h.entries();
@@ -1024,8 +1059,7 @@ void commandTAddsAndShowsATerminal() {
     CHECK(h.model.active() == 2 && h.active().kind == TabKind::Terminal && h.active().id == 2);
     CHECK(h.terminals.running.count(2) == 1);
     CHECK(!h.terminals.shown.empty() && h.terminals.shown.back() == 2);
-    CHECK(h.terminals.extent.x == 1000);
-    CHECK(near(h.terminals.extent.y, 780 - (style::kStripHeight + 1)));
+    CHECK(h.terminals.parent == h.window());    // the terminal's view fills the room the strip leaves in the window
     CHECK(h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.view.transcript == kPrLayoutNodeNone);
     CHECK(h.model.tab(0).draft == "draft");
@@ -1229,6 +1263,46 @@ void commandDigitsWorkFromTheSprintTab() {
     CHECK(h.active().name == "f3");
 }
 
+// With Caps Lock on, Command-1 still selects the first tab, the sprint tab, and Command-2 the first friend: Prax's key
+// bindings leave Caps Lock out of the modifiers they compare (ui.cpp 820-824), so nexus filters nothing.
+void commandOneWithCapsLockSelectsTheSprintTab() {
+    Harness h = withSprint();
+    h.commandDigit(2, PrAppModifierFlag_CapsLock);
+    CHECK(h.active().name == "f1");
+    h.commandDigit(1, PrAppModifierFlag_CapsLock);
+    CHECK(h.model.active() == 0 && h.active().kind == TabKind::Sprint);
+}
+
+// Exactly the active tab is drawn selected, in whichever strip it stands: the other strip shows none selected.
+void onlyTheActiveTabShowsSelected() {
+    Harness h = withSprint();
+    // The colours as the tree holds them, in 16-bit floats.
+    const PrColor chosen = prColorFromColor16(prColor16FromColor(h.kit->looks[PrKitLookId_TabChosen].text));
+    const PrColor plain = prColorFromColor16(prColor16FromColor(h.kit->looks[PrKitLookId_Tab].text));
+    auto same = [](PrColor a, PrColor b) { return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a; };
+    CHECK(!same(chosen, plain));
+    auto inks = [&] {
+        std::string out;
+        for (PrLayoutNode t : h.tabs()) {
+            PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, t));
+            PrColor ink = prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color);
+            out += same(ink, chosen) ? "x" : same(ink, plain) ? "-" : "?";
+        }
+        return out;
+    };
+    h.frame();
+    CHECK(inks() == "x--");
+    h.commandDigit(2);
+    h.frame();
+    CHECK(inks() == "-x-");
+    h.commandDigit(3);
+    h.frame();
+    CHECK(inks() == "--x");
+    h.commandDigit(1);
+    h.frame();
+    CHECK(inks() == "x--");
+}
+
 // Typing, Enter and Command-Enter on the sprint tab change no draft and send nothing.
 void sprintTabTakesNoText() {
     Harness h = withSprint();
@@ -1302,6 +1376,8 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 int main() {
     sprintTabIsFirstAndCommandOne();
     commandDigitsWorkFromTheSprintTab();
+    commandOneWithCapsLockSelectsTheSprintTab();
+    onlyTheActiveTabShowsSelected();
     sprintTabTakesNoText();
     sprintTabNeverMoves();
     sprintTabKeysCloseNothing();

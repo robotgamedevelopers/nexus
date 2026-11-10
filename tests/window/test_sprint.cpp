@@ -143,7 +143,7 @@ void failuresCarryWhatTheCommandSaid() {
 PrAppEvent key(PrAppKey k, PrAppModifierFlags modifiers) {
     PrAppEvent e{};
     e.kind = PrAppEventKind_KeyDown;
-    e.key = k;
+    e.keyboard.key = k;
     e.modifiers = modifiers;
     return e;
 }

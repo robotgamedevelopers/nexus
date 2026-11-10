@@ -237,8 +237,8 @@ void PraxBoard::openPage() {
     PrHtmlViewDesc view{.page = page_, .compositor = nullptr, .jobBudget = 0, .canvasFilled = false,
         .updated = nullptr, .updatedContext = nullptr};
     view_ = prHtmlViewCreate(&view);
-    if (app_ != nullptr)
-        prHtmlViewSetApp(view_, app_);
+    if (desc_.window != nullptr)
+        prHtmlViewSetWindow(view_, desc_.window);
 }
 
 void PraxBoard::navigate() {
@@ -468,7 +468,8 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     place.flex = PrKitFlex_Fixed;
     prKitPlace(kit_, pane, &place);
     PrLayoutContent content{.kind = PrLayoutContentKind_Painter};
-    content.painter = PrLayoutPainter{paintPage, recorded_, retainPage, releasePage};
+    content.painter = PrLayoutPainter{.context = recorded_, .paint = paintPage, .measure = nullptr,
+        .retain = retainPage, .release = releasePage};
     prLayoutTreeFrameSetContent(tree, pane, &content);
     PrRect bounds = prLayoutRectToPx(prLayoutNodeBounds(tree, pane, PrLayoutCoordinates_Viewport));
     if (bounds.right - bounds.left >= 1 && bounds.bottom - bounds.top >= 1)
@@ -499,15 +500,18 @@ void PraxBoard::setTextScale(float k) {
 bool PraxBoard::event(const PrAppEvent& e) {
     if (!shown_ || view_ == nullptr || recorded_ == nullptr)
         return false;
-    const bool inPage = e.position.x >= pane_.left && e.position.x < pane_.right && e.position.y >= pane_.top &&
-        e.position.y < pane_.bottom;
+    PrVec2 at{};
+    const bool positioned = prAppEventPosition(&e, &at);
+    const bool inPage = positioned && at.x >= pane_.left && at.x < pane_.right && at.y >= pane_.top &&
+        at.y < pane_.bottom;
     BoardRoute route = routeBoardEvent(e, inPage, pressInPage_);
     if (e.kind == PrAppEventKind_PointerDown)
         pressInPage_ = route == BoardRoute::Page;
     if (route == BoardRoute::Window)
         return false;
     PrAppEvent copy = e;
-    copy.position = PrVec2{(e.position.x - pane_.left) / zoom_, (e.position.y - pane_.top) / zoom_};
+    if (positioned)
+        prAppEventSetPosition(&copy, PrVec2{(at.x - pane_.left) / zoom_, (at.y - pane_.top) / zoom_});
     prHtmlViewEvent(view_, &copy, 0);
     if (e.kind == PrAppEventKind_PointerUp)
         pressInPage_ = false;

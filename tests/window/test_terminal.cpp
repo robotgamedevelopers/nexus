@@ -58,7 +58,7 @@ struct Harness {
         ui = prUiCreate(tree);
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
-        terminals = new PraxTerminals(kit, fonts, nullptr, false);
+        terminals = new PraxTerminals(kit, fonts, nullptr, nullptr, false);
         view.model = &model;
         view.look = &look;
         view.terminals = terminals;
@@ -89,19 +89,27 @@ struct Harness {
 
     void push(PrAppEvent e) {
         e.time = time;
-        if (!takeEvent(ui, e))
-            prUiPushEvent(ui, &e);
+        prUiPushEvent(ui, kPrUiViewportMain, &e);
     }
 
     void key(PrAppKey k, PrAppKeyCode code, PrAppModifierFlags modifiers = 0) {
-        push(PrAppEvent{.kind = PrAppEventKind_KeyDown, .modifiers = modifiers, .key = k, .code = code});
-        push(PrAppEvent{.kind = PrAppEventKind_KeyUp, .modifiers = modifiers, .key = k, .code = code});
+        for (PrAppEventKind kind : {PrAppEventKind_KeyDown, PrAppEventKind_KeyUp}) {
+            PrAppEvent e{};
+            e.kind = kind;
+            e.modifiers = modifiers;
+            e.keyboard.key = k;
+            e.keyboard.code = code;
+            push(e);
+        }
         frame();
     }
 
     // Types `line` as text, then Enter.
     void typeLine(const std::string& line) {
-        push(PrAppEvent{.kind = PrAppEventKind_Text, .text = PrStringView{line.data(), line.size()}});
+        PrAppEvent e{};
+        e.kind = PrAppEventKind_Text;
+        e.input.text = PrStringView{line.data(), line.size()};
+        push(e);
         frame();
         key(PrAppKey_Enter, PrAppKeyCode_Enter);
     }

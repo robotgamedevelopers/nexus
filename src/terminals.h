@@ -1,11 +1,13 @@
 // The terminal tabs' shells over Prax's terminal (pr/terminal.h, prax::studio_terminal), as Prax's terminal app
 // (apps/terminal) runs them: one process launcher for the app, one PrTerminal per terminal tab keyed by the tab's id,
-// prTerminalFrame for the one that shows and prTerminalUpdate for the others, prTerminalDestroy on close and at exit.
+// prTerminalFrame for the one that shows (its view fills the room the strip leaves in the window) and
+// prTerminalService for the others, prTerminalDestroy on close and at exit.
 //
 // The screen's background is the window's (style::kBackground), see-through at style::kOverlayOpacity in the overlay
 // and opaque otherwise, as behind the friends' tabs. Prax takes the background from the kit theme's bg1, opaque
-// (terminal.cpp updateTheme): each frame sets the screen's background colour back to the window's, and paints it on
-// the window element (PrTerminalBackground_Parent).
+// (terminal.cpp updateTheme 738-751, color8Of 368-371): each frame sets the screen's background colour back to the
+// window's, and paints it on the window element (PrTerminalBackground_Parent). A request for Prax: a host-set
+// background role that survives palette changes, or a screen opacity apart from the ink.
 
 #pragma once
 
@@ -25,8 +27,9 @@ namespace nexus {
 
 class PraxTerminals final : public Terminals {
 public:
-    // `app` may be null (no wake, clipboard or notifications). `overlay`: the background is see-through.
-    PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, bool overlay);
+    // `app` may be null (no wake, clipboard or notifications), and `window`, the window that holds the terminals, null
+    // (no attention requests). `overlay`: the background is see-through.
+    PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window, bool overlay);
     ~PraxTerminals() override;   // destroys every terminal, then the launcher
     PraxTerminals(const PraxTerminals&) = delete;
     PraxTerminals& operator=(const PraxTerminals&) = delete;
@@ -37,7 +40,7 @@ public:
 
     bool open(std::size_t id) override;
     void close(std::size_t id) override;
-    void show(std::size_t id, PrLayoutNode parent, PrVec2 extent) override;
+    void show(std::size_t id, PrLayoutNode parent) override;
     void update(std::size_t id) override;
     bool ended(std::size_t id) override;
     std::string title(std::size_t id) override;
@@ -55,6 +58,7 @@ private:
     PrKit* kit_;
     PrFontSet* fonts_;
     PrApp* app_;
+    PrAppWindow* window_;
     PrColor8 background_;
     float scale_ = 1;
     PrProcessLauncher* launcher_ = nullptr;

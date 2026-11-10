@@ -17,7 +17,7 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 include(FetchContent)
 FetchContent_Declare(prax
     GIT_REPOSITORY https://github.com/pdoane/prax.git
-    GIT_TAG 73edfdb9b741307b31fc7fdff1e757860aa7abea
+    GIT_TAG 290852597a6c772d52afc7204f412cf2f04df9bc
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)
@@ -30,9 +30,9 @@ add_library(nexus_model STATIC src/model.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
-# The window's logic that runs without a window: the key bindings, the friend list's parsing (and the command that
-# prints it), and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
-add_library(nexus_window_logic STATIC src/input.cpp src/friends.cpp src/sprint.cpp src/tab_order.cpp)
+# The window's logic that runs without a window: the friend list's parsing (and the command that prints it), the saved
+# tab order, and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
+add_library(nexus_window_logic STATIC src/friends.cpp src/sprint.cpp src/tab_order.cpp)
 target_include_directories(nexus_window_logic PUBLIC src)
 target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_window_logic PUBLIC nexus_model prax::app prax::json prax::process prax::core_cpp)
@@ -64,7 +64,7 @@ add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
 set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
-    prax::studio_window prax::gpu prax::image prax::compress
+    prax::studio_app prax::gpu prax::image prax::compress
     "-framework AppKit" "-framework Carbon" "-framework QuartzCore")
 set_target_properties(nexus PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
