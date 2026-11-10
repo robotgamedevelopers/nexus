@@ -17,15 +17,30 @@ double coastSpeed(double y0, double target, double t) {
     return coastRate() * (target - coastPosition(y0, target, t));
 }
 
-// The page follows a target that starts at `base` and runs at `speed`: y' = k (base + speed t - y).
-double holdPosition(double y0, double base, double speed, double t) {
+double holdGoal(double base, double speed, double t) {
+    return base + speed * std::max(t - kHoldTapSeconds, 0.0);
+}
+
+namespace {
+
+// The page follows a target that starts at `base` and runs at `speed` from t = 0: y' = k (base + speed t - y).
+double running(double y0, double base, double speed, double t) {
     const double k = coastRate();
-    t = std::max(t, 0.0);
     return base + speed * t - speed / k + (y0 - base + speed / k) * std::exp(-k * t);
 }
 
+} // namespace
+
+// Through the tap window the page coasts to the line; then it follows the target as it runs.
+double holdPosition(double y0, double base, double speed, double t) {
+    t = std::max(t, 0.0);
+    if (t <= kHoldTapSeconds)
+        return coastPosition(y0, base, t);
+    return running(coastPosition(y0, base, kHoldTapSeconds), base, speed, t - kHoldTapSeconds);
+}
+
 double holdSpeed(double y0, double base, double speed, double t) {
-    return coastRate() * (base + speed * std::max(t, 0.0) - holdPosition(y0, base, speed, t));
+    return coastRate() * (holdGoal(base, speed, t) - holdPosition(y0, base, speed, t));
 }
 
 double springOffset(double e0, double v0, double t) {
@@ -115,7 +130,7 @@ bool GlideScroller::through(GlidePage& page, double now, int dir, const std::fun
     if (moving && dir != 0 && glide_.dir == dir) {
         double goal = glide_.target;
         if (glide_.kind == GlideKind::Hold)
-            goal += glide_.speed * elapsed(glide_, now);
+            goal = holdGoal(goal, glide_.speed, elapsed(glide_, now));
         if (glide_.kind != GlideKind::Spring)
             aim = std::clamp(goal, 0.0, max);
     }
@@ -144,7 +159,7 @@ void GlideScroller::release(double now) {
         return;
     const double t = elapsed(glide_, now);
     const double y = glidePosition(glide_, now);
-    double goal = glide_.target + glide_.speed * t;
+    double goal = holdGoal(glide_.target, glide_.speed, t);
     // A tap: exactly the line, unless the page already shows past it.
     if (t < kHoldTapSeconds && glide_.dir * (glide_.target - y) >= 0)
         goal = glide_.target;
@@ -210,7 +225,7 @@ void GlideScroller::hide(GlidePage& page, double now) {
     if (glide_.kind != GlideKind::Idle) {
         double goal = glide_.target;
         if (glide_.kind == GlideKind::Hold)
-            goal += glide_.speed * elapsed(glide_, now);
+            goal = holdGoal(goal, glide_.speed, elapsed(glide_, now));
         show(page, std::clamp(goal, 0.0, std::max(page.max(), 0.0)));
     }
     glide_ = Glide{};

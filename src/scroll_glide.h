@@ -5,10 +5,12 @@
 //   Coast   momentum toward a target: the speed is k times the distance left, so it decays by kCoastDecayPerMs each
 //           millisecond and the page comes to rest on the target: y(t) = T + (y0 - T) e^(-kt). A key, a wheel's notch,
 //           a key let go after a hold. A new target starts a coast from where the page shows.
-//   Hold    Up or Down held: the target runs ahead at kHoldPixelsPerSecond from a line past where the key went down,
-//           and the page follows it as a coast does, so it starts at once, reaches the hold's speed in about 1/k, and
-//           when the key comes up coasts on to rest at the same speed it had (a coast is a hold whose target stopped).
-//           Released within kHoldTapSeconds, the key was a tap: the page comes to rest exactly one line on.
+//   Hold    Up or Down held: the target stands a line past where the key went down through kHoldTapSeconds, then
+//           runs ahead at kHoldPixelsPerSecond, and the page follows it as a coast does: it starts at once toward the
+//           line, reaches the hold's speed some 1/k after the target starts running, and when the key comes up coasts
+//           on to rest at the same speed it had (a coast is a hold whose target stopped). Released within
+//           kHoldTapSeconds, the key was a tap: the target never ran, and the page comes to rest exactly one line on.
+//           (At 1000 px/s a target running from the press would carry the page past the line within a tap.)
 //   Spring  past an end: a critically damped spring pulls the page back to the end, from how far past it is and how
 //           fast it moves, without ever crossing back inside: e(t) = (e0 + (v0 + w e0) t) e^(-wt).
 // A coast or a hold that carries the page past an end becomes a spring there. A key or a notch at an end aims
@@ -29,10 +31,11 @@ namespace nexus {
 // --- Tuning ---------------------------------------------------------------------------------------------------------
 
 // The speed a coast keeps each millisecond. UIScrollView's fast rate; its normal rate, 0.998, is for a finger's fling,
-// and coasts a key let go at 500 px/s some 250 px on, over a second and a half.
+// and coasts a key let go at 1000 px/s some 500 px on, over a second and a half.
 constexpr double kCoastDecayPerMs = 0.99;
-// A held Up or Down: a line of Prax's 40 px each 80 ms.
-constexpr double kHoldPixelsPerSecond = 500;
+// A held Up or Down: a line of Prax's 40 px each 40 ms (the owner 2026-11-10: "Scroll on up/down is too slow. double
+// it", from 500). The ramp and the ease to rest keep their times, as kCoastDecayPerMs sets them.
+constexpr double kHoldPixelsPerSecond = 1000;
 // A key down for less than this is a tap: exactly one line.
 constexpr double kHoldTapSeconds = 0.15;
 // The spring back from an end: critically damped, at this angular frequency (1/s).
@@ -55,7 +58,9 @@ double coastRate();
 // A coast from y0 toward `target`, `t` s after it began: where it is and how fast it moves (px/s).
 double coastPosition(double y0, double target, double t);
 double coastSpeed(double y0, double target, double t);
-// A hold from y0 whose target starts at `base` and runs at `speed` px/s (signed): where it is and how fast.
+// A hold from y0 whose target stands at `base` (the first line) through kHoldTapSeconds, and then runs at `speed`
+// px/s (signed): where the target is, where the page is and how fast it moves.
+double holdGoal(double base, double speed, double t);
 double holdPosition(double y0, double base, double speed, double t);
 double holdSpeed(double y0, double base, double speed, double t);
 // A critically damped spring from e0 past its rest at speed v0: how far past rest, and how fast.

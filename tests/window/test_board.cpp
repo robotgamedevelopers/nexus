@@ -501,7 +501,7 @@ void keysAndTheWheelScrollSmoothly() {
     run(2);
     CHECK(std::fabs(top() - (40 + page)) < 1);
 
-    // Down held for a second, the OS's repeats ignored: some 500 px, every frame onward; then it coasts to rest.
+    // Down held for a second, the OS's repeats ignored: a line, then 1000 px/s from 0.15 s on, every frame onward; then it coasts to rest.
     const double from = top();
     down(PrAppKey_Down);
     double last = top();
@@ -512,11 +512,11 @@ void keysAndTheWheelScrollSmoothly() {
         CHECK(top() >= last);
         last = top();
     }
-    CHECK(top() - from > 400 && top() - from < 520);
+    CHECK(top() - from > 720 && top() - from < 880);
     up(PrAppKey_Down);
     const double released = top();
     run(2);
-    CHECK(top() > released + 20 && top() < released + 80);
+    CHECK(top() > released + 60 && top() < released + 140);
 
     // Command-Up: to the top. End: to the bottom, where it bounces past the end and comes back.
     down(PrAppKey_Up, PrAppModifierFlag_Super);

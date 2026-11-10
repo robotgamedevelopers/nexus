@@ -91,16 +91,23 @@ void theCurves() {
         last = y;
     }
     CHECK(near(coastPosition(100, 140, 10), 140, 1e-9));
-    // A hold: moving at once, its speed rising to the hold's and never past it.
-    CHECK(holdPosition(0, 40, 500, 0) == 0);
-    CHECK(holdSpeed(0, 40, 500, 0) > 300);
+    // A hold: moving at once toward the line, as a coast, while its target stands there through the tap window; then
+    // its target runs, and its speed rises to the hold's and never past it.
+    CHECK(holdPosition(0, 40, 1000, 0) == 0);
+    CHECK(holdSpeed(0, 40, 1000, 0) > 300);
+    for (double t = 0; t <= kHoldTapSeconds; t += 0.01) {
+        CHECK(holdGoal(40, 1000, t) == 40);
+        CHECK(near(holdPosition(0, 40, 1000, t), coastPosition(0, 40, t), 1e-9));
+        CHECK(holdPosition(0, 40, 1000, t) < 40);
+    }
     double speed = 0;
-    for (double t = 0; t < 1; t += 0.01) {
-        double v = holdSpeed(0, 40, 500, t);
-        CHECK(v >= speed - 1e-9 && v <= 500 + 1e-9);
+    for (double t = kHoldTapSeconds; t < 1.2; t += 0.01) {
+        double v = holdSpeed(0, 40, 1000, t);
+        CHECK(v >= speed - 1e-9 && v <= 1000 + 1e-9);
         speed = v;
     }
-    CHECK(holdSpeed(0, 40, 500, 3 / k) > 0.95 * 500);
+    CHECK(holdSpeed(0, 40, 1000, kHoldTapSeconds + 3 / k) > 0.95 * 1000);
+    CHECK(near(holdGoal(40, 1000, kHoldTapSeconds + 0.5), 540, 1e-9));
     // A spring: critically damped, from past the end at speed outward, out further, then back, never crossing.
     CHECK(springOffset(5, 300, 0) == 5);
     double peak = 0;
@@ -163,11 +170,11 @@ void aHoldScrollsWhileHeldAndCoastsToRest() {
     }
     for (std::size_t i = 1; i < ys.size(); ++i)
         CHECK(ys[i] >= ys[i - 1]);
-    // At the hold's speed after its ramp: 500 px/s, some 4 px a frame.
+    // At the hold's speed after its ramp: kHoldPixelsPerSecond, 1000 px/s, some 8 px a frame.
     const double late = ys[119] - ys[59];
-    CHECK(near(late, 250, 15));
-    // Held for 1 s: the line, then 500 px/s less the follow's lag.
-    CHECK(ys.back() > 400 && ys.back() < 520);
+    CHECK(near(late, kHoldPixelsPerSecond / 2, 15));
+    // Held for 1 s: the line, then 1000 px/s from the tap window on, less the follow's lag (the speed over k, 100 px).
+    CHECK(ys.back() > 720 && ys.back() < 880);
     // Up: it coasts on, at the speed it had, to rest.
     const double atRelease = r.page.y;
     const double speedBefore = glideSpeed(r.s.glide(), r.now);
@@ -177,7 +184,7 @@ void aHoldScrollsWhileHeldAndCoastsToRest() {
     CHECK(r.page.y == atRelease);
     r.frames(0.5);
     const double coasted = r.page.y - atRelease;
-    CHECK(coasted > 20 && coasted < 80);    // about the speed over k: 500 / 10 px
+    CHECK(coasted > 60 && coasted < 140);   // about the speed over k: 1000 / 10 px
     r.settle();
     CHECK(!r.s.busy());
 }
@@ -317,7 +324,7 @@ void theEndsBounceAndSpringBack() {
         Rig r;
         r.page.y = r.page.range - 300;
         r.down(1);
-        r.frames(0.55);
+        r.frames(0.45);          // its target 340 px on, the page some 250
         CHECK(r.page.y < r.page.range);
         r.up(1);
         r.settle();
