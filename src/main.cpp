@@ -584,6 +584,12 @@ int main(int argc, char** argv) {
         PrStudioWindowDesc window{
             .title = "nexus",
             .extent = {1000, 780},
+            // Frames come from Prax's display link at the display's own rate (120 Hz on a ProMotion or XDR display)
+            // and only when one is asked for, so the idle overlay draws nothing. The swap chain stays SDR: the window,
+            // the board and the terminals draw only sRGB colours at or below SDR white, and Prax's HDR path presents
+            // every pixel opaque (lib/draw/src/draw_display.slang convertPixel), which would cover the screen behind
+            // the see-through overlay. HDR waits on that (docs/roadmap.sexp "hdr").
+            .intent = PrGpuSwapChainIntent_Sdr,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
