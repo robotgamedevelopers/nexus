@@ -42,7 +42,8 @@ enum class Part : unsigned char {
 };
 
 // The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
-// area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale.
+// area's padding of 4 px above and below (kit_input.cpp kAreaPadding), and its 1 px borders, which do not scale. The
+// numbers are the kit's own, copied: Prax has no public query for a text area's height or padding (a request).
 float oneLineArea(float k) {
     return kLinePitch * k + 2 * 4 + 2;
 }
@@ -289,6 +290,8 @@ struct Builder {
     // the accent while focused and a focus ring, and offers no option to round it, quiet it or leave it out (the bare
     // style is not honoured by text areas), so the prompt's rounded box draws the frame and the area's decoration is
     // the default: no fill, no border, no ring. Its box (rows, padding, scrolling) and all its editing stay the kit's.
+    // The public way would be PrKitFieldStyle.bare, which prKitTextArea ignores (kit_input.cpp prKitTextArea sets no
+    // PartFlag_Bare): a request for Prax.
     void frameless(PrLayoutNode area) {
         PrLayoutStyle record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, area));
         record.groups[PrLayoutGroup_Decoration] = 0;
@@ -399,7 +402,9 @@ struct Builder {
     }
 
     // The kit's text area has a fixed number of rows; the prompt grows with its text up to kPromptMaxLines, so the rows
-    // come from how tall the text was at the last layout. A workaround for the area's missing auto height.
+    // come from how tall the text was at the last layout. A workaround for the area's missing auto height. It assumes the
+    // area's first child holds its text (kit_input.cpp editedText); Prax has no public auto-height area or query for
+    // the area's text element (a request).
     uint32_t promptRows() {
         if (view.prompt == kPrLayoutNodeNone)
             return 1;
@@ -501,6 +506,8 @@ struct Builder {
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
+    // The palette is public, but which slot each widget draws with (the tab strip bg1, a hovered tab bg2, the strip's
+    // rule line2) is read from the kit's source, not documented: Prax has no public per-widget colours (a request).
     PrKitPalette& p = theme.palette;
     p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
     p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip
