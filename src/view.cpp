@@ -5,27 +5,20 @@
 
 #include "pr/draw.h"
 
+#include "style.h"
+
 namespace nexus {
 
 namespace {
 
+using namespace style;
+
 constexpr float kPi = 3.14159265358979f;
 
-PrColor rgb(uint32_t hex, float alpha = 1) {
-    return PrColor{float((hex >> 16) & 0xFF) / 255.0f, float((hex >> 8) & 0xFF) / 255.0f, float(hex & 0xFF) / 255.0f,
-        alpha};
+PrColor faded(PrColor c, float alpha) {
+    c.a = alpha;
+    return c;
 }
-
-const PrColor kBackground = rgb(0x1a1a1a);
-const PrColor kBubble = rgb(0x2a2a2a);
-const PrColor kInk = rgb(0xececec);
-const PrColor kBright = rgb(0xffffff);
-const PrColor kMid = rgb(0x8f8f8f);
-const PrColor kDim = rgb(0x6c6c6c);
-const PrColor kLine = rgb(0x333333);
-const PrColor kPromptFill = rgb(0x242424);
-const PrColor kPromptBorder = rgb(0x3a3a3a);
-const PrColor kOrange = rgb(0xd97757);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Text
@@ -191,109 +184,108 @@ void circleStroke(PrDrawList* list, PrVec2 center, float radius, PrColor color, 
 // ---------------------------------------------------------------------------------------------------------------------
 // Transcript
 
-constexpr float kBodySize = 15;
-constexpr float kBodyLine = 23;
-constexpr float kGap = 18;
-
 struct Column {
     float left;
     float right;
 };
+
+// Draws a paragraph wrapped to `width`, with an optional bold run-in `lead`. Returns its height.
+float paragraph(PrDrawList* list, const Fonts& fonts, const std::string& lead, const std::string& text, float left,
+        float width, float top, PrColor ink) {
+    std::string whole = lead.empty() ? text : lead + " " + text;
+    std::vector<std::string> lines = wrap(fonts, fonts.regular, kBodySize, whole, width);
+    if (list != nullptr) {
+        for (size_t i = 0; i < lines.size(); ++i) {
+            PrVec2 at{left, top + kLinePitch * float(i) + kLinePitch * 0.72f};
+            if (i == 0 && !lead.empty() && lines[0].compare(0, lead.size(), lead) == 0) {
+                at.x += drawText(list, fonts, fonts.semibold, kBodySize, lead, at, ink);
+                drawText(list, fonts, fonts.regular, kBodySize, lines[0].substr(lead.size()), at, ink);
+            } else {
+                drawText(list, fonts, fonts.regular, kBodySize, lines[i], at, ink);
+            }
+        }
+    }
+    return float(lines.size()) * kLinePitch;
+}
 
 // Lays out one entry at `top`, drawing it if `list` is not null. Returns its height including the gap after it.
 float entry(PrDrawList* list, const Fonts& fonts, const Entry& e, bool newestPerson, Column c, float top) {
     float width = c.right - c.left;
     switch (e.kind) {
         case EntryKind::Person: {
-            float padX = 16;
-            float padY = 11;
-            float maxText = width * 0.72f - padX * 2;
+            float maxText = width * kBubbleMaxFraction - kBubblePadX * 2;
             std::vector<std::string> lines = wrap(fonts, fonts.regular, kBodySize, e.text, maxText);
             float textWidth = 0;
             for (const std::string& l : lines)
                 textWidth = std::max(textWidth, measure(fonts, fonts.regular, kBodySize, l));
-            float h = float(lines.size()) * kBodyLine + padY * 2;
-            PrRect bubble{c.right - textWidth - padX * 2, top, c.right, top + h};
-            float meta = (newestPerson || e.queued) ? 22 : 0;
+            float h = float(lines.size()) * kLinePitch + kBubblePadY * 2;
+            PrRect bubble{c.right - textWidth - kBubblePadX * 2, top, c.right, top + h};
+            float meta = (newestPerson || e.queued) ? kMetaSize * 1.6f : 0;
             if (list != nullptr) {
-                float alpha = e.queued ? 0.5f : 1;
-                PrColor fill = kBubble;
-                fill.a = alpha;
-                fillRounded(list, bubble, 18, fill);
-                PrColor ink = kBright;
-                ink.a = e.queued ? 0.6f : 1;
+                fillRounded(list, bubble, kBubbleRadius, faded(kBubble, e.queued ? 0.5f : 1));
                 for (size_t i = 0; i < lines.size(); ++i)
                     drawText(list, fonts, fonts.regular, kBodySize, lines[i],
-                        PrVec2{bubble.left + padX, top + padY + kBodyLine * float(i) + 16.5f}, ink);
-                float baseline = bubble.bottom + 16;
+                        PrVec2{bubble.left + kBubblePadX, top + kBubblePadY + kLinePitch * float(i) + kLinePitch * 0.72f},
+                        faded(kInk, e.queued ? 0.55f : 1));
+                float baseline = bubble.bottom + kMetaSize * 1.3f;
                 if (e.queued) {
-                    float w = measure(fonts, fonts.regular, 12, "queued");
-                    drawText(list, fonts, fonts.regular, 12, "queued", PrVec2{c.right - w - 4, baseline}, kDim);
+                    float w = measure(fonts, fonts.regular, kMetaSize, "queued");
+                    drawText(list, fonts, fonts.regular, kMetaSize, "queued", PrVec2{c.right - w - 6, baseline}, kMeta);
                 } else if (newestPerson) {
-                    float w = measure(fonts, fonts.regular, 12, "Just now");
-                    float x = c.right - w - 4;
-                    drawText(list, fonts, fonts.regular, 12, "Just now", PrVec2{x, baseline}, kDim);
-                    check(list, PrVec2{x - 26, baseline - 4}, 8, kDim, 1.3f);
-                    check(list, PrVec2{x - 20, baseline - 4}, 8, kDim, 1.3f);
+                    float w = measure(fonts, fonts.regular, kMetaSize, "Just now");
+                    float x = c.right - w - 6;
+                    drawText(list, fonts, fonts.regular, kMetaSize, "Just now", PrVec2{x, baseline}, kMeta);
+                    float s = kMetaSize * 0.55f;
+                    check(list, PrVec2{x - s * 3.1f, baseline - s * 0.45f}, s, kMeta, 1.6f);
+                    check(list, PrVec2{x - s * 2.3f, baseline - s * 0.45f}, s, kMeta, 1.6f);
                 }
             }
             return h + meta + kGap;
         }
-        case EntryKind::Ai: {
-            std::vector<std::string> lines = wrap(fonts, fonts.regular, kBodySize, e.text, width);
-            if (list != nullptr) {
-                for (size_t i = 0; i < lines.size(); ++i)
-                    drawText(list, fonts, fonts.regular, kBodySize, lines[i],
-                        PrVec2{c.left, top + kBodyLine * float(i) + 16.5f}, kInk);
-            }
-            return float(lines.size()) * kBodyLine + kGap;
-        }
-        case EntryKind::ToolSummary: {
-            if (list != nullptr) {
-                float w = drawText(list, fonts, fonts.regular, 14, e.text, PrVec2{c.left, top + 15}, kMid);
-                drawText(list, fonts, fonts.regular, 14, " \xE2\x80\xBA", PrVec2{c.left + w, top + 15}, kMid);
-            }
-            return 20 + kGap;
-        }
+        case EntryKind::Ai:
+            return paragraph(list, fonts, e.lead, e.text, c.left, width, top, kInk) + kGap;
+        case EntryKind::ToolSummary:
+            return paragraph(list, fonts, {}, e.text + "  \xE2\x80\xBA", c.left, width, top, kNotice) + kGap;
         case EntryKind::TaskList: {
-            float row = 38;
-            float h = row * float(e.tasks.size()) + 12;
+            float h = kCardRow * float(e.tasks.size()) + kCardRow * 0.35f;
             if (list != nullptr) {
-                strokeRounded(list, PrRect{c.left, top, c.right, top + h}, 12, kLine, 1);
+                strokeRounded(list, PrRect{c.left, top, c.right, top + h}, kCardRadius, kCardLine, 1);
                 for (size_t i = 0; i < e.tasks.size(); ++i) {
                     const Task& t = e.tasks[i];
-                    float cy = top + 6 + row * float(i) + row / 2;
-                    PrVec2 center{c.left + 24, cy};
+                    float cy = top + kCardRow * 0.175f + kCardRow * float(i) + kCardRow / 2;
+                    PrVec2 center{c.left + kU * 1.0f, cy};
                     PrColor ink = kInk;
                     if (t.state == TaskState::Done) {
-                        prDrawListEllipse(list, center, PrVec2{8, 8}, 0, PrDrawPaint{.color = kMid});
-                        check(list, PrVec2{center.x - 4, center.y + 0.5f}, 8, kBackground, 1.8f);
-                        ink = kMid;
+                        prDrawListEllipse(list, center, PrVec2{kIcon, kIcon}, 0, PrDrawPaint{.color = kNotice});
+                        check(list, PrVec2{center.x - kIcon * 0.5f, center.y + kIcon * 0.05f}, kIcon, kBackground, 2.2f);
+                        ink = kNotice;
                     } else if (t.state == TaskState::InProgress) {
-                        circleStroke(list, center, 7.5f, kLine, 2);
-                        prDrawListSector(list, center, 6.5f, 8.5f, -kPi / 2, kPi * 1.2f,
-                            PrDrawPaint{.color = kBright});
-                        ink = kBright;
+                        circleStroke(list, center, kIcon * 0.92f, kCardLine, 2.4f);
+                        prDrawListSector(list, center, kIcon * 0.8f, kIcon * 1.05f, -kPi / 2, kPi * 1.2f,
+                            PrDrawPaint{.color = kInk});
                     } else {
-                        static const float dashes[] = {2.2f, 2.2f};
-                        circleStroke(list, center, 7.5f, kMid, 1.4f, dashes, 2);
-                        ink = rgb(0xc8c8c8);
+                        static const float dashes[] = {2.8f, 2.8f};
+                        circleStroke(list, center, kIcon * 0.92f, kNotice, 1.6f, dashes, 2);
+                        ink = faded(kInk, 0.85f);
                     }
-                    drawText(list, fonts, fonts.regular, 14, t.text, PrVec2{c.left + 44, cy + 5}, ink);
+                    drawText(list, fonts, fonts.regular, kBodySize, t.text,
+                        PrVec2{c.left + kU * 1.9f, cy + kBodySize * 0.35f}, ink);
                 }
             }
-            return h + 12;
+            return h + kGap;
         }
         case EntryKind::Status: {
             if (list != nullptr) {
-                // A small cluster of orange dots.
-                const PrVec2 dots[] = {{0, 0}, {5, -3}, {5, 3}, {10, 0}};
-                for (PrVec2 d : dots)
-                    prDrawListEllipse(list, PrVec2{c.left + 3 + d.x, top + 10 + d.y}, PrVec2{1.8f, 1.8f}, 0,
-                        PrDrawPaint{.color = kOrange});
-                drawText(list, fonts, fonts.regular, 13, e.text, PrVec2{c.left + 22, top + 14.5f}, kDim);
+                // Two small orange dots, then dim text, as in the reference.
+                float cy = top + kLinePitch * 0.72f - kBodySize * 0.33f;
+                float r = kBodySize * 0.12f;
+                prDrawListEllipse(list, PrVec2{c.left + r * 1.3f, cy}, PrVec2{r, r}, 0, PrDrawPaint{.color = kOrange});
+                prDrawListEllipse(list, PrVec2{c.left + r * 7.0f, cy}, PrVec2{r * 1.1f, r}, 0,
+                    PrDrawPaint{.color = kOrange});
+                drawText(list, fonts, fonts.regular, kBodySize, e.text,
+                    PrVec2{c.left + kBodySize * 1.7f, top + kLinePitch * 0.72f}, kNotice);
             }
-            return 20 + kGap;
+            return kLinePitch + kGap;
         }
     }
     return 0;
@@ -337,80 +329,90 @@ void drawWindow(PrDrawList* list, const Model& model, ViewState& view, const Fon
     view.scroll.resize(model.tabs.size(), 0);
     prDrawListRect(list, PrRect{0, 0, extent.x, extent.y}, PrDrawPaint{.color = kBackground});
 
-    // Tab strip.
-    const float stripH = 44;
+    // Tab strip, in the place and quiet style of the reference's title row.
+    prDrawListRect(list, PrRect{0, 0, extent.x, kStripHeight}, PrDrawPaint{.color = kStrip});
     view.tabRects.assign(model.tabs.size(), PrRect{});
-    float x = 12;
+    float x = kU * 0.8f;
+    float pillH = kTabSize * 1.75f;
+    float pillTop = (kStripHeight - pillH) / 2;
+    float tabBaseline = kStripHeight / 2 + kTabSize * 0.36f;
     for (size_t i = 0; i < model.tabs.size(); ++i) {
         bool active = i == model.active;
         std::string number = std::to_string(i + 1);
         const std::string& name = model.tabs[i].who.name;
-        float numberW = measure(fonts, fonts.regular, 12, number);
-        float nameW = measure(fonts, active ? fonts.semibold : fonts.regular, 13, name);
-        PrRect r{x, 8, x + 12 + numberW + 8 + nameW + 14, stripH - 6};
+        float numberW = measure(fonts, fonts.regular, kTabSize, number);
+        float nameW = measure(fonts, fonts.regular, kTabSize, name);
+        float pad = kTabSize * 0.6f;
+        PrRect r{x, pillTop, x + pad + numberW + kTabSize * 0.45f + nameW + pad, pillTop + pillH};
         view.tabRects[i] = r;
         if (active)
-            fillRounded(list, r, 8, kBubble);
-        drawText(list, fonts, fonts.regular, 12, number, PrVec2{r.left + 12, r.top + 19.5f}, active ? kMid : kDim);
-        drawText(list, fonts, active ? fonts.semibold : fonts.regular, 13, name,
-            PrVec2{r.left + 12 + numberW + 8, r.top + 19.5f}, active ? kBright : kMid);
-        x = r.right + 6;
+            fillRounded(list, r, pillH * 0.3f, kBubble);
+        drawText(list, fonts, fonts.regular, kTabSize, number, PrVec2{r.left + pad, tabBaseline}, kPlaceholder);
+        drawText(list, fonts, fonts.regular, kTabSize, name,
+            PrVec2{r.left + pad + numberW + kTabSize * 0.45f, tabBaseline}, active ? kInk : kNotice);
+        x = r.right + kTabSize * 0.3f;
     }
-    prDrawListRect(list, PrRect{0, stripH, extent.x, stripH + 1}, PrDrawPaint{.color = kLine});
+    prDrawListRect(list, PrRect{0, kStripHeight, extent.x, kStripHeight + 1}, PrDrawPaint{.color = kStripLine});
 
-    // The column that the transcript and prompt share.
-    float columnW = std::min(760.0f, extent.x - 48);
+    // The transcript column and the slightly wider prompt box, both centred.
+    float columnW = extent.x * kColumnFraction;
     Column c{(extent.x - columnW) / 2, (extent.x + columnW) / 2};
+    float promptW = extent.x * kPromptFraction;
 
-    // Prompt box and the row beneath it, pinned to the bottom.
+    // Prompt box and the label row beneath it, pinned to the bottom.
     const Tab& tab = activeTab(model);
-    float belowH = 30;
-    float boxH = 58;
-    PrRect box{c.left, extent.y - belowH - boxH - 8, c.right, extent.y - belowH - 8};
-    fillRounded(list, box, 18, kPromptFill);
-    strokeRounded(list, box, 18, kPromptBorder, 1);
+    PrRect box{(extent.x - promptW) / 2, extent.y - kPromptBottom - kPromptHeight, (extent.x + promptW) / 2,
+        extent.y - kPromptBottom};
+    fillRounded(list, box, kPromptRadius, kPromptFill);
+    strokeRounded(list, box, kPromptRadius, kPromptBorder, 1);
     float mid = (box.top + box.bottom) / 2;
-    line(list, PrVec2{box.left + 18, mid}, PrVec2{box.left + 30, mid}, kMid, 1.6f);
-    line(list, PrVec2{box.left + 24, mid - 6}, PrVec2{box.left + 24, mid + 6}, kMid, 1.6f);
-    float textX = box.left + 46;
-    float baseline = mid + 5.5f;
+    float plusX = box.left + kU * 1.15f;
+    float plus = kU * 0.32f;
+    line(list, PrVec2{plusX - plus, mid}, PrVec2{plusX + plus, mid}, kInk, 2);
+    line(list, PrVec2{plusX, mid - plus}, PrVec2{plusX, mid + plus}, kInk, 2);
+    float textX = box.left + kU * 2.3f;
+    float baseline = mid + kBodySize * 0.36f;
+    float caretH = kBodySize * 0.62f;
     if (tab.prompt.empty()) {
         drawText(list, fonts, fonts.regular, kBodySize, "\xE2\x8F\x8E to send, \xE2\x8C\x98\xE2\x8F\x8E to queue for later",
-            PrVec2{textX, baseline}, kDim);
+            PrVec2{textX, baseline}, kPlaceholder);
         if (view.caretOn)
-            prDrawListRect(list, PrRect{textX - 1, mid - 10, textX + 0.5f, mid + 10}, PrDrawPaint{.color = kInk});
+            prDrawListRect(list, PrRect{textX - 3, mid - caretH, textX - 1, mid + caretH}, PrDrawPaint{.color = kInk});
     } else {
         drawText(list, fonts, fonts.regular, kBodySize, tab.prompt, PrVec2{textX, baseline}, kInk);
         float caretX = textX + measure(fonts, fonts.regular, kBodySize, tab.prompt.substr(0, tab.caret));
         if (view.caretOn)
-            prDrawListRect(list, PrRect{caretX, mid - 10, caretX + 1.5f, mid + 10}, PrDrawPaint{.color = kInk});
+            prDrawListRect(list, PrRect{caretX, mid - caretH, caretX + 2, mid + caretH}, PrDrawPaint{.color = kInk});
     }
-    // Stop button and microphone on the right.
-    PrRect stop{box.right - 46, mid - 14, box.right - 18, mid + 14};
-    fillRounded(list, stop, 8, kBright);
-    fillRounded(list, PrRect{stop.left + 9, stop.top + 9, stop.right - 9, stop.bottom - 9}, 2, kPromptFill);
-    float micX = box.right - 70;
+    // Stop square, then the microphone, at the right (the reference's order).
+    float micX = box.right - kU * 1.15f;
+    float stopX = micX - kU * 1.9f;
+    float stop = kU * 0.36f;
+    fillRounded(list, PrRect{stopX - stop, mid - stop, stopX + stop, mid + stop}, stop * 0.3f, kStop);
     PrDrawStroke micStroke = prDrawStrokeDefault();
-    micStroke.shape.width = 1.6f;
-    prDrawListCapsule(list, PrVec2{micX, mid - 5}, PrVec2{micX, mid + 1}, 3.5f,
-        PrDrawPaint{.color = kMid, .stroke = &micStroke});
-    prDrawListSector(list, PrVec2{micX, mid + 1}, 6, 7.6f, 0, kPi, PrDrawPaint{.color = kMid});
-    line(list, PrVec2{micX, mid + 7.6f}, PrVec2{micX, mid + 10}, kMid, 1.6f);
+    micStroke.shape.width = 2;
+    float m = kU * 0.2f;
+    prDrawListCapsule(list, PrVec2{micX, mid - m * 2}, PrVec2{micX, mid + m * 0.2f}, m * 1.1f,
+        PrDrawPaint{.color = kInk, .stroke = &micStroke});
+    prDrawListSector(list, PrVec2{micX, mid + m * 0.2f}, m * 1.8f, m * 1.8f + 2, 0, kPi, PrDrawPaint{.color = kInk});
+    line(list, PrVec2{micX, mid + m * 2.0f}, PrVec2{micX, mid + m * 2.8f}, kInk, 2);
 
-    // Model, effort, mode, ring: right-aligned under the box.
-    float rowBase = extent.y - belowH / 2 + 2;
-    std::string model_ = tab.who.model.empty() ? std::string("model") : tab.who.model;
-    float wModel = measure(fonts, fonts.regular, 12, model_);
-    float wHigh = measure(fonts, fonts.regular, 12, "High");
-    float wAuto = measure(fonts, fonts.regular, 12, "Auto");
-    float rx = c.right - 14 - 8 - wAuto - 12 - wHigh - 6 - wModel;
-    rx += drawText(list, fonts, fonts.regular, 12, model_, PrVec2{rx, rowBase}, kInk) + 6;
-    rx += drawText(list, fonts, fonts.regular, 12, "High", PrVec2{rx, rowBase}, kDim) + 12;
-    rx += drawText(list, fonts, fonts.regular, 12, "Auto", PrVec2{rx, rowBase}, kMid) + 8;
-    circleStroke(list, PrVec2{rx + 6, rowBase - 4}, 5, kMid, 1.4f);
+    // Model, effort, mode and a ring: right-aligned under the box.
+    float rowBase = extent.y - kLabelBaseline;
+    std::string modelName = tab.who.model.empty() ? std::string("model") : tab.who.model;
+    float space = kLabelSize * 0.5f;
+    float ringR = kLabelSize * 0.38f;
+    float wModel = measure(fonts, fonts.regular, kLabelSize, modelName);
+    float wHigh = measure(fonts, fonts.regular, kLabelSize, "High");
+    float wAuto = measure(fonts, fonts.regular, kLabelSize, "Auto");
+    float rx = box.right - kU * 0.7f - ringR * 2 - space * 2 - wAuto - space * 2 - wHigh - space - wModel;
+    rx += drawText(list, fonts, fonts.regular, kLabelSize, modelName, PrVec2{rx, rowBase}, kInk) + space;
+    rx += drawText(list, fonts, fonts.regular, kLabelSize, "High", PrVec2{rx, rowBase}, kNotice) + space * 2;
+    rx += drawText(list, fonts, fonts.regular, kLabelSize, "Auto", PrVec2{rx, rowBase}, kInk) + space * 2;
+    circleStroke(list, PrVec2{rx + ringR, rowBase - kLabelSize * 0.35f}, ringR, kRing, 2.2f);
 
     // Transcript: everything between the strip and the box, bottom-anchored, scrolled, clipped.
-    PrRect area{0, stripH + 1, extent.x, box.top - 10};
+    PrRect area{0, kStripHeight + 1, extent.x, box.top - kU};
     bool newestFound = false;
     size_t newestPerson = tab.transcript.size();
     for (size_t i = tab.transcript.size(); i-- > 0 && !newestFound;) {
@@ -419,19 +421,21 @@ void drawWindow(PrDrawList* list, const Model& model, ViewState& view, const Fon
             newestFound = true;
         }
     }
-    float total = 16;
+    float inset = kU * 0.6f;
+    float total = inset;
     for (size_t i = 0; i < tab.transcript.size(); ++i)
         total += entry(nullptr, fonts, tab.transcript[i], i == newestPerson, c, 0);
     float areaH = area.bottom - area.top;
     view.maxScroll = std::max(0.0f, total - areaH);
     float& scroll = view.scroll[model.active];
     scroll = std::clamp(scroll, 0.0f, view.maxScroll);
-    float y = total > areaH ? area.bottom - total + scroll + 16 : area.top + 16;
+    float y = total > areaH ? area.bottom - total + scroll + inset : area.top + inset;
     prDrawListPushClipRect(list, area, PrDrawEdges_Antialiased);
     if (tab.transcript.empty()) {
         std::string hint = "Say something to " + tab.who.name;
-        float w = measure(fonts, fonts.regular, 14, hint);
-        drawText(list, fonts, fonts.regular, 14, hint, PrVec2{(extent.x - w) / 2, (area.top + area.bottom) / 2}, kDim);
+        float w = measure(fonts, fonts.regular, kBodySize, hint);
+        drawText(list, fonts, fonts.regular, kBodySize, hint,
+            PrVec2{(extent.x - w) / 2, (area.top + area.bottom) / 2}, kPlaceholder);
     }
     for (size_t i = 0; i < tab.transcript.size(); ++i)
         y += entry(list, fonts, tab.transcript[i], i == newestPerson, c, y);

@@ -92,6 +92,7 @@ void seedSample(Tab& tab) {
     add(EntryKind::Ai, "Sure. I'll check who can create repos in the org first, then make it private and report back.");
     add(EntryKind::ToolSummary, "Read org-settings.md, ran 1 command");
     add(EntryKind::Ai, "Only org owners can create repos there. I'm not an owner, so I'll need you to create it.");
+    tab.transcript.back().lead = "What I found.";
     add(EntryKind::Person, "Done, it's created. Go ahead.");
     add(EntryKind::ToolSummary, "Read not-org-admin-by-design.md, ran 2 commands, 1 failed");
     add(EntryKind::Ai, "Thanks. The first push was refused because the repo was still empty on my side; retrying on main now.");

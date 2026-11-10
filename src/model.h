@@ -27,6 +27,7 @@ enum class EntryKind {
 struct Entry {
     EntryKind kind = EntryKind::Ai;
     std::string text;
+    std::string lead;          // Ai: a bold run-in label before the text, or empty
     bool queued = false;       // Person: waits to be sent later
     std::vector<Task> tasks;   // TaskList
 };
