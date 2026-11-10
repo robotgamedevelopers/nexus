@@ -51,8 +51,8 @@ constexpr float textScale(int steps) {
 }
 
 // Widths, as percentages of the window width.
-constexpr float kColumnPercent = 54.1f;       // transcript: x 462..1544 of 2000
-constexpr float kPromptPercent = 56.75f;      // prompt box: x 432..1567 of 2000
+constexpr float kColumnPercent = 80;          // transcript (the reference's 54.1% widened at the owner's ask)
+constexpr float kPromptPercent = 82;          // prompt box, a little wider than the column, as in the reference
 
 // Colours.
 constexpr PrColor rgb(unsigned hex) {

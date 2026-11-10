@@ -452,8 +452,15 @@ void checkPromptBox(const Harness& h) {
     CHECK(inside(area, outer));
     CHECK(p.right <= area.left);
     CHECK(p.left > outer.left + 0.5f * style::kPromptPadX * k);
-    // One line: the box is kPromptHeight tall.
+    // One line: the box is kPromptHeight tall. It is kPromptPercent of the window wide, centred, and the transcript's
+    // column kColumnPercent.
     CHECK(near(outer.bottom - outer.top, style::kPromptHeight * k));
+    PrRect window = h.bounds(prLayoutNodeParent(h.tree, h.view.transcript));
+    const float width = window.right - window.left;
+    CHECK(near(outer.right - outer.left, width * style::kPromptPercent / 100));
+    CHECK(near(outer.left - window.left, window.right - outer.right));
+    PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
+    CHECK(near(column.right - column.left, width * style::kColumnPercent / 100));
     // The area draws no frame of its own: no fill, no border, no focus ring.
     PrLayoutStyle areaRecord = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, h.view.prompt));
     CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
