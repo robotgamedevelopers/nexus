@@ -106,6 +106,10 @@ if(NEXUS_LINK)
     add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable)
+    # TRACER (tracer/claude-driver): where the server finds node and the Claude driver.
+    set(NEXUS_NODE "node" CACHE STRING "node, for the AI drivers (a path, or a name on PATH)")
+    target_compile_definitions(nexus-server PRIVATE NEXUS_NODE="${NEXUS_NODE}"
+        NEXUS_CLAUDE_DRIVER="${PROJECT_SOURCE_DIR}/drivers/claude/driver.mjs")
 endif()
 
 # The app, as a real bundle: nexus.app.

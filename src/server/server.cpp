@@ -19,8 +19,11 @@
 #include <thread>
 #include <vector>
 
+#include <sys/wait.h>
+
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "pr/json.h"
 #include "server/durable.h"
 #include "store/fs.h"
 #include "sync/hub.h"
@@ -30,6 +33,176 @@ extern char** environ;
 namespace nexus::server {
 
 namespace {
+
+// ---- TRACER (tracer/claude-driver): one AI driver process for one friend tab ----
+// The tab kDrivenTab is served by drivers/claude/driver.mjs (one JSON object per line each way); every other tab keeps
+// the placeholder reply. A send starts the driver if none runs; the prompt "/stop" interrupts the turn instead. When the
+// driver exits, the next send starts it again with --resume <the last session id it reported>.
+
+constexpr const char* kDrivenTab = "rowan";
+
+std::string errnoText(const std::string& what);
+
+#ifndef NEXUS_NODE
+#define NEXUS_NODE "node"
+#endif
+#ifndef NEXUS_CLAUDE_DRIVER
+#define NEXUS_CLAUDE_DRIVER "drivers/claude/driver.mjs"
+#endif
+
+std::string_view jview(PrStringView s) {
+    return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
+}
+
+std::string jsonString(const std::string& s) {
+    std::string out = "\"";
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                out += buf;
+            } else {
+                out += static_cast<char>(c);
+            }
+        }
+    }
+    return out + "\"";
+}
+
+struct Driver {
+    pid_t pid = -1;
+    int in = -1;            // its stdin
+    int out = -1;           // its stdout
+    std::string buf;        // stdout bytes not yet a whole line
+    std::string session;    // the last session id it reported: --resume for the next start
+};
+
+// Starts the driver: node <driver> --cwd <cwd> [--resume <id>], its stdin and stdout piped to us, its stderr to ours.
+bool startDriver(Driver* d, const std::string& cwd, std::string* why) {
+    int inPipe[2];
+    int outPipe[2];
+    if (pipe(inPipe) != 0 || pipe(outPipe) != 0) {
+        *why = errnoText("cannot make the driver's pipes");
+        return false;
+    }
+    posix_spawn_file_actions_t files;
+    posix_spawn_file_actions_init(&files);
+    posix_spawn_file_actions_adddup2(&files, inPipe[0], 0);
+    posix_spawn_file_actions_adddup2(&files, outPipe[1], 1);
+    posix_spawn_file_actions_addinherit_np(&files, 2);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    const char* node = std::getenv("NEXUS_NODE") ? std::getenv("NEXUS_NODE") : NEXUS_NODE;
+    std::vector<std::string> args = {node, NEXUS_CLAUDE_DRIVER, "--cwd", cwd};
+    if (!d->session.empty()) {
+        args.push_back("--resume");
+        args.push_back(d->session);
+    }
+    std::vector<char*> argv;
+    for (std::string& a : args)
+        argv.push_back(a.data());
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    const int rc = posix_spawnp(&pid, node, &files, &attr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&files);
+    posix_spawnattr_destroy(&attr);
+    close(inPipe[0]);
+    close(outPipe[1]);
+    if (rc != 0) {
+        close(inPipe[1]);
+        close(outPipe[0]);
+        *why = std::string("cannot start the driver `") + node + " " + NEXUS_CLAUDE_DRIVER + "`: " + std::strerror(rc) +
+            "; set NEXUS_NODE to node's path";
+        return false;
+    }
+    fcntl(outPipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(inPipe[1], F_SETFD, FD_CLOEXEC);
+    fcntl(outPipe[0], F_SETFD, FD_CLOEXEC);
+    d->pid = pid;
+    d->in = inPipe[1];
+    d->out = outPipe[0];
+    d->buf.clear();
+    std::fprintf(stderr, "nexus-server: driver for %s started, pid %d%s%s\n", kDrivenTab, static_cast<int>(pid),
+        d->session.empty() ? "" : ", resuming ", d->session.c_str());
+    return true;
+}
+
+void endDriver(Driver* d) {
+    if (d->in >= 0)
+        close(d->in);
+    if (d->out >= 0)
+        close(d->out);
+    int status = 0;
+    if (d->pid > 0)
+        waitpid(d->pid, &status, 0);
+    std::fprintf(stderr, "nexus-server: driver pid %d ended, status %d\n", static_cast<int>(d->pid), status);
+    d->pid = -1;
+    d->in = -1;
+    d->out = -1;
+    d->buf.clear();
+}
+
+// One line of the driver's stdout as a transcript entry; false when it makes none.
+bool driverEntry(Driver* d, const std::string& line, EntryKind* kind, std::string* text) {
+    PrJson* doc = prJsonCreate();
+    size_t at = 0;
+    if (!prJsonParse(doc, PrStringView{line.data(), line.size()}, &at)) {
+        prJsonDestroy(doc);
+        *kind = EntryKind::Notice;
+        *text = "driver printed a line that is not JSON: " + line.substr(0, 200);
+        return true;
+    }
+    auto str = [&](const char* name) {
+        PrJsonValueIndex v = prJsonMember(doc, 0, PrStringView{name, std::strlen(name)});
+        return prJsonKind(doc, v) == PrJsonKind_String ? std::string(jview(prJsonString(doc, v))) : std::string();
+    };
+    auto num = [&](const char* name) {
+        return prJsonNumber(doc, prJsonMember(doc, 0, PrStringView{name, std::strlen(name)}), -1);
+    };
+    const std::string ev = str("ev");
+    bool made = true;
+    *kind = EntryKind::Notice;
+    if (ev == "text") {
+        *kind = EntryKind::Friend;
+        *text = str("text");
+    } else if (ev == "tool") {
+        *text = "tool: " + str("name") + " " + str("summary");
+    } else if (ev == "tool_summary") {
+        *text = "tool summary: " + str("summary");
+    } else if (ev == "session") {
+        d->session = str("id");
+        *text = "session " + d->session;
+    } else if (ev == "credential") {
+        *text = "credential: apiKeySource " + str("apiKeySource") + ", tokenSource " + str("tokenSource") +
+            ", subscriptionType " + str("subscriptionType") + ", apiProvider " + str("apiProvider");
+    } else if (ev == "done") {
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "done: %s, cost $%.4f (estimate)", str("subtype").c_str(),
+            num("total_cost_usd"));
+        *text = buf;
+    } else if (ev == "error") {
+        *text = "error: " + str("cause");
+    } else if (ev == "ready") {
+        *text = "driver ready, pid " + std::to_string(static_cast<long long>(num("pid")));
+    } else if (ev == "stopped") {
+        *text = "stopped";
+    } else if (ev == "end") {
+        *text = "driver's stream ended";
+    } else {
+        made = false;   // delta, other: in the log only
+    }
+    std::fprintf(stderr, "nexus-server: driver: %s\n", line.substr(0, 400).c_str());
+    prJsonDestroy(doc);
+    return made;
+}
 
 constexpr std::size_t kMaxSessions = 64;
 constexpr int kControlTimeoutMs = 2000;     // for one request or reply on the control socket
@@ -168,6 +341,10 @@ private:
     bool openStore(std::string* why);
     bool listenControl(std::string* why);
     void control(int fd);
+    void toDriver(const sync::Action& a);
+    bool readDriver();
+    void notice(const std::string& text);
+    Driver driver_;
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
     DurableStore store_;
@@ -183,6 +360,7 @@ bool Server::openStore(std::string* why) {
     if (!store_.open(*fs_, paths_.store, why))
         return false;
     hub_ = std::make_unique<sync::Hub>(store_);
+    hub_->setDriven(kDrivenTab);
     const store::OpenReport& r = store_.report();
     std::fprintf(stderr, "nexus-server: store %s: %s, %zu tab%s, %llu record%s replayed, %llu bytes of torn tail cut\n",
         paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
@@ -280,6 +458,75 @@ void Server::control(int fd) {
     }
 }
 
+void Server::notice(const std::string& text) {
+    std::string why;
+    if (!hub_->append(kDrivenTab, EntryKind::Notice, text, &why))
+        std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+}
+
+// TRACER: a send applied to the driven tab goes to its driver: "/stop" as a stop, anything else as a prompt.
+void Server::toDriver(const sync::Action& a) {
+    if (a.kind != sync::ActionKind::Send || a.tab != kDrivenTab)
+        return;
+    const bool stop = a.text == "/stop";
+    if (driver_.pid < 0) {
+        if (stop) {
+            notice("no driver runs: nothing to stop");
+            return;
+        }
+        const std::string cwd = paths_.dir + "/" + kDrivenTab + "-cwd";
+        mkdir(cwd.c_str(), 0700);
+        std::string why;
+        if (!startDriver(&driver_, cwd, &why)) {
+            notice("error: " + why);
+            return;
+        }
+    }
+    const std::string line = stop ? std::string("{\"op\":\"stop\"}\n") :
+        "{\"op\":\"send\",\"text\":" + jsonString(a.text) + "}\n";
+    if (!writeAll(driver_.in, line)) {
+        notice("error: " + errnoText("the driver did not take the prompt") + "; it is restarted on the next send");
+        endDriver(&driver_);
+    }
+}
+
+// TRACER: reads what the driver printed; true when the transcript changed.
+bool Server::readDriver() {
+    bool changed = false;
+    char buf[65536];
+    bool ended = false;
+    for (;;) {
+        const ssize_t n = read(driver_.out, buf, sizeof buf);
+        if (n > 0) {
+            driver_.buf.append(buf, static_cast<std::size_t>(n));
+            continue;
+        }
+        if (n == 0 || (errno != EAGAIN && errno != EINTR))
+            ended = true;
+        break;
+    }
+    std::size_t nl;
+    while ((nl = driver_.buf.find('\n')) != std::string::npos) {
+        const std::string line = driver_.buf.substr(0, nl);
+        driver_.buf.erase(0, nl + 1);
+        EntryKind kind;
+        std::string text;
+        if (driverEntry(&driver_, line, &kind, &text)) {
+            std::string why;
+            if (!hub_->append(kDrivenTab, kind, text, &why))
+                std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+            changed = true;
+        }
+    }
+    if (ended) {
+        endDriver(&driver_);
+        notice("driver exited; the next send starts it again" +
+            (driver_.session.empty() ? std::string() : ", resuming session " + driver_.session));
+        changed = true;
+    }
+    return changed;
+}
+
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
@@ -315,13 +562,18 @@ int Server::run() {
                 owner.push_back(i);
             }
         }
+        const std::size_t sessionFds = fds.size();     // TRACER: the driver's stdout, when one runs, comes after
+        if (driver_.out >= 0)
+            fds.push_back(pollfd{driver_.out, POLLIN, 0});
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
             std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
             break;
         }
         link::freezeClock();
         bool changed = false;
-        for (std::size_t k = 1; k < fds.size(); ++k) {
+        if (fds.size() > sessionFds && (fds[sessionFds].revents & (POLLIN | POLLHUP)) && readDriver())
+            changed = true;
+        for (std::size_t k = 1; k < sessionFds; ++k) {
             if (!(fds[k].revents & POLLIN))
                 continue;
             Session& s = sessions_[owner[k]];
@@ -334,7 +586,8 @@ int Server::run() {
             // Each action is durable (with the client's counter) before the next tick can acknowledge it.
             for (const sync::Action& a : s.link->take(&problem)) {
                 std::string refused;
-                hub_->apply(a, &refused, s.client);
+                if (hub_->apply(a, &refused, s.client))
+                    toDriver(a);
                 changed = true;
                 if (!refused.empty())
                     std::fprintf(stderr, "nexus-server: session %llu, action %llu: %s\n",
@@ -369,6 +622,10 @@ int Server::run() {
                 close(fd);
             }
         }
+    }
+    if (driver_.pid > 0) {
+        kill(driver_.pid, SIGTERM);     // TRACER: our own child only
+        endDriver(&driver_);
     }
     close(listen_);
     unlink(paths_.socket.c_str());

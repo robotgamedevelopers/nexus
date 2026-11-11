@@ -44,3 +44,9 @@ set_tests_properties(${e2e_tests} PROPERTIES LABELS functional TIMEOUT 90 FIXTUR
 add_test(NAME link_e2e_stop_servers COMMAND link_e2e ${server} stop ${e2e_dirs})
 set_tests_properties(link_e2e_stop_servers PROPERTIES LABELS functional TIMEOUT 60
     FIXTURES_CLEANUP link_e2e_servers)
+
+# TRACER (tracer/claude-driver): built, never added to ctest: it calls an outside service. Run by hand.
+add_executable(claude_tracer claude_tracer.cpp)
+target_link_libraries(claude_tracer PRIVATE nexus_link)
+target_compile_options(claude_tracer PRIVATE ${warnings})
+add_dependencies(claude_tracer nexus-server)

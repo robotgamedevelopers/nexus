@@ -110,13 +110,26 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     std::vector<TabChange> changes;
     if (action.kind == ActionKind::Send) {
         changes.push_back(TabChange{entry(EntryKind::Person, action.text), {}});
-        changes.push_back(TabChange{entry(EntryKind::Friend, kReceived), {}});
+        if (action.tab != driven_)
+            changes.push_back(TabChange{entry(EntryKind::Friend, kReceived), {}});
     } else {
         changes.push_back(TabChange{nullptr, action.text});
     }
     if (!commit(action.tab, changes))
         return false;
     refresh(action.tab);
+    return true;
+}
+
+bool Hub::append(const std::string& name, EntryKind kind, const std::string& text, std::string* why) {
+    std::string failed;
+    const std::string bounded = text.size() > limits_.text ? text.substr(0, limits_.text) : text;
+    if (!store_.commit(name, {TabChange{entry(kind, bounded), {}}}, std::string(), 0, &failed)) {
+        if (why != nullptr)
+            *why = "tab " + name + ": the driver's event was not appended: " + failed;
+        return false;
+    }
+    refresh(name);
     return true;
 }
 

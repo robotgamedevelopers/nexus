@@ -93,11 +93,20 @@ public:
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
 
+    // TRACER (tracer/claude-driver): the tab named here is driven by an AI driver process, so a send to it gets no
+    // placeholder reply; the server appends the driver's events with append().
+    void setDriven(const std::string& name) { driven_ = name; }
+    const std::string& driven() const { return driven_; }
+    // TRACER: one entry at the end of `name`'s transcript, outside any client's actions (no counter moves). False, with
+    // why, when the store did not take it.
+    bool append(const std::string& name, EntryKind kind, const std::string& text, std::string* why = nullptr);
+
 private:
     void refresh(const std::string& name);
     TabStore& store_;
     Limits limits_;
     Tabs state_;
+    std::string driven_;
 };
 
 } // namespace nexus::sync
