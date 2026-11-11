@@ -65,6 +65,15 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
 // replaces.
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone);
 
+// The local time zone's names from the system, standard first, then daylight: tzname after tzset on POSIX (short
+// names, such as EST and EDT), _get_tzname after _tzset on Windows (which gives the long names, such as Eastern
+// Standard Time). Empty where the system has none.
+struct ZoneNames {
+    std::string standard;
+    std::string daylight;
+};
+ZoneNames localZoneNames();
+
 // The Cost breakdown panel as laid out, in CSS px, which board.h measures from the page after each paint (the page gives
 // no other way to know how tall the header and tiles above it are): its top in the document; the gap above it, from the
 // block before it, which is the page's gap between blocks; and the gap below it, to the block after it. A negative top

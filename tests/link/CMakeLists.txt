@@ -5,7 +5,7 @@
 #               NEXUS_E2E_TAILNET names a second way to reach this same machine (its tailnet address or name); when
 #               set, the round trip runs through it too.
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 set(NEXUS_E2E_TAILNET "" CACHE STRING "This machine's tailnet address or name, for the functional round trip over it")
 
 add_executable(link_unit link_unit.cpp)

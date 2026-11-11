@@ -9,7 +9,7 @@
 #                  it. Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Supervisor.tla on its larger instance
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(supervisor_walk supervisor_walk.cpp)
 target_link_libraries(supervisor_walk PRIVATE nexus_supervisor)
@@ -24,10 +24,13 @@ add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
 target_compile_options(driver_table_test PRIVATE ${warnings})
 
-add_executable(drivers_functional drivers_functional.cpp)
-target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
-target_compile_options(drivers_functional PRIVATE ${warnings})
-add_dependencies(drivers_functional nexus_fake_driver)
+# The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
+if(NOT WIN32)
+    add_executable(drivers_functional drivers_functional.cpp)
+    target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
+    target_compile_options(drivers_functional PRIVATE ${warnings})
+    add_dependencies(drivers_functional nexus_fake_driver)
+endif()
 
 add_dependencies(model_checks supervisor_walk supervisor_test)
 
@@ -39,13 +42,15 @@ add_test(NAME friends_unit_driver_table COMMAND driver_table_test)
 set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30)
 
 # Each case in a directory of its own under the build tree.
-foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
-             orphan escaped_output queue queue_unconfigured restart_unconfigured
-             stop_hammered)
-    add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
-             ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
-    set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
-endforeach()
+if(NOT WIN32)
+    foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
+                 orphan escaped_output queue queue_unconfigured restart_unconfigured
+                 stop_hammered)
+        add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
+                 ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
+        set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
+    endforeach()
+endif()
 
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)

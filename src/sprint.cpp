@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <vector>
 
 #include "pr/json.h"
+
+#include "style.h"
 
 namespace nexus {
 
@@ -151,11 +154,11 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
             // Command-Up and Command-Down scroll the page to its top and its bottom, as on macOS; nexus binds neither.
             if (event.keyboard.key == PrAppKey_Up || event.keyboard.key == PrAppKey_Down)
                 return BoardRoute::Page;
-            if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.keyboard.key == PrAppKey_Escape)
+            if ((event.modifiers & style::kCommand) != 0 || event.keyboard.key == PrAppKey_Escape)
                 return BoardRoute::Window;
             return BoardRoute::Page;
         case PrAppEventKind_Text:
-            return (event.modifiers & PrAppModifierFlag_Super) != 0 ? BoardRoute::Window : BoardRoute::Page;
+            return (event.modifiers & style::kCommand) != 0 ? BoardRoute::Window : BoardRoute::Page;
         case PrAppEventKind_CompositionUpdate:
         case PrAppEventKind_CompositionEnd:
             return BoardRoute::Page;
@@ -351,6 +354,26 @@ std::string sprintPrelude(std::string_view standardZone, std::string_view daylig
     replace(text, "@STD@", literal(standardZone));
     replace(text, "@DST@", literal(daylightZone));
     return text;
+}
+
+ZoneNames localZoneNames() {
+    ZoneNames names;
+#if defined(_WIN32)
+    _tzset();
+    char name[128];
+    std::size_t size = 0;
+    if (_get_tzname(&size, name, sizeof(name), 0) == 0) {
+        names.standard = name;
+    }
+    if (_get_tzname(&size, name, sizeof(name), 1) == 0) {
+        names.daylight = name;
+    }
+#else
+    tzset();
+    names.standard = tzname[0] != nullptr ? tzname[0] : "";
+    names.daylight = tzname[1] != nullptr ? tzname[1] : "";
+#endif
+    return names;
 }
 
 } // namespace nexus

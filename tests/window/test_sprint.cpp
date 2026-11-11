@@ -3,10 +3,12 @@
 // window, and the script and style nexus adds to the page. No OS, no clock, no window, no process, no network.
 
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
 #include "sprint.h"
+#include "style.h"
 
 namespace {
 
@@ -75,7 +77,14 @@ struct FakeRun {
     }
 };
 
+// What the sprint's command runs (with SHELL /bin/zsh), and how its errors show it.
+#if defined(_WIN32)
+constexpr const char* kShown = "nova-config service show sprint-run --json";
+constexpr const char* kProgram = "nova-config";
+#else
 constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config service show sprint-run --json'";
+constexpr const char* kProgram = "/bin/zsh";
+#endif
 
 SprintBoardAddress findWith(CommandResult result, FakeRun* seen = nullptr, const char* override = nullptr) {
     FakeRun fake{result, {}, 0, 0};
@@ -87,10 +96,15 @@ SprintBoardAddress findWith(CommandResult result, FakeRun* seen = nullptr, const
 
 void commandIsTheLoginShellOrTheOverride() {
     Command shell = sprintRunCommand(nullptr, "/bin/zsh");
-    CHECK(shell.program == "/bin/zsh");
-    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config service show sprint-run --json"}));
+    CHECK(shell.program == kProgram);
     CHECK(shell.shown == kShown);
+#if defined(_WIN32)
+    CHECK((shell.arguments == std::vector<std::string>{"service", "show", "sprint-run", "--json"}));
+    CHECK(sprintRunCommand(nullptr, nullptr).program == "nova-config");
+#else
+    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config service show sprint-run --json"}));
     CHECK(sprintRunCommand(nullptr, nullptr).program == "/bin/sh");
+#endif
     Command direct = sprintRunCommand("/opt/nova/nova-config", "/bin/zsh");
     CHECK(direct.program == "/opt/nova/nova-config");
     CHECK((direct.arguments == std::vector<std::string>{"service", "show", "sprint-run", "--json"}));
@@ -121,7 +135,7 @@ void notFoundSaysWhatToDo() {
     CHECK(shell.url.empty() && has(shell.error, kShown) && has(shell.error, "status 127"));
     CHECK(has(shell.error, "command not found") && has(shell.error, "NEXUS_NOVA_CONFIG"));
     SprintBoardAddress missing = findWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
-    CHECK(has(missing.error, "/bin/zsh was not found") && has(missing.error, "NEXUS_NOVA_CONFIG"));
+    CHECK(has(missing.error, (std::string(kProgram) + " was not found").c_str()) && has(missing.error, "NEXUS_NOVA_CONFIG"));
     SprintBoardAddress unstarted = findWith(CommandResult{CommandResult::End::NotStarted, 0, "", ""});
     CHECK(has(unstarted.error, "could not start") && has(unstarted.error, "NEXUS_SPRINT_URL"));
 }
@@ -157,7 +171,7 @@ PrAppEvent pointer(PrAppEventKind kind) {
 // Every Command chord and Escape stay with the window; other keys and text go to the page; the pointer's presses and
 // the wheel go where the pointer is, a release where its press went, and a move to both.
 void eventsAreRouted() {
-    constexpr PrAppModifierFlags kCmd = PrAppModifierFlag_Super;
+    constexpr PrAppModifierFlags kCmd = style::kCommand;
     for (char digit : std::string("1234567890"))
         CHECK(routeBoardEvent(key(PrAppKey(digit), kCmd), true, false) == BoardRoute::Window);
     for (PrAppKey k : {PrAppKey('T'), PrAppKey('W'), PrAppKey('='), PrAppKey('-'), PrAppKey('`')})
@@ -167,7 +181,8 @@ void eventsAreRouted() {
     CHECK(routeBoardEvent(key(PrAppKey_Down, 0), true, false) == BoardRoute::Page);
     CHECK(routeBoardEvent(key(PrAppKey(' '), 0), false, false) == BoardRoute::Page);
     // The keys that scroll the page go to it; Command-Up and Command-Down too (to its top and its bottom).
-    for (PrAppKey k : {PrAppKey_Up, PrAppKey_Down, PrAppKey_PageUp, PrAppKey_PageDown, PrAppKey_Home, PrAppKey_End})
+    for (PrAppKey k : std::initializer_list<PrAppKey>{PrAppKey_Up, PrAppKey_Down, PrAppKey_PageUp, PrAppKey_PageDown,
+             PrAppKey_Home, PrAppKey_End})
         CHECK(routeBoardEvent(key(k, 0), false, false) == BoardRoute::Page);
     CHECK(routeBoardEvent(key(PrAppKey(' '), PrAppModifierFlag_Shift), false, false) == BoardRoute::Page);
     CHECK(routeBoardEvent(key(PrAppKey_Up, kCmd), false, false) == BoardRoute::Page);

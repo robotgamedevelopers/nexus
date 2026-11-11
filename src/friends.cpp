@@ -111,10 +111,17 @@ Command novaConfigCommand(const char* override, const char* shell, const std::ve
         joined += (joined.empty() ? "" : " ") + a;
     if (override != nullptr && *override != 0)
         return Command{override, arguments, std::string(override) + " " + joined};
+#if defined(_WIN32)
+    // Windows has no login shell to find nova-config through, and a GUI program there gets the person's whole PATH:
+    // nova-config is run directly, from PATH.
+    (void)shell;
+    return Command{"nova-config", arguments, "nova-config " + joined};
+#else
     std::string program = shell != nullptr && *shell != 0 ? shell : "/bin/sh";
     // exec: the shell becomes nova-config, so a timeout's kill reaches it.
     std::string line = "exec nova-config " + joined;
     return Command{program, {"-l", "-c", line}, program + " -l -c '" + line + "'"};
+#endif
 }
 
 Command friendListCommand(const char* override, const char* shell) {

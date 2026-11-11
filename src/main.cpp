@@ -8,7 +8,7 @@
 // The window is the overlay: Prax's Overlay window (a borderless panel above other apps, on every Space and beside
 // fullscreen apps) with a Transparent backdrop, in an Accessory app (no Dock icon), shown and hidden by Prax's global
 // hotkey (style.h kOverlayHotkey) and by Escape, and hidden when it loses the keyboard, as overlay.h's rules say.
-// platform_mac.h makes it cover the whole screen, menu bar included, which Prax does not. --windowed gives a normal
+// platform.h makes it cover the whole screen, menu bar included, which Prax does not. --windowed gives a normal
 // opaque window, where Escape does nothing. --print-window-config prints what the overlay asks of Prax and exits.
 //
 // Command-T opens a terminal tab (terminals.h) running the login shell in the home directory; --demo-terminal makes the
@@ -60,7 +60,7 @@
 #include "friends.h"
 #include "model.h"
 #include "overlay.h"
-#include "platform_mac.h"
+#include "platform.h"
 #include "style.h"
 #include "tab_order.h"
 #include "terminals.h"
@@ -199,10 +199,9 @@ void carryOut(App& a, OverlayAct act) {
         return;
     }
     PrAppSurface surface{};
-    if (prAppWindowSurface(window, &surface) != PrStatus_Ok || surface.kind != PrAppSurfaceKind_NsView ||
-            !coverScreen(surface.handle))
-        std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no NSView, window or screen), so "
-            "it covers the screen's work area only, below the menu bar\n");
+    if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
+        std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
+            "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
     prAppWindowFocus(window);
     prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
 }
@@ -310,10 +309,16 @@ bool start(void* context, PrStudioApp* studio) {
         return false;
     }
     PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
-    if (status != PrStatus_Ok)
-        std::fprintf(stderr, "nexus: the overlay hotkey (Command-backtick) did not register (status %d: %s), so only "
-            "launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h\n",
-            int(status), status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
+    if (status != PrStatus_Ok) {
+        char line[512];
+        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (%s-backtick) did not register (status %d: %s), so "
+            "only launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h",
+            style::kCommandName, int(status),
+            status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
+        std::fprintf(stderr, "%s\n", line);
+        // The one launch failure the person must be told: on Windows nexus has no terminal, so a message box says it.
+        showLaunchError(line);
+    }
     // Launch shows nothing and takes no focus (the owner 2026-11-10: "I want nothing visible no change, no input focus
     // change ... until the hotkey"); the link connects meanwhile. Only with no hotkey does launch show it, else never.
     if (status != PrStatus_Ok)
@@ -585,6 +590,8 @@ void seedDemo(Model& model, std::size_t tab) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // On Windows the window has no terminal: its error lines go to %LOCALAPPDATA%\nexus\nexus.log (src/platform.h).
+    startErrorLog();
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool tabGiven = false;
@@ -639,11 +646,12 @@ int main(int argc, char** argv) {
             "role: Overlay (a borderless panel above other apps, on every Space and beside fullscreen apps)\n"
             "backdrop: %s; opens hidden; shown by the hotkey\n"
             "presence: %s\n"
-            "hotkey: Command-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
-            "frame: the whole screen with the pointer, menu bar included, set through the NSView at each show\n"
+            "hotkey: %s-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
+            "frame: the whole screen with the pointer, menu bar or taskbar included, set through the native window at "
+            "each show\n"
             "background alpha: %.2f; tab strip fill alpha: %.2f\n",
             style::kOverlayBlur ? "Blur" : "Transparent", style::kOverlayAccessory ? "Accessory" : "Regular",
-            unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
+            style::kCommandName, unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
             double(style::kOverlayOpacity), double(style::kOverlayStripFill));
         return 0;
     }
@@ -779,12 +787,12 @@ int main(int argc, char** argv) {
     int code = 0;
     if (shot != nullptr) {
         // A fullscreen-sized frame of the main display (a 1000x780 window with --windowed).
-        float w = 1000, h = 780, scale = 2;
-        if (!windowed && !mainDisplay(&w, &h, &scale)) {
+        float w = 1000, h = 780, ratio = 2;
+        if (!windowed && !mainDisplay(&w, &h, &ratio)) {
             std::fprintf(stderr, "nexus: no main display to size the screenshot by\n");
             code = 1;
         } else {
-            code = screenshot(a, shot, PrVec2{w, h}, scale);
+            code = screenshot(a, shot, PrVec2{w, h}, ratio);
         }
     } else {
         // The overlay opens hidden at the size Prax holds it to; each show gives it the whole screen (carryOut).

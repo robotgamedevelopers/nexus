@@ -6,16 +6,19 @@
 #   functional  driver_fake_test: the fake driver (nexus-fake-driver, the stand-in for a harness's driver that the
 #               server's tests start) as a real child process over pipes, in a working directory of its own
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(driver_protocol_test protocol_test.cpp)
 target_link_libraries(driver_protocol_test PRIVATE nexus_driver)
 target_compile_options(driver_protocol_test PRIVATE ${warnings})
 
-add_executable(nexus_fake_driver fake_driver.cpp)
-target_link_libraries(nexus_fake_driver PRIVATE nexus_driver)
-target_compile_options(nexus_fake_driver PRIVATE ${warnings})
-set_target_properties(nexus_fake_driver PROPERTIES OUTPUT_NAME nexus-fake-driver)
+# The fake driver is a POSIX program, as nexus-server's drivers are (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
+if(NOT WIN32)
+    add_executable(nexus_fake_driver fake_driver.cpp)
+    target_link_libraries(nexus_fake_driver PRIVATE nexus_driver)
+    target_compile_options(nexus_fake_driver PRIVATE ${warnings})
+    set_target_properties(nexus_fake_driver PROPERTIES OUTPUT_NAME nexus-fake-driver)
+endif()
 
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).
 add_dependencies(model_checks driver_protocol_test)
@@ -26,8 +29,8 @@ foreach(group roundtrip encode_refusals property chunking refusals strings numbe
 endforeach()
 
 # The functional test starts the fake driver through Prax's lib/process: with the window's logic (NEXUS_WINDOW_LOGIC in
-# CMakeLists.txt), where lib/process links.
-if(NEXUS_WINDOW_LOGIC)
+# CMakeLists.txt), where lib/process links, and with the fake driver (not on Windows).
+if(NEXUS_WINDOW_LOGIC AND NOT WIN32)
     add_executable(driver_fake_test fake_driver_test.cpp)
     target_link_libraries(driver_fake_test PRIVATE nexus_driver prax::process)
     target_compile_options(driver_fake_test PRIVATE ${warnings})

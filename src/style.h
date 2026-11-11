@@ -89,9 +89,25 @@ constexpr float kOverlayOpacity = 0.50f;    // alpha of the window background; w
 constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
 constexpr bool kOverlayBlur = false;          // true blurs what is behind (Prax's Blur backdrop); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
+// Command and Option, by key position, so that the overlay's keys are the same on every keyboard (AGENTS.md): Command
+// is the key directly left of the space bar, which is Command on a Mac and Alt on a PC keyboard (never Control, which
+// terminals need); Option is the key left of that, Option on a Mac and the Windows key on a PC.
+#if defined(__APPLE__)
+constexpr PrAppModifierFlags kCommand = PrAppModifierFlag_Super;
+constexpr PrAppModifierFlags kOption = PrAppModifierFlag_Alt;
+constexpr const char* kCommandName = "Command";
+#elif defined(_WIN32) || defined(__linux__)
+// Windows and Linux: Alt is Command, the Windows (Super) key is Option.
+constexpr PrAppModifierFlags kCommand = PrAppModifierFlag_Alt;
+constexpr PrAppModifierFlags kOption = PrAppModifierFlag_Super;
+constexpr const char* kCommandName = "Alt";
+#else
+#error "nexus: no Command and Option mapping for this platform in src/style.h; add one by key position (AGENTS.md)"
+#endif
+
 // The hotkey, by key position: Command-backtick (the key left of 1, which also types the tilde; macOS's virtual key
-// 0x32). Command-backtick is macOS's "move focus to next window" key, which this registration takes over while nexus
-// runs.
-constexpr PrAppHotkey kOverlayHotkey{.code = PrAppKeyCode_Backquote, .modifiers = PrAppModifierFlag_Super};
+// 0x32), Alt-backtick on a PC keyboard. Command-backtick is macOS's "move focus to next window" key, which this
+// registration takes over while nexus runs.
+constexpr PrAppHotkey kOverlayHotkey{.code = PrAppKeyCode_Backquote, .modifiers = kCommand};
 
 } // namespace nexus::style

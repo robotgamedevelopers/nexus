@@ -24,6 +24,7 @@
 
 #include "board.h"
 #include "model.h"
+#include "style.h"
 #include "view.h"
 
 namespace {
@@ -323,9 +324,13 @@ void loadsPollsAndFormats() {
         std::fprintf(stderr, "the page's text: %s\n", t.c_str());
     std::time_t wall = std::time_t(Clock::wall(&h.clock) / 1000);
     std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &wall);
+#else
     localtime_r(&wall, &local);
-    tzset();
-    std::string zone = tzname[local.tm_isdst > 0 ? 1 : 0];
+#endif
+    const ZoneNames zones = localZoneNames();
+    std::string zone = local.tm_isdst > 0 ? zones.daylight : zones.standard;
     CHECK(has(t, "first"));
     CHECK(!zone.empty() && has(t, zone));
     CHECK(h.hasStyle());
@@ -519,7 +524,7 @@ void keysAndTheWheelScrollSmoothly() {
     CHECK(top() > released + 150 && top() < released + 250);
 
     // Command-Up: to the top. End: to the bottom, where it bounces past the end and comes back.
-    down(PrAppKey_Up, PrAppModifierFlag_Super);
+    down(PrAppKey_Up, style::kCommand);
     run(2);
     CHECK(top() == 0);
     down(PrAppKey_End);

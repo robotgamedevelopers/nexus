@@ -26,6 +26,8 @@
 #include "pr/ui.h"
 #include "pr/url_quickjs.h"
 
+#include "style.h"
+
 namespace nexus {
 
 namespace {
@@ -150,8 +152,8 @@ PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.
             return address;
         });
     }
-    tzset();
-    prelude_ = sprintPrelude(tzname[0] != nullptr ? tzname[0] : "", tzname[1] != nullptr ? tzname[1] : "");
+    const ZoneNames zones = localZoneNames();
+    prelude_ = sprintPrelude(zones.standard, zones.daylight);
 }
 
 PraxBoard::~PraxBoard() {
@@ -412,7 +414,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     display_ = display;
     const bool onScreen = shown_ && (!desc_.visible || desc_.visible());
     if (page_ != nullptr && hiddenSet_ == onScreen) {
-        prHtmlPageSetVisibility(page_, onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden);
+        prHtmlPageSetVisibility(page_, PrHtmlVisibility(onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden));
         hiddenSet_ = !onScreen;
     }
     if (!onScreen) {
@@ -654,12 +656,12 @@ namespace {
 
 // Which way a key scrolls the page, as Prax's view scrolls by keys (html_view.cpp scrollByKey): -1 up, 1 down, 0 none.
 int keyDirection(const PrAppEvent& e) {
-    if ((e.modifiers & PrAppModifierFlag_Alt) != 0)
+    if ((e.modifiers & style::kOption) != 0)
         return 0;
     switch (e.keyboard.key) {
         case PrAppKey_Up: case PrAppKey_PageUp: case PrAppKey_Home: return -1;
         case PrAppKey_Down: case PrAppKey_PageDown: case PrAppKey_End: return 1;
-        case ' ': return (e.modifiers & (PrAppModifierFlag_Super | PrAppModifierFlag_Control)) != 0 ? 0 :
+        case ' ': return (e.modifiers & (style::kCommand | PrAppModifierFlag_Control)) != 0 ? 0 :
             (e.modifiers & PrAppModifierFlag_Shift) != 0 ? -1 : 1;
         default: return 0;
     }
@@ -667,7 +669,7 @@ int keyDirection(const PrAppEvent& e) {
 
 // Up or Down, -1 or 1, else 0; with `plain`, only with no Command, Control or Option (which change what it does).
 int arrowOf(const PrAppEvent& e, bool plain) {
-    const PrAppModifierFlags chord = PrAppModifierFlag_Super | PrAppModifierFlag_Control | PrAppModifierFlag_Alt;
+    const PrAppModifierFlags chord = style::kCommand | PrAppModifierFlag_Control | style::kOption;
     if (plain && (e.modifiers & chord) != 0)
         return 0;
     return e.keyboard.key == PrAppKey_Up ? -1 : e.keyboard.key == PrAppKey_Down ? 1 : 0;

@@ -387,3 +387,135 @@ jobs:
       # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
+
+  # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
+  # the flags), on captain's Windows runners: everything that builds there today, and its unit tests. Not the window
+  # (Prax's Win32 backend of lib/app does not compile at its pin) and not the link (mosh's network layer is POSIX).
+  #
+  # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
+  # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
+  # runner is cold. Prax's download cache sits beside it (PR_DOWNLOAD_DIR), one per runner for the reason given above.
+  windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Windows, X64, captain]
+    timeout-minutes: 2
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
+      - name: Build directory and caches outside the workspace
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'pdoane/prax\.git\s+GIT_TAG\s+([0-9a-f]{40})').Groups[1].Value
+          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (FetchContent_Declare(prax ... GIT_TAG <sha>))" }
+          $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
+          $build = "$caches\build-x64"
+          New-Item -ItemType Directory -Force -Path $caches | Out-Null
+          # The runner's directory holds only what this job keeps: anything else (an old Prax pin, a leftover build
+          # directory) goes.
+          $keep = @('build-x64', 'build-x64.ok', 'build-x64.unfinished', 'prax-downloads', "prax-$pin")
+          Get-ChildItem -Force $caches | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
+            Write-Output "removing $($_.FullName)"
+            Remove-Item -Recurse -Force $_.FullName
+          }
+          # build-x64.ok is written only after a build that finished. A build directory without it is from a run cut
+          # off (or failed) mid-configure or mid-build: it is resumed, since a cold build outlasts one run's 2 minutes,
+          # but at most 3 times (build-x64.unfinished counts them); the 4th start without a finished build starts from
+          # nothing, so a directory a cut left broken does not stay.
+          if (Test-Path "$build.ok") {
+            Remove-Item -Force -ErrorAction SilentlyContinue "$build.unfinished"
+          } elseif (Test-Path $build) {
+            $starts = 1
+            if (Test-Path "$build.unfinished") { $starts = [int](Get-Content "$build.unfinished") + 1 }
+            if ($starts -gt 3) {
+              Write-Output "the build directory has had 3 starts without a finished build; removing it"
+              Remove-Item -Recurse -Force $build
+              $starts = 0
+            } else {
+              Write-Output "the build directory has no finished build; resuming it (start $starts of 3)"
+            }
+            Set-Content -Path "$build.unfinished" -Value $starts
+          }
+          Remove-Item -Force -ErrorAction SilentlyContinue "$build.ok"
+          New-Item -ItemType Directory -Force -Path $build, "$caches\prax-downloads" | Out-Null
+          "PRAX_PIN=$pin" >> $env:GITHUB_ENV
+          "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
+          "NEXUS_BUILD=$build" >> $env:GITHUB_ENV
+          "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
+          "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
+      # Prax at the commit CMakeLists.txt pins, fetched once per runner at depth 1 (a full clone outlasts the job's 2
+      # minutes) into a directory of its own, then renamed into place, so a fetch cut short leaves nothing half made. A
+      # kept checkout is used only when its HEAD is the pin.
+      - name: Prax at its pin, outside the workspace
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $pin = $env:PRAX_PIN
+          $prax = "$env:NEXUS_CACHES\prax-$pin"
+          if (Test-Path $prax) {
+            $head = git -C $prax rev-parse HEAD
+            if ($LASTEXITCODE -ne 0 -or $head -ne $pin) {
+              Write-Output "the Prax checkout at $prax is at '$head', not $pin; fetching it again"
+              Remove-Item -Recurse -Force $prax
+            }
+          }
+          if (-not (Test-Path $prax)) {
+            $partial = "$env:NEXUS_CACHES\prax-partial"
+            if (Test-Path $partial) { Remove-Item -Recurse -Force $partial }
+            git init -q $partial
+            if ($LASTEXITCODE -ne 0) { throw "git init exited $LASTEXITCODE" }
+            git -C $partial fetch -q --depth 1 https://github.com/pdoane/prax.git $pin
+            if ($LASTEXITCODE -ne 0) { throw "git fetch of Prax $pin exited $LASTEXITCODE" }
+            git -C $partial checkout -q FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw "git checkout of Prax $pin exited $LASTEXITCODE" }
+            $head = git -C $partial rev-parse HEAD
+            if ($LASTEXITCODE -ne 0 -or $head -ne $pin) { throw "the fetched Prax is at '$head', not $pin" }
+            Rename-Item $partial "prax-$pin"
+          }
+          "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
+          # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
+          # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short would
+          # start again from nothing on the next run.
+          $deps = Get-Content -Raw "$prax\cmake\dependencies.cmake"
+          $asset = 'windows-x86_64.zip'
+          $hash = [regex]::Match($deps, 'PR_SLANG_ASSET ' + [regex]::Escape($asset) + '\)\s+set\(PR_SLANG_HASH ([0-9a-f]{64})').Groups[1].Value
+          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{PR_SLANG_ASSET\}').Groups[1].Value
+          if (-not $hash -or -not $url) { throw "Prax's cmake/dependencies.cmake no longer names Slang's $asset as this step reads it" }
+          $file = ($url -split '/')[-1] + $asset
+          $slang = "$env:PR_DOWNLOAD_DIR\slang"
+          New-Item -ItemType Directory -Force -Path $slang | Out-Null
+          $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
+          if ($have -ne $hash) {
+            # curl.exe resumes a download that an earlier run's 2 minutes cut short (-C -).
+            curl.exe -fsSL --retry 3 -C - -o "$slang\$file.partial" ($url + $asset)
+            if ($LASTEXITCODE -ne 0) { throw "curl of Slang's $file exited $LASTEXITCODE (the partial file is kept to resume)" }
+            $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
+            if ($got -ne $hash) {
+              Remove-Item -Force "$slang\$file.partial"
+              throw "Slang's $file has sha256 $got, and Prax pins $hash (removed; the next run downloads it again)"
+            }
+            Move-Item -Force "$slang\$file.partial" "$slang\$file"
+          }
+      # Every NEXUS_* option is given, so a kept CMakeCache.txt never decides what is built. The window, its logic and
+      # the link are off on Windows (CMakeLists.txt says why for each); src/platform_win.cpp is compiled on its own.
+      - name: Configure (Release, MSVC x64)
+        run: |
+          cmake -S . -B "$env:NEXUS_BUILD" -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
+      - name: Build
+        run: |
+          cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
+          if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
+          New-Item -ItemType File -Force -Path "$env:NEXUS_BUILD.ok" | Out-Null
+          Remove-Item -Force -ErrorAction SilentlyContinue "$env:NEXUS_BUILD.unfinished"
+      - name: Unit tests
+        run: |
+          ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }

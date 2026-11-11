@@ -4,7 +4,7 @@
 #                  spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Window.tla on the three largest instances (the nightly workflow)
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(model_test model_test.cpp)
 target_link_libraries(model_test PRIVATE nexus_model)

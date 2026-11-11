@@ -259,9 +259,9 @@ struct TextKey {
     int steps;
 };
 constexpr TextKey kTextKeys[] = {
-    {'=', PrAppModifierFlag_Super, 1},
-    {'+', PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_Shift), 1},
-    {'-', PrAppModifierFlag_Super, -1},
+    {'=', style::kCommand, 1},
+    {'+', PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift), 1},
+    {'-', style::kCommand, -1},
 };
 
 PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
@@ -634,7 +634,7 @@ struct Builder {
         PrLayoutNode box = element(footer, Part::Prompt);
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
-        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, PrAppModifierFlag_Super);
+        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
         view.promptRows = promptRows();
 
         plus(box);
@@ -681,38 +681,42 @@ struct Builder {
         // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
         // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
         const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
+        // nexus's Command chords are captured, not claimed: a capture routes ahead of every claim (pr/ui.h
+        // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
+        // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
+        // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
         // Command-1 to Command-0 select the tabs at positions 1 to 10 in the strip's current order, in the keyboard
         // row's order. A key whose tab does not exist is refused by the model and changes nothing. macOS types no text
         // for a Command chord. The sprint tab's key takes its page back to the board (Board::home).
         for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
-            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super) && model.select_tab(n) &&
+            if (prUiKeyCaptured(ui, keys, PrAppKey(kTabKeys[n]), style::kCommand) && model.select_tab(n) &&
                     model.tab(n).kind == TabKind::Sprint && view.board != nullptr)
                 view.board->home();
         }
-        // The text scale's keys, claimed the same way, ask for a new scale; the next frame applies it (beginWindowFrame).
+        // The text scale's keys, captured the same way, ask for a new scale; the next frame applies it
+        // (beginWindowFrame).
         for (const TextKey& t : kTextKeys) {
-            if (prUiKeyPressed(ui, keys, t.key, t.modifiers))
+            if (prUiKeyCaptured(ui, keys, t.key, t.modifiers))
                 view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
         // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the
-        // sprint tab. A terminal that cannot start leaves the tab that showed before. Claimed like the keys above: a
-        // terminal leaves
-        // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
-        if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
+        // sprint tab. A terminal that cannot start leaves the tab that showed before. Captured like the keys above, so
+        // neither a terminal nor the prompt sees them.
+        if (prUiKeyCaptured(ui, keys, PrAppKey('T'), style::kCommand) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
             if (!view.terminals->open(id))
                 model.close_tab(model.active());
         }
-        if (prUiKeyPressed(ui, keys, PrAppKey('W'), PrAppModifierFlag_Super) && model.tab_count() != 0 &&
+        if (prUiKeyCaptured(ui, keys, PrAppKey('W'), style::kCommand) && model.tab_count() != 0 &&
                 model.tab(model.active()).kind == TabKind::Terminal) {
             const std::size_t id = model.tab(model.active()).id;
             model.close_tab(model.active());
             view.terminals->close(id);
         }
         serviceTerminals();
-        // On a terminal tab, Escape and Command-Escape are not claimed: the terminal claims Escape for its shell, and
-        // Command-Escape does nothing there. On the sprint tab Escape hides, and Command-Escape does nothing.
+        // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
+        // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
         const TabKind activeKind = model.tab_count() == 0 ? TabKind::Friend : model.tab(model.active()).kind;
         const bool onFriend = activeKind == TabKind::Friend;
         const bool hides = activeKind != TabKind::Terminal;
@@ -725,9 +729,10 @@ struct Builder {
         if (hides && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing &&
                 view.hide)
             view.hide();
-        // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
-        // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
-        if (onFriend && prUiKeyPressed(ui, keys, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
+        // Command-Escape is stop (view.stop) on a friend's tab, and does nothing on the others. It hides nothing. It is
+        // captured on every tab, like nexus's other Command chords, so a terminal never takes it as Meta-Escape.
+        const bool stopKey = prUiKeyCaptured(ui, keys, PrAppKey_Escape, style::kCommand);
+        if (onFriend && stopKey && view.stop)
             view.stop();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
