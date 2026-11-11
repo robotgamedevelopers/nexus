@@ -20,9 +20,11 @@
 // whole state is written as the journal's snapshot and the log starts again.
 //
 // A record: u8 format (1); str tab; u32 count, then each change: u8 kind, and for an append u8 entry kind, u8 closed,
-// str text, for an enqueue str prompt; then str client (empty: none) and u64 its new counter. The snapshot: u8 format
-// (1); u32 tabs, each str name, u32 entries (u8 kind, u8 closed, str text), u32 prompts (str); u32 clients, each str
-// client, u64 counter. Little-endian; str is a u32 length and the bytes (codec.h).
+// str text, for an enqueue str prompt, for a driver the driver; then str client (empty: none) and u64 its new counter.
+// A driver: u64 next turn, u64 open turn, str session, u32 waiting prompts (str). The snapshot: u8 format (2); u32
+// tabs, each str name, u32 entries (u8 kind, u8 closed, str text), u32 prompts (str), the driver; u32 clients, each str
+// client, u64 counter. A snapshot of format 1 (written before drivers) has no driver and is read with the default one.
+// Little-endian; str is a u32 length and the bytes (codec.h).
 namespace nexus::store {
 
 // An entry of a transcript. The store keeps kind as the server gives it (sync's EntryKind); an open entry (closed
@@ -34,17 +36,29 @@ struct Entry {
     bool operator==(const Entry&) const = default;
 };
 
+// A friend tab's driver, as the server keeps it across restarts (server/supervisor.h): the next turn number, the turn
+// open (0 for none), the last session id, and the prompts waiting for a driver.
+struct Driver {
+    std::uint64_t next_turn = 1;
+    std::uint64_t open_turn = 0;
+    std::string session;
+    std::vector<std::string> waiting;
+    bool operator==(const Driver&) const = default;
+};
+
 struct Tab {
     std::vector<Entry> transcript;
     std::vector<std::string> queue;
+    Driver driver;
     bool operator==(const Tab&) const = default;
 };
 
 struct Change {
-    enum class Kind : std::uint8_t { Append = 1, Enqueue = 2 };
+    enum class Kind : std::uint8_t { Append = 1, Enqueue = 2, SetDriver = 3 };
     Kind kind = Kind::Append;
     Entry entry;          // Append: the entry added at the end of the transcript
     std::string prompt;   // Enqueue: the prompt added at the end of the queue
+    Driver driver;        // SetDriver: the tab's driver, replaced whole
 };
 
 struct StoreOptions {

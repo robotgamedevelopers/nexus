@@ -33,7 +33,7 @@ target_compile_options(store_functional_test PRIVATE ${warnings})
 add_custom_target(store_checks DEPENDS store_test durable_test journal_walk)
 add_dependencies(model_checks store_checks)
 
-foreach(group codec memfs journal journal_crash store store_crash)
+foreach(group codec memfs journal journal_crash store store_crash driver)
     add_test(NAME store_unit_${group} COMMAND store_test ${group})
     set_tests_properties(store_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

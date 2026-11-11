@@ -5,9 +5,10 @@
 // cleanup fixture, which ctest runs even after a crash or a timeout) stops the servers in every directory it names, so
 // no server outlives the tests. The session key is never printed.
 //
-//   link_e2e <nexus-server> <dir> roundtrip <host>
+//   link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver>
 //       the window's own link thread (link/client.h) through ssh <host>: a prompt sent to one friend comes back with
-//       its reply, one queued to another shows queued; then the link shuts down and the server ends the session
+//       its reply from the friend's driver (the fake, named in <dir>/drivers), one queued to another shows queued;
+//       then the link shuts down and the server ends the session
 //   link_e2e <nexus-server> <dir> outage
 //       through a relay on loopback that the test can cut: prompts sent while the network is down for 8 s arrive once
 //       each when it comes back, the window says it has no contact while it is down, and converges after
@@ -39,6 +40,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -137,10 +139,31 @@ double seconds(Clock::time_point since) {
     return std::chrono::duration<double>(Clock::now() - since).count();
 }
 
+// A tab with no driver: the server's notice for a prompt it could not send (server/driver_table.h), which the runs
+// other than roundtrip get, having no drivers file.
+bool noDriver(const std::string& text) {
+    return text.find(" has no driver, so the prompt was not sent") != std::string::npos;
+}
+
+bool writeFile(const std::string& path, const std::string& text) {
+    std::ofstream out(path);
+    out << text;
+    return static_cast<bool>(out.flush());
+}
+
 // ---- roundtrip: the window's own link thread ----
 
-int roundtrip(const std::string& binary, const std::string& dir, const std::string& host) {
+int roundtrip(const std::string& binary, const std::string& dir, const std::string& host, const std::string& fake) {
     Server server(binary, dir);
+    // ada's driver is the fake, answering one prompt; the server reads the drivers file at the prompt.
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
+        "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\nemit {\"kind\":\"text\",\"delta\":\"hello \"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"back\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"));
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+        "\n"));
     Model model(kFriends, true);
     sync::Mirror mirror;
     const auto start = Clock::now();
@@ -171,7 +194,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
             CHECK(model.tab(ada).transcript[0].kind == EntryKind::Person);
             CHECK(model.tab(ada).transcript[0].text == "hello over mosh");
             CHECK(model.tab(ada).transcript[1].kind == EntryKind::Friend);
-            CHECK(model.tab(ada).transcript[1].text == sync::kReceived);
+            CHECK(model.tab(ada).transcript[1].text == "hello back");
         }
         CHECK(model.tab(bo).queue == std::vector<std::string>{"for later"});
         CHECK(model.tab(bo).transcript.empty());
@@ -356,11 +379,10 @@ int outage(const std::string& binary, const std::string& dir) {
     CHECK(settle(15, [&] { return w.model.tab(ada).transcript.size() == 8 && w.session->allAcknowledged(); }));
     std::printf("converged %.2f s after the network came back\n", seconds(back));
     const auto& t = w.model.tab(ada).transcript;
-    const std::vector<std::string> want = {"before", sync::kReceived, "during 0", sync::kReceived, "during 1",
-        sync::kReceived, "during 2", sync::kReceived};
-    CHECK(t.size() == want.size());
-    for (std::size_t i = 0; i < t.size() && i < want.size(); ++i)
-        CHECK(t[i].text == want[i]);
+    const std::vector<std::string> want = {"before", "during 0", "during 1", "during 2"};
+    CHECK(t.size() == 2 * want.size());
+    for (std::size_t i = 0; i < t.size() && i < 2 * want.size(); ++i)
+        CHECK(i % 2 == 0 ? t[i].text == want[i / 2] : t[i].kind == EntryKind::Notice && noDriver(t[i].text));
     const sync::TabView* v = w.session->state().find("ada");
     CHECK(v != nullptr && v->total() == 8);
 
@@ -381,11 +403,12 @@ int outage(const std::string& binary, const std::string& dir) {
 
 // ---- soak ----
 
-// The entries a window shows, by the server's transcript index, with the entries it never received left empty.
+// The entries a window shows, by the server's transcript index, with the entries it never received (the notice of
+// how many came before) left empty.
 std::vector<const Entry*> byIndex(const Tab& tab) {
     std::vector<const Entry*> out;
     for (const Entry& e : tab.transcript) {
-        if (e.kind == EntryKind::Notice) {
+        if (e.kind == EntryKind::Notice && !noDriver(e.text)) {
             const std::size_t n = std::strtoul(e.text.c_str(), nullptr, 10);
             out.insert(out.end(), n, nullptr);
         } else {
@@ -471,7 +494,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
                         CHECK(other[i]->kind == e->kind && other[i]->text == e->text);
                 }
                 if (i % 2 == 1) {
-                    CHECK(e->kind == EntryKind::Friend && e->text == sync::kReceived);
+                    CHECK(e->kind == EntryKind::Notice && noDriver(e->text));
                     continue;
                 }
                 CHECK(e->kind == EntryKind::Person);
@@ -574,11 +597,12 @@ int restart(const std::string& binary, const std::string& dir) {
             step(ws, nullptr, 20);
         return done();
     };
+    // ada's texts, with the notice that ada has no driver as "no driver".
     auto adaTexts = [](const sync::Tabs& tabs) {
         std::vector<std::string> out;
         if (const sync::TabView* v = tabs.find("ada"))
             for (const sync::EntryRef& e : v->entries)
-                out.push_back(e->text);
+                out.push_back(e->kind == EntryKind::Notice && noDriver(e->text) ? "no driver" : e->text);
         return out;
     };
     {
@@ -615,8 +639,8 @@ int restart(const std::string& binary, const std::string& dir) {
     for (const auto& a : before)
         add(w, a);
     add(w, {"ada", "four"});
-    const std::vector<std::string> want = {"one", sync::kReceived, "two", sync::kReceived, "three", sync::kReceived,
-                                           "four", sync::kReceived};
+    const std::vector<std::string> want = {"one", "no driver", "two", "no driver", "three", "no driver",
+                                           "four", "no driver"};
     CHECK(settle(w, 15, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
     CHECK(adaTexts(w.session->state()) == want);
     bo = w.session->state().find("bo");
@@ -646,16 +670,16 @@ int main(int argc, char** argv) {
             status |= stopIn(argv[1], argv[i]) ? 0 : 1;
         return status;
     }
-    if (argc == 5 && std::strcmp(argv[3], "roundtrip") == 0)
-        return roundtrip(argv[1], argv[2], argv[4]);
+    if (argc == 6 && std::strcmp(argv[3], "roundtrip") == 0)
+        return roundtrip(argv[1], argv[2], argv[4], argv[5]);
     if (argc == 4 && std::strcmp(argv[3], "outage") == 0)
         return outage(argv[1], argv[2]);
     if (argc == 6 && std::strcmp(argv[3], "soak") == 0)
         return soak(argv[1], argv[2], std::atoi(argv[4]), std::atoi(argv[5]));
     if (argc == 4 && std::strcmp(argv[3], "restart") == 0)
         return restart(argv[1], argv[2]);
-    std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> | outage | soak <clients> <prompts> | "
-                         "restart\n"
+    std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
+                         "soak <clients> <prompts> | restart\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

@@ -24,6 +24,8 @@
 #               mirror, tail
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
+#   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -65,7 +67,20 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
+if(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn or resume")
+    endif()
+    execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "supervisor_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "keyup")
         list(APPEND walk_args --faulty-keyup)

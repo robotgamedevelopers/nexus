@@ -32,7 +32,9 @@ bool MemoryStore::commit(const std::string& name, const std::vector<TabChange>& 
     if (!changes.empty()) {
         StoredTab& t = tabs_[name];
         for (const TabChange& c : changes) {
-            if (c.entry)
+            if (c.driver)
+                t.driver = *c.driver;
+            else if (c.entry)
                 t.transcript.push_back(c.entry);
             else
                 t.queue.push_back(c.prompt);
@@ -48,7 +50,8 @@ std::uint64_t MemoryStore::applied(const std::string& client) const {
     return it == applied_.end() ? 0 : it->second;
 }
 
-Hub::Hub(TabStore& store, Limits limits) : store_(store), limits_(limits) {
+Hub::Hub(TabStore& store, Limits limits, Responder* responder)
+    : store_(store), limits_(limits), responder_(responder) {
     for (const std::string& name : store_.names())
         refresh(name);
 }
@@ -108,15 +111,30 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return false;
     }
     std::vector<TabChange> changes;
-    if (action.kind == ActionKind::Send) {
+    if (action.kind == ActionKind::Send && responder_ != nullptr) {
+        changes = responder_->send(action.tab, action.text);
+    } else if (action.kind == ActionKind::Send) {
         changes.push_back(TabChange{entry(EntryKind::Person, action.text), {}});
         changes.push_back(TabChange{entry(EntryKind::Friend, kReceived), {}});
     } else {
         changes.push_back(TabChange{nullptr, action.text});
     }
-    if (!commit(action.tab, changes))
+    const bool committed = commit(action.tab, changes);
+    if (action.kind == ActionKind::Send && responder_ != nullptr)
+        responder_->sent(action.tab, committed);
+    if (!committed)
         return false;
-    refresh(action.tab);
+    if (store_.find(action.tab) != nullptr)
+        refresh(action.tab);
+    return true;
+}
+
+bool Hub::commit(const std::string& tab, const std::vector<TabChange>& changes, std::string* why) {
+    if (changes.empty())
+        return true;
+    if (!store_.commit(tab, changes, std::string(), 0, why))
+        return false;
+    refresh(tab);
     return true;
 }
 

@@ -1,6 +1,8 @@
 // nexus-server's tabs: what the clients' actions do to them, and the down state (sync/tabs.h) every client is sent.
-// No AI yet: a prompt sent to a friend's tab goes in its transcript, followed by a placeholder reply, "(received)", so
-// that a round trip shows; a queued prompt goes in its queue.
+// A prompt sent to a friend's tab goes to its Responder: in nexus-server, the tab's driver supervisor (server/drivers.h),
+// which puts the prompt in the transcript and writes it to the friend's driver, whose replies it adds later (commit).
+// Without a Responder (the tests, and the link's walk), the prompt is followed by a placeholder reply, "(received)", so
+// that a round trip shows. A queued prompt goes in its queue.
 //
 // The tabs live in a TabStore: MemoryStore keeps them in memory, for the tests and walks; nexus-server's DurableStore
 // (server/durable.h) keeps them on disk (src/store). Each action is one step of the store: what it does to its tab and
@@ -12,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,16 +23,30 @@
 
 namespace nexus::sync {
 
-// What the server holds of one tab: its whole transcript and its queue.
+// What nexus-server keeps of a friend tab's driver (server/supervisor.h) across restarts of the driver and of the
+// server: the next turn number (from 1, never reused), the turn open (0 for none), the last session id the driver
+// reported (the next start's --resume), and the prompts waiting for a driver, oldest first.
+struct DriverState {
+    std::uint64_t nextTurn = 1;
+    std::uint64_t openTurn = 0;
+    std::string session;
+    std::vector<std::string> waiting;
+    bool operator==(const DriverState&) const = default;
+};
+
+// What the server holds of one tab: its whole transcript, its queue, and its driver's state.
 struct StoredTab {
     std::vector<EntryRef> transcript;
     std::vector<std::string> queue;
+    DriverState driver;
 };
 
-// One change to a tab: an entry at the end of its transcript, or (entry null) a prompt at the end of its queue.
+// One change to a tab: an entry at the end of its transcript; or (entry null) a prompt at the end of its queue; or
+// (driver set) its driver's state, replaced whole.
 struct TabChange {
     EntryRef entry;
     std::string prompt;
+    std::optional<DriverState> driver = std::nullopt;
 };
 
 class TabStore {
@@ -77,17 +94,33 @@ struct Limits {
 
 extern const char* const kReceived;  // the placeholder reply: "(received)"
 
+// What a send to a friend's tab does once it is within the hub's limits.
+class Responder {
+public:
+    virtual ~Responder() = default;
+    // The changes a send of `prompt` makes to `tab` (the person's entry and anything after it, or a notice that
+    // refuses it), which the hub commits in one step with the client's counter.
+    virtual std::vector<TabChange> send(const std::string& tab, const std::string& prompt) = 0;
+    // Whether the store took that step. Only once it did may the responder act on the send.
+    virtual void sent(const std::string& tab, bool committed) = 0;
+};
+
 class Hub {
 public:
-    // The state starts as every tab the store already holds.
-    explicit Hub(TabStore& store, Limits limits = {});
+    // The state starts as every tab the store already holds. Sends go to `responder` when one is given.
+    explicit Hub(TabStore& store, Limits limits = {}, Responder* responder = nullptr);
 
-    // Applies one action (each once: the session's Applier sees to that). A send puts the prompt in the tab's
-    // transcript and then the placeholder reply; a queue puts it in the tab's queue. An action past the limits is
-    // refused: the tab's transcript gets a notice that says so (when the tab exists or can be made), and `why` says it
-    // too. Either way, with `client` given, the store's counter for it becomes action.num in the same step. Returns
-    // false when refused, or when the store did not take the step (failed() then says whether it can take any more).
+    // Applies one action (each once: the session's Applier sees to that). A send gives the responder's changes, or
+    // without one the prompt and then the placeholder reply; a queue puts the prompt in the tab's queue. An action past
+    // the limits is refused: the tab's transcript gets a notice that says so (when the tab exists or can be made), and
+    // `why` says it too. Either way, with `client` given, the store's counter for it becomes action.num in the same
+    // step. Returns false when refused, or when the store did not take the step (failed() then says whether it can take
+    // any more).
     bool apply(const Action& action, std::string* why = nullptr, const std::string& client = std::string());
+
+    // Changes that come from the server rather than a client (a friend's reply), in one step of the store. False, with
+    // why, when the store did not take it.
+    bool commit(const std::string& tab, const std::vector<TabChange>& changes, std::string* why = nullptr);
 
     const Tabs& state() const { return state_; }
     const Limits& limits() const { return limits_; }
@@ -97,6 +130,7 @@ private:
     void refresh(const std::string& name);
     TabStore& store_;
     Limits limits_;
+    Responder* responder_;
     Tabs state_;
 };
 

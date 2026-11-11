@@ -9,6 +9,14 @@ sync::EntryRef toRef(const store::Entry& e) {
         sync::TabEntry{static_cast<EntryKind>(e.kind), e.text, e.closed});
 }
 
+sync::DriverState toState(const store::Driver& d) {
+    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting};
+}
+
+store::Driver toDriver(const sync::DriverState& d) {
+    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting};
+}
+
 } // namespace
 
 bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why, const store::StoreOptions& options) {
@@ -25,6 +33,7 @@ bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why,
         for (const store::Entry& e : tab.transcript)
             t.transcript.push_back(toRef(e));
         t.queue = tab.queue;
+        t.driver = toState(tab.driver);
     }
     return true;
 }
@@ -52,7 +61,10 @@ bool DurableStore::commit(const std::string& name, const std::vector<sync::TabCh
     out.reserve(changes.size());
     for (const sync::TabChange& c : changes) {
         store::Change sc;
-        if (c.entry) {
+        if (c.driver) {
+            sc.kind = store::Change::Kind::SetDriver;
+            sc.driver = toDriver(*c.driver);
+        } else if (c.entry) {
             sc.kind = store::Change::Kind::Append;
             sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed};
         } else {
@@ -70,7 +82,9 @@ bool DurableStore::commit(const std::string& name, const std::vector<sync::TabCh
     if (!changes.empty()) {
         sync::StoredTab& t = tabs_[name];
         for (const sync::TabChange& c : changes) {
-            if (c.entry)
+            if (c.driver)
+                t.driver = *c.driver;
+            else if (c.entry)
                 t.transcript.push_back(c.entry);
             else
                 t.queue.push_back(c.prompt);

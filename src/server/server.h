@@ -14,6 +14,10 @@
 // reconnects, after a server restart or a lost session, and sends again the actions it has no acknowledgement for
 // under their own numbers, the server skips those it applied before. A window that does not name itself gets a
 // counter for that session only. A new session for a client ends that client's earlier session.
+//
+// A prompt sent to a friend's tab goes to the friend's driver, a child process the server starts and supervises
+// (server/drivers.h, server/supervisor.h, docs/driver-protocol.md); the file `drivers` in the directory says which
+// program each friend's driver is (server/driver_table.h).
 
 #pragma once
 
@@ -27,6 +31,7 @@ struct Paths {
     std::string socket;     // <dir>/server.sock: the control socket
     std::string log;        // <dir>/server.log: a server `new` started writes here
     std::string store;      // <dir>/store: the tabs and the applied counters (src/store)
+    std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
 };
 
 // Who asks for a session: a client id (empty: none) and the number of its first action in the session.
@@ -42,7 +47,8 @@ bool validClientId(const std::string& id);
 // than a Unix socket's address holds.
 bool paths(const std::string& dir, Paths* out, std::string* why);
 
-// The server: runs until `nexus-server stop`, SIGTERM or SIGINT. Returns the exit status.
+// The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every friend's driver and waits for them.
+// Returns the exit status.
 int serve(const Paths& p);
 // Asks the running server for a session, starting one (`self` serve) if none answers; prints its CONNECT line.
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
