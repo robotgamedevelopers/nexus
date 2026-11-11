@@ -269,6 +269,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest's progress bar slows it many times over
           $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'pdoane/prax\.git\s+GIT_TAG\s+([0-9a-f]{40})').Groups[1].Value
           if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (FetchContent_Declare(prax ... GIT_TAG <sha>))" }
           $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
@@ -282,6 +283,24 @@ jobs:
             Rename-Item $partial "prax-$pin"
           }
           "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
+          # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
+          # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short starts
+          # again from nothing on the next run.
+          $deps = Get-Content -Raw "$prax\cmake\dependencies.cmake"
+          $asset = 'windows-x86_64.zip'
+          $hash = [regex]::Match($deps, 'PR_SLANG_ASSET ' + [regex]::Escape($asset) + '\)\s+set\(PR_SLANG_HASH ([0-9a-f]{64})').Groups[1].Value
+          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{PR_SLANG_ASSET\}').Groups[1].Value
+          if (-not $hash -or -not $url) { throw "Prax's cmake/dependencies.cmake no longer names Slang's $asset as this step reads it" }
+          $file = ($url -split '/')[-1] + $asset
+          $slang = "$env:PR_DOWNLOAD_DIR\slang"
+          New-Item -ItemType Directory -Force -Path $slang | Out-Null
+          $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
+          if ($have -ne $hash) {
+            Invoke-WebRequest -Uri ($url + $asset) -OutFile "$slang\$file.partial"
+            $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
+            if ($got -ne $hash) { throw "Slang's $file has sha256 $got, and Prax pins $hash" }
+            Move-Item -Force "$slang\$file.partial" "$slang\$file"
+          }
       - name: Configure (Release, MSVC x64)
         run: cmake -S . -B "$env:NEXUS_BUILD" -A x64 -DNEXUS_LINK=OFF "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
       - name: Build
