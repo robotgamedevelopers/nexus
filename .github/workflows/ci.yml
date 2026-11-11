@@ -418,16 +418,28 @@ jobs:
           New-Item -ItemType Directory -Force -Path $caches | Out-Null
           # The runner's directory holds only what this job keeps: anything else (an old Prax pin, a leftover build
           # directory) goes.
-          $keep = @('build-x64', 'build-x64.ok', 'prax-downloads', "prax-$pin")
+          $keep = @('build-x64', 'build-x64.ok', 'build-x64.unfinished', 'prax-downloads', "prax-$pin")
           Get-ChildItem -Force $caches | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
             Write-Output "removing $($_.FullName)"
             Remove-Item -Recurse -Force $_.FullName
           }
-          # build-x64.ok is written only after a build that finished; a build directory without it is from a run cut
-          # off mid-configure or mid-build, and is started again from nothing rather than trusted.
-          if ((Test-Path $build) -and -not (Test-Path "$build.ok")) {
-            Write-Output "the build directory has no finished build; removing it"
-            Remove-Item -Recurse -Force $build
+          # build-x64.ok is written only after a build that finished. A build directory without it is from a run cut
+          # off (or failed) mid-configure or mid-build: it is resumed, since a cold build outlasts one run's 2 minutes,
+          # but at most 3 times (build-x64.unfinished counts them); the 4th start without a finished build starts from
+          # nothing, so a directory a cut left broken does not stay.
+          if (Test-Path "$build.ok") {
+            Remove-Item -Force -ErrorAction SilentlyContinue "$build.unfinished"
+          } elseif (Test-Path $build) {
+            $starts = 1
+            if (Test-Path "$build.unfinished") { $starts = [int](Get-Content "$build.unfinished") + 1 }
+            if ($starts -gt 3) {
+              Write-Output "the build directory has had 3 starts without a finished build; removing it"
+              Remove-Item -Recurse -Force $build
+              $starts = 0
+            } else {
+              Write-Output "the build directory has no finished build; resuming it (start $starts of 3)"
+            }
+            Set-Content -Path "$build.unfinished" -Value $starts
           }
           Remove-Item -Force -ErrorAction SilentlyContinue "$build.ok"
           New-Item -ItemType Directory -Force -Path $build, "$caches\prax-downloads" | Out-Null
@@ -502,6 +514,7 @@ jobs:
           cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
           if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
           New-Item -ItemType File -Force -Path "$env:NEXUS_BUILD.ok" | Out-Null
+          Remove-Item -Force -ErrorAction SilentlyContinue "$env:NEXUS_BUILD.unfinished"
       - name: Unit tests
         run: |
           ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
