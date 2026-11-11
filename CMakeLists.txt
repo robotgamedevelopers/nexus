@@ -17,7 +17,7 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 include(FetchContent)
 FetchContent_Declare(prax
     GIT_REPOSITORY https://github.com/pdoane/prax.git
-    GIT_TAG 290852597a6c772d52afc7204f412cf2f04df9bc
+    GIT_TAG e39b205bbba4845077889f4a0fbfb38525d943ff
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)
