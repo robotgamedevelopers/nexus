@@ -388,10 +388,9 @@ jobs:
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
 
-  # The window on 64-bit Windows (x64 only; there is no 32-bit build) (the port: AGENTS.md "the overlay acts exactly the same on every platform"), with MSVC at /W4
-  # and warnings as errors (CMakeLists.txt sets the flags), on captain's Windows runners: everything that builds there
-  # today, and its unit tests. Not the window (Prax's Win32 backend does not compile at its pin) and not the link
-  # (mosh's network layer is POSIX).
+  # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
+  # the flags), on captain's Windows runners: everything that builds there today, and its unit tests. Not the window
+  # (Prax's Win32 backend of lib/app does not compile at its pin) and not the link (mosh's network layer is POSIX).
   #
   # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
   # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
@@ -423,7 +422,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest's progress bar slows it many times over
+          $ProgressPreference = 'SilentlyContinue'
           $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'pdoane/prax\.git\s+GIT_TAG\s+([0-9a-f]{40})').Groups[1].Value
           if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (FetchContent_Declare(prax ... GIT_TAG <sha>))" }
           $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
@@ -466,27 +465,3 @@ jobs:
         run: cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
       - name: Unit tests
         run: ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
-      # TEMPORARY probe, removed before the pull request is ready: the window configured on, and every project compiled
-      # on its own without building its references first, so that every compile error in Prax and in the window shows.
-      - name: Probe (temporary)
-        continue-on-error: true
-        run: |
-          cmake -S . -B "$env:NEXUS_BUILD-link" -A x64 -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=ON "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
-          $probe = "$env:NEXUS_BUILD-window"
-          cmake -S . -B $probe -A x64 -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
-          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-          # Every project at once, each without its references and past any failure (a solution skips the dependents of
-          # a project that fails, which hides their own errors).
-          $all = @'
-          <Project>
-            <ItemGroup>
-              <P Include="**\*.vcxproj" Exclude="**\ALL_BUILD.vcxproj;**\ZERO_CHECK.vcxproj;**\INSTALL.vcxproj;**\RUN_TESTS.vcxproj" />
-            </ItemGroup>
-            <Target Name="Build">
-              <MSBuild Projects="@(P)" BuildInParallel="true" ContinueOnError="true" StopOnFirstFailure="false"
-                       Properties="Configuration=Release;Platform=x64;BuildProjectReferences=false" />
-            </Target>
-          </Project>
-          '@
-          Set-Content -Path "$probe\probe.proj" -Value $all
-          & $msbuild "$probe\probe.proj" /m /nologo /v:m
