@@ -331,13 +331,11 @@ std::string Supervisor::brokeProtocol(const std::string& what) const {
         "(docs/driver-protocol.md).";
 }
 
-// The open turn's gathered text goes into the tab, in entries of at most the limit.
+// The open turn's gathered text goes into the tab as one entry: receive() keeps it within the entry limit.
 void Supervisor::flush() {
-    while (!gathered_.empty()) {
-        const std::size_t cut = cutAt(gathered_, config_.maxEntryBytes);
-        effect(Effect::What::Reply, gathered_.substr(0, cut), state_.openTurn);
-        gathered_.erase(0, cut);
-    }
+    if (!gathered_.empty())
+        effect(Effect::What::Reply, std::move(gathered_), state_.openTurn);
+    gathered_.clear();
 }
 
 // The open turn ends without its done. Its prompt is never written again.
