@@ -258,8 +258,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
-          New-Item -ItemType Directory -Force -Path "$caches\build", "$caches\prax-downloads" | Out-Null
-          "NEXUS_BUILD=$caches\build" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force -Path "$caches\build-x64", "$caches\prax-downloads" | Out-Null
+          "NEXUS_BUILD=$caches\build-x64" >> $env:GITHUB_ENV
           "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
           "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
           cmake --version
