@@ -71,7 +71,8 @@ Each of these moves into the locked rules above, with its test or model, in the 
 Keys and contexts
 - Everything is driven by the keyboard, and fast. Every action has a key; the mouse is never required, and dragging is only ever a second way. Pop-ups open at once, a repeat of the key steps to the next item, and typing filters the list.
 - Every shortcut uses Command, never Control or Option.
-- nexus is opinionated and makes trade-offs. When a key nexus wants clashes with a convention elsewhere (a text-editing key, a macOS shortcut), nexus takes it, says the cost in one line, and moves on.
+- nexus is opinionated and makes trade-offs. When a key nexus wants clashes with a convention elsewhere (a text-editing key, a macOS shortcut), nexus takes it, says the cost in one line, and moves on. Inside the overlay, nexus is its own OS.
+- The overlay acts exactly the same on every platform: macOS, Linux, Windows, iPad. Same keys, same contexts, same behaviour; only the code underneath differs. Command is chosen by position: the key directly left of the space bar. That is Command on macOS and iPad, and Alt on Windows and Linux keyboards (never Control, which terminals need), so the hotkey there is Alt-backtick. Where the OS or an app uses one of these keys, nexus takes it inside the overlay.
 - Escape always backs out one context: a pop-up, the session menu, a drag. The last context is the overlay itself, so only with nothing else open does Escape hide it. Terminal tabs still give Escape to the terminal.
 
 Sessions
