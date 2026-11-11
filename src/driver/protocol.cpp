@@ -1,5 +1,7 @@
 #include "driver/protocol.h"
 
+#include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <type_traits>
 #include <utility>
@@ -19,9 +21,12 @@ std::string_view view(PrStringView s) {
     return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
 }
 
-// The offset of the first byte of `text` that is not well-formed UTF-8, or npos. Stricter than prUtf8Validate, which
-// passes an encoded surrogate: a sequence decodes as U+FFFD here only if it is ill-formed or is U+FFFD itself, and
-// U+0000 (which prUtf8DecodeScalar also turns into U+FFFD) is left for the JSON reader to refuse.
+// Prax's JSON reader has no strict mode: it reads ill-formed UTF-8 and an escaped lone surrogate as U+FFFD without an
+// error, and prUtf8Validate passes surrogates. So a line is checked here before and after it is read.
+
+// The offset of the first byte of `text` that is not well-formed UTF-8, or npos. A sequence decodes as U+FFFD here
+// only if it is ill-formed or is U+FFFD itself; U+0000 (which prUtf8DecodeScalar also turns into U+FFFD) is left for
+// the JSON reader to refuse.
 std::size_t illFormedAt(std::string_view text) {
     std::size_t at = 0;
     while (at < text.size()) {
@@ -32,6 +37,72 @@ std::size_t illFormedAt(std::string_view text) {
         at += n;
     }
     return std::string_view::npos;
+}
+
+// The offset of an escaped lone surrogate in `text`, which is JSON that Prax read, or npos.
+std::size_t loneSurrogateAt(std::string_view text) {
+    // The code unit of the \u escape at `at`, or 0 if there is none there.
+    auto unit = [text](std::size_t at) {
+        std::uint32_t u = 0;
+        if (at + 6 <= text.size() && text[at] == '\\' && text[at + 1] == 'u')
+            std::from_chars(text.data() + at + 2, text.data() + at + 6, u, 16);
+        return u;
+    };
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\')
+            continue;
+        const std::uint32_t u = unit(i);
+        if (u >= 0xDC00 && u <= 0xDFFF)
+            return i;
+        if (u >= 0xD800 && u <= 0xDBFF) {
+            const std::uint32_t low = unit(i + 6);
+            if (low < 0xDC00 || low > 0xDFFF)
+                return i;
+            i += 6;
+        }
+        ++i;    // past the escaped character; a \u escape's hex digits hold no backslash
+    }
+    return std::string_view::npos;
+}
+
+// Whether `text` opens more arrays and objects at once than Prax's JSON reader takes.
+bool nestedTooDeeply(std::string_view text) {
+    int depth = 0;
+    bool inString = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (inString) {
+            if (c == '\\')
+                ++i;
+            else if (c == '"')
+                inString = false;
+        } else if (c == '"') {
+            inString = true;
+        } else if ((c == '[' || c == '{') && ++depth > kPrJsonMaxDepth) {
+            return true;
+        } else if (c == ']' || c == '}') {
+            --depth;
+        }
+    }
+    return false;
+}
+
+// Whether `text` holds a control character (C0, DEL, C1, U+0085 among them) or a line or paragraph separator.
+bool breaksTheLine(std::string_view text) {
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::uint32_t c = 0;
+        at += prUtf8Decode(pr(text), at, &c);
+        if (c < 0x20 || (c >= 0x7F && c <= 0x9F) || c == 0x2028 || c == 0x2029)
+            return true;
+    }
+    return false;
+}
+
+// A session id: 1 to 256 bytes of printable ASCII without spaces, since it becomes a command-line argument.
+bool isSessionId(std::string_view id) {
+    return !id.empty() && id.size() <= 256 &&
+        std::all_of(id.begin(), id.end(), [](char c) { return c > 0x20 && c < 0x7F; });
 }
 
 // ---- Writing ----
@@ -53,11 +124,7 @@ public:
         prJsonWriterNumber(w_, value);
         return *this;
     }
-    Writer& turn(std::uint64_t turn) {
-        if (turn == 0 || turn > kMaxTurn)
-            fail("turn " + std::to_string(turn) + " is out of range; a turn is 1 to " + std::to_string(kMaxTurn));
-        return num("turn", double(turn));
-    }
+    Writer& turn(std::uint64_t turn) { return num("turn", double(turn)); }
     Writer& begin(std::string_view key) {
         prJsonWriterKey(w_, pr(key));
         prJsonWriterBeginObject(w_);
@@ -96,20 +163,22 @@ private:
     std::string error_;
 };
 
+// The encoders write each field as it is; encode() then refuses what does not read back equal.
+
+void refuseUnknown(Writer& w) {
+    w.fail("an unknown kind is only ever read, never written");
+}
+
 struct ServerEncoder {
     Writer& w;
     void operator()(const Send& m) { w.str("kind", "send").turn(m.turn).str("prompt", m.prompt); }
-    void operator()(const Stop&) { w.str("kind", "stop"); }
-    void operator()(const Unknown& m) { w.str("kind", m.kind); }
+    void operator()(const Stop& m) { w.str("kind", "stop").turn(m.turn); }
+    void operator()(const Unknown&) { refuseUnknown(w); }
 };
 
 struct DriverEncoder {
     Writer& w;
-    void operator()(const Hello& m) {
-        if (m.protocol < 1)
-            w.fail("protocol version " + std::to_string(m.protocol) + " is out of range; versions start at 1");
-        w.str("kind", "hello").num("protocol", m.protocol).str("harness", m.harness);
-    }
+    void operator()(const Hello& m) { w.str("kind", "hello").num("protocol", m.protocol).str("harness", m.harness); }
     void operator()(const Credential& m) {
         w.str("kind", "credential").str("billing", billingName(m.billing));
         if (!m.plan.empty())
@@ -118,18 +187,11 @@ struct DriverEncoder {
     void operator()(const Session& m) { w.str("kind", "session").str("id", m.id); }
     void operator()(const Text& m) { w.str("kind", "text").turn(m.turn).str("delta", m.delta); }
     void operator()(const TextEnd& m) { w.str("kind", "text-end").turn(m.turn); }
-    void operator()(const Tool& m) {
-        if (m.summary.find_first_of("\r\n") != std::string::npos)
-            w.fail("the tool's summary holds a line break; a summary is one line");
-        w.str("kind", "tool").turn(m.turn).str("name", m.name).str("summary", m.summary);
-    }
+    void operator()(const Tool& m) { w.str("kind", "tool").turn(m.turn).str("name", m.name).str("summary", m.summary); }
     void operator()(const Done& m) {
         w.str("kind", "done").turn(m.turn).str("outcome", outcomeName(m.outcome));
-        if (m.sessionCostUsd) {
-            if (!std::isfinite(*m.sessionCostUsd) || *m.sessionCostUsd < 0)
-                w.fail("session_cost_usd must be a finite number of dollars, zero or more");
+        if (m.sessionCostUsd)
             w.num("session_cost_usd", *m.sessionCostUsd);
-        }
         if (m.usage) {
             w.begin("usage");
             count("input_tokens", m.usage->input);
@@ -143,15 +205,13 @@ struct DriverEncoder {
         w.str("kind", "error").str("cause", m.cause).str("fix", m.fix);
         if (m.turn)
             w.turn(*m.turn);
+        w.str("code", errorCodeName(m.code));
     }
-    void operator()(const Unknown& m) { w.str("kind", m.kind); }
+    void operator()(const Unknown&) { refuseUnknown(w); }
 
     void count(std::string_view key, const std::optional<std::uint64_t>& v) {
-        if (!v)
-            return;
-        if (*v > kMaxInteger)
-            w.fail(std::string(key) + " " + std::to_string(*v) + " is past what a JSON number holds exactly");
-        w.num(key, double(*v));
+        if (v)
+            w.num(key, double(*v));
     }
 };
 
@@ -180,7 +240,8 @@ public:
         return s;
     }
 
-    // An integer from `lo` to `hi`.
+    // A number whose value (as a double) is a whole number from `lo` to `hi`, however it is written: Prax's reader
+    // keeps the value, not the literal, so 1, 1.0 and 1e0 are alike.
     std::optional<std::uint64_t> integer(std::string_view key, bool required, std::uint64_t lo, std::uint64_t hi) {
         const PrJsonValueIndex v = member(key);
         if (v == kPrJsonMissing) {
@@ -190,7 +251,7 @@ public:
         }
         const double d = prJsonNumber(doc_, v, -1);
         if (prJsonKind(doc_, v) != PrJsonKind_Number || d != std::floor(d) || d < double(lo) || d > double(hi)) {
-            fail(std::string("has \"") + std::string(key) + "\" that is not an integer from " + std::to_string(lo) +
+            fail(std::string("has \"") + std::string(key) + "\" that is not a whole number from " + std::to_string(lo) +
                 " to " + std::to_string(hi));
             return std::nullopt;
         }
@@ -204,8 +265,8 @@ public:
         if (v == kPrJsonMissing)
             return std::nullopt;
         const double d = prJsonNumber(doc_, v, -1);
-        if (prJsonKind(doc_, v) != PrJsonKind_Number || d < 0) {
-            fail(std::string("has \"") + std::string(key) + "\" that is not a number, zero or more");
+        if (prJsonKind(doc_, v) != PrJsonKind_Number || !std::isfinite(d) || d < 0) {
+            fail(std::string("has \"") + std::string(key) + "\" that is not a finite number, zero or more");
             return std::nullopt;
         }
         return d;
@@ -260,10 +321,24 @@ struct Parsed {
                 "writer must send UTF-8";
             return;
         }
+        if (line.starts_with("\xEF\xBB\xBF")) {
+            error = "the line starts with a byte-order mark; the writer must send each line without one";
+            return;
+        }
         std::size_t at = 0;
         if (!prJsonParse(doc, pr(line), &at)) {
-            error = "the line is not JSON (it stops making sense at byte " + std::to_string(at) + "); the writer must "
-                "send one JSON object per line";
+            if (nestedTooDeeply(line))
+                error = "the line's JSON is nested too deeply (more than " + std::to_string(kPrJsonMaxDepth) +
+                    " arrays and objects inside each other); the writer must nest less";
+            else
+                error = "the line is not JSON (it stops making sense at byte " + std::to_string(at) + "); the writer "
+                    "must send one JSON object per line";
+            return;
+        }
+        const std::size_t lone = loneSurrogateAt(line);
+        if (lone != std::string_view::npos) {
+            error = "the line is not UTF-8: an escaped lone surrogate at byte " + std::to_string(lone) + " (a \\u "
+                "escape of U+D800 to U+DFFF that is not half of a pair); the writer must send whole characters";
             return;
         }
         if (prJsonKind(doc, 0) != PrJsonKind_Object) {
@@ -321,16 +396,46 @@ std::string_view outcomeName(Outcome outcome) {
     return "error";
 }
 
+std::string_view errorCodeName(ErrorCode code) {
+    switch (code) {
+        case ErrorCode::Protocol: return "protocol";
+        case ErrorCode::NoCredential: return "no-credential";
+        case ErrorCode::SessionNotFound: return "session-not-found";
+        case ErrorCode::Harness: return "harness";
+        case ErrorCode::Other: break;
+    }
+    return "other";
+}
+
+namespace {
+
+// The line `w` wrote for `message`, if the decoder reads it back equal; otherwise why not.
+template <class Message, class Decode>
+Encoded checked(Writer& w, const Message& message, Decode decode) {
+    Encoded e = w.finish();
+    if (!e.error.empty())
+        return e;
+    const auto d = decode(std::string_view(e.line).substr(0, e.line.size() - 1));
+    if (d.message && *d.message == message)
+        return e;
+    e.line.clear();
+    e.error = "cannot encode the message: " + (d.message ? "it would not read back as written (a string that is not "
+        "UTF-8, or a value outside its type)" : d.error);
+    return e;
+}
+
+} // namespace
+
 Encoded encode(const ServerMessage& message) {
     Writer w;
     std::visit(ServerEncoder{w}, message);
-    return w.finish();
+    return checked(w, message, decodeServerMessage);
 }
 
 Encoded encode(const DriverMessage& message) {
     Writer w;
     std::visit(DriverEncoder{w}, message);
-    return w.finish();
+    return checked(w, message, decodeDriverMessage);
 }
 
 Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
@@ -345,7 +450,7 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
         return result<ServerMessage>(std::move(m), f);
     }
     if (p.kind == "stop")
-        return result<ServerMessage>(Stop{}, f);
+        return result<ServerMessage>(Stop{f.turn()}, f);
     return result<ServerMessage>(Unknown{p.kind}, f);
 }
 
@@ -373,8 +478,13 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
         m.plan = f.str("plan", false);
         return result<DriverMessage>(std::move(m), f);
     }
-    if (kind == "session")
-        return result<DriverMessage>(Session{f.str("id", true, true)}, f);
+    if (kind == "session") {
+        Session m{f.str("id", true)};
+        if (f.error().empty() && !isSessionId(m.id))
+            f.fail("has an \"id\" that is not 1 to 256 printable ASCII characters without spaces; it becomes an "
+                "argument of the driver's command line");
+        return result<DriverMessage>(std::move(m), f);
+    }
     if (kind == "text") {
         Text m;
         m.turn = f.turn();
@@ -388,8 +498,10 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
         m.turn = f.turn();
         m.name = f.str("name", true, true);
         m.summary = f.str("summary", true);
-        if (m.summary.find_first_of("\r\n") != std::string::npos)
-            f.fail("has a \"summary\" with a line break; a summary is one line");
+        if (breaksTheLine(m.name))
+            f.fail("has a \"name\" with a control character or a line break; a name is one line");
+        if (breaksTheLine(m.summary))
+            f.fail("has a \"summary\" with a control character or a line break; a summary is one line");
         return result<DriverMessage>(std::move(m), f);
     }
     if (kind == "done") {
@@ -420,6 +532,11 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
         const std::uint64_t turn = f.turn(false);
         if (turn != 0)
             m.turn = turn;
+        const std::string code = f.str("code", false);
+        for (ErrorCode c : {ErrorCode::Protocol, ErrorCode::NoCredential, ErrorCode::SessionNotFound,
+                 ErrorCode::Harness})
+            if (code == errorCodeName(c))
+                m.code = c;
         return result<DriverMessage>(std::move(m), f);
     }
     return result<DriverMessage>(Unknown{kind}, f);
@@ -442,8 +559,11 @@ void LineReader::feed(std::string_view bytes, std::vector<Line>& out) {
         }
         if (newline == std::string_view::npos)
             return;
-        if (!dropping_)
+        if (!dropping_) {
+            if (partial_.ends_with('\r'))
+                partial_.pop_back();
             out.push_back(Line{std::move(partial_), {}, lineNumber_});
+        }
         partial_.clear();
         dropping_ = false;
         ++lineNumber_;

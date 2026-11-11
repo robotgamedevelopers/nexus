@@ -9,7 +9,7 @@
    :rows (
      ("window" "1. Window: tabs, transcript and prompt draw and take input (in progress)")
      ("server-sync" "2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress)")
-     ("friends" "3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); no message lost or shown twice")
+     ("friends" "3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); nothing the server received is lost or shown twice; a prompt reaches the harness at most once; a turn cut by a driver's exit is shown as cut")
      ("heads-down" "4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end")
      ("fleet" "5. Fleet: see the machines and what runs on each")
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
@@ -58,12 +58,15 @@
   (:id "t-friends" :type :work-set :children ("t-friends-protocol" "t-friends-supervisor" "t-friends-wire"
                                                "t-friends-claude" "t-friends-accounts" "t-friends-window"))
   (:id "t-friends-protocol" :type :task :title "1. Driver protocol and a fake driver: the line protocol, its reader, and a scripted driver for the server's tests" :state :done
-   :evidence ("tests/driver/protocol_test.cpp: ctest -L unit driver_unit_*" "tests/driver/fake_driver_test.cpp: ctest -L functional driver_fake" "docs/driver-protocol.md"))
+   :evidence ("tests/driver/protocol_test.cpp: ctest -L unit driver_unit_*" "tests/driver/fake_driver_test.cpp: ctest -L functional driver_fake_*" "docs/driver-protocol.md"))
   (:id "t-friends-supervisor" :type :task :title "2. Driver supervisor in the server: starts, restarts and resumes each tab's driver; modelled in TLA+ with the protocol's sequence rules" :state :todo)
   (:id "t-friends-wire" :type :task :title "3. Wire and transcript: turns, text blocks, tools and outcomes carried to the window" :state :todo)
   (:id "t-friends-claude" :type :task :title "4. Claude driver on the Agent SDK" :state :todo)
   (:id "t-friends-accounts" :type :task :title "5. Accounts: the environment each friend's driver starts with" :state :todo)
   (:id "t-friends-window" :type :task :title "6. Window: a friend tab shows the conversation" :state :todo)
+  ; Feedback for Prax's author (a gap nexus works around, AGENTS.md): no table renders it.
+  (:id "prax-json-strict-utf8" :type :task :title "Prax feedback: a strict mode for lib/json and lib/core's UTF-8" :state :todo
+   :note "prJsonParse reads ill-formed UTF-8 inside strings, and a \\u escape of a lone surrogate, as U+FFFD without an error; prUtf8Validate accepts encoded surrogates; neither has a strict option. nexus checks each driver protocol line itself (src/driver/protocol.cpp illFormedAt, loneSurrogateAt). Confirmed by a second reader on 2026-11-10.")
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)

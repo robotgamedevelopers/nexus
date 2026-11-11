@@ -41,8 +41,9 @@ struct Send {
     bool operator==(const Send&) const = default;
 };
 
-// Stop the open turn. No fields.
+// Stop turn `turn`, if it is the open turn; any other stop is ignored.
 struct Stop {
+    std::uint64_t turn = 0;
     bool operator==(const Stop&) const = default;
 };
 
@@ -115,11 +116,16 @@ struct Done {
     bool operator==(const Done&) const = default;
 };
 
+// What kind of error: a broken protocol rule, no usable credential, a --resume id the harness does not know, the
+// harness's own failure, or anything else (also what a code this version does not know reads as).
+enum class ErrorCode { Protocol, NoCredential, SessionNotFound, Harness, Other };
+
 // Something went wrong: what, and what a person does about it. `turn` when it belongs to one.
 struct Error {
     std::string cause;
     std::string fix;
     std::optional<std::uint64_t> turn;
+    ErrorCode code = ErrorCode::Other;
     bool operator==(const Error&) const = default;
 };
 
@@ -127,8 +133,9 @@ using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, To
 
 // ---- Encoding and decoding ----
 
-// A message as one line ending in a newline, or why it cannot be written (it would be longer than kMaxLineBytes, or a
-// field is out of range). Strings that are not UTF-8 are written with U+FFFD in place of each ill-formed sequence.
+// A message as one line ending in a newline, or why it cannot be written: whatever the decoder would refuse (a line
+// longer than kMaxLineBytes, a field out of range, a string that is not UTF-8), anything that would not read back
+// equal, and an Unknown, which is only ever read.
 struct Encoded {
     std::string line;
     std::string error;          // empty when `line` holds the message
@@ -137,9 +144,10 @@ struct Encoded {
 Encoded encode(const ServerMessage& message);
 Encoded encode(const DriverMessage& message);
 
-// One line, without its newline, as a message, or the cause of its refusal: not UTF-8, not JSON, not an object, no
-// "kind", or a known kind with a required field missing or of the wrong type. Unknown fields are ignored and an unknown
-// kind decodes as Unknown.
+// One line, without its newline, as a message, or the cause of its refusal: not UTF-8 (an escaped lone surrogate
+// included), a byte-order mark, not JSON, nested too deeply, not an object, no "kind", or a known kind with a required
+// field missing or of the wrong type or value. Unknown fields are ignored, of duplicate keys the last wins, and an
+// unknown kind decodes as Unknown.
 template <class Message>
 struct Decoded {
     std::optional<Message> message;
@@ -153,12 +161,13 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line);
 
 // Cuts the bytes of a stream, in chunks of any size, into lines. A line longer than kMaxLineBytes is refused when its
 // limit is passed: the reader reports it once, drops the rest of it up to its newline, and goes on with the next line.
-// Each line is one item: its text, or the cause it was refused for. Decoding is the caller's (decodeServerMessage or
-// decodeDriverMessage), so one reader serves both ends.
+// Each line is one item: its text, or the cause it was refused for. A line may end in CR LF; the CR is dropped (it
+// counts toward the limit). Decoding is the caller's (decodeServerMessage or decodeDriverMessage), so one reader serves
+// both ends.
 class LineReader {
 public:
     struct Line {
-        std::string text;       // the line without its newline, when `error` is empty
+        std::string text;       // the line without its newline (or CR LF), when `error` is empty
         std::string error;
         std::uint64_t number = 0;   // its place in the stream, from 1
     };
@@ -207,5 +216,6 @@ using DriverReader = MessageReader<DriverMessage>;   // what the server reads
 // The names the protocol gives these values, as written on the line.
 std::string_view billingName(Billing billing);
 std::string_view outcomeName(Outcome outcome);
+std::string_view errorCodeName(ErrorCode code);
 
 } // namespace nexus::driver

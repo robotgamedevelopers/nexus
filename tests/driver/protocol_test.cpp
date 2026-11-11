@@ -1,14 +1,17 @@
-// Unit tests of the driver protocol (src/driver/protocol.h): every message's round trip, the reader over every
-// chunking, each refusal with its cause, forward compatibility, and the line limit at its edges. Logic only: no time,
-// no sockets, no processes, no files.
+// Unit tests of the driver protocol (src/driver/protocol.h): every message's round trip, the encoder refusing what the
+// decoder refuses (and a property test over random messages), the reader over every chunking, each refusal with its
+// cause, forward compatibility, and the line limit at its edges. Logic only: no time, no sockets, no processes, no
+// files.
 //
 //   driver_protocol_test           runs every group
 //   driver_protocol_test <group>   runs one
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,7 +32,7 @@ int failures = 0;
         }                                                                                 \
     } while (0)
 
-// splitmix64: the same chunkings on every run.
+// splitmix64: the same chunkings and messages on every run.
 struct Rng {
     std::uint64_t state;
     std::uint64_t next() {
@@ -50,7 +53,7 @@ const std::vector<std::string> kTexts = {"", "hi", "two\nlines\r\n", "\"q\" \\ /
     "\xc3\xa9t\xc3\xa9 \xe2\x9c\x93 \xf0\x9f\x9a\x80", "\xef\xbf\xbd"};
 
 std::vector<ServerMessage> serverMessages() {
-    std::vector<ServerMessage> all = {Stop{}, Unknown{"pause"}, Send{kMaxTurn, "last"}};
+    std::vector<ServerMessage> all = {Stop{3}, Stop{kMaxTurn}, Send{kMaxTurn, "last"}};
     std::uint64_t turn = 1;
     for (const std::string& t : kTexts)
         all.push_back(Send{turn++, t});
@@ -65,29 +68,59 @@ std::vector<DriverMessage> driverMessages() {
         Credential{Billing::ApiKey, ""},
         Credential{Billing::None, ""},
         Session{"5f0c2a8e-1d34-4b7e-9a51-3c6f2b0d9e77"},
+        Session{std::string(256, '~')},
         TextEnd{3},
         Tool{3, "Bash", "ls -la src"},
         Tool{3, "Read", ""},
+        Tool{3, "Edit", "caf\xc3\xa9 \xe2\x9c\x93"},
         Done{3, Outcome::Ok, std::nullopt, std::nullopt},
         Done{4, Outcome::Stopped, 0.0, Usage{}},
         Done{5, Outcome::Error, 1.234567, Usage{10, 20, 30, 40}},
-        Done{6, Outcome::Ok, 0.1, Usage{0, std::nullopt, kMaxTurn, std::nullopt}},
-        Error{"the cause", "the fix", std::nullopt},
-        Error{"a turn's cause", "its fix", 9},
-        Unknown{"thinking"},
+        Done{6, Outcome::Ok, 0.1, Usage{0, std::nullopt, kMaxInteger, std::nullopt}},
+        Error{"the cause", "the fix", std::nullopt, ErrorCode::Other},
+        Error{"a turn's cause", "its fix", 9, ErrorCode::Protocol},
+        Error{"no login", "log in", std::nullopt, ErrorCode::NoCredential},
+        Error{"no such session", "start without --resume", std::nullopt, ErrorCode::SessionNotFound},
+        Error{"the harness failed", "see its log", 9, ErrorCode::Harness},
     };
     for (const std::string& t : kTexts)
         all.push_back(Text{2, t});
     return all;
 }
 
-// What a reader yields, as text: the message re-encoded, or its error.
+// A message as text: its line, or the name of an unknown kind (which cannot be encoded).
+template <class Message>
+std::string shown(const Message& m) {
+    if (const Unknown* u = std::get_if<Unknown>(&m))
+        return "U " + u->kind + "\n";
+    return "M " + encode(m).line;
+}
+
+// What a reader yields, as text: each message, or its error.
 template <class Item>
 std::string show(const std::vector<Item>& items) {
     std::string s;
     for (const Item& item : items)
-        s += item.message ? "M " + encode(*item.message).line : "E " + item.error + "\n";
+        s += item.message ? shown(*item.message) : "E " + item.error + "\n";
     return s;
+}
+
+std::string driverError(std::string_view line) {
+    const Decoded<DriverMessage> d = decodeDriverMessage(line);
+    CHECK(!d.message);
+    return d.error;
+}
+
+std::string serverError(std::string_view line) {
+    const Decoded<ServerMessage> d = decodeServerMessage(line);
+    CHECK(!d.message);
+    return d.error;
+}
+
+std::string encodeError(const DriverMessage& m) {
+    const Encoded e = encode(m);
+    CHECK(e.line.empty());
+    return e.error;
 }
 
 // ---- round trips ----
@@ -112,29 +145,134 @@ void roundtrip() {
     }
     // The wire names, as the document gives them.
     CHECK(encode(ServerMessage{Send{1, "hi"}}).line == "{\"kind\":\"send\",\"turn\":1,\"prompt\":\"hi\"}\n");
-    CHECK(encode(ServerMessage{Stop{}}).line == "{\"kind\":\"stop\"}\n");
+    CHECK(encode(ServerMessage{Stop{4}}).line == "{\"kind\":\"stop\",\"turn\":4}\n");
     CHECK(encode(DriverMessage{TextEnd{2}}).line == "{\"kind\":\"text-end\",\"turn\":2}\n");
     CHECK(encode(DriverMessage{Credential{Billing::ApiKey, ""}}).line ==
         "{\"kind\":\"credential\",\"billing\":\"api-key\"}\n");
     CHECK(encode(DriverMessage{Done{1, Outcome::Stopped, 0.5, Usage{1, 2, 3, 4}}}).line ==
         "{\"kind\":\"done\",\"turn\":1,\"outcome\":\"stopped\",\"session_cost_usd\":0.5,\"usage\":{\"input_tokens\":1,"
         "\"output_tokens\":2,\"cache_read_tokens\":3,\"cache_write_tokens\":4}}\n");
-    // An optional field written as null reads as absent.
+    CHECK(encode(DriverMessage{Error{"c", "f", 2, ErrorCode::SessionNotFound}}).line ==
+        "{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"turn\":2,\"code\":\"session-not-found\"}\n");
+    // An optional field written as null reads as absent; an error with no code, or one this version does not know,
+    // reads as other.
     const Decoded<DriverMessage> d =
         decodeDriverMessage("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"turn\":null,\"plan\":null}");
-    CHECK(d.message && *d.message == DriverMessage(Error{"c", "f", std::nullopt}));
+    CHECK(d.message && *d.message == DriverMessage(Error{"c", "f", std::nullopt, ErrorCode::Other}));
+    const Decoded<DriverMessage> later =
+        decodeDriverMessage("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"code\":\"rate-limited\"}");
+    CHECK(later.message && *later.message == DriverMessage(Error{"c", "f", std::nullopt, ErrorCode::Other}));
+    const Decoded<DriverMessage> no =
+        decodeDriverMessage("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"code\":\"no-credential\"}");
+    CHECK(no.message && *no.message == DriverMessage(Error{"c", "f", std::nullopt, ErrorCode::NoCredential}));
 }
 
-// Messages that cannot be encoded are refused with their cause, never written.
+// The encoder refuses everything the decoder would refuse, with its cause, and writes nothing.
 void encode_refusals() {
-    CHECK(contains(encode(ServerMessage{Send{0, "x"}}).error, "turn 0 is out of range"));
-    CHECK(contains(encode(DriverMessage{Text{kMaxTurn + 1, "x"}}).error, "is out of range"));
-    CHECK(contains(encode(DriverMessage{Hello{0, "x"}}).error, "protocol version 0"));
-    CHECK(contains(encode(DriverMessage{Tool{1, "Bash", "two\nlines"}}).error, "one line"));
-    CHECK(contains(encode(DriverMessage{Done{1, Outcome::Ok, -1.0, std::nullopt}}).error, "session_cost_usd"));
-    CHECK(encode(DriverMessage{Done{1, Outcome::Ok, -1.0, std::nullopt}}).line.empty());
-    CHECK(contains(encode(DriverMessage{Done{1, Outcome::Ok, std::nullopt, Usage{kMaxTurn + 1, {}, {}, {}}}}).error,
+    CHECK(contains(encode(ServerMessage{Send{0, "x"}}).error, "\"turn\""));
+    CHECK(contains(encode(ServerMessage{Stop{0}}).error, "\"turn\""));
+    CHECK(contains(encode(ServerMessage{Unknown{"pause"}}).error, "unknown kind"));
+    CHECK(contains(encodeError(Unknown{"thinking"}), "unknown kind"));
+    CHECK(contains(encodeError(Text{kMaxTurn + 1, "x"}), "\"turn\""));
+    CHECK(contains(encodeError(Hello{0, "x"}), "\"protocol\""));
+    CHECK(contains(encodeError(Hello{1, ""}), "empty \"harness\""));
+    CHECK(contains(encodeError(Session{""}), "\"id\""));
+    CHECK(contains(encodeError(Session{"a b"}), "\"id\""));
+    CHECK(contains(encodeError(Tool{1, "", "s"}), "empty \"name\""));
+    CHECK(contains(encodeError(Tool{1, "Bash", "two\nlines"}), "\"summary\""));
+    CHECK(contains(encodeError(Tool{1, "Bash", "a\rb"}), "\"summary\""));
+    CHECK(contains(encodeError(Error{"", "f", std::nullopt, ErrorCode::Other}), "empty \"cause\""));
+    CHECK(contains(encodeError(Error{"c", "", std::nullopt, ErrorCode::Other}), "empty \"fix\""));
+    CHECK(contains(encodeError(Error{"c", "f", 0, ErrorCode::Other}), "\"turn\""));
+    CHECK(contains(encodeError(Done{1, Outcome::Ok, -1.0, std::nullopt}), "\"session_cost_usd\""));
+    CHECK(!encodeError(Done{1, Outcome::Ok, std::nan(""), std::nullopt}).empty());
+    CHECK(!encodeError(Done{1, Outcome::Ok, std::numeric_limits<double>::infinity(), std::nullopt}).empty());
+    CHECK(contains(encodeError(Done{1, Outcome::Ok, std::nullopt, Usage{kMaxInteger + 1, {}, {}, {}}}),
         "input_tokens"));
+    CHECK(!encodeError(Text{1, "bad\xff"}).empty());
+    CHECK(!encodeError(Credential{Billing(7), ""}).empty());
+    CHECK(!encodeError(Done{1, Outcome(9), std::nullopt, std::nullopt}).empty());
+}
+
+// A random string: mostly text, sometimes awkward bytes (control characters, separators, ill-formed UTF-8).
+std::string randomString(Rng& rng) {
+    static const std::vector<std::string> pieces = {"a", "Bash", " ", "-", "\n", "\r", "\t", "\x7f", "\"", "\\",
+        "\xc3\xa9", "\xe2\x80\xa8", "\xc2\x85", "\xf0\x9f\x9a\x80", "\xff", "\xed\xa0\x80", "\xe2\x9c", "\xef\xbb\xbf"};
+    std::string s;
+    const std::size_t n = rng.below(6);
+    for (std::size_t i = 0; i < n; ++i)
+        s += pieces[rng.below(pieces.size())];
+    return s;
+}
+
+std::optional<std::uint64_t> randomCount(Rng& rng) {
+    switch (rng.below(4)) {
+        case 0: return std::nullopt;
+        case 1: return rng.below(100000);
+        case 2: return kMaxInteger + rng.below(2);
+        default: return 0;
+    }
+}
+
+std::uint64_t randomTurn(Rng& rng) {
+    const std::uint64_t edges[] = {0, 1, 2, kMaxTurn, kMaxTurn + 1};
+    return rng.below(2) == 0 ? edges[rng.below(5)] : 1 + rng.below(1000);
+}
+
+DriverMessage randomDriverMessage(Rng& rng) {
+    switch (rng.below(9)) {
+        case 0: return Hello{int(rng.below(3)), randomString(rng)};
+        case 1: return Credential{Billing(rng.below(4)), randomString(rng)};
+        case 2: return Session{randomString(rng)};
+        case 3: return Text{randomTurn(rng), randomString(rng)};
+        case 4: return TextEnd{randomTurn(rng)};
+        case 5: return Tool{randomTurn(rng), randomString(rng), randomString(rng)};
+        case 6: {
+            const double costs[] = {0.0, 0.25, -1.0, 1e300, std::nan(""), std::numeric_limits<double>::infinity()};
+            Done d{randomTurn(rng), Outcome(rng.below(4)), std::nullopt, std::nullopt};
+            if (rng.below(2) == 0)
+                d.sessionCostUsd = costs[rng.below(6)];
+            if (rng.below(2) == 0)
+                d.usage = Usage{randomCount(rng), randomCount(rng), randomCount(rng), randomCount(rng)};
+            return d;
+        }
+        case 7: {
+            Error e{randomString(rng), randomString(rng), std::nullopt, ErrorCode(rng.below(6))};
+            if (rng.below(2) == 0)
+                e.turn = randomTurn(rng);
+            return e;
+        }
+        default: return Unknown{randomString(rng)};
+    }
+}
+
+// Every message the encoder accepts, the decoder accepts and gives back equal.
+void property() {
+    Rng rng{7};
+    int accepted = 0;
+    for (int i = 0; i < 20000; ++i) {
+        const DriverMessage m = randomDriverMessage(rng);
+        const Encoded e = encode(m);
+        CHECK(e.line.empty() != e.error.empty());
+        if (e.line.empty())
+            continue;
+        ++accepted;
+        const Decoded<DriverMessage> d = decodeDriverMessage(std::string_view(e.line).substr(0, e.line.size() - 1));
+        CHECK(d.message && *d.message == m);
+        if (!d.message || !(*d.message == m))
+            std::fprintf(stderr, "  encoded but not read back equal: %s", e.line.c_str());
+    }
+    for (int i = 0; i < 5000; ++i) {
+        const ServerMessage m = rng.below(2) == 0 ? ServerMessage{Send{randomTurn(rng), randomString(rng)}}
+                                                  : ServerMessage{Stop{randomTurn(rng)}};
+        const Encoded e = encode(m);
+        if (e.line.empty())
+            continue;
+        ++accepted;
+        const Decoded<ServerMessage> d = decodeServerMessage(std::string_view(e.line).substr(0, e.line.size() - 1));
+        CHECK(d.message && *d.message == m);
+    }
+    CHECK(accepted > 5000);     // the generator reaches both sides
 }
 
 // ---- the reader ----
@@ -144,6 +282,7 @@ std::string stream() {
     std::string s;
     for (const DriverMessage& m : driverMessages())
         s += encode(m).line;
+    s += "{\"kind\":\"thinking\",\"turn\":2}\r\n";
     s += "not json\n";
     s += "\n";
     s += "{\"kind\":\"text\",\"turn\":\"one\",\"delta\":\"x\"}\n";
@@ -159,7 +298,7 @@ void chunking() {
     std::vector<DriverReader::Item> expect;
     whole.feed(s, expect);
     whole.finish(expect);
-    CHECK(expect.size() == driverMessages().size() + 6);
+    CHECK(expect.size() == driverMessages().size() + 7);
     CHECK(expect.back().message == std::nullopt && contains(expect.back().error, "ended inside line"));
 
     DriverReader bytewise;
@@ -197,21 +336,17 @@ void chunking() {
         b.feed(std::string_view(&c, 1), one);
     CHECK(all.size() == serverMessages().size());
     CHECK(show(one) == show(all));
+
+    // A tail of one byte with no newline is refused at the end of the stream.
+    LineReader tail;
+    std::vector<LineReader::Line> out;
+    tail.feed("x", out);
+    CHECK(out.empty());
+    tail.finish(out);
+    CHECK(out.size() == 1 && contains(out[0].error, "ended inside line 1 (1 bytes"));
 }
 
 // ---- refusals ----
-
-std::string driverError(std::string_view line) {
-    const Decoded<DriverMessage> d = decodeDriverMessage(line);
-    CHECK(!d.message);
-    return d.error;
-}
-
-std::string serverError(std::string_view line) {
-    const Decoded<ServerMessage> d = decodeServerMessage(line);
-    CHECK(!d.message);
-    return d.error;
-}
 
 void refusals() {
     // not UTF-8: a stray continuation byte, an overlong form, an encoded surrogate, a truncated sequence
@@ -219,11 +354,28 @@ void refusals() {
              "{\"kind\":\"\xe2\x9c\"}"})
         CHECK(contains(driverError(bad), "not UTF-8"));
     CHECK(contains(driverError("{\"kind\":\"x\x80\"}"), "at byte 10"));
-    // not JSON, or not one object
+    // an escaped lone surrogate, like the raw one; a pair is one character
+    for (std::string_view bad : {"\\ud83d", "\\ude80", "\\ud83dx", "\\ud83d\\u0041", "\\uDBFF\\uDBFF"})
+        CHECK(contains(driverError("{\"kind\":\"text\",\"turn\":1,\"delta\":\"" + std::string(bad) + "\"}"),
+            "lone surrogate"));
+    const Decoded<DriverMessage> pair =
+        decodeDriverMessage("{\"kind\":\"text\",\"turn\":1,\"delta\":\"\\ud83d\\ude80\"}");
+    CHECK(pair.message && *pair.message == DriverMessage(Text{1, "\xf0\x9f\x9a\x80"}));
+    const Decoded<DriverMessage> escapedBackslash =
+        decodeDriverMessage("{\"kind\":\"text\",\"turn\":1,\"delta\":\"\\\\ud83d\"}");
+    CHECK(escapedBackslash.message && *escapedBackslash.message == DriverMessage(Text{1, "\\ud83d"}));
+    // a byte-order mark
+    CHECK(contains(serverError("\xEF\xBB\xBF{\"kind\":\"stop\",\"turn\":1}"), "byte-order mark"));
+    // not JSON, nested too deeply, or not one object
     CHECK(contains(driverError(""), "not JSON"));
     CHECK(contains(driverError("{\"kind\":\"stop\""), "not JSON"));
     CHECK(contains(driverError("{\"kind\":\"stop\"} {}"), "not JSON"));
     CHECK(contains(serverError(std::string_view("{\"kind\":\"st\0op\"}", 16)), "not JSON"));
+    const std::string deep = "{\"kind\":\"stop\",\"turn\":1,\"x\":" + std::string(1100, '[') + std::string(1100, ']') +
+        "}";
+    CHECK(contains(serverError(deep), "nested too deeply"));
+    CHECK(contains(serverError("{\"kind\":\"stop\",\"turn\":1,\"x\":" + std::string(500000, '[')),
+        "nested too deeply"));
     CHECK(contains(serverError("[1,2]"), "not an object"));
     CHECK(contains(serverError("\"send\""), "not an object"));
     CHECK(contains(serverError("{\"turn\":1}"), "no \"kind\""));
@@ -233,6 +385,7 @@ void refusals() {
     // missing required fields, each kind
     CHECK(contains(serverError("{\"kind\":\"send\",\"prompt\":\"x\"}"), "a \"send\" message has no \"turn\""));
     CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1}"), "has no \"prompt\""));
+    CHECK(contains(serverError("{\"kind\":\"stop\"}"), "a \"stop\" message has no \"turn\""));
     CHECK(contains(driverError("{\"kind\":\"hello\",\"harness\":\"x\"}"), "has no \"protocol\""));
     CHECK(contains(driverError("{\"kind\":\"hello\",\"protocol\":1}"), "has no \"harness\""));
     CHECK(contains(driverError("{\"kind\":\"credential\"}"), "has no \"billing\""));
@@ -249,30 +402,43 @@ void refusals() {
 
     // wrong types and values
     CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":\"1\",\"prompt\":\"x\"}"),
-        "\"turn\" that is not an integer"));
+        "\"turn\" that is not a whole number"));
     CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":0,\"prompt\":\"x\"}"), "from 1 to"));
-    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1.5,\"prompt\":\"x\"}"), "not an integer"));
-    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":-1,\"prompt\":\"x\"}"), "not an integer"));
-    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":9007199254740992,\"prompt\":\"x\"}"), "not an integer"));
+    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1.5,\"prompt\":\"x\"}"), "not a whole number"));
+    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":-1,\"prompt\":\"x\"}"), "not a whole number"));
+    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":9007199254740992,\"prompt\":\"x\"}"), "not a whole"));
+    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1e400,\"prompt\":\"x\"}"), "not a whole number"));
     CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1,\"prompt\":7}"), "\"prompt\" that is not a string"));
+    CHECK(contains(serverError("{\"kind\":\"stop\",\"turn\":0}"), "\"turn\""));
     CHECK(contains(driverError("{\"kind\":\"hello\",\"protocol\":0,\"harness\":\"x\"}"), "\"protocol\""));
     CHECK(contains(driverError("{\"kind\":\"hello\",\"protocol\":1,\"harness\":\"\"}"), "empty \"harness\""));
     CHECK(contains(driverError("{\"kind\":\"credential\",\"billing\":\"card\"}"), "subscription, api-key, none"));
     CHECK(contains(driverError("{\"kind\":\"credential\",\"billing\":\"none\",\"plan\":1}"), "\"plan\""));
-    CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"\"}"), "empty \"id\""));
+    CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"\"}"), "\"id\""));
     CHECK(contains(driverError("{\"kind\":\"text\",\"turn\":1,\"delta\":null}"), "has no \"delta\""));
-    CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"x\",\"summary\":\"a\\nb\"}"), "one line"));
+    CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"\",\"summary\":\"\"}"), "empty \"name\""));
+    CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"x\",\"summary\":\"a\\nb\"}"), "\"summary\""));
+    CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"x\",\"summary\":\"a\\rb\"}"), "\"summary\""));
     CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"cancelled\"}"), "ok, stopped, error"));
     CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"session_cost_usd\":-0.5}"),
         "\"session_cost_usd\""));
     CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"session_cost_usd\":\"1\"}"),
         "\"session_cost_usd\""));
+    CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"session_cost_usd\":1e999}"),
+        "\"session_cost_usd\" that is not a finite number"));
     CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"usage\":[]}"),
         "\"usage\" that is not an object"));
     CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"usage\":{\"input_tokens\":-1}}"),
         "\"input_tokens\""));
+    CHECK(contains(driverError("{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"usage\":{\"output_tokens\":"
+        "9007199254740992}}"), "\"output_tokens\""));
+    const Decoded<DriverMessage> most = decodeDriverMessage(
+        "{\"kind\":\"done\",\"turn\":1,\"outcome\":\"ok\",\"usage\":{\"output_tokens\":9007199254740991}}");
+    CHECK(most.message && std::get<Done>(*most.message).usage->output == kMaxInteger);
     CHECK(contains(driverError("{\"kind\":\"error\",\"cause\":\"\",\"fix\":\"f\"}"), "empty \"cause\""));
+    CHECK(contains(driverError("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"\"}"), "empty \"fix\""));
     CHECK(contains(driverError("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"turn\":0}"), "\"turn\""));
+    CHECK(contains(driverError("{\"kind\":\"error\",\"cause\":\"c\",\"fix\":\"f\",\"code\":3}"), "\"code\""));
 
     // the reader names the line a refusal came from
     DriverReader reader;
@@ -285,7 +451,46 @@ void refusals() {
     CHECK(items.size() == 3 && contains(items[2].error, "stream ended inside line 3 (8 bytes"));
 }
 
-// Unknown fields are ignored; an unknown kind is kept by name, to be skipped.
+// The strings with rules of their own: a session id becomes a command-line argument; a tool's name and summary are
+// one line each.
+void strings() {
+    for (std::string_view id : {"a b", "a\\nb --evil", " ", "tab\\there", "caf\xc3\xa9", "del\x7f"})
+        CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"" + std::string(id) + "\"}"), "\"id\""));
+    CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"" + std::string(257, 'a') + "\"}"), "\"id\""));
+    const Decoded<DriverMessage> longest =
+        decodeDriverMessage("{\"kind\":\"session\",\"id\":\"" + std::string(256, 'a') + "\"}");
+    CHECK(longest.message && *longest.message == DriverMessage(Session{std::string(256, 'a')}));
+    for (std::string_view bad : {"\\t", "\\r", "\\n", "\\u0000", "\x7f", "\\u0085", "\\u009f", "\\u2028", "\\u2029"}) {
+        CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"a" + std::string(bad) +
+            "\",\"summary\":\"\"}"), "\"name\""));
+        CHECK(contains(driverError("{\"kind\":\"tool\",\"turn\":1,\"name\":\"a\",\"summary\":\"b" + std::string(bad) +
+            "\"}"), "\"summary\""));
+    }
+    // Text past ASCII is fine in both, and anything but a lone surrogate is fine in a delta.
+    const Decoded<DriverMessage> tool = decodeDriverMessage(
+        "{\"kind\":\"tool\",\"turn\":1,\"name\":\"\xc3\xa9\",\"summary\":\"\\u2027 \\u00a0 \xe2\x9c\x93\"}");
+    CHECK(tool.message);
+    const Decoded<DriverMessage> text = decodeDriverMessage(
+        "{\"kind\":\"text\",\"turn\":1,\"delta\":\"\\u2028\\u0085\\t\\r\\n\\u0000\"}");
+    CHECK(text.message);
+}
+
+// Integer fields take a JSON number whose value is a whole number in range, however it is written.
+void numbers() {
+    for (std::string_view one : {"1", "1.0", "1e0", "10e-1", "0.1e1"}) {
+        const Decoded<ServerMessage> d =
+            decodeServerMessage("{\"kind\":\"send\",\"turn\":" + std::string(one) + ",\"prompt\":\"x\"}");
+        CHECK(d.message && *d.message == ServerMessage(Send{1, "x"}));
+    }
+    const Decoded<ServerMessage> top =
+        decodeServerMessage("{\"kind\":\"send\",\"turn\":9007199254740991,\"prompt\":\"x\"}");
+    CHECK(top.message && std::get<Send>(*top.message).turn == kMaxTurn);
+    for (std::string_view bad : {"1.5", "-0", "0", "true", "null", "[1]", "9007199254740993"})
+        CHECK(!decodeServerMessage("{\"kind\":\"send\",\"turn\":" + std::string(bad) + ",\"prompt\":\"x\"}").message);
+}
+
+// Unknown fields are ignored; an unknown kind is kept by name, to be skipped. Of duplicate keys the last wins. A line
+// may end in CR LF.
 void forward() {
     const Decoded<DriverMessage> d = decodeDriverMessage(
         "{\"future\":{\"x\":[1,{\"y\":null}]},\"kind\":\"text\",\"turn\":4,\"delta\":\"a\",\"lang\":\"en\"}");
@@ -294,10 +499,25 @@ void forward() {
     CHECK(u.message && *u.message == DriverMessage(Unknown{"thinking"}));
     const Decoded<ServerMessage> s = decodeServerMessage("{\"kind\":\"pause\",\"for\":\"ever\"}");
     CHECK(s.message && *s.message == ServerMessage(Unknown{"pause"}));
-    const Decoded<ServerMessage> stop = decodeServerMessage("{\"kind\":\"stop\",\"why\":\"later\"}");
-    CHECK(stop.message && *stop.message == ServerMessage(Stop{}));
+    const Decoded<ServerMessage> stop = decodeServerMessage("{\"kind\":\"stop\",\"turn\":2,\"why\":\"later\"}");
+    CHECK(stop.message && *stop.message == ServerMessage(Stop{2}));
     // An unknown kind is still a JSON object with a kind: a malformed one is refused.
     CHECK(contains(driverError("{\"kind\":\"thinking\""), "not JSON"));
+
+    const Decoded<ServerMessage> dup = decodeServerMessage(
+        "{\"kind\":\"stop\",\"kind\":\"send\",\"turn\":1,\"prompt\":\"a\",\"turn\":2,\"prompt\":\"b\"}");
+    CHECK(dup.message && *dup.message == ServerMessage(Send{2, "b"}));
+    CHECK(contains(serverError("{\"kind\":\"send\",\"turn\":1,\"prompt\":\"a\",\"turn\":null}"), "no \"turn\""));
+
+    ServerReader reader;
+    std::vector<ServerReader::Item> items;
+    reader.feed("{\"kind\":\"stop\",\"turn\":1}\r\n{\"kind\":\"stop\",\"turn\":2}\n\r\n", items);
+    CHECK(items.size() == 3);
+    if (items.size() == 3) {
+        CHECK(items[0].message && *items[0].message == ServerMessage(Stop{1}));
+        CHECK(items[1].message && *items[1].message == ServerMessage(Stop{2}));
+        CHECK(!items[2].message && contains(items[2].error, "not JSON"));
+    }
 }
 
 // ---- the line limit ----
@@ -317,8 +537,8 @@ void limit() {
     const std::string at = textLine(kMaxLineBytes);
     CHECK(under.size() == kMaxLineBytes - 1);
     CHECK(at.size() == kMaxLineBytes);
-    CHECK(encode(DriverMessage{Text{1, std::string(kMaxLineBytes, 'x')}}).line.empty());
-    CHECK(contains(encode(DriverMessage{Text{1, std::string(kMaxLineBytes, 'x')}}).error, "past the protocol's line"));
+    // The encoder writes a line of exactly the limit and refuses one byte more.
+    CHECK(contains(encodeError(Text{1, std::string(kMaxLineBytes - kTextBase + 1, 'x')}), "past the protocol's line"));
 
     // At the limit and one under: read. One over (encode refuses it, so it is made by hand): refused, with the line
     // after it read as usual. Fed whole and a byte at a time, which passes the limit in the middle of a feed and across
@@ -346,6 +566,12 @@ void limit() {
         CHECK(items[3].message && *items[3].message == DriverMessage(TextEnd{1}));
     }
 
+    // A CR before the newline counts toward the limit.
+    LineReader crlf;
+    std::vector<LineReader::Line> cr;
+    crlf.feed(under + "\r\n" + at + "\r\n", cr);
+    CHECK(cr.size() == 2 && cr[0].error.empty() && cr[0].text == under && contains(cr[1].error, "line 2 is longer"));
+
     // A line over the limit with no newline yet is refused as soon as it passes the limit, and nothing more of it is
     // held: what follows its newline is read.
     LineReader lines;
@@ -367,8 +593,11 @@ struct Group {
 const Group kGroups[] = {
     {"roundtrip", roundtrip},
     {"encode_refusals", encode_refusals},
+    {"property", property},
     {"chunking", chunking},
     {"refusals", refusals},
+    {"strings", strings},
+    {"numbers", numbers},
     {"forward", forward},
     {"limit", limit},
 };

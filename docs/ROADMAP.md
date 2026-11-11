@@ -10,7 +10,7 @@
 |---|:---:|
 | 1. Window: tabs, transcript and prompt draw and take input (in progress) | ❌ |
 | 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress) | ❌ |
-| 3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); no message lost or shown twice | ❌ |
+| 3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); nothing the server received is lost or shown twice; a prompt reaches the harness at most once; a turn cut by a driver's exit is shown as cut | ❌ |
 | 4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end | ❌ |
 | 5. Fleet: see the machines and what runs on each | ❌ |
 | 6. Sprint: see and deal cards without leaving the window | ❌ |
