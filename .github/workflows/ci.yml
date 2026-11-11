@@ -169,6 +169,8 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
+          # the driver protocol: every group (the parser and the reader over every chunking)
+          build/tests/driver/driver_protocol_test
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

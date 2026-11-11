@@ -12,6 +12,8 @@ The rules for an AI working in this repository. Each one holds on every change.
 - Use Prax fully: take the highest Prax layer that does the job, and never rewrite what Prax already has.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
+- `nexus-server` reaches each friend through a driver, a child process per friend tab, over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
+- A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the session id, and starts a driver again with `--resume`.
 
 ## How nexus behaves (locked: the owner's decisions; every change keeps all of them)
 
