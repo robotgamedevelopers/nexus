@@ -373,9 +373,9 @@ Next == NextWith(Stop, Apply, Result, Refuse, NotFound)
 \* so a liveness witness writes its own.)
 Spec ==
     /\ Init /\ [][Next]_vars
-    /\ WF_vars(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ NotFound))
-    /\ WF_vars(Apply) /\ WF_vars(Push) /\ WF_vars(Take) /\ WF_vars(Answer)
-    /\ WF_vars(\E k \in ResultKinds : Result(k))
+    /\ WF_vars(S(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ NotFound)))
+    /\ WF_vars(S(Apply)) /\ WF_vars(S(Push)) /\ WF_vars(S(Take)) /\ WF_vars(S(Answer))
+    /\ WF_vars(\E k \in ResultKinds : S(Result(k)))
 
 \* Without the fairness: what a finite code trace is checked against.
 SafeSpec == Init /\ [][Next]_vars

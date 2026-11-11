@@ -9,7 +9,7 @@ BrokenResult(k) == ResultWith(k, Refuse, BrokenNotFound)
 
 BrokenSpec ==
     Init /\ [][NextWith(Stop, Apply, BrokenResult, Refuse, BrokenNotFound)]_vars
-    /\ WF_vars(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ BrokenNotFound))
-    /\ WF_vars(Apply) /\ WF_vars(Push) /\ WF_vars(Take) /\ WF_vars(Answer)
-    /\ WF_vars(\E k \in ResultKinds : BrokenResult(k))
+    /\ WF_vars(S(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ BrokenNotFound)))
+    /\ WF_vars(S(Apply)) /\ WF_vars(S(Push)) /\ WF_vars(S(Take)) /\ WF_vars(S(Answer))
+    /\ WF_vars(\E k \in ResultKinds : S(BrokenResult(k)))
 =============================================================================
