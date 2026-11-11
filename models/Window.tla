@@ -31,8 +31,9 @@
 (*                                                                         *)
 (* Actions are the operations of nexus::Model. Each takes the arguments   *)
 (* the caller passes, positions in range and out of it and drafts that    *)
-(* are all whitespace; a refused operation changes no model state. No     *)
-(* operation takes from a queue: delivery belongs to a later layer.       *)
+(* are all whitespace; a refused operation changes no model state. One    *)
+(* operation takes from a queue, take_queued: its oldest prompt leaves,   *)
+(* when the server delivered it (the window's mirror calls it, Link.tla). *)
 (*                                                                         *)
 (* `history` is the selection history: the ids of the tabs selected, most  *)
 (* recent last, each once. The tab active at the start is its first entry; *)
@@ -75,7 +76,7 @@ Kinds == {"Person", "Friend", "Notice"}
 Texts == Drafts \cup {e.text : e \in AppendEntries}
 Entry == [kind : Kinds, text : Texts]
 NoEntry == [kind |-> "None", text |-> ""]
-Ops == {"init", "select", "set_draft", "send", "queue", "append", "move", "add", "close"}
+Ops == {"init", "select", "set_draft", "send", "queue", "take", "append", "move", "add", "close"}
 
 \* a tab's kind, by its id: the friends' ids are theirs, SprintId the sprint tab's if there is one, every later id a
 \* terminal's
@@ -190,6 +191,15 @@ Queue(i) ==
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
+\* take_queued(i): the oldest prompt of that tab's queue leaves it
+TakeQueued(i) ==
+    IF FriendTab(i) /\ queue[At(i)] /= <<>>
+    THEN /\ queue' = [queue EXCEPT ![At(i)] = Tail(@)]
+         /\ last' = Did("take", i, "", NoEntry, TRUE)
+         /\ UNCHANGED <<friends, order, active, transcript, draft, nextId, history>>
+    ELSE /\ last' = Did("take", i, "", NoEntry, FALSE)
+         /\ UNCHANGED model
+
 \* append(i, e)
 AppendEntry(i, e) ==
     IF FriendTab(i)
@@ -250,7 +260,12 @@ NextWithAll(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _), Add, Cls(_
 NextWith(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _)) ==
     NextWithAll(Sel, SetD, Snd, Que, App, Mov, AddTerminal, CloseTab)
 
-Next == NextWith(SelectTab, SetDraft, Send, Queue, AppendEntry, MoveTab)
+\* With take_queued as well: the form its witnesses use, passing a broken take.
+NextTake(Tk(_)) ==
+    \/ NextWith(SelectTab, SetDraft, Send, Queue, AppendEntry, MoveTab)
+    \/ \E i \in Idx : Tk(i)
+
+Next == NextTake(TakeQueued)
 
 Spec == Init /\ [][Next]_vars
 
@@ -361,9 +376,17 @@ QueueAppendsOne ==
 QueueLeavesTranscripts ==
     [][last'.op = "queue" => UNCHANGED transcript]_vars
 
-\* only queue changes a queue: send, select, set_draft, append, move, add and close never do
+\* only queue and take change a queue: send, select, set_draft, append, move, add and close never do
 OnlyQueueTouchesQueues ==
-    [][last'.op /= "queue" => UNCHANGED queue]_vars
+    [][last'.op \notin {"queue", "take"} => UNCHANGED queue]_vars
+
+\* take returns true exactly when i is a friend's tab with a queued prompt; then exactly that queue's oldest prompt
+\* leaves it, and nothing else changes
+TakeExact ==
+    [][last'.op = "take" =>
+        /\ last'.ok = (FriendTab(last'.i) /\ queue[At(last'.i)] /= <<>>)
+        /\ queue' = (IF last'.ok THEN [queue EXCEPT ![At(last'.i)] = Tail(@)] ELSE queue)
+        /\ UNCHANGED <<friends, order, active, transcript, draft, nextId, history>>]_vars
 
 \* a send or queue that returns true clears that friend's draft and no other
 SendClearsOnlyItsDraft ==
@@ -481,9 +504,9 @@ Extends(s2, s1) == Len(s2) >= Len(s1) /\ SubSeq(s2, 1, Len(s1)) = s1
 TranscriptsOnlyGrow ==
     [][\A f \in Ids : Extends(transcript'[f], transcript[f])]_vars
 
-\* queues only grow by appending: queued prompts never change, move or go
+\* queues only grow by appending, but for take: queued prompts never change or move, and go only from the front
 QueuesOnlyGrow ==
-    [][\A f \in Ids : Extends(queue'[f], queue[f])]_vars
+    [][last'.op /= "take" => \A f \in Ids : Extends(queue'[f], queue[f])]_vars
 
 \* the friends never change
 FriendsFixed == [][UNCHANGED friends]_vars

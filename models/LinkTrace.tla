@@ -6,17 +6,22 @@
 (* tests/sync/link_walk.cpp drives the code (sync::Actions, Applier, Hub,  *)
 (* Tabs and Mirror, and nexus::Model as the windows) through a copy of     *)
 (* mosh's bookkeeping (tests/sync/fake_mosh.h) under loss, duplication and *)
-(* reordering from a seeded generator, and writes LinkTraceData.tla        *)
-(* beside this module. It defines                                         *)
-(*   TraceClients, TraceTabs, TraceMaxActions, TraceW: the instance, and   *)
+(* reordering from a seeded generator, with the server's own steps (an     *)
+(* open entry growing and closing, a queued prompt taken, a restart), and  *)
+(* writes LinkTraceData.tla beside this module. It defines                 *)
+(*   TraceClients, TraceTabs, TraceMaxActions, TraceW, TraceMaxGrows,      *)
+(*     TraceMaxRestarts: the instance, and                                 *)
 (*   Trace: one record per step. Trace[1] is the start (op "init"); each   *)
 (*     later record is the step the code took (a window's action, a range *)
 (*     of actions reaching the server's Applier, a window receiving one of *)
-(*     the server's states), its arguments, and the code's whole state     *)
-(*     after it: each window's list, the Applier's count, the server's     *)
-(*     transcripts and queues (its store, whole), how many states it has   *)
-(*     made, the state each window's receiver holds, and each window's     *)
-(*     transcripts, queues and mirror.                                     *)
+(*     the server's states, or one of the server's own steps), its         *)
+(*     arguments, and the code's whole state after it: each window's list, *)
+(*     the Applier's count, the server's transcripts and queues (its       *)
+(*     store, whole), its open entries (open, as its state shows), the    *)
+(*     stops that reached each tab's responder or were refused, how many   *)
+(*     open entries, grows and restarts it has made, how many states it    *)
+(*     has made, the state each window's receiver holds, and each window's *)
+(*     transcripts, queues, mirror and open entries.                       *)
 (*                                                                         *)
 (* Each step of this spec takes the Link action the record names. The      *)
 (* invariant TraceMatches requires the spec's state to equal the code's.   *)
@@ -26,9 +31,11 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, LinkTraceData
 
-VARIABLES acts, applied, done, tr, q, snaps, last, view, vq, seen, l
+VARIABLES acts, applied, done, tr, q, op, stops, made, snaps, last, view, vq, seen, live, l
 
-L == INSTANCE Link WITH Clients <- TraceClients, TabNames <- TraceTabs, MaxActions <- TraceMaxActions, W <- TraceW
+L == INSTANCE Link WITH Clients <- TraceClients, TabNames <- TraceTabs, MaxActions <- TraceMaxActions, W <- TraceW,
+                        MaxGrows <- TraceMaxGrows, MaxRestarts <- TraceMaxRestarts,
+                        Kinds <- {"Send", "Queue", "Stop"}
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
@@ -38,11 +45,15 @@ Matches(k) ==
     /\ applied = s.applied
     /\ tr = s.tr
     /\ q = s.q
+    /\ op = s.open
+    /\ stops = s.stops
+    /\ made = s.made
     /\ Len(snaps) = s.states
     /\ last = s.last
     /\ view = s.view
     /\ vq = s.vq
     /\ seen = s.seen
+    /\ live = s.live
 
 TraceMatches == Matches(l)
 
@@ -50,9 +61,13 @@ Step(s) ==
     CASE s.op = "act"     -> L!Act(s.c, s.kind, s.tab)
       [] s.op = "deliver" -> L!Deliver(s.c, s.first, s.lst)
       [] s.op = "receive" -> L!Receive(s.c, s.j)
+      [] s.op = "grow"    -> L!Grow(s.t)
+      [] s.op = "close"   -> L!Close(s.t)
+      [] s.op = "take"    -> L!Take(s.t)
+      [] s.op = "restart" -> L!Restart
       [] OTHER            -> FALSE
 
-traceVars == <<acts, applied, done, tr, q, snaps, last, view, vq, seen, l>>
+traceVars == <<acts, applied, done, tr, q, op, stops, made, snaps, last, view, vq, seen, live, l>>
 
 TraceInit == l = 1 /\ L!Init
 
@@ -73,7 +88,10 @@ ServerHoldsEach == L!ServerHoldsEach
 ViewMatches == L!ViewMatches
 QueueMatches == L!QueueMatches
 NoticesSound == L!NoticesSound
+EachClosedOnce == L!EachClosedOnce
+LiveSound == L!LiveSound
 OnlyGrow == L!OnlyGrow
+OpenGrows == L!OpenGrows
 EndsSettled == l = Len(Trace) => L!Settled
 
 =============================================================================

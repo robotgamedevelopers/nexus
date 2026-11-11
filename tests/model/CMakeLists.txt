@@ -127,6 +127,7 @@ tlc_test(tlc_witness_queue_to_transcript  WQueueToTranscript  WQueueToTranscript
 tlc_test(tlc_witness_queue_wrong_tab      WQueueWrongTab      WQueueWrongTab.cfg      action    PROPERTY SendTouchesNoOtherTab)
 tlc_test(tlc_witness_send_also_queues     WSendAlsoQueues     WSendAlsoQueues.cfg     action    PROPERTY OnlyQueueTouchesQueues)
 tlc_test(tlc_witness_queue_prepends       WQueuePrepends      WQueuePrepends.cfg      action    PROPERTY QueuesOnlyGrow)
+tlc_test(tlc_witness_take_newest          WTakeNewest         WTakeNewest.cfg         action    PROPERTY TakeExact)
 tlc_test(tlc_witness_append_drops_queued  WAppendDropsQueued  WAppendDropsQueued.cfg  action    PROPERTY QueuesOnlyGrow)
 tlc_test(tlc_witness_set_draft_active_too WSetDraftActiveToo  WSetDraftActiveToo.cfg  action    PROPERTY SetDraftExact)
 tlc_test(tlc_witness_select_clears_draft  WSelectClearsDraft  WSelectClearsDraft.cfg  action    PROPERTY SelectExact)

@@ -5,7 +5,7 @@ EXTENDS MCLink
 
 BrokenApplier(c, first, lst) ==
     IF first > applied[c] + 1 \/ lst <= applied[c]
-    THEN UNCHANGED <<applied, done, tr, q, snaps>>
+    THEN UNCHANGED <<applied, done, server>>
     ELSE ApplyRange(c, first, lst)
 
 BrokenDeliver(c, first, lst) == DeliverWith(BrokenApplier, c, first, lst)

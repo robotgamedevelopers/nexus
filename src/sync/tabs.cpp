@@ -140,22 +140,32 @@ bool TabView::operator==(const TabView& x) const {
     return true;
 }
 
-TabView tailOf(std::string name, const std::vector<EntryRef>& transcript, std::vector<std::string> queue, Tail tail) {
+TabView tailOf(std::string name, const std::vector<EntryRef>& transcript, std::vector<std::string> queue, Tail tail,
+               EntryRef open) {
     TabView t;
     t.name = std::move(name);
     t.queue = std::move(queue);
-    std::size_t from = transcript.size();
+    // The tail of the closed entries, then the open entry, if any, which the tail's rules do not count: so a state
+    // always carries the newest closed entry, and a window that missed entries always gets one after its notice.
+    const std::size_t count = transcript.size();
+    std::size_t from = count;
     std::size_t bytes = 0;
     while (from > 0) {
         const std::size_t size = transcript[from - 1]->text.size();
-        const bool newest = from == transcript.size();
-        if (!newest && (transcript.size() - from >= tail.entries || bytes + size > tail.bytes))
+        const bool newest = from == count;
+        if (!newest && (count - from >= tail.entries || bytes + size > tail.bytes)) {
             break;
+        }
         bytes += size;
         --from;
     }
     t.first = from;
-    t.entries.assign(transcript.begin() + static_cast<std::ptrdiff_t>(from), transcript.end());
+    for (std::size_t i = from; i < count; ++i) {
+        t.entries.push_back(transcript[i]);
+    }
+    if (open) {
+        t.entries.push_back(std::move(open));
+    }
     return t;
 }
 

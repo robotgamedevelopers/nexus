@@ -40,7 +40,7 @@ set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30
 
 # Each case in a directory of its own under the build tree.
 foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
-             orphan escaped_output)
+             orphan escaped_output queue)
     add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
              ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
     set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)

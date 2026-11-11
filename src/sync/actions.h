@@ -19,6 +19,7 @@ namespace nexus::sync {
 enum class ActionKind : std::uint8_t {
     Send = 1,   // a prompt sent to a friend's tab: it goes in the transcript
     Queue = 2,  // a prompt queued in a friend's tab, for later
+    Stop = 3,   // stop the friend's work in a tab (no text): applied at once, never queued behind anything
 };
 
 struct Action {

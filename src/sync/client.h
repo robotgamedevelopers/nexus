@@ -35,4 +35,9 @@ bool blankText(const std::string& text);
 // draft is too long (an empty or blank draft sends nothing, as Model::send).
 bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* text, std::string* why);
 
+// The stop of tab i's friend's work (Command-Escape) as an action: true, with the friend's name (the tab the action
+// names), when i is a friend's tab; otherwise false. A stop carries no text, changes nothing in the window, and is
+// sent whether or not the friend is working: the server stops the turn open, if any, and ignores it otherwise.
+bool stopTarget(const Model& model, std::size_t i, std::string* tab);
+
 } // namespace nexus::sync
