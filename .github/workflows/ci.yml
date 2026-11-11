@@ -438,12 +438,9 @@ jobs:
         run: cmake --build build --parallel "$JOBS" --target model_checks
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
       # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
-      # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
+      # model_nightly (the window model's three largest, the link's, the store's, and the Claude driver's with both settings), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
-      - name: TEMP the Claude driver's TLC counts
-        if: always()
-        run: grep -H -E "distinct states|Finished in|is violated|Deadlock" build/tests/driver/tlc/*/tlc.log || true
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags), on captain's Windows runners: everything that builds there today, and its unit tests. Not the window
