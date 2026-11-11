@@ -8,11 +8,13 @@ The rules for an AI working in this repository. Each one holds on every change.
 - Zero warnings. Warnings are errors on every compiler; a change that adds a warning does not land.
 - Prax is pinned and never forked or patched. When nexus needs something Prax lacks, work around it in nexus and record the gap as feedback for Prax's author.
 - Errors never fail silently. Each error carries its cause and how to fix it.
+- Make decisions on the server. `nexus-server` is where the real work runs: anything that affects the state of the AI models (sessions, accounts, models, effort, transcripts, queues, session logs) lives and is decided there, against the server's state when it processes each message. The client is a thin client, a portal: it sends inputs and events and displays what comes back. Its only state is what is being prepared to send (text typed with no latency) and its own visual-only preferences (tab order, the selected tab, scroll position, text scale). So behaviour never depends on latency, and nothing here is a distributed-programming problem.
+- The server and the wire know sessions and accounts, never tabs or any other part of the UI. How sessions are shown (tabs, subtabs, several per tab, one in two windows) is the client's business alone.
 
 - Use Prax fully: take the highest Prax layer that does the job, and never rewrite what Prax already has.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
-- `nexus-server` reaches each friend through a driver, a child process per friend tab, over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
+- `nexus-server` reaches each friend through a driver, a child process per friend (per session, after the session-id step), over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
 - A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the session id, and starts a driver again with `--resume`.
 - A prompt is written to a driver at most once. A turn left open when its driver exits or the server restarts is cut with a notice and never sent again (`models/Supervisor.tla`). Which program is each friend's driver comes from the file `drivers` in the server's directory (`src/server/driver_table.h`).
 
@@ -61,6 +63,35 @@ Scrolling (like Safari on macOS)
 Display
 - nexus draws at the display's refresh rate (120 Hz on ProMotion).
 - HDR is on the roadmap. It is blocked because Prax's HDR display pass drops alpha, which the transparent overlay needs.
+
+## Decided by the owner, not yet built (2026-11-11)
+
+Each of these moves into the locked rules above, with its test or model, in the pull request that builds it. Until then it is the design to build, not a thing to redecide.
+
+Keys and contexts
+- Everything is driven by the keyboard, and fast. Every action has a key; the mouse is never required, and dragging is only ever a second way. Pop-ups open at once, a repeat of the key steps to the next item, and typing filters the list.
+- Every shortcut uses Command, never Control or Option.
+- Escape always backs out one context: a pop-up, the session menu, a drag. The last context is the overlay itself, so only with nothing else open does Escape hide it. Terminal tabs still give Escape to the terminal.
+
+Sessions
+- A session has an id, a harness (Claude for now) and an account, a model and an effort, plus its transcript, its queue and its driver. The server makes the id; the server keys everything by session id, never by friend name or by tab. Today the server keys by friend name; the session-id step changes that, after part 3 and before the Claude driver.
+- Several sessions may share a harness and an account, or not. How they are used is still to be decided; the design keeps it possible.
+- A friend's tab holds that friend's sessions as subtabs, like a menu bar or a cross menu: friends run across the strip, and the selected friend's sessions drop down in a column under its tab. The column shows only while switching, and hides once a session is chosen.
+- Command-Up/Down move between the sessions in the current friend's tab. (In a friend's tab this replaces Command-Up/Down gliding to the ends; Home and End still glide.)
+- Command-N makes a new session with this friend as a subtab in this tab; Command-Shift-N makes it a tab of its own (like a browser's new tab and new window). A new session starts with the current session's account, model and effort.
+- A session can be dragged out of the column into the strip to become its own tab.
+- Switching a session's account happens inside its tab: the session keeps its id and its transcript, and its driver restarts under the new account. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far.
+- Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. A change applies from the next turn; a turn never changes model halfway. Nothing shows the model or effort otherwise.
+
+Stopping
+- Command-Escape always sends a stop to the server, whatever the window shows (no turn seen, or the link down: then it waits in order with the other actions). The client never filters a stop.
+- Stops arrive in order. Each one stops the friend's work running when the server processes it, an open turn or a driver starting one, and the next queued prompt then goes. A stop that finds nothing running is dropped and never affects a later turn, so pressing it repeatedly is always safe.
+
+The state cursor
+- Under the last text in a friend's tab, a cursor shows the session's state, from the server's state only: pulsing light blue while a turn is open (starting and stopping included); steady dark blue when it is waiting for the person; steady red when the friend is down (its driver crashed, keeps failing to start, or has no login); dim grey when the window has lost the server (never blue then). Colours are OKLCH; the pulse is a slow brightness breathe, about 1.5 s.
+
+Tabs
+- Moving the current tab left or right by key, within its zone. The key is not settled: Command-Left/Right are line start and end in text, so the proposal is Command-Shift-[ and ] to select and Command-Option-Left/Right to reorder.
 
 ## Tests
 
