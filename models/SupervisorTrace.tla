@@ -29,7 +29,7 @@ L == INSTANCE Supervisor WITH Prompts <- TracePrompts, MaxWaiting <- TraceMaxWai
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "session", "gathered", "finished", "failed",
-           "blocked", "down", "procs", "written", "fx", "resumed"}
+           "blocked", "nocred", "down", "procs", "written", "fx", "resumed"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -78,5 +78,6 @@ EffectsForOpen == L!EffectsForOpen
 EndsAnsweredOrCut == L!EndsAnsweredOrCut
 TextKept == L!TextKept
 StartsSound == L!StartsSound
+NoSendWithoutCredential == L!NoSendWithoutCredential
 
 =============================================================================

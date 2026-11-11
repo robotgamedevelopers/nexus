@@ -51,22 +51,25 @@ Config config() {
 Supervisor make(sync::DriverState state = {}, Output* first = nullptr) {
     Output o;
     Supervisor s(config(), std::move(state), kStart, &o);
-    if (first != nullptr)
+    if (first != nullptr) {
         *first = o;
+    }
     return s;
 }
 
 std::vector<What> whats(const Output& o) {
     std::vector<What> w;
-    for (const Effect& e : o.effects)
+    for (const Effect& e : o.effects) {
         w.push_back(e.what);
+    }
     return w;
 }
 
 std::vector<Kind> kinds(const Output& o) {
     std::vector<Kind> k;
-    for (const Command& c : o.commands)
+    for (const Command& c : o.commands) {
         k.push_back(c.kind);
+    }
     return k;
 }
 
@@ -78,13 +81,15 @@ bool contains(const std::string& text, const std::string& part) {
 std::vector<ServerMessage> written(const Output& o) {
     std::vector<ServerMessage> out;
     for (const Command& c : o.commands) {
-        if (c.kind != Kind::Write)
+        if (c.kind != Kind::Write) {
             continue;
+        }
         CHECK(!c.line.empty() && c.line.back() == '\n');
         const auto d = decodeServerMessage(std::string_view(c.line).substr(0, c.line.size() - 1));
         CHECK(d.message.has_value());
-        if (d.message)
+        if (d.message) {
             out.push_back(*d.message);
+        }
     }
     return out;
 }
@@ -427,12 +432,14 @@ void testFailedStarts() {
     t.exited("exited with status 0", kStart + 103);
     CHECK(t.failedStarts() == 1 && t.phase() == Phase::Starting);   // "y" still waits: started again
     // A driver that says hello, reports it cannot work, and exits: the prompt it was sent is cut, and the next prompt
-    // starts the next try, until the hold.
+    // starts the next try, until the hold. (A driver that reports no credential holds at once: the credential
+    // group.)
     for (Millis at = kStart + 200; t.failedStarts() < 3; at += 10) {
-        if (t.phase() == Phase::None)
+        if (t.phase() == Phase::None) {
             t.prompt("z", at);
+        }
         t.message(Hello{1, "h"}, at + 1);
-        t.message(Error{"no login", "run login", std::nullopt, ErrorCode::NoCredential}, at + 2);
+        t.message(Error{"no login", "run login", std::nullopt, ErrorCode::Harness}, at + 2);
         o = t.exited("exited with status 1", at + 3);
     }
     CHECK(t.held() && contains(o.effects.back().text, "The last: no login. run login."));
@@ -470,6 +477,57 @@ void testCredentialAndErrors() {
         CHECK(!o.durable);
         o = s.message(Done{1, Outcome::Error, std::nullopt, std::nullopt}, kStart + 6);
         CHECK(o.effects.empty() && s.phase() == Phase::Idle);
+    }
+    // No credential (protocol rule 11): the error and done of the open turn, then the driver exits. The prompt
+    // waiting is never written to it: the driver is ended quietly once its turn is done, and none is started again
+    // until the person's next prompt.
+    {
+        Supervisor s = working();
+        s.prompt("waits", kStart + 2);
+        Output o = s.message(Error{"not signed in", "sign in", 1, ErrorCode::NoCredential}, kStart + 3);
+        CHECK(whats(o) == std::vector<What>{What::Error} && s.held() && s.phase() == Phase::Working);
+        o = s.message(Done{1, Outcome::Error, std::nullopt, std::nullopt}, kStart + 4);
+        CHECK(written(o).empty() && ended(s, o) && o.effects.empty());
+        CHECK(s.state().openTurn == 0 && s.state().nextTurn == 2 && s.state().waiting.size() == 1);
+        o = s.exited("exited with status 0", kStart + 5);
+        CHECK(o.commands.empty() && o.effects.empty() && s.failedStarts() == 0 && s.phase() == Phase::None);
+        o = s.prompt("again", kStart + 6);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+    }
+    // ... and with no turn open: ended at once.
+    {
+        Supervisor s = working();
+        s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 2);
+        Output o = s.message(Error{"not signed in", "sign in", std::nullopt, ErrorCode::NoCredential}, kStart + 3);
+        CHECK(whats(o) == std::vector<What>{What::Notice} && ended(s, o) && s.held());
+        o = s.prompt("waits", kStart + 4);
+        CHECK(written(o).empty() && s.phase() == Phase::Ending && !s.held());
+        o = s.exited("exited with status 0", kStart + 5);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+    }
+    // A driver's cause and fix go into the tab cut to kReportBytes each, however long the line that carried them, and
+    // so does the cause the failed-start notice repeats.
+    {
+        const std::string big(100000, 'c');
+        Supervisor s = working();
+        Output o = s.message(Error{big, big, 1, ErrorCode::Harness}, kStart + 2);
+        CHECK(o.effects.size() == 1 && o.effects[0].text.size() < 2 * kReportBytes + 100);
+        o = s.message(Error{big, "f", std::nullopt, ErrorCode::SessionNotFound}, kStart + 3);
+        CHECK(o.effects.size() == 1 && o.effects[0].text.size() < kReportBytes + 100);
+        s.message(Error{big, big, 1, ErrorCode::Harness}, kStart + 4);
+        for (int i = 0; i < 3; ++i) {
+            o = s.exited("exited with status 1", kStart + 5);
+            CHECK(!o.effects.empty());
+            for (const Effect& e : o.effects) {
+                CHECK(e.text.size() < 2 * kReportBytes + 400);
+            }
+            if (i < 2) {
+                CHECK(kinds(s.prompt("w", kStart + 5)) == std::vector<Kind>{Kind::Start});
+                s.message(Hello{1, "h"}, kStart + 5);
+                s.message(Error{big, big, std::nullopt, ErrorCode::Harness}, kStart + 5);
+            }
+        }
+        CHECK(s.held() && contains(o.effects.back().text, "stopped starting"));
     }
 }
 
@@ -519,8 +577,9 @@ void testShutdown() {
     quiet(idle);
     for (bool stopping : {false, true}) {
         Supervisor s = working();
-        if (stopping)
+        if (stopping) {
             s.stop(kStart + 2);
+        }
         s.prompt("waits", kStart + 3);
         Output o = s.shutdown(kStart + 4);
         CHECK(ended(s, o) && (whats(o) == std::vector<What>{What::Notice, What::Cut}));
@@ -583,8 +642,9 @@ const Group kGroups[] = {
 int main(int argc, char** argv) {
     bool ran = false;
     for (const Group& g : kGroups) {
-        if (argc > 1 && std::strcmp(argv[1], g.name) != 0)
+        if (argc > 1 && std::strcmp(argv[1], g.name) != 0) {
             continue;
+        }
         g.run();
         ran = true;
     }

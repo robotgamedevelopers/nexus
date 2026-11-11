@@ -32,8 +32,9 @@ void log(const std::string& tab, const std::string& what) {
 
 // How a process ended, as a notice says it after "ada's driver ".
 std::string howEnded(int status) {
-    if (WIFEXITED(status))
+    if (WIFEXITED(status)) {
         return "exited with status " + std::to_string(WEXITSTATUS(status));
+    }
     if (WIFSIGNALED(status)) {
         const char* name = strsignal(WTERMSIG(status));
         return "was ended by signal " + std::to_string(WTERMSIG(status)) + (name != nullptr ? std::string(" (") +
@@ -44,15 +45,19 @@ std::string howEnded(int status) {
 
 // One output after another, as one: the effects and commands in order, the latest of the rest.
 void append(Output& into, Output from) {
-    for (Effect& e : from.effects)
+    for (Effect& e : from.effects) {
         into.effects.push_back(std::move(e));
+    }
     into.durable = into.durable || from.durable;
-    for (Command& c : from.commands)
+    for (Command& c : from.commands) {
         into.commands.push_back(std::move(c));
-    if (from.credential)
+    }
+    if (from.credential) {
         into.credential = std::move(from.credential);
-    if (from.sessionCostUsd)
+    }
+    if (from.sessionCostUsd) {
         into.sessionCostUsd = from.sessionCostUsd;
+    }
 }
 
 // Starts `argv` with its standard input and output on pipes (ours non-blocking), its standard error this process's,
@@ -68,13 +73,15 @@ pid_t spawnDriver(const std::vector<std::string>& argv, int* in, int* out, std::
     if (::pipe(toChild) != 0 || ::pipe(fromChild) != 0) {
         *why = std::string("cannot make its pipes: ") + std::strerror(errno);
         for (int fd : {toChild[0], toChild[1], fromChild[0], fromChild[1]}) {
-            if (fd >= 0)
+            if (fd >= 0) {
                 ::close(fd);
+            }
         }
         return -1;
     }
-    for (int fd : {toChild[0], toChild[1], fromChild[0], fromChild[1]})
+    for (int fd : {toChild[0], toChild[1], fromChild[0], fromChild[1]}) {
         ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
     posix_spawn_file_actions_t files;
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_adddup2(&files, toChild[0], 0);
@@ -87,16 +94,18 @@ pid_t spawnDriver(const std::vector<std::string>& argv, int* in, int* out, std::
     posix_spawnattr_setpgroup(&attr, 0);
     sigset_t defaults;
     sigemptyset(&defaults);
-    for (int s : {SIGPIPE, SIGTERM, SIGINT, SIGHUP, SIGCHLD})
+    for (int s : {SIGPIPE, SIGTERM, SIGINT, SIGHUP, SIGCHLD}) {
         sigaddset(&defaults, s);
+    }
     posix_spawnattr_setsigdefault(&attr, &defaults);
     sigset_t none;
     sigemptyset(&none);
     posix_spawnattr_setsigmask(&attr, &none);
     std::vector<std::string> args = argv;
     std::vector<char*> raw;
-    for (std::string& a : args)
+    for (std::string& a : args) {
         raw.push_back(a.data());
+    }
     raw.push_back(nullptr);
     pid_t pid = -1;
     const int rc = posix_spawnp(&pid, raw[0], &files, &attr, raw.data(), environ);
@@ -123,12 +132,15 @@ Drivers::Drivers(const sync::TabStore& store, Options options) : store_(store), 
 
 Drivers::~Drivers() {
     for (auto& [name, t] : tabs_) {
-        if (!t.proc)
+        if (!t.proc) {
             continue;
-        if (t.proc->in >= 0)
+        }
+        if (t.proc->in >= 0) {
             ::close(t.proc->in);
-        if (t.proc->out >= 0)
+        }
+        if (t.proc->out >= 0) {
             ::close(t.proc->out);
+        }
         ::killpg(t.proc->pid, SIGKILL);
         int status = 0;
         while (::waitpid(t.proc->pid, &status, 0) < 0 && errno == EINTR) {
@@ -168,8 +180,9 @@ Config Drivers::config(const std::string& tab, const ResolvedDriver& driver) con
 bool Drivers::start(Millis now) {
     for (const std::string& name : store_.names()) {
         sync::DriverState state = store_.find(name)->driver;
-        if (state.openTurn == 0 && state.waiting.empty())
+        if (state.openTurn == 0 && state.waiting.empty()) {
             continue;
+        }
         const ResolvedDriver r = resolve(name);
         std::string dropped;
         if (!r.problem.empty() && !state.waiting.empty()) {
@@ -183,8 +196,9 @@ bool Drivers::start(Millis now) {
             out.effects.push_back(Effect{Effect::What::Notice, dropped, 0});
             out.durable = true;
         }
-        if (!run(name, std::move(out), now, false))
+        if (!run(name, std::move(out), now, false)) {
             return false;
+        }
     }
     return true;
 }
@@ -194,9 +208,10 @@ std::vector<sync::TabChange> Drivers::send(const std::string& tab, const std::st
     pendingSup_.reset();
     pendingOut_ = Output{};
     const ResolvedDriver r = resolve(tab);
-    if (!r.problem.empty())
+    if (!r.problem.empty()) {
         return {sync::TabChange{entry(EntryKind::Person, prompt), {}}, sync::TabChange{entry(EntryKind::Notice,
             r.problem), {}}};
+    }
     auto it = tabs_.find(tab);
     if (it != tabs_.end()) {
         pendingSup_ = it->second.sup;
@@ -207,21 +222,25 @@ std::vector<sync::TabChange> Drivers::send(const std::string& tab, const std::st
     }
     append(pendingOut_, pendingSup_->prompt(prompt, now));
     std::vector<sync::TabChange> changes;
-    for (const Effect& e : pendingOut_.effects)
+    for (const Effect& e : pendingOut_.effects) {
         changes.push_back(sync::TabChange{entry(entryKind(e.what), e.text), {}});
-    if (pendingOut_.durable)
+    }
+    if (pendingOut_.durable) {
         changes.push_back(sync::TabChange{nullptr, {}, pendingSup_->state()});
+    }
     return changes;
 }
 
 void Drivers::sent(const std::string& tab, bool committed) {
-    if (!committed || !pendingSup_)
+    if (!committed || !pendingSup_) {
         return;
+    }
     auto it = tabs_.find(tab);
-    if (it == tabs_.end())
+    if (it == tabs_.end()) {
         tabs_.emplace(tab, Tab(std::move(*pendingSup_)));
-    else
+    } else {
         it->second.sup = std::move(*pendingSup_);
+    }
     pendingSup_.reset();
     run(tab, std::move(pendingOut_), options_.clock(), true);
 }
@@ -233,8 +252,9 @@ bool Drivers::stop(const std::string& tab, Millis now) {
 
 bool Drivers::shutdown(Millis now) {
     for (auto& [name, t] : tabs_) {
-        if (!run(name, t.sup.shutdown(now), now, false))
+        if (!run(name, t.sup.shutdown(now), now, false)) {
             return false;
+        }
     }
     return true;
 }
@@ -256,19 +276,23 @@ pid_t Drivers::pid(const std::string& tab) const {
 // The step's effects and durable state, in one step of the store.
 bool Drivers::commit(const std::string& tab, const Output& out, bool* changed) {
     std::vector<sync::TabChange> changes;
-    for (const Effect& e : out.effects)
+    for (const Effect& e : out.effects) {
         changes.push_back(sync::TabChange{entry(entryKind(e.what), e.text), {}});
-    if (out.durable)
+    }
+    if (out.durable) {
         changes.push_back(sync::TabChange{nullptr, {}, tabs_.at(tab).sup.state()});
-    if (changes.empty())
+    }
+    if (changes.empty()) {
         return true;
+    }
     std::string why;
     if (!hub_->commit(tab, changes, &why)) {
         log(tab, "the store did not take the driver's step: " + why);
         return false;
     }
-    if (changed != nullptr)
+    if (changed != nullptr) {
         *changed = true;
+    }
     return true;
 }
 
@@ -279,11 +303,13 @@ bool Drivers::run(const std::string& tab, Output out, Millis now, bool committed
     queue.push_back(std::move(out));
     for (std::size_t i = 0; i < queue.size(); ++i) {
         Output o = std::move(queue[i]);
-        if (!(i == 0 && committed) && !commit(tab, o))
+        if (!(i == 0 && committed) && !commit(tab, o)) {
             return false;
-        if (o.credential)
+        }
+        if (o.credential) {
             log(tab, "the driver's credential: " + std::string(driver::billingName(o.credential->billing)) +
                 (o.credential->plan.empty() ? std::string() : " (" + o.credential->plan + ")"));
+        }
         if (o.sessionCostUsd) {
             char cost[64];
             std::snprintf(cost, sizeof cost, "the session has cost $%.4f so far", *o.sessionCostUsd);
@@ -291,10 +317,12 @@ bool Drivers::run(const std::string& tab, Output out, Millis now, bool committed
         }
         Tab& t = tabs_.at(tab);
         std::vector<Output> more;
-        for (const Command& c : o.commands)
+        for (const Command& c : o.commands) {
             carryOut(tab, t, c, more, now);
-        for (Output& m : more)
+        }
+        for (Output& m : more) {
             queue.push_back(std::move(m));
+        }
     }
     return true;
 }
@@ -332,8 +360,9 @@ void Drivers::carryOut(const std::string& tab, Tab& t, const Command& c, std::ve
             return;
         case Command::Kind::Terminate:
         case Command::Kind::Kill:
-            if (p != nullptr)
+            if (p != nullptr) {
                 ::killpg(p->pid, c.kind == Command::Kind::Terminate ? SIGTERM : SIGKILL);
+            }
             return;
     }
 }
@@ -390,30 +419,40 @@ void Drivers::readSome(Tab& t, Output& out, Millis now, std::size_t limit) {
         }
     }
     for (driver::DriverReader::Item& item : items) {
-        if (item.message)
+        if (item.message) {
             append(out, t.sup.message(*item.message, now));
-        else
+        } else {
             append(out, t.sup.refused(item.error, now));
+        }
     }
 }
 
 // The driver's exit, if it has exited: what it wrote before, then the exit.
 void Drivers::collect(const std::string& tab, Tab& t, Output& out, Millis now) {
     Process& p = *t.proc;
-    int status = 0;
-    if (::waitpid(p.pid, &status, WNOHANG) != p.pid)
+    siginfo_t info{};
+    if (::waitid(P_PID, static_cast<id_t>(p.pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0 || info.si_pid != p.pid) {
         return;
+    }
+    // What it started in its process group (its harness) goes with it, while its pid, not yet collected, still names
+    // the group: a next driver for the tab never works beside it.
+    ::killpg(p.pid, SIGKILL);
+    int status = 0;
+    while (::waitpid(p.pid, &status, 0) < 0 && errno == EINTR) {
+    }
     readSome(t, out, now, kReadChunk);
     if (p.out >= 0) {
         // Its output is still held open (by a process it started): what is read so far is all it gets.
         std::vector<driver::DriverReader::Item> rest;
         p.reader.finish(rest);
-        for (driver::DriverReader::Item& item : rest)
+        for (driver::DriverReader::Item& item : rest) {
             append(out, item.message ? t.sup.message(*item.message, now) : t.sup.refused(item.error, now));
+        }
         ::close(p.out);
     }
-    if (p.in >= 0)
+    if (p.in >= 0) {
         ::close(p.in);
+    }
     log(tab, "driver " + std::to_string(p.pid) + " " + howEnded(status));
     t.proc.reset();
     append(out, t.sup.exited(howEnded(status), now));
@@ -422,12 +461,15 @@ void Drivers::collect(const std::string& tab, Tab& t, Output& out, Millis now) {
 std::vector<pollfd> Drivers::fds() const {
     std::vector<pollfd> out;
     for (const auto& [name, t] : tabs_) {
-        if (!t.proc)
+        if (!t.proc) {
             continue;
-        if (t.proc->out >= 0)
+        }
+        if (t.proc->out >= 0) {
             out.push_back(pollfd{t.proc->out, POLLIN, 0});
-        if (t.proc->in >= 0 && !t.proc->pending.empty())
+        }
+        if (t.proc->in >= 0 && !t.proc->pending.empty()) {
             out.push_back(pollfd{t.proc->in, POLLOUT, 0});
+        }
     }
     return out;
 }
@@ -435,11 +477,16 @@ std::vector<pollfd> Drivers::fds() const {
 int Drivers::waitMs(Millis now) const {
     Millis wait = INT_MAX;
     for (const auto& [name, t] : tabs_) {
-        if (const std::optional<Millis> d = t.sup.deadline())
+        if (const std::optional<Millis> d = t.sup.deadline()) {
             wait = std::min(wait, *d > now ? *d - now : 0);
-        // An exit is collected by polling for it: soon, once its output has ended.
-        if (t.proc && t.proc->brokenSince)
+        }
+        // An exit is collected by polling for it: soon, once its output has ended, and within kCollectMs while a
+        // process outside the driver's group holds its output open.
+        if (t.proc && t.proc->brokenSince) {
             wait = std::min<Millis>(wait, 10);
+        } else if (t.proc) {
+            wait = std::min<Millis>(wait, kCollectMs);
+        }
     }
     return static_cast<int>(wait);
 }
@@ -451,8 +498,9 @@ bool Drivers::serve(Millis now, bool* changed) {
             flushInput(*t.proc, now);
             readSome(t, out, now, kReadChunk);
         }
-        if (t.proc)
+        if (t.proc) {
             collect(name, t, out, now);
+        }
         if (t.proc && t.proc->brokenSince && !t.proc->brokenTold && now - *t.proc->brokenSince >= kPipeGraceMs) {
             t.proc->brokenTold = true;
             append(out, t.sup.closed(t.proc->broken, now));
@@ -460,10 +508,12 @@ bool Drivers::serve(Millis now, bool* changed) {
         append(out, t.sup.tick(now));
         const bool any = !out.effects.empty() || out.durable || !out.commands.empty();
         if (any) {
-            if (!commit(name, out, changed))
+            if (!commit(name, out, changed)) {
                 return false;
-            if (!run(name, std::move(out), now, true))
+            }
+            if (!run(name, std::move(out), now, true)) {
                 return false;
+            }
         }
     }
     return true;

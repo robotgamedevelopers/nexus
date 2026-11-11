@@ -2,8 +2,9 @@
 #   unit           supervisor_test: the state machine by rule, every refusal and every deadline at its edges, text
 #                  gathering and splitting, the failed-start count, shutdown from every phase; friends_unit: the
 #                  drivers file. Logic only: no processes, files, sockets or clock.
-#   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver) over real
-#                  pipes, on a real store in a directory of the test's own, with short deadlines.
+#   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver, and shell
+#                  scripts for drivers that start processes of their own) over real pipes, on a real store in a
+#                  directory of the test's own, with short deadlines.
 #   model          TLC: Supervisor.tla, its reversed witnesses, and the code's walks (supervisor_walk) checked against
 #                  it. Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Supervisor.tla on its larger instance
@@ -38,7 +39,8 @@ add_test(NAME friends_unit_driver_table COMMAND driver_table_test)
 set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30)
 
 # Each case in a directory of its own under the build tree.
-foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart)
+foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
+             orphan escaped_output)
     add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
              ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
     set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -59,6 +61,8 @@ tlc_test(tlc_supervisor_witness_no_stop_timeout WSupNoStopTimeout WSupNoStopTime
 tlc_test(tlc_supervisor_witness_send_while_open WSupSendWhileOpen WSupSendWhileOpen.cfg invariant PROPERTY OneTurn)
 tlc_test(tlc_supervisor_witness_text_lost      WSupTextLost      WSupTextLost.cfg      action    PROPERTY TextKept)
 tlc_test(tlc_supervisor_witness_start_fresh    WSupStartFresh    WSupStartFresh.cfg    action    PROPERTY StartsSound)
+tlc_test(tlc_supervisor_witness_send_no_credential WSupSendNoCredential WSupSendNoCredential.cfg action
+         PROPERTY NoSendWithoutCredential)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4)

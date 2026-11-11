@@ -1,6 +1,7 @@
-// Which program is each friend's driver: the file `drivers` in nexus-server's directory, read at each prompt to a tab
-// whose driver is not running, so that an edit takes effect without a restart. Two kinds of line, words split on
-// spaces and tabs (no quoting), `#` starting a comment line:
+// Which program is each friend's driver: the file `drivers` in nexus-server's directory, read at each prompt, so that
+// an edit takes effect without a restart (a driver running keeps the program it was started with; a friend the file no
+// longer names has its prompts refused with the fix). Two kinds of line, words split on spaces and tabs (no quoting),
+// `#` starting a comment line:
 //
 //   driver <harness> <program> [<argument>...]    the harness's driver, started with these arguments, then --cwd
 //                                                  and --resume (docs/driver-protocol.md)

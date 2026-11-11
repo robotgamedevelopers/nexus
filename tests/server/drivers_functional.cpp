@@ -6,7 +6,8 @@
 //   drivers_functional <nexus-fake-driver> <dir> <case>
 //
 // The cases: normal, stop, silent, exit_mid_turn, malformed, ignores_stop, kill (ignores EOF and SIGTERM, so only
-// SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again).
+// SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
+// orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open).
 
 #include <libproc.h>
 #include <poll.h>
@@ -106,8 +107,9 @@ struct Server {
 
     void see() {
         const pid_t p = drivers->pid("ada");
-        if (p > 0)
+        if (p > 0) {
             pids.insert(p);
+        }
     }
 
     void send(const std::string& text) {
@@ -135,9 +137,10 @@ struct Server {
     std::vector<std::string> transcript() const {
         std::vector<std::string> out;
         if (const sync::StoredTab* t = store.find("ada")) {
-            for (const sync::EntryRef& e : t->transcript)
+            for (const sync::EntryRef& e : t->transcript) {
                 out.push_back(std::string(e->kind == EntryKind::Person ? "P " : e->kind == EntryKind::Friend ? "F " :
                     "N ") + e->text);
+            }
         }
         return out;
     }
@@ -150,14 +153,16 @@ struct Server {
     void end() {
         CHECK(drivers->shutdown(now()));
         CHECK(serveUntil([&] { return !drivers->alive(); }, 5));
-        for (pid_t p : pids)
+        for (pid_t p : pids) {
             CHECK(::kill(p, 0) != 0 && errno == ESRCH);
+        }
     }
 };
 
 void dump(const Server& s) {
-    for (const std::string& line : s.transcript())
+    for (const std::string& line : s.transcript()) {
         std::fprintf(stderr, "  | %s\n", line.c_str());
+    }
 }
 
 // ada's drivers file and script.
@@ -337,6 +342,69 @@ void resume(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(log, "cwd=" + dir));
 }
 
+// ada's driver as a shell script, for what the fake driver does not do: start processes of its own.
+void setUpShell(const std::string& dir, const std::string& script) {
+    writeFile(dir + "/ada.sh", script);
+    writeFile(dir + "/drivers", "driver sh /bin/sh " + dir + "/ada.sh\nfriend ada sh " + dir + "\n");
+}
+
+pid_t readPid(const std::string& path) {
+    const std::string text = readFile(path);
+    return text.empty() ? -1 : static_cast<pid_t>(std::stol(text));
+}
+
+// Whether process `pid` is gone within `seconds`.
+bool goneWithin(pid_t pid, double seconds) {
+    const Millis end = now() + static_cast<Millis>(seconds * 1000);
+    while (::kill(pid, 0) == 0 && now() < end) {
+        ::usleep(10'000);
+    }
+    return ::kill(pid, 0) != 0 && errno == ESRCH;
+}
+
+const char* const kShellHello = "printf '%s\\n' '{\"kind\":\"hello\",\"protocol\":1,\"harness\":\"sh\"}'\n";
+
+// A driver that exits on its own: what it started in its process group (its harness) is ended with it, so that the
+// next driver for the tab never works beside it.
+void orphan(Server& s, const std::string& dir, const std::string&) {
+    setUpShell(dir, "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + dir + "/child.pid\n" + kShellHello +
+        "exit 3\n");
+    s.send("q");
+    CHECK(s.serveUntil([&] { return none(s) && s.sup().failedStarts() == 1; }, 10));
+    const pid_t child = readPid(dir + "/child.pid");
+    CHECK(child > 0);
+    if (child > 0) {
+        CHECK(goneWithin(child, 2));
+        ::kill(child, SIGKILL);
+    }
+}
+
+// A driver ended at shutdown that ignores the end of its input and SIGTERM, while a process it started outside its
+// process group holds its output open: the loop as nexus-server ends its drivers (polling as long as waitMs() says)
+// collects it soon after SIGKILL, not when that process lets go.
+void escapedOutput(Server& s, const std::string& dir, const std::string&) {
+    setUpShell(dir, "trap '' TERM\nperl -e 'setpgrp(0, 0); sleep 5' </dev/null &\necho $! > " + dir +
+        "/holder.pid\n" + kShellHello + "while :; do sleep 1; done\n");
+    s.send("q");
+    CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Working; }, 10));
+    const Millis start = now();
+    CHECK(s.drivers->shutdown(start));
+    while (s.drivers->alive() && now() - start < 10'000) {
+        std::vector<pollfd> fds = s.drivers->fds();
+        ::poll(fds.data(), static_cast<nfds_t>(fds.size()), s.drivers->waitMs(now()));
+        bool changed = false;
+        CHECK(s.drivers->serve(now(), &changed));
+    }
+    const Millis took = now() - start;
+    CHECK(!s.drivers->alive());
+    CHECK(took < kTiming.endGrace + kTiming.termGrace + 1500);
+    std::printf("escaped_output: the driver was collected %lld ms after the shutdown\n", static_cast<long long>(took));
+    const pid_t holder = readPid(dir + "/holder.pid");
+    if (holder > 0) {
+        ::kill(holder, SIGKILL);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -371,15 +439,17 @@ int main(int argc, char** argv) {
             CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
             CHECK(s.driver().nextTurn == 3);    // the second prompt was turn 2: the first's number is never reused
             s.end();
-            if (failures != 0)
+            if (failures != 0) {
                 dump(s);
+            }
         } else {
             Server s(dir);
             using Case = void (*)(Server&, const std::string&, const std::string&);
             const std::vector<std::pair<std::string, Case>> cases = {{"normal", normal}, {"stop", stop},
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
-                {"fails_first_start", failsFirstStart}, {"resume", resume}};
+                {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
+                {"escaped_output", escapedOutput}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());
@@ -387,8 +457,9 @@ int main(int argc, char** argv) {
             }
             it->second(s, dir, fake);
             s.end();
-            if (failures != 0)
+            if (failures != 0) {
                 dump(s);
+            }
         }
     }
     CHECK(children() == before);

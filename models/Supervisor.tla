@@ -61,8 +61,8 @@ Init ==
     /\ restarts = 0
     /\ s = [phase |-> "none", stage |-> "none", open |-> 0, prompt |-> 0, next |-> 1, waiting |-> <<>>,
             session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
-            down |-> FALSE, procs |-> 0, written |-> <<>>, fate |-> [p \in 1 .. Prompts |-> "unsent"],
-            fx |-> <<>>, resumed |-> ""]
+            nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>,
+            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> ""]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -80,12 +80,17 @@ Abandon(x) ==
     LET y == Fx(Flush(x), E("N", 0, 0)) IN
     IF y.open # 0 THEN CutOpen(y) ELSE y
 
-\* End the driver: abandon it and close its input; TERM and KILL follow on deadlines.
-End(x) == [Abandon(x) EXCEPT !.phase = "ending", !.stage = "closed"]
+\* End the driver with no turn open: close its input; TERM and KILL follow on deadlines.
+QuietEnd(x) == [x EXCEPT !.phase = "ending", !.stage = "closed"]
 
-\* The open turn's done.
-Close(x) == [x EXCEPT !.fate[x.prompt] = "answered", !.open = 0, !.prompt = 0, !.phase = "idle",
-                      !.finished = TRUE, !.failed = 0]
+\* End the driver: abandon it and close its input.
+End(x) == QuietEnd(Abandon(x))
+
+\* The open turn's done. A driver that said it has no credential exits next: it is ended, never given a prompt.
+Close(x) ==
+    LET y == [x EXCEPT !.fate[x.prompt] = "answered", !.open = 0, !.prompt = 0, !.phase = "idle",
+                       !.finished = TRUE, !.failed = 0]
+    IN IF x.nocred THEN QuietEnd(y) ELSE y
 
 \* Write the oldest waiting prompt to an idle driver as the next turn.
 WriteNext(x) ==
@@ -98,7 +103,8 @@ WriteNext(x) ==
 \* Start a driver when a prompt waits and none is alive, with --resume the last session id.
 StartDriver(x) ==
     IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down
-    THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.resumed = x.session]
+    THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
+                    !.resumed = x.session]
     ELSE x
 
 \* What follows every step.
@@ -113,8 +119,15 @@ ExitedWith(x) ==
         count == ~y.finished /\ ~y.blocked /\ ~y.down
         f == IF count THEN y.failed + 1 ELSE y.failed
         z == [y EXCEPT !.phase = "none", !.stage = "none", !.procs = @ - 1, !.failed = f, !.finished = FALSE,
-                       !.gathered = FALSE]
+                       !.nocred = FALSE, !.gathered = FALSE]
     IN IF count /\ f >= MaxFailedStarts THEN [Fx(z, E("N", 0, 0)) EXCEPT !.blocked = TRUE] ELSE z
+
+\* An error of code no-credential (v): the driver ends the open turn, if any, and exits (protocol rule 11). No
+\* driver is started until the person's next prompt, and this one is ended once no turn is open.
+NoCredential(m, x) ==
+    IF m.v # "no-credential" THEN x
+    ELSE LET y == [x EXCEPT !.blocked = TRUE, !.nocred = TRUE] IN
+         IF y.phase = "idle" THEN QuietEnd(y) ELSE y
 
 \* A message from the driver.
 ReceiveWith(x, m, Txt(_, _)) ==
@@ -123,8 +136,8 @@ ReceiveWith(x, m, Txt(_, _)) ==
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
       [] m.kind = "session"    -> [x EXCEPT !.session = m.v]
-      [] m.kind = "error"      -> IF m.t = 0 THEN Fx(x, E("N", 0, 0))
-                                  ELSE IF m.t = x.open THEN Fx(x, E("E", m.t, 0)) ELSE x
+      [] m.kind = "error"      -> NoCredential(m, IF m.t = 0 THEN Fx(x, E("N", 0, 0))
+                                                 ELSE IF m.t = x.open THEN Fx(x, E("E", m.t, 0)) ELSE x)
       [] m.kind = "text"       -> Txt(x, m)
       [] m.t # x.open          -> End(x)
       [] m.kind = "text-end"   -> Flush(x)
@@ -143,7 +156,7 @@ Messages(x) ==
     {[kind |-> "session", t |-> 0, v |-> i] : i \in Sessions} \cup
     {[kind |-> k, t |-> t, v |-> ""] : k \in {"text", "text-end", "tool"}, t \in Turns(x)} \cup
     {[kind |-> "done", t |-> t, v |-> o] : t \in Turns(x), o \in Outcomes} \cup
-    {[kind |-> "error", t |-> t, v |-> ""] : t \in Turns(x) \cup {0}}
+    {[kind |-> "error", t |-> t, v |-> c] : t \in Turns(x) \cup {0}, c \in {"", "no-credential"}}
 
 ----------------------------------------------------------------------------
 \* The steps. Each witness passes a broken part through the With forms.
@@ -208,7 +221,7 @@ Shutdown ==
     /\ s' = LET x == [Fresh EXCEPT !.down = TRUE] IN
             CASE x.phase \in {"none", "ending"} -> x
               [] x.open # 0                     -> End(x)
-              [] OTHER                          -> [x EXCEPT !.phase = "ending", !.stage = "closed"]
+              [] OTHER                          -> QuietEnd(x)
 
 \* The server starts again from what is durable. A turn left open is cut; waiting prompts go to a new driver.
 RestartWith(R(_)) ==
@@ -219,7 +232,7 @@ RestartWith(R(_)) ==
 Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
-              !.blocked = FALSE, !.down = FALSE, !.procs = 0]
+              !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0]
 Restart == RestartWith(Restarted)
 
 NextWith(P, M(_), Ex, T, R) ==
@@ -298,6 +311,9 @@ TextKept ==
     [][s.gathered /\ s.open # 0 /\ s'.open # s.open /\ restarts' = restarts =>
          \E i \in 1 .. Len(s'.fx) : /\ s'.fx[i] = E("F", s.open, 0)
                                     /\ \A j \in 1 .. (i - 1) : s'.fx[j].k \notin {"X", "K"}]_vars
+
+\* No prompt is written to a driver that said it has no credential: it exits next.
+NoSendWithoutCredential == [][Len(s'.written) > Len(s.written) => ~s.nocred]_vars
 
 \* A driver is started only when not held back, and with --resume the last session id.
 StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = s'.session]_vars

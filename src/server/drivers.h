@@ -41,6 +41,11 @@ namespace nexus::server {
 // milliseconds.
 constexpr Millis kPipeGraceMs = 1000;
 
+// The longest the loop waits while a driver process is alive, so that an exit is collected even when a process the
+// driver started outside its group holds its output open (no end of output wakes the poll). A judgement, not measured:
+// nexus-server's own loop wakes at least this often.
+constexpr Millis kCollectMs = 1000;
+
 // The most of one driver's output read in one round of the loop. A judgement, not measured: a round's commits stay
 // short, while a driver streaming text is read far faster than a person reads it.
 constexpr std::size_t kReadChunk = 64 * 1024;

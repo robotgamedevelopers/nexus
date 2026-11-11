@@ -124,29 +124,39 @@ public:
         const bool alive = procs_ > 0 && s.phase() != Phase::None;
         const bool ending = s.phase() == Phase::Ending;
         const std::size_t r = rng.below(1000);
-        if (s.deadline() && (r < 30 || (ending && r < 300)))
+        if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
-        if (r < 130 && sent_ < kPrompts && !s.shuttingDown())
+        }
+        if (r < 130 && sent_ < kPrompts && !s.shuttingDown()) {
             return prompt();
-        if (r < 160)
+        }
+        if (r < 160) {
             return take("stop", "", 0, "", s.stop(now_));
+        }
         if (r < 170 && alive && !ending) {
-            if (rng.chance(2))
+            if (rng.chance(2)) {
                 return take("broken", "", 0, "", s.refused("line 3: not JSON", now_));
+            }
             return take("broken", "", 0, "", s.closed("output", now_));
         }
-        if (alive && (r < 185 || (ending && r < 500)))
+        if (alive && (r < 185 || (ending && r < 500))) {
             return exit(rng);
-        if (r < 190 && !s.shuttingDown())
+        }
+        if (r < 190 && !s.shuttingDown()) {
             return take("shutdown", "", 0, "", s.shutdown(now_));
-        if ((r < 194 || (s.shuttingDown() && !alive)) && restarts_ < kMaxRestarts)
+        }
+        if ((r < 194 || (s.shuttingDown() && !alive)) && restarts_ < kMaxRestarts) {
             return restart();
-        if (alive)
+        }
+        if (alive) {
             return message(rng);
-        if (sent_ < kPrompts && !s.shuttingDown())
+        }
+        if (sent_ < kPrompts && !s.shuttingDown()) {
             return prompt();
-        if (s.deadline())
+        }
+        if (s.deadline()) {
             return timeout();
+        }
         return restarts_ < kMaxRestarts && restart();
     }
 
@@ -167,8 +177,9 @@ private:
         if (at > now_ + 1) {
             now_ = at - 1;
             Output early = sup_->tick(now_);
-            if (!early.effects.empty() || !early.commands.empty() || early.durable || sup_->deadline() != at)
+            if (!early.effects.empty() || !early.commands.empty() || early.durable || sup_->deadline() != at) {
                 fail("a tick one millisecond before the deadline did something");
+            }
         }
         now_ = at;
         return take("timeout", "", 0, "", sup_->tick(now_));
@@ -185,10 +196,12 @@ private:
         ++restarts_;
         procs_ = 0;     // the old server's driver reads the end of its input and exits
         sync::DriverState state = committed_;
-        if (fault_ == Fault::Turn)
+        if (fault_ == Fault::Turn) {
             state.nextTurn = 1;
-        if (fault_ == Fault::Resume)
+        }
+        if (fault_ == Fault::Resume) {
             state.session.clear();
+        }
         Output out;
         sup_.emplace(config(), state, now_, &out);
         return take("restart", "", 0, "", std::move(out));
@@ -200,8 +213,9 @@ private:
         const std::uint64_t next = sup_->state().nextTurn;
         std::vector<std::uint64_t> turns;
         for (std::uint64_t t : {open - 1, open, open + 1, next - 1, next}) {
-            if (t >= 1 && t <= next)
+            if (t >= 1 && t <= next) {
                 turns.push_back(t);
+            }
         }
         return turns[rng.below(turns.size())];
     }
@@ -212,27 +226,39 @@ private:
         const std::uint64_t open = sup_->state().openTurn;
         const std::size_t r = rng.below(100);
         if (phase == Phase::Starting) {
-            if (r < 92)
+            if (r < 92) {
                 return say(Hello{1, "walk"}, rng);
-            if (r < 95)
+            }
+            if (r < 95) {
                 return say(Hello{2, "walk"}, rng);
+            }
         } else if (phase == Phase::Idle && r < 90) {
-            if (r < 45)
+            if (r < 45) {
                 return say(Session{rng.chance(2) ? "a" : "b"}, rng);
+            }
             return say(Credential{Billing::Subscription, "max"}, rng);
         } else if ((phase == Phase::Working || phase == Phase::Stopping) && r < 95) {
-            if (r < 8)
+            if (r < 8) {
                 return say(Session{rng.chance(2) ? "a" : "b"}, rng);
-            if (r < 12)
+            }
+            if (r < 12) {
                 return say(Credential{Billing::Subscription, "max"}, rng);
-            if (r < 15)
+            }
+            if (r < 14) {
                 return say(Error{"it failed", "try again", open, ErrorCode::Harness}, rng);
-            if (r < 50)
+            }
+            if (r < 15) {
+                return say(Error{"not signed in", "sign in", open, ErrorCode::NoCredential}, rng);
+            }
+            if (r < 50) {
                 return say(Text{open, rng.chance(2) ? "x" : "y"}, rng);
-            if (r < 65)
+            }
+            if (r < 65) {
                 return say(TextEnd{open}, rng);
-            if (r < 75)
+            }
+            if (r < 75) {
                 return say(Tool{open, "Bash", "ls"}, rng);
+            }
             const Outcome outcomes[] = {Outcome::Ok, Outcome::Ok, Outcome::Stopped, Outcome::Error};
             return say(Done{open, outcomes[rng.below(4)], 0.01, std::nullopt}, rng);
         }
@@ -241,7 +267,7 @@ private:
             case 0: return say(Session{rng.chance(2) ? "a" : "b"}, rng);
             case 1: return say(Credential{rng.chance(3) ? Billing::ApiKey : Billing::Subscription, "max"}, rng);
             case 2: return say(Credential{rng.chance(3) ? Billing::None : Billing::Subscription, ""}, rng);
-            case 3: return say(Error{"it failed", "try again", std::nullopt,
+            case 3: return say(Error{"it failed", "try again", std::nullopt, rng.chance(4) ? ErrorCode::NoCredential :
                 rng.chance(2) ? ErrorCode::SessionNotFound : ErrorCode::Other}, rng);
             case 4: return say(Error{"it failed", "try again", open != 0 && rng.chance(2) ? open : someTurn(rng),
                 ErrorCode::Harness}, rng);
@@ -282,6 +308,7 @@ private:
         } else if (const Error* e2 = std::get_if<Error>(&m)) {
             kind = "error";
             t = e2->turn.value_or(0);
+            v = e2->code == ErrorCode::NoCredential ? "no-credential" : "";
         }
         return take("message", kind, t, v, sup_->message(m, now_));
     }
@@ -294,24 +321,29 @@ private:
 
     // As the server does: the durable state committed with the effects, then the commands.
     void carryOut(const Output& out) {
-        if (out.durable)
+        if (out.durable) {
             committed_ = sup_->state();
-        for (const Effect& e : out.effects)
+        }
+        for (const Effect& e : out.effects) {
             ++counts_[static_cast<int>(e.what)];
+        }
         for (const Command& c : out.commands) {
             if (c.kind == Command::Kind::Start) {
                 ++procs_;
                 resumed_.clear();
                 for (std::size_t i = 0; i + 1 < c.argv.size(); ++i) {
-                    if (c.argv[i] == "--resume")
+                    if (c.argv[i] == "--resume") {
                         resumed_ = c.argv[i + 1];
+                    }
                 }
             } else if (c.kind == Command::Kind::Write) {
                 const auto d = driver::decodeServerMessage(std::string_view(c.line).substr(0, c.line.size() - 1));
-                if (!d.message)
+                if (!d.message) {
                     fail("the supervisor wrote a line that does not decode: " + d.error);
-                if (const driver::Send* send = std::get_if<driver::Send>(&*d.message))
+                }
+                if (const driver::Send* send = std::get_if<driver::Send>(&*d.message)) {
                     written_.push_back({promptId(send->prompt), send->turn});
+                }
             }
         }
     }
@@ -324,14 +356,17 @@ private:
           << ", sent |-> " << sent_ << ", restarts |-> " << restarts_ << ", phase |-> " << str(phaseName(s.phase()))
           << ", stage |-> " << str(stageName(s.stage())) << ", open |-> " << s.state().openTurn << ", prompt |-> "
           << promptId(s.openPrompt()) << ", next |-> " << s.state().nextTurn << ", waiting |-> <<";
-        for (std::size_t i = 0; i < s.state().waiting.size(); ++i)
+        for (std::size_t i = 0; i < s.state().waiting.size(); ++i) {
             o << (i ? ", " : "") << promptId(s.state().waiting[i]);
+        }
         o << ">>, session |-> " << str(s.state().session) << ", gathered |-> " << (s.gathering() ? "TRUE" : "FALSE")
           << ", finished |-> " << (s.finished() ? "TRUE" : "FALSE") << ", failed |-> " << s.failedStarts()
-          << ", blocked |-> " << (s.held() ? "TRUE" : "FALSE") << ", down |-> "
+          << ", blocked |-> " << (s.held() ? "TRUE" : "FALSE") << ", nocred |-> "
+          << (s.noCredential() ? "TRUE" : "FALSE") << ", down |-> "
           << (s.shuttingDown() ? "TRUE" : "FALSE") << ", procs |-> " << procs_ << ", written |-> <<";
-        for (std::size_t i = 0; i < written_.size(); ++i)
+        for (std::size_t i = 0; i < written_.size(); ++i) {
             o << (i ? ", " : "") << "[p |-> " << written_[i].first << ", t |-> " << written_[i].second << "]";
+        }
         o << ">>, fx |-> <<";
         for (std::size_t i = 0; i < out.effects.size(); ++i) {
             const Effect& e = out.effects[i];
@@ -383,8 +418,9 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
     out << "TraceSessions == {\"a\", \"b\"}\n";
     out << "Trace == <<\n";
     const auto& records = w.records();
-    for (std::size_t k = 0; k < records.size(); ++k)
+    for (std::size_t k = 0; k < records.size(); ++k) {
         out << "  " << records[k] << (k + 1 < records.size() ? ",\n" : "\n");
+    }
     out << ">>\n====\n";
     out.close();
     if (!out) {

@@ -47,6 +47,10 @@ struct Timing {
 // until the person's next prompt. A judgement, not measured: three tries outlast a passing fault.
 constexpr int kMaxFailedStarts = 3;
 
+// The most of a driver's error cause, and of its fix, that goes into the tab: one line of the driver's may be 1 MiB,
+// and an entry stays far within the hub's text limit.
+constexpr std::size_t kReportBytes = 1024;
+
 // Which friend, how to start its driver, and the bounds.
 struct Config {
     std::string name;                   // the friend's name, as the notices say it
@@ -132,6 +136,7 @@ public:
     bool finished() const { return finished_; }             // the driver alive finished a turn
     int failedStarts() const { return failed_; }
     bool held() const { return held_; }                     // no driver is started until the next prompt
+    bool noCredential() const { return noCredential_; }     // the driver alive said it has no credential
     bool shuttingDown() const { return down_; }
     const std::string& openPrompt() const { return openPrompt_; }
 
@@ -143,7 +148,8 @@ private:
     void cutOpen();
     void abandon(const std::string& why);
     void end(const std::string& why, Millis now);
-    void close();
+    void endQuietly(Millis now);
+    void close(Millis now);
     void startDriver(Millis now);
     void writeNext();
     void advance(Millis now);
@@ -160,6 +166,7 @@ private:
     bool finished_ = false;
     int failed_ = 0;
     bool held_ = false;
+    bool noCredential_ = false;
     bool down_ = false;
     std::string lastFailure_;           // why the last driver ended, for the notice that holds starts back
     std::string lastCause_;             // the cause the driver gave with its last error, if any

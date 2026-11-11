@@ -16,15 +16,25 @@ using namespace nexus::driver;
 std::string kindOf(const DriverMessage& message) {
     return std::visit([](const auto& m) -> std::string {
         using M = std::decay_t<decltype(m)>;
-        if constexpr (std::is_same_v<M, Hello>) return "hello";
-        else if constexpr (std::is_same_v<M, Credential>) return "credential";
-        else if constexpr (std::is_same_v<M, Session>) return "session";
-        else if constexpr (std::is_same_v<M, Text>) return "text";
-        else if constexpr (std::is_same_v<M, TextEnd>) return "text-end";
-        else if constexpr (std::is_same_v<M, Tool>) return "tool";
-        else if constexpr (std::is_same_v<M, Done>) return "done";
-        else if constexpr (std::is_same_v<M, Error>) return "error";
-        else return m.kind;
+        if constexpr (std::is_same_v<M, Hello>) {
+            return "hello";
+        } else if constexpr (std::is_same_v<M, Credential>) {
+            return "credential";
+        } else if constexpr (std::is_same_v<M, Session>) {
+            return "session";
+        } else if constexpr (std::is_same_v<M, Text>) {
+            return "text";
+        } else if constexpr (std::is_same_v<M, TextEnd>) {
+            return "text-end";
+        } else if constexpr (std::is_same_v<M, Tool>) {
+            return "tool";
+        } else if constexpr (std::is_same_v<M, Done>) {
+            return "done";
+        } else if constexpr (std::is_same_v<M, Error>) {
+            return "error";
+        } else {
+            return m.kind;
+        }
     }, message);
 }
 
@@ -33,26 +43,31 @@ std::uint64_t turnOf(const DriverMessage& message) {
     return std::visit([](const auto& m) -> std::uint64_t {
         using M = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<M, Text> || std::is_same_v<M, TextEnd> || std::is_same_v<M, Tool> ||
-                      std::is_same_v<M, Done>)
+                      std::is_same_v<M, Done>) {
             return m.turn;
-        else
+        } else {
             return 0;
+    }
     }, message);
 }
 
 // The longest start of `text` at most `max` bytes that ends between two characters (a whole one when the first is
 // longer than `max`, which a limit of a few bytes would need).
 std::size_t cutAt(const std::string& text, std::size_t max) {
-    if (text.size() <= max)
+    if (text.size() <= max) {
         return text.size();
+    }
     std::size_t cut = max;
-    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) {
         --cut;
-    if (cut > 0)
+    }
+    if (cut > 0) {
         return cut;
+    }
     cut = 1;
-    while (cut < text.size() && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+    while (cut < text.size() && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) {
         ++cut;
+    }
     return cut;
 }
 
@@ -64,8 +79,9 @@ std::string secondsText(Millis ms) {
 
 // A sentence, ended by one full stop.
 std::string sentence(std::string s) {
-    while (!s.empty() && (s.back() == '.' || s.back() == ' '))
+    while (!s.empty() && (s.back() == '.' || s.back() == ' ')) {
         s.pop_back();
+    }
     return s + ".";
 }
 
@@ -148,10 +164,12 @@ Output Supervisor::stop(Millis now) {
 }
 
 Output Supervisor::message(const DriverMessage& message, Millis now) {
-    if (phase_ == Phase::None)
+    if (phase_ == Phase::None) {
         return finish();    // no driver: nothing it says can arrive
-    if (phase_ == Phase::Ending)
+    }
+    if (phase_ == Phase::Ending) {
         return finish();    // being ended: its turn is closed already, and what it says is dropped
+    }
     if (phase_ == Phase::Starting) {
         const Hello* hello = std::get_if<Hello>(&message);
         if (hello != nullptr && hello->protocol == kProtocolVersion) {
@@ -192,17 +210,27 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             out_.durable = true;
         }
     } else if (const Error* e = std::get_if<Error>(&message)) {
-        lastCause_ = e->cause;
-        lastFix_ = e->fix;
+        lastCause_ = e->cause.substr(0, cutAt(e->cause, kReportBytes));
+        lastFix_ = e->fix.substr(0, cutAt(e->fix, kReportBytes));
         std::string text = e->code == ErrorCode::SessionNotFound
             ? "The earlier conversation with " + config_.name + " could not be resumed, so this is a new one: " +
-              sentence(e->cause)
-            : config_.name + "'s driver reports: " + sentence(e->cause) + " " + sentence(e->fix);
-        if (!e->turn)
+              sentence(lastCause_)
+            : config_.name + "'s driver reports: " + sentence(lastCause_) + " " + sentence(lastFix_);
+        if (!e->turn) {
             effect(Effect::What::Notice, std::move(text));
-        else if (*e->turn == open && open != 0)
+        } else if (*e->turn == open && open != 0) {
             effect(Effect::What::Error, std::move(text), open);
+        }
         // an error of a turn not open (the one a driver writes as it refuses a line) is dropped: it exits next
+        if (e->code == ErrorCode::NoCredential) {
+            // It ends the open turn, if any, and exits (protocol rule 11): nothing more is written to it, and no
+            // driver is started again until the person's next prompt.
+            held_ = true;
+            noCredential_ = true;
+            if (phase_ == Phase::Idle) {
+                endQuietly(now);
+            }
+        }
     } else if (std::holds_alternative<Unknown>(message)) {
         // a kind this version does not know: skipped
     } else if (open == 0 || turnOf(message) != open) {
@@ -226,41 +254,49 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
         effect(Effect::What::Tool, std::move(line), open);
     } else if (const Done* done = std::get_if<Done>(&message)) {
         flush();
-        if (done->outcome == Outcome::Stopped)
+        if (done->outcome == Outcome::Stopped) {
             effect(Effect::What::Stopped, "Stopped.", open);
-        if (done->sessionCostUsd)
+        }
+        if (done->sessionCostUsd) {
             out_.sessionCostUsd = done->sessionCostUsd;
-        close();
+        }
+        close(now);
     }
 }
 
 Output Supervisor::refused(const std::string& cause, Millis now) {
-    if (phase_ != Phase::None && phase_ != Phase::Ending)
+    if (phase_ != Phase::None && phase_ != Phase::Ending) {
         end(config_.name + "'s driver wrote a line the server refused (" + cause + "), so it was ended. Fix the "
             "driver: each line it writes must be one message of docs/driver-protocol.md.", now);
+    }
     advance(now);
     return finish();
 }
 
 Output Supervisor::closed(const std::string& what, Millis now) {
-    if (phase_ != Phase::None && phase_ != Phase::Ending)
+    if (phase_ != Phase::None && phase_ != Phase::Ending) {
         end(config_.name + "'s driver closed its " + what + " while it ran, so it was ended. A driver keeps its "
             "standard input and output open until it exits.", now);
+    }
     advance(now);
     return finish();
 }
 
 Output Supervisor::exited(const std::string& how, Millis now) {
-    if (phase_ == Phase::None)
+    if (phase_ == Phase::None) {
         return finish();
-    if (phase_ != Phase::Ending)
+    }
+    if (phase_ != Phase::Ending) {
         abandon(config_.name + "'s driver " + how + ".");
+    }
     const bool counted = !finished_ && !held_ && !down_;
-    if (counted)
+    if (counted) {
         ++failed_;
+    }
     phase_ = Phase::None;
     stage_ = Stage::None;
     finished_ = false;
+    noCredential_ = false;
     gathered_.clear();
     deadline_.reset();
     if (counted && failed_ >= config_.maxFailedStarts) {
@@ -279,8 +315,9 @@ Output Supervisor::exited(const std::string& how, Millis now) {
 }
 
 Output Supervisor::tick(Millis now) {
-    if (!deadline_ || now < *deadline_)
+    if (!deadline_ || now < *deadline_) {
         return finish();
+    }
     if (phase_ == Phase::Starting) {
         end(config_.name + "'s driver did not say hello within " + secondsText(config_.timing.hello) + ", so it was "
             "ended. Check that " + quoted(config_.command) + " is a nexus driver (docs/driver-protocol.md).", now);
@@ -301,19 +338,17 @@ Output Supervisor::tick(Millis now) {
 }
 
 Output Supervisor::shutdown(Millis now) {
-    if (down_)
+    if (down_) {
         return finish();
+    }
     down_ = true;
-    if (phase_ == Phase::None || phase_ == Phase::Ending)
+    if (phase_ == Phase::None || phase_ == Phase::Ending) {
         return finish();
+    }
     if (state_.openTurn != 0) {
         end("nexus-server is stopping, so " + config_.name + "'s driver was ended.", now);
     } else {
-        // No turn open: ended quietly, with nothing in the tab.
-        phase_ = Phase::Ending;
-        stage_ = Stage::Closed;
-        command(Command::Kind::CloseInput);
-        deadline_ = now + config_.timing.endGrace;
+        endQuietly(now);    // no turn open: nothing in the tab
     }
     return finish();
 }
@@ -333,8 +368,9 @@ std::string Supervisor::brokeProtocol(const std::string& what) const {
 
 // The open turn's gathered text goes into the tab as one entry: receive() keeps it within the entry limit.
 void Supervisor::flush() {
-    if (!gathered_.empty())
+    if (!gathered_.empty()) {
         effect(Effect::What::Reply, std::move(gathered_), state_.openTurn);
+    }
     gathered_.clear();
 }
 
@@ -352,20 +388,26 @@ void Supervisor::abandon(const std::string& why) {
     flush();
     effect(Effect::What::Notice, why);
     lastFailure_ = why;
-    if (state_.openTurn != 0)
+    if (state_.openTurn != 0) {
         cutOpen();
+    }
 }
 
 void Supervisor::end(const std::string& why, Millis now) {
     abandon(why);
+    endQuietly(now);
+}
+
+// End the driver with no turn open: its input closed; TERM and KILL follow on deadlines.
+void Supervisor::endQuietly(Millis now) {
     phase_ = Phase::Ending;
     stage_ = Stage::Closed;
     command(Command::Kind::CloseInput);
     deadline_ = now + config_.timing.endGrace;
 }
 
-// The open turn's done.
-void Supervisor::close() {
+// The open turn's done. A driver with no credential exits next, so it is ended rather than given a prompt.
+void Supervisor::close(Millis now) {
     state_.openTurn = 0;
     openPrompt_.clear();
     out_.durable = true;
@@ -373,28 +415,35 @@ void Supervisor::close() {
     deadline_.reset();
     finished_ = true;
     failed_ = 0;
+    if (noCredential_) {
+        endQuietly(now);
+    }
 }
 
 void Supervisor::startDriver(Millis now) {
-    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_)
+    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_) {
         return;
+    }
     std::vector<std::string> argv = config_.command;
     argv.insert(argv.end(), {"--cwd", config_.cwd});
-    if (!state_.session.empty())
+    if (!state_.session.empty()) {
         argv.insert(argv.end(), {"--resume", state_.session});
+    }
     command(Command::Kind::Start, std::move(argv));
     phase_ = Phase::Starting;
     stage_ = Stage::None;
     deadline_ = now + config_.timing.hello;
     finished_ = false;
+    noCredential_ = false;
     lastCause_.clear();
     lastFix_.clear();
 }
 
 // The oldest waiting prompt, to an idle driver, as the next turn: durable before the line is written.
 void Supervisor::writeNext() {
-    if (phase_ != Phase::Idle || state_.waiting.empty())
+    if (phase_ != Phase::Idle || state_.waiting.empty()) {
         return;
+    }
     const std::uint64_t turn = state_.nextTurn;
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
