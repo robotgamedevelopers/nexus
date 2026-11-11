@@ -417,6 +417,19 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
+      # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
+      - name: Node from the runner's machine, and the Claude driver built
+        shell: bash
+        working-directory: drivers/claude
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          npm ci --omit=optional --no-audit --no-fund
+          npm run build
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF

@@ -26,6 +26,13 @@
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
 #               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue
+#   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
+#               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
+#               one of settings, refusal, latch
+#   DRIVERTESTS optional, in place of WALK: the Claude driver's unit tests (drivers/claude/dist/test/unit/
+#               driver.test.js), run under NODE with NEXUS_DRIVER_TRACE set; they write ClaudeDriverTraceData.tla
+#               into WORK, the traces of every test that keeps to the model
+#   NODE        with DRIVERWALK or DRIVERTESTS: node (Node 20.19 or newer)
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -67,7 +74,40 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-if(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
+if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTESTS AND NOT "${DRIVERTESTS}" STREQUAL ""))
+    if(NOT DEFINED NODE OR "${NODE}" STREQUAL "" OR NODE MATCHES "NOTFOUND$")
+        message(FATAL_ERROR "No node on PATH when this build was configured. The Claude driver's trace checks run its "
+            "walk and unit tests under Node: put Node 20.19 or newer on PATH (the fleet's sdk/bin) and configure again.")
+    endif()
+    set(program "${DRIVERWALK}${DRIVERTESTS}")
+    if(NOT EXISTS "${program}")
+        message(FATAL_ERROR "${program} does not exist: build the Claude driver first, with `npm ci && npm run build` "
+            "in drivers/claude.")
+    endif()
+    if(DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "")
+        set(walk_args "${DRIVERWALK}" "${SEED}" "${STEPS}")
+        if(FAULTY STREQUAL "settings" OR FAULTY STREQUAL "refusal" OR FAULTY STREQUAL "latch")
+            list(APPEND walk_args "--faulty-${FAULTY}")
+        elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+            message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not settings, refusal or latch")
+        endif()
+        execute_process(COMMAND "${NODE}" ${walk_args} "${WORK}/ClaudeDriverTraceData.tla"
+            RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    else()
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env "NEXUS_DRIVER_TRACE=${WORK}/ClaudeDriverTraceData.tla"
+                "${NODE}" --test "${DRIVERTESTS}"
+            WORKING_DIRECTORY "${WORK}"
+            RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    endif()
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "the Claude driver's ${program} failed (${walk_rc}): ${walk_out}")
+    endif()
+    if(NOT EXISTS "${WORK}/ClaudeDriverTraceData.tla")
+        message(FATAL_ERROR "${program} wrote no ClaudeDriverTraceData.tla into ${WORK}")
+    endif()
+elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue")
         list(APPEND walk_args "--faulty-${FAULTY}")

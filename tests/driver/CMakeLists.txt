@@ -54,6 +54,38 @@ if(NOT WIN32)
     endif()
 endif()
 
+# The Claude driver's turns (models/ClaudeDriver.tla), label model: the spec on its small instance, every property;
+# a reversed witness per property, each a bug TLC must reject; and the driver's traces, each a behaviour of the spec:
+# its unit tests' and its walk's (drivers/claude/test/walk.ts) over several seeds, with three faulty walks rejected.
+# The traces need Node and the driver built (npm ci && npm run build in drivers/claude), as the model job does.
+tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4)
+tlc_test(tlc_claude_driver_witness_done_left_open WDrvDoneLeftOpen WDrvDoneLeftOpen.cfg invariant PROPERTY OneDone)
+tlc_test(tlc_claude_driver_witness_apply_during_interrupt WDrvApplyDuringInterrupt WDrvApplyDuringInterrupt.cfg
+         invariant PROPERTY StopNeverLater)
+tlc_test(tlc_claude_driver_witness_refusal_in_block WDrvRefusalInBlock WDrvRefusalInBlock.cfg action
+         PROPERTY NoDoneInBlock)
+tlc_test(tlc_claude_driver_witness_lost_start_settings WDrvLostStartSettings WDrvLostStartSettings.cfg action
+         PROPERTY SettingsNeverChangeOpen)
+tlc_test(tlc_claude_driver_witness_stop_drops_settings WDrvStopDropsSettings WDrvStopDropsSettings.cfg action
+         PROPERTY SettingsFromNextSend)
+tlc_test(tlc_claude_driver_witness_early_stop_ignored WDrvEarlyStopIgnored WDrvEarlyStopIgnored.cfg action
+         PROPERTY StopEndsWhatRuns)
+tlc_test(tlc_claude_driver_witness_stop_latched WDrvStopLatched WDrvStopLatched.cfg action PROPERTY NoLatchedStop)
+tlc_test(tlc_claude_driver_witness_stopped_lost_hangs WDrvStoppedLostHangs WDrvStoppedLostHangs.cfg liveness)
+tlc_test(tlc_claude_driver_trace_unit ClaudeDriverTrace ClaudeDriverTrace.cfg pass DRIVERTESTS)
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_claude_driver_trace_seed_${seed} ClaudeDriverTrace ClaudeDriverTrace.cfg pass DRIVERWALK
+             SEED ${seed} STEPS 600)
+endforeach()
+# The binding can fail: a driver that drops a stopped turn's settings (seed 1 stops a turn that carries settings), one
+# whose refusal leaves a text block open (seed 5 refuses mid-block), and one that keeps a stop for a later turn.
+tlc_test(tlc_claude_driver_trace_faulty_settings_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
+         PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY settings)
+tlc_test(tlc_claude_driver_trace_faulty_refusal_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
+         PROPERTY TraceMatches DRIVERWALK SEED 5 STEPS 600 FAULTY refusal)
+tlc_test(tlc_claude_driver_trace_faulty_latch_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
+         PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY latch)
+
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).
 add_dependencies(model_checks driver_protocol_test)
 

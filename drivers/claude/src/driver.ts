@@ -12,6 +12,10 @@
 // (--setting-sources), and is checked before any prompt reaches it: accountInfo() must name a first-party subscription
 // and no API key; and every `init` must say apiKeySource "none". A turn that starts drawing on paid extra usage
 // (overage) is stopped. Each refusal is a `no-credential` error with its cause and fix, then the driver exits.
+//
+// The turn's state machine (the credential check, the push, stop and interrupt, settings, a lost --resume id, the
+// refusals) is models/ClaudeDriver.tla. Each step below that the model names is recorded through Host.step, and the
+// model job checks the traces of the unit tests and of test/walk.ts against it (models/ClaudeDriverTrace.tla).
 
 import { randomUUID } from 'node:crypto';
 
@@ -58,6 +62,36 @@ export interface HarnessStart {
     claudePath?: string;
 }
 
+/** Model and effort changes; an absent field is no change (in `inUse`, the value the driver was started with). */
+export interface Changes {
+    model?: string;                     // '' is Claude's default
+    effort?: EffortLevel;
+}
+
+/** The driver's state as models/ClaudeDriver.tla names it, recorded after each of its steps for the trace check. */
+export interface DriverState {
+    phase: 'checking' | 'ready' | 'ended';
+    resume: 'given' | 'none';           // the harness was started with a --resume id
+    open: number;                       // the open turn, 0 for none
+    stage: 'none' | 'waiting' | 'applying' | 'pushed' | 'taken';
+    stopping: boolean;
+    textOpen: boolean;
+    failure: 'none' | 'harness' | 'no-credential';
+    interrupting: number;               // the turn whose interrupt has not answered yet, 0 for none
+    pending: Changes;                   // settings for the next send
+    carry: Changes;                     // the open turn's settings, not yet applied
+    inUse: Changes;                     // the settings the harness runs with
+    last: number;                       // the last turn sent
+}
+
+/** What a recorded step was given: a turn, settings, or what kind of result or failure. */
+export interface StepArgs {
+    turn?: number;
+    changes?: Changes;
+    kind?: 'ok' | 'error' | 'lost';
+    code?: 'harness' | 'no-credential';
+}
+
 /** The world outside the driver. */
 export interface Host {
     write(line: string): void;          // one protocol line to standard output
@@ -66,6 +100,8 @@ export interface Host {
     startHarness(start: HarnessStart): Harness;
     newSessionId(): string;
     oauthToken: boolean;                // the environment carries CLAUDE_CODE_OAUTH_TOKEN (an account's login)
+    /** A step of the turn's state machine and the state after it (models/ClaudeDriver.tla); only tests listen. */
+    step?(op: string, args: StepArgs, state: DriverState): void;
 }
 
 export const kEffortLevels: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -134,6 +170,12 @@ class Prompts implements AsyncIterable<SDKUserMessage> {
     private pending: SDKUserMessage[] = [];
     private wake: (() => void) | undefined;
     private closed = false;
+    private readonly onTake: (m: SDKUserMessage) => void;
+
+    /** `onTake` hears each prompt as the query reads it: from then on it cannot be withdrawn. */
+    constructor(onTake: (m: SDKUserMessage) => void) {
+        this.onTake = onTake;
+    }
 
     /** Queues a prompt for the query; the message returned is the handle withdraw() takes. */
     push(text: string): SDKUserMessage {
@@ -162,6 +204,7 @@ class Prompts implements AsyncIterable<SDKUserMessage> {
         for (;;) {
             const next = this.pending.shift();
             if (next !== undefined) {
+                this.onTake(next);
                 yield next;
                 continue;
             }
@@ -177,9 +220,12 @@ class Prompts implements AsyncIterable<SDKUserMessage> {
 interface Turn {
     turn: number;
     prompt: string;
+    changes: Changes;           // the settings it starts with, until applied (back to pending if it never starts)
     message?: SDKUserMessage;   // its prompt as pushed, until the query reads it
-    previousModel?: string;     // the model before this turn's change ('' Claude's default), if it changed one
+    revertTo?: { model: string | undefined };   // the model before this turn changed it, if it did
+    applying: boolean;          // its settings are going to the harness, its prompt next
     pushed: boolean;            // its prompt is in the query
+    taken: boolean;             // the query has read its prompt
     stopping: boolean;          // a stop was taken for it
     textOpen: boolean;          // a text block is open
     held: string;               // a high surrogate held back from the last delta, to go with the next
@@ -199,12 +245,6 @@ const kMaxDelta = 16384;
 
 function isHighSurrogate(c: number): boolean {
     return c >= 0xd800 && c <= 0xdbff;
-}
-
-/** Model and effort changes waiting for the next turn; a model of '' is Claude's default. */
-interface Changes {
-    model?: string;
-    effort?: EffortLevel;
 }
 
 const kFixAgain = 'send the prompt again; if it keeps failing, the driver\'s log (nexus-server\'s standard error) has more';
@@ -236,8 +276,10 @@ export class Driver {
     private readonly args: Arguments;
     private readonly reader = new LineReader();
     private harness: Harness | undefined;
-    private prompts = new Prompts();
+    private prompts = new Prompts(() => undefined);
     private generation = 0;
+    private replaced: Promise<void> = Promise.resolve();   // settles when the current harness is replaced
+    private replace: () => void = () => undefined;
     private ready = false;                       // the credential check passed
     private starting: Promise<void> = Promise.resolve();   // the current harness's credential check
     private ended = false;                       // exiting: nothing more is written
@@ -245,7 +287,8 @@ export class Driver {
     private lastTurn = 0;
     private open: Turn | undefined;
     private pending: Changes = {};
-    private model: string;                       // the model in use as far as the driver set it ('' Claude's default)
+    private inUse: Changes = {};                 // the settings the harness runs with, beyond the start arguments
+    private interrupting = 0;                    // the turn whose interrupt has not answered yet
     private session = '';
     private cost: number | undefined;
     private plan = '';
@@ -253,7 +296,6 @@ export class Driver {
     constructor(host: Host, args: Arguments) {
         this.host = host;
         this.args = args;
-        this.model = args.model ?? '';
     }
 
     // ---- The process's life ----
@@ -262,6 +304,7 @@ export class Driver {
     start(): void {
         this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude' });
         this.launch(this.args.resume);
+        this.record('init');
     }
 
     /** Bytes from standard input. */
@@ -287,6 +330,40 @@ export class Driver {
             this.host.log(`nexus-claude-driver: ${item.error}`);
         }
         this.quit(0);
+        this.record('end');
+    }
+
+    /** One step of models/ClaudeDriver.tla, for the trace check. */
+    private record(op: string, args: StepArgs = {}): void {
+        if (this.host.step !== undefined) {
+            this.host.step(op, args, this.state());
+        }
+    }
+
+    private state(): DriverState {
+        const t = this.open;
+        let failure: DriverState['failure'] = 'none';
+        if (t?.failure !== undefined) {
+            failure = t.failure.code === 'no-credential' ? 'no-credential' : 'harness';
+        }
+        let stage: DriverState['stage'] = 'none';
+        if (t !== undefined) {
+            stage = t.taken ? 'taken' : t.pushed ? 'pushed' : t.applying ? 'applying' : 'waiting';
+        }
+        return {
+            phase: this.ended ? 'ended' : this.ready ? 'ready' : 'checking',
+            resume: this.args.resume === undefined ? 'none' : 'given',
+            open: t?.turn ?? 0,
+            stage,
+            stopping: t?.stopping ?? false,
+            textOpen: t?.textOpen ?? false,
+            failure,
+            interrupting: this.interrupting,
+            pending: { ...this.pending },
+            carry: { ...(t?.changes ?? {}) },
+            inUse: { ...this.inUse },
+            last: this.lastTurn,
+        };
     }
 
     private quit(code: number): void {
@@ -319,18 +396,22 @@ export class Driver {
     private launch(resume: string | undefined): void {
         const generation = ++this.generation;
         this.ready = false;
-        this.prompts = new Prompts();
+        this.prompts = new Prompts((m) => { this.took(m); });
+        this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources };
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {
             start.resume = resume;
         }
-        if (this.args.model !== undefined) {
-            start.model = this.args.model;
+        // A harness started again (a --resume id Claude does not know) runs with the settings in use, not the start's.
+        const model = this.inUse.model ?? this.args.model;
+        if (model !== undefined && model !== '') {
+            start.model = model;
         }
-        if (this.args.effort !== undefined) {
-            start.effort = this.args.effort;
+        const effort = this.inUse.effort ?? this.args.effort;
+        if (effort !== undefined) {
+            start.effort = effort;
         }
         if (this.args.claudePath !== undefined) {
             start.claudePath = this.args.claudePath;
@@ -359,6 +440,7 @@ export class Driver {
             const why = message(e);
             if (this.args.resume !== undefined && sessionId === this.args.resume && isSessionNotFound(why)) {
                 this.notFound(harness);
+                this.record('lost');
                 return;
             }
             this.fail(`the Claude harness did not start: ${why}`);
@@ -387,40 +469,55 @@ export class Driver {
         if (billing === 'api-key') {
             this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key or auth token (apiKeySource ${keySource}${token === '' ? '' : `, tokenSource ${token}`})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
                 'remove the API key or provider setting Claude finds (an apiKeyHelper, a key saved by `claude /login` with a Console account, or a provider in managed settings) and run `claude /login` with the subscription account, in the user session nexus-server runs in');
+            this.record('refused');
             return;
         }
         if (billing === 'none') {
             this.refuseCredential('Claude has no subscription login: the account reports no subscription',
                 'run `claude /login` with the subscription account in the user session nexus-server runs in (a process started over ssh cannot read the login keychain), or give the driver CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`');
+            this.record('refused');
             return;
         }
         this.ready = true;
         this.reportSession(sessionId);
+        this.record('checked');
     }
 
     /**
      * The --resume id is not a session Claude knows, found at the start or once the first turn began: go on in a new
-     * session (sequence rule 10). A prompt the old query took never ran; it goes into the new one.
+     * session (sequence rule 10). A prompt the old query took never ran; it goes into the new one, after the new
+     * session's credential check, with the settings in use. A turn being stopped ends: nothing runs any more. An
+     * interrupt the old query had not answered goes with it.
      */
     private notFound(old: Harness): void {
         old.close();
         const id = this.args.resume ?? '';
         const t = this.open;
+        if (t !== undefined) {
+            this.closeText(t);
+        }
         this.error(`Claude does not know the session ${id} in ${this.args.cwd}; the conversation goes on in a new session, without the earlier history`,
             'nothing to do: the new session is reported next', 'session-not-found', t?.turn);
         delete this.args.resume;
+        this.interrupting = 0;
+        this.replace();
         this.launch(undefined);
-        if (t?.pushed === true) {
-            t.pushed = false;
-            t.held = '';
-            t.textOpen = false;
-            this.enqueue(async () => {
-                await this.started();
-                if (this.open === t && !t.stopping && !this.ended && this.ready) {
-                    t.message = this.prompts.push(t.prompt);
-                    t.pushed = true;
-                }
-            });
+        if (t === undefined) {
+            return;
+        }
+        delete t.failure;
+        if (t.stopping) {
+            this.finish(t, 'stopped');
+            return;
+        }
+        const begun = t.pushed;
+        t.applying = false;
+        t.pushed = false;
+        t.taken = false;
+        delete t.message;
+        t.streamed = new Set();
+        if (begun) {
+            this.enqueue(() => this.begin(t));
         }
     }
 
@@ -441,6 +538,7 @@ export class Driver {
         this.error(cause, fix, 'no-credential', turn);
         if (turn !== undefined) {
             this.write({ kind: 'done', turn, outcome: 'error' });
+            this.open = undefined;
         }
         this.quit(1);
     }
@@ -452,6 +550,7 @@ export class Driver {
         }
         this.error(cause, 'send the prompt again: nexus-server starts the driver again and resumes the session', 'harness', this.open?.turn);
         this.quit(1);
+        this.record('failed');
     }
 
     private reportSession(id: string): void {
@@ -477,9 +576,25 @@ export class Driver {
         // A failure during the credential check is that check's to report (a --resume id Claude does not know ends
         // the stream and fails accountInfo() alike); after it, the harness is gone.
         await this.starting;
-        if (generation === this.generation && !this.ended && !this.resumeLost(why)) {
+        if (generation !== this.generation || this.ended) {
+            return;
+        }
+        if (this.resumeLost(why)) {
+            this.record('lost');
+        } else {
             this.fail(why);
         }
+    }
+
+    /** The query read a prompt: the open turn's, unless that was withdrawn or belongs to a harness replaced since. */
+    private took(m: SDKUserMessage): void {
+        const t = this.open;
+        if (t?.message !== m || this.ended) {
+            return;
+        }
+        t.taken = true;
+        delete t.message;
+        this.record('take');
     }
 
     // ---- From the server ----
@@ -503,6 +618,7 @@ export class Driver {
                 break;
             case 'stop':
                 this.stop(m.turn);
+                this.record('stop', { turn: m.turn });
                 break;
             case 'settings':
                 this.settings(m);
@@ -522,27 +638,70 @@ export class Driver {
         this.quit(3);
     }
 
+    /** The settings received so far go with this turn: a stop before it starts gives them back (finish). */
     private send(turn: number, prompt: string): void {
         this.lastTurn = turn;
-        const t: Turn = { turn, prompt, pushed: false, stopping: false, textOpen: false, held: '', streamed: new Set() };
+        const t: Turn = {
+            turn, prompt, changes: this.pending, applying: false, pushed: false, taken: false, stopping: false,
+            textOpen: false, held: '', streamed: new Set(),
+        };
         this.open = t;
-        const changes = this.pending;
         this.pending = {};
-        // Whether the turn still waits for its prompt to go in (a stop or the end can come during each await).
-        const waiting = (): boolean => this.open === t && !t.stopping && !this.ended;
-        this.enqueue(async () => {
+        this.record('send', { turn });
+        this.enqueue(() => this.begin(t));
+    }
+
+    /**
+     * A turn's start, after every operation before it (an unanswered interrupt among them): its settings, then its
+     * prompt. A stop or the end can come during each await; a --resume id Claude does not know, during the settings,
+     * replaces the harness, and the start begins again on the new one once its credential check passes.
+     */
+    private async begin(t: Turn): Promise<void> {
+        const waiting = (): boolean => this.open === t && !t.stopping && !t.pushed && !this.ended;
+        for (;;) {
             await this.started();
             if (!waiting() || !this.ready) {
-                this.restore(changes);
                 return;
             }
-            await this.apply(changes, t);
+            const generation = this.generation;
+            const changes = t.changes;
+            const before = { ...this.inUse };
+            t.changes = {};
+            t.applying = true;
+            if (changes.model !== undefined) {
+                this.inUse.model = changes.model;
+            }
+            if (changes.effort !== undefined) {
+                this.inUse.effort = changes.effort;
+            }
+            this.record('apply');
+            await this.apply(changes, before, t);
             if (!waiting()) {
                 return;
             }
-            t.message = this.prompts.push(prompt);
+            if (this.replacedSince(t, generation)) {
+                continue;
+            }
+            t.applying = false;
+            t.message = this.prompts.push(t.prompt);
             t.pushed = true;
-        });
+            this.record('push');
+            return;
+        }
+    }
+
+    /** The model in use goes back to `model` (absent: the start's). */
+    private modelBack(model: string | undefined): void {
+        if (model === undefined) {
+            delete this.inUse.model;
+        } else {
+            this.inUse.model = model;
+        }
+    }
+
+    /** Whether the harness was replaced (a --resume id lost) while turn `t`'s settings went to it. */
+    private replacedSince(t: Turn, generation: number): boolean {
+        return !t.applying || generation !== this.generation || !this.ready;
     }
 
     /** Changes a turn did not get to apply go back to wait for the next turn, under any newer ones. */
@@ -566,6 +725,7 @@ export class Driver {
         }
     }
 
+    /** A stop ends what runs when it arrives, or nothing: it is never kept for a later turn. */
     private stop(turn: number): void {
         const t = this.open;
         if (t?.turn !== turn || t.stopping) {
@@ -581,32 +741,50 @@ export class Driver {
         if (harness === undefined) {
             return;
         }
+        this.interrupting = turn;
+        const generation = this.generation;
+        const gone = this.replaced;
         const answered = harness.interrupt();
+        // The next turn's start waits behind this, so the interrupt cannot land in it.
         this.enqueue(async () => {
             try {
-                await answered;
+                await Promise.race([answered, gone]);
             } catch (e) {
-                this.fail(`Claude did not stop the turn: ${message(e)}`);
+                if (generation === this.generation && this.interrupting === turn) {
+                    this.fail(`Claude did not stop the turn: ${message(e)}`);
+                }
+                return;
+            }
+            if (generation === this.generation && this.interrupting === turn && !this.ended) {
+                this.interrupting = 0;
+                this.record('answered');
             }
         });
     }
 
     private settings(m: Settings): void {
+        const changes: Changes = {};
         if (m.model !== undefined) {
+            changes.model = m.model;
             this.pending.model = m.model;
         }
         if (m.effort !== undefined) {
             if (isEffortLevel(m.effort)) {
+                changes.effort = m.effort;
                 this.pending.effort = m.effort;
             } else {
                 this.error(`effort ${m.effort} is not a level Claude has; the effort stays as it was`,
                     `choose one of ${kEffortLevels.join(', ')}`, 'other');
             }
         }
+        this.record('settings', { changes });
     }
 
-    /** Model and effort changes, before the prompt of the turn they apply from. */
-    private async apply(changes: Changes, t: Turn): Promise<void> {
+    /**
+     * Model and effort changes, before the prompt of the turn they apply from; `inUse` already holds them, and a value
+     * Claude refuses goes back to the one before.
+     */
+    private async apply(changes: Changes, before: Changes, t: Turn): Promise<void> {
         const harness = this.harness;
         if (harness === undefined) {
             return;
@@ -614,9 +792,9 @@ export class Driver {
         if (changes.model !== undefined) {
             try {
                 await harness.setModel(changes.model === '' ? undefined : changes.model);
-                t.previousModel = this.model;
-                this.model = changes.model;
+                t.revertTo = { model: before.model };
             } catch (e) {
+                this.modelBack(before.model);
                 this.error(`Claude did not take the model ${changes.model}: ${message(e)}; the model stays as it was`,
                     'choose a model Claude has', 'harness');
             }
@@ -625,6 +803,11 @@ export class Driver {
             try {
                 await harness.applyFlagSettings({ effortLevel: changes.effort });
             } catch (e) {
+                if (before.effort === undefined) {
+                    delete this.inUse.effort;
+                } else {
+                    this.inUse.effort = before.effort;
+                }
                 this.error(`Claude did not take the effort ${changes.effort}: ${message(e)}; the effort stays as it was`,
                     `choose one of ${kEffortLevels.join(', ')}`, 'harness');
             }
@@ -643,6 +826,7 @@ export class Driver {
                     this.write({ kind: 'credential', billing: 'api-key', ...(this.plan === '' ? {} : { plan: this.plan }) });
                     this.refuseCredential(`Claude started a turn billing an API key (apiKeySource ${m.apiKeySource}), not the subscription login; nexus runs Claude only on a subscription`,
                         'remove the API key Claude finds (an apiKeyHelper or a key saved by `claude /login` with a Console account) and run `claude /login` with the subscription account');
+                    this.record('refused');
                 }
                 return;
             case 'rate_limit_event': {
@@ -650,6 +834,7 @@ export class Driver {
                 if (info.isUsingOverage === true || info.overageInUse === true) {
                     this.refuseCredential('Claude began drawing on paid extra usage (overage) beyond the subscription; nexus runs Claude only on the subscription\'s included usage',
                         'turn extra usage off for this account in its Claude settings, or wait until the subscription\'s limit resets');
+                    this.record('refused');
                 }
                 return;
             }
@@ -686,9 +871,12 @@ export class Driver {
             this.messageId = e.message.id;
         } else if (e.type === 'content_block_delta' && e.delta.type === 'text_delta') {
             t.streamed.add(this.messageId);
-            this.text(t, e.delta.text);
+            if (this.text(t, e.delta.text)) {
+                this.record('delta');
+            }
         } else if (e.type === 'content_block_stop' || e.type === 'message_stop') {
             this.closeText(t);
+            this.record('block-end');
         }
     }
 
@@ -702,28 +890,35 @@ export class Driver {
         if (m.error !== undefined) {
             const said = m.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
             t.failure = failure(m.error, said);
+            this.record('assistant-error', { code: t.failure.code === 'no-credential' ? 'no-credential' : 'harness' });
             return;
         }
         for (const b of m.message.content) {
             if (b.type === 'text' && !t.streamed.has(m.message.id)) {
                 this.text(t, b.text);
                 this.closeText(t);
+                this.record('block-text');
             } else if (b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
                 this.closeText(t);
                 const name = cut(oneLine(b.name), 200) || 'tool';
                 this.write({ kind: 'tool', turn: t.turn, name, summary: toolSummary(b.name, b.input) });
+                this.record('tool');
             }
         }
     }
 
-    /** A piece of text: whole characters only, a high surrogate at its end held for the next piece. */
-    private text(t: Turn, delta: string): void {
+    /**
+     * A piece of text: whole characters only, a high surrogate at its end held for the next piece. Whether anything
+     * was written.
+     */
+    private text(t: Turn, delta: string): boolean {
         let s = t.held + delta;
         t.held = '';
         if (isHighSurrogate(s.charCodeAt(s.length - 1))) {
             t.held = s.slice(-1);
             s = s.slice(0, -1);
         }
+        const wrote = s !== '';
         while (s !== '') {
             let n = Math.min(s.length, kMaxDelta);
             if (n < s.length && isHighSurrogate(s.charCodeAt(n - 1))) {
@@ -733,6 +928,7 @@ export class Driver {
             this.write({ kind: 'text', turn: t.turn, delta: whole(s.slice(0, n)) });
             s = s.slice(n);
         }
+        return wrote;
     }
 
     private closeText(t: Turn): void {
@@ -757,15 +953,21 @@ export class Driver {
         if (Number.isFinite(r.total_cost_usd) && r.total_cost_usd > 0) {
             this.cost = r.total_cost_usd;
         }
+        const ok = r.subtype === 'success' && !r.is_error;
+        const said = (r.subtype === 'success' ? [r.result] : r.errors).join('; ');
+        this.resultOf(t, r, ok, said);
+        this.record('result', { kind: ok ? 'ok' : isSessionNotFound(said) ? 'lost' : 'error' });
+    }
+
+    private resultOf(t: Turn, r: SDKResultMessage, ok: boolean, said: string): void {
         if (t.stopping) {
             this.finish(t, 'stopped', r);
             return;
         }
-        if (r.subtype === 'success' && !r.is_error && t.failure === undefined) {
+        if (ok && t.failure === undefined) {
             this.finish(t, 'ok', r);
             return;
         }
-        const said = (r.subtype === 'success' ? [r.result] : r.errors).join('; ');
         if (t.failure === undefined && this.resumeLost(said)) {
             return;
         }
@@ -774,11 +976,12 @@ export class Driver {
             code: 'harness' as const,
             fix: kFixAgain,
         };
-        if (t.failure?.model === true && t.previousModel !== undefined) {
+        if (t.failure?.model === true && t.revertTo !== undefined) {
             // The model this turn changed to cannot run: the one before comes back from the next turn.
-            this.restore({ model: t.previousModel });
-            this.model = t.previousModel;
-            f.cause += `; the model goes back to ${t.previousModel === '' ? 'Claude\'s default' : t.previousModel} from the next turn`;
+            const back = t.revertTo.model ?? this.args.model ?? '';
+            this.restore({ model: back });
+            this.modelBack(t.revertTo.model);
+            f.cause += `; the model goes back to ${back === '' ? 'Claude\'s default' : back} from the next turn`;
         }
         this.closeText(t);
         if (f.code === 'no-credential') {
@@ -791,6 +994,8 @@ export class Driver {
 
     private finish(t: Turn, outcome: 'ok' | 'stopped' | 'error', r?: SDKResultMessage): void {
         this.closeText(t);
+        this.restore(t.changes);
+        t.changes = {};
         this.open = undefined;
         const done: DriverMessage = { kind: 'done', turn: t.turn, outcome };
         if (this.cost !== undefined) {

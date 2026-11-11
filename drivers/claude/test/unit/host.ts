@@ -1,8 +1,21 @@
-// A Host for the unit tests: what the driver writes, parsed; the harnesses it starts, as FakeHarness; its exit.
+// A Host for the unit tests: what the driver writes, parsed; the harnesses it starts, as FakeHarness; its exit; and
+// the trace of its steps. With NEXUS_DRIVER_TRACE set to a file's path, the traces of every test that keeps to
+// models/ClaudeDriver.tla are written there when the tests end, for TLC (models/ClaudeDriverTrace.tla).
 
-import { Driver, type Arguments, type HarnessStart, type Host } from '../../src/driver.js';
+import { Driver, type Arguments, type DriverState, type HarnessStart, type Host, type StepArgs } from '../../src/driver.js';
 import type { DriverMessage } from '../../src/protocol.js';
 import { FakeHarness } from '../fake-harness.js';
+import { Trace, writeTraceModule } from '../trace.js';
+
+const hosts: TestHost[] = [];
+
+const tracePath = process.env['NEXUS_DRIVER_TRACE'];
+if (tracePath !== undefined && tracePath !== '') {
+    process.on('exit', () => {
+        const traces = hosts.filter((h) => h.untraced === undefined && h.trace.records.length > 0).map((h) => h.trace);
+        writeTraceModule(tracePath, traces, `${String(traces.length)} traces of the driver's unit tests (test/unit/driver.test.ts)`);
+    });
+}
 
 export class TestHost implements Host {
     readonly out: DriverMessage[] = [];
@@ -10,7 +23,15 @@ export class TestHost implements Host {
     readonly harnesses: FakeHarness[] = [];
     exitCode: number | undefined;
     oauthToken = false;
+    readonly trace = new Trace();
+    /** Why this test's trace is not checked against the model: it goes where the model does not (a line the driver
+     * refuses, a setting Claude refuses, a model Claude cannot run). */
+    untraced: string | undefined;
     private ids = 0;
+
+    constructor() {
+        hosts.push(this);
+    }
     /** Set up each harness as it starts (account, scripted answers). */
     prepare: (h: FakeHarness) => void = () => undefined;
 
@@ -18,7 +39,13 @@ export class TestHost implements Host {
         if (!line.endsWith('\n') || line.indexOf('\n') !== line.length - 1) {
             throw new Error(`not one line: ${JSON.stringify(line)}`);
         }
-        this.out.push(JSON.parse(line) as DriverMessage);
+        const m = JSON.parse(line) as DriverMessage;
+        this.out.push(m);
+        this.trace.wrote(m);
+    }
+
+    step(op: string, args: StepArgs, state: DriverState): void {
+        this.trace.step(op, args, state);
     }
 
     log(text: string): void {

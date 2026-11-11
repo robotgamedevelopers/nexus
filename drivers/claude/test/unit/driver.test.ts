@@ -277,6 +277,7 @@ void test('model and effort apply from the next send, before its prompt; never i
 
 void test('an effort Claude does not have is refused and the rest stays; a model Claude refuses is said', async () => {
     const { host, driver } = await started();
+    host.untraced = 'settings Claude refuses';
     host.harness.setModelFails = new Error('unknown model');
     driver.feed(line({ kind: 'settings', model: 'nope', effort: 'extreme' }));
     const out = host.take();
@@ -302,6 +303,7 @@ void test('start values from the drivers file go to the query', async () => {
 
 async function refusedLine(bytes: Uint8Array, opened = false): Promise<TestHost> {
     const { host, driver } = await started();
+    host.untraced = 'a line the driver refuses';
     if (opened) {
         driver.feed(line({ kind: 'send', turn: 3, prompt: 'a' }));
         await settle();
@@ -335,6 +337,7 @@ void test('a line the driver cannot accept: one protocol error, then exit 3', as
 
 void test('a send whose turn does not follow the last one is refused', async () => {
     const { host, driver } = await started();
+    host.untraced = 'a line the driver refuses';
     driver.feed(line({ kind: 'send', turn: 5, prompt: 'a' }));
     await settle();
     host.harness.emit(result(S));
@@ -538,6 +541,7 @@ void test('a --resume id Claude finds unknown only when the turn starts: a new s
 
 void test('a model Claude cannot run goes back to the one before from the next turn', async () => {
     const { host, driver } = await started({ model: 'opus' });
+    host.untraced = 'a model Claude cannot run';
     driver.feed(line({ kind: 'settings', model: 'no-such-model' }));
     driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
     await settle();
@@ -559,6 +563,110 @@ void test('a token source that is an API key or auth token is refused', async ()
     const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' }, true);
     assert.deepEqual(odd.take()[1], { kind: 'credential', billing: 'none' });
     assert.equal(odd.exitCode, 1);
+});
+
+// ---- Found by the model (models/ClaudeDriver.tla) ----
+
+void test('settings carried by a turn stopped before it began reach the very next turn, even one sent at once', async () => {
+    let release: () => void = () => undefined;
+    const host = new TestHost();
+    host.prepare = (h) => {
+        h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
+    };
+    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    driver.start();
+    driver.feed(line({ kind: 'settings', model: 'opus' }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    driver.feed(line({ kind: 'stop', turn: 1 }));
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'b' }));
+    release();
+    await settle();
+    assert.deepEqual(host.harness.calls, ['model opus']);
+    assert.deepEqual(host.harness.prompts, ['b']);
+});
+
+void test('a --resume id lost once the turn began: the new session runs with the settings in use', async () => {
+    const host = new TestHost();
+    const driver = new Driver(host, { cwd: '/work', resume: 'gone-3', model: 'opus', effort: 'low', settingSources: [] });
+    driver.start();
+    await settle();
+    driver.feed(line({ kind: 'settings', model: 'sonnet', effort: 'max' }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    assert.deepEqual(host.harness.calls, ['model sonnet', 'effort max']);
+    host.harness.emit(result('gone-3', { subtype: 'error_during_execution', errors: ['No conversation found with session ID: gone-3'] }));
+    await settle();
+    assert.equal(host.harnesses.length, 2);
+    assert.equal(host.harness.start.model, 'sonnet');
+    assert.equal(host.harness.start.effort, 'max');
+    assert.deepEqual(host.harness.prompts, ['a']);
+});
+
+void test('a stopped turn whose --resume id is lost before its result still gets its done', async () => {
+    const host = new TestHost();
+    const driver = new Driver(host, { cwd: '/work', resume: 'gone-4', settingSources: [] });
+    driver.start();
+    await settle();
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    driver.feed(line({ kind: 'stop', turn: 1 }));
+    await settle();
+    host.take();
+    host.harness.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-4'));
+    await settle();
+    const out = host.take();
+    assert.equal(errorOf(out).code, 'session-not-found');
+    assert.deepEqual(out.filter((m) => m.kind === 'done'), [{ kind: 'done', turn: 1, outcome: 'stopped' }]);
+    assert.deepEqual(host.harness.prompts, []);
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'b' }));
+    await settle();
+    assert.deepEqual(host.harness.prompts, ['b']);
+});
+
+void test('a --resume id lost with a text block open: the block is ended before the notice', async () => {
+    const host = new TestHost();
+    const driver = new Driver(host, { cwd: '/work', resume: 'gone-5', settingSources: [] });
+    driver.start();
+    await settle();
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    host.take();
+    host.harness.emit(...openText('gone-5', 'm1', 'part'));
+    await settle();
+    host.harness.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-5'));
+    await settle();
+    assert.deepEqual(host.take().map((m) => m.kind).slice(0, 3), ['text', 'text-end', 'error']);
+});
+
+void test('a --resume id lost while settings are applied: the prompt waits for the new session\'s credential check', async () => {
+    let applied: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const host = new TestHost();
+    host.prepare = (h) => {
+        if (h.start.resume === undefined) {
+            h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
+        } else {
+            h.setModel = (m) => { h.calls.push(`model ${m ?? ''}`); return new Promise((resolve) => { applied = resolve; }); };
+        }
+    };
+    const driver = new Driver(host, { cwd: '/work', resume: 'gone-6', settingSources: [] });
+    driver.start();
+    await settle();
+    driver.feed(line({ kind: 'settings', model: 'sonnet' }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    const first = host.harness;
+    first.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-6'));
+    await settle();
+    applied();
+    await settle();
+    assert.equal(host.harnesses.length, 2);
+    assert.deepEqual(host.harness.prompts, []);
+    assert.deepEqual(first.prompts, []);
+    release();
+    await settle();
+    assert.deepEqual(host.harness.prompts, ['a']);
+    assert.equal(host.harness.start.model, 'sonnet');
 });
 
 void test('parseArguments', () => {

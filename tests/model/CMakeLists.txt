@@ -59,8 +59,13 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
 # (turn, resume, queue).
+# With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
+# FAULTY one of its faults (settings, refusal, latch); with DRIVERTESTS, the traces are those of the driver's unit
+# tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
+# tests/driver.
+find_program(NEXUS_NODE node)
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK"
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;DRIVERWALK;DRIVERTESTS"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
@@ -82,7 +87,12 @@ function(tlc_test name module cfg expect)
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
     endif()
-    if(T_SUPWALK)
+    set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
+    if(T_DRIVERWALK)
+        list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_DRIVERTESTS)
+        list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
+    elseif(T_SUPWALK)
         list(APPEND defs -DSUPWALK=$<TARGET_FILE:supervisor_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_GLIDEWALK)
         list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
