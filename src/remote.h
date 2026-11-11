@@ -36,7 +36,7 @@ Command machineListCommand(const char* override, const char* shell);
 // Runs `command` with `run` and parses what it prints. Every error names the command, what happened and what to do.
 MachineList loadMachines(const Command& command, const CommandRunner& run);
 
-// loadMachines with machineListCommand(NEXUS_NOVA_CONFIG, SHELL) and runCommand.
+// loadMachines with machineListCommand(the client config's nova-config, SHELL) and runCommand.
 MachineList loadMachines();
 
 // The destination of an ssh command line, `argv` as the process has it (argv[0] first), exactly as given: the first

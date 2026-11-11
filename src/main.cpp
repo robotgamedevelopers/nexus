@@ -16,7 +16,7 @@
 // each a new login shell in the directory its shell last worked in (tab_order.h).
 //
 // The first tab is always the sprint tab: nova-sprint's served board (board.h), at the address in the sprint's record
-// (sprint.h) or NEXUS_SPRINT_URL. The window opens on the tab selected when it last quit (tab_order.h), or the sprint
+// (sprint.h) or the client config's sprint-url (client_home.h). The window opens on the tab selected when it last quit (tab_order.h), or the sprint
 // tab if that tab is gone or nothing is saved; --tab N opens tab N, and a screenshot without --tab shows the sprint
 // tab. The text scale (Command-plus and Command-minus) is saved as it changes and comes back at launch.
 // --backdrop draws the screenshot see-through,
@@ -57,6 +57,7 @@
 #include "pr/text.h"
 
 #include "board.h"
+#include "client_home.h"
 #include "friends.h"
 #include "model.h"
 #include "overlay.h"
@@ -590,8 +591,16 @@ void seedDemo(Model& model, std::size_t tab) {
 } // namespace
 
 int main(int argc, char** argv) {
-    // On Windows the window has no terminal: its error lines go to %LOCALAPPDATA%\nexus\nexus.log (src/platform.h).
-    startErrorLog();
+    // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
+    // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged.
+    std::string home;
+    std::string homeWhy;
+    const bool haveHome = clientHome(&home, &homeWhy) && makeClientHome(home, &homeWhy);
+    startErrorLog(haveHome ? home : std::string());
+    if (!haveHome) {
+        std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
+    }
+    clientConfig();
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool tabGiven = false;

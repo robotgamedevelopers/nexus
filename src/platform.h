@@ -18,10 +18,10 @@
 namespace nexus {
 
 // Where the window's error lines (stderr) go when it has no terminal. On Windows nexus is a GUI program, whose stderr
-// goes nowhere unless whoever started it redirected it: then stderr is reopened, appending, onto
-// %LOCALAPPDATA%\nexus\nexus.log, and that path is returned. On macOS stderr stays as it is, and the result is empty.
-// Called once, first thing in main().
-std::string startErrorLog();
+// goes nowhere unless whoever started it redirected it: then stderr is reopened, appending, onto nexus.log in `home`,
+// the window's home (%USERPROFILE%\.nexus\client, client_home.h), and that path is returned. With `home` empty, or on
+// macOS, stderr stays as it is, and the result is empty. Called once, first thing in main().
+std::string startErrorLog(const std::string& home);
 
 // Shows `text` to the person, for the one failure that launch must explain because nothing else would (the hotkey that
 // did not register). On Windows a message box, which also names the error log; on macOS nothing more than the line on

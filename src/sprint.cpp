@@ -8,6 +8,7 @@
 
 #include "pr/json.h"
 
+#include "client_home.h"
 #include "style.h"
 
 namespace nexus {
@@ -15,7 +16,8 @@ namespace nexus {
 namespace {
 
 constexpr const char* kShown = "nova-config service show sprint-run --json";
-constexpr const char* kSetUrl = "set NEXUS_SPRINT_URL to the board's address (http://<host>:<port>/)";
+constexpr const char* kSetUrl = "give the board's address in nexus's client config (a line `sprint-url http://<host>:<port>/` "
+    "in ~/.nexus/client/config)";
 
 std::string_view view(PrStringView s) {
     return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
@@ -98,14 +100,15 @@ SprintBoardAddress findSprintBoard(const char* override, const Command& command,
     if (override != nullptr && *override != 0) {
         std::string_view url(override);
         if (!startsWith(url, "http://") && !startsWith(url, "https://"))
-            return failed("NEXUS_SPRINT_URL is \"" + std::string(url) + "\", which is not an http:// or https:// "
-                "address; " + kSetUrl + ", or unset it to read the sprint's record");
+            return failed("the client config's sprint-url is \"" + std::string(url) + "\", which is not an http:// or "
+                "https:// address; " + kSetUrl + ", or remove the line to read the sprint's record");
         return SprintBoardAddress{std::string(url), {}};
     }
     CommandResult r = run(command, kSprintRunTimeoutSeconds);
     const std::string cmd = "`" + command.shown + "`";
-    const std::string fix = std::string("set NEXUS_NOVA_CONFIG to the full path of nova-config, or install nova-tools "
-        "so that nova-config is on your login shell's PATH, or ") + kSetUrl;
+    const std::string fix = std::string("put the full path of nova-config in nexus's client config (a line "
+        "`nova-config <path>` in ~/.nexus/client/config), or install nova-tools so that nova-config is on your login "
+        "shell's PATH, or ") + kSetUrl;
     switch (r.end) {
         case CommandResult::End::NotFound:
             return failed("cannot find the sprint board: " + command.program + " was not found to run " + cmd + "; " +
@@ -136,8 +139,9 @@ SprintBoardAddress findSprintBoard(const char* override, const Command& command,
 }
 
 SprintBoardAddress findSprintBoard() {
-    return findSprintBoard(std::getenv("NEXUS_SPRINT_URL"),
-        sprintRunCommand(std::getenv("NEXUS_NOVA_CONFIG"), std::getenv("SHELL")), runCommand);
+    const ClientConfig& config = clientConfig();
+    return findSprintBoard(config.sprintUrl.c_str(), sprintRunCommand(config.novaConfig.c_str(), std::getenv("SHELL")),
+        runCommand);
 }
 
 BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPage) {

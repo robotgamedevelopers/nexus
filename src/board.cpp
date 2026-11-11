@@ -286,8 +286,9 @@ void PraxBoard::navigate() {
     }
     if (prHtmlPageNavigate(page_, sv(url_)) != PrStatus_Ok) {
         load_ = Load::Failed;
-        loadError_ = "cannot show the sprint board: \"" + url_ + "\" is not an address; set NEXUS_SPRINT_URL to the "
-            "board's address (http://<host>:<port>/), or unset it to read the sprint's record";
+        loadError_ = "cannot show the sprint board: \"" + url_ + "\" is not an address; give the board's "
+            "address in nexus's client config (a line `sprint-url http://<host>:<port>/` in ~/.nexus/client/config), "
+            "or remove that line to read the sprint's record";
         retryAt_ = 1e300;
     }
 }
@@ -317,7 +318,7 @@ void PraxBoard::loaded(void* context, PrHtmlPage*, PrStatus status) {
     }
     b.load_ = Load::Failed;
     b.loadError_ = "cannot load the sprint board from " + b.url_ + ": " + statusName(status) + "; check that the "
-        "sprint runs (`nova-sprint up`), or set NEXUS_SPRINT_URL to the board's address; trying again every " +
+        "sprint runs (`nova-sprint up`), or give the board's address in ~/.nexus/client/config (a line `sprint-url http://<host>:<port>/`); trying again every " +
         std::to_string(int(kRetrySeconds)) + " seconds";
     b.retryAt_ = b.frameTime_ + kRetrySeconds;
 }

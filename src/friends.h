@@ -43,7 +43,8 @@ using CommandRunner = std::function<CommandResult(const Command& command, int ti
 // How long loadFriends waits for the command. It runs before the window opens.
 constexpr int kFriendListTimeoutSeconds = 5;
 
-// nova-config with `arguments`. With `override` (NEXUS_NOVA_CONFIG, a full path to nova-config), that program is run
+// nova-config with `arguments`. With `override` (the client config's `nova-config`, a full path to nova-config;
+// client_home.h), that program is run
 // directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if unset) as a login shell, so that it is
 // found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH. On Windows,
 // which has no login shell, nova-config is run directly from PATH and `shell` is not used.
@@ -61,7 +62,7 @@ FriendList loadFriends(const Command& command, const CommandRunner& run);
 // Runs a command as a child process (Prax's lib/process), with this process's environment.
 CommandResult runCommand(const Command& command, int timeoutSeconds);
 
-// loadFriends with friendListCommand(NEXUS_NOVA_CONFIG, SHELL) and runCommand.
+// loadFriends with friendListCommand(the client config's nova-config, SHELL) and runCommand.
 FriendList loadFriends();
 
 } // namespace nexus

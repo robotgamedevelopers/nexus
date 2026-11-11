@@ -103,7 +103,7 @@ export async function started(args: Partial<Arguments> = {}, prepare?: (h: FakeH
     if (prepare !== undefined) {
         host.prepare = prepare;
     }
-    const driver = new Driver(host, { cwd: '/work', settingSources: [], ...args });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [], ...args });
     driver.start();
     await settle();
     host.take();

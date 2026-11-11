@@ -23,6 +23,7 @@
 #include "link/mosh_link.h"
 #include "server/drivers.h"
 #include "server/durable.h"
+#include "server/home.h"
 #include "store/fs.h"
 #include "sync/hub.h"
 
@@ -152,6 +153,48 @@ bool ensureDir(const std::string& dir, std::string* why) {
         return false;
     }
     return true;
+}
+
+// The server's home: ~/.nexus first, when the directory is the default under it, then the directory itself.
+bool ensureHome(const Paths& p, std::string* why) {
+    return (p.top.empty() || ensureDir(p.top, why)) && ensureDir(p.dir, why);
+}
+
+// The server's config: none is fine; a malformed line stops the server, naming the file and the line; an unknown key
+// is logged.
+bool readConfig(const std::string& path, std::string* why) {
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        *why = errnoText("cannot read " + path) + "; make it readable by you, or remove it";
+        return false;
+    }
+    std::string text;
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = read(fd, buf, sizeof buf);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0) {
+            *why = errnoText("cannot read " + path);
+            close(fd);
+            return false;
+        }
+        if (n == 0) {
+            break;
+        }
+        text.append(buf, static_cast<std::size_t>(n));
+    }
+    close(fd);
+    std::vector<std::string> warnings;
+    const bool ok = readServerConfig(text, path, &warnings, why);
+    for (const std::string& w : warnings) {
+        std::fprintf(stderr, "nexus-server: %s\n", w.c_str());
+    }
+    return ok;
 }
 
 // "new", or "new <client> <next>" with a valid id and a number from 1.
@@ -331,7 +374,7 @@ bool Server::endDrivers() {
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
-    if (!ensureDir(paths_.dir, &why) || !openStore(&why) || !listenControl(&why)) {
+    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &why) || !openStore(&why) || !listenControl(&why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
@@ -479,7 +522,7 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
     int fd = connectControl(p.socket);
     if (fd < 0 && !self.empty() && (errno == ENOENT || errno == ECONNREFUSED)) {
         std::string dirWhy;
-        if (!ensureDir(p.dir, &dirWhy)) {
+        if (!ensureHome(p, &dirWhy)) {
             *why = dirWhy;
             return false;
         }
@@ -512,17 +555,14 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
 
 bool paths(const std::string& dir, Paths* out, std::string* why) {
     std::string d = dir;
-    if (d.empty()) {
-        const char* home = std::getenv("HOME");
-        if (home == nullptr || *home == 0) {
-            *why = "HOME is not set; give the directory with --dir";
-            return false;
-        }
-        d = std::string(home) + "/.nexus";
+    out->top.clear();
+    if (d.empty() && !serverHome(std::getenv("HOME"), &out->top, &d, why)) {
+        return false;
     }
     while (d.size() > 1 && d.back() == '/')
         d.pop_back();
     out->dir = d;
+    out->config = d + "/config";
     out->socket = d + "/server.sock";
     out->log = d + "/server.log";
     out->store = d + "/store";

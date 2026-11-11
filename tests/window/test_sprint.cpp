@@ -52,9 +52,9 @@ void listeningEverywhereIsReachedLocally() {
 void aRecordWithoutABoardSaysWhatToDo() {
     SprintBoardAddress none = parseSprintRun(record(R"(["nova-sprint","run"])"));
     CHECK(none.url.empty() && has(none.error, "no --listen") && has(none.error, "nova-sprint up"));
-    CHECK(has(none.error, "NEXUS_SPRINT_URL"));
+    CHECK(has(none.error, "sprint-url http://<host>:<port>/"));
     SprintBoardAddress empty = parseSprintRun(R"({"result":{"status":"ok"},"items":[]})");
-    CHECK(empty.url.empty() && has(empty.error, "nova-sprint up") && has(empty.error, "NEXUS_SPRINT_URL"));
+    CHECK(empty.url.empty() && has(empty.error, "nova-sprint up") && has(empty.error, "sprint-url http://<host>:<port>/"));
     SprintBoardAddress refused = parseSprintRun(R"({"result":{"status":"refused"},"items":[]})");
     CHECK(refused.url.empty() && has(refused.error, "status refused") && has(refused.error, "run it in a terminal"));
     SprintBoardAddress junk = parseSprintRun("not json");
@@ -118,13 +118,13 @@ void theRecordGivesTheAddress() {
     CHECK(seen.calls == 1 && seen.timeout == kSprintRunTimeoutSeconds);
 }
 
-// NEXUS_SPRINT_URL wins, and nothing is run; one that is not an http address says so.
+// The client config's sprint-url wins, and nothing is run; one that is not an http address says so.
 void theOverrideWinsWithoutRunningAnything() {
     FakeRun seen;
     SprintBoardAddress a = findWith(CommandResult{}, &seen, "http://board.test:8080/");
     CHECK(a.error.empty() && a.url == "http://board.test:8080/" && seen.calls == 0);
     a = findWith(CommandResult{}, &seen, "board.test:8080");
-    CHECK(a.url.empty() && has(a.error, "NEXUS_SPRINT_URL") && has(a.error, "not an http://") && seen.calls == 0);
+    CHECK(a.url.empty() && has(a.error, "sprint-url http://<host>:<port>/") && has(a.error, "not an http://") && seen.calls == 0);
     // An empty override is unset.
     a = findWith(CommandResult{CommandResult::End::Exited, 0, record(R"(["x","--listen","h:1"])"), ""}, &seen, "");
     CHECK(a.url == "http://h:1/" && seen.calls == 1);
@@ -133,11 +133,11 @@ void theOverrideWinsWithoutRunningAnything() {
 void notFoundSaysWhatToDo() {
     SprintBoardAddress shell = findWith(CommandResult{CommandResult::End::Exited, 127, "", "zsh: command not found"});
     CHECK(shell.url.empty() && has(shell.error, kShown) && has(shell.error, "status 127"));
-    CHECK(has(shell.error, "command not found") && has(shell.error, "NEXUS_NOVA_CONFIG"));
+    CHECK(has(shell.error, "command not found") && has(shell.error, "nova-config <path>"));
     SprintBoardAddress missing = findWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
-    CHECK(has(missing.error, (std::string(kProgram) + " was not found").c_str()) && has(missing.error, "NEXUS_NOVA_CONFIG"));
+    CHECK(has(missing.error, (std::string(kProgram) + " was not found").c_str()) && has(missing.error, "nova-config <path>"));
     SprintBoardAddress unstarted = findWith(CommandResult{CommandResult::End::NotStarted, 0, "", ""});
-    CHECK(has(unstarted.error, "could not start") && has(unstarted.error, "NEXUS_SPRINT_URL"));
+    CHECK(has(unstarted.error, "could not start") && has(unstarted.error, "sprint-url http://<host>:<port>/"));
 }
 
 void timeoutSaysSo() {
@@ -151,7 +151,7 @@ void failuresCarryWhatTheCommandSaid() {
     a = findWith(CommandResult{CommandResult::End::Exited, 3, "", ""});
     CHECK(has(a.error, "status 3") && has(a.error, "nothing on standard error"));
     a = findWith(CommandResult{CommandResult::End::Signaled, 9, "", ""});
-    CHECK(has(a.error, "signal 9") && has(a.error, "NEXUS_SPRINT_URL"));
+    CHECK(has(a.error, "signal 9") && has(a.error, "sprint-url http://<host>:<port>/"));
 }
 
 PrAppEvent key(PrAppKey k, PrAppModifierFlags modifiers) {

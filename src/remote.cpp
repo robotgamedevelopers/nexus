@@ -5,6 +5,8 @@
 
 #include "pr/json.h"
 
+#include "client_home.h"
+
 namespace nexus {
 
 namespace {
@@ -111,7 +113,7 @@ MachineList loadMachines(const Command& command, const CommandRunner& run) {
 }
 
 MachineList loadMachines() {
-    return loadMachines(machineListCommand(std::getenv("NEXUS_NOVA_CONFIG"), std::getenv("SHELL")), runCommand);
+    return loadMachines(machineListCommand(clientConfig().novaConfig.c_str(), std::getenv("SHELL")), runCommand);
 }
 
 std::string sshDestination(const std::vector<std::string>& argv) {

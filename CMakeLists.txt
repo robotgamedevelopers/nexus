@@ -131,11 +131,12 @@ target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
 
 # The driver supervisor (src/server/supervisor.h): what nexus-server does with one friend tab's driver, as a pure
-# state machine; and the drivers file (src/server/driver_table.h). No OS, no time, no processes.
-add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp)
+# state machine; the drivers file (src/server/driver_table.h); and the server's home and config (src/server/home.h).
+# No OS, no time, no processes.
+add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp)
 target_include_directories(nexus_supervisor PUBLIC src)
 target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver)
+target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver nexus_config)
 
 # The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX (poll,
 # process ids), like the rest of nexus-server: not built natively on Windows, where nexus-server runs inside WSL2.
@@ -152,14 +153,21 @@ add_library(nexus_scroll STATIC src/scroll_glide.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
+# nexus's settings files (src/config.h), the window's ~/.nexus/client/config and nexus-server's
+# ~/.nexus/server/config: the parsing only. No OS, no time.
+add_library(nexus_config STATIC src/config.cpp)
+target_include_directories(nexus_config PUBLIC src)
+target_compile_options(nexus_config PRIVATE ${NEXUS_WARNINGS})
+
 if(NEXUS_WINDOW_LOGIC)
     # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
-    # them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
-    # which events go to it, the script nexus adds to it).
-    add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
+    # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
+    # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
+    add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
+        src/client_home.cpp)
     target_include_directories(nexus_window_logic PUBLIC src)
     target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+    target_link_libraries(nexus_window_logic PUBLIC nexus_config nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
 endif()
 
 if(NEXUS_WINDOW)

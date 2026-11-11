@@ -24,6 +24,13 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME sprint_unit COMMAND nexus_sprint_tests)
     set_tests_properties(sprint_unit PROPERTIES LABELS unit)
 
+    # The window's home and config (src/client_home.h): the home from HOME, and the config's parsing. Pure logic.
+    add_executable(nexus_client_home_tests test_client_home.cpp)
+    target_compile_options(nexus_client_home_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_client_home_tests PRIVATE nexus_window_logic)
+    add_test(NAME client_home_unit COMMAND nexus_client_home_tests)
+    set_tests_properties(client_home_unit PROPERTIES LABELS unit)
+
     # Running a command (src/friends.h runCommand): real child processes and a real clock.
     add_executable(nexus_command_tests test_command.cpp)
     target_compile_options(nexus_command_tests PRIVATE ${NEXUS_WARNINGS})
@@ -31,7 +38,8 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME window_command COMMAND nexus_command_tests)
     set_tests_properties(window_command PROPERTIES LABELS functional TIMEOUT 30)
 
-    # The tab order's file store: a real file, in a directory of the test's own.
+    # The tab order's file store: a real file, in a directory of the test's own; and the window's home, ~/.nexus/client,
+    # under a HOME inside that directory.
     add_executable(nexus_tab_order_file_tests test_tab_order_file.cpp)
     target_compile_options(nexus_tab_order_file_tests PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_tab_order_file_tests PRIVATE nexus_window_logic)

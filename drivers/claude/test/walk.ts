@@ -351,7 +351,7 @@ async function main(argv: readonly string[]): Promise<number> {
         host.hold = rng.chance(30);
         const resume = rng.chance(40) ? `resumed-${String(lives)}` : undefined;
         const driver = new Driver(host, {
-            cwd: '/walk', settingSources: [], ...(resume === undefined ? {} : { resume }),
+            account: 'walk', cwd: '/walk', settingSources: [], ...(resume === undefined ? {} : { resume }),
             ...(rng.chance(30) ? { model: 'opus' } : {}),
         });
         driver.start();

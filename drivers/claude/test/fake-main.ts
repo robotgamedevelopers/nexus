@@ -1,7 +1,8 @@
 // The Claude driver as a process over a scripted query instead of the SDK: what the protocol conformance test
 // (tests/driver/conformance_test.cpp, "prompted") starts. Never reaches Claude. A prompt "reply" is answered with a
 // text block and a successful result; "wait" with a text block that stays open until the driver interrupts, then the
-// result an interrupt gives (error_during_execution); anything else with an error result.
+// result an interrupt gives (error_during_execution); anything else with an error result. Its account is made up: no
+// file is read, and no token reaches anything.
 
 import { runProcess } from '../src/run.js';
 import { blockStop, FakeHarness, init, openText, result, streamedText } from './fake-harness.js';
@@ -25,4 +26,4 @@ runProcess((start) => {
         }
     };
     return h;
-}, false, []);
+}, [], (name) => ({ name, dir: '/nonexistent/accounts/' + name, token: 'conformance' }));

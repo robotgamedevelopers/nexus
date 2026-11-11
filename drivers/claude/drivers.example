@@ -1,12 +1,24 @@
-# An example of nexus-server's drivers file (~/.nexus/drivers, src/server/driver_table.h) with the Claude driver.
+# An example of nexus-server's drivers file (~/.nexus/server/drivers, src/server/driver_table.h) with the Claude driver.
 # Words are split on spaces; give the programs by absolute path, since the server's PATH may not hold node.
 #
 #   driver <harness> <program> [<argument>...]    the server adds --cwd <dir> and, to go on, --resume <session id>
 #   friend <name> <harness> [<directory>]
 #
-# The Claude driver's own arguments, all optional: --model <model>, --effort <low|medium|high|xhigh|max>, and
+# The Claude driver's one required argument is --account <name>: its login is ~/.nexus/server/accounts/<name>/, which
+# Claude gets as CLAUDE_CONFIG_DIR, with the token in its file oauth-token (one line from `claude setup-token`, mode
+# 0600) as CLAUDE_CODE_OAUTH_TOKEN. It never uses ~/.claude, the Keychain's login or one in the server's environment,
+# and refuses to start (no-credential) when the account's directory or token is missing. To log an account in:
+#   mkdir -p -m 700 ~/.nexus/server/accounts/main
+#   CLAUDE_CONFIG_DIR=~/.nexus/server/accounts/main claude setup-token
+#   (umask 077 && cat > ~/.nexus/server/accounts/main/oauth-token)    # paste the token, Enter, Control-D
+#
+# Its other arguments are optional: --model <model>, --effort <low|medium|high|xhigh|max>, and
 # --setting-sources <user,project,local> to load Claude's settings files (and so their hooks); none load by default.
 # --claude <path> runs that claude executable instead of the SDK's own.
+#
+# Each driver line is one harness on one account; friends on two accounts name two harnesses.
 
-driver claude /opt/homebrew/bin/node /Users/me/nexus/drivers/claude/dist/src/main.js --effort high
+driver claude /opt/homebrew/bin/node /Users/me/nexus/drivers/claude/dist/src/main.js --account main --effort high
+driver claude-work /opt/homebrew/bin/node /Users/me/nexus/drivers/claude/dist/src/main.js --account work
 friend alice claude ~/work
+friend bob claude-work ~/src

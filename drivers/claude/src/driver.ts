@@ -30,6 +30,7 @@ import type {
     SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { kTokenFile } from './account.js';
 import {
     cut,
     decodeServerLine,
@@ -113,6 +114,7 @@ export function isEffortLevel(s: string): s is EffortLevel {
 
 /** The driver's arguments, or why they cannot be used. */
 export interface Arguments {
+    account: string;                    // the login: ~/.nexus/server/accounts/<account> (account.ts)
     cwd: string;
     resume?: string;
     model?: string;
@@ -122,7 +124,7 @@ export interface Arguments {
 }
 
 const kUsage = 'the arguments are --cwd <dir> and --resume <session id> (from the server), and from the drivers file '
-    + '--model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
+    + '--account <name> (required), --model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
     + '--claude <path of a claude executable>';
 
 export function parseArguments(argv: readonly string[]): Arguments | { error: string } {
@@ -130,11 +132,12 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--cwd', '--resume', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
         switch (name) {
+            case '--account': a.account = value; break;
             case '--cwd': a.cwd = value; break;
             case '--resume': a.resume = value; break;
             case '--model': a.model = value; break;
@@ -159,10 +162,13 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.cwd === undefined || a.cwd === '') {
         return { error: `--cwd <dir> is required; ${kUsage}` };
     }
+    if (a.account === undefined || a.account === '') {
+        return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
+    }
     if (a.resume !== undefined && !isSessionId(a.resume)) {
         return { error: `--resume ${a.resume} is not a session id (1 to 256 printable ASCII characters, no spaces)` };
     }
-    return { ...a, cwd: a.cwd };
+    return { ...a, cwd: a.cwd, account: a.account };
 }
 
 /** The user messages pushed into the query, one per turn. */
@@ -468,13 +474,13 @@ export class Driver {
         this.write(plan === '' ? { kind: 'credential', billing } : { kind: 'credential', billing, plan: whole(plan) });
         if (billing === 'api-key') {
             this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key or auth token (apiKeySource ${keySource}${token === '' ? '' : `, tokenSource ${token}`})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
-                'remove the API key or provider setting Claude finds (an apiKeyHelper, a key saved by `claude /login` with a Console account, or a provider in managed settings) and run `claude /login` with the subscription account, in the user session nexus-server runs in');
+                `remove the API key or provider setting Claude finds (an apiKeyHelper in the account's settings, or a provider in managed settings), then ${tokenFix(this.args.account)}`);
             this.record('refused');
             return;
         }
         if (billing === 'none') {
             this.refuseCredential('Claude has no subscription login: the account reports no subscription',
-                'run `claude /login` with the subscription account in the user session nexus-server runs in (a process started over ssh cannot read the login keychain), or give the driver CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`');
+                tokenFix(this.args.account));
             this.record('refused');
             return;
         }
@@ -825,7 +831,7 @@ export class Driver {
                 if (m.subtype === 'init' && m.apiKeySource !== 'none') {
                     this.write({ kind: 'credential', billing: 'api-key', ...(this.plan === '' ? {} : { plan: this.plan }) });
                     this.refuseCredential(`Claude started a turn billing an API key (apiKeySource ${m.apiKeySource}), not the subscription login; nexus runs Claude only on a subscription`,
-                        'remove the API key Claude finds (an apiKeyHelper or a key saved by `claude /login` with a Console account) and run `claude /login` with the subscription account');
+                        `remove the API key Claude finds (an apiKeyHelper in the account's settings), then ${tokenFix(this.args.account)}`);
                     this.record('refused');
                 }
                 return;
@@ -889,7 +895,7 @@ export class Driver {
         }
         if (m.error !== undefined) {
             const said = m.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
-            t.failure = failure(m.error, said);
+            t.failure = failure(m.error, said, this.args.account);
             this.record('assistant-error', { code: t.failure.code === 'no-credential' ? 'no-credential' : 'harness' });
             return;
         }
@@ -1021,8 +1027,15 @@ export class Driver {
     }
 }
 
+/** How to give the account a new subscription login (account.ts). */
+function tokenFix(account: string): string {
+    const dir = `~/.nexus/server/accounts/${account}`;
+    return `make a new token with \`CLAUDE_CONFIG_DIR=${dir} claude setup-token\` on the subscription account, and save it, `
+        + `alone on one line, to ${dir}/${kTokenFile} with mode 0600`;
+}
+
 /** The failure an assistant message's error code names. */
-function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string): Failure {
+function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, account: string): Failure {
     const detail = said === '' ? code : `${code}: ${said}`;
     switch (code) {
         case 'authentication_failed':
@@ -1031,7 +1044,7 @@ function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string):
         case 'verification_required':
         case 'billing_error':
             return { cause: `Claude's login cannot be used (${detail})`, code: 'no-credential',
-                fix: 'run `claude /login` with the subscription account in the user session nexus-server runs in, or give the driver a fresh CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`' };
+                fix: tokenFix(account) };
         case 'rate_limit':
             return { cause: `the subscription's usage limit is reached (${detail})`, code: 'harness',
                 fix: 'wait until the limit resets (the cause says when), or move the session to another account' };
