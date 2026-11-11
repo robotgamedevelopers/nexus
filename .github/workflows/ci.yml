@@ -235,7 +235,7 @@ jobs:
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
 
-  # The window on Windows (the port: AGENTS.md "the overlay acts exactly the same on every platform"), with MSVC at /W4
+  # The window on 64-bit Windows (x64 only; there is no 32-bit build) (the port: AGENTS.md "the overlay acts exactly the same on every platform"), with MSVC at /W4
   # and warnings as errors (CMakeLists.txt sets the flags), on captain's Windows runners. Without the link's transport:
   # mosh's network layer does not build there (the link and nexus-server stay on macOS). Only the unit tests run here.
   #
@@ -263,8 +263,8 @@ jobs:
           "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
           "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
           cmake --version
-      - name: Configure (Release, MSVC)
-        run: cmake -S . -B "$env:NEXUS_BUILD" -DNEXUS_LINK=OFF
+      - name: Configure (Release, MSVC x64)
+        run: cmake -S . -B "$env:NEXUS_BUILD" -A x64 -DNEXUS_LINK=OFF
       - name: Build
         run: cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
       - name: Unit tests

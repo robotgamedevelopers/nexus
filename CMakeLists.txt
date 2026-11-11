@@ -1,4 +1,4 @@
-# nexus: one person and several AIs in one window. The window builds on macOS and Windows; nexus-server on macOS.
+# nexus: one person and several AIs in one window. The window builds on macOS and 64-bit Windows; nexus-server on macOS.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
@@ -143,6 +143,9 @@ if(APPLE)
     set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(nexus PRIVATE "-framework AppKit")
 elseif(WIN32)
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(FATAL_ERROR "nexus: the window builds for 64-bit Windows only; configure with -A x64")
+    endif()
     add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
     if(MSVC)
         target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
