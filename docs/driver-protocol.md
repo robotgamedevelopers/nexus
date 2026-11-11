@@ -38,8 +38,8 @@ standard input first, and ends a driver that does not exit.
 - A malformed line is refused with its cause, and reading goes on with the next line: one that is not UTF-8 (including
   an encoded surrogate, an overlong form, or a `\u` escape of a lone surrogate such as `"\ud83d"`), not JSON, nested
   more than 1024 arrays and objects deep, not a single object, without a `"kind"`, or of a known kind with a required
-  field missing or of the wrong type or value. What a side does about a refused line is its own choice; a driver
-  reports it with an `error` of code `protocol`.
+  field missing or of the wrong type or value. The server refuses a driver's line and goes on, or not, as it
+  chooses. A driver that refuses a line from the server ends (sequence rule 4).
 - A **whole number** is a JSON number whose value, read as a double, has no fraction: `1`, `1.0` and `1e0` are all 1;
   `1.5` is refused. A **turn** is a whole number from 1 to 2^53 - 1, the largest a double holds exactly; so is a token
   count, from 0.
@@ -66,7 +66,7 @@ reply, is unknown, and the person decides whether to send it again.
 |---|---|---|
 | `hello` | `protocol` (whole number, required: 1), `harness` (non-empty string, required, as `"claude"`) | the first line, always |
 | `credential` | `billing` (required: `"subscription"`, `"api-key"` or `"none"`), `plan` (string, optional: the plan's name as the harness reports it) | which credential the harness is using |
-| `session` | `id` (required: 1 to 256 bytes of printable ASCII, no spaces) | the harness's session id: what the server passes as `--resume` when it starts the driver again |
+| `session` | `id` (required: 1 to 256 bytes of printable ASCII, no spaces, not starting with `-`) | the harness's session id: what the server passes as `--resume` when it starts the driver again |
 | `text` | `turn`, `delta` (string, required) | a piece of the turn's current text block, appended to it |
 | `text-end` | `turn` | the turn's current text block is complete |
 | `tool` | `turn`, `name` (non-empty string, required), `summary` (string, required) | the friend started using a tool; the summary says what it does, in one line |
@@ -88,8 +88,8 @@ An error's `code` is one of these; an absent code, or one this version does not 
 | code | meaning |
 |---|---|
 | `protocol` | a rule of this protocol was broken (by the server, when a driver says so) |
-| `no-credential` | the harness has no credential it can use |
-| `session-not-found` | the harness does not know the `--resume` id; the driver writes this and exits, and the server may start it again without `--resume` |
+| `no-credential` | the harness has no credential it can use; the driver ends the open turn, if any, with this error (with the turn) and `done` outcome `error`, then exits |
+| `session-not-found` | the harness does not know the `--resume` id, at start or once the first turn begins; a notice, after which the driver carries on in a new session (sequence rule 10) |
 | `harness` | the harness itself failed |
 | `other` | anything else |
 
@@ -106,24 +106,32 @@ longer waits for (after a restart of either side).
    session id and credential only once its first turn has started.
 3. At most one turn is open at a time. A `send` opens its turn; the turn's `done` closes it. The server writes the next
    `send` only after the open turn's `done`.
-4. A `send` the driver cannot accept (a turn is open, or its turn is not greater than the last turn this driver process
-   saw) is the server's bug. The driver writes one `error` with code `protocol` carrying that send's `turn`, then exits
-   with a status other than 0. It never leaves the server waiting.
+4. A line from the server that the driver cannot accept is the server's bug, whatever it is: a line the reader refuses
+   (malformed, or a known kind with a field missing or wrong, as `{"kind":"send","turn":7}`), or a `send` while a turn
+   is open or whose turn is not greater than the last turn this driver process saw. The driver writes one `error` with
+   code `protocol`, carrying the line's `turn` if the line has one it can read, then exits with a status other than 0.
+   It never leaves the server waiting.
 5. Within a turn the driver writes, in any number and order: text blocks (one or more `text`, then `text-end`) and
    `tool`. A text block is ended by its `text-end` before a `tool`, another block or `done`. The turn ends with exactly
    one `done`, the last message of its turn: nothing with that turn's number follows it.
-6. An `error` with a `turn` is written only while that turn is open, except the one that refuses a send (rule 4). An
+6. An `error` with a `turn` is written only while that turn is open, except the one that refuses a line (rule 4). An
    `error` without a turn may come at any time after `hello`. A turn that ends with `done` outcome `error` has at least
-   one `error` with that turn before its `done`, giving the cause.
+   one `error` with that turn before its `done`, giving the cause (a `session-not-found` notice does not count).
 7. A `stop` whose turn is the open turn ends that turn: the driver delivers the text the harness had already produced
    (and its `text-end`, if a text block is open), then `done` with outcome `stopped`. If no text block is open, the
    driver writes just the `done`. Any other `stop` (for a turn that is not open, or with no turn open) is ignored and
    answered by nothing. So a `stop` that crosses a turn's `done` on the way, or that is meant for a turn already ended,
    does nothing.
-8. A message the reader refuses is reported and skipped (above); a message of an unknown kind is skipped silently.
+8. A message of an unknown kind is skipped silently, by either side.
 9. When its standard input ends, the driver stops the harness and exits, owing no `done` for an open turn (above). If
    the driver exits for any reason, the open turn gets no `done` from it; the server ends that turn itself and marks it
    as cut short.
+10. A driver started with `--resume` whose id the harness does not know (found at start, or only once the first turn
+    begins) neither exits nor loses the prompt. It starts a new harness session itself, writes an `error` with code
+    `session-not-found` (with the open turn if there is one), writes the new session's `session`, and the turn carries
+    on in the new session. That error is a notice: it does not by itself make the turn's outcome `error`.
+11. A driver with no credential it can use (code `no-credential`) ends the open turn, if any, with that `error`
+    (carrying the turn) and `done` outcome `error`, then exits.
 
 A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the last session id, and
 starts a new driver with `--resume` to go on.

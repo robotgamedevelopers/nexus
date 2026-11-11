@@ -19,25 +19,27 @@
 //   signal <number>      end by that signal, sent to itself
 //   stderr <text>        write <text> and a newline to standard error
 //   record <path> [VAR ...]
-//                        append to <path> the arguments it was started with, as `cwd=<dir>` and `resume=<id>` (empty
-//                        when not given), and each named environment variable as `VAR=<value>` or `VAR unset`
+//                        append to <path> the arguments it was started with and the directory it works in, as
+//                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), and each
+//                        named environment variable as `VAR=<value>` or `VAR unset`
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
 //   option <name>        anywhere in the script, for the whole run:
 //                          ignore-eof          when standard input ends, wait to be killed instead of exiting
+//                          ignore-sigterm      ignore SIGTERM, so that only a stronger signal ends it
 //                          stop-any-turn       act on any stop while a turn is open (breaks: a stop names its turn)
-//                          accept-bad-send     take a send whose turn does not follow, or that arrives while a turn is
-//                                              open (dropped then), instead of refusing it (breaks: a bad send ends
-//                                              the driver)
+//                          accept-bad-input    report a line it refuses, or a send whose turn does not follow or that
+//                                              arrives while a turn is open, and go on (a send while a turn is open is
+//                                              dropped; one out of order is answered) (breaks: the driver exits)
 //                          done-without-cause  answer a send the script has no block for with done outcome error
 //                                              alone (breaks: an error states the cause first)
 //
-// By default it keeps the protocol's rules: it acts on a stop only for the open turn; it refuses a send that arrives
-// while a turn is open or whose turn is not above the last it saw, with one error of code protocol carrying that send's
-// turn, then exits 3; it reports a bad line from the server with an error and goes on; it answers a send the script has
-// no block for with an error and a done whose outcome is error; it skips messages of unknown kinds; and it exits 0 when
-// its standard input ends. A script that cannot be read or that writes a message which does not decode is a bug in the
-// test: the fake says why on standard error and exits 2.
+// By default it keeps the protocol's rules: it acts on a stop only for the open turn; it refuses any line it cannot
+// accept (malformed, a known kind with a bad or missing field, a send whose turn is not above the last it saw or that
+// arrives while a turn is open) with one error of code protocol, carrying the line's turn when it has a readable one,
+// then exits 3; it answers a send the script has no block for with an error and a done whose outcome is error; it skips
+// messages of unknown kinds; and it exits 0 when its standard input ends. A script that cannot be read or that writes a
+// message which does not decode is a bug in the test: the fake says why on standard error and exits 2.
 
 #include <unistd.h>
 
@@ -48,6 +50,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <set>
@@ -111,7 +114,8 @@ struct Script {
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "hang", "exit", "signal", "stderr",
     "record", "count-starts"};
-const std::set<std::string> kOptions = {"ignore-eof", "stop-any-turn", "accept-bad-send", "done-without-cause"};
+const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
+    "done-without-cause"};
 
 // The first word of `s`, and the rest after one space.
 std::pair<std::string, std::string> split(const std::string& s) {
@@ -156,13 +160,34 @@ Script readScript(const std::string& path) {
     return script;
 }
 
-// The server's messages, read from standard input as they are needed.
-class Input {
-public:
-    explicit Input(bool ignoreEof) : ignoreEof_(ignoreEof) {}
+// The turn a line names, if it is JSON with a "turn" that is a valid turn number, even though the line was refused.
+std::optional<std::uint64_t> readableTurn(const std::string& line) {
+    PrJson* doc = prJsonCreate();
+    std::optional<std::uint64_t> turn;
+    if (prJsonParse(doc, PrStringView{line.data(), line.size()}, nullptr)) {
+        const PrJsonValueIndex v = prJsonMember(doc, 0, PrStringView{"turn", 4});
+        const double d = prJsonNumber(doc, v, 0);
+        if (prJsonKind(doc, v) == PrJsonKind_Number && d >= 1 && d <= double(kMaxTurn) && d == double(std::uint64_t(d)))
+            turn = std::uint64_t(d);
+    }
+    prJsonDestroy(doc);
+    return turn;
+}
 
-    // The next message or bad line, or nothing once standard input has ended.
-    std::optional<ServerReader::Item> next() {
+// A line from the server: a message, or why it was refused and the turn it named if that was readable.
+struct Input {
+    std::optional<ServerMessage> message;
+    std::string error;
+    std::optional<std::uint64_t> turn;
+};
+
+// The server's lines, read from standard input as they are needed.
+class Reader {
+public:
+    explicit Reader(bool ignoreEof) : ignoreEof_(ignoreEof) {}
+
+    // The next line, or nothing once standard input has ended.
+    std::optional<Input> next() {
         while (pending_.empty()) {
             if (ended_) {
                 while (ignoreEof_)
@@ -173,25 +198,36 @@ public:
             const ssize_t n = ::read(STDIN_FILENO, buffer, sizeof buffer);
             if (n < 0 && errno == EINTR)
                 continue;
-            items_.clear();
+            lines_.clear();
             if (n <= 0) {
                 ended_ = true;
-                reader_.finish(items_);
+                reader_.finish(lines_);
             } else {
-                reader_.feed(std::string_view(buffer, std::size_t(n)), items_);
+                reader_.feed(std::string_view(buffer, std::size_t(n)), lines_);
             }
-            pending_.insert(pending_.end(), items_.begin(), items_.end());
+            for (const LineReader::Line& line : lines_) {
+                if (!line.error.empty()) {
+                    pending_.push_back(Input{std::nullopt, line.error, std::nullopt});
+                    continue;
+                }
+                Decoded<ServerMessage> d = decodeServerMessage(line.text);
+                if (d.message)
+                    pending_.push_back(Input{std::move(d.message), {}, std::nullopt});
+                else
+                    pending_.push_back(Input{std::nullopt, "line " + std::to_string(line.number) + ": " + d.error,
+                        readableTurn(line.text)});
+            }
         }
-        ServerReader::Item item = std::move(pending_.front());
+        Input input = std::move(pending_.front());
         pending_.pop_front();
-        return item;
+        return input;
     }
 
 private:
     bool ignoreEof_;
-    ServerReader reader_;
-    std::vector<ServerReader::Item> items_;
-    std::deque<ServerReader::Item> pending_;
+    LineReader reader_;
+    std::vector<LineReader::Line> lines_;
+    std::deque<Input> pending_;
     bool ended_ = false;
 };
 
@@ -211,12 +247,12 @@ public:
 
     int run() {
         play(script_.start, 0);
-        while (std::optional<ServerReader::Item> item = in_.next()) {
-            if (!item->message) {
-                badLine(item->error);
+        while (std::optional<Input> input = in_.next()) {
+            if (!input->message) {
+                badLine(*input);
                 continue;
             }
-            if (const Send* send = std::get_if<Send>(&*item->message))
+            if (const Send* send = std::get_if<Send>(&*input->message))
                 answer(*send);
             // a stop with no turn open, and any unknown kind: nothing
         }
@@ -226,24 +262,27 @@ public:
 private:
     bool option(const char* name) const { return script_.options.contains(name); }
 
-    void badLine(const std::string& error) {
-        emit(Error{"the server sent a line the driver refused: " + error,
-            "the server must write one protocol message per line (docs/driver-protocol.md)", std::nullopt,
-            ErrorCode::Protocol});
+    // A line the driver refused: one error with the line's turn if it was readable, then the end.
+    void badLine(const Input& input) {
+        refuse(Error{"the server sent a line the driver refused: " + input.error, "the server must write one "
+            "protocol message per line (docs/driver-protocol.md)", input.turn, ErrorCode::Protocol});
     }
 
-    // A send the driver cannot accept: one error with its turn, then the end.
-    void refuse(const Send& send, const std::string& why) {
-        if (option("accept-bad-send"))
-            return;
-        emit(Error{"send of turn " + std::to_string(send.turn) + " " + why, "the server must send turns in order, "
+    // A send the driver cannot accept: the same, with its turn.
+    void badSend(const Send& send, const std::string& why) {
+        refuse(Error{"send of turn " + std::to_string(send.turn) + " " + why, "the server must send turns in order, "
             "each after the last one's done (docs/driver-protocol.md)", send.turn, ErrorCode::Protocol});
-        std::exit(kRefusedSend);
+    }
+
+    void refuse(const Error& error) {
+        emit(error);
+        if (!option("accept-bad-input"))
+            std::exit(kRefusedSend);
     }
 
     void answer(const Send& send) {
         if (send.turn <= lastTurn_)
-            refuse(send, "does not follow turn " + std::to_string(lastTurn_));
+            badSend(send, "does not follow turn " + std::to_string(lastTurn_));
         lastTurn_ = send.turn;
         if (nextBlock_ == script_.sends.size()) {
             if (!option("done-without-cause"))
@@ -314,16 +353,16 @@ private:
     }
 
     void awaitStop(std::uint64_t turn) {
-        while (std::optional<ServerReader::Item> item = in_.next()) {
+        while (std::optional<Input> item = in_.next()) {
             if (!item->message) {
-                badLine(item->error);
+                badLine(*item);
                 continue;
             }
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
                 if (stop->turn == turn || option("stop-any-turn"))
                     return;
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
-                refuse(*send, "arrived while turn " + std::to_string(turn) + " is open");
+                badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
             }
         }
         std::exit(0);
@@ -332,7 +371,8 @@ private:
     void record(const std::string& arg) {
         auto [path, names] = split(arg);
         std::ofstream out(path, std::ios::app);
-        out << "cwd=" << arguments_.cwd << "\nresume=" << arguments_.resume.value_or("") << "\n";
+        const std::string dir = std::filesystem::current_path().string();
+        out << "cwd=" << arguments_.cwd << "\ndir=" << dir << "\nresume=" << arguments_.resume.value_or("") << "\n";
         while (!names.empty()) {
             auto [name, rest] = split(names);
             const char* value = std::getenv(name.c_str());
@@ -353,7 +393,7 @@ private:
 
     Script script_;
     Arguments arguments_;
-    Input in_;
+    Reader in_;
     std::uint64_t lastTurn_ = 0;
     std::size_t nextBlock_ = 0;
     int start_ = 0;             // which start this is, once count-starts has run
@@ -387,5 +427,7 @@ int main(int argc, char** argv) {
             "naming a directory that exists", std::nullopt, ErrorCode::Other});
         return 2;
     }
+    if (script.options.contains("ignore-sigterm"))
+        std::signal(SIGTERM, SIG_IGN);
     return Fake(std::move(script), std::move(arguments)).run();
 }

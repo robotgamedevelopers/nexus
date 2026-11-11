@@ -13,11 +13,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "driver/protocol.h"
@@ -69,9 +72,9 @@ struct Waker {
 // The fake driver as a child, its output read as driver messages and its standard error kept as text.
 class Driver {
 public:
-    explicit Driver(const std::string& script) {
+    explicit Driver(const std::string& script, const std::string& cwd = ".") {
         launcher_ = prProcessLauncherCreate(PrProcessBackend_Default);
-        const std::vector<std::string> args = {"--cwd", ".", "--resume", "s-0", "--script", script};
+        const std::vector<std::string> args = {"--cwd", cwd, "--resume", "s-0", "--script", script};
         std::vector<PrStringView> views;
         for (const std::string& a : args)
             views.push_back(pr(a));
@@ -231,29 +234,94 @@ void exchange() {
     CHECK(is(items[6], Tool{1, "Read", "turn"}));
     CHECK(is(items[7], Done{1, Outcome::Ok, 0.02, Usage{12, {}, {}, {}}}));
 
-    // The second turn: once its first text has arrived, a stop of turn 1 (ignored), a bad line (reported at once, so
-    // before anything the stop would have let through), then the stop of turn 2.
+    // The second turn: once its first text has arrived, stops of an earlier and a later turn, which get nothing for a
+    // while, then the stop of turn 2.
     d.send(Send{2, "work on it"});
     d.readUntil(9);
     CHECK(items.size() == 9 && is(items[8], Text{2, "Work"}));
     d.send(Stop{1});
-    d.write("not a message\n");
+    d.send(Stop{3});
+    d.readUntil(10, std::chrono::milliseconds(300));
+    CHECK(items.size() == 9);
     d.send(Stop{2});
-    d.readUntil(13);
-    CHECK(items.size() == 13);
-    if (items.size() != 13)
+    d.readUntil(12);
+    CHECK(items.size() == 12);
+    if (items.size() != 12)
         return;
-    CHECK(isError(items[9], std::nullopt, ErrorCode::Protocol, "line 4: the line is not JSON"));
-    CHECK(is(items[10], Text{2, "ing"}));
-    CHECK(is(items[11], TextEnd{2}));
-    CHECK(is(items[12], Done{2, Outcome::Stopped, 0.03, std::nullopt}));
+    CHECK(is(items[9], Text{2, "ing"}));
+    CHECK(is(items[10], TextEnd{2}));
+    CHECK(is(items[11], Done{2, Outcome::Stopped, 0.03, std::nullopt}));
 
     // A stop with no turn open and an unknown kind are answered by nothing; the end of input ends the driver.
     d.send(Stop{2});
     d.write("{\"kind\":\"pause\"}\n");
     d.closeInput();
     CHECK(d.exitStatus() == 0);
-    CHECK(items.size() == 13);
+    CHECK(items.size() == 12);
+}
+
+// A line the driver refuses, of any kind: one error of code protocol, with the line's turn if it has a readable one,
+// then exit 3.
+void refused() {
+    writeFile("refused.script", kHello);
+    const std::pair<const char*, std::optional<std::uint64_t>> lines[] = {{"not a message\n", std::nullopt},
+        {"{\"kind\":\"send\",\"turn\":7}\n", 7}, {"{\"kind\":\"stop\"}\n", std::nullopt},
+        {"{\"kind\":\"send\",\"turn\":0,\"prompt\":\"x\"}\n", std::nullopt}};
+    for (const auto& [line, turn] : lines) {
+        Driver d("refused.script");
+        if (!d.started())
+            return;
+        d.write(line);
+        CHECK(d.exitStatus() == 3);
+        const std::vector<DriverReader::Item>& items = d.readUntil(3);
+        CHECK(items.size() == 2 && isError(items[1], turn, ErrorCode::Protocol, "line 1: "));
+    }
+}
+
+// raw writes its line exactly, a malformed one here, which the reader refuses and reads past.
+void raw() {
+    writeFile("raw.script", std::string(kHello) + "raw {\"kind\":\"text\",\"turn\":\n"
+        "emit {\"kind\":\"session\",\"id\":\"s-9\"}\nexit 0\n");
+    Driver d("raw.script");
+    if (!d.started())
+        return;
+    CHECK(d.exitStatus() == 0);
+    const std::vector<DriverReader::Item>& items = d.readUntil(4);
+    CHECK(items.size() == 3);
+    if (items.size() == 3) {
+        CHECK(!items[1].message && items[1].error.find("line 2: the line is not JSON") != std::string::npos);
+        CHECK(is(items[2], Session{"s-9"}));
+    }
+}
+
+// A send the script has no block for: an error with its turn, then done outcome error.
+void noBlock() {
+    writeFile("noblock.script", kHello);
+    Driver d("noblock.script");
+    if (!d.started())
+        return;
+    d.send(Send{4, "go"});
+    d.readUntil(3);
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    const std::vector<DriverReader::Item>& items = d.readUntil(4);
+    CHECK(items.size() == 3);
+    if (items.size() == 3) {
+        CHECK(isError(items[1], 4, ErrorCode::Other, "no reply for send 1"));
+        CHECK(is(items[2], Done{4, Outcome::Error, std::nullopt, std::nullopt}));
+    }
+}
+
+// ignore-sigterm: a SIGTERM does not end it.
+void ignoreSigterm() {
+    writeFile("sigterm.script", std::string(kHello) + "option ignore-sigterm\nsignal 15\n"
+        "emit {\"kind\":\"session\",\"id\":\"s-7\"}\nexit 0\n");
+    Driver d("sigterm.script");
+    if (!d.started())
+        return;
+    CHECK(d.exitStatus() == 0);
+    const std::vector<DriverReader::Item>& items = d.readUntil(3);
+    CHECK(items.size() == 2 && is(items[1], Session{"s-7"}));
 }
 
 // A send whose turn does not follow the last: one error of code protocol with that send's turn, then exit 3.
@@ -303,6 +371,8 @@ void hang() {
     d.send(Stop{1});
     d.send(Send{2, "more"});
     d.write("not a message\n");
+    // Still running, not exited: a hang is not an exit.
+    CHECK(!d.end(std::chrono::milliseconds(300)).exited);
     d.closeInput();
     CHECK(d.exitStatus() == 0);
     CHECK(d.readUntil(3).size() == 2);
@@ -310,7 +380,7 @@ void hang() {
 
 // The options that break the rules, for the server's tests of what it does about a broken driver.
 void options() {
-    writeFile("options.script", std::string(kHello) + "option stop-any-turn\noption accept-bad-send\n"
+    writeFile("options.script", std::string(kHello) + "option stop-any-turn\noption accept-bad-input\n"
         "option done-without-cause\n"
         "send\nawait-stop\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
         "send\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
@@ -319,25 +389,31 @@ void options() {
         return;
     d.send(Send{4, "go"});
     d.send(Send{5, "while open: dropped"});
+    d.write("not a message\n");
     d.send(Stop{9});
     d.send(Send{2, "out of order: answered"});
     d.send(Send{6, "no block left"});
     d.closeInput();
     CHECK(d.exitStatus() == 0);
-    const std::vector<DriverReader::Item>& items = d.readUntil(4);
-    CHECK(items.size() == 4);
-    if (items.size() == 4) {
-        CHECK(is(items[1], Done{4, Outcome::Stopped, std::nullopt, std::nullopt}));
-        CHECK(is(items[2], Done{2, Outcome::Ok, std::nullopt, std::nullopt}));
-        CHECK(is(items[3], Done{6, Outcome::Error, std::nullopt, std::nullopt}));
+    const std::vector<DriverReader::Item>& items = d.readUntil(8);
+    CHECK(items.size() == 7);
+    if (items.size() == 7) {
+        CHECK(isError(items[1], 5, ErrorCode::Protocol, "while turn 4 is open"));
+        CHECK(isError(items[2], std::nullopt, ErrorCode::Protocol, "line 3: the line is not JSON"));
+        CHECK(is(items[3], Done{4, Outcome::Stopped, std::nullopt, std::nullopt}));
+        CHECK(isError(items[4], 2, ErrorCode::Protocol, "does not follow turn 4"));
+        CHECK(is(items[5], Done{2, Outcome::Ok, std::nullopt, std::nullopt}));
+        CHECK(is(items[6], Done{6, Outcome::Error, std::nullopt, std::nullopt}));
     }
 }
 
-// What the server's tests script: the first start fails, the second records its arguments and environment, floods,
-// writes to standard error and ends with a last line cut short; the third ends by a signal.
+// What the server's tests script, in a directory of its own given as --cwd: the first start fails, the second records
+// its arguments, directory and environment, floods more than a pipe holds (so the fake waits on its reader), writes to
+// standard error and ends with a last line cut short; the third ends by a signal.
 void starts() {
-    std::remove("starts.count");
-    std::remove("starts.record");
+    constexpr std::size_t kFlood = 30000;     // about 1 MB of lines
+    std::filesystem::remove_all("starts.dir");
+    std::filesystem::create_directory("starts.dir");
     ::setenv("NEXUS_FAKE_PROBE", "42", 1);
     writeFile("starts.script",
         "count-starts starts.count\n"
@@ -346,36 +422,38 @@ void starts() {
         "on-start 1 exit 4\n" +
         std::string(kHello) +
         "on-start 3 signal 15\n"
-        "flood 500 {\"kind\":\"session\",\"id\":\"s-2\"}\n"
+        "flood " + std::to_string(kFlood) + " {\"kind\":\"session\",\"id\":\"s-2\"}\n"
         "stderr written to standard error\n"
         "tail {\"kind\":\"session\",\"id\":\"s-3\"}\n"
         "exit 0\n");
     {
-        Driver d("starts.script");
+        Driver d("starts.script", "starts.dir");
         CHECK(d.exitStatus() == 4);
         CHECK(d.readUntil(1).empty());
         CHECK(d.errors() == "the first start fails\n");
     }
     {
-        Driver d("starts.script");
+        Driver d("starts.script", "starts.dir");
         CHECK(d.exitStatus() == 0);
-        const std::vector<DriverReader::Item>& items = d.readUntil(503);
-        CHECK(items.size() == 502);
-        if (items.size() == 502) {
+        const std::vector<DriverReader::Item>& items = d.readUntil(kFlood + 3);
+        CHECK(items.size() == kFlood + 2);
+        if (items.size() == kFlood + 2) {
             CHECK(is(items[0], Hello{1, "fake"}));
-            CHECK(is(items[500], Session{"s-2"}));
-            CHECK(!items[501].message && items[501].error.find("ended inside line 502") != std::string::npos);
+            CHECK(is(items[kFlood], Session{"s-2"}));
+            CHECK(!items[kFlood + 1].message && items[kFlood + 1].error.find("ended inside line " +
+                std::to_string(kFlood + 2)) != std::string::npos);
         }
         CHECK(d.errors() == "written to standard error\n");
     }
     {
-        Driver d("starts.script");
+        Driver d("starts.script", "starts.dir");
         const PrProcessInfo info = d.end();
         CHECK(info.exited && info.signaled && info.code == 15);
     }
-    const std::string once = "cwd=.\nresume=s-0\nNEXUS_FAKE_PROBE=42\nNEXUS_FAKE_ABSENT unset\n";
-    CHECK(readFile("starts.record") == once + once + once);
-    CHECK(readFile("starts.count") == "3\n");
+    const std::string once = "cwd=starts.dir\ndir=" + std::filesystem::canonical("starts.dir").string() +
+        "\nresume=s-0\nNEXUS_FAKE_PROBE=42\nNEXUS_FAKE_ABSENT unset\n";
+    CHECK(readFile("starts.dir/starts.record") == once + once + once);
+    CHECK(readFile("starts.dir/starts.count") == "3\n");
 }
 
 // ignore-eof: the end of input does not end it; only a kill does.
@@ -397,6 +475,10 @@ struct Case {
 
 const Case kCases[] = {
     {"exchange", exchange},
+    {"refused", refused},
+    {"raw", raw},
+    {"no_block", noBlock},
+    {"ignore_sigterm", ignoreSigterm},
     {"order", order},
     {"send_while_open", sendWhileOpen},
     {"hang", hang},

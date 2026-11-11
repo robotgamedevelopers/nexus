@@ -178,6 +178,7 @@ void encode_refusals() {
     CHECK(contains(encodeError(Hello{1, ""}), "empty \"harness\""));
     CHECK(contains(encodeError(Session{""}), "\"id\""));
     CHECK(contains(encodeError(Session{"a b"}), "\"id\""));
+    CHECK(contains(encodeError(Session{"-x"}), "\"id\""));
     CHECK(contains(encodeError(Tool{1, "", "s"}), "empty \"name\""));
     CHECK(contains(encodeError(Tool{1, "Bash", "two\nlines"}), "\"summary\""));
     CHECK(contains(encodeError(Tool{1, "Bash", "a\rb"}), "\"summary\""));
@@ -355,7 +356,8 @@ void refusals() {
         CHECK(contains(driverError(bad), "not UTF-8"));
     CHECK(contains(driverError("{\"kind\":\"x\x80\"}"), "at byte 10"));
     // an escaped lone surrogate, like the raw one; a pair is one character
-    for (std::string_view bad : {"\\ud83d", "\\ude80", "\\ud83dx", "\\ud83d\\u0041", "\\uDBFF\\uDBFF"})
+    for (std::string_view bad : {"\\ud83d", "\\ude80", "\\ud83dx", "\\ud83d\\u0041", "\\uDBFF\\uDBFF", "\\udc00",
+             "\\udfff", "\\ud800\\n", "\\ud800\\\\udc00"})
         CHECK(contains(driverError("{\"kind\":\"text\",\"turn\":1,\"delta\":\"" + std::string(bad) + "\"}"),
             "lone surrogate"));
     const Decoded<DriverMessage> pair =
@@ -371,9 +373,14 @@ void refusals() {
     CHECK(contains(driverError("{\"kind\":\"stop\""), "not JSON"));
     CHECK(contains(driverError("{\"kind\":\"stop\"} {}"), "not JSON"));
     CHECK(contains(serverError(std::string_view("{\"kind\":\"st\0op\"}", 16)), "not JSON"));
-    const std::string deep = "{\"kind\":\"stop\",\"turn\":1,\"x\":" + std::string(1100, '[') + std::string(1100, ']') +
-        "}";
-    CHECK(contains(serverError(deep), "nested too deeply"));
+    // The object and 1023 arrays inside it are the bound, 1024 arrays one past it.
+    auto nested = [](std::size_t arrays) {
+        return "{\"kind\":\"stop\",\"turn\":1,\"x\":" + std::string(arrays, '[') + std::string(arrays, ']') + "}";
+    };
+    const Decoded<ServerMessage> atBound = decodeServerMessage(nested(1023));
+    CHECK(atBound.message && *atBound.message == ServerMessage(Stop{1}));
+    CHECK(contains(serverError(nested(1024)), "nested too deeply"));
+    CHECK(contains(serverError(nested(1100)), "nested too deeply"));
     CHECK(contains(serverError("{\"kind\":\"stop\",\"turn\":1,\"x\":" + std::string(500000, '[')),
         "nested too deeply"));
     CHECK(contains(serverError("[1,2]"), "not an object"));
@@ -454,7 +461,7 @@ void refusals() {
 // The strings with rules of their own: a session id becomes a command-line argument; a tool's name and summary are
 // one line each.
 void strings() {
-    for (std::string_view id : {"a b", "a\\nb --evil", " ", "tab\\there", "caf\xc3\xa9", "del\x7f"})
+    for (std::string_view id : {"a b", "a\\nb --evil", " ", "tab\\there", "caf\xc3\xa9", "del\x7f", "-", "--resume"})
         CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"" + std::string(id) + "\"}"), "\"id\""));
     CHECK(contains(driverError("{\"kind\":\"session\",\"id\":\"" + std::string(257, 'a') + "\"}"), "\"id\""));
     const Decoded<DriverMessage> longest =

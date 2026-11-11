@@ -99,9 +99,10 @@ bool breaksTheLine(std::string_view text) {
     return false;
 }
 
-// A session id: 1 to 256 bytes of printable ASCII without spaces, since it becomes a command-line argument.
+// A session id: 1 to 256 bytes of printable ASCII without spaces, not starting with -, since it becomes a command-line
+// argument.
 bool isSessionId(std::string_view id) {
-    return !id.empty() && id.size() <= 256 &&
+    return !id.empty() && id.size() <= 256 && id[0] != '-' &&
         std::all_of(id.begin(), id.end(), [](char c) { return c > 0x20 && c < 0x7F; });
 }
 
@@ -481,8 +482,8 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
     if (kind == "session") {
         Session m{f.str("id", true)};
         if (f.error().empty() && !isSessionId(m.id))
-            f.fail("has an \"id\" that is not 1 to 256 printable ASCII characters without spaces; it becomes an "
-                "argument of the driver's command line");
+            f.fail("has an \"id\" that is not 1 to 256 printable ASCII characters without spaces, not starting with "
+                "-; it becomes an argument of the driver's command line");
         return result<DriverMessage>(std::move(m), f);
     }
     if (kind == "text") {

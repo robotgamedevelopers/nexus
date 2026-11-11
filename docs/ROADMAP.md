@@ -17,6 +17,7 @@
 | 7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it | ❌ |
 | Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon | ❌ |
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
+| macOS installer: a signed, notarized disk image; the person drags nexus.app to Applications and runs it, and the first run sets everything up: nexus-server as a login item started from the logged-in session, the Claude driver and its runtime inside the app, and a check for a Claude subscription login that says what to do when there is none. Open questions: friends configured in nexus itself rather than read from nova-config, what the sprint tab shows with no board, and window and server on one Mac as the starting case. After the friends layer. (later) | ❌ |
 | complete | 0% |
 
 [Source data](roadmap.sexp)

@@ -16,6 +16,7 @@
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
      ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
+     ("macos-installer" "macOS installer: a signed, notarized disk image; the person drags nexus.app to Applications and runs it, and the first run sets everything up: nexus-server as a login item started from the logged-in session, the Claude driver and its runtime inside the app, and a check for a Claude subscription login that says what to do when there is none. Open questions: friends configured in nexus itself rather than read from nova-config, what the sprint tab shows with no board, and window and server on one Mac as the starting case. After the friends layer." :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -28,6 +29,7 @@
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
      ("ios-client" "done" "t-ios-client")
+     ("macos-installer" "done" "t-macos-installer")
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
@@ -72,4 +74,5 @@
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
   (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)
-  (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)))
+  (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)
+  (:id "t-macos-installer" :type :task :title "macOS installer: drag nexus.app to Applications, first run sets everything up (after the friends layer)" :state :todo)))
