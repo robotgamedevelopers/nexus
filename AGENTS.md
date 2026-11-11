@@ -91,7 +91,7 @@ The state cursor
 - Under the last text in a friend's tab, a cursor shows the session's state, from the server's state only: pulsing light blue while a turn is open (starting and stopping included); steady dark blue when it is waiting for the person; steady red when the friend is down (its driver crashed, keeps failing to start, or has no login); dim grey when the window has lost the server (never blue then). Colours are OKLCH; the pulse is a slow brightness breathe, about 1.5 s.
 
 Tabs
-- Moving the current tab left or right by key, within its zone. The key is not settled: Command-Left/Right are line start and end in text, so the proposal is Command-Shift-[ and ] to select and Command-Option-Left/Right to reorder.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. With Command-Up/Down for sessions, the arrows make one grid: friends across, sessions down.
 
 ## Tests
 
