@@ -35,6 +35,19 @@ set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 # lib/font finds the system's fonts through CoreText and DirectWrite only. Off, everything else still builds and tests:
 # the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
 option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
+# The window's logic (src/friends.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
+# their tests) starts processes through Prax's lib/process. On by default on macOS only: at this Prax pin, lib/process's
+# POSIX backend does not link on Linux (process_posix.cpp declares `environ` inside its own namespace, so the symbol is
+# never defined), so off macOS those parts are left out until Prax fixes it.
+option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)" ${APPLE})
+if(NEXUS_WINDOW AND NOT NEXUS_WINDOW_LOGIC)
+    message(FATAL_ERROR "nexus: the window needs its logic; configure with -DNEXUS_WINDOW_LOGIC=ON or -DNEXUS_WINDOW=OFF")
+endif()
+if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
+    message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
+        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
+        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
+endif()
 if(NEXUS_WINDOW AND NOT APPLE)
     message(STATUS "nexus: the window's libraries and their tests are built, but not the app, whose platform layer is "
         "macOS's (src/platform_mac.mm): Prax's lib/app has no backend here")
@@ -100,13 +113,15 @@ add_library(nexus_scroll STATIC src/scroll_glide.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
-# The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
-# them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
-# which events go to it, the script nexus adds to it).
-add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
-target_include_directories(nexus_window_logic PUBLIC src)
-target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+if(NEXUS_WINDOW_LOGIC)
+    # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
+    # them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
+    # which events go to it, the script nexus adds to it).
+    add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
+    target_include_directories(nexus_window_logic PUBLIC src)
+    target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+endif()
 
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.

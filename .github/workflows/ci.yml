@@ -182,9 +182,10 @@ jobs:
           done
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
-  # lib/font; CMakeLists.txt NEXUS_WINDOW). On the fleet's Linux runners, with clang and lld, warnings as errors as on
-  # macOS. Configured without the link's transport (NEXUS_LINK=OFF) until the Linux runners have protobuf (its CMake
-  # package and protoc), so nexus-server and the link's tests are not built here yet. Caches live under
+  # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
+  # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the
+  # window's logic, so it is off too (NEXUS_LINK=OFF); it also needs protobuf, which the Linux runners do not have yet.
+  # On the fleet's Linux runners, with clang and lld, warnings as errors as on macOS. Caches live under
   # ~/.cache/nexus-ci on the runner's machine, laid out as the macOS jobs' (the linker's ThinLTO cache is lld's).
   build-and-unit-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -223,7 +224,7 @@ jobs:
           else
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF "${launcher[@]}" \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
             -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
       - name: Build
         run: cmake --build build --parallel "$JOBS"
@@ -260,7 +261,7 @@ jobs:
           echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DCMAKE_LINKER_TYPE=LLD
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
       - name: Build the model checks

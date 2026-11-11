@@ -14,10 +14,12 @@ add_executable(trace_walk trace_walk.cpp)
 target_link_libraries(trace_walk PRIVATE nexus_model)
 target_compile_options(trace_walk PRIVATE ${warnings})
 
-# TabLabel's walk (src/remote.h), for TabLabelTrace.tla.
-add_executable(label_walk label_walk.cpp)
-target_link_libraries(label_walk PRIVATE nexus_window_logic)
-target_compile_options(label_walk PRIVATE ${warnings})
+# TabLabel's walk (src/remote.h), for TabLabelTrace.tla: with the window's logic (NEXUS_WINDOW_LOGIC).
+if(NEXUS_WINDOW_LOGIC)
+    add_executable(label_walk label_walk.cpp)
+    target_link_libraries(label_walk PRIVATE nexus_window_logic)
+    target_compile_options(label_walk PRIVATE ${warnings})
+endif()
 
 # The board scroller's walk (src/scroll_glide.h), for GlideTrace.tla.
 add_executable(glide_walk glide_walk.cpp)
@@ -34,7 +36,10 @@ target_link_libraries(overlay_walk PRIVATE nexus_model)
 target_compile_options(overlay_walk PRIVATE ${warnings})
 
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk label_walk glide_walk overlay_test overlay_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk glide_walk overlay_test overlay_walk)
+if(NEXUS_WINDOW_LOGIC)
+    add_dependencies(model_checks label_walk)
+endif()
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -216,12 +221,14 @@ tlc_test(tlc_witness_label_no_mask         WLabelNoMask        WLabelNoMask.cfg 
 tlc_test(tlc_witness_label_mask_sticks     WLabelMaskSticks    WLabelMaskSticks.cfg    action PROPERTY MaskEnds)
 tlc_test(tlc_witness_label_before_at_start WLabelBeforeAtStart WLabelBeforeAtStart.cfg action PROPERTY BeforeIsOwn)
 tlc_test(tlc_witness_label_no_tail         WLabelNoTail        WLabelNoTail.cfg        action PROPERTY TailRestores)
-foreach(seed 1 2 3)
-    tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
-endforeach()
-tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
-tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
-         LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+if(NEXUS_WINDOW_LOGIC)
+    foreach(seed 1 2 3)
+        tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
+    endforeach()
+    tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
+    tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
+             LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+endif()
 
 # The board's scroller (src/scroll_glide.h): Glide.tla on its small instance, every property.
 tlc_test(tlc_glide_spec MCGlide MCGlide.cfg pass)
