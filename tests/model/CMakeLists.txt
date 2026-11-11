@@ -42,11 +42,11 @@ add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [WORKERS w] [NIGHTLY] [LABEL] [OVERLAY])
+#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [WORKERS w] [NIGHTLY [CAP s]] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
-# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
+# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60 (or CAP s): see the instances below.
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
@@ -56,7 +56,7 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (turn, resume, queue).
 function(tlc_test name module cfg expect)
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" "" ${ARGN})
+        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -67,6 +67,9 @@ function(tlc_test name module cfg expect)
     if(T_NIGHTLY)
         set(label model_nightly)
         set(cap 300)
+        if(T_CAP)
+            set(cap ${T_CAP})
+        endif()
     endif()
     math(EXPR ctest_timeout "${cap} + 30")
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}

@@ -113,7 +113,8 @@ public:
     // The changes a queue of `prompt` makes: the prompt at the end of the queue first, then anything that follows (the
     // oldest taken at once, when the friend is free), committed the same way.
     virtual std::vector<TabChange> queue(const std::string& tab, const std::string& prompt) = 0;
-    // The changes a stop of the friend's work in `tab` makes (none, so far), committed the same way.
+    // The changes a stop of the friend's work in `tab` makes (a start cancelled: its prompt no longer waiting, and a
+    // notice; none for an open turn or nothing running), committed the same way.
     virtual std::vector<TabChange> stop(const std::string& tab) = 0;
     // Whether the store took the step of the send, queue or stop just given. Only once it did may the responder act
     // on it.

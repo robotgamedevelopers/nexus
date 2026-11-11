@@ -50,7 +50,7 @@ endforeach()
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
-tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_supervisor_witness_resend_after_cut WSupResendAfterCut WSupResendAfterCut.cfg invariant PROPERTY AtMostOnce)
@@ -74,7 +74,7 @@ tlc_test(tlc_supervisor_witness_stop_start_ignored WSupStopStartIgnored WSupStop
 tlc_test(tlc_supervisor_witness_stop_latched   WSupStopLatched   WSupStopLatched.cfg   action    PROPERTY NoLatchedStop)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
-foreach(seed 1 2 3 4)
+foreach(seed 1 2 3 4 12)
     tlc_test(tlc_supervisor_trace_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK SEED ${seed} STEPS 600)
 endforeach()
 

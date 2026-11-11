@@ -257,7 +257,8 @@ std::vector<sync::TabChange> Drivers::queue(const std::string& tab, const std::s
     return out;
 }
 
-// A stop changes nothing in the store: the stop line is written once the hub has counted the action.
+// A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
+// A stop of a start cancels the turn about to begin: its prompt leaves the waiting prompts, committed with a notice.
 std::vector<sync::TabChange> Drivers::stop(const std::string& tab) {
     pendingSup_.reset();
     pendingOut_ = Output{};

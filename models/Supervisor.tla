@@ -312,7 +312,8 @@ Next == NextWith(Prompt, Message, Exit, Timeout, Restart)
 \* The fairness the liveness needs: deadlines pass, KILL ends a driver, and a person whose friend's turn never ends
 \* stops it (there is no deadline on a working turn, by design).
 ExitKilled == s.phase = "ending" /\ s.stage = "killed" /\ Exit
-Spec == Init /\ [][Next]_vars /\ WF_vars(Timeout) /\ WF_vars(Stop) /\ WF_vars(ExitKilled)
+StopWorking == Working(s) /\ Stop
+Spec == Init /\ [][Next]_vars /\ WF_vars(Timeout) /\ WF_vars(StopWorking) /\ WF_vars(ExitKilled)
 \* The spec without fairness, which a finite trace of the code (SupervisorTrace.tla) is checked against.
 SafetySpec == Init /\ [][Next]_vars
 
@@ -398,10 +399,13 @@ CancelledBy(x, y) == {p \in DOMAIN x.fate : x.fate[p] = "waiting" /\ y.fate[p] =
 \* changes nothing.
 StopEndsWhatRuns ==
     [][s'.asked =>
-         CASE s.phase = "working"                        -> s'.phase = "stopping" /\ s'.stops = Append(s.stops, s.open)
-           [] s.phase = "starting" /\ s.waiting # <<>> -> CancelledBy(s, s') = {Head(s.waiting)} /\
-                                                            s'.waiting = Tail(s.waiting) /\ s'.phase = "starting"
-           [] OTHER                                      -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE]]_vars
+         CASE s.phase = "working"
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.phase = "stopping", !.stops = Append(@, s.open)]
+           [] s.phase = "starting" /\ s.waiting # <<>>
+              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.waiting = Tail(@),
+                                !.fate[Head(s.waiting)] = "cut"]
+           [] OTHER
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE]]_vars
 
 \* No stop is kept for later: a stop is written, or a turn cancelled, only in the step of the person's stop that
 \* found it running. So a stop that found nothing never touches a turn that begins after it.

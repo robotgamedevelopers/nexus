@@ -552,6 +552,40 @@ void testStop() {
         o = starting.message(Hello{1, "h"}, kStart + 3);
         CHECK(o.taken == 1 && sends(o, 1, "q") && starting.queue().empty());
     }
+    {
+        // A stop while starting with nothing left waiting changes nothing; the cancelled prompt never comes back: not
+        // when the start fails (a failed start, and no other started, as nothing waits), nor after a restart.
+        Supervisor s = make();
+        s.prompt("x", kStart);
+        s.stop(kStart + 1);
+        Output o = s.stop(kStart + 2);
+        CHECK(o.effects.empty() && o.commands.empty() && !o.durable && s.phase() == Phase::Starting);
+        o = s.exited("exited with status 1", kStart + 3);
+        CHECK(s.failedStarts() == 1 && o.commands.empty() && s.phase() == Phase::None);
+        Output first;
+        Supervisor r(config(), s.state(), kStart + 4, &first);
+        CHECK(first.effects.empty() && first.commands.empty() && r.state().waiting.empty());
+    }
+    {
+        // Nothing running, with a prompt waiting: a driver being ended (a new one starts for it once it is gone), or
+        // starting held back after failed starts. The stop changes nothing, and the prompt still goes.
+        Supervisor ending = working();
+        ending.prompt("b", kStart + 2);
+        ending.refused("line 3: not JSON", kStart + 3);
+        CHECK(ending.phase() == Phase::Ending);
+        Output o = ending.stop(kStart + 4);
+        CHECK(o.effects.empty() && o.commands.empty() && !o.durable);
+        CHECK(ending.state().waiting == std::vector<std::string>{"b"});
+        Supervisor held = make();
+        held.prompt("x", kStart);
+        for (int i = 0; i < 3; ++i) {
+            held.exited("could not be started: no such file", kStart + 1);
+        }
+        CHECK(held.held() && held.phase() == Phase::None);
+        o = held.stop(kStart + 2);
+        CHECK(o.effects.empty() && o.commands.empty() && !o.durable);
+        CHECK(held.state().waiting == std::vector<std::string>{"x"});
+    }
     Supervisor s = working();
     Output o = s.stop(kStart + 2);
     CHECK(written(o) == std::vector<ServerMessage>{Stop{1}} && s.phase() == Phase::Stopping);
