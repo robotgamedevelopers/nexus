@@ -475,5 +475,18 @@ jobs:
           $probe = "$env:NEXUS_BUILD-window"
           cmake -S . -B $probe -A x64 -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-          $sln = Get-ChildItem "$probe\nexus.sln*" | Select-Object -First 1
-          & $msbuild $sln.FullName /m /nologo /v:m /p:Configuration=Release /p:BuildProjectReferences=false
+          # Every project at once, each without its references and past any failure (a solution skips the dependents of
+          # a project that fails, which hides their own errors).
+          $all = @'
+          <Project>
+            <ItemGroup>
+              <P Include="**\*.vcxproj" Exclude="**\ALL_BUILD.vcxproj;**\ZERO_CHECK.vcxproj;**\INSTALL.vcxproj;**\RUN_TESTS.vcxproj" />
+            </ItemGroup>
+            <Target Name="Build">
+              <MSBuild Projects="@(P)" BuildInParallel="true" ContinueOnError="true" StopOnFirstFailure="false"
+                       Properties="Configuration=Release;Platform=x64;BuildProjectReferences=false" />
+            </Target>
+          </Project>
+          '@
+          Set-Content -Path "$probe\probe.proj" -Value $all
+          & $msbuild "$probe\probe.proj" /m /nologo /v:m
