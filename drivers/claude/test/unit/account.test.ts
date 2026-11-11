@@ -3,7 +3,7 @@
 // prepare), and Claude's environment: the account's login and no inherited one (src/env.ts).
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
@@ -82,7 +82,23 @@ void test('each missing or unsafe login is refused, naming the file and the fix,
         assert.match(refusal(readAccount(home, 'locked')).cause, /cannot be read/);
     }
 
-    for (const name of ['nobody', 'out', 'open', 'group', 'two', 'empty', 'dir', 'locked']) {
+    // A token that is a link (to a file elsewhere, say another tool's login) is refused, whatever the target's mode.
+    const elsewhere = join(home, 'elsewhere-token');
+    writeFileSync(elsewhere, 'sk-elsewhere-secret\n', { mode: 0o600 });
+    const linked = makeAccount('linked');
+    symlinkSync(elsewhere, join(linked, 'oauth-token'));
+    assert.match(refusal(readAccount(home, 'linked')).cause, /is a link/);
+
+    // The account's directory must be the user's own, mode 0700, and not a link.
+    const loose = makeAccount('loose', 'sk-loose-secret\n');
+    chmodSync(loose, 0o755);
+    const looseRefusal = refusal(readAccount(home, 'loose'));
+    assert.match(looseRefusal.cause, /mode 0755/);
+    assert.match(looseRefusal.fix, /chmod 700/);
+    symlinkSync(makeAccount('real', 'sk-real-secret\n'), join(accountsDir(home), 'alias'));
+    assert.match(refusal(readAccount(home, 'alias')).cause, /not a directory of this user's/);
+
+    for (const name of ['nobody', 'out', 'open', 'group', 'two', 'empty', 'dir', 'locked', 'linked', 'loose', 'alias']) {
         const r = readAccount(home, name);
         assert.ok(!JSON.stringify(r).includes('secret'), name);
     }

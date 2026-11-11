@@ -4,7 +4,7 @@
 // 0600), as CLAUDE_CODE_OAUTH_TOKEN, in Claude's environment only. Nothing else is a credential: not the Keychain, not
 // the server's environment, not ~/.claude. The token is never logged, written to the server or put in an argument.
 
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 
 /** An account the driver can start Claude on. */
 export interface Account {
@@ -38,27 +38,21 @@ function makeToken(dir: string): string {
         + `prints, alone on one line, to ${dir}/${kTokenFile} with mode 0600 (\`chmod 600 ${dir}/${kTokenFile}\`)`;
 }
 
-function isDirectory(path: string): boolean {
-    try {
-        return statSync(path).isDirectory();
-    } catch {
-        return false;
-    }
+/** The error's code (ENOENT, ELOOP, EACCES...), or empty. */
+function codeOf(e: unknown): string {
+    const code = (e as { code?: unknown }).code;
+    return typeof code === 'string' ? code : '';
 }
 
-/** The file's mode bits and whether it is a regular file, or undefined if it is missing. */
-function fileMode(path: string): { file: boolean; mode: number } | undefined {
-    try {
-        const s = statSync(path);
-        return { file: s.isFile(), mode: s.mode & 0o777 };
-    } catch {
-        return undefined;
-    }
+/** This process's user id, or undefined where there is none (Windows). */
+function uid(): number | undefined {
+    return process.getuid?.();
 }
 
 /**
- * The account `name` under `home` (HOME): its directory must exist, and its token file must be a regular file no one
- * but its owner can read or write, holding one line. Otherwise why not, and how to fix it; the token never appears in
+ * The account `name` under `home` (HOME): its directory must be a directory of this user's that no one else can reach
+ * (mode 0700), and its token file a regular file, not a link, of this user's that no one else can read or write (mode
+ * 0600), holding one line. Otherwise why not, and how to fix it; the token never appears in
  * either.
  */
 export function readAccount(home: string | undefined, name: string): Account | AccountRefusal {
@@ -71,29 +65,59 @@ export function readAccount(home: string | undefined, name: string): Account | A
             fix: 'fix the driver\'s --account in nexus-server\'s drivers file' };
     }
     const dir = `${accountsDir(home)}/${name}`;
-    if (!isDirectory(dir)) {
+    let dirStat;
+    try {
+        dirStat = lstatSync(dir);
+    } catch {
         return { cause: `the account ${name} has no directory: ${dir} is missing`,
             fix: `make it (\`mkdir -p -m 700 ${dir}\`), then ${makeToken(dir)}` };
     }
+    // The directory itself, never a link to one elsewhere, this user's, and no one else's to change.
+    if (!dirStat.isDirectory() || (uid() !== undefined && dirStat.uid !== uid())) {
+        return { cause: `the account ${name}'s ${dir} is not a directory of this user's (a link, a file or another user's)`,
+            fix: `move it aside and make it again (\`mkdir -p -m 700 ${dir}\`), then ${makeToken(dir)}` };
+    }
+    if ((dirStat.mode & 0o077) !== 0) {
+        return { cause: `the account ${name}'s ${dir} has mode 0${(dirStat.mode & 0o777).toString(8)}, so others can reach its login`,
+            fix: `run \`chmod 700 ${dir}\`` };
+    }
     const path = `${dir}/${kTokenFile}`;
-    const st = fileMode(path);
-    if (st === undefined) {
-        return { cause: `the account ${name} is not logged in: ${path} is missing`, fix: makeToken(dir) };
-    }
-    if (!st.file) {
-        return { cause: `the account ${name}'s token ${path} is not a regular file`, fix: makeToken(dir) };
-    }
-    if ((st.mode & 0o077) !== 0) {
-        return { cause: `the account ${name}'s token ${path} has mode 0${st.mode.toString(8)}, so others can read it`,
-            fix: `run \`chmod 600 ${path}\`, and make a new token if anyone else could have read it: ${makeToken(dir)}` };
+    // Opened without following a link, then checked and read through the same descriptor: what is checked is what is read.
+    let fd: number;
+    try {
+        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (e) {
+        const code = codeOf(e);
+        if (code === 'ENOENT') {
+            return { cause: `the account ${name} is not logged in: ${path} is missing`, fix: makeToken(dir) };
+        }
+        if (code === 'ELOOP' || code === 'EMLINK') {
+            return { cause: `the account ${name}'s token ${path} is a link; the token must be the file itself`,
+                fix: `remove the link, then ${makeToken(dir)}` };
+        }
+        return { cause: `the account ${name}'s token ${path} cannot be read${code === '' ? '' : ` (${code})`}`,
+            fix: `make it readable by the user nexus-server runs as, mode 0600, or ${makeToken(dir)}` };
     }
     let text: string;
     try {
-        text = readFileSync(path, 'utf8');
+        const st = fstatSync(fd);
+        if (!st.isFile()) {
+            return { cause: `the account ${name}'s token ${path} is not a regular file`, fix: makeToken(dir) };
+        }
+        if (uid() !== undefined && st.uid !== uid()) {
+            return { cause: `the account ${name}'s token ${path} belongs to another user`, fix: `remove it, then ${makeToken(dir)}` };
+        }
+        if ((st.mode & 0o077) !== 0) {
+            return { cause: `the account ${name}'s token ${path} has mode 0${(st.mode & 0o777).toString(8)}, so others can read it`,
+                fix: `run \`chmod 600 ${path}\`, and make a new token if anyone else could have read it: ${makeToken(dir)}` };
+        }
+        text = readFileSync(fd, 'utf8');
     } catch (e) {
-        const code = (e as { code?: unknown }).code;
-        return { cause: `the account ${name}'s token ${path} cannot be read${typeof code === 'string' ? ` (${code})` : ''}`,
+        const code = codeOf(e);
+        return { cause: `the account ${name}'s token ${path} cannot be read${code === '' ? '' : ` (${code})`}`,
             fix: `make it readable by the user nexus-server runs as, mode 0600, or ${makeToken(dir)}` };
+    } finally {
+        closeSync(fd);
     }
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
     if (lines.length !== 1 || /\s/.test(lines[0] ?? '')) {

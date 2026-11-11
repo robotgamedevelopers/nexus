@@ -71,8 +71,6 @@ export function runProcess(startHarness: (start: HarnessStart, account: Account)
             return startHarness(start, account);
         },
         newSessionId,
-        // Every account is a token from `claude setup-token` (account.ts).
-        oauthToken: true,
     };
     if (removed.length > 0) {
         host.log(`nexus-claude-driver: removed from Claude's environment: ${removed.join(' ')}`);

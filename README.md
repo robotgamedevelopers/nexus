@@ -71,7 +71,7 @@ the Windows window has no `--server` yet.
 ## Where nexus keeps things
 
 Everything nexus keeps lives under `~/.nexus` (mode 0700), in two homes, each mode 0700 and each with its own
-config; whichever side starts first makes them. Every token and key is a file of mode 0600 there: none is read from
+config. Whichever side starts first makes `~/.nexus`; each side makes its own home. Every token and key is a file of mode 0600 there: none is read from
 the Keychain, the environment or another tool's directory (`~/.claude` included).
 
 ```

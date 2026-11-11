@@ -125,9 +125,8 @@ void test('a stop before the prompt reached the query ends the turn at once; the
     assert.deepEqual(host.harness.calls, []);
 });
 
-async function refusedAtStart(account: object, oauthToken = false): Promise<TestHost> {
+async function refusedAtStart(account: object): Promise<TestHost> {
     const host = new TestHost();
-    host.oauthToken = oauthToken;
     host.prepare = (h) => { h.account = account; };
     const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
@@ -167,7 +166,7 @@ void test('another provider is refused', async () => {
     assert.deepEqual(host.harness.prompts, []);
 });
 
-void test('no subscription is refused; an account token counts as one', async () => {
+void test('no subscription is refused; the account token counts as one only when Claude says it uses it', async () => {
     const none = await refusedAtStart({ apiProvider: 'firstParty' });
     const out = none.take();
     assert.deepEqual(out[1], { kind: 'credential', billing: 'none' });
@@ -175,7 +174,7 @@ void test('no subscription is refused; an account token counts as one', async ()
     assert.equal(none.exitCode, 1);
     assert.deepEqual(none.harness.prompts, []);
 
-    const token = await refusedAtStart({ apiProvider: 'firstParty' }, true);
+    const token = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' });
     assert.deepEqual(token.take()[1], { kind: 'credential', billing: 'subscription' });
     assert.equal(token.exitCode, undefined);
     assert.deepEqual(token.harness.prompts, ['hello']);
@@ -561,7 +560,7 @@ void test('a token source that is an API key or auth token is refused', async ()
         assert.equal(host.exitCode, 1);
         assert.deepEqual(host.harness.prompts, []);
     }
-    const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' }, true);
+    const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' });
     assert.deepEqual(odd.take()[1], { kind: 'credential', billing: 'none' });
     assert.equal(odd.exitCode, 1);
 });

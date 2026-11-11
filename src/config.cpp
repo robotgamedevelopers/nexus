@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <algorithm>
+#include <set>
 
 namespace nexus {
 
@@ -35,6 +36,7 @@ std::string known(const std::vector<std::string>& keys) {
 
 Config parseConfig(std::string_view text, const std::string& path, const std::vector<std::string>& keys) {
     Config config;
+    std::set<std::string> seen;
     std::size_t number = 0;
     while (!text.empty()) {
         ++number;
@@ -55,19 +57,20 @@ Config parseConfig(std::string_view text, const std::string& path, const std::ve
         const std::string key(line.substr(0, end));
         const std::string value(trim(line.substr(end)));
         const std::string where = path + " line " + std::to_string(number) + ": ";
-        if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
-            config.warnings.push_back(where + "\"" + key + "\" is not a setting, so the line is skipped; " +
-                known(keys) + "; remove the line or fix the key");
-            continue;
-        }
+        // A malformed line is an error whatever its key; only a well-formed line can be an unknown setting.
         if (value.empty()) {
             config.errors.push_back(where + "`" + key + "` has no value, so the line is not used; write it as `" + key +
                 " <value>`");
             continue;
         }
-        if (config.values.count(key) != 0) {
+        if (!seen.insert(key).second) {
             config.errors.push_back(where + "`" + key + "` is set again, so the line is not used; keep one `" + key +
                 "` line");
+            continue;
+        }
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+            config.warnings.push_back(where + "\"" + key + "\" is not a setting, so the line is skipped; " +
+                known(keys) + "; remove the line or fix the key");
             continue;
         }
         config.values[key] = value;

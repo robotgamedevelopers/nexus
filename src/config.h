@@ -1,8 +1,9 @@
 // nexus's own settings files: ~/.nexus/client/config for the window (client_home.h) and ~/.nexus/server/config for
 // nexus-server (server/server.h). One setting per line, `<key> <value>`: the key is the line's first word, the value
 // the rest of the line with the spaces around it removed (so a path may hold spaces). A line whose first word starts
-// with `#` is a comment, and blank lines are skipped. A key the side does not know is a warning and is skipped; a key
-// with no value, or a key given twice, is an error naming the file and the line, and that line is not used.
+// with `#` is a comment, and blank lines are skipped. A key with no value, or a key given twice, is an error naming the
+// file and the line, and that line is not used; a well-formed line whose key the side does not know is a warning and
+// is skipped.
 // Pure: parsing only, no files.
 
 #pragma once

@@ -250,9 +250,7 @@ bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     if (!store_.open(*fs_, paths_.store, why))
         return false;
-    const char* home = std::getenv("HOME");
-    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, home != nullptr ? home : "/",
-        Timing{}, nowMs});
+    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     const store::OpenReport& r = store_.report();
@@ -554,10 +552,15 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
 } // namespace
 
 bool paths(const std::string& dir, Paths* out, std::string* why) {
-    std::string d = dir;
-    out->top.clear();
-    if (d.empty() && !serverHome(std::getenv("HOME"), &out->top, &d, why)) {
+    // HOME is needed with --dir too: a friend's directory in the drivers file may start with ~, and a driver finds its
+    // account under it.
+    std::string d;
+    if (!serverHome(std::getenv("HOME"), &out->home, &out->top, &d, why)) {
         return false;
+    }
+    if (!dir.empty()) {
+        d = dir;
+        out->top.clear();
     }
     while (d.size() > 1 && d.back() == '/')
         d.pop_back();

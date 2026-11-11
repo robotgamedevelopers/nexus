@@ -592,14 +592,17 @@ void seedDemo(Model& model, std::size_t tab) {
 
 int main(int argc, char** argv) {
     // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
-    // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged.
+    // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged
+    // (clientConfig also says when there is no home to read it from).
     std::string home;
     std::string homeWhy;
-    const bool haveHome = clientHome(&home, &homeWhy) && makeClientHome(home, &homeWhy);
-    startErrorLog(haveHome ? home : std::string());
-    if (!haveHome) {
+    const bool haveHome = clientHome(&home, &homeWhy);
+    const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
+    startErrorLog(madeHome ? home : std::string());
+    if (haveHome && !madeHome) {
         std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
     }
+    // No dialog for it: launch shows nothing but a hotkey that failed (AGENTS.md). With no home, Windows has no log.
     clientConfig();
     const char* shot = nullptr;
     std::size_t tab = 1;

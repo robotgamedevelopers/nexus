@@ -4,16 +4,17 @@
 
 namespace nexus::server {
 
-bool serverHome(const char* home, std::string* top, std::string* dir, std::string* why) {
+bool serverHome(const char* home, std::string* resolved, std::string* top, std::string* dir, std::string* why) {
     if (home == nullptr || *home == 0) {
-        *why = "HOME is not set, so nexus-server has no home (HOME/.nexus/server); set HOME, or give the directory "
-            "with --dir";
+        *why = "HOME is not set, so nexus-server has no home (HOME/.nexus/server) and no ~ for the drivers file or the "
+            "accounts; start it with HOME set to your home directory";
         return false;
     }
     std::string h = home;
     while (h.size() > 1 && h.back() == '/') {
         h.pop_back();
     }
+    *resolved = h;
     *top = (h == "/" ? std::string() : h) + "/.nexus";
     *dir = *top + "/server";
     return true;

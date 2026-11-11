@@ -27,6 +27,7 @@
 namespace nexus::server {
 
 struct Paths {
+    std::string home;       // $HOME: a friend's ~ in the drivers file
     std::string top;        // $HOME/.nexus, which holds dir, made 0700 first; empty with --dir
     std::string dir;        // --dir, else $HOME/.nexus/server (server/home.h serverHome)
     std::string config;     // <dir>/config: the server's settings (config.h); it takes none yet
@@ -45,8 +46,8 @@ struct Client {
 // An id of 1 to 64 bytes, each a letter, digit, '-' or '_'.
 bool validClientId(const std::string& id);
 
-// The paths under `dir` (empty: $HOME/.nexus/server). False, with why, when there is no HOME or the socket's path is
-// longer than a Unix socket's address holds.
+// The paths under `dir` (empty: $HOME/.nexus/server). False, with why, when there is no HOME (needed with --dir too) or
+// the socket's path is longer than a Unix socket's address holds.
 bool paths(const std::string& dir, Paths* out, std::string* why);
 
 // The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every friend's driver and waits for them.

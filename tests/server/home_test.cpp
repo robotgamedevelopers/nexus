@@ -30,18 +30,19 @@ bool has(const std::string& text, const std::string& part) {
 }
 
 void home() {
+    std::string resolved;
     std::string top;
     std::string dir;
     std::string why;
-    CHECK(serverHome("/home/me", &top, &dir, &why));
-    CHECK(top == "/home/me/.nexus" && dir == "/home/me/.nexus/server");
-    CHECK(serverHome("/home/me//", &top, &dir, &why));
-    CHECK(top == "/home/me/.nexus" && dir == "/home/me/.nexus/server");
-    CHECK(serverHome("/", &top, &dir, &why));
-    CHECK(top == "/.nexus" && dir == "/.nexus/server");
-    CHECK(!serverHome(nullptr, &top, &dir, &why) && has(why, "HOME is not set") && has(why, "--dir"));
+    CHECK(serverHome("/home/me", &resolved, &top, &dir, &why));
+    CHECK(resolved == "/home/me" && top == "/home/me/.nexus" && dir == "/home/me/.nexus/server");
+    CHECK(serverHome("/home/me//", &resolved, &top, &dir, &why));
+    CHECK(resolved == "/home/me" && top == "/home/me/.nexus" && dir == "/home/me/.nexus/server");
+    CHECK(serverHome("/", &resolved, &top, &dir, &why));
+    CHECK(resolved == "/" && top == "/.nexus" && dir == "/.nexus/server");
+    CHECK(!serverHome(nullptr, &resolved, &top, &dir, &why) && has(why, "HOME is not set"));
     why.clear();
-    CHECK(!serverHome("", &top, &dir, &why) && has(why, "HOME is not set"));
+    CHECK(!serverHome("", &resolved, &top, &dir, &why) && has(why, "HOME is not set"));
 }
 
 void parsing() {
@@ -76,8 +77,10 @@ void serverConfig() {
     CHECK(readServerConfig("# nothing yet\n", "/s/config", &warnings, &why) && warnings.empty() && why.empty());
     CHECK(readServerConfig("port 9\n", "/s/config", &warnings, &why));
     CHECK(warnings.size() == 1 && has(warnings[0], "/s/config line 1:") && has(warnings[0], "takes no settings"));
-    CHECK(readServerConfig("\nport\n", "/s/config", &warnings, &why));   // unknown before it is malformed: a warning
-    CHECK(warnings.size() == 1 && has(warnings[0], "line 2"));
+    CHECK(!readServerConfig("\nport\n", "/s/config", &warnings, &why));   // malformed, whatever the key: an error
+    CHECK(warnings.empty() && has(why, "/s/config line 2:") && has(why, "no value"));
+    CHECK(!readServerConfig("port 1\nport 2\n", "/s/config", &warnings, &why));
+    CHECK(warnings.size() == 1 && has(why, "/s/config line 2:") && has(why, "set again"));
 }
 
 } // namespace

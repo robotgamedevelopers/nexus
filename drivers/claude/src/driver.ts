@@ -100,7 +100,6 @@ export interface Host {
     exit(code: number): void;           // end the process (after what was written reaches the server)
     startHarness(start: HarnessStart): Harness;
     newSessionId(): string;
-    oauthToken: boolean;                // the environment carries CLAUDE_CODE_OAUTH_TOKEN (an account's login)
     /** A step of the turn's state machine and the state after it (models/ClaudeDriver.tla); only tests listen. */
     step?(op: string, args: StepArgs, state: DriverState): void;
 }
@@ -460,12 +459,15 @@ export class Driver {
         const plan = info.subscriptionType ?? '';
         const token = info.tokenSource ?? '';
         let billing: Billing;
-        if (provider !== 'firstParty' || keySource !== 'none' || /api.?key|auth.?token|helper/i.test(token)) {
+        // An auth token (ANTHROPIC_AUTH_TOKEN) bills the API; the account's OAuth token (CLAUDE_CODE_OAUTH_TOKEN) does not.
+        const apiToken = /api.?key|helper/i.test(token) || (/auth.?token/i.test(token) && !/oauth/i.test(token));
+        if (provider !== 'firstParty' || keySource !== 'none' || apiToken) {
             billing = 'api-key';
         } else if (plan !== '') {
             billing = 'subscription';
-        } else if (this.host.oauthToken && (token === '' || /oauth/i.test(token))) {
-            // An account's token from `claude setup-token` is a subscription's; Claude may not name the plan for it.
+        } else if (/oauth/i.test(token)) {
+            // The account's token from `claude setup-token` (account.ts) is a subscription's, and Claude may not name
+            // the plan for it; but Claude must say it is using that token, or the session is refused.
             billing = 'subscription';
         } else {
             billing = 'none';

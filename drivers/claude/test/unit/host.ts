@@ -22,7 +22,6 @@ export class TestHost implements Host {
     readonly logs: string[] = [];
     readonly harnesses: FakeHarness[] = [];
     exitCode: number | undefined;
-    oauthToken = false;
     readonly trace = new Trace();
     /** Why this test's trace is not checked against the model: it goes where the model does not (a line the driver
      * refuses, a setting Claude refuses, a model Claude cannot run). */

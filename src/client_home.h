@@ -8,7 +8,8 @@
 //                     its saved preferences (tab_order.h)
 //   nexus.log         on Windows only, its error lines (platform.h startErrorLog)
 //
-// ~/.nexus and ~/.nexus/client are made mode 0700 by whichever of the window and the server starts first.
+// ~/.nexus is made mode 0700 by whichever of the window and the server starts first; the window makes ~/.nexus/client,
+// mode 0700, itself.
 
 #pragma once
 

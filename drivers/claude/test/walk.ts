@@ -90,7 +90,6 @@ class WalkHost implements Host {
     readonly trace = new Trace();
     readonly queries: Query[] = [];
     exited = false;
-    oauthToken = false;
     /** The turns the server has sent and has not yet seen the done of: at most one. */
     awaiting = 0;
     private ids = 0;
