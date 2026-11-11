@@ -183,6 +183,39 @@ void only_queue_touches_a_queue() {
     CHECK(m.tab(0).queue == held);
 }
 
+void take_queued_takes_the_oldest_only() {
+    Model m(three());
+    m.set_draft(1, "first");
+    m.queue(1);
+    m.set_draft(1, "second");
+    m.queue(1);
+    m.set_draft(0, "other");
+    m.queue(0);
+    m.set_draft(1, "draft stays");
+    CHECK(m.take_queued(1));
+    CHECK((m.tab(1).queue == std::vector<std::string>{"second"}));
+    CHECK(m.tab(1).draft == "draft stays");
+    CHECK(m.tab(1).transcript.empty());       // the mirror shows the delivered prompt; take only leaves the queue
+    CHECK((m.tab(0).queue == std::vector<std::string>{"other"}));
+    CHECK(m.active() == 0);
+    CHECK(m.take_queued(1));
+    CHECK(m.tab(1).queue.empty());
+}
+
+void take_queued_refusals_change_nothing() {
+    Model m(three());
+    Model before = m;
+    CHECK(!m.take_queued(1));                   // an empty queue
+    CHECK(!m.take_queued(3));                   // past the tabs
+    CHECK(!m.take_queued(kHuge));
+    CHECK(same(m, before));
+    const std::size_t terminal = m.tab_count();
+    m.add_terminal();
+    before = m;
+    CHECK(!m.take_queued(terminal));            // a terminal's tab has no queue
+    CHECK(same(m, before));
+}
+
 void send_keeps_surrounding_whitespace() {
     Model m(three());
     m.set_draft(0, "  hi\n");
@@ -711,6 +744,8 @@ const Case kCases[] = {
     {"set_draft_out_of_range_changes_nothing", set_draft_out_of_range_changes_nothing},
     {"send_appends_person_and_clears_that_draft", send_appends_person_and_clears_that_draft},
     {"queue_appends_to_that_tabs_queue_not_the_transcript", queue_appends_to_that_tabs_queue_not_the_transcript},
+    {"take_queued_takes_the_oldest_only", take_queued_takes_the_oldest_only},
+    {"take_queued_refusals_change_nothing", take_queued_refusals_change_nothing},
     {"only_queue_touches_a_queue", only_queue_touches_a_queue},
     {"send_keeps_surrounding_whitespace", send_keeps_surrounding_whitespace},
     {"whitespace_drafts_are_refused", whitespace_drafts_are_refused},

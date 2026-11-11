@@ -14,10 +14,12 @@ add_executable(trace_walk trace_walk.cpp)
 target_link_libraries(trace_walk PRIVATE nexus_model)
 target_compile_options(trace_walk PRIVATE ${warnings})
 
-# TabLabel's walk (src/remote.h), for TabLabelTrace.tla.
-add_executable(label_walk label_walk.cpp)
-target_link_libraries(label_walk PRIVATE nexus_window_logic)
-target_compile_options(label_walk PRIVATE ${warnings})
+# TabLabel's walk (src/remote.h), for TabLabelTrace.tla: with the window's logic (NEXUS_WINDOW_LOGIC).
+if(NEXUS_WINDOW_LOGIC)
+    add_executable(label_walk label_walk.cpp)
+    target_link_libraries(label_walk PRIVATE nexus_window_logic)
+    target_compile_options(label_walk PRIVATE ${warnings})
+endif()
 
 # The board scroller's walk (src/scroll_glide.h), for GlideTrace.tla.
 add_executable(glide_walk glide_walk.cpp)
@@ -34,7 +36,10 @@ target_link_libraries(overlay_walk PRIVATE nexus_model)
 target_compile_options(overlay_walk PRIVATE ${warnings})
 
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk label_walk glide_walk overlay_test overlay_walk)
+add_custom_target(model_checks DEPENDS model_test trace_walk glide_walk overlay_test overlay_walk)
+if(NEXUS_WINDOW_LOGIC)
+    add_dependencies(model_checks label_walk)
+endif()
 
 add_test(NAME model_unit COMMAND model_test)
 set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -42,21 +47,21 @@ add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [WORKERS w] [NIGHTLY] [LABEL] [OVERLAY])
+#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [WORKERS w] [NIGHTLY [CAP s]] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
-# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below.
+# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60 (or CAP s): see the instances below.
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
-# (turn, resume).
+# (turn, resume, queue).
 function(tlc_test name module cfg expect)
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" "" ${ARGN})
+        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -67,6 +72,9 @@ function(tlc_test name module cfg expect)
     if(T_NIGHTLY)
         set(label model_nightly)
         set(cap 300)
+        if(T_CAP)
+            set(cap ${T_CAP})
+        endif()
     endif()
     math(EXPR ctest_timeout "${cap} + 30")
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}
@@ -127,6 +135,7 @@ tlc_test(tlc_witness_queue_to_transcript  WQueueToTranscript  WQueueToTranscript
 tlc_test(tlc_witness_queue_wrong_tab      WQueueWrongTab      WQueueWrongTab.cfg      action    PROPERTY SendTouchesNoOtherTab)
 tlc_test(tlc_witness_send_also_queues     WSendAlsoQueues     WSendAlsoQueues.cfg     action    PROPERTY OnlyQueueTouchesQueues)
 tlc_test(tlc_witness_queue_prepends       WQueuePrepends      WQueuePrepends.cfg      action    PROPERTY QueuesOnlyGrow)
+tlc_test(tlc_witness_take_newest          WTakeNewest         WTakeNewest.cfg         action    PROPERTY TakeExact)
 tlc_test(tlc_witness_append_drops_queued  WAppendDropsQueued  WAppendDropsQueued.cfg  action    PROPERTY QueuesOnlyGrow)
 tlc_test(tlc_witness_set_draft_active_too WSetDraftActiveToo  WSetDraftActiveToo.cfg  action    PROPERTY SetDraftExact)
 tlc_test(tlc_witness_select_clears_draft  WSelectClearsDraft  WSelectClearsDraft.cfg  action    PROPERTY SelectExact)
@@ -216,12 +225,14 @@ tlc_test(tlc_witness_label_no_mask         WLabelNoMask        WLabelNoMask.cfg 
 tlc_test(tlc_witness_label_mask_sticks     WLabelMaskSticks    WLabelMaskSticks.cfg    action PROPERTY MaskEnds)
 tlc_test(tlc_witness_label_before_at_start WLabelBeforeAtStart WLabelBeforeAtStart.cfg action PROPERTY BeforeIsOwn)
 tlc_test(tlc_witness_label_no_tail         WLabelNoTail        WLabelNoTail.cfg        action PROPERTY TailRestores)
-foreach(seed 1 2 3)
-    tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
-endforeach()
-tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
-tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
-         LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+if(NEXUS_WINDOW_LOGIC)
+    foreach(seed 1 2 3)
+        tlc_test(tlc_label_trace_seed_${seed} TabLabelTrace TabLabelTrace.cfg pass LABEL SEED ${seed} STEPS 1000 FRIENDS 2)
+    endforeach()
+    tlc_test(tlc_label_trace_three_remotes TabLabelTrace TabLabelTrace.cfg pass LABEL SEED 4 STEPS 1000 FRIENDS 3)
+    tlc_test(tlc_label_trace_faulty_before_rejected TabLabelTrace TabLabelTrace.cfg invariant PROPERTY TraceMatches
+             LABEL SEED 1 STEPS 1000 FRIENDS 2 FAULTY before)
+endif()
 
 # The board's scroller (src/scroll_glide.h): Glide.tla on its small instance, every property.
 tlc_test(tlc_glide_spec MCGlide MCGlide.cfg pass)

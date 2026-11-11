@@ -69,6 +69,7 @@ Step(s) ==
          [] s.op = "set_draft" -> s.text \in TraceDrafts /\ W!SetDraft(s.i, s.text)
          [] s.op = "send"      -> W!Send(s.i)
          [] s.op = "queue"     -> W!Queue(s.i)
+         [] s.op = "take"      -> W!TakeQueued(s.i)
          [] s.op = "append"    -> s.entry \in TraceEntries /\ W!AppendEntry(s.i, s.entry)
          [] s.op = "move"      -> s.j \in TraceIdx /\ W!MoveTab(s.i, s.j)
          [] s.op = "add"       -> W!AddTerminal
@@ -100,6 +101,7 @@ SendAppendsOne == W!SendAppendsOne
 QueueAppendsOne == W!QueueAppendsOne
 QueueLeavesTranscripts == W!QueueLeavesTranscripts
 OnlyQueueTouchesQueues == W!OnlyQueueTouchesQueues
+TakeExact == W!TakeExact
 SendClearsOnlyItsDraft == W!SendClearsOnlyItsDraft
 SendTouchesNoOtherTab == W!SendTouchesNoOtherTab
 AppendExact == W!AppendExact

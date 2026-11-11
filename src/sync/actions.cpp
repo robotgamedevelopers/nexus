@@ -71,8 +71,10 @@ std::vector<Action> Actions::parse(const std::string& diff) {
         Action a;
         a.num = start + i;
         const std::uint8_t kind = r.byte();
-        if (kind != static_cast<std::uint8_t>(ActionKind::Send) && kind != static_cast<std::uint8_t>(ActionKind::Queue))
-            throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", neither send (1) nor queue (2)");
+        if (kind < static_cast<std::uint8_t>(ActionKind::Send) || kind > static_cast<std::uint8_t>(ActionKind::Stop)) {
+            throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", none of send (1), queue (2) "
+                "and stop (3)");
+        }
         a.kind = static_cast<ActionKind>(kind);
         a.tab = r.str();
         a.text = r.str();

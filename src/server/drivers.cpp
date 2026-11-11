@@ -22,6 +22,15 @@ namespace nexus::server {
 
 namespace {
 
+// posix_spawn's way to start a child with no descriptor of ours but the ones its file actions name: on macOS the flag
+// POSIX_SPAWN_CLOEXEC_DEFAULT (and addinherit_np for one to keep as it is); on Linux, glibc's addclosefrom_np(3) after
+// the other file actions, which leaves 0 to 2 as they are.
+#if defined(__APPLE__)
+constexpr short kSpawnCloseOthers = POSIX_SPAWN_CLOEXEC_DEFAULT;
+#else
+constexpr short kSpawnCloseOthers = 0;
+#endif
+
 sync::EntryRef entry(EntryKind kind, std::string text) {
     return std::make_shared<const sync::TabEntry>(sync::TabEntry{kind, std::move(text), true});
 }
@@ -58,6 +67,7 @@ void append(Output& into, Output from) {
     if (from.sessionCostUsd) {
         into.sessionCostUsd = from.sessionCostUsd;
     }
+    into.taken += from.taken;
 }
 
 // Starts `argv` with its standard input and output on pipes (ours non-blocking), its standard error this process's,
@@ -86,11 +96,15 @@ pid_t spawnDriver(const std::vector<std::string>& argv, int* in, int* out, std::
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_adddup2(&files, toChild[0], 0);
     posix_spawn_file_actions_adddup2(&files, fromChild[1], 1);
+#if defined(__APPLE__)
     posix_spawn_file_actions_addinherit_np(&files, 2);
+#else
+    posix_spawn_file_actions_addclosefrom_np(&files, 3);
+#endif
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK |
-        POSIX_SPAWN_CLOEXEC_DEFAULT);
+        kSpawnCloseOthers);
     posix_spawnattr_setpgroup(&attr, 0);
     sigset_t defaults;
     sigemptyset(&defaults);
@@ -179,11 +193,15 @@ Config Drivers::config(const std::string& tab, const ResolvedDriver& driver) con
 
 bool Drivers::start(Millis now) {
     for (const std::string& name : store_.names()) {
-        sync::DriverState state = store_.find(name)->driver;
-        if (state.openTurn == 0 && state.waiting.empty()) {
+        const sync::StoredTab* stored = store_.find(name);
+        sync::DriverState state = stored->driver;
+        if (state.openTurn == 0 && state.waiting.empty() && stored->queue.empty()) {
             continue;
         }
         const ResolvedDriver r = resolve(name);
+        if (!r.problem.empty() && state.openTurn == 0 && state.waiting.empty()) {
+            continue;   // only queued prompts, and no driver to give them: they stay queued, as they are
+        }
         std::string dropped;
         if (!r.problem.empty() && !state.waiting.empty()) {
             dropped = std::to_string(state.waiting.size()) + " prompt" + (state.waiting.size() == 1 ? "" : "s") +
@@ -191,7 +209,7 @@ bool Drivers::start(Millis now) {
             state.waiting.clear();
         }
         Output out;
-        tabs_.emplace(name, Tab(Supervisor(config(name, r), state, now, &out)));
+        tabs_.emplace(name, Tab(Supervisor(config(name, r), state, now, &out, stored->queue)));
         if (!dropped.empty()) {
             out.effects.push_back(Effect{Effect::What::Notice, dropped, 0});
             out.durable = true;
@@ -203,6 +221,23 @@ bool Drivers::start(Millis now) {
     return true;
 }
 
+// The tab's supervisor as the action in progress changes it: a copy of the one running, or a new one over what the
+// store holds, kept aside until the hub has committed the action (sent()).
+Supervisor& Drivers::pending(const std::string& tab, const ResolvedDriver& driver, Millis now) {
+    auto it = tabs_.find(tab);
+    if (it != tabs_.end()) {
+        pendingSup_ = it->second.sup;
+        // A friend whose driver no longer resolves has none: what is queued stays queued until it has one again.
+        pendingSup_->configure(driver.problem.empty() ? driver.command : std::vector<std::string>{}, driver.cwd,
+            options_.table);
+    } else {
+        const sync::StoredTab* stored = store_.find(tab);
+        pendingSup_.emplace(config(tab, driver), stored != nullptr ? stored->driver : sync::DriverState{}, now,
+            &pendingOut_, stored != nullptr ? stored->queue : std::vector<std::string>{});
+    }
+    return *pendingSup_;
+}
+
 std::vector<sync::TabChange> Drivers::send(const std::string& tab, const std::string& prompt) {
     const Millis now = options_.clock();
     pendingSup_.reset();
@@ -212,27 +247,46 @@ std::vector<sync::TabChange> Drivers::send(const std::string& tab, const std::st
         return {sync::TabChange{entry(EntryKind::Person, prompt), {}}, sync::TabChange{entry(EntryKind::Notice,
             r.problem), {}}};
     }
+    Supervisor& sup = pending(tab, r, now);
+    append(pendingOut_, sup.prompt(prompt, now));
+    return changes(pendingOut_, sup);
+}
+
+// The prompt at the end of the queue first: the supervisor's output follows it, and takes from the head.
+std::vector<sync::TabChange> Drivers::queue(const std::string& tab, const std::string& prompt) {
+    const Millis now = options_.clock();
+    pendingSup_.reset();
+    pendingOut_ = Output{};
+    std::vector<sync::TabChange> out = {sync::TabChange{nullptr, prompt}};
+    const ResolvedDriver r = resolve(tab);
+    if (!r.problem.empty() && tabs_.find(tab) == tabs_.end()) {
+        return out;     // no driver to give it to: it stays queued until the tab has one
+    }
+    Supervisor& sup = pending(tab, r, now);
+    append(pendingOut_, sup.queued(prompt, now));
+    for (sync::TabChange& c : changes(pendingOut_, sup)) {
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+// A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
+// A stop of a start cancels the turn about to begin: its prompt leaves the waiting prompts, committed with a notice.
+std::vector<sync::TabChange> Drivers::stop(const std::string& tab) {
+    pendingSup_.reset();
+    pendingOut_ = Output{};
     auto it = tabs_.find(tab);
-    if (it != tabs_.end()) {
-        pendingSup_ = it->second.sup;
-        pendingSup_->configure(r.command, r.cwd, options_.table);
-    } else {
-        const sync::StoredTab* stored = store_.find(tab);
-        pendingSup_.emplace(config(tab, r), stored != nullptr ? stored->driver : sync::DriverState{}, now, &pendingOut_);
+    if (it == tabs_.end()) {
+        return {};      // no supervisor: no driver runs for the tab, so nothing to stop
     }
-    append(pendingOut_, pendingSup_->prompt(prompt, now));
-    std::vector<sync::TabChange> changes;
-    for (const Effect& e : pendingOut_.effects) {
-        changes.push_back(sync::TabChange{entry(entryKind(e.what), e.text), {}});
-    }
-    if (pendingOut_.durable) {
-        changes.push_back(sync::TabChange{nullptr, {}, pendingSup_->state()});
-    }
-    return changes;
+    pendingSup_ = it->second.sup;
+    append(pendingOut_, pendingSup_->stop(options_.clock()));
+    return changes(pendingOut_, *pendingSup_);
 }
 
 void Drivers::sent(const std::string& tab, bool committed) {
     if (!committed || !pendingSup_) {
+        pendingSup_.reset();
         return;
     }
     auto it = tabs_.find(tab);
@@ -243,11 +297,6 @@ void Drivers::sent(const std::string& tab, bool committed) {
     }
     pendingSup_.reset();
     run(tab, std::move(pendingOut_), options_.clock(), true);
-}
-
-bool Drivers::stop(const std::string& tab, Millis now) {
-    auto it = tabs_.find(tab);
-    return it == tabs_.end() || run(tab, it->second.sup.stop(now), now, false);
 }
 
 bool Drivers::shutdown(Millis now) {
@@ -273,15 +322,30 @@ pid_t Drivers::pid(const std::string& tab) const {
     return it == tabs_.end() || !it->second.proc ? -1 : it->second.proc->pid;
 }
 
-// The step's effects and durable state, in one step of the store.
-bool Drivers::commit(const std::string& tab, const Output& out, bool* changed) {
+// An output as the changes of one step of the store: the prompts it took from the queue's head, its entries, and the
+// supervisor's durable state when it changed.
+std::vector<sync::TabChange> Drivers::changes(const Output& out, const Supervisor& sup) const {
     std::vector<sync::TabChange> changes;
+    for (std::size_t i = 0; i < out.taken; ++i) {
+        changes.push_back(sync::takeQueued());
+    }
     for (const Effect& e : out.effects) {
         changes.push_back(sync::TabChange{entry(entryKind(e.what), e.text), {}});
     }
     if (out.durable) {
-        changes.push_back(sync::TabChange{nullptr, {}, tabs_.at(tab).sup.state()});
+        changes.push_back(sync::TabChange{nullptr, {}, sup.state()});
     }
+    return changes;
+}
+
+// The friend's text still growing, as the tab's open entry: in memory only, never in the store. True when it changed.
+bool Drivers::showOpen(const std::string& tab, const Tab& t) {
+    return hub_->setOpen(tab, t.sup.gathered());
+}
+
+// The step's effects and durable state, in one step of the store.
+bool Drivers::commit(const std::string& tab, const Output& out, bool* changed) {
+    const std::vector<sync::TabChange> changes = this->changes(out, tabs_.at(tab).sup);
     if (changes.empty()) {
         return true;
     }
@@ -298,12 +362,12 @@ bool Drivers::commit(const std::string& tab, const Output& out, bool* changed) {
 
 // An output: committed (unless it was already, with the window's action), then its commands carried out in order;
 // what carrying them out gives (a driver that could not start) goes the same way.
-bool Drivers::run(const std::string& tab, Output out, Millis now, bool committed) {
+bool Drivers::run(const std::string& tab, Output out, Millis now, bool committed, bool* changed) {
     std::vector<Output> queue;
     queue.push_back(std::move(out));
     for (std::size_t i = 0; i < queue.size(); ++i) {
         Output o = std::move(queue[i]);
-        if (!(i == 0 && committed) && !commit(tab, o)) {
+        if (!(i == 0 && committed) && !commit(tab, o, changed)) {
             return false;
         }
         if (o.credential) {
@@ -323,6 +387,9 @@ bool Drivers::run(const std::string& tab, Output out, Millis now, bool committed
         for (Output& m : more) {
             queue.push_back(std::move(m));
         }
+    }
+    if (showOpen(tab, tabs_.at(tab)) && changed != nullptr) {
+        *changed = true;
     }
     return true;
 }
@@ -506,14 +573,16 @@ bool Drivers::serve(Millis now, bool* changed) {
             append(out, t.sup.closed(t.proc->broken, now));
         }
         append(out, t.sup.tick(now));
-        const bool any = !out.effects.empty() || out.durable || !out.commands.empty();
+        const bool any = !out.effects.empty() || out.durable || !out.commands.empty() || out.taken != 0;
         if (any) {
             if (!commit(name, out, changed)) {
                 return false;
             }
-            if (!run(name, std::move(out), now, true)) {
+            if (!run(name, std::move(out), now, true, changed)) {
                 return false;
             }
+        } else if (showOpen(name, t) && changed != nullptr) {
+            *changed = true;    // text that only grew changes nothing durable: it shows as the open entry
         }
     }
     return true;

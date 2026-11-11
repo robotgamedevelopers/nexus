@@ -34,7 +34,7 @@ endif()
 
 add_dependencies(model_checks supervisor_walk supervisor_test)
 
-foreach(group start turns waiting protocol deadlines text failed_starts credential stop shutdown restart)
+foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown restart)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -44,7 +44,8 @@ set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30
 # Each case in a directory of its own under the build tree.
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
-                 orphan escaped_output)
+                 orphan escaped_output queue queue_unconfigured restart_unconfigured
+                 stop_hammered)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -53,7 +54,8 @@ endif()
 
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)
-tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
+tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_supervisor_witness_resend_after_cut WSupResendAfterCut WSupResendAfterCut.cfg invariant PROPERTY AtMostOnce)
@@ -68,14 +70,24 @@ tlc_test(tlc_supervisor_witness_text_lost      WSupTextLost      WSupTextLost.cf
 tlc_test(tlc_supervisor_witness_start_fresh    WSupStartFresh    WSupStartFresh.cfg    action    PROPERTY StartsSound)
 tlc_test(tlc_supervisor_witness_send_no_credential WSupSendNoCredential WSupSendNoCredential.cfg action
          PROPERTY NoSendWithoutCredential)
+tlc_test(tlc_supervisor_witness_take_while_open WSupTakeWhileOpen WSupTakeWhileOpen.cfg action PROPERTY TakesAtTurnEnd)
+tlc_test(tlc_supervisor_witness_take_newest    WSupTakeNewest    WSupTakeNewest.cfg    action    PROPERTY TakesAtTurnEnd)
+tlc_test(tlc_supervisor_witness_take_keeps     WSupTakeKeeps     WSupTakeKeeps.cfg     invariant PROPERTY QueueSound)
+tlc_test(tlc_supervisor_witness_stop_again     WSupStopAgain     WSupStopAgain.cfg     invariant PROPERTY StopOnce)
+tlc_test(tlc_supervisor_witness_stop_start_ignored WSupStopStartIgnored WSupStopStartIgnored.cfg action
+         PROPERTY StopEndsWhatRuns)
+tlc_test(tlc_supervisor_witness_stop_latched   WSupStopLatched   WSupStopLatched.cfg   action    PROPERTY NoLatchedStop)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
-foreach(seed 1 2 3 4)
+foreach(seed 1 2 3 4 12)
     tlc_test(tlc_supervisor_trace_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK SEED ${seed} STEPS 600)
 endforeach()
 
-# The binding can fail: a restart that loses the next turn number or the session id must be rejected.
+# The binding can fail: a restart that loses the next turn number, the session id or the queue must be rejected. The
+# queue's seed is one whose walk restarts with prompts queued.
 foreach(fault turn resume)
     tlc_test(tlc_supervisor_trace_faulty_${fault}_rejected SupervisorTrace SupervisorTrace.cfg invariant
              PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY ${fault})
 endforeach()
+tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK SEED 12 STEPS 600 FAULTY queue)

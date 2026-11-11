@@ -21,11 +21,11 @@
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
-#               mirror, tail
+#               mirror, tail, close
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
-#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -69,10 +69,10 @@ get_filename_component(cfg_name "${CFG}" NAME)
 
 if(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume")
+    if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn or resume")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume or queue")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
@@ -95,10 +95,10 @@ elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     endif()
 elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")
-    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail")
+    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail" OR FAULTY STREQUAL "close")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror or tail")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror, tail or close")
     endif()
     execute_process(COMMAND "${LINKWALK}" ${walk_args} "${WORK}/LinkTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

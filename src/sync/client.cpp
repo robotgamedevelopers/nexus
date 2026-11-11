@@ -41,4 +41,12 @@ bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* tex
     return true;
 }
 
+bool stopTarget(const Model& model, std::size_t i, std::string* tab) {
+    if (i >= model.tab_count() || model.tab(i).kind != TabKind::Friend) {
+        return false;
+    }
+    *tab = model.tab(i).name;
+    return true;
+}
+
 } // namespace nexus::sync

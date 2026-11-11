@@ -11,8 +11,13 @@
 //   driver <harness> <program> [<argument>...]
 //   friend <name> <harness> [<directory>]
 
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +39,7 @@ int usage() {
 }
 
 // This program's own path, to start the server with.
+#if defined(__APPLE__)
 std::string selfPath() {
     std::uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
@@ -47,6 +53,26 @@ std::string selfPath() {
     std::free(real);
     return out;
 }
+#else
+// /proc/self/exe itself when its target cannot be resolved: it still starts this program, even one replaced on disk.
+// Empty, with the cause on standard error, only when it cannot be read at all.
+std::string selfPath() {
+    const char* const exe = "/proc/self/exe";
+    char* real = realpath(exe, nullptr);
+    if (real != nullptr) {
+        std::string out(real);
+        std::free(real);
+        return out;
+    }
+    const int realpathError = errno;
+    if (access(exe, X_OK) == 0) {
+        return exe;
+    }
+    std::fprintf(stderr, "nexus-server: cannot find this program's own path to start the server with: realpath(%s): "
+        "%s (is /proc mounted?)\n", exe, std::strerror(realpathError));
+    return std::string();
+}
+#endif
 
 } // namespace
 

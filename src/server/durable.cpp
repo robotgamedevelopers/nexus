@@ -61,7 +61,9 @@ bool DurableStore::commit(const std::string& name, const std::vector<sync::TabCh
     out.reserve(changes.size());
     for (const sync::TabChange& c : changes) {
         store::Change sc;
-        if (c.driver) {
+        if (c.take) {
+            sc.kind = store::Change::Kind::Dequeue;
+        } else if (c.driver) {
             sc.kind = store::Change::Kind::SetDriver;
             sc.driver = toDriver(*c.driver);
         } else if (c.entry) {
@@ -82,12 +84,15 @@ bool DurableStore::commit(const std::string& name, const std::vector<sync::TabCh
     if (!changes.empty()) {
         sync::StoredTab& t = tabs_[name];
         for (const sync::TabChange& c : changes) {
-            if (c.driver)
+            if (c.take) {
+                t.queue.erase(t.queue.begin());     // the store refused the step had the queue nothing left
+            } else if (c.driver) {
                 t.driver = *c.driver;
-            else if (c.entry)
+            } else if (c.entry) {
                 t.transcript.push_back(c.entry);
-            else
+            } else {
                 t.queue.push_back(c.prompt);
+            }
         }
     }
     return true;

@@ -104,8 +104,8 @@ EntryKind entryKind(Effect::What what) {
     return EntryKind::Notice;
 }
 
-Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Output* out)
-    : config_(std::move(config)), state_(std::move(state)) {
+Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Output* out, std::vector<std::string> queue)
+    : config_(std::move(config)), state_(std::move(state)), queue_(std::move(queue)) {
     if (state_.openTurn != 0) {
         effect(Effect::What::Cut, "The reply was cut short: nexus-server restarted while " + config_.name +
             " was answering. Whether " + config_.name + " got the prompt is unknown; send it again if you still want "
@@ -154,11 +154,28 @@ Output Supervisor::prompt(const std::string& text, Millis now) {
     return finish();
 }
 
+Output Supervisor::queued(const std::string& text, Millis now) {
+    queue_.push_back(text);
+    if (held_) {
+        held_ = false;
+        failed_ = 0;
+    }
+    advance(now);
+    return finish();
+}
+
+// A stop ends what runs when it arrives: the open turn, or, while the driver starts, the turn about to begin (its
+// prompt is never written; the driver keeps starting for the next). Finding the turn already stopping, or nothing
+// running, it changes nothing: no stop is kept for a later turn.
 Output Supervisor::stop(Millis now) {
     if (phase_ == Phase::Working) {
         command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
         phase_ = Phase::Stopping;
         deadline_ = now + config_.timing.stop;
+    } else if (phase_ == Phase::Starting && !state_.waiting.empty()) {
+        state_.waiting.erase(state_.waiting.begin());
+        effect(Effect::What::Stopped, "Stopped.");
+        out_.durable = true;
     }
     return finish();
 }
@@ -425,9 +442,11 @@ void Supervisor::startDriver(Millis now) {
         return;
     }
     std::vector<std::string> argv = config_.command;
-    argv.insert(argv.end(), {"--cwd", config_.cwd});
-    if (!state_.session.empty()) {
-        argv.insert(argv.end(), {"--resume", state_.session});
+    if (!argv.empty()) {        // none configured: the start fails, as no program is configured
+        argv.insert(argv.end(), {"--cwd", config_.cwd});
+        if (!state_.session.empty()) {
+            argv.insert(argv.end(), {"--resume", state_.session});
+        }
     }
     command(Command::Kind::Start, std::move(argv));
     phase_ = Phase::Starting;
@@ -456,8 +475,32 @@ void Supervisor::writeNext() {
     phase_ = Phase::Working;
 }
 
-// What follows every event: a driver started for a waiting prompt, or the prompt written to an idle one.
+// With a driver configured, no turn open, nothing waiting and starting not held back, the oldest queued prompt leaves
+// the queue and waits, shown as the person's entry: one per turn. One that cannot be written as a protocol line (the
+// hub's text limit keeps every prompt far within the line limit, so only text that is not UTF-8) leaves the queue with
+// a notice, and the next is taken in its place.
+void Supervisor::take() {
+    while (!config_.command.empty() && state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ &&
+           !queue_.empty()) {
+        std::string text = std::move(queue_.front());
+        queue_.erase(queue_.begin());
+        ++out_.taken;
+        const Encoded line = encode(Send{state_.nextTurn, text});
+        if (!line.error.empty()) {
+            effect(Effect::What::Notice, "A queued prompt to " + config_.name + " was not sent: " +
+                sentence(line.error));
+            continue;
+        }
+        effect(Effect::What::Prompt, text);
+        state_.waiting.push_back(std::move(text));
+        out_.durable = true;
+    }
+}
+
+// What follows every event: the oldest queued prompt taken at a turn's end, a driver started for a waiting prompt, or
+// the prompt written to an idle one.
 void Supervisor::advance(Millis now) {
+    take();
     startDriver(now);
     writeNext();
 }

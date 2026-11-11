@@ -4,19 +4,22 @@
 EXTENDS MCLink
 
 BrokenFirst(s) == Max(0, Len(s) - W - 1)
-BrokenSnap(trs, qs) == [t \in TabNames |-> [first   |-> BrokenFirst(trs[t]),
-                                            entries |-> SubSeq(trs[t], TailFirst(trs[t]) + 1, Len(trs[t])),
-                                            queue   |-> qs[t]]]
+BrokenSnap(trs, qs, ops) == [t \in TabNames |-> LET s == trs[t] IN
+                                                [first   |-> BrokenFirst(s),
+                                                 entries |-> SubSeq(s, TailFirst(s) + 1, Len(s)) \o OpenOf(ops, t),
+                                                 queue   |-> qs[t]]]
 
 BrokenApplier(c, first, lst) ==
     IF first > applied[c] + 1 \/ lst <= applied[c]
-    THEN UNCHANGED <<applied, done, tr, q, snaps>>
-    ELSE LET r == ApplyAll(c, applied[c] + 1, lst, tr, q) IN
+    THEN UNCHANGED <<applied, done, server>>
+    ELSE LET r == ApplyAll(c, applied[c] + 1, lst, [trs |-> tr, qs |-> q, sts |-> stops]) IN
          /\ applied' = [applied EXCEPT ![c] = lst]
          /\ done' = [done EXCEPT ![c] = @ \o Numbers(applied[c] + 1, lst)]
          /\ tr' = r.trs
          /\ q' = r.qs
-         /\ snaps' = Append(snaps, BrokenSnap(r.trs, r.qs))
+         /\ stops' = r.sts
+         /\ snaps' = Append(snaps, BrokenSnap(r.trs, r.qs, op))
+         /\ UNCHANGED <<op, made>>
 
 BrokenDeliver(c, first, lst) == DeliverWith(BrokenApplier, c, first, lst)
 

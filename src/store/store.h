@@ -20,7 +20,8 @@
 // whole state is written as the journal's snapshot and the log starts again.
 //
 // A record: u8 format (1); str tab; u32 count, then each change: u8 kind, and for an append u8 entry kind, u8 closed,
-// str text, for an enqueue str prompt, for a driver the driver; then str client (empty: none) and u64 its new counter.
+// str text, for an enqueue str prompt, for a dequeue nothing (the queue's oldest prompt leaves it), for a driver the
+// driver; then str client (empty: none) and u64 its new counter.
 // A driver: u64 next turn, u64 open turn, str session, u32 waiting prompts (str). The snapshot: u8 format (2); u32
 // tabs, each str name, u32 entries (u8 kind, u8 closed, str text), u32 prompts (str), the driver; u32 clients, each str
 // client, u64 counter. A snapshot of format 1 (written before drivers) has no driver and is read with the default one.
@@ -54,10 +55,10 @@ struct Tab {
 };
 
 struct Change {
-    enum class Kind : std::uint8_t { Append = 1, Enqueue = 2, SetDriver = 3 };
+    enum class Kind : std::uint8_t { Append = 1, Enqueue = 2, SetDriver = 3, Dequeue = 4 };
     Kind kind = Kind::Append;
     Entry entry;          // Append: the entry added at the end of the transcript
-    std::string prompt;   // Enqueue: the prompt added at the end of the queue
+    std::string prompt;   // Enqueue: the prompt added at the end of the queue. Dequeue: the oldest prompt leaves it
     Driver driver;        // SetDriver: the tab's driver, replaced whole
 };
 
@@ -81,9 +82,9 @@ public:
 
     // One durable step, all or none: `changes` to the tab named `tab` (made if it does not exist), and, when `client`
     // is not empty, that client's counter set to `num`. Refused, changing nothing: a change with no tab name, a step
-    // with nothing in it, or a `num` other than one past the client's counter (an action applied twice, or one
-    // skipped). Failed: the write or the sync failed; what reached the disk is unknown, and the store refuses every
-    // later step until it is opened again.
+    // with nothing in it, a dequeue from a queue with nothing left in it, or a `num` other than one past the client's
+    // counter (an action applied twice, or one skipped). Failed: the write or the sync failed; what reached the disk is
+    // unknown, and the store refuses every later step until it is opened again.
     Status commit(const std::string& tab, std::span<const Change> changes, const std::string& client = std::string(),
                   std::uint64_t num = 0);
 
@@ -96,6 +97,7 @@ public:
 private:
     Store(Fs& fs, std::string dir, const StoreOptions& options);
     void apply(const std::string& tab, std::span<const Change> changes, const std::string& client, std::uint64_t num);
+    bool dequeues_fit(const std::string& tab, std::span<const Change> changes) const;
     Status replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq);
     Status replay_snapshot(std::span<const std::uint8_t> snap);
     Bytes encode_snapshot() const;

@@ -3,12 +3,13 @@
 # pacing, fragmentation and diff-based retransmission. Pinned to a release tag, compiled from its own sources unmodified.
 # GPL v3 section 13 lets it be combined with nexus's AGPL v3; its notices stay in its files (see README.md, Licence).
 #
-# Only what Network::Transport needs is built: src/network, src/crypto with mosh's own OCB over Apple's CommonCrypto AES
-# (its `--with-crypto-library=apple-common-crypto`, no library to install), src/util/timestamp.cc, and the Instruction
-# protobuf it sends. mosh is built with autotools; its config.h is generated here from the same checks its configure.ac
+# Only what Network::Transport needs is built: src/network, src/crypto with mosh's own OCB over the platform's AES (on
+# macOS Apple's CommonCrypto, its `--with-crypto-library=apple-common-crypto`, no library to install; elsewhere OpenSSL's
+# libcrypto, its `--with-crypto-library=openssl`), src/util/timestamp.cc, and the Instruction protobuf it sends. mosh is built with autotools; its config.h is generated here from the same checks its configure.ac
 # makes (cmake/mosh_config.h.in).
 #
-# Needs protobuf (its CMake package and protoc) and zlib. On macOS: `brew install protobuf`; zlib is in the SDK.
+# Needs protobuf (its CMake package and protoc) and zlib; and OpenSSL's libcrypto off macOS. On macOS: `brew install
+# protobuf`; zlib is in the SDK. On Ubuntu: `apt install libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev`.
 
 include(CheckCXXSourceCompiles)
 include(CheckIncludeFileCXX)
@@ -52,9 +53,19 @@ check_include_file_cxx(sys/uio.h HAVE_SYS_UIO_H)
 check_include_file_cxx(endian.h HAVE_ENDIAN_H)
 check_include_file_cxx(sys/endian.h HAVE_SYS_ENDIAN_H)
 check_include_file_cxx(strings.h HAVE_STRINGS_H)
-check_include_file_cxx(CommonCrypto/CommonCrypto.h HAVE_COMMONCRYPTO)
-if(NOT HAVE_COMMONCRYPTO)
-    message(FATAL_ERROR "nexus: mosh's crypto is built over Apple's CommonCrypto here, and its header was not found.")
+if(APPLE)
+    check_include_file_cxx(CommonCrypto/CommonCrypto.h HAVE_COMMONCRYPTO)
+    if(NOT HAVE_COMMONCRYPTO)
+        message(FATAL_ERROR "nexus: mosh's crypto is built over Apple's CommonCrypto here, and its header was not found.")
+    endif()
+    set(USE_APPLE_COMMON_CRYPTO_AES ON)
+else()
+    find_package(OpenSSL 3 COMPONENTS Crypto)
+    if(NOT OpenSSL_FOUND)
+        message(FATAL_ERROR "nexus: mosh's crypto is built over OpenSSL's libcrypto here, and it was not found. Install "
+            "it (on Ubuntu: apt install libssl-dev), or configure with -DNEXUS_LINK=OFF.")
+    endif()
+    set(USE_OPENSSL_AES ON)
 endif()
 check_symbol_exists(IP_MTU_DISCOVER netinet/in.h HAVE_IP_MTU_DISCOVER)
 check_symbol_exists(IP_RECVTOS netinet/in.h HAVE_IP_RECVTOS)
@@ -115,6 +126,9 @@ target_include_directories(mosh_transport SYSTEM PUBLIC
 # that clang raises on them by default (deprecated declarations among them), so the build log stays clean.
 target_compile_options(mosh_transport PRIVATE -w)
 target_link_libraries(mosh_transport PUBLIC protobuf::libprotobuf-lite ZLIB::ZLIB)
+if(USE_OPENSSL_AES)
+    target_link_libraries(mosh_transport PUBLIC OpenSSL::Crypto)
+endif()
 # The generated message code is built as the protobuf library it calls was: release, without sanitizers. Built without
 # NDEBUG, or with a sanitizer, protobuf's headers switch on a test-only check (DebugHardenCheckHasBitConsistency in
 # protobuf's port.h) that calls into the library, and a release library (Homebrew's) faults in it on the first message

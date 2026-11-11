@@ -1,13 +1,18 @@
-# nexus: one person and several AIs in one window. The window builds on macOS and 64-bit Windows; nexus-server on macOS.
+# nexus: one person and several AIs in one window. The window runs on macOS; on 64-bit Windows it builds against Prax's
+# Win32 backend where Prax allows (NEXUS_WINDOW below); on Linux the parts without a window build and test.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
 project(nexus LANGUAGES C CXX)
-# The window's AppKit code (src/platform_mac.mm) is Objective-C++.
+# The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
+endif()
+# Windows is 64-bit only: there is no 32-bit build.
+if(WIN32 AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "nexus: Windows builds are 64-bit only; configure with -A x64")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -33,9 +38,35 @@ else()
     set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# The window: the app and the libraries and tests that draw or set text (the view, the terminal tabs, the sprint tab).
+# On by default on macOS only: Prax's lib/app has backends for Cocoa, Win32 and the web, none for Linux, and its
+# lib/font finds the system's fonts through CoreText and DirectWrite only. On Windows, ON builds the app against Prax's
+# Win32 backend, which does not compile at this pin (lib/app/backends/win32/src/app_win32.cpp), so it is off there too. Off, everything else still builds and tests:
+# the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
+option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
+# The window's logic (src/friends.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
+# their tests) starts processes through Prax's lib/process. On by default on macOS only: at this Prax pin, lib/process's
+# POSIX backend does not link on Linux (process_posix.cpp declares `environ` inside its own namespace, so the symbol is
+# never defined), so off macOS those parts are left out until Prax fixes it.
+option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and what uses it (the link included)" ${APPLE})
+if(NEXUS_WINDOW AND NOT NEXUS_WINDOW_LOGIC)
+    message(FATAL_ERROR "nexus: the window needs its logic; configure with -DNEXUS_WINDOW_LOGIC=ON or -DNEXUS_WINDOW=OFF")
+endif()
+if(NEXUS_WINDOW AND NOT APPLE AND NOT WIN32)
+    message(STATUS "nexus: the window's libraries and their tests are built, but not the app, whose platform layer is "
+        "macOS's (src/platform_mac.mm): Prax's lib/app has no backend here")
+endif()
+
 # The link between the window and nexus-server: mosh's transport (cmake/mosh.cmake), which needs protobuf. OFF builds
-# without nexus-server and without the window's --server; the model checks need neither.
-option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)" ON)
+# without nexus-server and without the window's --server; the model checks need neither. It uses the window's logic, so
+# it is on by default where that is.
+option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)"
+    ${NEXUS_WINDOW_LOGIC})
+if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
+    message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
+        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
+        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
+endif()
 if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()
@@ -57,8 +88,8 @@ target_link_libraries(nexus_sync PUBLIC nexus_model)
 # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
 # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
 add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/store.cpp)
-# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS, and Windows builds only the window, which
-# never opens the store. The store's unit tests (MemFs) build everywhere.
+# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS and Linux, and Windows builds only the
+# window, which never opens the store. The store's unit tests (MemFs) build everywhere.
 if(NOT WIN32)
     target_sources(nexus_store PRIVATE src/store/posix_fs.cpp)
 endif()
@@ -100,35 +131,39 @@ add_library(nexus_scroll STATIC src/scroll_glide.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
-# The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
-# them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
-# which events go to it, the script nexus adds to it).
-add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
-target_include_directories(nexus_window_logic PUBLIC src)
-target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+if(NEXUS_WINDOW_LOGIC)
+    # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
+    # them), a terminal tab's label in ssh (remote.h), the saved tab order, and the sprint tab's (where the board is served,
+    # which events go to it, the script nexus adds to it).
+    add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp)
+    target_include_directories(nexus_window_logic PUBLIC src)
+    target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_window_logic PUBLIC nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+endif()
 
-# The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
-add_library(nexus_view STATIC src/view.cpp)
-target_include_directories(nexus_view PUBLIC src)
-target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_view PUBLIC nexus_window_logic
-    prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
+if(NEXUS_WINDOW)
+    # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
+    add_library(nexus_view STATIC src/view.cpp)
+    target_include_directories(nexus_view PUBLIC src)
+    target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_view PUBLIC nexus_window_logic
+        prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
-# The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
-add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
-target_include_directories(nexus_terminals PUBLIC src)
-target_compile_options(nexus_terminals PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_terminals PUBLIC nexus_view prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)
+    # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
+    add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
+    target_include_directories(nexus_terminals PUBLIC src)
+    target_compile_options(nexus_terminals PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_terminals PUBLIC nexus_view prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)
 
-# The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
-# functional test on pages it serves from memory.
-add_library(nexus_board STATIC src/board.cpp)
-target_include_directories(nexus_board PUBLIC src)
-target_compile_options(nexus_board PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
-    prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
-    prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
+    # The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
+    # functional test on pages it serves from memory.
+    add_library(nexus_board STATIC src/board.cpp)
+    target_include_directories(nexus_board PUBLIC src)
+    target_compile_options(nexus_board PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
+        prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
+        prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
+endif()
 
 if(NEXUS_LINK)
     # The link over mosh's transport: its sessions (both ends), the ssh bootstrap, and the window's link thread.
@@ -143,40 +178,36 @@ if(NEXUS_LINK)
     target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers)
 endif()
 
-# The app: on macOS a real bundle, nexus.app; on Windows a GUI program (no console window opens at launch, so launch
-# shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
-if(APPLE)
-    add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
-    set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(nexus PRIVATE "-framework AppKit")
-elseif(WIN32)
-    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-        message(FATAL_ERROR "nexus: the window builds for 64-bit Windows only; configure with -A x64")
+if(NEXUS_WINDOW AND (APPLE OR WIN32))
+    # The app: on macOS a real bundle, nexus.app; on Windows a GUI program (no console window opens at launch, so
+    # launch shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
+    if(APPLE)
+        add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+        set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(nexus PRIVATE "-framework AppKit")
+        # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
+        # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app
+        # menu's About, Hide and Quit) and the window's title (main.cpp).
+        set_target_properties(nexus PROPERTIES
+            MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
+            MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
+            MACOSX_BUNDLE_BUNDLE_NAME nexus
+            MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
+            MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
+    else()
+        add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
+        if(MSVC)
+            target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
+        endif()
     endif()
-    add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
-    if(MSVC)
-        target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
+    target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
+        prax::studio_app prax::gpu prax::image prax::compress)
+    if(NEXUS_LINK)
+        target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
+        target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
     endif()
-else()
-    message(FATAL_ERROR "nexus: the window builds on macOS and Windows only so far (src/platform.h has no code for "
-        "${CMAKE_SYSTEM_NAME}); configure on one of those")
 endif()
-target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
-    prax::studio_app prax::gpu prax::image prax::compress)
-if(NEXUS_LINK)
-    target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
-    target_link_libraries(nexus PRIVATE nexus_link nexus_sync)
-endif()
-# The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
-# template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app menu's
-# About, Hide and Quit) and the window's title (main.cpp).
-set_target_properties(nexus PROPERTIES
-    MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
-    MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
-    MACOSX_BUNDLE_BUNDLE_NAME nexus
-    MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
-    MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
 
 enable_testing()
 add_subdirectory(tests/model)

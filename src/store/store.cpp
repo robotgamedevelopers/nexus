@@ -50,12 +50,13 @@ Bytes encode_record(const std::string& tab, std::span<const Change> changes, con
     w.u32(std::uint32_t(changes.size()));
     for (const Change& c : changes) {
         w.u8(std::uint8_t(c.kind));
-        if (c.kind == Change::Kind::Append)
+        if (c.kind == Change::Kind::Append) {
             put_entry(w, c.entry);
-        else if (c.kind == Change::Kind::Enqueue)
+        } else if (c.kind == Change::Kind::Enqueue) {
             w.str(c.prompt);
-        else
+        } else if (c.kind == Change::Kind::SetDriver) {
             put_driver(w, c.driver);
+        }
     }
     w.str(client);
     w.u64(num);
@@ -110,16 +111,36 @@ void Store::apply(const std::string& tab, std::span<const Change> changes, const
     if (!changes.empty()) {
         Tab& t = tabs_[tab];
         for (const Change& c : changes) {
-            if (c.kind == Change::Kind::Append)
+            if (c.kind == Change::Kind::Append) {
                 t.transcript.push_back(c.entry);
-            else if (c.kind == Change::Kind::Enqueue)
+            } else if (c.kind == Change::Kind::Enqueue) {
                 t.queue.push_back(c.prompt);
-            else
+            } else if (c.kind == Change::Kind::Dequeue) {
+                t.queue.erase(t.queue.begin());     // commit and replay refuse a dequeue from an empty queue
+            } else {
                 t.driver = c.driver;
+            }
         }
     }
     if (!client.empty())
         applied_[client] = num;
+}
+
+// Every dequeue of the step takes a prompt the queue holds at that point of the step.
+bool Store::dequeues_fit(const std::string& tab, std::span<const Change> changes) const {
+    const Tab* t = this->tab(tab);
+    std::size_t queued = t == nullptr ? 0 : t->queue.size();
+    for (const Change& c : changes) {
+        if (c.kind == Change::Kind::Enqueue) {
+            ++queued;
+        } else if (c.kind == Change::Kind::Dequeue) {
+            if (queued == 0) {
+                return false;
+            }
+            --queued;
+        }
+    }
+    return true;
 }
 
 Status Store::commit(const std::string& tab, std::span<const Change> changes, const std::string& client,
@@ -131,6 +152,8 @@ Status Store::commit(const std::string& tab, std::span<const Change> changes, co
         return Status::refused("store " + dir_ + ": a change names no tab");
     if (changes.empty() && client.empty())
         return Status::refused("store " + dir_ + ": a step with no change and no client changes nothing");
+    if (!dequeues_fit(tab, changes))
+        return Status::refused("store " + dir_ + ": tab " + tab + ": a dequeue from a queue with nothing left in it");
     if (!client.empty() && num != applied(client) + 1)
         return Status::refused("store " + dir_ + ": client " + client + " has applied up to " +
                                std::to_string(applied(client)) + ", so its next action is " +
@@ -169,6 +192,8 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         } else if (kind == std::uint8_t(Change::Kind::SetDriver)) {
             c.kind = Change::Kind::SetDriver;
             get_driver(r, c.driver);
+        } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
+            c.kind = Change::Kind::Dequeue;
         } else {
             return unreadable(dir_, "record " + std::to_string(seq));
         }
@@ -176,7 +201,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
     }
     std::string client = r.str();
     std::uint64_t num = r.u64();
-    if (!r.ok() || !r.done())
+    if (!r.ok() || !r.done() || !dequeues_fit(tab, changes))
         return unreadable(dir_, "record " + std::to_string(seq));
     apply(tab, changes, client, num);
     return Status::ok();
