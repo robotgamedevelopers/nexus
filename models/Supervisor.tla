@@ -14,8 +14,14 @@
 (* stop's done, and the grace periods while ending a driver). There is no   *)
 (* deadline on a working turn.                                             *)
 (*                                                                         *)
-(* The supervisor's state is one record, s. Its fields next, open, waiting *)
-(* and session are durable (the store): each step's effects and durable    *)
+(* The person also queues prompts for later (Command-Enter): the tab's     *)
+(* queue, apart from the transcript. When no turn is open, no prompt waits  *)
+(* and starting is not held back, the oldest queued prompt leaves the queue *)
+(* and joins the waiting prompts (shown as the person's entry): one per     *)
+(* turn, oldest first, each once.                                          *)
+(*                                                                         *)
+(* The supervisor's state is one record, s. Its fields next, open, waiting, *)
+(* queue and session are durable (the store): each step's effects and durable *)
 (* state are committed in one store step before its commands are carried   *)
 (* out, so a step here is atomic, and Restart (the server ended, by a      *)
 (* crash or a stop, and started again) keeps exactly those fields. The     *)
@@ -27,7 +33,15 @@
 (* the tab, each [k, t, p]: "P" the person's prompt p, "F" the friend's    *)
 (* text of turn t, "T" a tool line, "E" an error notice of the turn, "K"   *)
 (* the turn stopped, "X" the turn cut short, "N" any other notice) and     *)
-(* resumed (the --resume the last start was given, "" for none).           *)
+(* resumed (the --resume the last start was given, "" for none), stops    *)
+(* (the turn of every stop written to a driver, in order) and asked (the  *)
+(* step was the person's stop).                                            *)
+(*                                                                         *)
+(* A stop ends what runs when it arrives: the open turn (a stop written to *)
+(* the driver), or, while the driver starts, the turn about to begin (its  *)
+(* prompt leaves the waiting prompts, never written). One that finds the   *)
+(* turn already stopping, or nothing running, changes nothing: no stop is  *)
+(* kept for a later turn.                                                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -49,7 +63,7 @@ vars == <<s, sent, restarts>>
 
 Phases == {"none", "starting", "idle", "working", "stopping", "ending"}
 Stages == {"none", "closed", "termed", "killed"}   \* while ending: input closed, then TERM sent, then KILL sent
-Fates == {"unsent", "refused", "waiting", "open", "answered", "cut"}
+Fates == {"unsent", "refused", "queued", "waiting", "open", "answered", "cut"}
 Kinds == {"P", "F", "T", "E", "K", "X", "N"}
 TurnKinds == {"F", "T", "E", "K", "X"}
 Billings == {"subscription", "api-key", "none"}
@@ -60,9 +74,9 @@ Init ==
     /\ sent = 0
     /\ restarts = 0
     /\ s = [phase |-> "none", stage |-> "none", open |-> 0, prompt |-> 0, next |-> 1, waiting |-> <<>>,
-            session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
-            nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>,
-            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> ""]
+            queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
+            nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
+            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -107,11 +121,20 @@ StartDriver(x) ==
                     !.resumed = x.session]
     ELSE x
 
-\* What follows every step.
-Advance(x) == WriteNext(StartDriver(x))
+\* When no turn is open, no prompt waits and starting is not held back: the oldest queued prompt joins the waiting
+\* prompts, shown as the person's entry. One per turn: it waits, or is written as the turn that opens.
+Take(x) ==
+    IF x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
+    THEN LET p == Head(x.queue) IN
+         [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
+    ELSE x
 
-\* Every step starts with no effects.
-Fresh == [s EXCEPT !.fx = <<>>]
+\* What follows every step.
+AdvanceWith(Tk(_), x) == WriteNext(StartDriver(Tk(x)))
+Advance(x) == AdvanceWith(Take, x)
+
+\* Every step starts with no effects, and is not a stop until it says so.
+Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE]
 
 \* The driver is gone: a failed start is one that finished no turn.
 ExitedWith(x) ==
@@ -178,40 +201,69 @@ PromptWith(Adv(_)) ==
                                                      !.blocked = FALSE, !.failed = IF x.blocked THEN 0 ELSE @])
 Prompt == PromptWith(Advance)
 
-\* The person stops the friend's work: a stop for the open turn, if one is open and no stop is out.
-Stop ==
-    /\ Keep
-    /\ s' = LET x == Fresh IN IF x.phase = "working" THEN [x EXCEPT !.phase = "stopping"] ELSE x
+\* The person queues prompt p for later. The hub refuses one past its limit before it reaches the supervisor, so the
+\* queue holds at most MaxWaiting (the code's limit for both). Like a prompt, it lifts the hold on starting drivers.
+QueuePromptWith(Adv(_)) ==
+    /\ ~s.down
+    /\ sent < Prompts
+    /\ Len(s.queue) < MaxWaiting
+    /\ sent' = sent + 1
+    /\ UNCHANGED restarts
+    /\ LET p == sent + 1
+           x == Fresh
+       IN s' = Adv([x EXCEPT !.queue = Append(@, p), !.fate[p] = "queued", !.blocked = FALSE,
+                             !.failed = IF x.blocked THEN 0 ELSE @])
+QueuePrompt == QueuePromptWith(Advance)
 
-MessageWith(m, Txt(_, _)) ==
+\* The person stops the friend's work: a stop for the open turn, if one is open and no stop is out; while the driver
+\* starts, the turn about to begin is cancelled (C). It never waits: it acts in the step it is given, or not at all.
+StopWith(Ok(_), C(_)) ==
+    /\ Keep
+    /\ s' = LET x == [Fresh EXCEPT !.asked = TRUE] IN
+            CASE Ok(x)                                     -> [x EXCEPT !.phase = "stopping", !.stops = Append(@, x.open)]
+              [] x.phase = "starting" /\ x.waiting # <<>> -> C(x)
+              [] OTHER                                     -> x
+Working(x) == x.phase = "working"
+\* The prompt the starting driver was to be given leaves the waiting prompts, stopped: it is never written.
+CancelStart(x) == [Fx(x, E("K", 0, 0)) EXCEPT !.waiting = Tail(@), !.fate[Head(x.waiting)] = "cut"]
+Stop == StopWith(Working, CancelStart)
+
+\* Each step that ends with what follows every step takes that as A, so that the take's witnesses can break it
+\* everywhere (NextTake); the plain forms pass Advance.
+MessageA(m, Txt(_, _), A(_)) ==
     /\ s.procs > 0 /\ s.phase # "none"
     /\ Keep
-    /\ s' = Advance(ReceiveWith(Fresh, m, Txt))
+    /\ s' = A(ReceiveWith(Fresh, m, Txt))
+MessageWith(m, Txt(_, _)) == MessageA(m, Txt, Advance)
 Message(m) == MessageWith(m, Gather)
 
-\* A line the server refuses, or the driver's output or input closing: the driver is ended.
-Broken ==
+\* A line the server refuses, or the driver's output or input closing: the driver is ended. The turn it cuts is a
+\* turn's end: the next queued prompt may go.
+BrokenA(A(_)) ==
     /\ s.procs > 0 /\ s.phase \notin {"none", "ending"}
     /\ Keep
-    /\ s' = End(Fresh)
+    /\ s' = A(End(Fresh))
+Broken == BrokenA(Advance)
 
 \* The driver exits, by itself or by a signal.
-ExitWith(Ex(_)) ==
+ExitA(Ex(_), A(_)) ==
     /\ s.procs > 0 /\ s.phase # "none"
     /\ Keep
-    /\ s' = Advance(Ex(Fresh))
+    /\ s' = A(Ex(Fresh))
+ExitWith(Ex(_)) == ExitA(Ex, Advance)
 Exit == ExitWith(ExitedWith)
 
 \* A deadline passes: no hello, no done after a stop, or a grace period while ending.
-TimeoutWith(Starting(_), Stopping(_)) ==
+TimeoutA(Starting(_), Stopping(_), A(_)) ==
     /\ \/ s.phase \in {"starting", "stopping"}
        \/ s.phase = "ending" /\ s.stage # "killed"
     /\ Keep
     /\ s' = LET x == Fresh IN
-            Advance(CASE x.phase = "starting"                       -> Starting(x)
+            A(CASE x.phase = "starting"                       -> Starting(x)
                       [] x.phase = "stopping"                       -> Stopping(x)
                       [] x.phase = "ending" /\ x.stage = "closed"   -> [x EXCEPT !.stage = "termed"]
                       [] OTHER                                      -> [x EXCEPT !.stage = "killed"])
+TimeoutWith(Starting(_), Stopping(_)) == TimeoutA(Starting, Stopping, Advance)
 Timeout == TimeoutWith(End, End)
 
 \* The server stops: every driver is ended, and none is started again. A driver with no turn open is ended quietly.
@@ -224,20 +276,22 @@ Shutdown ==
               [] OTHER                          -> QuietEnd(x)
 
 \* The server starts again from what is durable. A turn left open is cut; waiting prompts go to a new driver.
-RestartWith(R(_)) ==
+RestartA(R(_), A(_)) ==
     /\ restarts < MaxRestarts
     /\ restarts' = restarts + 1
     /\ UNCHANGED sent
-    /\ s' = Advance(R(Fresh))
+    /\ s' = A(R(Fresh))
+RestartWith(R(_)) == RestartA(R, Advance)
 Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
               !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0]
 Restart == RestartWith(Restarted)
 
-NextWith(P, M(_), Ex, T, R) ==
+NextWithAll(P, Q, St, M(_), Ex, T, R) ==
     \/ P
-    \/ Stop
+    \/ Q
+    \/ St
     \/ \E m \in Messages(s) : M(m)
     \/ Broken
     \/ Ex
@@ -245,12 +299,21 @@ NextWith(P, M(_), Ex, T, R) ==
     \/ Shutdown
     \/ R
 
+NextWith(P, M(_), Ex, T, R) == NextWithAll(P, QueuePrompt, Stop, M, Ex, T, R)
+
+\* Every step with Tk in place of Take: the take's witnesses break it through this.
+NextTake(Tk(_)) ==
+    LET A(x) == AdvanceWith(Tk, x) IN
+    NextWithAll(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
+                TimeoutA(End, End, A), RestartA(Restarted, A)) \/ BrokenA(A)
+
 Next == NextWith(Prompt, Message, Exit, Timeout, Restart)
 
 \* The fairness the liveness needs: deadlines pass, KILL ends a driver, and a person whose friend's turn never ends
 \* stops it (there is no deadline on a working turn, by design).
 ExitKilled == s.phase = "ending" /\ s.stage = "killed" /\ Exit
-Spec == Init /\ [][Next]_vars /\ WF_vars(Timeout) /\ WF_vars(Stop) /\ WF_vars(ExitKilled)
+StopWorking == Working(s) /\ Stop
+Spec == Init /\ [][Next]_vars /\ WF_vars(Timeout) /\ WF_vars(StopWorking) /\ WF_vars(ExitKilled)
 \* The spec without fairness, which a finite trace of the code (SupervisorTrace.tla) is checked against.
 SafetySpec == Init /\ [][Next]_vars
 
@@ -286,6 +349,12 @@ TurnsIncrease ==
 \* Each prompt is written to a driver at most once, ever.
 AtMostOnce == \A i, j \in 1 .. Len(s.written) : i # j => s.written[i].p # s.written[j].p
 
+\* The queue: within the bound, each prompt in it once and queued, and every queued prompt in it.
+QueueSound ==
+    /\ Len(s.queue) <= MaxWaiting
+    /\ \A i, j \in 1 .. Len(s.queue) : i # j => s.queue[i] # s.queue[j]
+    /\ \A p \in DOMAIN s.fate : (s.fate[p] = "queued") = (\E i \in 1 .. Len(s.queue) : s.queue[i] = p)
+
 \* A prompt waits only while the driver cannot take it, and no more than the bound wait.
 WaitingSound ==
     /\ Len(s.waiting) <= MaxWaiting
@@ -295,9 +364,53 @@ WaitingSound ==
 \* The failed-start limit holds.
 LimitHolds == s.failed <= MaxFailedStarts
 
-\* No effect for a turn that is not open: every entry of a turn is for the turn open before the step.
+\* A stop is written only for the open turn, and at most once for a turn.
+StopOnce == \A i, j \in 1 .. Len(s.stops) : i # j => s.stops[i] # s.stops[j]
+StopForOpen == [][Len(s'.stops) > Len(s.stops) => Len(s'.stops) = Len(s.stops) + 1 /\ s.open # 0 /\
+                                                  s'.stops[Len(s'.stops)] = s.open]_vars
+
+\* What the step took from the queue: the prompts in it before and in it no more.
+TakenBy(x, y) == {x.queue[i] : i \in 1 .. Len(x.queue)} \ {y.queue[i] : i \in 1 .. Len(y.queue)}
+
+\* A queued prompt leaves the queue only when no turn is open (or the step ended the open one), the oldest first,
+\* one per turn: it alone waits, or it is the turn just opened, and it shows as the person's entry.
+TakesAtTurnEnd ==
+    [][LET taken == TakenBy(s, s') IN
+       taken # {} =>
+         /\ taken = {Head(s.queue)}
+         /\ s.open = 0 \/ s'.fate[s.prompt] \in {"answered", "cut"}
+         /\ s.waiting = <<>>
+         /\ \/ s'.waiting = <<Head(s.queue)>> /\ s'.open = 0
+            \/ s'.waiting = <<>> /\ s'.prompt = Head(s.queue)
+         /\ \E i \in 1 .. Len(s'.fx) : s'.fx[i] = E("P", 0, Head(s.queue))]_vars
+
+\* No effect for a turn that is not open: every entry of a turn is for the turn open before the step, but for the
+\* notice of a turn a stop cancelled before it began.
 EffectsForOpen ==
-    [][\A i \in 1 .. Len(s'.fx) : s'.fx[i].k \in TurnKinds => s'.fx[i].t = s.open /\ s.open # 0]_vars
+    [][\A i \in 1 .. Len(s'.fx) : s'.fx[i].k \in TurnKinds =>
+         \/ s'.fx[i].t = s.open /\ s.open # 0
+         \/ s'.fx[i] = E("K", 0, 0) /\ s'.asked /\ s.phase = "starting"]_vars
+
+\* The prompts a step cancelled: waiting before, cut after (only a stop of a start does that).
+CancelledBy(x, y) == {p \in DOMAIN x.fate : x.fate[p] = "waiting" /\ y.fate[p] = "cut"}
+
+\* A stop ends what runs when it arrives: the open turn, by a stop written for it; the turn about to begin while the
+\* driver starts, the oldest waiting prompt, cancelled. Finding the turn already stopping, or nothing running, it
+\* changes nothing.
+StopEndsWhatRuns ==
+    [][s'.asked =>
+         CASE s.phase = "working"
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.phase = "stopping", !.stops = Append(@, s.open)]
+           [] s.phase = "starting" /\ s.waiting # <<>>
+              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.waiting = Tail(@),
+                                !.fate[Head(s.waiting)] = "cut"]
+           [] OTHER
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE]]_vars
+
+\* No stop is kept for later: a stop is written, or a turn cancelled, only in the step of the person's stop that
+\* found it running. So a stop that found nothing never touches a turn that begins after it.
+NoLatchedStop ==
+    [][Len(s'.stops) > Len(s.stops) \/ CancelledBy(s, s') # {} => s'.asked]_vars
 
 \* A turn ends only by its done or by a cut with its notice.
 EndsAnsweredOrCut ==
@@ -318,10 +431,10 @@ NoSendWithoutCredential == [][Len(s'.written) > Len(s.written) => ~s.nocred]_var
 \* A driver is started only when not held back, and with --resume the last session id.
 StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = s'.session]_vars
 
-\* Liveness: every prompt accepted is eventually answered or cut, or waits while starting drivers is held back (until
+\* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
 \* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).
 Settles ==
     \A p \in 1 .. Prompts :
-        s.fate[p] \in {"waiting", "open"} ~> (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down)
+        s.fate[p] \in {"queued", "waiting", "open"} ~> (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down)
 
 =============================================================================

@@ -646,6 +646,170 @@ void hub_shares_untouched_tabs() {
     CHECK(before.find("bo") != hub.state().find("bo"));
 }
 
+// A responder that records what reaches it: a send gives the prompt and the placeholder reply, a queue the prompt at
+// the queue's end and, when `deliver` is set, the oldest taken at once (as a free friend does).
+class RecordingResponder : public Responder {
+public:
+    std::vector<TabChange> send(const std::string&, const std::string& prompt) override {
+        return {TabChange{entry(EntryKind::Person, prompt), {}}, TabChange{entry(EntryKind::Friend, kReceived), {}}};
+    }
+    std::vector<TabChange> queue(const std::string&, const std::string& prompt) override {
+        std::vector<TabChange> out = {TabChange{nullptr, prompt}};
+        if (deliver) {
+            out.push_back(takeQueued());
+            out.push_back(TabChange{entry(EntryKind::Person, prompt), {}});
+        }
+        return out;
+    }
+    // As the drivers do: a stop acts only once the store took the step (sent).
+    std::vector<TabChange> stop(const std::string& tab) override {
+        pending = tab;
+        return {};
+    }
+    void sent(const std::string& tab, bool committed) override {
+        sentTo.push_back(tab + (committed ? " committed" : " not committed"));
+        if (committed && pending == tab) {
+            stopped.push_back(tab);
+        }
+        pending.clear();
+    }
+    bool deliver = false;
+    std::string pending;
+    std::vector<std::string> stopped;
+    std::vector<std::string> sentTo;
+};
+
+void actions_stop_kind() {
+    Actions a;
+    a.add(ActionKind::Stop, "ada", "");
+    const std::vector<Action> parsed = Actions::parse(a.init_diff());
+    CHECK(parsed.size() == 1 && parsed[0].kind == ActionKind::Stop && parsed[0].tab == "ada" && parsed[0].text.empty());
+    // the kind past stop is refused
+    Writer w;
+    w.u64(1);
+    w.u64(1);
+    w.byte(4);
+    w.str("ada");
+    w.str("");
+    bool threw = false;
+    try {
+        Actions::parse(w.take());
+    } catch (const BadDiff&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+void hub_stop_reaches_the_responder_once() {
+    MemoryStore store;
+    RecordingResponder r;
+    Hub hub(store, Limits{}, &r);
+    std::string why;
+    // a tab the server does not hold: refused, counted, and no tab made
+    CHECK(!hub.apply(Action{1, ActionKind::Stop, "ada", ""}, &why, "w"));
+    CHECK(why == "no tab ada: nothing to stop");
+    CHECK(store.applied("w") == 1);
+    CHECK(store.find("ada") == nullptr && hub.state().find("ada") == nullptr);
+    CHECK(r.stopped.empty() && r.sentTo.empty());
+    CHECK(hub.apply(Action{2, ActionKind::Send, "ada", "hi"}, &why, "w"));
+    // a stop that carries text: refused with a notice, counted, and not passed on
+    why.clear();
+    CHECK(!hub.apply(Action{3, ActionKind::Stop, "ada", "x"}, &why, "w"));
+    CHECK(why == "tab ada: A stop that carried text was not applied: a stop carries none.");
+    CHECK(store.applied("w") == 3);
+    CHECK(hub.state().find("ada")->entries.back()->kind == EntryKind::Notice);
+    CHECK(r.stopped.empty());
+    // a stop: to the responder, once, with nothing in the store
+    const std::size_t entries = store.find("ada")->transcript.size();
+    CHECK(hub.apply(Action{4, ActionKind::Stop, "ada", ""}, &why, "w"));
+    CHECK(r.stopped == std::vector<std::string>{"ada"});
+    CHECK(r.sentTo.back() == "ada committed");
+    CHECK(store.applied("w") == 4);
+    CHECK(store.find("ada")->transcript.size() == entries);
+    // the same number again is the store's to refuse: the Applier never gives it twice
+    CHECK(!hub.apply(Action{4, ActionKind::Stop, "ada", ""}, &why, "w"));
+    CHECK(r.stopped.size() == 1 && r.sentTo.back() == "ada not committed");
+}
+
+void hub_stop_without_responder_changes_nothing() {
+    MemoryStore store;
+    Hub hub(store);
+    CHECK(hub.apply(Action{1, ActionKind::Send, "ada", "hi"}));
+    const Tabs before = hub.state();
+    CHECK(hub.apply(Action{2, ActionKind::Stop, "ada", ""}));
+    CHECK(hub.state() == before);
+}
+
+void hub_queue_goes_to_the_responder() {
+    MemoryStore store;
+    RecordingResponder r;
+    Hub hub(store, Limits{}, &r);
+    CHECK(hub.apply(Action{1, ActionKind::Queue, "ada", "later"}));
+    CHECK(hub.state().find("ada")->queue == std::vector<std::string>{"later"});
+    r.deliver = true;
+    CHECK(hub.apply(Action{2, ActionKind::Queue, "ada", "now"}));
+    // the oldest left the queue, as the person's entry; the new one waits
+    const TabView* t = hub.state().find("ada");
+    CHECK(t->queue == std::vector<std::string>{"now"});
+    CHECK(t->entries.size() == 1 && t->entries[0]->kind == EntryKind::Person && t->entries[0]->text == "now");
+    CHECK(r.sentTo.size() == 2 && r.sentTo[1] == "ada committed");
+}
+
+void memory_store_take_refusals() {
+    MemoryStore store;
+    std::string why;
+    CHECK(!store.commit("ada", {takeQueued()}, "", 0, &why));
+    CHECK(why == "tab ada: a take from a queue with nothing left in it");
+    CHECK(store.find("ada") == nullptr);
+    // two takes of one prompt: the second finds nothing, and the step is taken whole or not at all
+    CHECK(!store.commit("ada", {TabChange{nullptr, "one"}, takeQueued(), takeQueued()}, "", 0, &why));
+    CHECK(store.find("ada") == nullptr);
+    CHECK(store.commit("ada", {TabChange{nullptr, "one"}, TabChange{nullptr, "two"}}, "", 0, &why));
+    CHECK(store.commit("ada", {takeQueued()}, "", 0, &why));
+    CHECK(store.find("ada")->queue == std::vector<std::string>{"two"});
+}
+
+void hub_open_entry() {
+    MemoryStore store;
+    Limits limits;
+    limits.text = 8;
+    Hub hub(store, limits);
+    CHECK(!hub.setOpen("ada", "part"));                 // a tab the store does not hold
+    CHECK(hub.state().find("ada") == nullptr);
+    CHECK(hub.apply(Action{1, ActionKind::Send, "ada", "hi"}));
+    CHECK(!hub.setOpen("ada", "123456789"));            // past the text limit
+    CHECK(!hub.setOpen("ada", ""));                     // none to drop
+    CHECK(hub.setOpen("ada", "part"));
+    const TabView* t = hub.state().find("ada");
+    CHECK(t->entries.size() == 3 && !t->entries.back()->closed && t->entries.back()->text == "part");
+    CHECK(t->entries.back()->kind == EntryKind::Friend);
+    CHECK(store.find("ada")->transcript.size() == 2);   // in memory only
+    CHECK(!hub.setOpen("ada", "part"));                 // no change
+    CHECK(hub.setOpen("ada", "part two"));
+    CHECK(hub.state().find("ada")->entries.back()->text == "part two");
+    CHECK(hub.setOpen("ada", ""));
+    CHECK(hub.state().find("ada")->entries.size() == 2);
+    // a new hub over the same store has none: the open entry is not durable
+    CHECK(hub.setOpen("ada", "lost"));
+    Hub again(store, limits);
+    CHECK(again.state().find("ada")->entries.size() == 2);
+}
+
+void tabs_tail_carries_open_apart() {
+    std::vector<EntryRef> t;
+    for (int i = 0; i < 5; ++i) {
+        t.push_back(entry(EntryKind::Person, std::to_string(i)));
+    }
+    const TabView v = tailOf("ada", t, {}, Tail{2, 1000}, entry(EntryKind::Friend, "open", false));
+    CHECK(v.first == 3 && v.entries.size() == 3 && v.total() == 6);
+    CHECK(v.entries[0]->text == "3" && v.entries[1]->text == "4" && !v.entries[2]->closed);
+    // an open entry past the byte budget still comes with the newest closed one
+    const TabView big = tailOf("ada", t, {}, Tail{2, 10}, entry(EntryKind::Friend, std::string(100, 'x'), false));
+    CHECK(big.first == 3 && big.entries.size() == 3 && big.entries[1]->text == "4");
+    const TabView none = tailOf("ada", {}, {}, Tail{2, 10}, entry(EntryKind::Friend, "o", false));
+    CHECK(none.first == 0 && none.entries.size() == 1);
+}
+
 // ---- the window's mirror ----
 
 std::vector<FriendInfo> friends2() {
@@ -708,6 +872,60 @@ void mirror_queue_keeps_draft() {
     CHECK(m.tab(0).queue.size() == 3 && m.tab(0).queue[2] == "three");
 }
 
+Tabs openState(const std::vector<EntryRef>& t, EntryRef open, Tail tail = {}) {
+    return Tabs({std::make_shared<const TabView>(tailOf("ada", t, {}, tail, std::move(open)))});
+}
+
+void mirror_holds_open_entry_apart() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    std::vector<EntryRef> t = {entry(EntryKind::Person, "q")};
+    CHECK(mirror.open(id) == nullptr);
+    CHECK(mirror.apply(m, openState(t, entry(EntryKind::Friend, "pa", false))));
+    CHECK(m.tab(0).transcript.size() == 1);
+    CHECK(mirror.open(id) != nullptr && mirror.open(id)->text == "pa" && !mirror.open(id)->closed);
+    CHECK(mirror.seen(id).next == 1);
+    CHECK(!mirror.apply(m, openState(t, entry(EntryKind::Friend, "pa", false))));  // the same: no change
+    CHECK(mirror.apply(m, openState(t, entry(EntryKind::Friend, "part", false))));  // grown
+    CHECK(mirror.open(id)->text == "part" && m.tab(0).transcript.size() == 1);
+    // closed: appended once, and no longer held
+    t.push_back(entry(EntryKind::Friend, "part one"));
+    CHECK(mirror.apply(m, openState(t, nullptr)));
+    CHECK(mirror.open(id) == nullptr);
+    CHECK(m.tab(0).transcript.size() == 2 && m.tab(0).transcript[1].text == "part one");
+    CHECK(!mirror.apply(m, openState(t, nullptr)));
+    CHECK(m.tab(0).transcript.size() == 2);
+    // a window away for longer than the tail: the notice, the newest closed entry, and the open one held
+    for (int i = 0; i < 6; ++i) {
+        t.push_back(entry(EntryKind::Person, std::to_string(i)));
+    }
+    CHECK(mirror.apply(m, openState(t, entry(EntryKind::Friend, "o", false), Tail{1, 1000})));
+    const auto& tr = m.tab(0).transcript;
+    CHECK(tr.size() == 4 && tr[2].text == notShownNotice(5) && tr[3].text == "5");
+    CHECK(mirror.open(id)->text == "o");
+}
+
+void mirror_queue_follows_the_servers() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    m.set_draft(0, "typing");
+    mirror.apply(m, stateOf("ada", {}, {"one", "two"}));
+    // the server took the oldest and queued another
+    CHECK(mirror.apply(m, stateOf("ada", {}, {"two", "three"})));
+    CHECK(m.tab(0).queue == std::vector<std::string>({"two", "three"}));
+    CHECK(m.tab(0).draft == "typing");
+    // took both
+    CHECK(mirror.apply(m, stateOf("ada", {}, {})));
+    CHECK(m.tab(0).queue.empty());
+    // equal prompts: the queue still ends as the server's
+    mirror.apply(m, stateOf("ada", {}, {"x", "x"}));
+    CHECK(mirror.apply(m, stateOf("ada", {}, {"x"})));
+    CHECK(m.tab(0).queue == std::vector<std::string>({"x"}));
+    CHECK(!mirror.apply(m, stateOf("ada", {}, {"x"})));
+    CHECK(m.tab(0).draft == "typing");
+}
+
 void mirror_ignores_other_tabs() {
     Model m(friends2(), true);
     Mirror mirror;
@@ -741,6 +959,52 @@ void take_prompt_rules() {
     CHECK(text == " hi " && m.tab(1).draft.empty() && m.tab(1).transcript.empty());
     CHECK(!takePrompt(m, 9, 100, &text, &why));
     CHECK(blankText("") && blankText(" \r\n\t\v\f") && !blankText(" a"));
+}
+
+void stop_target_rules() {
+    Model m(friends2(), true);
+    std::string tab;
+    CHECK(!stopTarget(m, 0, &tab) && tab.empty());          // the sprint tab
+    CHECK(stopTarget(m, 1, &tab) && tab == "ada");           // a friend's, working or not
+    CHECK(!stopTarget(m, 9, &tab));                          // past the tabs
+    const std::size_t terminal = m.tab_count();
+    m.add_terminal();
+    tab.clear();
+    CHECK(!stopTarget(m, terminal, &tab) && tab.empty());    // a terminal's
+}
+
+// The window never filters a stop: whatever the tab shows and whether or not the link is up, Command-Escape on a
+// friend's tab is an action in the outbox, sent in order with the others once the link carries them. The server
+// decides each against its state when it processes it (here: the first, for a tab it does not hold yet, is refused).
+void stop_never_filtered_by_the_window() {
+    Model m(friends2(), true);
+    Actions outbox;                     // the link is down: nothing leaves the window
+    std::string tab;
+    CHECK(stopTarget(m, 1, &tab) && tab == "ada");      // the tab shows no turn
+    outbox.add(ActionKind::Stop, tab, "");
+    m.set_draft(1, "hi");
+    std::string text;
+    CHECK(takePrompt(m, 1, 1024, &text, nullptr));
+    outbox.add(ActionKind::Send, "ada", text);
+    for (int i = 0; i < 2; ++i) {
+        tab.clear();
+        CHECK(stopTarget(m, 1, &tab) && tab == "ada");
+        outbox.add(ActionKind::Stop, tab, "");
+    }
+    CHECK(outbox.held().size() == 4);
+    // the link comes up: the whole outbox reaches the server, in order
+    MemoryStore store;
+    RecordingResponder r;
+    Hub hub(store, Limits{}, &r);
+    Applier applier;
+    std::vector<std::string> outcomes;
+    for (const Action& a : applier.apply(Actions::parse(outbox.init_diff()))) {
+        std::string why;
+        outcomes.push_back(hub.apply(a, &why, "w") ? "ok" : why);
+    }
+    CHECK((outcomes == std::vector<std::string>{"no tab ada: nothing to stop", "ok", "ok", "ok"}));
+    CHECK((r.stopped == std::vector<std::string>{"ada", "ada"}));
+    CHECK(store.applied("w") == 4);
 }
 
 struct Case {
@@ -777,6 +1041,17 @@ const Case kCases[] = {
     {"mirror_ignores_other_tabs", mirror_ignores_other_tabs},
     {"link_status_lines", link_status_lines},
     {"take_prompt_rules", take_prompt_rules},
+    {"actions_stop_kind", actions_stop_kind},
+    {"hub_stop_reaches_the_responder_once", hub_stop_reaches_the_responder_once},
+    {"hub_stop_without_responder_changes_nothing", hub_stop_without_responder_changes_nothing},
+    {"hub_queue_goes_to_the_responder", hub_queue_goes_to_the_responder},
+    {"memory_store_take_refusals", memory_store_take_refusals},
+    {"hub_open_entry", hub_open_entry},
+    {"tabs_tail_carries_open_apart", tabs_tail_carries_open_apart},
+    {"mirror_holds_open_entry_apart", mirror_holds_open_entry_apart},
+    {"mirror_queue_follows_the_servers", mirror_queue_follows_the_servers},
+    {"stop_target_rules", stop_target_rules},
+    {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
 };
 
 } // namespace

@@ -51,8 +51,10 @@ struct Tail {
     std::size_t bytes = 16 * 1024;
 };
 
-// A tab's tail of a whole transcript, by those rules.
-TabView tailOf(std::string name, const std::vector<EntryRef>& transcript, std::vector<std::string> queue, Tail tail);
+// A tab's tail of a whole transcript, by those rules; `open`, when given, is the newest entry, after the tail, and
+// outside its rules (it is within the hub's text limit): the newest closed entry is always carried with it.
+TabView tailOf(std::string name, const std::vector<EntryRef>& transcript, std::vector<std::string> queue, Tail tail,
+               EntryRef open = nullptr);
 
 class Tabs {
 public:

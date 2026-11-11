@@ -7,7 +7,8 @@
 //
 // The cases: normal, stop, silent, exit_mid_turn, malformed, ignores_stop, kill (ignores EOF and SIGTERM, so only
 // SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
-// orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open).
+// orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
+// queue (the open entry while the friend writes, and a queued prompt taken at the turn's end).
 
 #include <libproc.h>
 #include <poll.h>
@@ -201,13 +202,102 @@ void stop(Server& s, const std::string& dir, const std::string& fake) {
         "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     s.send("go");
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
-    CHECK(s.drivers->stop("ada", now()));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
     CHECK(s.serveUntil([&] { return idle(s); }, 10));
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Working", "N Stopped."}));
     const pid_t first = s.drivers->pid("ada");
     s.send("again");
     CHECK(s.serveUntil([&] { return s.driver().nextTurn == 3 && idle(s); }, 10));
     CHECK(s.drivers->pid("ada") == first);
+}
+
+// The friend's text growing shows as the tab's open entry, in memory only; a prompt queued meanwhile waits for the
+// turn's end (here a stop), then goes to the driver as the next turn; one queued with the friend idle goes at once.
+void queue(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"Second\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.send("go");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    const sync::TabView* v = s.hub->state().find("ada");
+    CHECK(v != nullptr && !v->entries.empty() && !v->entries.back()->closed && v->entries.back()->text == "Work");
+    CHECK((s.transcript() == std::vector<std::string>{"P go"}));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "next"}));
+    CHECK(s.store.find("ada")->queue == std::vector<std::string>{"next"});
+    CHECK((s.transcript() == std::vector<std::string>{"P go"}));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 3 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped.", "P next", "F Second"}));
+    CHECK(s.store.find("ada")->queue.empty());
+    v = s.hub->state().find("ada");
+    CHECK(v != nullptr && v->entries.back()->closed);
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "idle"}));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
+    CHECK(s.transcript().back() == "P idle");
+    CHECK(s.store.find("ada")->queue.empty());
+}
+
+// Command-Escape hammered, stops applied in batches with prompts queued: a stop while the driver starts cancels the
+// turn about to begin, each stop ends the turn running when it arrives, and the rest (the turn already stopping, or
+// nothing running) vanish: none is kept for a later turn, and nothing queued is lost.
+void stopHammered(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"A\"}\nawait-stop\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"B\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    const auto stops = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
+        }
+    };
+    s.send("never");
+    CHECK(s.sup().phase() == Phase::Starting);
+    stops(3);
+    CHECK((s.transcript() == std::vector<std::string>{"P never", "N Stopped."}));
+    CHECK(s.driver().waiting.empty() && s.driver().nextTurn == 1);
+    s.send("go");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    for (const char* q : {"q1", "q2"}) {
+        CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", q}));
+    }
+    stops(4);
+    CHECK(s.serveUntil([&] { return s.driver().openTurn == 2 && s.sup().gathering(); }, 10));
+    stops(3);
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
+    stops(5);
+    CHECK(s.store.find("ada")->queue.empty() && idle(s));
+    s.send("last");
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 5 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P never", "N Stopped.", "P go", "F Work", "N Stopped.",
+        "P q1", "F A", "N Stopped.", "P q2", "F B", "P last"}));
+}
+
+// The drivers file loses ada mid-turn: a prompt queued then stays queued at the turn's end, since there is no driver
+// to give it to; once ada is configured again, the next action takes the oldest, one per turn.
+void queueUnconfigured(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"Second\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.send("go");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    const std::string table = dir + "/drivers";
+    std::filesystem::rename(table, table + ".away");
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "next"}));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
+    CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped."}));
+    CHECK(s.store.find("ada")->queue == std::vector<std::string>{"next"});
+    CHECK(s.driver().waiting.empty());
+    std::filesystem::rename(table + ".away", table);
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "later"}));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped.", "P next", "F Second",
+        "P later"}));
+    CHECK(s.store.find("ada")->queue.empty());
 }
 
 // No hello: ended after the hello deadline, counted as a failed start, and started again for the prompt still waiting.
@@ -257,7 +347,7 @@ void ignoresStop(Server& s, const std::string& dir, const std::string& fake) {
     s.send("q");
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
     const Millis stopped = now();
-    CHECK(s.drivers->stop("ada", stopped));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     CHECK(now() - stopped >= kTiming.stop);
     const std::vector<std::string> t = s.transcript();
@@ -275,7 +365,7 @@ void kill(Server& s, const std::string& dir, const std::string& fake) {
     s.send("q");
     CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Working; }, 10));
     const Millis stopped = now();
-    CHECK(s.drivers->stop("ada", stopped));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
     bool killed = false;
     CHECK(s.serveUntil([&] {
         killed = killed || s.sup().stage() == Stage::Killed;
@@ -442,6 +532,29 @@ int main(int argc, char** argv) {
             if (failures != 0) {
                 dump(s);
             }
+        } else if (name == "restart_unconfigured") {
+            // The server dies mid-turn with a prompt queued, and starts again with ada no longer configured: the turn
+            // is cut, and the queued prompt stays queued, with no driver started for it.
+            {
+                Server s(dir);
+                setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"a\"}\nhang\n");
+                s.send("first");
+                CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+                CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "queued"}));
+                CHECK(s.store.find("ada")->queue == std::vector<std::string>{"queued"});
+            }
+            writeFile(dir + "/drivers", "");
+            Server s(dir);
+            CHECK(s.driver().openTurn == 0);
+            CHECK(s.driver().waiting.empty());
+            CHECK(s.store.find("ada")->queue == std::vector<std::string>{"queued"});
+            const std::vector<std::string> t = s.transcript();
+            CHECK(t.size() == 2 && has(t.back(), "nexus-server restarted while ada was answering"));
+            CHECK(s.drivers->pid("ada") < 0);
+            s.end();
+            if (failures != 0) {
+                dump(s);
+            }
         } else {
             Server s(dir);
             using Case = void (*)(Server&, const std::string&, const std::string&);
@@ -449,7 +562,8 @@ int main(int argc, char** argv) {
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
-                {"escaped_output", escapedOutput}};
+                {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
+                {"stop_hammered", stopHammered}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

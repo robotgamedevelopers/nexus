@@ -11,9 +11,11 @@
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from
 // the clock or the OS. Each step calls one operation, with positions in range and out of it (move_tab's two among
 // them, across zones too), drafts that are empty, all whitespace or text, and entries of every kind; it adds
-// terminals (up to kMaxTerminals open) and closes tabs of both kinds. Each record holds the operation, its arguments,
-// the value it returned (and the id add returned) and the model's whole state after it: the tabs' order (each
-// position's Tab::id), the selection history and, by position, each tab's kind, friend, draft, transcript and queue.
+// terminals (up to kMaxTerminals open), closes tabs of both kinds, and every 25th step takes a queue's oldest prompt
+// (take_queued, the window's mirror's call when the server delivered it). Each record holds the operation, its
+// arguments, the value it returned (and the id add returned) and the model's whole state after it: the tabs' order
+// (each position's Tab::id), the selection history and, by position, each tab's kind, friend, draft, transcript and
+// queue.
 //
 // --faulty walks FaultyModel instead: a test-only subclass whose send accepts a draft that is all whitespace but
 // not empty. --faulty-queue walks FaultyQueueModel: its queue also puts the draft in the transcript. --faulty-move
@@ -171,7 +173,7 @@ public:
     bool queue(std::size_t i) {
         if (!Model::queue(i))
             return false;
-        // The model offers no way to take from a queue, so the fault writes the tab directly (it is not const).
+        // The fault writes the tab directly (it is not const): the drop is part of the queue, not a take.
         std::vector<std::string>& q = const_cast<nexus::Tab&>(tab(i)).queue;
         if (q.size() > 4)
             q.erase(q.begin());
@@ -428,6 +430,14 @@ int walk(std::uint64_t seed, std::size_t steps, std::size_t friend_count, bool s
         for (std::size_t t = 0; t < m.tab_count(); ++t)
             longest = std::max(longest, m.tab(t).queue.size());
         records.push_back(record(op, i, j, text, ent, ret, id, state(m)));
+        // Every 25th step, the oldest queued prompt of the tab at that position leaves (the server delivered it): a
+        // step of its own that draws no random number, so every walk's other steps are as they were, and seldom
+        // enough that queues still grow long.
+        if (s % 25 == 24) {
+            const bool took = m.take_queued(i);
+            accepted += took ? 1 : 0;
+            records.push_back(record("take", i, 0, "", kNoEntry, took, 0, state(m)));
+        }
     }
 
     std::ofstream out(path);
