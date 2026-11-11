@@ -748,6 +748,80 @@ void test_driver() {
     CHECK(texts(old.s->tab("ada")) == "[0:old]|[queued]|turn 2 open 1 session ");
 }
 
+Change dequeue() {
+    Change c;
+    c.kind = Change::Kind::Dequeue;
+    return c;
+}
+
+void test_dequeue() {
+    MemFs fs;
+    Opened o = open_store(fs);
+    CHECK_OK(o.st);
+    // a dequeue from an empty queue, or one more than the step leaves, is refused and changes nothing
+    Status none = o.s->commit("ada", std::vector<Change>{dequeue()});
+    CHECK(none.code() == Status::Code::Refused);
+    CHECK(none.message().find("a dequeue from a queue with nothing left in it") != std::string::npos);
+    CHECK(o.s->commit("ada", std::vector<Change>{enqueue("one"), dequeue(), dequeue()}, "w1", 1).code() ==
+          Status::Code::Refused);
+    CHECK(o.s->tab("ada") == nullptr && o.s->applied("w1") == 0);
+    // queued, then taken at a turn's end with the person's entry, in one step
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{enqueue("one")}, "w1", 1));
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{enqueue("two")}, "w1", 2));
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{dequeue(), append("one", 0)}));
+    CHECK(texts(o.s->tab("ada")) == "[0:one]|[two]");
+    // replayed after a crash as it was: each taken once
+    const std::string before = digest(*o.s, {"w1"});
+    o.s.reset();
+    fs.crash(fs.plan_all(false));
+    Opened o2 = open_store(fs);
+    CHECK_OK(o2.st);
+    CHECK(digest(*o2.s, {"w1"}) == before);
+    CHECK_OK(o2.s->commit("ada", std::vector<Change>{dequeue(), append("two", 0)}));
+    CHECK(texts(o2.s->tab("ada")) == "[0:one][0:two]|");
+    // and kept by compaction
+    StoreOptions small;
+    small.compact_bytes = 120;
+    MemFs fs2;
+    Opened c = open_store(fs2, small);
+    CHECK_OK(c.st);
+    for (int i = 0; i < 10; ++i) {
+        CHECK_OK(c.s->commit("ada", std::vector<Change>{enqueue("q" + std::to_string(i))}));
+        CHECK_OK(c.s->commit("ada", std::vector<Change>{dequeue(), append("q" + std::to_string(i), 0)}));
+    }
+    CHECK(c.s->tab("ada")->queue.empty() && c.s->tab("ada")->transcript.size() == 10);
+    const std::string compacted = digest(*c.s, {});
+    c.s.reset();
+    fs2.crash(fs2.plan_all(false));
+    Opened c2 = open_store(fs2, small);
+    CHECK_OK(c2.st);
+    CHECK(digest(*c2.s, {}) == compacted);
+
+    // a journaled dequeue from an empty queue is not one this store writes: the store does not open
+    MemFs fs3;
+    {
+        Opened first = open_store(fs3);
+        CHECK_OK(first.st);
+    }
+    {
+        Writer w;
+        w.u8(1);
+        w.str("ada");
+        w.u32(1);
+        w.u8(4);
+        w.str("");
+        w.u64(0);
+        Journal j(fs3, "store");
+        Journal::Recovery rec;
+        CHECK_OK(j.open(rec));
+        CHECK_OK(j.append(w.out()));
+        CHECK_OK(j.sync());
+    }
+    Opened bad = open_store(fs3);
+    CHECK(bad.st.code() == Status::Code::Failed);
+    CHECK(bad.st.message().find("record") != std::string::npos);
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -761,6 +835,7 @@ const Group kGroups[] = {
     {"store", test_store},
     {"store_crash", test_store_crash},
     {"driver", test_driver},
+    {"dequeue", test_dequeue},
 };
 
 } // namespace

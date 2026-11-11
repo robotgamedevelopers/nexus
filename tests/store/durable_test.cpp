@@ -3,7 +3,7 @@
 // applied counter, so that a reconnecting window's resent actions are skipped and the rest applied once, in order.
 //
 //   durable_test            runs every group
-//   durable_test <group>    runs one: restart resend crash
+//   durable_test <group>    runs one: restart resend crash take
 
 #include "server/durable.h"
 #include "store/fs.h"
@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -205,12 +206,46 @@ void test_crash() {
     CHECK(taken > 100);
 }
 
+// A queued prompt delivered at a turn's end, and the friend's text still growing, across a restart: the take is
+// durable (the prompt left the queue once, and is in the transcript once); the open entry is not, and a closed entry
+// is kept once.
+void test_take() {
+    store::MemFs fs;
+    std::string before;
+    {
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        Hub hub(ds);
+        CHECK(hub.apply(Action{1, ActionKind::Queue, "ada", "one"}, nullptr, "w1"));
+        CHECK(hub.apply(Action{2, ActionKind::Queue, "ada", "two"}, nullptr, "w1"));
+        std::string why;
+        CHECK(hub.commit("ada", {takeQueued(), TabChange{std::make_shared<const TabEntry>(TabEntry{EntryKind::Person,
+            "one", true}), {}}}, &why));
+        CHECK(hub.setOpen("ada", "the reply so"));
+        CHECK(hub.commit("ada", {TabChange{std::make_shared<const TabEntry>(TabEntry{EntryKind::Friend,
+            "the reply so far", true}), {}}}, &why));
+        CHECK(hub.setOpen("ada", "and then"));
+        // a take of more than the queue holds is refused whole
+        CHECK(!hub.commit("ada", {takeQueued(), takeQueued()}, &why));
+        CHECK(why.find("a dequeue from a queue with nothing left in it") != std::string::npos);
+        CHECK(text(hub.state(), "ada") == "0:[0one][1the reply so far][1and then]|[two]");
+        before = text(hub.state(), "ada");
+    }
+    fs.crash(fs.plan_all(false));
+    server::DurableStore ds;
+    CHECK(openOn(fs, ds));
+    Hub hub(ds);
+    CHECK(text(hub.state(), "ada") == "0:[0one][1the reply so far]|[two]");
+    CHECK(ds.applied("w1") == 2);
+}
+
 struct Group {
     const char* name;
     void (*run)();
 };
 
-const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash}};
+const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
+                         {"take", test_take}};
 
 } // namespace
 

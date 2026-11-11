@@ -47,6 +47,9 @@ public:
                                 // transcript, clear that draft, true; else false, no change. Never touches a queue.
     bool queue(std::size_t i);  // a friend's tab whose draft is not all-whitespace: append the draft to that tab's queue,
                                 // clear that draft, true; else false, no change. Never touches a transcript.
+    bool take_queued(std::size_t i);  // a friend's tab whose queue is not empty: its oldest queued prompt leaves the
+                                      // queue (the server delivered it), true; else false, no change. Never touches a
+                                      // transcript or a draft.
     bool append(std::size_t i, Entry e);         // false and no change unless i is a friend's tab
     bool move_tab(std::size_t from, std::size_t to); // false and no change unless both < tab_count() and the tabs at
                                                      // `from` and `to` are in the same zone; else the tab at `from`

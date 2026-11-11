@@ -110,6 +110,14 @@ bool Model::queue(std::size_t i) {
     return true;
 }
 
+bool Model::take_queued(std::size_t i) {
+    if (!friend_tab(i) || tabs_[i].queue.empty()) {
+        return false;
+    }
+    tabs_[i].queue.erase(tabs_[i].queue.begin());
+    return true;
+}
+
 bool Model::append(std::size_t i, Entry e) {
     if (!friend_tab(i))
         return false;
