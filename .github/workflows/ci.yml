@@ -471,7 +471,9 @@ jobs:
       - name: Probe (temporary)
         continue-on-error: true
         run: |
+          cmake -S . -B "$env:NEXUS_BUILD-link" -A x64 -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=ON "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
           $probe = "$env:NEXUS_BUILD-window"
           cmake -S . -B $probe -A x64 -DNEXUS_WINDOW=ON -DNEXUS_WINDOW_LOGIC=ON -DNEXUS_LINK=OFF "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-          & $msbuild "$probe\nexus.sln" /m /nologo /v:m /p:Configuration=Release /p:BuildProjectReferences=false
+          $sln = Get-ChildItem "$probe\nexus.sln*" | Select-Object -First 1
+          & $msbuild $sln.FullName /m /nologo /v:m /p:Configuration=Release /p:BuildProjectReferences=false
