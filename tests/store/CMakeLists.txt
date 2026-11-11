@@ -24,7 +24,7 @@ add_executable(journal_walk journal_walk.cpp)
 target_link_libraries(journal_walk PRIVATE nexus_store)
 target_compile_options(journal_walk PRIVATE ${warnings})
 
-# The store on the real filesystem: POSIX, like nexus-server (not built on Windows, where only the window builds).
+# The store on the real filesystem: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     add_executable(store_functional_test store_functional_test.cpp)
     target_link_libraries(store_functional_test PRIVATE nexus_store)

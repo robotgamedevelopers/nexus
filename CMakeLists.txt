@@ -62,8 +62,26 @@ endif()
 # The link between the window and nexus-server: mosh's transport (cmake/mosh.cmake), which needs protobuf. OFF builds
 # without nexus-server and without the window's --server; the model checks need neither. It uses the window's logic, so
 # it is on by default where that is.
+# On Windows only the window (the UI overlay) is native: nexus-server and the mosh link run as the Linux build inside
+# WSL2, which the native window will reach over a local socket. So none of them is built natively on Windows: the link
+# is off there and cannot be turned on, and nexus-server's POSIX parts (the real filesystem under the store, the
+# drivers' poll loop, the fake driver and their functional tests) are left out below.
+if(WIN32)
+    set(nexus_link_default OFF)
+else()
+    set(nexus_link_default ${NEXUS_WINDOW_LOGIC})
+endif()
 option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)"
-    ${NEXUS_WINDOW_LOGIC})
+    ${nexus_link_default})
+if(WIN32)
+    if(NEXUS_LINK)
+        message(FATAL_ERROR "nexus: on Windows nexus-server and the mosh link run as the Linux build inside WSL2, and "
+            "only the window is built natively; configure with -DNEXUS_LINK=OFF (build the link and nexus-server inside "
+            "WSL2 instead)")
+    endif()
+    message(STATUS "nexus: Windows builds the window only; nexus-server, the mosh link and the store's POSIX "
+        "filesystem run as the Linux build inside WSL2, and are not built here")
+endif()
 if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
         "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
@@ -90,8 +108,9 @@ target_link_libraries(nexus_sync PUBLIC nexus_model)
 # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
 # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
 add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/store.cpp)
-# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS and Linux, and Windows builds only the
-# window, which never opens the store. The store's unit tests (MemFs) build everywhere.
+# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS and Linux, inside WSL2 on Windows, and native
+# Windows builds only the window, which never opens the store (NEXUS_LINK above). The store's unit tests (MemFs) build
+# everywhere.
 if(NOT WIN32)
     target_sources(nexus_store PRIVATE src/store/posix_fs.cpp)
 endif()
@@ -119,7 +138,7 @@ target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver)
 
 # The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX (poll,
-# process ids), like the rest of nexus-server: not built on Windows, where only the window builds.
+# process ids), like the rest of nexus-server: not built natively on Windows, where nexus-server runs inside WSL2.
 if(NOT WIN32)
     add_library(nexus_drivers STATIC src/server/drivers.cpp)
     target_include_directories(nexus_drivers PUBLIC src)

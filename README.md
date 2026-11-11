@@ -64,7 +64,8 @@ nexus finds `nova-config` on the PATH your login shell gives, or at the full pat
 
 The window writes its errors to stderr. On Windows it has no terminal, so unless stderr was redirected they go to
 `%LOCALAPPDATA%\nexus\nexus.log`, appended to on each launch; if the hotkey does not register, a message box says
-so and names that file.
+so and names that file. On Windows only the window is native: `nexus-server` and the link run as the Linux build inside WSL2, and
+the Windows window has no `--server` yet.
 
 ## The server
 

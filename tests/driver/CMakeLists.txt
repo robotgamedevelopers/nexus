@@ -12,7 +12,7 @@ add_executable(driver_protocol_test protocol_test.cpp)
 target_link_libraries(driver_protocol_test PRIVATE nexus_driver)
 target_compile_options(driver_protocol_test PRIVATE ${warnings})
 
-# The fake driver is a POSIX program, as nexus-server's drivers are (not built on Windows, where only the window builds).
+# The fake driver is a POSIX program, as nexus-server's drivers are (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     add_executable(nexus_fake_driver fake_driver.cpp)
     target_link_libraries(nexus_fake_driver PRIVATE nexus_driver)

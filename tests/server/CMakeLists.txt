@@ -24,7 +24,7 @@ add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
 target_compile_options(driver_table_test PRIVATE ${warnings})
 
-# The friends layer's real processes: POSIX, like nexus-server (not built on Windows, where only the window builds).
+# The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     add_executable(drivers_functional drivers_functional.cpp)
     target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
