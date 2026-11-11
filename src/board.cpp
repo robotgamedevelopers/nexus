@@ -152,8 +152,8 @@ PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.
             return address;
         });
     }
-    tzset();
-    prelude_ = sprintPrelude(tzname[0] != nullptr ? tzname[0] : "", tzname[1] != nullptr ? tzname[1] : "");
+    const ZoneNames zones = localZoneNames();
+    prelude_ = sprintPrelude(zones.standard, zones.daylight);
 }
 
 PraxBoard::~PraxBoard() {
@@ -414,7 +414,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     display_ = display;
     const bool onScreen = shown_ && (!desc_.visible || desc_.visible());
     if (page_ != nullptr && hiddenSet_ == onScreen) {
-        prHtmlPageSetVisibility(page_, onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden);
+        prHtmlPageSetVisibility(page_, PrHtmlVisibility(onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden));
         hiddenSet_ = !onScreen;
     }
     if (!onScreen) {

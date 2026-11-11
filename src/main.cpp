@@ -780,12 +780,12 @@ int main(int argc, char** argv) {
     int code = 0;
     if (shot != nullptr) {
         // A fullscreen-sized frame of the main display (a 1000x780 window with --windowed).
-        float w = 1000, h = 780, scale = 2;
-        if (!windowed && !mainDisplay(&w, &h, &scale)) {
+        float w = 1000, h = 780, ratio = 2;
+        if (!windowed && !mainDisplay(&w, &h, &ratio)) {
             std::fprintf(stderr, "nexus: no main display to size the screenshot by\n");
             code = 1;
         } else {
-            code = screenshot(a, shot, PrVec2{w, h}, scale);
+            code = screenshot(a, shot, PrVec2{w, h}, ratio);
         }
     } else {
         // The overlay opens hidden at the size Prax holds it to; each show gives it the whole screen (carryOut).

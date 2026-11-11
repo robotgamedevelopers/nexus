@@ -324,9 +324,13 @@ void loadsPollsAndFormats() {
         std::fprintf(stderr, "the page's text: %s\n", t.c_str());
     std::time_t wall = std::time_t(Clock::wall(&h.clock) / 1000);
     std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &wall);
+#else
     localtime_r(&wall, &local);
-    tzset();
-    std::string zone = tzname[local.tm_isdst > 0 ? 1 : 0];
+#endif
+    const ZoneNames zones = localZoneNames();
+    std::string zone = local.tm_isdst > 0 ? zones.daylight : zones.standard;
     CHECK(has(t, "first"));
     CHECK(!zone.empty() && has(t, zone));
     CHECK(h.hasStyle());

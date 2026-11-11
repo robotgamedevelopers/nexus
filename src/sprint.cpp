@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <vector>
 
 #include "pr/json.h"
@@ -353,6 +354,26 @@ std::string sprintPrelude(std::string_view standardZone, std::string_view daylig
     replace(text, "@STD@", literal(standardZone));
     replace(text, "@DST@", literal(daylightZone));
     return text;
+}
+
+ZoneNames localZoneNames() {
+    ZoneNames names;
+#if defined(_WIN32)
+    _tzset();
+    char name[128];
+    std::size_t size = 0;
+    if (_get_tzname(&size, name, sizeof(name), 0) == 0) {
+        names.standard = name;
+    }
+    if (_get_tzname(&size, name, sizeof(name), 1) == 0) {
+        names.daylight = name;
+    }
+#else
+    tzset();
+    names.standard = tzname[0] != nullptr ? tzname[0] : "";
+    names.daylight = tzname[1] != nullptr ? tzname[1] : "";
+#endif
+    return names;
 }
 
 } // namespace nexus
