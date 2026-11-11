@@ -25,7 +25,9 @@
 #define HAVE_MEMORY 1
 #define HAVE_STD_SHARED_PTR 1
 
-/* --with-crypto-library=apple-common-crypto: mosh's own OCB over CommonCrypto's AES */
-#define USE_APPLE_COMMON_CRYPTO_AES 1
+/* mosh's own OCB over the platform's AES: --with-crypto-library=apple-common-crypto on macOS (CommonCrypto),
+   --with-crypto-library=openssl elsewhere (libcrypto) */
+#cmakedefine USE_APPLE_COMMON_CRYPTO_AES 1
+#cmakedefine USE_OPENSSL_AES 1
 
 #endif

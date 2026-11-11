@@ -10,7 +10,9 @@
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end).
 
+#if defined(__APPLE__)
 #include <libproc.h>
+#endif
 #include <poll.h>
 #include <signal.h>
 #include <unistd.h>
@@ -77,12 +79,40 @@ std::string readFile(const std::string& path) {
     return all.str();
 }
 
-// The children of this process not yet collected, and those still running.
+// The children of this process not yet collected, and those still running: on macOS from libproc, on Linux from each
+// process's parent in /proc (a child not yet collected is still there, a zombie).
+#if defined(__APPLE__)
 int children() {
     pid_t pids[256] = {};
     proc_listchildpids(getpid(), pids, sizeof pids);
     return static_cast<int>(std::count_if(std::begin(pids), std::end(pids), [](pid_t p) { return p > 0; }));
 }
+#else
+int children() {
+    const pid_t self = getpid();
+    int count = 0;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("/proc", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) {
+            continue;
+        }
+        // /proc/<pid>/stat: pid (comm) state ppid ...; comm may hold spaces and parentheses, so read after the last ')'.
+        const std::string stat = readFile(entry.path().string() + "/stat");
+        const std::size_t close = stat.rfind(')');
+        if (close == std::string::npos) {
+            continue;
+        }
+        std::istringstream rest(stat.substr(close + 1));
+        std::string state;
+        long ppid = 0;
+        if (rest >> state >> ppid && ppid == self) {
+            ++count;
+        }
+    }
+    return count;
+}
+#endif
 
 // nexus-server's friends over a store in `dir`: the store, the hub and the drivers, as the server makes them.
 struct Server {
