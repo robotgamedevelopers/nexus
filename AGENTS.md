@@ -68,6 +68,16 @@ Display
 
 Each of these moves into the locked rules above, with its test or model, in the pull request that builds it. Until then it is the design to build, not a thing to redecide.
 
+Installing
+- There is no installer. nexus is installed through an AI: a person, in their own AI on their own subscription, points it at this repository, and the AI builds nexus from source by the README and sets it up. The README is the installer; every step says how to check it worked and what to do when it did not, and it is proven by a cold run on a clean Mac by an AI with no other context.
+- A default install has one friend: the installing AI's own harness and account, so the person talks to that harness through nexus. No sprint tab and no fleet. Friends are configured in nexus itself; the fleet's friend list is an extra source, not a requirement.
+- The first experience is: talk with my AI, and a quake-style terminal overlay. Nothing about sprints, fleets or boards shows until the person asks for it.
+- Once the one friend works, the AI teaches the next steps, in this order and each only when the person wants it: running terminals in the overlay; adding more friends (more subscriptions); setting up a fleet over Tailscale; and last, a sprint, for API-rate work or going really wide.
+- The sprint tab exists only when a board is configured; when it exists, it is Cmd-1, first, and never moves or closes.
+
+Billing
+- Friends run on subscriptions, always; a driver has no way to bill an API and refuses a session that is not on a subscription. API billing is for fleet workers only, where the fleet's record allows it.
+
 Keys and contexts
 - Everything is driven by the keyboard, and fast. Every action has a key; the mouse is never required, and dragging is only ever a second way. Pop-ups open at once, a repeat of the key steps to the next item, and typing filters the list.
 - Every shortcut uses Command, never Control or Option.
