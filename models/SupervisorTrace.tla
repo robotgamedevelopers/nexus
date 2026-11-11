@@ -10,7 +10,7 @@
 (* TraceSessions) and Trace: one record per step. Trace[1] is the start    *)
 (* (op "init"); each later record is the event the code was given (op,    *)
 (* and for a message its kind, turn and value), and after it the code's    *)
-(* whole state, every send it has written, the entries the step appended   *)
+(* whole state, every send and stop it has written, the entries the step appended *)
 (* to the tab, and the --resume of its last start.                         *)
 (*                                                                         *)
 (* Each step of this spec takes the Supervisor action the record names.    *)
@@ -28,8 +28,8 @@ L == INSTANCE Supervisor WITH Prompts <- TracePrompts, MaxWaiting <- TraceMaxWai
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
-Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "session", "gathered", "finished", "failed",
-           "blocked", "nocred", "down", "procs", "written", "fx", "resumed"}
+Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
+           "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -43,6 +43,7 @@ Msg(r) == [kind |-> r.kind, t |-> r.t, v |-> r.v]
 
 Step(r) ==
     CASE r.op = "prompt"   -> L!Prompt
+      [] r.op = "queue"    -> L!QueuePrompt
       [] r.op = "stop"     -> L!Stop
       [] r.op = "message"  -> L!Message(Msg(r))
       [] r.op = "broken"   -> L!Broken
@@ -73,11 +74,15 @@ OneTurn == L!OneTurn
 TurnsIncrease == L!TurnsIncrease
 AtMostOnce == L!AtMostOnce
 WaitingSound == L!WaitingSound
+QueueSound == L!QueueSound
+StopOnce == L!StopOnce
 LimitHolds == L!LimitHolds
 EffectsForOpen == L!EffectsForOpen
 EndsAnsweredOrCut == L!EndsAnsweredOrCut
 TextKept == L!TextKept
 StartsSound == L!StartsSound
 NoSendWithoutCredential == L!NoSendWithoutCredential
+StopForOpen == L!StopForOpen
+TakesAtTurnEnd == L!TakesAtTurnEnd
 
 =============================================================================

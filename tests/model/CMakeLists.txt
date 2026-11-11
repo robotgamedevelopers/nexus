@@ -53,7 +53,7 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
-# (turn, resume).
+# (turn, resume, queue).
 function(tlc_test name module cfg expect)
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS" "" ${ARGN})

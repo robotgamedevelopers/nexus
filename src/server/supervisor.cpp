@@ -104,8 +104,8 @@ EntryKind entryKind(Effect::What what) {
     return EntryKind::Notice;
 }
 
-Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Output* out)
-    : config_(std::move(config)), state_(std::move(state)) {
+Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Output* out, std::vector<std::string> queue)
+    : config_(std::move(config)), state_(std::move(state)), queue_(std::move(queue)) {
     if (state_.openTurn != 0) {
         effect(Effect::What::Cut, "The reply was cut short: nexus-server restarted while " + config_.name +
             " was answering. Whether " + config_.name + " got the prompt is unknown; send it again if you still want "
@@ -151,6 +151,16 @@ Output Supervisor::prompt(const std::string& text, Millis now) {
         }
         advance(now);
     }
+    return finish();
+}
+
+Output Supervisor::queued(const std::string& text, Millis now) {
+    queue_.push_back(text);
+    if (held_) {
+        held_ = false;
+        failed_ = 0;
+    }
+    advance(now);
     return finish();
 }
 
@@ -456,8 +466,31 @@ void Supervisor::writeNext() {
     phase_ = Phase::Working;
 }
 
-// What follows every event: a driver started for a waiting prompt, or the prompt written to an idle one.
+// With no turn open, nothing waiting and starting not held back, the oldest queued prompt leaves the queue and waits,
+// shown as the person's entry: one per turn. One that cannot be written as a protocol line (the hub's text limit
+// keeps every prompt far within the line limit, so only text that is not UTF-8) leaves the queue with a notice, and
+// the next is taken in its place.
+void Supervisor::take() {
+    while (state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ && !queue_.empty()) {
+        std::string text = std::move(queue_.front());
+        queue_.erase(queue_.begin());
+        ++out_.taken;
+        const Encoded line = encode(Send{state_.nextTurn, text});
+        if (!line.error.empty()) {
+            effect(Effect::What::Notice, "A queued prompt to " + config_.name + " was not sent: " +
+                sentence(line.error));
+            continue;
+        }
+        effect(Effect::What::Prompt, text);
+        state_.waiting.push_back(std::move(text));
+        out_.durable = true;
+    }
+}
+
+// What follows every event: the oldest queued prompt taken at a turn's end, a driver started for a waiting prompt, or
+// the prompt written to an idle one.
 void Supervisor::advance(Millis now) {
+    take();
     startDriver(now);
     writeNext();
 }

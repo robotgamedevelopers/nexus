@@ -16,6 +16,17 @@
 // turn that is not open has no effect on the tab; a driver that exits or is ended with a turn open has that turn cut,
 // with a notice that whether the friend got the prompt is unknown; consecutive failed starts stop the starting of
 // drivers until the person's next prompt. There is no deadline on a working turn: a turn may run for hours.
+//
+// The tab's queue (prompts queued for later, Command-Enter) is the hub's, apart from the transcript; the supervisor
+// holds the same list, as it holds the driver's durable state, and changes it only in steps the caller commits whole.
+// When no turn is open, no prompt waits and starting is not held back, the oldest queued prompt leaves the queue and
+// waits like a prompt sent (shown as the person's entry): one per turn, oldest first, each once. A stop is written
+// only for the open turn, at most once for it, and never waits behind anything.
+//
+// The open turn's text not yet in the tab (gathered()) is the friend's text block as it grows: the caller shows it as
+// an entry still open, kept in memory only. It goes into the tab, durable, when the block ends (its text-end, a tool,
+// the turn's done or cut) or reaches the entry limit; a server that crashes loses at most that one block, and the turn
+// is cut with its notice when the server starts again.
 
 #pragma once
 
@@ -97,18 +108,23 @@ struct Output {
     std::vector<Command> commands;
     std::optional<driver::Credential> credential;   // the driver reported the credential it uses
     std::optional<double> sessionCostUsd;           // a turn's done reported the session's cost so far
+    std::size_t taken = 0;      // prompts taken from the head of the tab's queue: commit as many dequeues, first
 };
 
 class Supervisor {
 public:
     // The supervisor of a tab whose durable state is `state`, as the server finds it when it starts: a turn left open
-    // by the server before is cut, and a waiting prompt starts a driver. What that takes is written to `out`.
-    Supervisor(Config config, sync::DriverState state, Millis now, Output* out);
+    // by the server before is cut, and a waiting prompt starts a driver. `queue` is the tab's queue as the store holds
+    // it: with no turn open and nothing waiting, its oldest prompt is taken. What that takes is written to `out`.
+    Supervisor(Config config, sync::DriverState state, Millis now, Output* out, std::vector<std::string> queue = {});
 
     // The person sent `text`: it is shown and waits, and is written as the next turn as soon as a driver is idle (a
     // driver is started for it if none is alive). Refused with a notice past the bound, or if it cannot be written as
     // a protocol line. A prompt lifts the hold that failed starts put on starting drivers.
     Output prompt(const std::string& text, Millis now);
+    // The person queued `text` for later, which the hub has put at the end of the tab's queue (within its limits): it
+    // is taken at once if no turn is open and nothing waits. Like a prompt, it lifts the hold on starting drivers.
+    Output queued(const std::string& text, Millis now);
     // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out.
     Output stop(Millis now);
     // A message the driver wrote.
@@ -133,6 +149,8 @@ public:
     Stage stage() const { return stage_; }
     bool alive() const { return phase_ != Phase::None; }
     bool gathering() const { return !gathered_.empty(); }   // text of the open turn not yet in the tab
+    const std::string& gathered() const { return gathered_; }   // that text: the friend's block, still open
+    const std::vector<std::string>& queue() const { return queue_; }    // the tab's queue, oldest first
     bool finished() const { return finished_; }             // the driver alive finished a turn
     int failedStarts() const { return failed_; }
     bool held() const { return held_; }                     // no driver is started until the next prompt
@@ -150,6 +168,7 @@ private:
     void end(const std::string& why, Millis now);
     void endQuietly(Millis now);
     void close(Millis now);
+    void take();
     void startDriver(Millis now);
     void writeNext();
     void advance(Millis now);
@@ -158,6 +177,7 @@ private:
 
     Config config_;
     sync::DriverState state_;
+    std::vector<std::string> queue_;    // the tab's queue, as the store holds it once the output is committed
     Phase phase_ = Phase::None;
     Stage stage_ = Stage::None;
     std::optional<Millis> deadline_;

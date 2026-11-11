@@ -551,6 +551,103 @@ void testStop() {
     CHECK(idle.stop(kStart + 3).commands.empty());
 }
 
+// ---- the queue: one per turn, at the turn's end, oldest first, each once ----
+
+void testQueue() {
+    const Done ok{1, Outcome::Ok, std::nullopt, std::nullopt};
+    {
+        // No turn open and nothing waiting: taken at once, and a driver started for it.
+        Supervisor s = make();
+        Output o = s.queued("q1", kStart);
+        CHECK(o.taken == 1 && whats(o) == std::vector<What>{What::Prompt} && o.effects[0].text == "q1" && o.durable);
+        CHECK(s.queue().empty() && s.state().waiting == std::vector<std::string>{"q1"});
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+        o = s.message(Hello{1, "h"}, kStart + 1);
+        CHECK(sends(o, 1, "q1") && o.taken == 0);
+    }
+    {
+        // While a turn is open the queue holds; each turn's end takes the oldest, and writes it as the next turn.
+        Supervisor s = working();
+        Output o = s.queued("q1", kStart + 2);
+        CHECK(o.taken == 0 && o.effects.empty() && o.commands.empty() && !o.durable);
+        o = s.queued("q2", kStart + 3);
+        CHECK(o.taken == 0 && (s.queue() == std::vector<std::string>{"q1", "q2"}));
+        o = s.message(ok, kStart + 4);
+        CHECK(o.taken == 1 && whats(o) == std::vector<What>{What::Prompt} && o.effects[0].text == "q1");
+        CHECK(sends(o, 2, "q1") && s.state().openTurn == 2 && s.queue() == std::vector<std::string>{"q2"});
+        o = s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 5);
+        CHECK(o.taken == 1 && sends(o, 3, "q2") && s.queue().empty());
+        o = s.message(Done{3, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 6);
+        CHECK(o.taken == 0 && o.commands.empty() && s.phase() == Phase::Idle);
+    }
+    {
+        // A prompt sent while a turn is open goes before the queue: it was sent, the queue is for later.
+        Supervisor s = working();
+        s.queued("q1", kStart + 2);
+        s.prompt("s1", kStart + 3);
+        Output o = s.message(ok, kStart + 4);
+        CHECK(o.taken == 0 && sends(o, 2, "s1") && s.queue() == std::vector<std::string>{"q1"});
+        o = s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 5);
+        CHECK(o.taken == 1 && sends(o, 3, "q1"));
+    }
+    {
+        // A stopped turn is a turn's end: the next queued prompt goes.
+        Supervisor s = working();
+        s.queued("q1", kStart + 2);
+        Output o = s.stop(kStart + 3);
+        CHECK(o.taken == 0 && written(o) == std::vector<ServerMessage>{Stop{1}});
+        o = s.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 4);
+        CHECK((whats(o) == std::vector<What>{What::Stopped, What::Prompt}) && o.taken == 1 && sends(o, 2, "q1"));
+    }
+    {
+        // So is a turn cut by the driver's exit: the prompt waits for the next driver, which is started for it.
+        Supervisor s = working();
+        s.queued("q1", kStart + 2);
+        Output o = s.exited("exited with status 1", kStart + 3);
+        CHECK((whats(o) == std::vector<What>{What::Notice, What::Cut, What::Prompt}) && o.taken == 1);
+        CHECK(s.state().waiting == std::vector<std::string>{"q1"} && kinds(o) == std::vector<Kind>{Kind::Start});
+    }
+    {
+        // Queuing lifts the hold that failed starts put on starting drivers, as a prompt does.
+        Supervisor s = make();
+        s.prompt("x", kStart);
+        for (int i = 0; i < 3; ++i) {
+            s.exited("could not be started: no such file", kStart + 1);
+        }
+        CHECK(s.held() && s.state().waiting == std::vector<std::string>{"x"});
+        Output o = s.queued("q1", kStart + 2);
+        CHECK(!s.held() && s.failedStarts() == 0 && o.taken == 0 && kinds(o) == std::vector<Kind>{Kind::Start});
+        CHECK(s.queue() == std::vector<std::string>{"q1"});     // "x" waits ahead of it
+    }
+    {
+        // A server stopping takes nothing from the queue: it stays, durable, for the next server.
+        Supervisor s = make();
+        s.shutdown(kStart);
+        Output o = s.queued("q1", kStart + 1);
+        CHECK(o.taken == 0 && o.effects.empty() && o.commands.empty() && s.queue() == std::vector<std::string>{"q1"});
+    }
+    {
+        // A restart cuts the open turn, and that end takes the oldest queued prompt.
+        sync::DriverState open;
+        open.nextTurn = 4;
+        open.openTurn = 3;
+        Output first;
+        Supervisor s(config(), open, kStart, &first, {"q1", "q2"});
+        CHECK((whats(first) == std::vector<What>{What::Cut, What::Prompt}) && first.taken == 1 && first.durable);
+        CHECK(s.queue() == std::vector<std::string>{"q2"} && kinds(first) == std::vector<Kind>{Kind::Start});
+    }
+    {
+        // A queued prompt that cannot be written as a protocol line (not UTF-8) leaves the queue with a notice, and the
+        // next is taken in its place.
+        Supervisor s = working();
+        s.queued("\xff", kStart + 2);
+        s.queued("q2", kStart + 3);
+        Output o = s.message(ok, kStart + 4);
+        CHECK((whats(o) == std::vector<What>{What::Notice, What::Prompt}) && o.taken == 2 && sends(o, 2, "q2"));
+        CHECK(contains(o.effects[0].text, "A queued prompt to ada was not sent") && s.queue().empty());
+    }
+}
+
 // ---- shutdown, from every phase ----
 
 void testShutdown() {
@@ -633,6 +730,7 @@ const Group kGroups[] = {
     {"failed_starts", testFailedStarts},
     {"credential", testCredentialAndErrors},
     {"stop", testStop},
+    {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},
 };

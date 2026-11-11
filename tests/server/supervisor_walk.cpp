@@ -3,11 +3,13 @@
 // processes, no clock: the walk plays the driver and the person, keeps the time itself, and commits each step's
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
-//   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume] <out.tla>
+//   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
 //   prompt    the person sends the next prompt ("p1", "p2", ...)
+//   queue     the person queues the next prompt for later (the hub's limit, the waiting bound here, is kept: a queue
+//             past it is refused by the hub before the supervisor sees it, so the walk does not make one)
 //   stop      the person stops the friend's work
 //   message   the driver writes a message: mostly what the protocol allows where it is (hello, a turn's text, tools
 //             and done, a session id, the credential, an error), and at times what it does not (a message before
@@ -22,6 +24,7 @@
 // The faults, for the tests that show the check can fail:
 //   --faulty-turn    a restart finds the next turn number as 1, as if the store had not kept it
 //   --faulty-resume  a restart finds no session id, as if the store had not kept it
+//   --faulty-queue   a restart finds the queue empty, as if the store had not kept it
 
 #include <cstdint>
 #include <cstdio>
@@ -47,7 +50,7 @@ constexpr std::size_t kMaxWaiting = 2;
 constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
 
-enum class Fault { None, Turn, Resume };
+enum class Fault { None, Turn, Resume, Queue };
 
 std::string str(const std::string& s) {
     return "\"" + s + "\"";
@@ -127,8 +130,11 @@ public:
         if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
         }
-        if (r < 130 && sent_ < kPrompts && !s.shuttingDown()) {
+        if (r < 100 && sent_ < kPrompts && !s.shuttingDown()) {
             return prompt();
+        }
+        if (r < 130 && sent_ < kPrompts && !s.shuttingDown() && s.queue().size() < kMaxWaiting) {
+            return queue();
         }
         if (r < 160) {
             return take("stop", "", 0, "", s.stop(now_));
@@ -162,6 +168,9 @@ public:
 
     const std::vector<std::string>& records() const { return records_; }
     std::size_t sent() const { return sent_; }
+    std::size_t queued() const { return queued_; }
+    std::size_t taken() const { return taken_; }
+    std::size_t stops() const { return stops_.size(); }
     std::size_t restarts() const { return restarts_; }
     std::size_t written() const { return written_.size(); }
     std::size_t count(Effect::What w) const { return counts_[static_cast<int>(w)]; }
@@ -170,6 +179,14 @@ private:
     bool prompt() {
         ++sent_;
         return take("prompt", "", 0, "", sup_->prompt("p" + std::to_string(sent_), now_));
+    }
+
+    bool queue() {
+        ++sent_;
+        const std::string text = "p" + std::to_string(sent_);
+        committedQueue_.push_back(text);
+        ++queued_;
+        return take("queue", "", 0, "", sup_->queued(text, now_));
     }
 
     bool timeout() {
@@ -202,8 +219,12 @@ private:
         if (fault_ == Fault::Resume) {
             state.session.clear();
         }
+        std::vector<std::string> queue = committedQueue_;
+        if (fault_ == Fault::Queue) {
+            queue.clear();
+        }
         Output out;
-        sup_.emplace(config(), state, now_, &out);
+        sup_.emplace(config(), state, now_, &out, std::move(queue));
         return take("restart", "", 0, "", std::move(out));
     }
 
@@ -324,6 +345,16 @@ private:
         if (out.durable) {
             committed_ = sup_->state();
         }
+        // The store's queue: the hub put a queued prompt at its end before the supervisor saw it; the output's
+        // dequeues take from its head. The supervisor's list must be the same.
+        if (out.taken > committedQueue_.size()) {
+            fail("the supervisor took more queued prompts than the queue holds");
+        }
+        committedQueue_.erase(committedQueue_.begin(), committedQueue_.begin() + static_cast<std::ptrdiff_t>(out.taken));
+        taken_ += out.taken;
+        if (committedQueue_ != sup_->queue() && fault_ != Fault::Queue) {
+            fail("the supervisor's queue is not the store's");
+        }
         for (const Effect& e : out.effects) {
             ++counts_[static_cast<int>(e.what)];
         }
@@ -343,6 +374,8 @@ private:
                 }
                 if (const driver::Send* send = std::get_if<driver::Send>(&*d.message)) {
                     written_.push_back({promptId(send->prompt), send->turn});
+                } else if (const driver::Stop* stop = std::get_if<driver::Stop>(&*d.message)) {
+                    stops_.push_back(stop->turn);
                 }
             }
         }
@@ -359,6 +392,10 @@ private:
         for (std::size_t i = 0; i < s.state().waiting.size(); ++i) {
             o << (i ? ", " : "") << promptId(s.state().waiting[i]);
         }
+        o << ">>, queue |-> <<";
+        for (std::size_t i = 0; i < s.queue().size(); ++i) {
+            o << (i ? ", " : "") << promptId(s.queue()[i]);
+        }
         o << ">>, session |-> " << str(s.state().session) << ", gathered |-> " << (s.gathering() ? "TRUE" : "FALSE")
           << ", finished |-> " << (s.finished() ? "TRUE" : "FALSE") << ", failed |-> " << s.failedStarts()
           << ", blocked |-> " << (s.held() ? "TRUE" : "FALSE") << ", nocred |-> "
@@ -366,6 +403,10 @@ private:
           << (s.shuttingDown() ? "TRUE" : "FALSE") << ", procs |-> " << procs_ << ", written |-> <<";
         for (std::size_t i = 0; i < written_.size(); ++i) {
             o << (i ? ", " : "") << "[p |-> " << written_[i].first << ", t |-> " << written_[i].second << "]";
+        }
+        o << ">>, stops |-> <<";
+        for (std::size_t i = 0; i < stops_.size(); ++i) {
+            o << (i ? ", " : "") << stops_[i];
         }
         o << ">>, fx |-> <<";
         for (std::size_t i = 0; i < out.effects.size(); ++i) {
@@ -385,7 +426,11 @@ private:
     std::size_t procs_ = 0;
     std::size_t sent_ = 0;
     std::size_t restarts_ = 0;
+    std::vector<std::string> committedQueue_;   // the tab's queue as the store holds it
     std::vector<std::pair<std::size_t, std::uint64_t>> written_;
+    std::vector<std::uint64_t> stops_;          // the turn of every stop written
+    std::size_t queued_ = 0;
+    std::size_t taken_ = 0;
     std::string resumed_;
     std::size_t counts_[7] = {};
     std::vector<std::string> records_;
@@ -407,7 +452,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         std::fprintf(stderr, "supervisor_walk: cannot write %s\n", path);
         return 1;
     }
-    const char* faults[] = {"", ", faulty turn", ", faulty resume"};
+    const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
         << faults[static_cast<int>(fault)] << ".\n";
@@ -427,10 +472,12 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         std::fprintf(stderr, "supervisor_walk: writing %s failed\n", path);
         return 1;
     }
-    std::printf("supervisor_walk: seed %llu, %llu steps%s: %zu records, %zu prompts, %zu written, %zu replies, "
+    std::printf("supervisor_walk: seed %llu, %llu steps%s: %zu records, %zu prompts (%zu queued, %zu taken), "
+                "%zu written, %zu stops, %zu replies, "
                 "%zu tools, %zu stopped, %zu cut, %zu notices, %zu restarts -> %s\n",
                 static_cast<unsigned long long>(seed), static_cast<unsigned long long>(steps),
-                faults[static_cast<int>(fault)], records.size(), w.sent(), w.written(), w.count(Effect::What::Reply),
+                faults[static_cast<int>(fault)], records.size(), w.sent(), w.queued(), w.taken(), w.written(), w.stops(),
+                w.count(Effect::What::Reply),
                 w.count(Effect::What::Tool), w.count(Effect::What::Stopped), w.count(Effect::What::Cut),
                 w.count(Effect::What::Notice), w.restarts(), path);
     return 0;
@@ -450,13 +497,17 @@ int main(int argc, char** argv) {
         } else if (a == "--faulty-resume") {
             fault = Fault::Resume;
             ++faults;
+        } else if (a == "--faulty-queue") {
+            fault = Fault::Queue;
+            ++faults;
         } else {
             rest.push_back(a);
         }
     }
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
-        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume] <out.tla>\n");
+        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
+                     "--faulty-queue] <out.tla>\n");
         return 2;
     }
     return walk(seed, steps, fault, rest[2].c_str());

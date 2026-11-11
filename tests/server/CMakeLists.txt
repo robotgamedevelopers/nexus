@@ -31,7 +31,7 @@ add_dependencies(drivers_functional nexus_fake_driver)
 
 add_dependencies(model_checks supervisor_walk supervisor_test)
 
-foreach(group start turns waiting protocol deadlines text failed_starts credential stop shutdown restart)
+foreach(group start turns waiting protocol deadlines text failed_starts credential stop queue shutdown restart)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -48,6 +48,7 @@ endforeach()
 
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)
+tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
@@ -63,6 +64,10 @@ tlc_test(tlc_supervisor_witness_text_lost      WSupTextLost      WSupTextLost.cf
 tlc_test(tlc_supervisor_witness_start_fresh    WSupStartFresh    WSupStartFresh.cfg    action    PROPERTY StartsSound)
 tlc_test(tlc_supervisor_witness_send_no_credential WSupSendNoCredential WSupSendNoCredential.cfg action
          PROPERTY NoSendWithoutCredential)
+tlc_test(tlc_supervisor_witness_take_while_open WSupTakeWhileOpen WSupTakeWhileOpen.cfg action PROPERTY TakesAtTurnEnd)
+tlc_test(tlc_supervisor_witness_take_newest    WSupTakeNewest    WSupTakeNewest.cfg    action    PROPERTY TakesAtTurnEnd)
+tlc_test(tlc_supervisor_witness_take_keeps     WSupTakeKeeps     WSupTakeKeeps.cfg     invariant PROPERTY QueueSound)
+tlc_test(tlc_supervisor_witness_stop_again     WSupStopAgain     WSupStopAgain.cfg     invariant PROPERTY StopOnce)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4)
@@ -70,7 +75,7 @@ foreach(seed 1 2 3 4)
 endforeach()
 
 # The binding can fail: a restart that loses the next turn number or the session id must be rejected.
-foreach(fault turn resume)
+foreach(fault turn resume queue)
     tlc_test(tlc_supervisor_trace_faulty_${fault}_rejected SupervisorTrace SupervisorTrace.cfg invariant
              PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY ${fault})
 endforeach()
