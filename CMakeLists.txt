@@ -43,19 +43,21 @@ option(NEXUS_WINDOW_LOGIC "Build the window's logic over Prax's lib/process, and
 if(NEXUS_WINDOW AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the window needs its logic; configure with -DNEXUS_WINDOW_LOGIC=ON or -DNEXUS_WINDOW=OFF")
 endif()
-if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
-    message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
-        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
-        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
-endif()
 if(NEXUS_WINDOW AND NOT APPLE)
     message(STATUS "nexus: the window's libraries and their tests are built, but not the app, whose platform layer is "
         "macOS's (src/platform_mac.mm): Prax's lib/app has no backend here")
 endif()
 
 # The link between the window and nexus-server: mosh's transport (cmake/mosh.cmake), which needs protobuf. OFF builds
-# without nexus-server and without the window's --server; the model checks need neither.
-option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)" ON)
+# without nexus-server and without the window's --server; the model checks need neither. It uses the window's logic, so
+# it is on by default where that is.
+option(NEXUS_LINK "Build nexus-server and the window's --server over mosh's transport (needs protobuf)"
+    ${NEXUS_WINDOW_LOGIC})
+if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
+    message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
+        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
+        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
+endif()
 if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()

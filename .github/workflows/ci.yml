@@ -226,6 +226,20 @@ jobs:
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
             -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+      # A configure with no options at all takes the defaults that hold here (no window, no window logic, no link), so
+      # a plain `cmake -S . -B build` on Linux works rather than failing late; this proves it.
+      - name: Configure with the defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-plain
+          for option in NEXUS_WINDOW NEXUS_WINDOW_LOGIC NEXUS_LINK; do
+            value=$(sed -n "s/^$option:BOOL=//p" build-plain/CMakeCache.txt)
+            if [ "$value" != "OFF" ]; then
+              echo "::error::a plain configure on Linux left $option at '$value', not OFF: its default in CMakeLists.txt is wrong"
+              exit 1
+            fi
+          done
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests

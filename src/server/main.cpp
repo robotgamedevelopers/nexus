@@ -13,8 +13,11 @@
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#else
+#include <unistd.h>
 #endif
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -51,14 +54,23 @@ std::string selfPath() {
     return out;
 }
 #else
+// /proc/self/exe itself when its target cannot be resolved: it still starts this program, even one replaced on disk.
+// Empty, with the cause on standard error, only when it cannot be read at all.
 std::string selfPath() {
-    char* real = realpath("/proc/self/exe", nullptr);
-    if (real == nullptr) {
-        return std::string();
+    const char* const exe = "/proc/self/exe";
+    char* real = realpath(exe, nullptr);
+    if (real != nullptr) {
+        std::string out(real);
+        std::free(real);
+        return out;
     }
-    std::string out(real);
-    std::free(real);
-    return out;
+    const int realpathError = errno;
+    if (access(exe, X_OK) == 0) {
+        return exe;
+    }
+    std::fprintf(stderr, "nexus-server: cannot find this program's own path to start the server with: realpath(%s): "
+        "%s (is /proc mounted?)\n", exe, std::strerror(realpathError));
+    return std::string();
 }
 #endif
 
