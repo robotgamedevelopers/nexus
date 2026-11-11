@@ -309,11 +309,16 @@ bool start(void* context, PrStudioApp* studio) {
         return false;
     }
     PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
-    if (status != PrStatus_Ok)
-        std::fprintf(stderr, "nexus: the overlay hotkey (%s-backtick) did not register (status %d: %s), so only "
-            "launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h\n",
+    if (status != PrStatus_Ok) {
+        char line[512];
+        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (%s-backtick) did not register (status %d: %s), so "
+            "only launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h",
             style::kCommandName, int(status),
             status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
+        std::fprintf(stderr, "%s\n", line);
+        // The one launch failure the person must be told: on Windows nexus has no terminal, so a message box says it.
+        showLaunchError(line);
+    }
     // Launch shows nothing and takes no focus (the owner 2026-11-10: "I want nothing visible no change, no input focus
     // change ... until the hotkey"); the link connects meanwhile. Only with no hotkey does launch show it, else never.
     if (status != PrStatus_Ok)
@@ -585,6 +590,8 @@ void seedDemo(Model& model, std::size_t tab) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // On Windows the window has no terminal: its error lines go to %LOCALAPPDATA%\nexus\nexus.log (src/platform.h).
+    startErrorLog();
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool tabGiven = false;

@@ -96,10 +96,13 @@ constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher en
 constexpr PrAppModifierFlags kCommand = PrAppModifierFlag_Super;
 constexpr PrAppModifierFlags kOption = PrAppModifierFlag_Alt;
 constexpr const char* kCommandName = "Command";
-#else
+#elif defined(_WIN32) || defined(__linux__)
+// Windows and Linux: Alt is Command, the Windows (Super) key is Option.
 constexpr PrAppModifierFlags kCommand = PrAppModifierFlag_Alt;
 constexpr PrAppModifierFlags kOption = PrAppModifierFlag_Super;
 constexpr const char* kCommandName = "Alt";
+#else
+#error "nexus: no Command and Option mapping for this platform in src/style.h; add one by key position (AGENTS.md)"
 #endif
 
 // The hotkey, by key position: Command-backtick (the key left of 1, which also types the tilde; macOS's virtual key

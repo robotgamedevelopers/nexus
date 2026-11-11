@@ -4,6 +4,12 @@
 
 namespace nexus {
 
+std::string startErrorLog() {
+    return {};
+}
+
+void showLaunchError(const std::string&) {}
+
 bool coverScreen(const PrAppSurface& surface) {
     if (surface.kind != PrAppSurfaceKind_NsView) {
         return false;

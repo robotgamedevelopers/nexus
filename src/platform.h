@@ -11,9 +11,22 @@
 
 #pragma once
 
+#include <string>
+
 #include "pr/app_surface.h"
 
 namespace nexus {
+
+// Where the window's error lines (stderr) go when it has no terminal. On Windows nexus is a GUI program, whose stderr
+// goes nowhere unless whoever started it redirected it: then stderr is reopened, appending, onto
+// %LOCALAPPDATA%\nexus\nexus.log, and that path is returned. On macOS stderr stays as it is, and the result is empty.
+// Called once, first thing in main().
+std::string startErrorLog();
+
+// Shows `text` to the person, for the one failure that launch must explain because nothing else would (the hotkey that
+// did not register). On Windows a message box, which also names the error log; on macOS nothing more than the line on
+// stderr, which the caller has written already.
+void showLaunchError(const std::string& text);
 
 // Gives the window behind `surface` (prAppWindowSurface) the whole frame of the screen with the pointer on it, or of
 // the main screen, menu bar or taskbar included. Returns false, changing nothing, if the surface is not this system's

@@ -211,6 +211,14 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     endif()
 endif()
 
+if(WIN32 AND NOT NEXUS_WINDOW)
+    # The app does not build on Windows until Prax's Win32 backend does (NEXUS_WINDOW above); its Windows part,
+    # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
+    add_library(nexus_platform_win_check OBJECT src/platform_win.cpp)
+    target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_platform_win_check PRIVATE $<COMPILE_ONLY:prax::app>)
+endif()
+
 enable_testing()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
