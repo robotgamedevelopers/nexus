@@ -71,6 +71,7 @@ Each of these moves into the locked rules above, with its test or model, in the 
 Keys and contexts
 - Everything is driven by the keyboard, and fast. Every action has a key; the mouse is never required, and dragging is only ever a second way. Pop-ups open at once, a repeat of the key steps to the next item, and typing filters the list.
 - Every shortcut uses Command, never Control or Option.
+- nexus is opinionated and makes trade-offs. When a key nexus wants clashes with a convention elsewhere (a text-editing key, a macOS shortcut), nexus takes it, says the cost in one line, and moves on.
 - Escape always backs out one context: a pop-up, the session menu, a drag. The last context is the overlay itself, so only with nothing else open does Escape hide it. Terminal tabs still give Escape to the terminal.
 
 Sessions
@@ -91,7 +92,7 @@ The state cursor
 - Under the last text in a friend's tab, a cursor shows the session's state, from the server's state only: pulsing light blue while a turn is open (starting and stopping included); steady dark blue when it is waiting for the person; steady red when the friend is down (its driver crashed, keeps failing to start, or has no login); dim grey when the window has lost the server (never blue then). Colours are OKLCH; the pulse is a slow brightness breathe, about 1.5 s.
 
 Tabs
-- Moving the current tab left or right by key, within its zone. The key is not settled: Command-Left/Right are line start and end in text, so the proposal is Command-Shift-[ and ] to select and Command-Option-Left/Right to reorder.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. With Command-Up/Down for sessions, the arrows make one grid: friends across, sessions down.
 
 ## Tests
 
