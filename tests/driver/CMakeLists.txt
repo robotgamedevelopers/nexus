@@ -59,6 +59,7 @@ endif()
 # its unit tests' and its walk's (drivers/claude/test/walk.ts) over several seeds, with three faulty walks rejected.
 # The traces need Node and the driver built (npm ci && npm run build in drivers/claude), as the model job does.
 tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4)
+tlc_test(tlc_claude_driver_two_settings ClaudeDriver MCClaudeDriverTwo.cfg pass WORKERS 4)
 tlc_test(tlc_claude_driver_witness_done_left_open WDrvDoneLeftOpen WDrvDoneLeftOpen.cfg invariant PROPERTY OneDone)
 tlc_test(tlc_claude_driver_witness_apply_during_interrupt WDrvApplyDuringInterrupt WDrvApplyDuringInterrupt.cfg
          invariant PROPERTY StopNeverLater)
