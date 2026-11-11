@@ -29,6 +29,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -215,8 +216,9 @@ auto errorOf(ErrorCode code) {
 }
 
 // The rules every stream keeps: each line decodes; hello first; text blocks closed before a tool, a done or another
-// block; one done per turn, its last message; no error but a protocol refusal for a turn not open.
-void checkStream(const std::vector<DriverReader::Item>& items) {
+// block; one done per turn, its last message, and only for a turn the server sent; no error but a protocol refusal for
+// a turn not open.
+void checkStream(const std::vector<DriverReader::Item>& items, const std::set<std::uint64_t>& sent) {
     std::map<std::uint64_t, bool> closed;
     std::optional<std::uint64_t> textOpen;
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -251,8 +253,10 @@ void checkStream(const std::vector<DriverReader::Item>& items) {
         } else if (std::holds_alternative<Tool>(m) || std::holds_alternative<Done>(m)) {
             CHECK(!textOpen);
         }
-        if (const Done* d = std::get_if<Done>(&m))
+        if (const Done* d = std::get_if<Done>(&m)) {
+            CHECK(sent.contains(d->turn));
             closed[d->turn] = true;
+        }
     }
 }
 
@@ -297,7 +301,7 @@ void exchange(Child& d) {
     d.send(Stop{9});
     d.closeInput();
     CHECK(d.exitStatus() == 0);
-    checkStream(d.items());
+    checkStream(d.items(), {7, 9});
     CHECK(count(d.items(), ErrorCode::Protocol) == 0);
 }
 
@@ -309,7 +313,7 @@ void refused(Child& d) {
     CHECK(status > 0);
     CHECK(count(d.items(), ErrorCode::Protocol) == 1);
     CHECK(has<Error>(d.items(), [](const Error& e) { return e.code == ErrorCode::Protocol && e.turn == 7u; }));
-    checkStream(d.items());
+    checkStream(d.items(), {});
 }
 
 // A line that is not JSON: one protocol error with no turn, then an exit other than 0.
@@ -318,7 +322,7 @@ void notJson(Child& d) {
     CHECK(d.readUntil(errorOf(ErrorCode::Protocol)));
     CHECK(d.exitStatus() > 0);
     CHECK(has<Error>(d.items(), [](const Error& e) { return e.code == ErrorCode::Protocol && !e.turn; }));
-    checkStream(d.items());
+    checkStream(d.items(), {});
 }
 
 // A send whose turn does not follow the last: refused with its turn.
@@ -329,7 +333,7 @@ void order(Child& d) {
     CHECK(d.readUntil(errorOf(ErrorCode::Protocol)));
     CHECK(d.exitStatus() > 0);
     CHECK(has<Error>(d.items(), [](const Error& e) { return e.code == ErrorCode::Protocol && e.turn == 5u; }));
-    checkStream(d.items());
+    checkStream(d.items(), {5});
 }
 
 // A send while a turn is open: refused with its turn.
@@ -341,6 +345,7 @@ void sendWhileOpen(Child& d) {
     CHECK(d.exitStatus() > 0);
     CHECK(has<Error>(d.items(), [](const Error& e) { return e.code == ErrorCode::Protocol && e.turn == 4u; }));
     CHECK(!doneOf(4)(d.items()));
+    checkStream(d.items(), {3});
 }
 
 // The end of input while a turn is open: exit 0, owing no done.
@@ -350,7 +355,7 @@ void eofWhileOpen(Child& d) {
     d.closeInput();
     CHECK(d.exitStatus() == 0);
     CHECK(!doneOf(2)(d.items()));
-    checkStream(d.items());
+    checkStream(d.items(), {2});
 }
 
 // The fake driver's script for each case: "reply" and "wait" sends, in the order the case sends them.

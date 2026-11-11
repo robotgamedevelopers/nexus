@@ -29,12 +29,30 @@ export class FakeHarness implements Harness {
 
     constructor(start: HarnessStart) {
         this.start = start;
-        void this.consume();
+        queueMicrotask(() => { void this.consume(); });
+    }
+
+    /** While true the harness takes no prompt from the driver (as a query that has not yet read its input). */
+    holdPrompts = false;
+    private release: (() => void) | undefined;
+
+    /** Lets the harness take prompts again. */
+    takePrompts(): void {
+        this.holdPrompts = false;
+        this.release?.();
     }
 
     private async consume(): Promise<void> {
-        for await (const m of start(this.start.prompts)) {
-            const content = m.message.content;
+        const prompts = start(this.start.prompts)[Symbol.asyncIterator]();
+        for (;;) {
+            while (this.holdPrompts) {
+                await new Promise<void>((resolve) => { this.release = resolve; });
+            }
+            const next = await prompts.next();
+            if (next.done === true) {
+                return;
+            }
+            const content = next.value.message.content;
             const text = typeof content === 'string' ? content : '';
             this.prompts.push(text);
             this.onPrompt(text);

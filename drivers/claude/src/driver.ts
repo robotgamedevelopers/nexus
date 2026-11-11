@@ -135,9 +135,22 @@ class Prompts implements AsyncIterable<SDKUserMessage> {
     private wake: (() => void) | undefined;
     private closed = false;
 
-    push(text: string): void {
-        this.pending.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null });
+    /** Queues a prompt for the query; the message returned is the handle withdraw() takes. */
+    push(text: string): SDKUserMessage {
+        const m: SDKUserMessage = { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null };
+        this.pending.push(m);
         this.wake?.();
+        return m;
+    }
+
+    /** Takes back a prompt the query has not read yet; false when it has (it is then on its way to Claude). */
+    withdraw(m: SDKUserMessage): boolean {
+        const i = this.pending.indexOf(m);
+        if (i === -1) {
+            return false;
+        }
+        this.pending.splice(i, 1);
+        return true;
     }
 
     close(): void {
@@ -163,12 +176,22 @@ class Prompts implements AsyncIterable<SDKUserMessage> {
 
 interface Turn {
     turn: number;
+    prompt: string;
+    message?: SDKUserMessage;   // its prompt as pushed, until the query reads it
+    previousModel?: string;     // the model before this turn's change ('' Claude's default), if it changed one
     pushed: boolean;            // its prompt is in the query
     stopping: boolean;          // a stop was taken for it
     textOpen: boolean;          // a text block is open
     held: string;               // a high surrogate held back from the last delta, to go with the next
     streamed: Set<string>;      // ids of the API messages whose text arrived as stream events
-    failure?: { cause: string; code: ErrorCode; fix: string };
+    failure?: Failure;
+}
+
+interface Failure {
+    cause: string;
+    code: ErrorCode;
+    fix: string;
+    model?: boolean;            // the model cannot be used
 }
 
 /** The longest text delta written, in UTF-16 units: far inside the line limit whatever the characters. */
@@ -176,6 +199,12 @@ const kMaxDelta = 16384;
 
 function isHighSurrogate(c: number): boolean {
     return c >= 0xd800 && c <= 0xdbff;
+}
+
+/** Model and effort changes waiting for the next turn; a model of '' is Claude's default. */
+interface Changes {
+    model?: string;
+    effort?: EffortLevel;
 }
 
 const kFixAgain = 'send the prompt again; if it keeps failing, the driver\'s log (nexus-server\'s standard error) has more';
@@ -215,7 +244,8 @@ export class Driver {
     private chain: Promise<void> = Promise.resolve();
     private lastTurn = 0;
     private open: Turn | undefined;
-    private pending: { model?: string; effort?: EffortLevel } = {};
+    private pending: Changes = {};
+    private model: string;                       // the model in use as far as the driver set it ('' Claude's default)
     private session = '';
     private cost: number | undefined;
     private plan = '';
@@ -223,6 +253,7 @@ export class Driver {
     constructor(host: Host, args: Arguments) {
         this.host = host;
         this.args = args;
+        this.model = args.model ?? '';
     }
 
     // ---- The process's life ----
@@ -339,10 +370,14 @@ export class Driver {
         const provider = info.apiProvider ?? 'firstParty';
         const keySource = info.apiKeySource ?? 'none';
         const plan = info.subscriptionType ?? '';
+        const token = info.tokenSource ?? '';
         let billing: Billing;
-        if (provider !== 'firstParty' || keySource !== 'none') {
+        if (provider !== 'firstParty' || keySource !== 'none' || /api.?key|auth.?token|helper/i.test(token)) {
             billing = 'api-key';
-        } else if (plan !== '' || this.host.oauthToken) {
+        } else if (plan !== '') {
+            billing = 'subscription';
+        } else if (this.host.oauthToken && (token === '' || /oauth/i.test(token))) {
+            // An account's token from `claude setup-token` is a subscription's; Claude may not name the plan for it.
             billing = 'subscription';
         } else {
             billing = 'none';
@@ -350,7 +385,7 @@ export class Driver {
         this.plan = plan;
         this.write(plan === '' ? { kind: 'credential', billing } : { kind: 'credential', billing, plan: whole(plan) });
         if (billing === 'api-key') {
-            this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key (apiKeySource ${keySource})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
+            this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key or auth token (apiKeySource ${keySource}${token === '' ? '' : `, tokenSource ${token}`})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
                 'remove the API key or provider setting Claude finds (an apiKeyHelper, a key saved by `claude /login` with a Console account, or a provider in managed settings) and run `claude /login` with the subscription account, in the user session nexus-server runs in');
             return;
         }
@@ -363,18 +398,46 @@ export class Driver {
         this.reportSession(sessionId);
     }
 
-    /** The --resume id is not a session Claude knows: go on in a new session (sequence rule 10). */
+    /**
+     * The --resume id is not a session Claude knows, found at the start or once the first turn began: go on in a new
+     * session (sequence rule 10). A prompt the old query took never ran; it goes into the new one.
+     */
     private notFound(old: Harness): void {
         old.close();
         const id = this.args.resume ?? '';
+        const t = this.open;
         this.error(`Claude does not know the session ${id} in ${this.args.cwd}; the conversation goes on in a new session, without the earlier history`,
-            'nothing to do: the new session is reported next', 'session-not-found', this.open?.turn);
+            'nothing to do: the new session is reported next', 'session-not-found', t?.turn);
         delete this.args.resume;
         this.launch(undefined);
+        if (t?.pushed === true) {
+            t.pushed = false;
+            t.held = '';
+            t.textOpen = false;
+            this.enqueue(async () => {
+                await this.started();
+                if (this.open === t && !t.stopping && !this.ended && this.ready) {
+                    t.message = this.prompts.push(t.prompt);
+                    t.pushed = true;
+                }
+            });
+        }
+    }
+
+    /** Whether `why` is Claude not knowing the --resume id, and if so, goes on in a new session. */
+    private resumeLost(why: string): boolean {
+        if (this.args.resume === undefined || !isSessionNotFound(why) || this.harness === undefined) {
+            return false;
+        }
+        this.notFound(this.harness);
+        return true;
     }
 
     private refuseCredential(cause: string, fix: string): void {
         const turn = this.open?.turn;
+        if (this.open !== undefined) {
+            this.closeText(this.open);
+        }
         this.error(cause, fix, 'no-credential', turn);
         if (turn !== undefined) {
             this.write({ kind: 'done', turn, outcome: 'error' });
@@ -414,7 +477,7 @@ export class Driver {
         // A failure during the credential check is that check's to report (a --resume id Claude does not know ends
         // the stream and fails accountInfo() alike); after it, the harness is gone.
         await this.starting;
-        if (generation === this.generation) {
+        if (generation === this.generation && !this.ended && !this.resumeLost(why)) {
             this.fail(why);
         }
     }
@@ -461,7 +524,7 @@ export class Driver {
 
     private send(turn: number, prompt: string): void {
         this.lastTurn = turn;
-        const t: Turn = { turn, pushed: false, stopping: false, textOpen: false, held: '', streamed: new Set() };
+        const t: Turn = { turn, prompt, pushed: false, stopping: false, textOpen: false, held: '', streamed: new Set() };
         this.open = t;
         const changes = this.pending;
         this.pending = {};
@@ -470,15 +533,26 @@ export class Driver {
         this.enqueue(async () => {
             await this.started();
             if (!waiting() || !this.ready) {
+                this.restore(changes);
                 return;
             }
-            await this.apply(changes);
+            await this.apply(changes, t);
             if (!waiting()) {
                 return;
             }
-            this.prompts.push(prompt);
+            t.message = this.prompts.push(prompt);
             t.pushed = true;
         });
+    }
+
+    /** Changes a turn did not get to apply go back to wait for the next turn, under any newer ones. */
+    private restore(changes: Changes): void {
+        if (changes.model !== undefined && this.pending.model === undefined) {
+            this.pending.model = changes.model;
+        }
+        if (changes.effort !== undefined && this.pending.effort === undefined) {
+            this.pending.effort = changes.effort;
+        }
     }
 
     /** Waits for the credential check, and for the next one when a --resume id Claude does not know starts another. */
@@ -498,7 +572,8 @@ export class Driver {
             return;
         }
         t.stopping = true;
-        if (!t.pushed) {
+        if (!t.pushed || (t.message !== undefined && this.prompts.withdraw(t.message))) {
+            // The prompt never reached the query: nothing runs, nothing to interrupt.
             this.finish(t, 'stopped');
             return;
         }
@@ -531,14 +606,16 @@ export class Driver {
     }
 
     /** Model and effort changes, before the prompt of the turn they apply from. */
-    private async apply(changes: { model?: string; effort?: EffortLevel }): Promise<void> {
+    private async apply(changes: Changes, t: Turn): Promise<void> {
         const harness = this.harness;
         if (harness === undefined) {
             return;
         }
         if (changes.model !== undefined) {
             try {
-                await harness.setModel(changes.model);
+                await harness.setModel(changes.model === '' ? undefined : changes.model);
+                t.previousModel = this.model;
+                this.model = changes.model;
             } catch (e) {
                 this.error(`Claude did not take the model ${changes.model}: ${message(e)}; the model stays as it was`,
                     'choose a model Claude has', 'harness');
@@ -688,11 +765,21 @@ export class Driver {
             this.finish(t, 'ok', r);
             return;
         }
+        const said = (r.subtype === 'success' ? [r.result] : r.errors).join('; ');
+        if (t.failure === undefined && this.resumeLost(said)) {
+            return;
+        }
         const f = t.failure ?? {
-            cause: `Claude ended the turn with an error (${r.subtype}): ${(r.subtype === 'success' ? [r.result] : r.errors).join('; ') || 'no cause given'}`,
+            cause: `Claude ended the turn with an error (${r.subtype}): ${said || 'no cause given'}`,
             code: 'harness' as const,
             fix: kFixAgain,
         };
+        if (t.failure?.model === true && t.previousModel !== undefined) {
+            // The model this turn changed to cannot run: the one before comes back from the next turn.
+            this.restore({ model: t.previousModel });
+            this.model = t.previousModel;
+            f.cause += `; the model goes back to ${t.previousModel === '' ? 'Claude\'s default' : t.previousModel} from the next turn`;
+        }
         this.closeText(t);
         if (f.code === 'no-credential') {
             this.refuseCredential(f.cause, f.fix);
@@ -730,7 +817,7 @@ export class Driver {
 }
 
 /** The failure an assistant message's error code names. */
-function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string): { cause: string; code: ErrorCode; fix: string } {
+function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string): Failure {
     const detail = said === '' ? code : `${code}: ${said}`;
     switch (code) {
         case 'authentication_failed':
@@ -744,7 +831,7 @@ function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string):
             return { cause: `the subscription's usage limit is reached (${detail})`, code: 'harness',
                 fix: 'wait until the limit resets (the cause says when), or move the session to another account' };
         case 'model_not_found':
-            return { cause: `Claude has no such model (${detail})`, code: 'harness', fix: 'choose a model Claude has' };
+            return { cause: `Claude has no such model (${detail})`, code: 'harness', fix: 'choose a model Claude has', model: true };
         default:
             return { cause: `Claude failed the turn (${detail})`, code: 'harness', fix: kFixAgain };
     }

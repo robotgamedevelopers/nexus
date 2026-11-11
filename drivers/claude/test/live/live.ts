@@ -4,7 +4,7 @@
 // It checks: hello, then credential subscription and the session id before any turn, with an API key planted in the
 // environment removed; a turn answered (text, done ok); a turn stopped mid-reply (done stopped); a model and effort
 // change taking effect from the next turn; the driver killed and started again with --resume (the same session id,
-// and the conversation remembered).
+// and the conversation remembered); and a --resume id Claude does not know (a notice, then a new session).
 //
 // When the subscription's usage limit is reached, Claude answers every turn with that error; the test then checks what
 // needs no reply (start, credential, key removal, resume) and exits 2 saying so.
@@ -150,6 +150,14 @@ if (!state.limited) {
     check(second.done(4)?.outcome === 'ok' && /heron/i.test(second.text(4)), 'the resumed session remembers');
 }
 check(await second.close() === 0, 'the end of input exits 0');
+
+const unknown = '00000000-0000-4000-8000-000000000000';
+const third = new Driver(['--resume', unknown]);
+check(await third.until((o) => o.some((m) => m.kind === 'session'), 30), 'an unknown --resume id: a session is reported');
+check(third.out.some((m) => m.kind === 'error' && m.code === 'session-not-found'), 'an unknown --resume id: a session-not-found notice');
+const fresh = third.out.find((m) => m.kind === 'session');
+check(fresh?.kind === 'session' && fresh.id !== unknown, 'an unknown --resume id: the session is a new one');
+check(await third.close() === 0, 'the end of input exits 0 after a new session');
 
 if (state.limited) {
     process.stdout.write(`BLOCKED: the subscription's usage limit is reached; the turns could not be answered (${failures} other failure(s))\n`);

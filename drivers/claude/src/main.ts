@@ -16,7 +16,7 @@ import { scrub } from './env.js';
 import { runProcess } from './run.js';
 
 const { env, removed } = scrub(process.env);
-// Nothing in this process, the SDK included, sees what was removed.
+// Claude's process gets only `env`; the removed names also leave this process's own environment.
 for (const name of removed) {
     Reflect.deleteProperty(process.env, name);
 }

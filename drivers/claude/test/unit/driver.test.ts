@@ -466,6 +466,101 @@ void test('text that arrived only in an assistant message is still written', asy
     assert.deepEqual(host.take().slice(0, 2), [{ kind: 'text', turn: 1, delta: 'whole' }, { kind: 'text-end', turn: 1 }]);
 });
 
+void test('settings sent with a turn stopped before its prompt went in carry to the next turn', async () => {
+    let release: () => void = () => undefined;
+    const host = new TestHost();
+    host.prepare = (h) => {
+        h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
+    };
+    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    driver.start();
+    driver.feed(line({ kind: 'settings', model: 'opus', effort: 'low' }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    driver.feed(line({ kind: 'stop', turn: 1 }));
+    release();
+    await settle();
+    driver.feed(line({ kind: 'settings', effort: 'max' }));
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'b' }));
+    await settle();
+    assert.deepEqual(host.harness.calls, ['model opus', 'effort max']);
+    assert.deepEqual(host.harness.prompts, ['b']);
+});
+
+void test('a refusal mid-turn closes the open text block before its done', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    host.harness.emit(...openText(S, 'm1', 'partial'), rateLimit(S, { isUsingOverage: true }));
+    await settle();
+    assert.deepEqual(host.take().map((m) => m.kind), ['text', 'text-end', 'error', 'done']);
+    assert.equal(host.exitCode, 1);
+});
+
+void test('a stop before the query took the prompt withdraws it: no interrupt, nothing runs', async () => {
+    const { host, driver } = await started({}, (h) => { h.holdPrompts = true; });
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    driver.feed(line({ kind: 'stop', turn: 1 }));
+    await settle();
+    assert.deepEqual(host.take(), [{ kind: 'done', turn: 1, outcome: 'stopped' }]);
+    host.harness.takePrompts();
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'b' }));
+    await settle();
+    assert.deepEqual(host.harness.calls, []);
+    assert.deepEqual(host.harness.prompts, ['b']);
+});
+
+void test('a --resume id Claude finds unknown only when the turn starts: a new session, and the prompt goes there', async () => {
+    const host = new TestHost();
+    const driver = new Driver(host, { cwd: '/work', resume: 'gone-2', settingSources: [] });
+    driver.start();
+    await settle();
+    host.take();
+    driver.feed(line({ kind: 'send', turn: 3, prompt: 'go on' }));
+    await settle();
+    const first = host.harness;
+    assert.deepEqual(first.prompts, ['go on']);
+    first.emit(result('gone-2', { subtype: 'error_during_execution', errors: ['No conversation found with session ID: gone-2'] }));
+    first.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-2'));
+    await settle();
+    assert.equal(host.harnesses.length, 2);
+    assert.deepEqual(host.harness.prompts, ['go on']);
+    const out = host.take();
+    assert.equal(errorOf(out).code, 'session-not-found');
+    assert.equal(errorOf(out).turn, 3);
+    assert.ok(out.some((m) => m.kind === 'session' && m.id === 'session-1'));
+    assert.ok(!out.some((m) => m.kind === 'done'));
+    host.harness.emit(result('session-1'));
+    await settle();
+    assert.deepEqual(host.take().map((m) => m.kind), ['done']);
+    assert.equal(host.exitCode, undefined);
+});
+
+void test('a model Claude cannot run goes back to the one before from the next turn', async () => {
+    const { host, driver } = await started({ model: 'opus' });
+    driver.feed(line({ kind: 'settings', model: 'no-such-model' }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    await settle();
+    host.harness.emit(assistant(S, 'm1', [{ type: 'text', text: 'model not found' }], 'model_not_found'), result(S, { isError: true }));
+    await settle();
+    assert.match(errorOf(host.take()).cause, /goes back to opus/);
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'b' }));
+    await settle();
+    assert.deepEqual(host.harness.calls, ['model no-such-model', 'model opus']);
+});
+
+void test('a token source that is an API key or auth token is refused', async () => {
+    for (const tokenSource of ['ANTHROPIC_AUTH_TOKEN', 'apiKeyHelper']) {
+        const host = await refusedAtStart({ ...kSubscription, tokenSource });
+        assert.deepEqual(host.take()[1], { kind: 'credential', billing: 'api-key', plan: 'Claude Ultra' });
+        assert.equal(host.exitCode, 1);
+        assert.deepEqual(host.harness.prompts, []);
+    }
+    const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' }, true);
+    assert.deepEqual(odd.take()[1], { kind: 'credential', billing: 'none' });
+    assert.equal(odd.exitCode, 1);
+});
+
 void test('parseArguments', () => {
     assert.deepEqual(parseArguments(['--cwd', '/w']), { cwd: '/w', settingSources: [] });
     assert.deepEqual(parseArguments(['--cwd', '/w', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
