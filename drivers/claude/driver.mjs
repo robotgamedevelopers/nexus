@@ -121,6 +121,7 @@ async function checkCredential(init) {
     }
 }
 
+let sentAt = Date.now();
 const rl = createInterface({ input: process.stdin });
 rl.on('line', async (line) => {
     let msg;
@@ -131,11 +132,13 @@ rl.on('line', async (line) => {
         return;
     }
     if (msg.op === 'send' && typeof msg.text === 'string') {
+        sentAt = Date.now();
         if (!refused) push(msg.text);
     } else if (msg.op === 'stop') {
+        const t0 = Date.now();
         try {
             const r = await q.interrupt();
-            out({ ev: 'stopped', response: r ?? null });
+            out({ ev: 'stopped', ms: Date.now() - t0, response: r ?? null });
         } catch (e) {
             out({ ev: 'error', cause: `interrupt failed: ${e}` });
         }
@@ -149,6 +152,7 @@ rl.on('close', () => {
 });
 
 let sessionSent = '';
+let streamed = false;
 try {
     for await (const m of q) {
         if (m.session_id && m.session_id !== sessionSent) {
@@ -170,12 +174,17 @@ try {
                 }
             }
         } else if (m.type === 'stream_event') {
+            // Only the first delta of each turn, with its shape, so a stop can be timed against a running turn.
             const e = m.event;
-            if (e.type === 'content_block_delta') out({ ev: 'delta', delta: e.delta });
+            if (e.type === 'content_block_delta' && !streamed) {
+                streamed = true;
+                out({ ev: 'streaming', ms: Date.now() - sentAt, delta_type: e.delta?.type });
+            }
         } else if (m.type === 'tool_use_summary') {
             out({ ev: 'tool_summary', summary: m.summary });
         } else if (m.type === 'result') {
-            out({ ev: 'done', subtype: m.subtype, is_error: m.is_error, stop_reason: m.stop_reason,
+            streamed = false;
+            out({ ev: 'done', ms: Date.now() - sentAt, subtype: m.subtype, is_error: m.is_error, stop_reason: m.stop_reason,
                 num_turns: m.num_turns, total_cost_usd: m.total_cost_usd, usage: m.usage, modelUsage: m.modelUsage,
                 errors: m.errors });
         } else if (m.type === 'auth_status' && m.error) {

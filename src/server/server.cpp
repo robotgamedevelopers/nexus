@@ -101,7 +101,7 @@ bool startDriver(Driver* d, const std::string& cwd, std::string* why) {
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
     const char* node = std::getenv("NEXUS_NODE") ? std::getenv("NEXUS_NODE") : NEXUS_NODE;
-    std::vector<std::string> args = {node, NEXUS_CLAUDE_DRIVER, "--cwd", cwd};
+    std::vector<std::string> args = {node, NEXUS_CLAUDE_DRIVER, "--cwd", cwd, "--partial"};
     if (!d->session.empty()) {
         args.push_back("--resume");
         args.push_back(d->session);
@@ -184,16 +184,22 @@ bool driverEntry(Driver* d, const std::string& line, EntryKind* kind, std::strin
         *text = "credential: apiKeySource " + str("apiKeySource") + ", tokenSource " + str("tokenSource") +
             ", subscriptionType " + str("subscriptionType") + ", apiProvider " + str("apiProvider");
     } else if (ev == "done") {
-        char buf[160];
-        std::snprintf(buf, sizeof buf, "done: %s, cost $%.4f (estimate)", str("subtype").c_str(),
+        PrJsonValueIndex isError = prJsonMember(doc, 0, PrStringView{"is_error", 8});
+        char buf[240];
+        std::snprintf(buf, sizeof buf, "done: %s, is_error %s, stop_reason %s, %.0f ms after the send, "
+            "total_cost_usd %.4f (estimate)", str("subtype").c_str(),
+            prJsonKind(doc, isError) == PrJsonKind_True ? "true" : "false", str("stop_reason").c_str(), num("ms"),
             num("total_cost_usd"));
         *text = buf;
     } else if (ev == "error") {
         *text = "error: " + str("cause");
     } else if (ev == "ready") {
         *text = "driver ready, pid " + std::to_string(static_cast<long long>(num("pid")));
+    } else if (ev == "streaming") {
+        *text = "streaming: first delta (" + str("delta_type") + ") " +
+            std::to_string(static_cast<long long>(num("ms"))) + " ms after the send";
     } else if (ev == "stopped") {
-        *text = "stopped";
+        *text = "stopped: interrupt() answered in " + std::to_string(static_cast<long long>(num("ms"))) + " ms";
     } else if (ev == "end") {
         *text = "driver's stream ended";
     } else {
