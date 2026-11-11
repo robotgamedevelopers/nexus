@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <string>
 #include <thread>
 #include <vector>
@@ -103,7 +104,8 @@ struct Harness {
     }
 
     void key(PrAppKey k, PrAppKeyCode code, PrAppModifierFlags modifiers = 0) {
-        for (PrAppEventKind kind : {PrAppEventKind_KeyDown, PrAppEventKind_KeyUp}) {
+        const std::initializer_list<PrAppEventKind> kinds{PrAppEventKind_KeyDown, PrAppEventKind_KeyUp};
+        for (PrAppEventKind kind : kinds) {
             PrAppEvent e{};
             e.kind = kind;
             e.modifiers = modifiers;
@@ -307,7 +309,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     const char* path = std::getenv("PATH");
+#if defined(_WIN32)
+    _putenv_s("PATH", (std::string(argv[1]) + ";" + (path != nullptr ? path : "")).c_str());
+#else
     setenv("PATH", (std::string(argv[1]) + ":" + (path != nullptr ? path : "/usr/bin:/bin")).c_str(), 1);
+#endif
     aShellRunsAndItsTabClosesWhenItExits();
     aTerminalComesBackInItsDirectory();
     aTabInSshNamesTheMachine();

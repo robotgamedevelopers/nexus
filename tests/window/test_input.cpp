@@ -3,6 +3,7 @@
 // made-up clock (from 1000 s), never the real one. Text is set in the system's fonts, so these are functional tests.
 
 #include <cstdio>
+#include <initializer_list>
 #include <map>
 #include <set>
 #include <string>
@@ -964,7 +965,7 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     const PrKitPalette& p = h.kit->theme.palette;
     for (PrColor c : {p.text1, p.text2, p.text3, p.text4, p.textSelection})
         CHECK(c.a == 1);
-    for (PrKitLookId id : {PrKitLookId_Tab, PrKitLookId_TabChosen})
+    for (PrKitLookId id : std::initializer_list<PrKitLookId>{PrKitLookId_Tab, PrKitLookId_TabChosen})
         CHECK(h.kit->looks[id].text.a == 1);
 }
 
