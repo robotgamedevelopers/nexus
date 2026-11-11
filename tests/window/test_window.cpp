@@ -72,16 +72,32 @@ FriendList loadWith(CommandResult result, FakeRun* seen = nullptr) {
     return list;
 }
 
+// What the friend list's command runs (with SHELL /bin/zsh), and how its errors show it.
+#if defined(_WIN32)
+constexpr const char* kShown = "nova-config friend list --json";
+constexpr const char* kProgram = "nova-config";
+#else
 constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config friend list --json'";
+constexpr const char* kProgram = "/bin/zsh";
+#endif
 
 // The command goes through the person's login shell, or /bin/sh without SHELL, or straight to NEXUS_NOVA_CONFIG.
 void commandIsTheLoginShellOrTheOverride() {
+#if defined(_WIN32)
+    // Windows: straight to nova-config on PATH, whatever SHELL says.
+    Command onPath = friendListCommand(nullptr, "/bin/zsh");
+    CHECK(onPath.program == "nova-config");
+    CHECK((onPath.arguments == std::vector<std::string>{"friend", "list", "--json"}));
+    CHECK(onPath.shown == "nova-config friend list --json");
+    CHECK(friendListCommand(nullptr, nullptr).program == "nova-config");
+#else
     Command shell = friendListCommand(nullptr, "/bin/zsh");
     CHECK(shell.program == "/bin/zsh");
     CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config friend list --json"}));
     CHECK(shell.shown == kShown);
     CHECK(friendListCommand(nullptr, nullptr).program == "/bin/sh");
     CHECK(friendListCommand("", "").program == "/bin/sh");
+#endif
     Command direct = friendListCommand("/opt/nova/nova-config", "/bin/zsh");
     CHECK(direct.program == "/opt/nova/nova-config");
     CHECK((direct.arguments == std::vector<std::string>{"friend", "list", "--json"}));
@@ -119,7 +135,7 @@ void commandNotFoundSaysWhatToDo() {
     CHECK(has(shell.error, kShown) && has(shell.error, "status 127") && has(shell.error, "command not found"));
     CHECK(has(shell.error, "NEXUS_NOVA_CONFIG"));
     FriendList missing = loadWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
-    CHECK(has(missing.error, kShown) && has(missing.error, "/bin/zsh was not found"));
+    CHECK(has(missing.error, kShown) && has(missing.error, (std::string(kProgram) + " was not found").c_str()));
     CHECK(has(missing.error, "NEXUS_NOVA_CONFIG"));
 }
 

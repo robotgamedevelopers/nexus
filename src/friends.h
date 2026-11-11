@@ -45,7 +45,8 @@ constexpr int kFriendListTimeoutSeconds = 5;
 
 // nova-config with `arguments`. With `override` (NEXUS_NOVA_CONFIG, a full path to nova-config), that program is run
 // directly. Otherwise nova-config is run through `shell` (SHELL, or /bin/sh if unset) as a login shell, so that it is
-// found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH.
+// found on the PATH the person's terminal has: an app launched from Finder or at login gets a minimal PATH. On Windows,
+// which has no login shell, nova-config is run directly from PATH and `shell` is not used.
 Command novaConfigCommand(const char* override, const char* shell, const std::vector<std::string>& arguments);
 
 // The command that lists the friends: novaConfigCommand with `friend list --json`.
