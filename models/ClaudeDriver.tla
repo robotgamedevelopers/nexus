@@ -369,13 +369,13 @@ NextWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
 Next == NextWith(Stop, Apply, Result, Refuse, NotFound)
 
 \* The driver's own steps and the harness's answers are taken up; the server need do nothing. The credential check
-\* answers (but a refusal or failure later is never forced).
-FairnessWith(ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
-    /\ WF_vars(phase = "checking" /\ (CheckPass \/ RefuseOp \/ Fail \/ NotFoundOp))
-    /\ WF_vars(ApplyOp) /\ WF_vars(Push) /\ WF_vars(Take) /\ WF_vars(Answer)
-    /\ WF_vars(\E k \in ResultKinds : ResultOp(k))
-
-Spec == Init /\ [][Next]_vars /\ FairnessWith(Apply, Result, Refuse, NotFound)
+\* answers (but a refusal or failure later is never forced). (TLC takes no operator arguments in a temporal formula,
+\* so a liveness witness writes its own.)
+Spec ==
+    /\ Init /\ [][Next]_vars
+    /\ WF_vars(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ NotFound))
+    /\ WF_vars(Apply) /\ WF_vars(Push) /\ WF_vars(Take) /\ WF_vars(Answer)
+    /\ WF_vars(\E k \in ResultKinds : Result(k))
 
 \* Without the fairness: what a finite code trace is checked against.
 SafeSpec == Init /\ [][Next]_vars

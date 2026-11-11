@@ -9,5 +9,7 @@ BrokenResult(k) == ResultWith(k, Refuse, BrokenNotFound)
 
 BrokenSpec ==
     Init /\ [][NextWith(Stop, Apply, BrokenResult, Refuse, BrokenNotFound)]_vars
-    /\ FairnessWith(Apply, BrokenResult, Refuse, BrokenNotFound)
+    /\ WF_vars(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ BrokenNotFound))
+    /\ WF_vars(Apply) /\ WF_vars(Push) /\ WF_vars(Take) /\ WF_vars(Answer)
+    /\ WF_vars(\E k \in ResultKinds : BrokenResult(k))
 =============================================================================
