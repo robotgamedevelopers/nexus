@@ -56,8 +56,12 @@ target_link_libraries(nexus_sync PUBLIC nexus_model)
 
 # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
 # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
-add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/posix_fs.cpp
-    src/store/store.cpp)
+add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/store.cpp)
+# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS, and Windows builds only the window, which
+# never opens the store. The store's unit tests (MemFs) build everywhere.
+if(NOT WIN32)
+    target_sources(nexus_store PRIVATE src/store/posix_fs.cpp)
+endif()
 target_include_directories(nexus_store PUBLIC src)
 target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
 
@@ -81,11 +85,14 @@ target_include_directories(nexus_supervisor PUBLIC src)
 target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver)
 
-# The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor.
-add_library(nexus_drivers STATIC src/server/drivers.cpp)
-target_include_directories(nexus_drivers PUBLIC src)
-target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+# The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX (poll,
+# process ids), like the rest of nexus-server: not built on Windows, where only the window builds.
+if(NOT WIN32)
+    add_library(nexus_drivers STATIC src/server/drivers.cpp)
+    target_include_directories(nexus_drivers PUBLIC src)
+    target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+endif()
 
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.

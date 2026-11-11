@@ -307,7 +307,21 @@ jobs:
           }
       - name: Configure (Release, MSVC x64)
         run: cmake -S . -B "$env:NEXUS_BUILD" -A x64 -DNEXUS_LINK=OFF "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE"
-      - name: Build
-        run: cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
+      # Only the unit tests that need no Prax window: Prax's Windows backend of lib/app does not compile at its pin, so
+      # the window, its logic's tests and everything over lib/app wait on Prax (the pull request that adds this job).
+      - name: Build the platform-free unit tests
+        run: >-
+          cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS --target
+          model_test overlay_test nexus_scroll_glide_tests sync_test store_test durable_test supervisor_test
+          driver_table_test driver_protocol_test
       - name: Unit tests
-        run: ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
+        run: >-
+          ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
+          -R "^(model_unit|overlay_unit|scroll_glide_unit|sync_unit|store_unit_.*|durable_unit_.*|supervisor_unit_.*|friends_unit_driver_table|driver_unit_.*)$"
+      # TEMPORARY probe, removed before the pull request is ready: every project compiled on its own, without building
+      # its references first, so that every compile error in Prax and in the window shows, not only the first library's.
+      - name: Probe (temporary)
+        continue-on-error: true
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          & $msbuild "$env:NEXUS_BUILD\nexus.sln" /m /nologo /v:m /p:Configuration=Release /p:BuildProjectReferences=false

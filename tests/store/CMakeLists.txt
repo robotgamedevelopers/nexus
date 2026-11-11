@@ -10,7 +10,7 @@
 #                  Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: the largest instance (the nightly workflow)
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(store_test store_test.cpp)
 target_link_libraries(store_test PRIVATE nexus_store)
@@ -24,9 +24,12 @@ add_executable(journal_walk journal_walk.cpp)
 target_link_libraries(journal_walk PRIVATE nexus_store)
 target_compile_options(journal_walk PRIVATE ${warnings})
 
-add_executable(store_functional_test store_functional_test.cpp)
-target_link_libraries(store_functional_test PRIVATE nexus_store)
-target_compile_options(store_functional_test PRIVATE ${warnings})
+# The store on the real filesystem: POSIX, like nexus-server (not built on Windows, where only the window builds).
+if(NOT WIN32)
+    add_executable(store_functional_test store_functional_test.cpp)
+    target_link_libraries(store_functional_test PRIVATE nexus_store)
+    target_compile_options(store_functional_test PRIVATE ${warnings})
+endif()
 
 # The programs the unit and model tests run, built with the model's (cmake --build <dir> --target model_checks), so
 # the sanitizer and model jobs build them without the app.
@@ -42,10 +45,12 @@ foreach(group restart resend crash)
     set_tests_properties(durable_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()
 
-set(functional_dir "${CMAKE_CURRENT_BINARY_DIR}/functional")
-file(MAKE_DIRECTORY "${functional_dir}")
-add_test(NAME store_functional COMMAND store_functional_test WORKING_DIRECTORY "${functional_dir}")
-set_tests_properties(store_functional PROPERTIES LABELS functional TIMEOUT 60)
+if(NOT WIN32)
+    set(functional_dir "${CMAKE_CURRENT_BINARY_DIR}/functional")
+    file(MAKE_DIRECTORY "${functional_dir}")
+    add_test(NAME store_functional COMMAND store_functional_test WORKING_DIRECTORY "${functional_dir}")
+    set_tests_properties(store_functional PROPERTIES LABELS functional TIMEOUT 60)
+endif()
 
 set(store_models "${PROJECT_SOURCE_DIR}/models/store")
 set(store_tlc "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")

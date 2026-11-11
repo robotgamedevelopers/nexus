@@ -6,7 +6,7 @@
 #   functional  driver_fake_test: the fake driver (nexus-fake-driver, the stand-in for a harness's driver that the
 #               server's tests start) as a real child process over pipes, in a working directory of its own
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(driver_protocol_test protocol_test.cpp)
 target_link_libraries(driver_protocol_test PRIVATE nexus_driver)

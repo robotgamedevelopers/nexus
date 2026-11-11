@@ -6,7 +6,7 @@
 #                  TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Link.tla on its largest instance
 
-set(warnings -Wall -Wextra -Wpedantic -Werror)
+set(warnings ${NEXUS_WARNINGS})
 
 add_executable(sync_test sync_test.cpp)
 target_link_libraries(sync_test PRIVATE nexus_sync)
