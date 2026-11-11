@@ -53,6 +53,22 @@ std::string errnoText(const std::string& what) {
     return what + ": " + std::strerror(errno);
 }
 
+// The user on the other end of a connected Unix socket: getpeereid on macOS, SO_PEERCRED on Linux.
+bool peerUid(int fd, uid_t* uid) {
+#if defined(__APPLE__)
+    gid_t gid = 0;
+    return getpeereid(fd, uid, &gid) == 0;
+#else
+    ucred cred{};
+    socklen_t size = sizeof cred;
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &size) != 0 || size != sizeof cred) {
+        return false;
+    }
+    *uid = cred.uid;
+    return true;
+#endif
+}
+
 bool socketAddress(const std::string& path, sockaddr_un* addr) {
     std::memset(addr, 0, sizeof *addr);
     addr->sun_family = AF_UNIX;
@@ -241,8 +257,7 @@ bool Server::listenControl(std::string* why) {
 // One request on the control socket: "new" (a session: its CONNECT line) or "stop". Only this user may ask.
 void Server::control(int fd) {
     uid_t uid = 0;
-    gid_t gid = 0;
-    if (getpeereid(fd, &uid, &gid) != 0 || uid != getuid()) {
+    if (!peerUid(fd, &uid) || uid != getuid()) {
         std::fprintf(stderr, "nexus-server: refused a control request from user %u\n", static_cast<unsigned>(uid));
         return;
     }
@@ -436,7 +451,13 @@ bool startServer(const Paths& p, const std::string& self, std::string* why) {
     posix_spawn_file_actions_adddup2(&files, 1, 2);
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
+    // No other file of this process: on macOS by POSIX_SPAWN_CLOEXEC_DEFAULT, on Linux by glibc's addclosefrom_np.
+#if defined(__APPLE__)
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT);
+#else
+    posix_spawn_file_actions_addclosefrom_np(&files, 3);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+#endif
     std::vector<std::string> args = {self, "serve", "--dir", p.dir};
     std::vector<char*> argv;
     for (std::string& a : args)

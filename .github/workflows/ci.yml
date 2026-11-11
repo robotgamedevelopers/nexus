@@ -1,5 +1,6 @@
 # CI for nexus: the build with its unit and functional tests, the model under the sanitizers, and the TLA+ models
-# with their trace checks, as three jobs in parallel on the fleet's macOS runners (never GitHub-hosted). Every pull request runs it, whatever its base,
+# with their trace checks, as three jobs in parallel on the fleet's macOS runners (never GitHub-hosted); and the build
+# without the window, its unit and functional tests and the sanitizers' programs on the fleet's Linux runners. Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -179,6 +180,143 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+
+  # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
+  # lib/font; CMakeLists.txt NEXUS_WINDOW). On the fleet's Linux runners, with clang and lld, warnings as errors as on
+  # macOS. Configured without the link's transport (NEXUS_LINK=OFF) until the Linux runners have protobuf (its CMake
+  # package and protoc), so nexus-server and the link's tests are not built here yet. Caches live under
+  # ~/.cache/nexus-ci on the runner's machine, laid out as the macOS jobs' (the linker's ThinLTO cache is lld's).
+  build-and-unit-linux:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Linux, X64]
+    timeout-minutes: 2
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "NEXUS_CACHES=$caches"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
+            echo "JOBS=$(nproc)"
+          } >> "$GITHUB_ENV"
+      - name: Configure (Release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          else
+            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF "${launcher[@]}" \
+            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+      - name: Build
+        run: cmake --build build --parallel "$JOBS"
+      - name: Unit tests
+        run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
+      # Real child processes and real files: not unit tests.
+      - name: Functional tests
+        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure
+      - name: ccache hits in this job
+        if: always()
+        shell: bash
+        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
+
+  # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
+  sanitizers-linux:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Linux, X64]
+    timeout-minutes: 2
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Prax's download cache, one per runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/.cache/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+      - name: Configure (Debug, ASan and UBSan)
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DCMAKE_LINKER_TYPE=LLD
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build the model checks
+        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: Unit tests and trace walks under the sanitizers
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/tests/model/model_test
+          build/tests/model/overlay_test
+          mkdir -p walks
+          for seed in 1 2 3; do
+            build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
+          done
+          for friends in 0 1 2 3; do
+            for seed in 1 2 3 4 5 6 7 8; do
+              build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
+            done
+            build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
+          done
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
+            build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
+          done
+          build/tests/sync/sync_test
+          for windows in 1 2 3 4; do
+            for seed in 1 2 3 4; do
+              build/tests/sync/link_walk "$seed" 1000 "$windows" walks/link.tla
+            done
+          done
+          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
+            build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
+          done
+          # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
+          # journal's walks
+          build/tests/store/store_test
+          build/tests/store/durable_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
+          done
+          # the driver protocol: every group (the parser and the reader over every chunking)
+          build/tests/driver/driver_protocol_test
+          # the driver supervisor: every group, then its walks and their faults
+          build/tests/server/supervisor_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/server/supervisor_walk "$seed" 1000 walks/supervisor.tla
+          done
+          for fault in --faulty-turn --faulty-resume; do
+            build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
+          done
+
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

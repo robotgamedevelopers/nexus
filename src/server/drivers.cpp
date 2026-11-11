@@ -22,6 +22,15 @@ namespace nexus::server {
 
 namespace {
 
+// posix_spawn's way to start a child with no descriptor of ours but the ones its file actions name: on macOS the flag
+// POSIX_SPAWN_CLOEXEC_DEFAULT (and addinherit_np for one to keep as it is); on Linux, glibc's addclosefrom_np(3) after
+// the other file actions, which leaves 0 to 2 as they are.
+#if defined(__APPLE__)
+constexpr short kSpawnCloseOthers = POSIX_SPAWN_CLOEXEC_DEFAULT;
+#else
+constexpr short kSpawnCloseOthers = 0;
+#endif
+
 sync::EntryRef entry(EntryKind kind, std::string text) {
     return std::make_shared<const sync::TabEntry>(sync::TabEntry{kind, std::move(text), true});
 }
@@ -86,11 +95,15 @@ pid_t spawnDriver(const std::vector<std::string>& argv, int* in, int* out, std::
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_adddup2(&files, toChild[0], 0);
     posix_spawn_file_actions_adddup2(&files, fromChild[1], 1);
+#if defined(__APPLE__)
     posix_spawn_file_actions_addinherit_np(&files, 2);
+#else
+    posix_spawn_file_actions_addclosefrom_np(&files, 3);
+#endif
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK |
-        POSIX_SPAWN_CLOEXEC_DEFAULT);
+        kSpawnCloseOthers);
     posix_spawnattr_setpgroup(&attr, 0);
     sigset_t defaults;
     sigemptyset(&defaults);

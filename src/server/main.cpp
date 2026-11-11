@@ -11,7 +11,9 @@
 //   driver <harness> <program> [<argument>...]
 //   friend <name> <harness> [<directory>]
 
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -34,6 +36,7 @@ int usage() {
 }
 
 // This program's own path, to start the server with.
+#if defined(__APPLE__)
 std::string selfPath() {
     std::uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
@@ -47,6 +50,17 @@ std::string selfPath() {
     std::free(real);
     return out;
 }
+#else
+std::string selfPath() {
+    char* real = realpath("/proc/self/exe", nullptr);
+    if (real == nullptr) {
+        return std::string();
+    }
+    std::string out(real);
+    std::free(real);
+    return out;
+}
+#endif
 
 } // namespace
 
