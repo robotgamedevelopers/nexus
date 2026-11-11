@@ -66,6 +66,19 @@ target_include_directories(nexus_driver PUBLIC src)
 target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
 
+# The driver supervisor (src/server/supervisor.h): what nexus-server does with one friend tab's driver, as a pure
+# state machine; and the drivers file (src/server/driver_table.h). No OS, no time, no processes.
+add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp)
+target_include_directories(nexus_supervisor PUBLIC src)
+target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver)
+
+# The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor.
+add_library(nexus_drivers STATIC src/server/drivers.cpp)
+target_include_directories(nexus_drivers PUBLIC src)
+target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.
 add_library(nexus_scroll STATIC src/scroll_glide.cpp)
@@ -112,7 +125,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable)
+    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers)
 endif()
 
 # The app, as a real bundle: nexus.app.
@@ -142,6 +155,7 @@ add_subdirectory(tests/sync)
 add_subdirectory(tests/window)
 add_subdirectory(tests/store)
 add_subdirectory(tests/driver)
+add_subdirectory(tests/server)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()

@@ -21,6 +21,7 @@
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "server/drivers.h"
 #include "server/durable.h"
 #include "store/fs.h"
 #include "sync/hub.h"
@@ -40,6 +41,12 @@ volatile sig_atomic_t gStop = 0;
 
 void onSignal(int) {
     gStop = 1;
+}
+
+// Milliseconds on the steady clock: the drivers' deadlines.
+Millis nowMs() {
+    return static_cast<Millis>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 std::string errnoText(const std::string& what) {
@@ -168,9 +175,11 @@ private:
     bool openStore(std::string* why);
     bool listenControl(std::string* why);
     void control(int fd);
+    bool endDrivers();
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
     DurableStore store_;
+    std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
     std::vector<Session> sessions_;
     std::uint64_t nextId_ = 1;
@@ -182,12 +191,20 @@ bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     if (!store_.open(*fs_, paths_.store, why))
         return false;
-    hub_ = std::make_unique<sync::Hub>(store_);
+    const char* home = std::getenv("HOME");
+    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, home != nullptr ? home : "/",
+        Timing{}, nowMs});
+    hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
+    drivers_->attach(*hub_);
     const store::OpenReport& r = store_.report();
     std::fprintf(stderr, "nexus-server: store %s: %s, %zu tab%s, %llu record%s replayed, %llu bytes of torn tail cut\n",
         paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
         static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
         static_cast<unsigned long long>(r.cut_bytes));
+    if (!drivers_->start(nowMs())) {
+        *why = "the store failed while the friends' drivers were restored; restart the server";
+        return false;
+    }
     return true;
 }
 
@@ -280,6 +297,22 @@ void Server::control(int fd) {
     }
 }
 
+// Ends every driver (input closed, then SIGTERM, then SIGKILL, each after its grace period) and waits for them. False
+// when the store failed on the way; the drivers are killed and collected even then.
+bool Server::endDrivers() {
+    if (!drivers_->shutdown(nowMs()))
+        return false;     // Drivers' destructor kills and collects them
+    while (drivers_->alive()) {
+        std::vector<pollfd> fds = drivers_->fds();
+        if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), drivers_->waitMs(nowMs())) < 0 && errno != EINTR)
+            break;
+        bool changed = false;
+        if (!drivers_->serve(nowMs(), &changed))
+            return false;
+    }
+    return true;
+}
+
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
@@ -307,7 +340,7 @@ int Server::run() {
         }
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
-        int wait = kMaxWaitMs;
+        int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
         for (std::size_t i = 0; i < sessions_.size(); ++i) {
             wait = std::min(wait, std::max(0, sessions_[i].link->waitMs()));
             for (int fd : sessions_[i].link->fds()) {
@@ -315,13 +348,22 @@ int Server::run() {
                 owner.push_back(i);
             }
         }
+        // The drivers' pipes last: serve() below looks at every driver, so their events need no owner.
+        const std::size_t linkFds = fds.size();
+        for (const pollfd& p : drivers_->fds())
+            fds.push_back(p);
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
             std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
             break;
         }
         link::freezeClock();
         bool changed = false;
-        for (std::size_t k = 1; k < fds.size(); ++k) {
+        if (!drivers_->serve(nowMs(), &changed)) {
+            std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
+            status = 1;
+            break;
+        }
+        for (std::size_t k = 1; k < linkFds; ++k) {
             if (!(fds[k].revents & POLLIN))
                 continue;
             Session& s = sessions_[owner[k]];
@@ -372,6 +414,12 @@ int Server::run() {
     }
     close(listen_);
     unlink(paths_.socket.c_str());
+    // After the control socket closes, so no window sends a prompt to a driver being ended.
+    if (!endDrivers() && status == 0) {
+        std::fprintf(stderr, "nexus-server: the store failed while the drivers were ended; their turns are cut when "
+            "the server next starts\n");
+        status = 1;
+    }
     std::fprintf(stderr, "nexus-server: stopped, %zu session%s open\n", sessions_.size(),
         sessions_.size() == 1 ? "" : "s");
     return status;
@@ -457,6 +505,7 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     out->socket = d + "/server.sock";
     out->log = d + "/server.log";
     out->store = d + "/store";
+    out->drivers = d + "/drivers";
     sockaddr_un addr;
     if (!socketAddress(out->socket, &addr)) {
         *why = out->socket + " is longer than a Unix socket's address holds (" + std::to_string(sizeof addr.sun_path - 1) +

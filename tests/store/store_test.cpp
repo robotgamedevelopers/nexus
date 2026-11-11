@@ -3,7 +3,7 @@
 // through several plans (MemFs::plan), so that every write and sync point is a crash point.
 //
 //   store_test            runs every group
-//   store_test <group>    runs one: codec memfs journal journal_crash store store_crash
+//   store_test <group>    runs one: codec memfs journal journal_crash store store_crash driver
 
 #include "store/codec.h"
 #include "store/fs.h"
@@ -504,6 +504,12 @@ std::string texts(const Tab* t) {
     out += "|";
     for (const std::string& q : t->queue)
         out += "[" + q + "]";
+    const Driver& d = t->driver;
+    if (d.next_turn != 1 || d.open_turn != 0 || !d.session.empty() || !d.waiting.empty()) {
+        out += "|turn " + std::to_string(d.next_turn) + " open " + std::to_string(d.open_turn) + " session " + d.session;
+        for (const std::string& p : d.waiting)
+            out += "<" + p + ">";
+    }
     return out;
 }
 
@@ -663,6 +669,85 @@ void test_store_crash() {
     CHECK(taken > 300);
 }
 
+Change setDriver(std::uint64_t next, std::uint64_t open, const std::string& session,
+                 std::vector<std::string> waiting = {}) {
+    Change c;
+    c.kind = Change::Kind::SetDriver;
+    c.driver = Driver{next, open, session, std::move(waiting)};
+    return c;
+}
+
+// A tab's driver state: replaced whole in the same step as the entries beside it, durable across a crash and across
+// compaction, and absent (the defaults) from a snapshot written before drivers.
+void test_driver() {
+    MemFs fs;
+    Opened o = open_store(fs);
+    CHECK_OK(o.st);
+    // a send: the prompt, and the turn it was written as, in one step with the window's counter
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{append("hello", 0), setDriver(2, 1, "", {})}, "w1", 1));
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{append("hi back", 1), setDriver(2, 0, "s-1", {"next"})}));
+    CHECK_OK(o.s->commit("ada", std::vector<Change>{setDriver(3, 2, "s-1", {"a", "b"}), setDriver(3, 2, "s-2", {})}));
+    CHECK(texts(o.s->tab("ada")) == "[0:hello][1:hi back]||turn 3 open 2 session s-2");
+    const std::string before = digest(*o.s, {"w1"});
+    o.s.reset();
+    fs.crash(fs.plan_all(false));
+    Opened o2 = open_store(fs);
+    CHECK_OK(o2.st);
+    CHECK(digest(*o2.s, {"w1"}) == before);
+
+    // compaction writes the driver state into the snapshot
+    StoreOptions small;
+    small.compact_bytes = 200;
+    MemFs fs2;
+    Opened c = open_store(fs2, small);
+    CHECK_OK(c.st);
+    for (std::uint64_t i = 1; i <= 20; ++i)
+        CHECK_OK(c.s->commit("ada", std::vector<Change>{append("m" + std::to_string(i)),
+                                                         setDriver(i + 1, i, "s-" + std::to_string(i), {"w"})}));
+    CHECK(c.s->journal().log_bytes() <= 200);
+    const std::string compacted = digest(*c.s, {});
+    c.s.reset();
+    fs2.crash(fs2.plan_all(false));
+    Opened c2 = open_store(fs2, small);
+    CHECK_OK(c2.st);
+    CHECK(digest(*c2.s, {}) == compacted);
+    CHECK(c2.s->tab("ada")->driver == (Driver{21, 20, "s-20", {"w"}}));
+
+    // a snapshot of format 1 (before drivers): read, every tab's driver at its start
+    MemFs fs3;
+    {
+        Opened first = open_store(fs3);
+        CHECK_OK(first.st);
+        CHECK_OK(first.s->commit("ada", std::vector<Change>{append("old")}, "w1", 1));
+    }
+    {
+        Writer w;
+        w.u8(1);
+        w.u32(1);
+        w.str("ada");
+        w.u32(1);
+        w.u8(0);
+        w.u8(1);
+        w.str("old");
+        w.u32(1);
+        w.str("queued");
+        w.u32(1);
+        w.str("w1");
+        w.u64(1);
+        Journal j(fs3, "store");
+        Journal::Recovery rec;
+        CHECK_OK(j.open(rec));
+        CHECK_OK(j.compact(w.out()));
+    }
+    Opened old = open_store(fs3);
+    CHECK_OK(old.st);
+    CHECK(texts(old.s->tab("ada")) == "[0:old]|[queued]");
+    CHECK(old.s->tab("ada")->driver == Driver{});
+    CHECK(old.s->applied("w1") == 1);
+    CHECK_OK(old.s->commit("ada", std::vector<Change>{setDriver(2, 1, "")}, "w1", 2));
+    CHECK(texts(old.s->tab("ada")) == "[0:old]|[queued]|turn 2 open 1 session ");
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -675,6 +760,7 @@ const Group kGroups[] = {
     {"journal_crash", test_journal_crash},
     {"store", test_store},
     {"store_crash", test_store_crash},
+    {"driver", test_driver},
 };
 
 } // namespace

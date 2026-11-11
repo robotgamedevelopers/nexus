@@ -1,0 +1,177 @@
+// The driver supervisor: what nexus-server does with one friend tab's driver process (docs/driver-protocol.md). It
+// starts a driver when a prompt waits and none is alive, writes each prompt to it once as the next turn, gathers the
+// driver's replies into the tab, stops a turn, and ends a driver that breaks the protocol, misses a deadline or exits.
+//
+// A pure state machine: no processes, pipes, files or clock. Each event (a prompt, a stop, a message from the driver, a
+// line refused, a pipe closed, the driver's exit, a tick of the clock, the server stopping) takes the time as an
+// argument and returns an Output: the effects on the tab (entries to append, and the durable state when it changed),
+// then the commands for the caller to carry out (start a driver, write a line, close its input, signal it). The caller
+// commits the effects with the durable state in one step of the store first, and only then carries out the commands:
+// so a turn number is durable before its send is written. models/Supervisor.tla is the model; tests/server/
+// supervisor_walk.cpp binds this code to it.
+//
+// The rules (the model's properties): at most one driver alive and one turn open; turns numbered from 1, strictly
+// increasing and never reused across driver and server restarts; each prompt written at most once, never again after
+// its turn is cut; a prompt that arrives while the driver cannot take it waits, in order, up to a bound; a message for a
+// turn that is not open has no effect on the tab; a driver that exits or is ended with a turn open has that turn cut,
+// with a notice that whether the friend got the prompt is unknown; consecutive failed starts stop the starting of
+// drivers until the person's next prompt. There is no deadline on a working turn: a turn may run for hours.
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "driver/protocol.h"
+#include "model.h"
+#include "sync/hub.h"
+
+namespace nexus::server {
+
+using Millis = std::uint64_t;   // a time, in milliseconds, from any fixed start
+
+// The deadlines. Each is a judgement, not measured: a driver writes hello before it starts its harness, so ten
+// seconds is generous; a harness answers a stop within seconds when it is alive; the grace periods let a driver and
+// its harness save what they hold before they are signalled.
+struct Timing {
+    Millis hello = 10'000;      // from the start to the driver's hello
+    Millis stop = 10'000;       // from a stop to its turn's done
+    Millis endGrace = 2'000;    // from closing the driver's input to SIGTERM
+    Millis termGrace = 2'000;   // from SIGTERM to SIGKILL
+};
+
+// Consecutive failed starts (the driver ended before it finished a turn) after which no driver is started for the tab
+// until the person's next prompt. A judgement, not measured: three tries outlast a passing fault.
+constexpr int kMaxFailedStarts = 3;
+
+// The most of a driver's error cause, and of its fix, that goes into the tab: one line of the driver's may be 1 MiB,
+// and an entry stays far within the hub's text limit.
+constexpr std::size_t kReportBytes = 1024;
+
+// Which friend, how to start its driver, and the bounds.
+struct Config {
+    std::string name;                   // the friend's name, as the notices say it
+    std::vector<std::string> command;   // the driver's program and its arguments, before --cwd and --resume
+    std::string cwd;                    // the directory the harness works in
+    std::string configured;             // where the driver is configured, for the fixes notices give
+    Timing timing;
+    int maxFailedStarts = kMaxFailedStarts;
+    std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
+    std::size_t maxWaitingBytes = 32 * 1024;
+    std::size_t maxEntryBytes = 32 * 1024;  // the hub's text limit: longer text is split into several entries
+};
+
+// The model's phases: no driver; started, waiting for its hello; idle; a turn open; a stop written for the open turn,
+// waiting for its done; ending (input closed, then SIGTERM, then SIGKILL, each after its grace period), waiting for
+// the exit.
+enum class Phase { None, Starting, Idle, Working, Stopping, Ending };
+enum class Stage { None, Closed, Termed, Killed };
+
+// What the caller does, in order, once the effects are durable.
+struct Command {
+    enum class Kind { Start, Write, CloseInput, Terminate, Kill };
+    Kind kind = Kind::Start;
+    std::vector<std::string> argv;      // Start: the program and its arguments
+    std::string line;                   // Write: one protocol line, its newline included
+};
+
+// An entry to append to the tab: the person's prompt; the friend's text; a line for a tool the friend used; an error
+// the driver reported for the turn; the turn stopped; the turn cut short; any other notice. `turn` is the turn it
+// belongs to (0 for none).
+struct Effect {
+    enum class What { Prompt, Reply, Tool, Error, Stopped, Cut, Notice };
+    What what = What::Notice;
+    std::string text;
+    std::uint64_t turn = 0;
+};
+
+// The kind of transcript entry an effect is.
+EntryKind entryKind(Effect::What what);
+
+struct Output {
+    std::vector<Effect> effects;
+    bool durable = false;               // the durable state changed: commit Supervisor::state() with the effects
+    std::vector<Command> commands;
+    std::optional<driver::Credential> credential;   // the driver reported the credential it uses
+    std::optional<double> sessionCostUsd;           // a turn's done reported the session's cost so far
+};
+
+class Supervisor {
+public:
+    // The supervisor of a tab whose durable state is `state`, as the server finds it when it starts: a turn left open
+    // by the server before is cut, and a waiting prompt starts a driver. What that takes is written to `out`.
+    Supervisor(Config config, sync::DriverState state, Millis now, Output* out);
+
+    // The person sent `text`: it is shown and waits, and is written as the next turn as soon as a driver is idle (a
+    // driver is started for it if none is alive). Refused with a notice past the bound, or if it cannot be written as
+    // a protocol line. A prompt lifts the hold that failed starts put on starting drivers.
+    Output prompt(const std::string& text, Millis now);
+    // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out.
+    Output stop(Millis now);
+    // A message the driver wrote.
+    Output message(const driver::DriverMessage& message, Millis now);
+    // A line of the driver's the reader refused, with its cause: the driver is ended.
+    Output refused(const std::string& cause, Millis now);
+    // The driver's output or input closed while it ran (`what` says which): the driver is ended.
+    Output closed(const std::string& what, Millis now);
+    // The driver exited (`how` says how: its status, its signal, or why it could not start).
+    Output exited(const std::string& how, Millis now);
+    // The clock: a deadline at or before `now` passes.
+    Output tick(Millis now);
+    // The server is stopping: the driver is ended, and none is started again.
+    Output shutdown(Millis now);
+
+    // The driver's command, for the next start.
+    void configure(std::vector<std::string> command, std::string cwd, std::string configured);
+
+    std::optional<Millis> deadline() const;     // when tick() next has something to do
+    const sync::DriverState& state() const { return state_; }
+    Phase phase() const { return phase_; }
+    Stage stage() const { return stage_; }
+    bool alive() const { return phase_ != Phase::None; }
+    bool gathering() const { return !gathered_.empty(); }   // text of the open turn not yet in the tab
+    bool finished() const { return finished_; }             // the driver alive finished a turn
+    int failedStarts() const { return failed_; }
+    bool held() const { return held_; }                     // no driver is started until the next prompt
+    bool noCredential() const { return noCredential_; }     // the driver alive said it has no credential
+    bool shuttingDown() const { return down_; }
+    const std::string& openPrompt() const { return openPrompt_; }
+
+private:
+    void effect(Effect::What what, std::string text, std::uint64_t turn = 0);
+    void command(Command::Kind kind, std::vector<std::string> argv = {}, std::string line = {});
+    void receive(const driver::DriverMessage& message, Millis now);
+    void flush();
+    void cutOpen();
+    void abandon(const std::string& why);
+    void end(const std::string& why, Millis now);
+    void endQuietly(Millis now);
+    void close(Millis now);
+    void startDriver(Millis now);
+    void writeNext();
+    void advance(Millis now);
+    Output finish();
+    std::string brokeProtocol(const std::string& what) const;
+
+    Config config_;
+    sync::DriverState state_;
+    Phase phase_ = Phase::None;
+    Stage stage_ = Stage::None;
+    std::optional<Millis> deadline_;
+    std::string openPrompt_;            // the open turn's prompt
+    std::string gathered_;              // the open turn's text not yet in the tab
+    bool finished_ = false;
+    int failed_ = 0;
+    bool held_ = false;
+    bool noCredential_ = false;
+    bool down_ = false;
+    std::string lastFailure_;           // why the last driver ended, for the notice that holds starts back
+    std::string lastCause_;             // the cause the driver gave with its last error, if any
+    std::string lastFix_;               // and its fix
+    Output out_;                        // the output of the event in progress
+};
+
+} // namespace nexus::server

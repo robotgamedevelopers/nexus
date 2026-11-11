@@ -6,7 +6,10 @@
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
 //        nexus-server stop [--dir DIR]    stops the running server
 //
-// DIR is $HOME/.nexus unless given: the control socket server.sock, the log server.log and the store store/ live there.
+// DIR is $HOME/.nexus unless given: the control socket server.sock, the log server.log and the store store/ live there,
+// and the file drivers, which names each friend's driver (server/driver_table.h):
+//   driver <harness> <program> [<argument>...]
+//   friend <name> <harness> [<directory>]
 
 #include <mach-o/dyld.h>
 
@@ -24,7 +27,9 @@ namespace {
 int usage() {
     std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
                          "       nexus-server serve|stop [--dir DIR]\n"
-                         "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n");
+                         "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
+                         "DIR ($HOME/.nexus unless given) holds the file drivers, read at each prompt, with lines\n"
+                         "  driver <harness> <program> [<argument>...]    and    friend <name> <harness> [<directory>]\n");
     return 2;
 }
 

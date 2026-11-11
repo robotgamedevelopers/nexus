@@ -215,6 +215,32 @@ The binding: `tests/sync/link_walk.cpp` (`link_walk <seed> <steps> <windows> [--
 
 Per commit (`-L '^model$'`): the two small instances, the seven witnesses, six traces (seeds 1 to 4 on two windows and seed 5 on one, 400 steps each; seed 6 on three windows, 600 steps) and the three faulty traces: under 26 s of TLC in all, 7 s on eight cores.
 
+## Supervisor.tla: a friend tab's driver
+
+`Supervisor.tla` models `src/server/supervisor.h`, the state machine `nexus-server` keeps per friend tab: it starts the tab's driver when a prompt waits, writes each prompt as the next turn, gathers the friend's text, stops a turn, and ends the driver (input closed, then TERM, then KILL, each after its grace period). The driver is the environment: any message of any kind, for the open turn or another, a line the server refuses, a pipe closing, an exit at any moment. A driver that reports `no-credential` (protocol rule 11) is ended once no turn is open, and no driver is started again until the person's next prompt. Deadlines are steps that may happen (no hello, no done after a stop, each grace while ending); a working turn has none. `Restart` is the server dying and starting again from what the store holds: the next turn number, the open turn, the last session id and the waiting prompts. `Shutdown` is the server stopping.
+
+Invariants: `TypeOK`; `OneDriver` (at most one driver process, alive exactly when the phase says so); `OneTurn` (at most one turn open, only while a driver works on it); `TurnsIncrease` (a turn number is never reused, across driver and server restarts); `AtMostOnce` (each prompt is written to a driver at most once, ever); `WaitingSound` (a prompt waits only while the driver cannot take it, within the bound); `LimitHolds` (the failed-start count stays within its limit). Action properties: `EffectsForOpen` (every entry of a turn is for the turn open before the step), `EndsAnsweredOrCut` (a turn ends by its done or by a cut with its notice), `TextKept` (gathered text goes into the tab before the turn's closing notice), `StartsSound` (a driver starts only when not held back, and with `--resume` the last session id), `NoSendWithoutCredential` (no prompt is written to a driver that reported it has no credential). Liveness: `Settles` (every prompt accepted is answered or cut, or waits while starting is held back or the server is stopping), under fairness for deadlines, the person's stop and KILL.
+
+Instances: `MCSupervisor.cfg`, three prompts, two waiting, two failed starts, one restart, one session id (16,617 states, 2 s on four workers); `MCSupervisorWide.cfg`, nightly, four prompts, three failed starts, two restarts, two session ids (253,903 states, 54 s on four workers).
+
+Reversed witnesses (`witnesses/WSup*.tla`), each rejected by TLC:
+
+| Witness | The break | Rejected by |
+|---|---|---|
+| `WSupResendAfterCut` | an exit cuts the turn but puts its prompt back at the head of the waiting prompts | `AtMostOnce` |
+| `WSupTurnReuse` | the next turn number is not durable before its send, so a restart reuses it | `TurnsIncrease` |
+| `WSupStaleText` | text for a turn other than the open one is shown instead of ending the driver | `EffectsForOpen` |
+| `WSupTwoDrivers` | a driver silent past the hello deadline is replaced without being ended | `OneDriver` |
+| `WSupNoCutOnExit` | an exit leaves the turn open with no driver | `OneTurn` |
+| `WSupStartLoop` | failed starts never stop the starting | `LimitHolds` |
+| `WSupNoStopTimeout` | a stopped turn has no deadline | `Settles` |
+| `WSupSendWhileOpen` | a prompt is written while a turn is open | `OneTurn` |
+| `WSupTextLost` | text gathered before a mid-turn exit is dropped | `TextKept` |
+| `WSupStartFresh` | a driver starts without `--resume` | `StartsSound` |
+| `WSupSendNoCredential` | a driver that reported no credential is left idle after its turn's done, and given the next prompt | `NoSendWithoutCredential` |
+
+The binding: `tests/server/supervisor_walk.cpp` (`supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume] <out.tla>`) runs the real `Supervisor` against a scripted driver chosen from the seed (good turns, stops, wrong turns, bad lines, exits, silent starts, credentials, errors including `no-credential`, server restarts and a shutdown), with the clock moved to each deadline and, one millisecond before it, checked to do nothing. It records each event with the code's whole state after it; `SupervisorTrace.tla` takes the `Supervisor` action each record names, `TraceMatches` requires the spec's state to equal the code's, and every safety property is checked on the trace. Seeds 1 to 4 run per commit, 600 steps each. The binding is shown to fail twice: `--faulty-turn` loses the next turn number at a restart and `--faulty-resume` the session id; TLC must report `TraceMatches` violated. The walk does not exercise what the spec leaves out: text past the entry limit (the code puts it in the tab in whole entries before the block ends), empty deltas (the code gathers nothing, so no entry), and the cut of a driver's error cause and fix to `kReportBytes` each. Nor does it see the process layer (`src/server/drivers.cpp`): commands are recorded only through the phase and stage they leave; the functional tests cover the processes.
+
 ## Glide.tla: the sprint board's scrolling
 
 `Glide.tla` models `nexus::GlideScroller` (`src/scroll_glide.h`), which animates the board's scroll for the keys and the mouse wheel. The page's scroll is `pos` in `0..Max`; the band drawn past an end is `over`. The motion is `mode`: `idle`, a `coast` easing to `target` (exponential decay), a `hold` running while an arrow is down, or a `spring` taking the band back to an end (critically damped). Time is frames of `Dts` ticks; a coast or a spring that has not settled by its cap (`CoastTicks`, `SpringTicks`) lands where it was going. The curves are abstracted: each frame moves the page any amount the right way, up to the target, so a curve that overshoots or turns back is caught by the properties. The actions are an arrow pressed (`Press`), its OS repeat (ignored), its release (`Release`; the window losing focus is a release too, as Prax sends a key-up for every held key on resign), another key (`Key(d)`: a page, an end), a notch (`Wheel(d)`), a trackpad's scroll or a press of the pointer (`Interrupt`), the page's own script scrolling (`Page(y)`), the board leaving the screen (`Hide`), and `Frame(dt)`.

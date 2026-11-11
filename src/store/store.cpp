@@ -6,7 +6,8 @@ namespace nexus::store {
 
 namespace {
 
-constexpr std::uint8_t kFormat = 1;
+constexpr std::uint8_t kRecordFormat = 1;
+constexpr std::uint8_t kSnapshotFormat = 2;   // 1: before drivers, still read
 
 void put_entry(Writer& w, const Entry& e) {
     w.u8(e.kind);
@@ -22,18 +23,39 @@ bool get_entry(Reader& r, Entry& e) {
     return closed <= 1;
 }
 
+void put_driver(Writer& w, const Driver& d) {
+    w.u64(d.next_turn);
+    w.u64(d.open_turn);
+    w.str(d.session);
+    w.u32(std::uint32_t(d.waiting.size()));
+    for (const std::string& p : d.waiting)
+        w.str(p);
+}
+
+void get_driver(Reader& r, Driver& d) {
+    d.next_turn = r.u64();
+    d.open_turn = r.u64();
+    d.session = r.str();
+    d.waiting.clear();
+    std::uint32_t n = r.u32();
+    for (std::uint32_t i = 0; i < n && r.ok(); ++i)
+        d.waiting.push_back(r.str());
+}
+
 Bytes encode_record(const std::string& tab, std::span<const Change> changes, const std::string& client,
                     std::uint64_t num) {
     Writer w;
-    w.u8(kFormat);
+    w.u8(kRecordFormat);
     w.str(tab);
     w.u32(std::uint32_t(changes.size()));
     for (const Change& c : changes) {
         w.u8(std::uint8_t(c.kind));
         if (c.kind == Change::Kind::Append)
             put_entry(w, c.entry);
-        else
+        else if (c.kind == Change::Kind::Enqueue)
             w.str(c.prompt);
+        else
+            put_driver(w, c.driver);
     }
     w.str(client);
     w.u64(num);
@@ -90,8 +112,10 @@ void Store::apply(const std::string& tab, std::span<const Change> changes, const
         for (const Change& c : changes) {
             if (c.kind == Change::Kind::Append)
                 t.transcript.push_back(c.entry);
-            else
+            else if (c.kind == Change::Kind::Enqueue)
                 t.queue.push_back(c.prompt);
+            else
+                t.driver = c.driver;
         }
     }
     if (!client.empty())
@@ -127,7 +151,7 @@ Status Store::commit(const std::string& tab, std::span<const Change> changes, co
 
 Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq) {
     Reader r(rec);
-    if (r.u8() != kFormat)
+    if (r.u8() != kRecordFormat)
         return unreadable(dir_, "record " + std::to_string(seq));
     std::string tab = r.str();
     std::uint32_t n = r.u32();
@@ -142,6 +166,9 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         } else if (kind == std::uint8_t(Change::Kind::Enqueue)) {
             c.kind = Change::Kind::Enqueue;
             c.prompt = r.str();
+        } else if (kind == std::uint8_t(Change::Kind::SetDriver)) {
+            c.kind = Change::Kind::SetDriver;
+            get_driver(r, c.driver);
         } else {
             return unreadable(dir_, "record " + std::to_string(seq));
         }
@@ -157,7 +184,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
 
 Bytes Store::encode_snapshot() const {
     Writer w;
-    w.u8(kFormat);
+    w.u8(kSnapshotFormat);
     w.u32(std::uint32_t(tabs_.size()));
     for (const auto& [name, t] : tabs_) {
         w.str(name);
@@ -167,6 +194,7 @@ Bytes Store::encode_snapshot() const {
         w.u32(std::uint32_t(t.queue.size()));
         for (const std::string& q : t.queue)
             w.str(q);
+        put_driver(w, t.driver);
     }
     w.u32(std::uint32_t(applied_.size()));
     for (const auto& [client, num] : applied_) {
@@ -178,7 +206,8 @@ Bytes Store::encode_snapshot() const {
 
 Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
     Reader r(snap);
-    if (r.u8() != kFormat)
+    const std::uint8_t format = r.u8();
+    if (format != 1 && format != kSnapshotFormat)
         return unreadable(dir_, "the snapshot");
     std::uint32_t tabs = r.u32();
     for (std::uint32_t i = 0; i < tabs && r.ok(); ++i) {
@@ -193,6 +222,8 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
         std::uint32_t prompts = r.u32();
         for (std::uint32_t k = 0; k < prompts && r.ok(); ++k)
             t.queue.push_back(r.str());
+        if (format == kSnapshotFormat)
+            get_driver(r, t.driver);
     }
     std::uint32_t clients = r.u32();
     for (std::uint32_t i = 0; i < clients && r.ok(); ++i) {

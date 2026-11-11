@@ -171,6 +171,14 @@ jobs:
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
+          # the driver supervisor: every group, then its walks and their faults
+          build/tests/server/supervisor_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/server/supervisor_walk "$seed" 1000 walks/supervisor.tla
+          done
+          for fault in --faulty-turn --faulty-resume; do
+            build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
+          done
 
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
