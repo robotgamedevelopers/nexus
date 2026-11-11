@@ -47,7 +47,15 @@ struct Stop {
     bool operator==(const Stop&) const = default;
 };
 
-using ServerMessage = std::variant<Send, Stop, Unknown>;
+// Model and effort for the turns after this message (a turn never changes them halfway); an empty field stays as it
+// is, and at least one is given. Values are the harness's own names. A driver that does not know this kind skips it.
+struct Settings {
+    std::string model;
+    std::string effort;
+    bool operator==(const Settings&) const = default;
+};
+
+using ServerMessage = std::variant<Send, Stop, Settings, Unknown>;
 
 // ---- Driver to server ----
 

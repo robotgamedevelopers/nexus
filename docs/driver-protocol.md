@@ -51,6 +51,15 @@ standard input first, and ends a driver that does not exit.
 |---|---|---|
 | `send` | `turn` (required), `prompt` (string, required) | a prompt; opens turn `turn` |
 | `stop` | `turn` (required) | stop turn `turn`, if it is the open turn |
+| `settings` | `model` (non-empty string, optional), `effort` (non-empty string, optional); at least one | the model and effort for the turns that follow |
+
+`settings` came into version 1 after it was first written. A driver that does not know it skips it, as any unknown kind
+(sequence rule 8), so the version stays 1; a server that needs to know whether a driver honours it asks of the driver's
+harness, not of the version. Its values are the harness's own names (for Claude a model id or alias, and an effort of
+`low`, `medium`, `high`, `xhigh` or `max`). A field left out stays as it was. It may come at any time after the driver
+starts, a turn open or not, and applies from the next `send` on: a turn never changes model or effort halfway. A value
+the harness does not take is answered by an `error` without a turn (code `other` for a value it does not have,
+`harness` when the harness refuses it), and the setting stays as it was.
 
 The server numbers turns from 1 for each tab, strictly increasing and never reused, across restarts of the driver: a
 driver that has just started may see its first `send` with any turn number. A driver checks the order: each `send`'s
@@ -169,6 +178,12 @@ A turn stopped part way, then a stop for the turn already ended, which gets no a
 < {"kind":"text-end","turn":2}
 < {"kind":"done","turn":2,"outcome":"stopped","session_cost_usd":0.034}
 > {"kind":"stop","turn":2}
+```
+
+A change of model and effort, between turns, which applies from the next one:
+
+```
+> {"kind":"settings","model":"claude-sonnet-5-5","effort":"high"}
 ```
 
 A turn the harness fails, with its cause first:

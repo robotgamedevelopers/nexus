@@ -174,6 +174,13 @@ struct ServerEncoder {
     Writer& w;
     void operator()(const Send& m) { w.str("kind", "send").turn(m.turn).str("prompt", m.prompt); }
     void operator()(const Stop& m) { w.str("kind", "stop").turn(m.turn); }
+    void operator()(const Settings& m) {
+        w.str("kind", "settings");
+        if (!m.model.empty())
+            w.str("model", m.model);
+        if (!m.effort.empty())
+            w.str("effort", m.effort);
+    }
     void operator()(const Unknown&) { refuseUnknown(w); }
 };
 
@@ -452,6 +459,14 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
     }
     if (p.kind == "stop")
         return result<ServerMessage>(Stop{f.turn()}, f);
+    if (p.kind == "settings") {
+        Settings m;
+        m.model = f.str("model", false, true);
+        m.effort = f.str("effort", false, true);
+        if (f.error().empty() && m.model.empty() && m.effort.empty())
+            f.fail("has neither \"model\" nor \"effort\"");
+        return result<ServerMessage>(std::move(m), f);
+    }
     return result<ServerMessage>(Unknown{p.kind}, f);
 }
 

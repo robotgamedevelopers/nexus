@@ -92,6 +92,25 @@ can use, `~/.nexus/server.sock` (mode 0600, in a directory of mode 0700), logs t
 and takes UDP on ports 60001 to 60999, one per window. `nexus-server stop` stops it. If the disk fails under the
 store, the server stops; started again, it opens the store from what is durable.
 
+A friend's AI is reached through a driver, a child process of `nexus-server` per friend that speaks the line protocol
+in [docs/driver-protocol.md](docs/driver-protocol.md). Which program drives which friend comes from `~/.nexus/drivers`
+(an example: [drivers/claude/drivers.example](drivers/claude/drivers.example)). The Claude driver,
+[drivers/claude](drivers/claude), runs Claude on the Claude Agent SDK (TypeScript, Node 20.19 or newer; the SDK is a
+dependency fetched by npm, never kept in this repository) with permission prompts bypassed, in the friend's directory.
+It runs only on a subscription: it removes every API-key variable from Claude's environment, loads no Claude settings
+files unless told to, and refuses any session that would bill an API key, another provider or paid extra usage, with
+a `no-credential` error saying why and what to do. It uses the login of the user session `nexus-server` runs in (a
+process started over ssh cannot read the login keychain, so the server runs as a LaunchAgent), or the account's
+`CLAUDE_CODE_OAUTH_TOKEN` when the server's environment gives one. Model and effort can be set in the drivers file and
+changed between turns. Build and test it:
+
+```sh
+cd drivers/claude
+npm ci            # the pinned SDK and tools, from package-lock.json
+npm run check     # compile (strict), lint, unit tests
+npm run test:live # opt-in: the real driver on the real SDK; spends the subscription
+```
+
 To try it, with `studio` a machine you can `ssh studio` to without a password prompt, and its UDP ports above
 reachable from yours (over the tailnet they are):
 

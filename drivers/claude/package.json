@@ -1,0 +1,31 @@
+{
+  "name": "nexus-claude-driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "nexus-server's driver for Claude on the Claude Agent SDK: the driver protocol (docs/driver-protocol.md) over standard input and output.",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "bin": {
+    "nexus-claude-driver": "dist/src/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint --max-warnings 0 .",
+    "test": "node --test --test-concurrency=4 'dist/test/unit/*.test.js'",
+    "check": "npm run build && npm run lint && npm test",
+    "test:live": "node dist/test/live/live.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.322"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.6",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2"
+  }
+}
