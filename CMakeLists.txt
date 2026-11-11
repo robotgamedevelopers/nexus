@@ -34,6 +34,8 @@ FetchContent_MakeAvailable(prax)
 
 if(MSVC)
     set(NEXUS_WARNINGS /W4 /WX)
+    # getenv, strerror and the like are standard C, which MSVC's CRT deprecates in favour of its own; Prax does the same.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
 else()
     set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 endif()
