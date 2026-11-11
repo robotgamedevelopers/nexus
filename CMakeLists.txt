@@ -59,6 +59,13 @@ target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
 
+# The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange, their
+# encoding and decoding, and a reader that cuts a stream into them. No OS, no time, no processes.
+add_library(nexus_driver STATIC src/driver/protocol.cpp)
+target_include_directories(nexus_driver PUBLIC src)
+target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
+
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.
 add_library(nexus_scroll STATIC src/scroll_glide.cpp)
@@ -134,6 +141,7 @@ add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
 add_subdirectory(tests/window)
 add_subdirectory(tests/store)
+add_subdirectory(tests/driver)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()

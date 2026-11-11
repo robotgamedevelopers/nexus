@@ -9,13 +9,14 @@
    :rows (
      ("window" "1. Window: tabs, transcript and prompt draw and take input (in progress)")
      ("server-sync" "2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress)")
-     ("friends" "3. Friends: each tab is a real conversation with one friend over nova-bus, driven by the server; no message lost or shown twice")
+     ("friends" "3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); nothing the server received is lost or shown twice; a prompt reaches the harness at most once; a turn cut by a driver's exit is shown as cut")
      ("heads-down" "4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end")
      ("fleet" "5. Fleet: see the machines and what runs on each")
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
      ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
+     ("macos-installer" "macOS installer: a signed, notarized disk image; the person drags nexus.app to Applications and runs it, and the first run sets everything up: nexus-server as a login item started from the logged-in session, the Claude driver and its runtime inside the app, and a check for a Claude subscription login that says what to do when there is none. Open questions: friends configured in nexus itself rather than read from nova-config, what the sprint tab shows with no board, and window and server on one Mac as the starting case. After the friends layer." :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -28,6 +29,7 @@
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
      ("ios-client" "done" "t-ios-client")
+     ("macos-installer" "done" "t-macos-installer")
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
@@ -55,10 +57,22 @@
   (:id "t-upload" :type :task :title "Upload: the plus button sends a file to the selected AI's incoming/, images to the chat too" :state :todo)
   (:id "t-upload-store" :type :task :title "Upload storage: blobs by content hash in the store, chunks that resume, atomic placement in incoming/" :state :todo)  (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
   (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :doing)
-  (:id "t-friends" :type :task :title "Friends: a real conversation per tab over nova-bus, driven by the server" :state :todo)
+  (:id "t-friends" :type :work-set :children ("t-friends-protocol" "t-friends-supervisor" "t-friends-wire"
+                                               "t-friends-claude" "t-friends-accounts" "t-friends-window"))
+  (:id "t-friends-protocol" :type :task :title "1. Driver protocol and a fake driver: the line protocol, its reader, and a scripted driver for the server's tests" :state :done
+   :evidence ("tests/driver/protocol_test.cpp: ctest -L unit driver_unit_*" "tests/driver/fake_driver_test.cpp: ctest -L functional driver_fake_*" "docs/driver-protocol.md"))
+  (:id "t-friends-supervisor" :type :task :title "2. Driver supervisor in the server: starts, restarts and resumes each tab's driver; modelled in TLA+ with the protocol's sequence rules" :state :todo)
+  (:id "t-friends-wire" :type :task :title "3. Wire and transcript: turns, text blocks, tools and outcomes carried to the window" :state :todo)
+  (:id "t-friends-claude" :type :task :title "4. Claude driver on the Agent SDK" :state :todo)
+  (:id "t-friends-accounts" :type :task :title "5. Accounts: the environment each friend's driver starts with" :state :todo)
+  (:id "t-friends-window" :type :task :title "6. Window: a friend tab shows the conversation" :state :todo)
+  ; Feedback for Prax's author (a gap nexus works around, AGENTS.md): no table renders it.
+  (:id "prax-json-strict-utf8" :type :task :title "Prax feedback: a strict mode for lib/json and lib/core's UTF-8" :state :todo
+   :note "prJsonParse reads ill-formed UTF-8 inside strings, and a \\u escape of a lone surrogate, as U+FFFD without an error; prUtf8Validate accepts encoded surrogates; neither has a strict option. nexus checks each driver protocol line itself (src/driver/protocol.cpp illFormedAt, loneSurrogateAt). Confirmed by a second reader on 2026-11-10.")
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-sprint" :type :task :title "Sprint: see and deal cards in the window" :state :todo)
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
   (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)
-  (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)))
+  (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)
+  (:id "t-macos-installer" :type :task :title "macOS installer: drag nexus.app to Applications, first run sets everything up (after the friends layer)" :state :todo)))

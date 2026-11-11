@@ -10,13 +10,14 @@
 |---|:---:|
 | 1. Window: tabs, transcript and prompt draw and take input (in progress) | ❌ |
 | 2. Server and sync: a server holds tabs, transcripts and drafts and keeps running without a client; the client reconnects from anywhere to the current state; nothing typed is lost or applied twice (in progress) | ❌ |
-| 3. Friends: each tab is a real conversation with one friend over nova-bus, driven by the server; no message lost or shown twice | ❌ |
+| 3. Friends: each tab is a real conversation with one friend, reached through a driver process that is a child of the server (one per tab, docs/driver-protocol.md); nothing the server received is lost or shown twice; a prompt reaches the harness at most once; a turn cut by a driver's exit is shown as cut | ❌ |
 | 4. Heads-down: timer and queue live on the server; visible queue, stop always gets through, one away-report at the end | ❌ |
 | 5. Fleet: see the machines and what runs on each | ❌ |
 | 6. Sprint: see and deal cards without leaving the window | ❌ |
 | 7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it | ❌ |
 | Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon | ❌ |
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
+| macOS installer: a signed, notarized disk image; the person drags nexus.app to Applications and runs it, and the first run sets everything up: nexus-server as a login item started from the logged-in session, the Claude driver and its runtime inside the app, and a check for a Claude subscription login that says what to do when there is none. Open questions: friends configured in nexus itself rather than read from nova-config, what the sprint tab shows with no board, and window and server on one Mac as the starting case. After the friends layer. (later) | ❌ |
 | complete | 0% |
 
 [Source data](roadmap.sexp)
@@ -35,7 +36,7 @@
 | The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store) (later) | ❌ |
 | Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt (later) | ❌ |
 | HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
-| complete | 20% |
+| complete | 16% |
 
 [Source data](roadmap.sexp)
 
