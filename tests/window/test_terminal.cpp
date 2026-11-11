@@ -24,6 +24,7 @@
 
 #include "model.h"
 #include "tab_order.h"
+#include "style.h"
 #include "terminals.h"
 #include "view.h"
 
@@ -143,7 +144,7 @@ void aShellRunsAndItsTabClosesWhenItExits() {
     Harness h;
     h.terminals->program = "/bin/sh";
     h.terminals->directory = dir.string();
-    h.key(PrAppKey('T'), PrAppKeyCode_KeyT, PrAppModifierFlag_Super);
+    h.key(PrAppKey('T'), PrAppKeyCode_KeyT, style::kCommand);
     CHECK(h.model.tab_count() == 2 && h.model.active() == 1);
     if (h.model.tab_count() != 2)
         return;
@@ -240,7 +241,7 @@ void aTabInSshNamesTheMachine() {
     Harness h;
     h.terminals->program = "/bin/sh";
     h.terminals->machines = {Machine{"space", "100.64.0.9"}, Machine{"hetzner2", ""}};
-    h.key(PrAppKey('T'), PrAppKeyCode_KeyT, PrAppModifierFlag_Super);
+    h.key(PrAppKey('T'), PrAppKeyCode_KeyT, style::kCommand);
     CHECK(h.model.tab_count() == 2);
     if (h.model.tab_count() != 2)
         return;

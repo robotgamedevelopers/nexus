@@ -259,9 +259,9 @@ struct TextKey {
     int steps;
 };
 constexpr TextKey kTextKeys[] = {
-    {'=', PrAppModifierFlag_Super, 1},
-    {'+', PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_Shift), 1},
-    {'-', PrAppModifierFlag_Super, -1},
+    {'=', style::kCommand, 1},
+    {'+', PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift), 1},
+    {'-', style::kCommand, -1},
 };
 
 PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
@@ -634,7 +634,7 @@ struct Builder {
         PrLayoutNode box = element(footer, Part::Prompt);
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
-        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, PrAppModifierFlag_Super);
+        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
         view.promptRows = promptRows();
 
         plus(box);
@@ -685,7 +685,7 @@ struct Builder {
         // row's order. A key whose tab does not exist is refused by the model and changes nothing. macOS types no text
         // for a Command chord. The sprint tab's key takes its page back to the board (Board::home).
         for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
-            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), PrAppModifierFlag_Super) && model.select_tab(n) &&
+            if (prUiKeyPressed(ui, keys, PrAppKey(kTabKeys[n]), style::kCommand) && model.select_tab(n) &&
                     model.tab(n).kind == TabKind::Sprint && view.board != nullptr)
                 view.board->home();
         }
@@ -699,12 +699,12 @@ struct Builder {
         // sprint tab. A terminal that cannot start leaves the tab that showed before. Claimed like the keys above: a
         // terminal leaves
         // Command chords to the window (terminal.cpp claimKeys), and the prompt claims neither.
-        if (prUiKeyPressed(ui, keys, PrAppKey('T'), PrAppModifierFlag_Super) && view.terminals != nullptr) {
+        if (prUiKeyPressed(ui, keys, PrAppKey('T'), style::kCommand) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
             if (!view.terminals->open(id))
                 model.close_tab(model.active());
         }
-        if (prUiKeyPressed(ui, keys, PrAppKey('W'), PrAppModifierFlag_Super) && model.tab_count() != 0 &&
+        if (prUiKeyPressed(ui, keys, PrAppKey('W'), style::kCommand) && model.tab_count() != 0 &&
                 model.tab(model.active()).kind == TabKind::Terminal) {
             const std::size_t id = model.tab(model.active()).id;
             model.close_tab(model.active());
@@ -727,7 +727,7 @@ struct Builder {
             view.hide();
         // Command-Escape is stop (view.stop): nothing runs in this layer that could be stopped; a later layer connects
         // it to stopping the friend's work. It hides nothing. The text area claims neither key, so neither types or edits.
-        if (onFriend && prUiKeyPressed(ui, keys, PrAppKey_Escape, PrAppModifierFlag_Super) && view.stop)
+        if (onFriend && prUiKeyPressed(ui, keys, PrAppKey_Escape, style::kCommand) && view.stop)
             view.stop();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).

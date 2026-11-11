@@ -1,10 +1,14 @@
-# nexus: one person and several AIs in one window. macOS only for now.
+# nexus: one person and several AIs in one window. The window builds on macOS and Windows; nexus-server on macOS.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus LANGUAGES C CXX OBJCXX)
+project(nexus LANGUAGES C CXX)
+# The window's AppKit code (src/platform_mac.mm) is Objective-C++.
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,7 +27,11 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
-set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
+if(MSVC)
+    set(NEXUS_WARNINGS /W4 /WX)
+else()
+    set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 # The link between the window and nexus-server: mosh's transport (cmake/mosh.cmake), which needs protobuf. OFF builds
 # without nexus-server and without the window's --server; the model checks need neither.
@@ -128,13 +136,24 @@ if(NEXUS_LINK)
     target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers)
 endif()
 
-# The app, as a real bundle: nexus.app.
-add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
-set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+# The app: on macOS a real bundle, nexus.app; on Windows a GUI program (no console window opens at launch, so launch
+# shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
+if(APPLE)
+    add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+    set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(nexus PRIVATE "-framework AppKit")
+elseif(WIN32)
+    add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
+    if(MSVC)
+        target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
+    endif()
+else()
+    message(FATAL_ERROR "nexus: the window builds on macOS and Windows only so far (src/platform.h has no code for "
+        "${CMAKE_SYSTEM_NAME}); configure on one of those")
+endif()
 target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
-    prax::studio_app prax::gpu prax::image prax::compress
-    "-framework AppKit")
+    prax::studio_app prax::gpu prax::image prax::compress)
 if(NEXUS_LINK)
     target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
     target_link_libraries(nexus PRIVATE nexus_link nexus_sync)

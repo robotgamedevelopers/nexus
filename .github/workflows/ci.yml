@@ -234,3 +234,38 @@ jobs:
       # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
+
+  # The window on Windows (the port: AGENTS.md "the overlay acts exactly the same on every platform"), with MSVC at /W4
+  # and warnings as errors (CMakeLists.txt sets the flags), on captain's Windows runners. Without the link's transport:
+  # mosh's network layer does not build there (the link and nexus-server stay on macOS). Only the unit tests run here.
+  #
+  # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
+  # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
+  # runner is cold. Prax's download cache sits beside it (PR_DOWNLOAD_DIR), one per runner for the reason given above.
+  windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Windows, X64, captain]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build directory and caches outside the workspace
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
+          New-Item -ItemType Directory -Force -Path "$caches\build", "$caches\prax-downloads" | Out-Null
+          "NEXUS_BUILD=$caches\build" >> $env:GITHUB_ENV
+          "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
+          "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+          cmake --version
+      - name: Configure (Release, MSVC)
+        run: cmake -S . -B "$env:NEXUS_BUILD" -DNEXUS_LINK=OFF
+      - name: Build
+        run: cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
+      - name: Unit tests
+        run: ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure

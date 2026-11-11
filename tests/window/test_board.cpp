@@ -24,6 +24,7 @@
 
 #include "board.h"
 #include "model.h"
+#include "style.h"
 #include "view.h"
 
 namespace {
@@ -519,7 +520,7 @@ void keysAndTheWheelScrollSmoothly() {
     CHECK(top() > released + 150 && top() < released + 250);
 
     // Command-Up: to the top. End: to the bottom, where it bounces past the end and comes back.
-    down(PrAppKey_Up, PrAppModifierFlag_Super);
+    down(PrAppKey_Up, style::kCommand);
     run(2);
     CHECK(top() == 0);
     down(PrAppKey_End);

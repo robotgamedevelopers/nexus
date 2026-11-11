@@ -246,7 +246,7 @@ struct Harness {
     // Command-digit as macOS sends it: the digit as the key, its code, and no text (a Command chord types none).
     void commandDigit(int digit, PrAppModifierFlags extra = 0) {
         PrAppKeyCode code = digit == 0 ? PrAppKeyCode_Digit0 : PrAppKeyCode(PrAppKeyCode_Digit1 + digit - 1);
-        key(PrAppKey('0' + digit), code, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
+        key(PrAppKey('0' + digit), code, PrAppModifierFlags(style::kCommand | extra));
     }
 
     const Tab& active() const {
@@ -363,10 +363,10 @@ struct Harness {
 
     // Command-T and Command-W, as macOS sends them: the letter's key, its code, and no text.
     void commandT() {
-        key(PrAppKey('T'), PrAppKeyCode_KeyT, PrAppModifierFlag_Super);
+        key(PrAppKey('T'), PrAppKeyCode_KeyT, style::kCommand);
     }
     void commandW() {
-        key(PrAppKey('W'), PrAppKeyCode_KeyW, PrAppModifierFlag_Super);
+        key(PrAppKey('W'), PrAppKeyCode_KeyW, style::kCommand);
     }
 
     // The tab labels' texts, in order.
@@ -383,15 +383,15 @@ struct Harness {
     // Command-= (larger), Command-+ (Shift-=, larger) and Command-minus (smaller), as macOS sends them: no text. Then a
     // frame more, whose start applies the scale.
     void larger(PrAppModifierFlags extra = 0) {
-        key(PrAppKey('='), PrAppKeyCode_Equal, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
+        key(PrAppKey('='), PrAppKeyCode_Equal, PrAppModifierFlags(style::kCommand | extra));
         frame();
     }
     void largerWithShift() {
-        key(PrAppKey('+'), PrAppKeyCode_Equal, PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_Shift));
+        key(PrAppKey('+'), PrAppKeyCode_Equal, PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift));
         frame();
     }
     void smaller(PrAppModifierFlags extra = 0) {
-        key(PrAppKey('-'), PrAppKeyCode_Minus, PrAppModifierFlags(PrAppModifierFlag_Super | extra));
+        key(PrAppKey('-'), PrAppKeyCode_Minus, PrAppModifierFlags(style::kCommand | extra));
         frame();
     }
 };
@@ -423,13 +423,13 @@ void enterSendsExactlyTheText() {
 void commandEnterQueues() {
     Harness h;
     h.type("later");
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     CHECK((h.active().queue == std::vector<std::string>{"later"}));
     CHECK(h.active().transcript.empty());     // the queue, not the transcript
     CHECK(h.active().draft.empty());
     CHECK(h.model.tab(1).queue.empty());
     h.type("then this");
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     CHECK((h.active().queue == std::vector<std::string>{"later", "then this"}));
     CHECK(h.active().transcript.empty());
 }
@@ -457,7 +457,7 @@ void blankDraftsSendNothing() {
     CHECK(h.active().transcript.empty());
     h.type("   ");
     h.enter();
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     CHECK(h.active().transcript.empty());
     CHECK(h.active().queue.empty());
     CHECK(h.active().draft == "   ");
@@ -501,7 +501,7 @@ void capsLockKeepsTheBindings() {
     h.enter(PrAppModifierFlag_CapsLock);
     CHECK(h.active().transcript.size() == 1 && h.active().transcript[0].text == "hi");
     h.type("x", PrAppModifierFlag_CapsLock);
-    h.enter(PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_CapsLock));
+    h.enter(PrAppModifierFlags(style::kCommand | PrAppModifierFlag_CapsLock));
     CHECK(h.active().transcript.size() == 1);
     CHECK((h.active().queue == std::vector<std::string>{"x"}));
     h.commandDigit(2, PrAppModifierFlag_CapsLock);
@@ -633,7 +633,7 @@ void textKeysWorkWithCapsLock() {
 void escapeHidesAndCommandEscapeStops() {
     Harness h;
     h.type("draft");
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     h.type("more");
     h.model.append(0, Entry{EntryKind::Friend, "a reply"});
     h.commandDigit(2);
@@ -645,9 +645,9 @@ void escapeHidesAndCommandEscapeStops() {
     CHECK(h.hides == 1 && h.stops == 0);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_CapsLock);
     CHECK(h.hides == 2 && h.stops == 0);
-    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, style::kCommand);
     CHECK(h.hides == 2 && h.stops == 1);
-    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlags(PrAppModifierFlag_Super | PrAppModifierFlag_CapsLock));
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlags(style::kCommand | PrAppModifierFlag_CapsLock));
     CHECK(h.hides == 2 && h.stops == 2);
     CHECK(h.model.active() == 0);
     for (std::size_t i = 0; i < 2; ++i) {
@@ -946,7 +946,7 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     h.type("sent");
     h.enter();
     h.type("held");
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     h.frame();
     PrLayoutNode window = prLayoutNodeParent(h.tree, h.view.transcript);
     CHECK(near(fillOf(h, window).a * 100, style::kOverlayOpacity * 100));
@@ -1211,7 +1211,7 @@ void escapeOnATerminalHidesNothing() {
     Harness h;
     h.commandT();
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
-    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, style::kCommand);
     h.key(PrAppKey_Enter, PrAppKeyCode_Enter);
     CHECK(h.hides == 0 && h.stops == 0);
     CHECK(h.model.active() == 2);
@@ -1416,7 +1416,7 @@ void sprintTabTakesNoText() {
     Harness h = withSprint();
     h.type("hello");
     h.enter();
-    h.enter(PrAppModifierFlag_Super);
+    h.enter(style::kCommand);
     for (std::size_t i = 0; i < h.model.tab_count(); ++i) {
         CHECK(h.model.tab(i).draft.empty() && h.model.tab(i).transcript.empty() && h.model.tab(i).queue.empty());
     }
@@ -1505,7 +1505,7 @@ void sprintTabKeysCloseNothing() {
     CHECK(h.model.tab_count() == 3 && h.active().kind == TabKind::Sprint);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     CHECK(h.hides == 1);
-    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, PrAppModifierFlag_Super);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape, style::kCommand);
     CHECK(h.stops == 0);
 }
 

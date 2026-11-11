@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "sprint.h"
+#include "style.h"
 
 namespace {
 
@@ -157,7 +158,7 @@ PrAppEvent pointer(PrAppEventKind kind) {
 // Every Command chord and Escape stay with the window; other keys and text go to the page; the pointer's presses and
 // the wheel go where the pointer is, a release where its press went, and a move to both.
 void eventsAreRouted() {
-    constexpr PrAppModifierFlags kCmd = PrAppModifierFlag_Super;
+    constexpr PrAppModifierFlags kCmd = style::kCommand;
     for (char digit : std::string("1234567890"))
         CHECK(routeBoardEvent(key(PrAppKey(digit), kCmd), true, false) == BoardRoute::Window);
     for (PrAppKey k : {PrAppKey('T'), PrAppKey('W'), PrAppKey('='), PrAppKey('-'), PrAppKey('`')})

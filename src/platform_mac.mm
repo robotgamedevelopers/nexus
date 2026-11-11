@@ -1,11 +1,14 @@
-#include "platform_mac.h"
+#include "platform.h"
 
 #import <AppKit/AppKit.h>
 
 namespace nexus {
 
-bool coverScreen(void* nsView) {
-    NSWindow* window = ((__bridge NSView*)nsView).window;
+bool coverScreen(const PrAppSurface& surface) {
+    if (surface.kind != PrAppSurfaceKind_NsView) {
+        return false;
+    }
+    NSWindow* window = ((__bridge NSView*)surface.handle).window;
     if (window == nil)
         return false;
     NSScreen* screen = NSScreen.mainScreen;

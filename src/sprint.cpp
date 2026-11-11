@@ -7,6 +7,8 @@
 
 #include "pr/json.h"
 
+#include "style.h"
+
 namespace nexus {
 
 namespace {
@@ -151,11 +153,11 @@ BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPag
             // Command-Up and Command-Down scroll the page to its top and its bottom, as on macOS; nexus binds neither.
             if (event.keyboard.key == PrAppKey_Up || event.keyboard.key == PrAppKey_Down)
                 return BoardRoute::Page;
-            if ((event.modifiers & PrAppModifierFlag_Super) != 0 || event.keyboard.key == PrAppKey_Escape)
+            if ((event.modifiers & style::kCommand) != 0 || event.keyboard.key == PrAppKey_Escape)
                 return BoardRoute::Window;
             return BoardRoute::Page;
         case PrAppEventKind_Text:
-            return (event.modifiers & PrAppModifierFlag_Super) != 0 ? BoardRoute::Window : BoardRoute::Page;
+            return (event.modifiers & style::kCommand) != 0 ? BoardRoute::Window : BoardRoute::Page;
         case PrAppEventKind_CompositionUpdate:
         case PrAppEventKind_CompositionEnd:
             return BoardRoute::Page;
