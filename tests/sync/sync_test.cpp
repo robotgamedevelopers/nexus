@@ -973,6 +973,40 @@ void stop_target_rules() {
     CHECK(!stopTarget(m, terminal, &tab) && tab.empty());    // a terminal's
 }
 
+// The window never filters a stop: whatever the tab shows and whether or not the link is up, Command-Escape on a
+// friend's tab is an action in the outbox, sent in order with the others once the link carries them. The server
+// decides each against its state when it processes it (here: the first, for a tab it does not hold yet, is refused).
+void stop_never_filtered_by_the_window() {
+    Model m(friends2(), true);
+    Actions outbox;                     // the link is down: nothing leaves the window
+    std::string tab;
+    CHECK(stopTarget(m, 1, &tab) && tab == "ada");      // the tab shows no turn
+    outbox.add(ActionKind::Stop, tab, "");
+    m.set_draft(1, "hi");
+    std::string text;
+    CHECK(takePrompt(m, 1, 1024, &text, nullptr));
+    outbox.add(ActionKind::Send, "ada", text);
+    for (int i = 0; i < 2; ++i) {
+        tab.clear();
+        CHECK(stopTarget(m, 1, &tab) && tab == "ada");
+        outbox.add(ActionKind::Stop, tab, "");
+    }
+    CHECK(outbox.held().size() == 4);
+    // the link comes up: the whole outbox reaches the server, in order
+    MemoryStore store;
+    RecordingResponder r;
+    Hub hub(store, Limits{}, &r);
+    Applier applier;
+    std::vector<std::string> outcomes;
+    for (const Action& a : applier.apply(Actions::parse(outbox.init_diff()))) {
+        std::string why;
+        outcomes.push_back(hub.apply(a, &why, "w") ? "ok" : why);
+    }
+    CHECK((outcomes == std::vector<std::string>{"no tab ada: nothing to stop", "ok", "ok", "ok"}));
+    CHECK((r.stopped == std::vector<std::string>{"ada", "ada"}));
+    CHECK(store.applied("w") == 4);
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -1017,6 +1051,7 @@ const Case kCases[] = {
     {"mirror_holds_open_entry_apart", mirror_holds_open_entry_apart},
     {"mirror_queue_follows_the_servers", mirror_queue_follows_the_servers},
     {"stop_target_rules", stop_target_rules},
+    {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
 };
 
 } // namespace

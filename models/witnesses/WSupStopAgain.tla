@@ -5,5 +5,5 @@ EXTENDS MCSupervisor
 
 Open(x) == x.phase \in {"working", "stopping"}
 
-BrokenSpec == Init /\ [][NextWithAll(Prompt, QueuePrompt, StopWith(Open), Message, Exit, Timeout, Restart)]_vars
+BrokenSpec == Init /\ [][NextWithAll(Prompt, QueuePrompt, StopWith(Open, CancelStart), Message, Exit, Timeout, Restart)]_vars
 =============================================================================

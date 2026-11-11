@@ -536,9 +536,22 @@ void testCredentialAndErrors() {
 void testStop() {
     Supervisor none = make();
     CHECK(none.stop(kStart).commands.empty());
-    Supervisor starting = make();
-    starting.prompt("x", kStart);
-    CHECK(starting.stop(kStart).commands.empty() && starting.phase() == Phase::Starting);
+    {
+        // A stop while the driver starts cancels the turn about to begin: its prompt is never written, and the turn
+        // number is not used. The driver keeps starting; the next prompt waiting, or queued, goes once it is up.
+        Supervisor starting = make();
+        starting.prompt("x", kStart);
+        starting.prompt("y", kStart);
+        starting.queued("q", kStart);
+        Output o = starting.stop(kStart + 1);
+        CHECK(whats(o) == std::vector<What>{What::Stopped} && o.effects[0].turn == 0 && o.durable);
+        CHECK(o.commands.empty() && starting.phase() == Phase::Starting);
+        CHECK(starting.state().waiting == std::vector<std::string>{"y"} && starting.queue().size() == 1);
+        o = starting.stop(kStart + 2);
+        CHECK(whats(o) == std::vector<What>{What::Stopped} && starting.state().waiting.empty());
+        o = starting.message(Hello{1, "h"}, kStart + 3);
+        CHECK(o.taken == 1 && sends(o, 1, "q") && starting.queue().empty());
+    }
     Supervisor s = working();
     Output o = s.stop(kStart + 2);
     CHECK(written(o) == std::vector<ServerMessage>{Stop{1}} && s.phase() == Phase::Stopping);
@@ -549,6 +562,39 @@ void testStop() {
     Supervisor idle = working();
     idle.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 2);
     CHECK(idle.stop(kStart + 3).commands.empty());
+}
+
+// Stops hammered, in order, with prompts queued: each ends the turn running when it arrives, those that find the turn
+// already stopping or nothing running change nothing, and none is kept for a later turn. Nothing queued is lost.
+void testStopHammered() {
+    Supervisor s = working("go");
+    for (const char* q : {"q1", "q2", "q3"}) {
+        s.queued(q, kStart + 2);
+    }
+    std::uint64_t turn = 1;
+    for (int round = 0; round < 3; ++round) {
+        Output o = s.stop(kStart + 3);
+        CHECK(written(o) == std::vector<ServerMessage>{Stop{turn}});
+        for (int i = 0; i < 4; ++i) {
+            const sync::DriverState before = s.state();
+            o = s.stop(kStart + 4);
+            CHECK(o.effects.empty() && o.commands.empty() && !o.durable && s.state().waiting == before.waiting);
+        }
+        o = s.message(Done{turn, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 5);
+        ++turn;
+        CHECK(o.taken == 1 && sends(o, turn, "q" + std::to_string(round + 1)));
+        CHECK(s.queue().size() == static_cast<std::size_t>(2 - round));
+    }
+    Output o = s.message(Done{turn, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 6);
+    CHECK(o.taken == 0 && s.phase() == Phase::Idle);
+    for (int i = 0; i < 5; ++i) {
+        o = s.stop(kStart + 7);
+        CHECK(o.effects.empty() && o.commands.empty() && !o.durable);
+    }
+    o = s.prompt("last", kStart + 8);
+    CHECK(sends(o, turn + 1, "last"));
+    o = s.message(Done{turn + 1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 9);
+    CHECK(whats(o).empty() && s.phase() == Phase::Idle && s.state().nextTurn == turn + 2);
 }
 
 // ---- the queue: one per turn, at the turn's end, oldest first, each once ----
@@ -755,6 +801,7 @@ const Group kGroups[] = {
     {"failed_starts", testFailedStarts},
     {"credential", testCredentialAndErrors},
     {"stop", testStop},
+    {"stop_hammered", testStopHammered},
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},

@@ -13,6 +13,7 @@ The rules for an AI working in this repository. Each one holds on every change.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
 - `nexus-server` reaches each friend through a driver, a child process per friend tab, over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
+- The server is where the real work runs and every decision is made, against its state when it processes each message. The client only sends inputs and events to the server and displays what comes back, so behaviour never depends on latency. The client is a thin client: it holds no actual state, except what is being prepared to send (latency-free typing of text, Enter and the like).
 - A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the session id, and starts a driver again with `--resume`.
 - A prompt is written to a driver at most once. A turn left open when its driver exits or the server restarts is cut with a notice and never sent again (`models/Supervisor.tla`). Which program is each friend's driver comes from the file `drivers` in the server's directory (`src/server/driver_table.h`).
 
@@ -42,7 +43,7 @@ Tabs
 
 Friend tabs
 - Enter sends, Command-Enter queues, and Shift-Enter breaks the line.
-- Command-Escape stops the friend's work.
+- Command-Escape on a friend's tab always sends a stop, whatever the tab shows and whether or not the link is up; stops arrive in order. The server decides (see Code): a stop ends the friend's work running when the server processes it (a turn, or a start about to begin one), and one that finds nothing running is dropped and never affects a later turn.
 - With `--server`, sending and queuing go through `nexus-server`, and the server's state is what the tab shows. Before the server is reached, the prompt is replaced by one plain line giving the link's state.
 
 The sprint tab

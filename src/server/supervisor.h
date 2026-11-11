@@ -126,7 +126,8 @@ public:
     // The person queued `text` for later, which the hub has put at the end of the tab's queue (within its limits): it
     // is taken at once if no turn is open and nothing waits. Like a prompt, it lifts the hold on starting drivers.
     Output queued(const std::string& text, Millis now);
-    // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out.
+    // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out; while the
+    // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
     Output stop(Millis now);
     // A message the driver wrote.
     Output message(const driver::DriverMessage& message, Millis now);

@@ -164,11 +164,18 @@ Output Supervisor::queued(const std::string& text, Millis now) {
     return finish();
 }
 
+// A stop ends what runs when it arrives: the open turn, or, while the driver starts, the turn about to begin (its
+// prompt is never written; the driver keeps starting for the next). Finding the turn already stopping, or nothing
+// running, it changes nothing: no stop is kept for a later turn.
 Output Supervisor::stop(Millis now) {
     if (phase_ == Phase::Working) {
         command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
         phase_ = Phase::Stopping;
         deadline_ = now + config_.timing.stop;
+    } else if (phase_ == Phase::Starting && !state_.waiting.empty()) {
+        state_.waiting.erase(state_.waiting.begin());
+        effect(Effect::What::Stopped, "Stopped.");
+        out_.durable = true;
     }
     return finish();
 }

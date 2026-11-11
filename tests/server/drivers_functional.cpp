@@ -238,6 +238,43 @@ void queue(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.find("ada")->queue.empty());
 }
 
+// Command-Escape hammered, stops applied in batches with prompts queued: a stop while the driver starts cancels the
+// turn about to begin, each stop ends the turn running when it arrives, and the rest (the turn already stopping, or
+// nothing running) vanish: none is kept for a later turn, and nothing queued is lost.
+void stopHammered(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"A\"}\nawait-stop\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"B\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    const auto stops = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
+        }
+    };
+    s.send("never");
+    CHECK(s.sup().phase() == Phase::Starting);
+    stops(3);
+    CHECK((s.transcript() == std::vector<std::string>{"P never", "N Stopped."}));
+    CHECK(s.driver().waiting.empty() && s.driver().nextTurn == 1);
+    s.send("go");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    for (const char* q : {"q1", "q2"}) {
+        CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", q}));
+    }
+    stops(4);
+    CHECK(s.serveUntil([&] { return s.driver().openTurn == 2 && s.sup().gathering(); }, 10));
+    stops(3);
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
+    stops(5);
+    CHECK(s.store.find("ada")->queue.empty() && idle(s));
+    s.send("last");
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 5 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P never", "N Stopped.", "P go", "F Work", "N Stopped.",
+        "P q1", "F A", "N Stopped.", "P q2", "F B", "P last"}));
+}
+
 // The drivers file loses ada mid-turn: a prompt queued then stays queued at the turn's end, since there is no driver
 // to give it to; once ada is configured again, the next action takes the oldest, one per turn.
 void queueUnconfigured(Server& s, const std::string& dir, const std::string& fake) {
@@ -525,7 +562,8 @@ int main(int argc, char** argv) {
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
-                {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured}};
+                {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
+                {"stop_hammered", stopHammered}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

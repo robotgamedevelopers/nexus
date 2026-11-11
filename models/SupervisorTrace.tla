@@ -83,6 +83,8 @@ TextKept == L!TextKept
 StartsSound == L!StartsSound
 NoSendWithoutCredential == L!NoSendWithoutCredential
 StopForOpen == L!StopForOpen
+StopEndsWhatRuns == L!StopEndsWhatRuns
+NoLatchedStop == L!NoLatchedStop
 TakesAtTurnEnd == L!TakesAtTurnEnd
 
 =============================================================================
