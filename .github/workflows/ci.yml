@@ -299,7 +299,10 @@ jobs:
             # curl.exe resumes a download that an earlier run's 2 minutes cut short (-C -).
             curl.exe -fsSL --retry 3 -C - -o "$slang\$file.partial" ($url + $asset)
             $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
-            if ($got -ne $hash) { throw "Slang's $file has sha256 $got, and Prax pins $hash" }
+            if ($got -ne $hash) {
+              Remove-Item -Force "$slang\$file.partial"
+              throw "Slang's $file has sha256 $got, and Prax pins $hash (removed; the next run downloads it again)"
+            }
             Move-Item -Force "$slang\$file.partial" "$slang\$file"
           }
       - name: Configure (Release, MSVC x64)
