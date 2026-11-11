@@ -53,7 +53,8 @@ const std::vector<std::string> kTexts = {"", "hi", "two\nlines\r\n", "\"q\" \\ /
     "\xc3\xa9t\xc3\xa9 \xe2\x9c\x93 \xf0\x9f\x9a\x80", "\xef\xbf\xbd"};
 
 std::vector<ServerMessage> serverMessages() {
-    std::vector<ServerMessage> all = {Stop{3}, Stop{kMaxTurn}, Send{kMaxTurn, "last"}};
+    std::vector<ServerMessage> all = {Stop{3}, Stop{kMaxTurn}, Send{kMaxTurn, "last"},
+        Settings{"claude-opus-5-5", "high"}, Settings{"opus", ""}, Settings{"", "low"}};
     std::uint64_t turn = 1;
     for (const std::string& t : kTexts)
         all.push_back(Send{turn++, t});
@@ -146,6 +147,12 @@ void roundtrip() {
     // The wire names, as the document gives them.
     CHECK(encode(ServerMessage{Send{1, "hi"}}).line == "{\"kind\":\"send\",\"turn\":1,\"prompt\":\"hi\"}\n");
     CHECK(encode(ServerMessage{Stop{4}}).line == "{\"kind\":\"stop\",\"turn\":4}\n");
+    CHECK(encode(ServerMessage{Settings{"opus", "max"}}).line ==
+        "{\"kind\":\"settings\",\"model\":\"opus\",\"effort\":\"max\"}\n");
+    CHECK(encode(ServerMessage{Settings{"", "low"}}).line == "{\"kind\":\"settings\",\"effort\":\"low\"}\n");
+    const Decoded<ServerMessage> settingsNull =
+        decodeServerMessage("{\"kind\":\"settings\",\"model\":null,\"effort\":\"low\"}");
+    CHECK(settingsNull.message && *settingsNull.message == ServerMessage(Settings{"", "low"}));
     CHECK(encode(DriverMessage{TextEnd{2}}).line == "{\"kind\":\"text-end\",\"turn\":2}\n");
     CHECK(encode(DriverMessage{Credential{Billing::ApiKey, ""}}).line ==
         "{\"kind\":\"credential\",\"billing\":\"api-key\"}\n");
@@ -172,6 +179,7 @@ void encode_refusals() {
     CHECK(contains(encode(ServerMessage{Send{0, "x"}}).error, "\"turn\""));
     CHECK(contains(encode(ServerMessage{Stop{0}}).error, "\"turn\""));
     CHECK(contains(encode(ServerMessage{Unknown{"pause"}}).error, "unknown kind"));
+    CHECK(contains(encode(ServerMessage{Settings{"", ""}}).error, "neither"));
     CHECK(contains(encodeError(Unknown{"thinking"}), "unknown kind"));
     CHECK(contains(encodeError(Text{kMaxTurn + 1, "x"}), "\"turn\""));
     CHECK(contains(encodeError(Hello{0, "x"}), "\"protocol\""));
@@ -366,6 +374,10 @@ void refusals() {
     const Decoded<DriverMessage> escapedBackslash =
         decodeDriverMessage("{\"kind\":\"text\",\"turn\":1,\"delta\":\"\\\\ud83d\"}");
     CHECK(escapedBackslash.message && *escapedBackslash.message == DriverMessage(Text{1, "\\ud83d"}));
+    // a settings with nothing to change, an empty value, or a value that is not a string
+    CHECK(contains(serverError("{\"kind\":\"settings\"}"), "neither \"model\" nor \"effort\""));
+    CHECK(contains(serverError("{\"kind\":\"settings\",\"model\":\"\"}"), "empty \"model\""));
+    CHECK(contains(serverError("{\"kind\":\"settings\",\"effort\":3}"), "\"effort\" that is not a string"));
     // a byte-order mark
     CHECK(contains(serverError("\xEF\xBB\xBF{\"kind\":\"stop\",\"turn\":1}"), "byte-order mark"));
     // not JSON, nested too deeply, or not one object

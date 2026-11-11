@@ -1,5 +1,6 @@
 # CI for nexus: the build with its unit and functional tests, the model under the sanitizers, and the TLA+ models
-# with their trace checks, as three jobs in parallel on the fleet's macOS runners (never GitHub-hosted); and the build
+# with their trace checks, and the Claude driver (drivers/claude), as four jobs in parallel on the fleet's macOS runners
+# (never GitHub-hosted); and the build
 # without the window, its unit and functional tests and the sanitizers' programs on the fleet's Linux runners. Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
@@ -180,6 +181,46 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+
+  # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
+  # tests (a scripted query: no process, clock or network), and the protocol's conformance cases run against it as a
+  # process (ctest -L claude_driver). Node comes from the runner's machine (the fleet's sdk/bin on the runner's PATH),
+  # never installed here; npm ci takes the pinned packages from package-lock.json, without the optional per-platform
+  # Claude executable the tests never run. The live test (npm run test:live) spends a subscription and never runs here.
+  claude-driver:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, macOS, ARM64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Node from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          echo "node $(node --version), npm $(npm --version) on $(hostname -s)"
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
+          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      - name: Install the pinned packages
+        working-directory: drivers/claude
+        run: npm ci --omit=optional --no-audit --no-fund
+      - name: Compile, lint and unit tests
+        working-directory: drivers/claude
+        run: npm run check
+      - name: Configure (the protocol and the conformance test only)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF
+      - name: Build the conformance test
+        run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
+      - name: Conformance of the Claude driver
+        run: ctest --test-dir build -L claude_driver -j "$JOBS" --output-on-failure --no-tests=error
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
@@ -376,6 +417,19 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
+      # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
+      - name: Node from the runner's machine, and the Claude driver built
+        shell: bash
+        working-directory: drivers/claude
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          npm ci --omit=optional --no-audit --no-fund
+          npm run build
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
@@ -384,7 +438,7 @@ jobs:
         run: cmake --build build --parallel "$JOBS" --target model_checks
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
       # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
-      # model_nightly (the window model's three largest, the link's and the store's), run in nightly.yml; every property is still checked here, on the smaller instances.
+      # model_nightly (the window model's three largest, the link's, the store's, and the Claude driver's with both settings), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
 
