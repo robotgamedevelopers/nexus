@@ -284,8 +284,8 @@ jobs:
           }
           "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
           # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
-          # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short starts
-          # again from nothing on the next run.
+          # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short would
+          # start again from nothing on the next run.
           $deps = Get-Content -Raw "$prax\cmake\dependencies.cmake"
           $asset = 'windows-x86_64.zip'
           $hash = [regex]::Match($deps, 'PR_SLANG_ASSET ' + [regex]::Escape($asset) + '\)\s+set\(PR_SLANG_HASH ([0-9a-f]{64})').Groups[1].Value
@@ -296,7 +296,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $slang | Out-Null
           $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
           if ($have -ne $hash) {
-            Invoke-WebRequest -Uri ($url + $asset) -OutFile "$slang\$file.partial"
+            # curl.exe resumes a download that an earlier run's 2 minutes cut short (-C -).
+            curl.exe -fsSL --retry 3 -C - -o "$slang\$file.partial" ($url + $asset)
             $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
             if ($got -ne $hash) { throw "Slang's $file has sha256 $got, and Prax pins $hash" }
             Move-Item -Force "$slang\$file.partial" "$slang\$file"
