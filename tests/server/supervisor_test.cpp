@@ -620,6 +620,31 @@ void testQueue() {
         CHECK(s.queue() == std::vector<std::string>{"q1"});     // "x" waits ahead of it
     }
     {
+        // With no driver configured nothing is taken, at a turn's end or a restart: the queue stays as it is until a
+        // driver is configured and the next event takes the oldest. A prompt still waiting fails its start, honestly.
+        Supervisor s = working();
+        s.configure({}, "/w", "the test's table");
+        s.queued("q1", kStart + 2);
+        Output o = s.message(ok, kStart + 3);
+        CHECK(o.taken == 0 && o.commands.empty() && s.queue() == std::vector<std::string>{"q1"});
+        s.configure({"drv"}, "/w", "the test's table");
+        o = s.queued("q2", kStart + 4);
+        CHECK(o.taken == 1 && sends(o, 2, "q1") && s.queue() == std::vector<std::string>{"q2"});
+        Config none = config();
+        none.command.clear();
+        sync::DriverState open;
+        open.nextTurn = 4;
+        open.openTurn = 3;
+        Output first;
+        Supervisor r(none, open, kStart, &first, {"q1"});
+        CHECK(whats(first) == std::vector<What>{What::Cut} && first.taken == 0 && first.commands.empty());
+        CHECK(r.queue() == std::vector<std::string>{"q1"} && r.state().waiting.empty());
+        Output started;
+        Supervisor w(none, sync::DriverState{}, kStart, &started);
+        o = w.prompt("x", kStart);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && o.commands[0].argv.empty());
+    }
+    {
         // A server stopping takes nothing from the queue: it stays, durable, for the next server.
         Supervisor s = make();
         s.shutdown(kStart);

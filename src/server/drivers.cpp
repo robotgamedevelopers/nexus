@@ -214,9 +214,9 @@ Supervisor& Drivers::pending(const std::string& tab, const ResolvedDriver& drive
     auto it = tabs_.find(tab);
     if (it != tabs_.end()) {
         pendingSup_ = it->second.sup;
-        if (driver.problem.empty()) {
-            pendingSup_->configure(driver.command, driver.cwd, options_.table);
-        }
+        // A friend whose driver no longer resolves has none: what is queued stays queued until it has one again.
+        pendingSup_->configure(driver.problem.empty() ? driver.command : std::vector<std::string>{}, driver.cwd,
+            options_.table);
     } else {
         const sync::StoredTab* stored = store_.find(tab);
         pendingSup_.emplace(config(tab, driver), stored != nullptr ? stored->driver : sync::DriverState{}, now,

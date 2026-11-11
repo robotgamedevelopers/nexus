@@ -65,7 +65,8 @@ constexpr std::size_t kReportBytes = 1024;
 // Which friend, how to start its driver, and the bounds.
 struct Config {
     std::string name;                   // the friend's name, as the notices say it
-    std::vector<std::string> command;   // the driver's program and its arguments, before --cwd and --resume
+    std::vector<std::string> command;   // the driver's program and its arguments, before --cwd and --resume; empty
+                                        // while the friend has no driver configured, and then nothing is taken
     std::string cwd;                    // the directory the harness works in
     std::string configured;             // where the driver is configured, for the fixes notices give
     Timing timing;
@@ -140,7 +141,7 @@ public:
     // The server is stopping: the driver is ended, and none is started again.
     Output shutdown(Millis now);
 
-    // The driver's command, for the next start.
+    // The driver's command, for the next start: empty when none is configured, and then no queued prompt is taken.
     void configure(std::vector<std::string> command, std::string cwd, std::string configured);
 
     std::optional<Millis> deadline() const;     // when tick() next has something to do

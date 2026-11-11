@@ -238,6 +238,31 @@ void queue(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.find("ada")->queue.empty());
 }
 
+// The drivers file loses ada mid-turn: a prompt queued then stays queued at the turn's end, since there is no driver
+// to give it to; once ada is configured again, the next action takes the oldest, one per turn.
+void queueUnconfigured(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"Second\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.send("go");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    const std::string table = dir + "/drivers";
+    std::filesystem::rename(table, table + ".away");
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "next"}));
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Stop, "ada", ""}));
+    CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped."}));
+    CHECK(s.store.find("ada")->queue == std::vector<std::string>{"next"});
+    CHECK(s.driver().waiting.empty());
+    std::filesystem::rename(table + ".away", table);
+    CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "later"}));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped.", "P next", "F Second",
+        "P later"}));
+    CHECK(s.store.find("ada")->queue.empty());
+}
+
 // No hello: ended after the hello deadline, counted as a failed start, and started again for the prompt still waiting.
 void silent(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, "hang\n");
@@ -470,6 +495,29 @@ int main(int argc, char** argv) {
             if (failures != 0) {
                 dump(s);
             }
+        } else if (name == "restart_unconfigured") {
+            // The server dies mid-turn with a prompt queued, and starts again with ada no longer configured: the turn
+            // is cut, and the queued prompt stays queued, with no driver started for it.
+            {
+                Server s(dir);
+                setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"a\"}\nhang\n");
+                s.send("first");
+                CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+                CHECK(s.hub->apply(sync::Action{s.num++, sync::ActionKind::Queue, "ada", "queued"}));
+                CHECK(s.store.find("ada")->queue == std::vector<std::string>{"queued"});
+            }
+            writeFile(dir + "/drivers", "");
+            Server s(dir);
+            CHECK(s.driver().openTurn == 0);
+            CHECK(s.driver().waiting.empty());
+            CHECK(s.store.find("ada")->queue == std::vector<std::string>{"queued"});
+            const std::vector<std::string> t = s.transcript();
+            CHECK(t.size() == 2 && has(t.back(), "nexus-server restarted while ada was answering"));
+            CHECK(s.drivers->pid("ada") < 0);
+            s.end();
+            if (failures != 0) {
+                dump(s);
+            }
         } else {
             Server s(dir);
             using Case = void (*)(Server&, const std::string&, const std::string&);
@@ -477,7 +525,7 @@ int main(int argc, char** argv) {
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
-                {"escaped_output", escapedOutput}, {"queue", queue}};
+                {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

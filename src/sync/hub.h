@@ -90,9 +90,9 @@ private:
 
 // The bounds that keep every diff small (sync/tabs.h): no single text larger than `text` bytes, no queue longer than
 // `queue` prompts or `queueBytes` bytes, at most `tabs` tabs, and each transcript's tail by `tail`. With the defaults a
-// diff from the empty state is at most 16 tabs of (a 32 KiB entry or a 16 KiB tail) and a 32 KiB queue: about 1 MiB,
-// under the 4 MiB mosh can carry (its compressor's buffer, mosh src/network/compressor.h). These numbers follow from
-// that limit and are not measured.
+// diff from the empty state is at most 16 tabs of (a 32 KiB closed entry or a 16 KiB tail), a 32 KiB open entry and a
+// 32 KiB queue: 96 KiB a tab, about 1.5 MiB in all, under the 4 MiB mosh can carry (its compressor's buffer, mosh
+// src/network/compressor.h). These numbers follow from that limit and are not measured.
 struct Limits {
     std::size_t text = 32 * 1024;
     std::size_t queue = 8;

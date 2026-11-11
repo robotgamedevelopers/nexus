@@ -435,9 +435,11 @@ void Supervisor::startDriver(Millis now) {
         return;
     }
     std::vector<std::string> argv = config_.command;
-    argv.insert(argv.end(), {"--cwd", config_.cwd});
-    if (!state_.session.empty()) {
-        argv.insert(argv.end(), {"--resume", state_.session});
+    if (!argv.empty()) {        // none configured: the start fails, as no program is configured
+        argv.insert(argv.end(), {"--cwd", config_.cwd});
+        if (!state_.session.empty()) {
+            argv.insert(argv.end(), {"--resume", state_.session});
+        }
     }
     command(Command::Kind::Start, std::move(argv));
     phase_ = Phase::Starting;
@@ -466,12 +468,13 @@ void Supervisor::writeNext() {
     phase_ = Phase::Working;
 }
 
-// With no turn open, nothing waiting and starting not held back, the oldest queued prompt leaves the queue and waits,
-// shown as the person's entry: one per turn. One that cannot be written as a protocol line (the hub's text limit
-// keeps every prompt far within the line limit, so only text that is not UTF-8) leaves the queue with a notice, and
-// the next is taken in its place.
+// With a driver configured, no turn open, nothing waiting and starting not held back, the oldest queued prompt leaves
+// the queue and waits, shown as the person's entry: one per turn. One that cannot be written as a protocol line (the
+// hub's text limit keeps every prompt far within the line limit, so only text that is not UTF-8) leaves the queue with
+// a notice, and the next is taken in its place.
 void Supervisor::take() {
-    while (state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ && !queue_.empty()) {
+    while (!config_.command.empty() && state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ &&
+           !queue_.empty()) {
         std::string text = std::move(queue_.front());
         queue_.erase(queue_.begin());
         ++out_.taken;
