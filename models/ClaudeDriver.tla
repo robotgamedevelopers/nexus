@@ -423,7 +423,8 @@ NoLatchedStop ==
 \* Every turn sent ends with its done, unless the driver exits first.
 EveryTurnEnds == \A n \in Turns : open = n ~> (open # n \/ phase = "ended")
 
-\* An interrupt is answered or dropped with its harness, so the next turn is never held for good.
-InterruptsAnswered == intFor # 0 ~> intFor = 0
+\* An interrupt is answered or dropped with its harness, so the next turn is never held for good (unless the driver
+\* exits, which ends everything).
+InterruptsAnswered == intFor # 0 ~> (intFor = 0 \/ phase = "ended")
 
 =============================================================================
