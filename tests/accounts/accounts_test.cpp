@@ -205,7 +205,7 @@ sync::Action act(std::uint64_t num, sync::ActionKind kind, std::string friendNam
 std::string lastNotice(const sync::SessionStore& store, sync::SessionId id) {
     const sync::StoredSession* s = store.find(id);
     for (auto it = s->transcript.rbegin(); it != s->transcript.rend(); ++it) {
-        if ((*it)->kind == EntryKind::Notice) {
+        if ((*it)->kind == sync::EntryKind::Notice) {
             return (*it)->text;
         }
     }
