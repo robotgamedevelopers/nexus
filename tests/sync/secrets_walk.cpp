@@ -68,6 +68,11 @@ std::size_t pick(std::size_t n) { return static_cast<std::size_t>(next() % n); }
 
 std::string q(const std::string& s) { return "\"" + s + "\""; }
 
+// A value's token as the trace writes it: a model value (v1, v2: SecretsTraceData's constants, made model values by
+// SecretsTrace.cfg, as the model checks' configs make theirs), or the string "none". A model value, unlike a string,
+// compares with the ids beside it in a record (Secrets.tla NoValueIn).
+std::string val(const std::string& token) { return token == kNone ? q(token) : token; }
+
 [[noreturn]] void fail(const std::string& what) {
     std::fprintf(stderr, "secrets_walk: %s\n", what.c_str());
     std::exit(1);
@@ -222,7 +227,8 @@ struct Walk {
             if (echo && event == "stored") {
                 event = tokenOf(keeper.files[l.account]);
             }
-            log.push_back("[id |-> " + std::to_string(l.id) + ", event |-> " + q(event) + "]");
+            log.push_back("[id |-> " + std::to_string(l.id) + ", event |-> " + (event == l.event ? q(event) : val(event)) +
+                          "]");
         }
         for (const sync::SecretReply& r : events.replies) {
             clean(r.reason, "an answer to an asker");
@@ -266,7 +272,7 @@ struct Walk {
         const sync::SecretRequest* r = w.prompt.showing();
         const std::string& typed = w.prompt.typed().bytes();
         return "[id |-> " + std::to_string(r != nullptr ? r->id : 0) + ", typed |-> " +
-            q(typed.empty() ? std::string(kNone) : tokenOf(typed)) + "]";
+            val(typed.empty() ? std::string(kNone) : tokenOf(typed)) + "]";
     }
 
     std::string doneOf(const Window& w) const {
@@ -301,7 +307,7 @@ struct Walk {
 
     static std::string flight(const Flight& m) {
         return "[id |-> " + std::to_string(m.id) + ", kind |-> " + q(m.secret ? "secret" : "cancel") + ", v |-> " +
-            q(m.secret ? m.token : kNone) + "]";
+            val(m.secret ? m.token : kNone) + "]";
     }
 
     std::string record() const {
@@ -325,7 +331,7 @@ struct Walk {
         for (std::size_t i = 0; i < kAccts.size(); ++i) {
             auto it = keeper.files.find(kAccts[i]);
             o << (i == 0 ? "" : " @@ ") << q(kAccts[i]) << " :> "
-              << q(it == keeper.files.end() ? std::string(kNone) : tokenOf(it->second));
+              << val(it == keeper.files.end() ? std::string(kNone) : tokenOf(it->second));
         }
         o << "), stores |-> (";
         for (std::uint64_t id = 1; id <= kMaxRequests; ++id) {
@@ -441,7 +447,7 @@ int main(int argc, char** argv) {
             // what was pasted, and the model's dialog the value it carries.
             const char* pads[] = {"", " ", "\n", "\r\n"};
             c.prompt.type(kValues[v] + pads[pick(4)]);
-            fields = "c |-> " + q(c.name) + ", v |-> " + q(kTokens[v]);
+            fields = "c |-> " + q(c.name) + ", v |-> " + val(kTokens[v]);
         } else if (choice < 640) {
             const sync::SecretRequest* r = c.prompt.showing();
             if (r == nullptr || c.prompt.typed().empty() ||
@@ -560,11 +566,12 @@ int main(int argc, char** argv) {
            "\\* Written by tests/sync/secrets_walk: seed " << args[0] << ", " << steps << " steps"
         << (faulty.empty() ? std::string() : ", faulty " + faulty) << ".\n"
         << "EXTENDS TLC\n"
+        << "CONSTANTS v1, v2\n"
         << "TraceClients == {\"c1\", \"c2\", \"c3\"}\n"
         << "TraceOldClients == {\"c3\"}\n"
         << "TraceAccounts == {\"a1\", \"a2\"}\n"
         << "TraceAskers == {\"nexus\", \"s1\", \"s2\"}\n"
-        << "TraceValues == {\"v1\", \"v2\"}\n"
+        << "TraceValues == {v1, v2}\n"
         << "TraceMaxRequests == " << kMaxRequests << "\n"
         << "TraceMaxRestarts == " << kMaxRestarts << "\n"
         << "Trace == <<\n";
