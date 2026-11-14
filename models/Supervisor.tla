@@ -147,11 +147,13 @@ Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
 WriteNext(x) == WriteNextWith(Told, x)
 
 \* Start a driver when a prompt waits and none is alive, with --resume the last session id, under the session's
-\* account.
+\* account. With no driver configured the start names no program, and so nothing to resume: it fails, as the exit
+\* that follows says.
 StartDriver(x) ==
     IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down
     THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
-                    !.resumed = x.session, !.drv = x.account, !.told = Default, !.retiring = FALSE]
+                    !.resumed = IF x.unconf THEN "" ELSE x.session, !.drv = x.account, !.told = Default,
+                    !.retiring = FALSE]
     ELSE x
 
 \* With no turn open, a driver started under an account that is no longer the session's, or told a field the session
@@ -518,8 +520,9 @@ TextKept ==
 \* No prompt is written to a driver that said it has no credential: it exits next.
 NoSendWithoutCredential == [][Len(s'.written) > Len(s.written) => ~s.nocred]_vars
 
-\* A driver is started only when not held back, and with --resume the last session id.
-StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = s'.session]_vars
+\* A driver is started only when not held back, and with --resume the last session id (a start with no driver
+\* configured names no program, and resumes nothing).
+StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = IF s'.unconf THEN "" ELSE s'.session]_vars
 
 \* A send is written with the setting the session has when it is written: a change applies from the next turn.
 WrittenWithSetting ==

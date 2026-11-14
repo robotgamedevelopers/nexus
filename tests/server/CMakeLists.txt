@@ -123,7 +123,7 @@ tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTr
          PROPERTY TraceMatches SUPWALK SEED 12 STEPS 600 FAULTY queue)
 # The account's seed is one whose walk sets an account before a restart.
 tlc_test(tlc_supervisor_trace_faulty_account_rejected SupervisorTrace SupervisorTrace.cfg invariant
-         PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY account)
+         PROPERTY TraceMatches SUPWALK SEED 10 STEPS 600 FAULTY account)
 # The code's activity (the window's state cursor) is bound too: a walk whose recorded activity reads a crash as idle is
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
