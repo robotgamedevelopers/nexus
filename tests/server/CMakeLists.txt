@@ -45,25 +45,44 @@ if(NOT WIN32)
     add_executable(drivers_functional drivers_functional.cpp)
     target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
     target_compile_options(drivers_functional PRIVATE ${warnings})
+    target_include_directories(drivers_functional PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     add_dependencies(drivers_functional nexus_fake_driver)
 endif()
 
-add_dependencies(model_checks supervisor_walk supervisor_test)
+add_dependencies(model_checks supervisor_walk supervisor_test secrets_test)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown
-              restart settings account place activity)
+              restart settings account place activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
 add_test(NAME friends_unit_driver_table COMMAND driver_table_test)
 set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30)
 
+# The secret dialog (docs/secrets.md): the desk, the prompt, their codecs, the hub over the server's store, the account's
+# file at every crash point (all on MemFs: unit), and the leak test, which searches every output for the fake value.
+# files_disk is functional: the file's and its directory's modes on the real filesystem, in a directory of its own.
+add_executable(secrets_test secrets_test.cpp)
+target_link_libraries(secrets_test PRIVATE nexus_durable nexus_driver)
+target_compile_options(secrets_test PRIVATE ${warnings})
+target_include_directories(secrets_test PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+foreach(group desk prompt codecs hub files files_crash leak leak_scan)
+    add_test(NAME secrets_unit_${group} COMMAND secrets_test ${group})
+    set_tests_properties(secrets_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+if(NOT WIN32)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/secrets_work)
+    add_test(NAME secrets_functional_files_disk COMMAND secrets_test files_disk
+             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/secrets_work)
+    set_tests_properties(secrets_functional_files_disk PROPERTIES LABELS functional TIMEOUT 30)
+endif()
+
 # Each case in a directory of its own under the build tree.
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured sign_in no_credential usage_limit no_account instance_dir
-                 instance_elsewhere instance_moved instance_default instance_removed held)
+                 instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -76,6 +95,7 @@ endif()
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 CAP 75)
+tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)

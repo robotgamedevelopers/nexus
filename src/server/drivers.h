@@ -77,6 +77,8 @@ public:
                                         // this is empty, starts no driver here yet
         std::string hostName{};         // this machine's full host name, which an instance may name instead
                                         // (server/home.h sameMachine)
+        bool secrets = false;           // the hub takes secret asks (Hub::secretsWith): each driver is told so after
+                                        // its hello, and its ask-secret lines go to the hub
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.
@@ -103,6 +105,16 @@ public:
     void configured(sync::SessionId id, const sync::SessionInfo& info) override;
     // sync::Responder: a session just made shows down when its friend has no driver configured.
     void made(sync::SessionId id) override;
+    // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
+    // is held back goes on (Supervisor::signedIn), without a restart.
+    void signedIn(const std::string& account) override;
+
+    // The secret dialog (docs/secrets.md): a driver's ask-secret goes to the hub once every slot is served (serve());
+    // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its friend, a file its
+    // provider does not document, a reason that is not a safe line) ends the driver as a line refused. The one answer
+    // to an ask comes back as its `secret` line (server/secret_lines.h), written to session `id`'s driver if that is
+    // still alive past its hello (else it has nowhere to go, and is dropped). It never holds the value.
+    void tellSecret(sync::SessionId id, const std::string& line);
     // The server is stopping: every driver is ended. Serve on until alive() is false.
     bool shutdown(Millis now);
     bool alive() const;     // any driver process not yet collected
@@ -161,7 +173,8 @@ private:
     bool commit(sync::SessionId id, const Output& out, bool* changed = nullptr);
     void carryOut(sync::SessionId id, Slot& t, const Command& c, std::vector<Output>& more, Millis now);
     void flushInput(Process& p, Millis now);
-    void readSome(Slot& t, Output& out, Millis now, std::size_t limit);
+    void tell(Process& p, const std::string& line, Millis now);
+    void readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std::size_t limit);
     void collect(sync::SessionId id, Slot& t, Output& out, Millis now);
 
     const sync::SessionStore& store_;
@@ -181,6 +194,12 @@ private:
         int sig = 0;
     };
     std::vector<Held> held_;
+    // The drivers' asks for secrets read this round, for the hub once every slot is served.
+    struct Ask {
+        sync::SessionId id = 0;
+        driver::AskSecret ask;
+    };
+    std::vector<Ask> asks_;
 };
 
 } // namespace nexus::server

@@ -23,6 +23,7 @@ This page is the whole scheme, kept small so that moving it to a schema tool lat
 | --- | --- |
 | 1 | The first (main before formats): nothing framed, no activity, entry kinds Person 0, Friend 1, Notice 2. A reader of 1 reads exactly 1. |
 | 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
+| 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's friend, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
 
 Fields appended to a format's frames do not change its number: a reader from before them skips them (rule 1), and
 nothing about them makes an older reader wrong. They are listed in the table in the order they were appended, and a
@@ -35,6 +36,8 @@ later field goes after them.
 - Unknown activity: **Busy** (the pulsing light blue). Something a later server knows is going on; busy says work
   may be under way without claiming the friend is waiting (idle) or broken (down). A stop is always allowed.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
+- Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
+  action; the server, which knows the link's format, never offers that window a request.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.

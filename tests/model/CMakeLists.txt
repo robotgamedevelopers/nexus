@@ -64,13 +64,15 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (turn, resume, queue).
 # With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
 # (stay, harness). Called from tests/accounts.
+# With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
+# one of its faults (store-late, echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
 # FAULTY one of its faults (settings, refusal, latch); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
 # tests/driver.
 find_program(NEXUS_NODE node)
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;DRIVERWALK;DRIVERTESTS"
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
@@ -97,6 +99,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
+    elseif(T_SECWALK)
+        list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_ACCWALK)
         list(APPEND defs -DACCWALK=$<TARGET_FILE:accounts_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SUPWALK)
@@ -303,7 +307,7 @@ tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrac
 
 # The secret dialog (docs/secrets.md): Secrets.tla on three small instances, every property, and a witness per
 # property, per commit (each a second or two); its three larger instances nightly (MCSecretsTwo.cfg took 7 s of the
-# model job's 2 minutes). Bound to the code by trace checks when the code lands (roadmap: 5b).
+# model job's 2 minutes). Bound to the code by trace checks: tests/sync's secrets_walk, tlc_secrets_trace_*.
 tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
 tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
 tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)

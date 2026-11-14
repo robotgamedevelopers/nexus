@@ -50,6 +50,7 @@ public:
     int waitMs();
     bool ended() const;         // the client shut the session down, and its shutdown was acknowledged
     std::uint64_t applied() const;
+    std::uint32_t format() const;   // the state format the link agreed
 
 private:
     struct Impl;

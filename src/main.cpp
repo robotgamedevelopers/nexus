@@ -42,6 +42,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -79,6 +80,7 @@
 #include "friends.h"
 #include "hitch.h"
 #include "model.h"
+#include "no_core.h"
 #include "overlay.h"
 #include "platform.h"
 #include "style.h"
@@ -625,6 +627,10 @@ void seedDemo(Model& model, std::size_t tab) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // No core file holds a secret typed into the dialog (no_core.h).
+    if (!nexus::noCoreDumps()) {
+        std::fprintf(stderr, "nexus: core dumps could not be turned off: %s\n", std::strerror(errno));
+    }
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool tabGiven = false;

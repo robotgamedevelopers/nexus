@@ -1152,18 +1152,42 @@ void state_format_2_reads_later_formats() {
     diff.u64(1);                // session 1
     diff.byte(1);
     diff.str(session.take());
-    diff.str("a field a later format adds after the sessions");
+    const std::string sessions = diff.take();
+    // Format 2: what follows the sessions is a later format's, skipped.
     Sessions s;
-    CHECK(s.format() == kStateFormat);
-    s.apply_string(diff.take());
-    const SessionView* v = s.find(1);
-    CHECK(v != nullptr);
-    if (v != nullptr) {
-        CHECK(v->info.friendName == "ada" && v->activity == Activity::Busy);
-        CHECK(v->entries.size() == 1 && v->entries[0]->kind == EntryKind::Notice && v->entries[0]->closed);
-        CHECK(v->entries[0]->text == "a line of a kind this build does not know");
-        CHECK(v->queue == std::vector<std::string>{"queued"});
-        CHECK(v->info.instance == "studio");
+    s.setFormat(2);
+    Writer later;
+    later.str("a field a later format adds after the sessions");
+    s.apply_string(sessions + later.take());
+    // Format 3: the secret requests follow the sessions, each framed, so a field a later format adds to a request, and
+    // one it adds after them, are skipped.
+    Writer request;
+    request.u64(4);
+    request.str("work");
+    request.str("oauth-token");
+    request.u64(1);
+    request.str("ada");
+    request.str("the login expired");
+    request.str("a field a later format adds to a request");
+    Writer requests;
+    requests.u64(1);
+    requests.str(request.take());
+    requests.str("a field a later format adds after the requests");
+    Sessions three;
+    CHECK(three.format() == kStateFormat && kStateFormat == kSecretsFormat);
+    three.apply_string(sessions + requests.take());
+    const std::vector<SecretRequest> asked{SecretRequest{4, "work", "oauth-token", 1, "ada", "the login expired"}};
+    CHECK(three.requests() == asked);
+    for (const Sessions* read : {&s, &three}) {
+        const SessionView* v = read->find(1);
+        CHECK(v != nullptr);
+        if (v != nullptr) {
+            CHECK(v->info.friendName == "ada" && v->activity == Activity::Busy);
+            CHECK(v->entries.size() == 1 && v->entries[0]->kind == EntryKind::Notice && v->entries[0]->closed);
+            CHECK(v->entries[0]->text == "a line of a kind this build does not know");
+            CHECK(v->queue == std::vector<std::string>{"queued"});
+            CHECK(v->info.instance == "studio");
+        }
     }
 }
 
@@ -1213,7 +1237,9 @@ void sessions_instance_appended() {
         }
         return Sessions(std::move(v));
     };
+    // Main's bytes are format 2's: a link agrees its format, so they are read in format 2.
     Sessions read;
+    read.setFormat(2);
     read.apply_string(mainSessionFrame(nullptr));
     const SessionView* a = read.find(sid("ada"));
     CHECK(a != nullptr && a->info.account == "work" && a->info.instance.empty());
@@ -1221,9 +1247,15 @@ void sessions_instance_appended() {
     // New to old: this build's bytes are main's, the instance appended inside the frame.
     SessionView one = tailOf(sid("ada"), SessionInfo{"ada", "claude", "work", "", "", "studio"},
         {entry(EntryKind::Person, "hi")}, {}, Tail{});
-    const Sessions b({std::make_shared<const SessionView>(one)});
+    Sessions b({std::make_shared<const SessionView>(one)});
     const std::string studio = "studio";
+    // In format 3 the secret requests follow, none here.
+    Writer none;
+    none.u64(0);
+    CHECK(b.init_diff() == mainSessionFrame(&studio) + none.take());
+    b.setFormat(2);
     CHECK(b.init_diff() == mainSessionFrame(&studio));
+    b.setFormat(kStateFormat);
     Sessions c;
     c.apply_string(b.init_diff());
     CHECK(c == b && c.find(sid("ada"))->info.instance == "studio");
@@ -1269,7 +1301,7 @@ void state_files() {
     Sessions busy = mainState("The nightly");
     std::string why;
     Sessions read;
-    CHECK(stateFile(busy).rfind("nexus-state 2\n", 0) == 0);
+    CHECK(stateFile(busy).rfind("nexus-state " + std::to_string(kStateFormat) + "\n", 0) == 0);
     CHECK(readStateFile(stateFile(busy), &read, &why) && read == busy);
     CHECK(readStateFile("nexus-state 1\n" + fixture("main-state-1.init"), &read, &why) && read == busy);
     CHECK(readStateFile("nexus-state 9\n" + busy.init_diff(), &read, &why) && read == busy);

@@ -104,6 +104,10 @@ public:
     store::Status sync_dir(const std::string& d) override { return inner_->sync_dir(d); }
     store::Status rename(const std::string& f, const std::string& t) override { return inner_->rename(f, t); }
     store::Status remove(const std::string& p) override { return inner_->remove(p); }
+    store::Status write_new(const std::string& p, std::span<const std::uint8_t> d) override {
+        return inner_->write_new(p, d);
+    }
+    store::Status private_dir(const std::string& d) override { return inner_->private_dir(d); }
 
 private:
     std::unique_ptr<store::Fs> inner_;

@@ -53,6 +53,7 @@ reports every hitch with its frame and phases.
 | `resizing` | a live resize, step by step, over a long history |
 | `scrolling_up_a_long_history` | 5,000 entries scrolled up from the end a screen a frame and back, the estimated heights replaced by measured ones as items come into sight |
 | `fallback_fonts` | emoji, CJK and Arabic text for the first time |
+| `secret_dialog` | a secret request arrives over a long history and its dialog opens (docs/secrets.md); keys typed and taken back, a 222-byte token pasted (shown masked), Enter sends it in one action and the dialog closes; a second request cancelled with Escape |
 | `slow_ssh_link` | the real link over an ssh that hangs for 3 s and fails |
 
 The preference files sit on a stand-in disk that takes 200 ms a write. Usage:

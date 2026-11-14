@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -36,6 +37,7 @@
 
 #include "accounts/registry.h"
 #include "sync/actions.h"
+#include "sync/secrets.h"
 #include "sync/sessions.h"
 
 namespace nexus::sync {
@@ -160,6 +162,20 @@ public:
     virtual void configured(SessionId id, const SessionInfo& info) = 0;
     // Session `id` was just made, durable: what the responder shows of it from the start (its activity).
     virtual void made(SessionId id) { (void)id; }
+    // The login of `account` just arrived (the secret dialog stored it): it counts as signed in from now, without a
+    // restart, and each of its sessions held back for want of it goes on.
+    virtual void signedIn(const std::string& account) { (void)account; }
+};
+
+// Where the secret dialog's effects go besides the sessions (sync/secrets.h): each asker's one answer, and the log's
+// lines. The notes go into the asker's session as notices, by the hub.
+class SecretEvents {
+public:
+    virtual ~SecretEvents() = default;
+    virtual void answered(const SecretReply& reply) = 0;
+    virtual void logged(const SecretLog& line) = 0;
+    // Every note, whether or not its asker's session is held (the walk reads them).
+    virtual void noted(const SecretNote& note) { (void)note; }
 };
 
 // Where the accounts and friends are kept between runs: nexus-server's config repository (server/config_repo.h), the
@@ -258,7 +274,35 @@ public:
     // why, when the session is not held, the hub holds no accounts, or there was none to move to.
     bool rotate(SessionId id, std::string* why = nullptr);
 
+    // The secret dialog (sync/secrets.h, docs/secrets.md, models/Secrets.tla). Until secretsWith() the hub takes no
+    // asks and every secret answer or cancel is counted and dropped. `keeper` writes a value to its account's file,
+    // `events` takes the askers' answers and the log's lines, `takers` says whether any connected window can take a
+    // request (a window of format 3 or later), and `clock` is now, in milliseconds, for the deadlines.
+    void secretsWith(SecretKeeper* keeper, SecretEvents* events, std::function<bool()> takers,
+                     std::function<std::uint64_t()> clock);
+    // An ask for `what` of `account`, from `asker` with its one-line reason `why`. Malformed, with no request made and
+    // no id minted (false, with `refused` saying why): `account` or `what` is not a name, the hub holds no accounts or
+    // none named `account`, the asker's friend is not linked to it (nexus itself, session 0, asks for any), its
+    // provider documents no file `what`, or `why` is not a safe line (isSecretWhy). An asker with an ask open already,
+    // or kSecretAsksPerWindow asks in the last kSecretAskWindowMs, is answered busy at once, with no request made and
+    // no id minted (the answer's id is 0). Otherwise an id is minted (durable: the store's counter under
+    // kSecretIdsClient, so never reused across restarts), and the request opens, or is refused at once (busy,
+    // no-client) with its answer to the asker. False, with why, when the store did not take the id.
+    bool askSecret(const SecretAsker& asker, const std::string& account, const std::string& what,
+                   const std::string& why, std::string* refused = nullptr);
+    // Every open request past its deadline is refused (timeout).
+    void expireSecrets();
+    // When expireSecrets() next has something to do (by the clock given to secretsWith), or none.
+    std::optional<std::uint64_t> secretDeadline() const { return desk_.deadline(); }
+    // The server is ending: every open request is dropped unanswered, each with its log line.
+    void dropSecrets();
+    const SecretDesk& secrets() const { return desk_; }
+    // The walk's faulty run alone: SecretDesk::injectEchoFault.
+    void injectSecretEchoFault() { desk_.injectEchoFault(); }
+
 private:
+    void secretEffects(const SecretEffects& effects);
+    bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
     bool set(const Action& action, std::string* why, const std::string& client);
     bool accountAction(const Action& action, std::string* why, const std::string& client);
@@ -281,6 +325,12 @@ private:
     AccountsKeeper* keeper_ = nullptr;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
+    SecretDesk desk_;
+    SecretKeeper* secretKeeper_ = nullptr;
+    SecretEvents* secretEvents_ = nullptr;
+    std::function<bool()> takers_;
+    std::function<std::uint64_t()> clock_;
+    std::map<SessionId, std::deque<std::uint64_t>> askTimes_;   // each asker's asks in the last kSecretAskWindowMs
 };
 
 } // namespace nexus::sync

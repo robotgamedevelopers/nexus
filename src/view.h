@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "pr/font_set.h"
@@ -64,6 +65,27 @@ struct Board {
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.
     virtual void home() = 0;
+};
+
+// The request a secret dialog shows (docs/secrets.md): never a value.
+struct SecretAsk {
+    std::uint64_t id = 0;       // the request's id: a new one opens the dialog afresh
+    std::string account;
+    std::string what;           // the file asked for, such as oauth-token
+    std::string asker;          // who asks: a friend, or empty for nexus itself
+    std::string why;            // the asker's one-line reason, shown as quoted text
+};
+
+// The secret dialog's side of the window, with a server (frame_host.h LinkSecrets over sync/secrets.h SecretPrompt).
+// Our own seam, so that the dialog runs in the headless window tests without a link. The value lives behind it, never in
+// the view.
+struct Secrets {
+    virtual ~Secrets() = default;
+    virtual const SecretAsk* showing() = 0;         // the request the dialog shows, or null for none
+    virtual std::string_view typed() = 0;           // the field's text, drawn masked, valid for the round
+    virtual void type(std::string_view text) = 0;   // the field's text changed
+    virtual void submit() = 0;                      // Enter: the value goes to the server, and the dialog closes
+    virtual void cancel() = 0;                      // Escape, or the dialog closed: the request is cancelled
 };
 
 // The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.
@@ -135,6 +157,9 @@ struct View {
     std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)
+    Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
+    std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
+    PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
     // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
     // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
     KitTabs pinnedTabs{prKitTabsCreate()};

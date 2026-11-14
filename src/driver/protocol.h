@@ -56,7 +56,23 @@ struct Settings {
     bool operator==(const Settings&) const = default;
 };
 
-using ServerMessage = std::variant<Send, Stop, Settings, Unknown>;
+// What this server takes beyond version 1, written right after the driver's hello: "secrets" means it takes
+// ask-secret (docs/secrets.md). A driver that does not know this kind skips it, and never asks.
+struct ServerInfo {
+    std::vector<std::string> features;
+    bool operator==(const ServerInfo&) const = default;
+};
+
+// The one answer to an ask-secret: stored, or refused with its reason. Never the value.
+struct SecretAnswer {
+    std::uint64_t ask = 0;
+    bool stored = false;
+    std::string reason;         // with refused: busy, no-client, cancelled, timeout or unwritable; with stored, empty
+                                // or unconfirmed (in its file, its durability not confirmed)
+    bool operator==(const SecretAnswer&) const = default;
+};
+
+using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswer, Unknown>;
 
 // ---- Driver to server ----
 
@@ -138,7 +154,17 @@ struct Error {
     bool operator==(const Error&) const = default;
 };
 
-using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, Done, Error, Unknown>;
+// An ask for a secret for an account (docs/secrets.md), from the AI's tool call: `ask` is the driver's own number for
+// it, unique within its process; `what` a file the account's provider documents; `why` one line the dialog shows.
+struct AskSecret {
+    std::uint64_t ask = 0;
+    std::string account;
+    std::string what;
+    std::string why;
+    bool operator==(const AskSecret&) const = default;
+};
+
+using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, Done, Error, AskSecret, Unknown>;
 
 // ---- Encoding and decoding ----
 

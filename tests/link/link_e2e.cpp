@@ -25,6 +25,11 @@
 //       write and its flush tells the driver nothing, shows the window nothing and acknowledges nothing; lost there (the
 //       server killed), the restarted server holds what was durable, and the window's action sent again is applied
 //       and sent to the driver once
+//   link_e2e <nexus-server> <dir> secret <nexus-fake-driver>
+//       the server started by the test under a HOME of its own in <dir>: ada's driver asks for a1's login, the window
+//       answers the request it sees with a fake value over the real link, the value lands in its file (0600) and,
+//       the server stopped, no run, hex, base64 or length of it is in any other file the run left (server.log with
+//       the server's and the driver's standard error, the driver's environment, the store) or the window's state
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -46,6 +51,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -56,6 +62,7 @@
 
 #include "fake_mosh.h"
 #include "friends.h"
+#include "leak_scan.h"
 #include "link/bootstrap.h"
 #include "link/client.h"
 #include "link/mosh_link.h"
@@ -160,7 +167,8 @@ struct Server {
     link::Bootstrap bootstrap(const std::string& host) const {
         link::Bootstrap b;
         b.host = host;
-        b.command = {binary, "new", "--dir", dir};
+        // Its HOME is the test's own, under `dir`, so no run reads or writes the machine's ~/.nexus.
+        b.command = {"/usr/bin/env", "HOME=" + dir + "/home", binary, "new", "--dir", dir};
         return b;
     }
 };
@@ -671,7 +679,8 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
 
 // ---- restart ----
 
-// `nexus-server serve --dir <dir>` as this test's child, its output to the server's log, so the test can kill it.
+// `nexus-server serve --dir <dir>` as this test's child, its output to the server's log, so the test can kill it; its
+// HOME is `dir`/home, as the bootstrap's is, never the machine's.
 pid_t startServe(const std::string& binary, const std::string& dir) {
     posix_spawn_file_actions_t files;
     posix_spawn_file_actions_init(&files);
@@ -684,8 +693,19 @@ pid_t startServe(const std::string& binary, const std::string& dir) {
     for (std::string& a : args)
         argv.push_back(a.data());
     argv.push_back(nullptr);
+    std::vector<std::string> env = {"HOME=" + dir + "/home"};
+    for (char** e = environ; *e != nullptr; ++e) {
+        if (std::strncmp(*e, "HOME=", 5) != 0) {
+            env.emplace_back(*e);
+        }
+    }
+    std::vector<char*> envp;
+    for (std::string& e : env) {
+        envp.push_back(e.data());
+    }
+    envp.push_back(nullptr);
     pid_t pid = -1;
-    if (posix_spawn(&pid, binary.c_str(), &files, nullptr, argv.data(), environ) != 0)
+    if (posix_spawn(&pid, binary.c_str(), &files, nullptr, argv.data(), envp.data()) != 0)
         pid = -1;
     posix_spawn_file_actions_destroy(&files);
     return pid;
@@ -952,6 +972,162 @@ int flush(const std::string& binary, const std::string& dir, const std::string& 
     return failures == 0 ? 0 : 1;   // the Server stops the restarted server
 }
 
+// ---- secret: a value pasted in a window reaches its account's file and nothing else ----
+
+// A fake value of `size` bytes, made up here from `seed`: letters and digits in no pattern any other text holds.
+std::string fakeValue(std::uint64_t seed, std::size_t size) {
+    const char* const letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    std::string out;
+    std::uint64_t x = seed;
+    while (out.size() < size) {
+        x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+        out += letters[(x >> 33) % 56];
+    }
+    return out;
+}
+
+// Every regular file under `dir` but `except`, with `scan` run over each: what gives the value away, and where.
+std::vector<std::string> leaksUnder(const std::string& dir, const std::string& except, const test::LeakScan& scan,
+                                    int* read) {
+    std::vector<std::string> found;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file() || entry.path() == std::filesystem::path(except)) {
+            continue;
+        }
+        ++*read;
+        const std::string what = scan.find(readFile(entry.path().string()));
+        if (!what.empty()) {
+            found.push_back(entry.path().string() + ": " + what);
+        }
+    }
+    return found;
+}
+
+// The real nexus-server (started by the test, its standard output and error to server.log) with a HOME of the test's
+// own under <dir>, never the machine's: its account a1 (claude) holds an old fake login, so ada's driver (the fake,
+// standing in for the claude harness) starts, and on the prompt asks for a1's oauth-token. The window, over the real
+// link (ssh, mosh's transport, ServerSession::take on the server), sees the request in its state and answers it with a
+// new fake value of 7919 bytes. The driver hears "stored" and nothing more; the file holds the value, mode 0600 in a
+// 0700 directory. Then, with the server stopped, every other byte the run left is searched for the value (any run of 8
+// of its bytes, its hex, its base64, its length beside the account's name; tests/leak_scan.h): server.log (the
+// server's standard error and the driver's, which echoes each line it reads), the driver's environment, what it read,
+// the store, the config, the drivers file, and the window's own state.
+int secret(const std::string& binary, const std::string& dir, const std::string& fake) {
+    Server server(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    const std::string home = dir + "/home";
+    const std::string accounts = home + "/.nexus/server/accounts";
+    const std::string file = accounts + "/a1/oauth-token";
+    std::error_code ec;
+    std::filesystem::create_directories(accounts + "/a1", ec);
+    for (const std::string& d : {home, home + "/.nexus", home + "/.nexus/server", accounts, accounts + "/a1"}) {
+        CHECK(::chmod(d.c_str(), 0700) == 0);
+    }
+    const std::string oldValue = fakeValue(2027, 3001);
+    const std::string value = fakeValue(7919, 7919);
+    CHECK(writeFile(file, oldValue));
+    CHECK(::chmod(file.c_str(), 0600) == 0);
+    const std::string heard = dir + "/heard";
+    CHECK(writeFile(dir + "/ada.script", "option echo-input\nrecord-env " + dir + "/env\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
+        "send\nstderr the fake driver asks for a1's login\n"
+        "raw {\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a1\",\"what\":\"oauth-token\",\"why\":\"the login expired\"}\n"
+        "await-secret " + heard + "\n"
+        "emit {\"kind\":\"text\",\"delta\":\"signed in again\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"));
+    CHECK(writeFile(dir + "/drivers", "driver claude " + fake + " --script " + dir + "/ada.script --account a1\n"
+        "friend ada claude " + dir + "\n"));
+    pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+
+    Window w;
+    {
+        const link::Bootstrap b = server.bootstrap("localhost");
+        link::Connect connect;
+        std::string why;
+        if (!link::bootstrap(b, runCommand, &connect, &why)) {
+            std::fprintf(stderr, "link_e2e: %s\n", why.c_str());
+            return 1;
+        }
+        CHECK(connect.format >= sync::kSecretsFormat);
+        w.session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", connect.port, 1, connect.format);
+    }
+    std::vector<Window*> ws{&w};
+    auto settle = [&](const std::function<bool()>& done) {
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(ws, nullptr, 20); });
+    };
+    std::vector<std::string> states;   // every state the window held, as text
+    for (const sync::Action& a : ensures()) {
+        w.session->add(a);
+    }
+    w.session->add(act(sync::ActionKind::Send, sid("ada"), "please sign in again"));
+    CHECK(settle([&] { return !w.session->state().requests().empty(); }));
+    states.push_back(w.session->state().init_diff());
+    std::uint64_t id = 0;
+    if (w.session->state().requests().size() == 1) {
+        const sync::SecretRequest r = w.session->state().requests()[0];
+        CHECK(r.account == "a1" && r.what == "oauth-token" && r.askerName == "ada" && r.why == "the login expired");
+        id = r.id;
+    }
+    CHECK(id != 0);
+    // The person pastes the value and presses Enter: the window's answer goes up the link.
+    sync::Action answer;
+    answer.kind = sync::ActionKind::SecretAnswer;
+    answer.request = id;
+    answer.secret = sync::SecretValue(value);
+    w.session->add(std::move(answer));
+    CHECK(settle([&] {
+        const sync::SessionView* v = w.session->state().find(sid("ada"));
+        return w.session->allAcknowledged() && w.session->state().requests().empty() && v != nullptr &&
+            v->activity == sync::Activity::Idle && v->total() >= 3;
+    }));
+    states.push_back(w.session->state().init_diff());
+    CHECK(readFile(heard).find("\"stored\"") != std::string::npos);
+    CHECK(readFile(file) == value);
+    struct stat st{};
+    CHECK(::stat(file.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+    CHECK(::stat((accounts + "/a1").c_str(), &st) == 0 && (st.st_mode & 0777) == 0700);
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(accounts + "/a1", ec)) {
+        names.push_back(entry.path().filename().string());
+    }
+    CHECK(names == std::vector<std::string>{"oauth-token"});
+    w.session->shutdown();
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone()) {
+        step(ws, nullptr, 20);
+    }
+    // The server stops (and its driver with it), so every file it and the driver wrote is complete.
+    const CommandResult stopped = runCommand(Command{binary, {"stop", "--dir", dir}, binary + " stop --dir " + dir}, 10);
+    CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    const std::string log = readFile(dir + "/server.log");
+    CHECK(log.find("the fake driver asks for a1's login") != std::string::npos);   // the driver's stderr is in it
+    CHECK(log.find("fake driver read: ") != std::string::npos);                     // and what it read, echoed
+    CHECK(readFile(dir + "/env").find("HOME=" + home) != std::string::npos);
+    int read = 0;
+    for (const std::string& v : {value, oldValue}) {
+        const test::LeakScan scan(v, "a1");
+        for (const std::string& where : leaksUnder(dir, file, scan, &read)) {
+            std::fprintf(stderr, "link_e2e: a value reached %s\n", where.c_str());
+            CHECK(false);
+        }
+        for (const std::string& s : states) {
+            CHECK(!scan.in(s));
+        }
+        CHECK(!scan.in(stopped.out) && !scan.in(stopped.err));
+    }
+    CHECK(read > 10);
+    std::printf("secret: %d files searched, %zu bytes of server.log; %s\n", read / 2, log.size(),
+        failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
+}
+
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
 // A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
@@ -1023,8 +1199,12 @@ int main(int argc, char** argv) {
         return restart(argv[1], argv[2]);
     if (argc == 5 && std::strcmp(argv[3], "flush") == 0)
         return flush(argv[1], argv[2], argv[4]);
+    if (argc == 5 && std::strcmp(argv[3], "secret") == 0) {
+        return secret(argv[1], argv[2], argv[4]);
+    }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
-                         "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver>\n"
+                         "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
+                         "       secret <nexus-fake-driver>\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

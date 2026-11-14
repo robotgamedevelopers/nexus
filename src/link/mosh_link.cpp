@@ -53,6 +53,13 @@ static sync::Sessions inFormat(sync::Sessions state, std::uint32_t format) {
     return state;
 }
 
+// The actions up, in the link's format too: framed from format 3 (sync/actions.h).
+static sync::Actions actionsIn(std::uint64_t next, std::uint32_t format) {
+    sync::Actions actions(next);
+    actions.setFormat(format);
+    return actions;
+}
+
 struct ServerSession::Impl {
     std::uint32_t format;
     sync::Sessions initialMine;
@@ -60,7 +67,7 @@ struct ServerSession::Impl {
     ServerTransport transport;
     sync::Applier applier;
     Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next, std::uint32_t f)
-        : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(next),
+        : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(actionsIn(next, f)),
           transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
         transport.set_current_state(inFormat(state, format));
     }
@@ -99,9 +106,15 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
     if (diff.empty())
         return fresh;
     std::vector<sync::Action> actions;
-    if (!guarded([&] { actions = sync::Actions::parse(diff); }, problem))
+    const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format); }, problem);
+    sync::wipeBytes(diff);  // it may hold a secret answer's value
+    if (!parsed)
         return fresh;
     return impl_->applier.apply(actions, problem);
+}
+
+std::uint32_t ServerSession::format() const {
+    return impl_->format;
 }
 
 void ServerSession::setState(const sync::Sessions& state) {
@@ -130,7 +143,7 @@ struct ClientSession::Impl {
     ClientTransport transport;
     Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next,
          std::uint32_t format)
-        : initialMine(next), initialRemote(inFormat(sync::Sessions(), format)),
+        : initialMine(actionsIn(next, format)), initialRemote(inFormat(sync::Sessions(), format)),
           transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
 };
 

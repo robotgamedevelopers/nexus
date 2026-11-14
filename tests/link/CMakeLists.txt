@@ -18,7 +18,7 @@ set_tests_properties(link_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 add_executable(link_e2e link_e2e.cpp)
 target_link_libraries(link_e2e PRIVATE nexus_link)
-target_include_directories(link_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync)
+target_include_directories(link_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync ${CMAKE_SOURCE_DIR}/tests)
 target_compile_options(link_e2e PRIVATE ${warnings})
 add_dependencies(link_e2e nexus-server nexus_fake_driver)
 
@@ -36,9 +36,11 @@ add_test(NAME link_e2e_soak COMMAND link_e2e ${server} ${e2e_dir}-soak soak 6 30
 add_test(NAME link_e2e_restart COMMAND link_e2e ${server} ${e2e_dir}-restart restart)
 add_test(NAME link_e2e_older_server COMMAND link_e2e ${server} ${e2e_dir}-older older_server)
 add_test(NAME link_e2e_flush COMMAND link_e2e ${server} ${e2e_dir}-flush flush $<TARGET_FILE:nexus_fake_driver>)
-set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush)
+add_test(NAME link_e2e_secret COMMAND link_e2e ${server} ${e2e_dir}-secret secret $<TARGET_FILE:nexus_fake_driver>)
+set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
+    link_e2e_secret)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush)
+    ${e2e_dir}-flush ${e2e_dir}-secret)
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

@@ -12,7 +12,8 @@
 // hangs for seconds (the real link thread, link/client.h); preference files whose every write takes 200 ms; a history
 // of thousands of entries with long lines; a reply streamed into a long open entry; a 1 MB paste; terminals opened,
 // filled with 10,000 lines and closed; the sprint tab's page shown for the first time and polled; tabs switched; the
-// window resized; the text scale changed; text that needs fallback fonts.
+// window resized; the text scale changed; text that needs fallback fonts; the secret dialog opened, typed and pasted
+// into, sent and cancelled.
 //
 // A case with a frame over the budget runs again, up to three times in all, in a fresh window. A real hitch is work on
 // the frame thread and is over the budget on the same frame every run; a frame the scheduler held up on a loaded host
@@ -516,6 +517,63 @@ struct Window {
         return kPrLayoutNodeNone;
     }
 
+    // The node under `node` whose text at the last layout holds `text` anywhere, or kPrLayoutNodeNone.
+    PrLayoutNode findPart(PrLayoutNode node, const std::string& text) const {
+        const PrStringView t =
+            prLayoutNodeKind(tree, node) == PrLayoutNodeKind_Text ? prLayoutNodeText(tree, node) : PrStringView{};
+        if (t.data != nullptr && std::string(t.data, t.size).find(text) != std::string::npos) {
+            return node;
+        }
+        for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
+                n = prLayoutNodeNextSibling(tree, n)) {
+            const PrLayoutNode found = findPart(n, text);
+            if (found != kPrLayoutNodeNone) {
+                return found;
+            }
+        }
+        return kPrLayoutNodeNone;
+    }
+
+    // True if any node of the window holds `text`: under the viewport's root, and under the top of the secret
+    // dialog's field (which the kit may place in a layer of its own).
+    bool holdsText(const std::string& text) const {
+        const PrLayoutNode root = prLayoutTreeRoot(tree);
+        if (root != kPrLayoutNodeNone && findPart(root, text) != kPrLayoutNodeNone) {
+            return true;
+        }
+        PrLayoutNode top = view.secretField;
+        if (top == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, top)) {
+            return false;
+        }
+        while (prLayoutNodeParent(tree, top) != kPrLayoutNodeNone) {
+            top = prLayoutNodeParent(tree, top);
+        }
+        return findPart(top, text) != kPrLayoutNodeNone;
+    }
+
+    // What the text nodes inside the secret dialog's field show, joined: Prax's edit shows its text, or a password's
+    // mask (U+2022 for each code point), with a space after it when empty (ui_text_edit.cpp).
+    std::string fieldShows() const {
+        std::string out;
+        std::function<void(PrLayoutNode)> add = [&](PrLayoutNode node) {
+            for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
+                    n = prLayoutNodeNextSibling(tree, n)) {
+                const PrStringView t =
+                    prLayoutNodeKind(tree, n) == PrLayoutNodeKind_Text ? prLayoutNodeText(tree, n) : PrStringView{};
+                if (t.data != nullptr) {
+                    out.append(t.data, t.size);
+                }
+                add(n);
+            }
+        };
+        if (view.secretField != kPrLayoutNodeNone) {
+            add(view.secretField);
+        }
+        return out;
+    }
+
+    bool prUiFocusIsField() const { return view.secretField != kPrLayoutNodeNone && prUiFocus(ui) == view.secretField; }
+
     // True if a line of the transcript reads `text` and shows whole in the transcript's view.
     bool showsLine(const std::string& text) const {
         const PrLayoutNode n = findText(view.transcript, text);
@@ -840,6 +898,81 @@ void scrollingUpALongHistory(Window& w) {
     w.frames(10);
 }
 
+// The secret dialog (docs/secrets.md) over a friend's tab with a long history: a request arrives in the server's state
+// and the dialog opens; the person types a few characters, takes them back, pastes a token, and presses Enter: the
+// value goes to the link in one action and the dialog closes, and the next state, without the request, keeps it
+// closed. A second request is cancelled with Escape. Every frame within the budget. The values are made up here.
+std::string bullets(std::size_t n) {
+    std::string out;
+    for (std::size_t i = 0; i < n; ++i) {
+        out += "\xe2\x80\xa2";
+    }
+    return out;
+}
+
+void secretDialog(Window& w) {
+    history(w.model, 1, 3000);
+    sync::Sessions state = stateOf(w.model, sync::Activity::Busy);
+    w.link.set(connected(state));
+    w.frames(5);
+    const std::string token = "fake-frame-test-token-" + std::string(200, 'k');
+    state.setRequests({sync::SecretRequest{7, "work", "oauth-token", 1, "alex", "the login expired"}});
+    w.link.set(connected(state));
+    w.frames(5);
+    CHECK(w.view.secretShown == 7 && w.view.secretField != kPrLayoutNodeNone);
+    CHECK(w.prUiFocusIsField());
+    // The dialog names the account, what is asked, who asks and why; the empty field shows no text (no placeholder).
+    CHECK(w.holdsText("work: oauth-token") && w.holdsText("alex") && w.holdsText("the login expired"));
+    CHECK(w.fieldShows() == " ");
+    w.type("abc");
+    CHECK(w.fieldShows() == bullets(3) && !w.holdsText("abc"));
+    for (int i = 0; i < 3; ++i) {
+        w.key(PrAppKey_Backspace, PrAppKeyCode_Backspace);
+    }
+    CHECK(w.host.secrets.typed().empty());
+    PrAppEvent paste{};
+    paste.kind = PrAppEventKind_Paste;
+    const std::string pasted = token + "\n";
+    paste.input.text = PrStringView{pasted.data(), pasted.size()};
+    w.push(paste);
+    w.frame();
+    // A one-line field: the paste's line break does not go in.
+    CHECK(w.host.secrets.typed() == token);
+    // Drawn masked, a bullet for each byte of it (all ASCII): no node of the window holds the value's text.
+    CHECK(w.fieldShows() == bullets(token.size()) && !w.holdsText(token));
+    // Nothing of it reached the prompt.
+    CHECK(w.model.tab(1).draft.empty());
+    const std::size_t sent = w.link.sent.size();
+    w.key(PrAppKey_Enter, PrAppKeyCode_Enter);
+    CHECK(w.link.sent.size() == sent + 1);
+    if (w.link.sent.size() == sent + 1) {
+        const sync::Action& a = w.link.sent.back();
+        CHECK(a.kind == sync::ActionKind::SecretAnswer && a.request == 7 && a.secret.bytes() == token);
+    }
+    CHECK(w.view.secretShown == 0 && w.host.secrets.typed().empty());
+    w.frames(5);
+    // The server's next state still holds the request (the answer is on its way): the dialog stays closed.
+    CHECK(w.view.secretShown == 0);
+    state.setRequests({});
+    w.link.set(connected(state));
+    w.frames(5);
+    CHECK(w.view.secretShown == 0);
+    // A second request, cancelled with Escape.
+    state.setRequests({sync::SecretRequest{8, "work", "oauth-token", 0, "", ""}});
+    w.link.set(connected(state));
+    w.frames(5);
+    CHECK(w.view.secretShown == 8);
+    w.type("x");
+    w.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(w.link.sent.size() == sent + 2);
+    if (w.link.sent.size() == sent + 2) {
+        const sync::Action& a = w.link.sent.back();
+        CHECK(a.kind == sync::ActionKind::SecretCancel && a.request == 8 && a.secret.empty());
+    }
+    CHECK(w.view.secretShown == 0);
+    w.frames(30);
+}
+
 // The real link over an ssh that hangs for seconds before it fails: the link's thread waits, never the window.
 void slowSshLink(Window& w) {
     link::ClientLink::Options options;
@@ -876,6 +1009,7 @@ const Case kCases[] = {
     {"fallback_fonts", fallbackFonts, "each text font of the kit matches the fallback faces on the frame that first "
         "needs one (Prax text_font.cpp matchFallback); nexus loads the faces ahead (font_prefetch.h), Prax has no way "
         "to match a kit's text fonts ahead or off the frame thread", 145},
+    {"secret_dialog", secretDialog},
     {"slow_ssh_link", slowSshLink},
 };
 

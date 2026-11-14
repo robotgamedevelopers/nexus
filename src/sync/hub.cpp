@@ -1,6 +1,7 @@
 #include "sync/hub.h"
 
 #include <algorithm>
+#include <deque>
 #include <memory>
 #include <numeric>
 
@@ -193,6 +194,13 @@ bool Hub::counted(const Action& action, const std::string& refused, std::string*
 }
 
 bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    if (action.kind == ActionKind::SecretAnswer || action.kind == ActionKind::SecretCancel) {
+        return secretAction(action, why, client);
+    }
+    if (action.kind == ActionKind::Unknown) {
+        return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
+            client);
+    }
     if (action.kind >= ActionKind::AddAccount) {
         return accountAction(action, why, client);
     }
@@ -591,8 +599,165 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     if (signedIn) {
         signedIn_.insert(account);
-    } else {
-        signedIn_.erase(account);
+        return;
+    }
+    signedIn_.erase(account);
+    // An account with no login it can use: nexus itself asks for it in the window (docs/secrets.md), one paste, unless
+    // a request for it is open already. With no window that can take one, the ask is refused at once and logged.
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (secretKeeper_ != nullptr && a != nullptr && !loginFile(a->provider).empty() &&
+            std::none_of(desk_.open().begin(), desk_.open().end(),
+                         [&](const SecretRequest& r) { return r.account == account; })) {
+        askSecret(SecretAsker{}, account, loginFile(a->provider),
+                  account + " has no login it can use: paste its " + loginFile(a->provider) + " to sign it in");
+    }
+}
+
+void Hub::secretsWith(SecretKeeper* keeper, SecretEvents* events, std::function<bool()> takers,
+                      std::function<std::uint64_t()> clock) {
+    secretKeeper_ = keeper;
+    secretEvents_ = events;
+    takers_ = std::move(takers);
+    clock_ = std::move(clock);
+}
+
+bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const std::string& what,
+                    const std::string& why, std::string* refused) {
+    auto refuse = [&](const std::string& text) {
+        if (refused != nullptr) {
+            *refused = text;
+        }
+        return false;
+    };
+    if (secretKeeper_ == nullptr) {
+        return refuse("this server takes no secrets");
+    }
+    // The account and the file are names before they reach any text (a refusal, a log line, the dialog): what an AI
+    // writes in them cannot forge a line.
+    if (!accounts::isName(account) || !accounts::isName(what)) {
+        return refuse("the account and the file asked for are each a name (letters, digits, '-', '_' and '.', at most "
+                      "64)");
+    }
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr) {
+        return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
+    }
+    // A friend's AI asks only for an account its friend is linked to; nexus itself asks for any.
+    if (asker.session != 0 && !accounts_->linked(asker.name, account)) {
+        return refuse("the account " + account + " is not linked to the friend of session " +
+                      std::to_string(asker.session) + " in friends.json, so its AI may not ask for its secrets");
+    }
+    const std::vector<std::string> files = secretFiles(a->provider);
+    if (std::find(files.begin(), files.end(), what) == files.end()) {
+        std::string named;
+        for (const std::string& f : files) {
+            named += (named.empty() ? "" : ", ") + f;
+        }
+        return refuse("a " + a->provider + " account has no secret \"" + what + "\"" +
+            (files.empty() ? std::string(": its provider documents none") : "; it has " + named));
+    }
+    if (!isSecretWhy(why)) {
+        return refuse("an ask's reason is one line of at most " + std::to_string(kSecretWhyBytes) + " bytes of UTF-8 "
+                      "text, with no control, bidirectional or zero-width characters");
+    }
+    // One open ask per asker, and a few a minute: refused busy at once, before a request is made or an id minted.
+    if (asker.session != 0) {
+        const std::uint64_t now = clock_ ? clock_() : 0;
+        std::deque<std::uint64_t>& times = askTimes_[asker.session];
+        while (!times.empty() && times.front() + kSecretAskWindowMs <= now) {
+            times.pop_front();
+        }
+        const bool pending = std::any_of(desk_.open().begin(), desk_.open().end(),
+                                         [&](const SecretRequest& r) { return r.asker == asker.session; });
+        if (pending || times.size() >= kSecretAsksPerWindow) {
+            secretEffects(desk_.refuseAtOnce(asker, account, what, pending ?
+                "one of its asks is open already" :
+                "it asked " + std::to_string(times.size()) + " times in the last minute"));
+            return true;
+        }
+        times.push_back(now);
+    }
+    // The id first, durable, so that it is never minted again, across restarts.
+    const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
+    std::string failed;
+    if (!store_.commit(0, {}, kSecretIdsClient, id, &failed)) {
+        return refuse("the request's id was not kept: " + failed);
+    }
+    secretEffects(desk_.ask(id, asker, account, what, why, takers_ ? takers_() : false, clock_ ? clock_() : 0));
+    return true;
+}
+
+void Hub::expireSecrets() {
+    if (clock_) {
+        secretEffects(desk_.expire(clock_()));
+    }
+}
+
+void Hub::dropSecrets() {
+    secretEffects(desk_.drop());
+}
+
+// A secret answer or cancel: counted like any action, then given to the desk, which writes the value (never anywhere
+// else) or drops it.
+bool Hub::secretAction(const Action& action, std::string* why, const std::string& client) {
+    if (!count(action, why, client)) {
+        return false;
+    }
+    if (secretKeeper_ == nullptr) {
+        if (why != nullptr) {
+            *why = describe(action) + " dropped: this server takes no secrets";
+        }
+        return false;
+    }
+    if (action.kind == ActionKind::SecretCancel) {
+        secretEffects(desk_.cancel(action.request));
+        return true;
+    }
+    const std::optional<SecretState> before = desk_.stateOf(action.request);
+    std::string account;
+    std::string what;
+    for (const SecretRequest& r : desk_.open()) {
+        if (r.id == action.request) {
+            account = r.account;
+            what = r.what;
+        }
+    }
+    secretEffects(desk_.answer(action.request, action.secret, *secretKeeper_));
+    if (before == SecretState::Open && desk_.stateOf(action.request) == SecretState::Stored) {
+        const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+        if (a != nullptr && what == loginFile(a->provider)) {
+            reportSignedIn(account, true);
+            if (responder_ != nullptr) {
+                responder_->signedIn(account);
+            }
+        }
+    }
+    return true;
+}
+
+void Hub::secretEffects(const SecretEffects& effects) {
+    for (const SecretNote& n : effects.notes) {
+        if (secretEvents_ != nullptr) {
+            secretEvents_->noted(n);
+        }
+        if (n.asker != 0 && store_.find(n.asker) != nullptr) {
+            std::string failed;
+            if (store_.commit(n.asker, {SessionChange{entry(EntryKind::Notice, n.text), {}}}, std::string(), 0,
+                              &failed)) {
+                refresh(n.asker);
+            }
+        }
+    }
+    if (effects.changed) {
+        state_.setRequests(desk_.open());
+    }
+    if (secretEvents_ != nullptr) {
+        for (const SecretReply& r : effects.replies) {
+            secretEvents_->answered(r);
+        }
+        for (const SecretLog& l : effects.log) {
+            secretEvents_->logged(l);
+        }
     }
 }
 
@@ -800,6 +965,7 @@ void Hub::refresh(SessionId id) {
         sessions.insert(it, fresh);
     }
     state_ = Sessions(std::move(sessions));
+    state_.setRequests(desk_.open());
 }
 
 } // namespace nexus::sync

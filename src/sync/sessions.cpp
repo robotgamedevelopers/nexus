@@ -222,7 +222,59 @@ SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionV
     return readFields(framed, frame.size(), id, a, format);
 }
 
+// The open secret requests, from format 3, after the sessions: how many, then each framed by its length (its id,
+// account, what is asked, the asker's session and friend, and the asker's reason; fields a later format adds go after
+// them). The whole list goes in every diff: it is a few short lines.
+void writeRequests(Writer& w, const std::vector<SecretRequest>& requests) {
+    w.u64(requests.size());
+    for (const SecretRequest& q : requests) {
+        Writer f;
+        f.u64(q.id);
+        f.str(q.account);
+        f.str(q.what);
+        f.u64(q.asker);
+        f.str(q.askerName);
+        f.str(q.why);
+        w.str(f.take());
+    }
+}
+
+std::vector<SecretRequest> readRequests(Reader& r, std::size_t left) {
+    const std::uint64_t n = r.u64();
+    if (n > left) {
+        throw BadDiff("sessions diff says it holds " + std::to_string(n) + " secret requests in " +
+            std::to_string(left) + " bytes");
+    }
+    std::vector<SecretRequest> out;
+    for (std::uint64_t i = 0; i < n; ++i) {
+        const std::string frame = r.str();
+        Reader f(frame);
+        SecretRequest q;
+        q.id = f.u64();
+        q.account = f.str();
+        q.what = f.str();
+        q.asker = f.u64();
+        q.askerName = f.str();
+        q.why = f.str();
+        if (q.id == 0 || (!out.empty() && !(out.back().id < q.id))) {
+            throw BadDiff("sessions diff names secret request " + std::to_string(q.id) + " out of order or twice");
+        }
+        out.push_back(std::move(q));
+    }
+    return out;
+}
+
+const std::shared_ptr<const std::vector<SecretRequest>>& noRequests() {
+    static const auto none = std::make_shared<const std::vector<SecretRequest>>();
+    return none;
+}
+
 } // namespace
+
+void Sessions::setRequests(std::vector<SecretRequest> requests) {
+    requests_ = requests.empty() ? noRequests() :
+        std::make_shared<const std::vector<SecretRequest>>(std::move(requests));
+}
 
 bool SessionView::operator==(const SessionView& x) const {
     if (id != x.id || !(info == x.info) || activity != x.activity || first != x.first ||
@@ -267,9 +319,9 @@ SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& 
     return t;
 }
 
-Sessions::Sessions() : sessions_(std::make_shared<const std::vector<SessionRef>>()) {}
+Sessions::Sessions() : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()) {}
 
-Sessions::Sessions(std::vector<SessionRef> sessions) {
+Sessions::Sessions(std::vector<SessionRef> sessions) : requests_(noRequests()) {
     for (std::size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i]->id == 0) {
             throw std::logic_error("Sessions: a session with id 0");
@@ -315,6 +367,9 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         w.byte(1);
         writeSession(w, *b, a, format_);
     }
+    if (format_ >= kSecretsFormat) {
+        writeRequests(w, *requests_);
+    }
     return w.take();
 }
 
@@ -357,14 +412,24 @@ void Sessions::apply_string(const std::string& diff) {
                 ", neither 0 nor 1");
         }
     }
-    // Format 1 ends with its sessions; from format 2 what a later format adds after them is skipped.
+    // Format 1 ends with its sessions; from format 2 what a later format adds after them is skipped. From format 3 the
+    // open secret requests follow, always (a diff cut short before them is refused, not read as none), and what a
+    // later format adds after them is skipped.
     if (format_ < 2) {
         r.end();
     }
+    std::vector<SecretRequest> requests;
+    if (format_ >= kSecretsFormat) {
+        requests = readRequests(r, diff.size());
+    }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
+    setRequests(std::move(requests));
 }
 
 bool Sessions::operator==(const Sessions& x) const {
+    if (requests_ != x.requests_ && *requests_ != *x.requests_) {
+        return false;
+    }
     if (sessions_ == x.sessions_) {
         return true;
     }

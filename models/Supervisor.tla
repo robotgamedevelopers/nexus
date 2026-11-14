@@ -111,7 +111,7 @@ Init ==
     /\ s = [phase |-> "none", stage |-> "none", open |-> 0, prompt |-> 0, next |-> 1, waiting |-> <<>>,
             queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
             nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
-            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE,
+            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE, signin |-> FALSE,
             setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
             unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE]
 
@@ -198,8 +198,8 @@ AdvanceAll(Tk(_), Rt(_), Wn(_), x) == Wn(StartDriver(Rt(Tk(x))))
 AdvanceWith(Tk(_), x) == AdvanceAll(Tk, Retire, WriteNext, x)
 Advance(x) == AdvanceWith(Take, x)
 
-\* Every step starts with no effects, and is not a stop until it says so.
-Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE]
+\* Every step starts with no effects, and is not a stop or a sign-in until it says so.
+Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE, !.signin = FALSE]
 
 \* The driver is gone: a failed start is one that finished no turn (and was not ended for an account change).
 ExitedWith(x) ==
@@ -397,8 +397,24 @@ Reconfigure(c) ==
     /\ UNCHANGED <<sent, restarts>>
     /\ s' = Advance([Fresh EXCEPT !.unconf = c])
 
+\* The session's account signed in while starting is held back: its login arrived through the secret dialog
+\* (docs/secrets.md, Drivers::signedIn). Like a prompt, it lifts the hold, without a restart, so what waits goes on
+\* and the oldest queued prompt is taken. It counts as a change of the person's (they pasted the login).
+\* SignIns says whether an instance takes it: TRUE here; the per-commit switch and place instances replace it with
+\* MCSupervisor's NoSignIns, so that their one change stays a setting, an account or a place, and
+\* MCSupervisorSignIn.cfg spends its one change on a sign-in instead.
+SignIns == TRUE
+SignIn ==
+    /\ SignIns
+    /\ s.blocked
+    /\ switches < MaxSwitches
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Advance([Fresh EXCEPT !.blocked = FALSE, !.failed = 0, !.signin = TRUE])
+
 NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     \/ P
+    \/ SignIn
     \/ \E c \in BOOLEAN : Reconfigure(c)
     \/ Q
     \/ St
@@ -535,12 +551,13 @@ CancelledBy(x, y) == {p \in DOMAIN x.fate : x.fate[p] = "waiting" /\ y.fate[p] =
 StopEndsWhatRuns ==
     [][s'.asked =>
          CASE s.phase = "working"
-              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.phase = "stopping", !.stops = Append(@, s.open)]
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE, !.phase = "stopping",
+                                !.stops = Append(@, s.open)]
            [] s.phase = "starting" /\ s.waiting # <<>>
-              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.waiting = Tail(@),
+              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.signin = FALSE, !.waiting = Tail(@),
                                 !.fate[Head(s.waiting)] = "cut"]
            [] OTHER
-              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE]]_vars
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE]]_vars
 
 \* No stop is kept for later: a stop is written, or a turn cancelled, only in the step of the person's stop that
 \* found it running. So a stop that found nothing never touches a turn that begins after it.
@@ -636,11 +653,12 @@ CrashShowsDownStep(A(_)) ==
 CrashShowsDown == [][CrashShowsDownStep(ActivityOf)]_vars
 
 \* Down (red) never quietly turns into idle: it leaves only for busy (the person's prompt, a queued one, a start), when
-\* a driver says hello, when the friend's driver is configured again, when its instance is on this machine again, or
-\* by a restart or the server stopping.
+\* a driver says hello, when the friend's driver is configured again, when its instance is on this machine again, when
+\* its account signs in, or by a restart or the server stopping.
 DownLeavesByWorkStep(A(_)) ==
     A(s) = "down" /\ A(s') = "idle" =>
         \/ s.phase = "starting" /\ s'.phase = "idle"
+        \/ s'.signin
         \/ s.unconf /\ ~s'.unconf
         \/ ~s.here /\ s'.here
         \/ restarts' > restarts

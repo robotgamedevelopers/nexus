@@ -107,7 +107,7 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
-    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp)
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/secrets.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
@@ -124,11 +124,13 @@ endif()
 target_include_directories(nexus_store PUBLIC src)
 target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
 
-# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link).
-add_library(nexus_durable STATIC src/server/durable.cpp)
+# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link),
+# the secret dialog's account files over the same filesystem seam (src/server/secret_files.h), and where its answers and
+# log lines go (src/server/secret_lines.h, which writes the driver protocol's `secret` line).
+add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp src/server/secret_lines.cpp)
 target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)
+target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store nexus_driver)
 
 # The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange, their
 # encoding and decoding, and a reader that cuts a stream into them. No OS, no time, no processes.

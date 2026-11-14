@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -205,6 +206,46 @@ public:
     Status remove(const std::string& path) override {
         if (::unlink(path.c_str()) != 0)
             return os_error("unlink", path);
+        return Status::ok();
+    }
+
+    Status write_new(const std::string& path, std::span<const std::uint8_t> data) override {
+        Fd fd(::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+        if (fd.get() < 0) {
+            return os_error("create", path);
+        }
+        Status s = write_all(fd.get(), data, path);
+        if (s.is_ok()) {
+            s = full_sync(fd.get(), path);
+        }
+        return s;
+    }
+
+    Status private_dir(const std::string& dir) override {
+        Status s = make_dir(dir);
+        if (!s.is_ok()) {
+            return s;
+        }
+        struct stat st;
+        if (::lstat(dir.c_str(), &st) != 0) {
+            return os_error("lstat", dir);
+        }
+        if (S_ISLNK(st.st_mode)) {
+            return Status::failed(dir + " is a symbolic link; it must be a directory of its own, mode 0700 (remove the "
+                                  "link)");
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            return Status::failed(dir + " is not a directory");
+        }
+        if (st.st_uid != ::geteuid()) {
+            return Status::failed(dir + " belongs to another user; it must be the server's user's, mode 0700");
+        }
+        if ((st.st_mode & 077) != 0) {
+            char mode[8];
+            std::snprintf(mode, sizeof mode, "%04o", static_cast<unsigned>(st.st_mode & 07777));
+            return Status::failed(dir + " is open to other users (mode " + mode + "); make it 0700 (chmod 700 " + dir +
+                                  ")");
+        }
         return Status::ok();
     }
 };

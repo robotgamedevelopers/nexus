@@ -54,6 +54,26 @@ struct LinkPort {
     virtual void send(sync::Action action) = 0;
 };
 
+// The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
+// dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). The value is held in the prompt
+// alone while it is typed, then in the one action that carries it to the server, which the link's thread hands to mosh
+// and which is wiped once the server has acknowledged it. Nothing here waits: submit and cancel hand the action to the
+// port.
+class LinkSecrets : public Secrets {
+public:
+    LinkPort* port = nullptr;
+    sync::SecretPrompt prompt;
+
+    const SecretAsk* showing() override;
+    std::string_view typed() override { return prompt.typed().bytes(); }
+    void type(std::string_view text) override { prompt.type(text); }
+    void submit() override;
+    void cancel() override;
+
+private:
+    SecretAsk shown_;
+};
+
 struct FrameHost {
     Model* model = nullptr;
     View* view = nullptr;
@@ -75,9 +95,11 @@ struct FrameHost {
     sync::Mirror mirror;
     sync::LinkPhase phase = sync::LinkPhase::Connecting;
     std::uint64_t heardMsAgo = 0;
+    LinkSecrets secrets;                // the secret dialog, from connect()
 
     // Shows the server's sessions through `port`: the prompt waits for the server, Enter and Command-Enter send and
-    // queue to the session the tab shows, Command-Escape stops it, and a session is ensured with each friend.
+    // queue to the session the tab shows, Command-Escape stops it, a session is ensured with each friend, and the
+    // server's secret requests are asked in the secret dialog.
     void connect(LinkPort* port, const std::string& serverHost);
     // Shows `state` as the window holds it once the server is heard, or with `lost` once it has lost the server.
     void showState(const sync::Sessions& state, bool lost);

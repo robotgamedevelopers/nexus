@@ -34,6 +34,8 @@
 #               driver.test.js), run under NODE with NEXUS_DRIVER_TRACE set; they write ClaudeDriverTraceData.tla
 #               into WORK, the traces of every test that keeps to the model
 #   NODE        with DRIVERWALK or DRIVERTESTS: node (Node 20.19 or newer)
+#   SECWALK     optional, in place of WALK: tests/sync's secrets_walk; it is run first and writes
+#               SecretsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of store-late, echo
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
@@ -122,6 +124,19 @@ elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "accounts_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "store-late" OR FAULTY STREQUAL "echo")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not store-late or echo")
+    endif()
+    execute_process(COMMAND "${SECWALK}" ${walk_args} "${WORK}/SecretsTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "secrets_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

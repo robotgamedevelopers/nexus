@@ -64,6 +64,7 @@ Step(r) ==
       [] r.op = "account"  -> L!SetAccount(r.v)
       [] r.op = "place"    -> L!SetPlace(r.v, r.here)
       [] r.op = "configure" -> L!Reconfigure(r.v = "none")
+      [] r.op = "signin"   -> L!SignIn
       [] OTHER             -> FALSE
 
 traceVars == <<s, sent, restarts, switches, l>>

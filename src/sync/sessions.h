@@ -27,6 +27,7 @@
 
 #include "model.h"
 #include "sync/formats.h"
+#include "sync/secrets.h"
 
 namespace nexus::sync {
 
@@ -97,6 +98,10 @@ public:
     explicit Sessions(std::vector<SessionRef> sessions);
 
     const std::vector<SessionRef>& sessions() const { return *sessions_; }
+    // The open secret requests (sync/secrets.h), oldest first, after the sessions: from format 3 on the wire, never a
+    // value. A window of an older format receives none.
+    const std::vector<SecretRequest>& requests() const { return *requests_; }
+    void setRequests(std::vector<SecretRequest> requests);
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -121,6 +126,7 @@ public:
 
 private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
+    std::shared_ptr<const std::vector<SecretRequest>> requests_;
     std::uint32_t format_ = kStateFormat;
 };
 

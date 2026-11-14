@@ -32,6 +32,8 @@ std::string kindOf(const DriverMessage& message) {
             return "done";
         } else if constexpr (std::is_same_v<M, Error>) {
             return "error";
+        } else if constexpr (std::is_same_v<M, AskSecret>) {
+            return "ask-secret";
         } else {
             return m.kind;
         }
@@ -199,6 +201,15 @@ Output Supervisor::queued(const std::string& text, Millis now) {
     return finish();
 }
 
+Output Supervisor::signedIn(Millis now) {
+    if (held_) {
+        held_ = false;
+        failed_ = 0;
+        advance(now);
+    }
+    return finish();
+}
+
 // A stop ends what runs when it arrives: the open turn, or, while the driver starts, the turn about to begin (its
 // prompt is never written; the driver keeps starting for the next). Finding the turn already stopping, or nothing
 // running, it changes nothing: no stop is kept for a later turn.
@@ -293,8 +304,8 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
                 endQuietly(now);
             }
         }
-    } else if (std::holds_alternative<Unknown>(message)) {
-        // a kind this version does not know: skipped
+    } else if (std::holds_alternative<Unknown>(message) || std::holds_alternative<AskSecret>(message)) {
+        // a kind this version does not know: skipped; an ask for a secret is the server's (Drivers), not the turn's
     } else if (open == 0 || turnOf(message) != open) {
         end(brokeProtocol("wrote " + kindOf(message) + " for turn " + std::to_string(turnOf(message)) + (open == 0
             ? std::string(" with no turn open") : " while turn " + std::to_string(open) + " is open")), now);

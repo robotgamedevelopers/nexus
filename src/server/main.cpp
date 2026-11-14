@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "no_core.h"
 #include "server/server.h"
 #include "sync/formats.h"
 
@@ -90,6 +91,10 @@ std::string selfPath() {
 } // namespace
 
 int main(int argc, char** argv) {
+    // No core file holds a secret this process wrote (no_core.h).
+    if (!nexus::noCoreDumps()) {
+        std::fprintf(stderr, "nexus-server: core dumps could not be turned off: %s\n", std::strerror(errno));
+    }
     if (argc < 2)
         return usage();
     const std::string command = argv[1];

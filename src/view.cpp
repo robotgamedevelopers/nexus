@@ -10,6 +10,7 @@
 #include "pr/kit_choice.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
+#include "pr/kit_menu.h"
 #include "pr/kit_text.h"
 #include "pr/layout_frame.h"
 #include "pr/layout_query.h"
@@ -469,6 +470,8 @@ struct Builder {
     // goes with it when it moves.
     // The tabs' nodes by position, as the strips declared them this round.
     std::vector<PrLayoutNode> tabNodes;
+    // The secret request the dialog shows this round, or null (read once, before the keys are claimed).
+    const SecretAsk* asking = nullptr;
 
     void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, bool reorderable,
             PrKitFlex flex) {
@@ -961,7 +964,8 @@ struct Builder {
         prKitPlace(kit, edit, &fill);
         frameless(edit);
         view.prompt = edit;
-        if (prUiFocus(ui) != edit)
+        // The focus is the secret dialog's while it shows (secretDialog).
+        if (asking == nullptr && prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
@@ -1001,6 +1005,64 @@ struct Builder {
             view.prompted = model.tab(active).id;
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
+        }
+    }
+
+    // The secret dialog (docs/secrets.md), over whatever tab shows: Prax's dialog (a modal card with a title and a
+    // close button), naming the account and what is asked, who asks, and the asker's reason as quoted text; then one
+    // masked field and nothing else, with no placeholder. Enter sends the value; Escape, the close button or a press
+    // outside the card cancels the request. The value is never in the view: the field shows what Secrets::typed() gives
+    // each round, masked by Prax, and each edit goes back through Secrets::type(). Nothing here waits on the network or
+    // the disk: an answer is one action handed to the link thread (frame_host.h LinkSecrets).
+    void secretDialog(PrLayoutNode window) {
+        if (asking == nullptr) {
+            if (view.secretShown != 0) {
+                prKitSetOpen(kit, window, false);
+                view.secretShown = 0;
+            }
+            view.secretField = kPrLayoutNodeNone;
+            return;
+        }
+        const bool fresh = view.secretShown != asking->id;
+        if (fresh) {
+            prKitSetOpen(kit, window, true);
+            view.secretShown = asking->id;
+        }
+        PrKitDialog dialog{};
+        dialog.key = prUiKey(ui, kPrLayoutNodeNone, sv("secret"));
+        const std::string title = asking->account + ": " + asking->what;
+        dialog.title = sv(title);
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, PrKitDialogStyle{});
+        if (body == kPrLayoutNodeNone) {
+            // The person closed it (Escape, the close button, a press outside): the request is cancelled.
+            view.secretField = kPrLayoutNodeNone;
+            if (!fresh) {
+                view.secrets->cancel();
+            }
+            return;
+        }
+        label(body, asking->asker.empty() ? std::string("asked by nexus") : "asked by " + asking->asker,
+              textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+        if (!asking->why.empty()) {
+            label(body, "“" + asking->why + "”", textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+        }
+        const bool enter = prUiKeyCaptured(ui, body, PrAppKey_Enter, 0);
+        PrKitTextField field{};
+        field.key = prUiKey(ui, kPrLayoutNodeNone, sv("secret-field"));
+        const std::string_view typed = view.secrets->typed();
+        field.text = sv(typed);
+        field.inputKind = PrAppTextInputKind_Password;
+        const PrLayoutNode edit = prKitTextField(kit, body, field, PrKitFieldStyle{});
+        view.secretField = edit;
+        if (prUiFocus(ui) != edit) {
+            prUiSetFocus(ui, edit);
+        }
+        PrStringView changed{};
+        if (prKitTextChanged(kit, edit, &changed)) {
+            view.secrets->type(std::string_view(changed.data, changed.size));
+        }
+        if (enter) {
+            view.secrets->submit();
         }
     }
 
@@ -1059,8 +1121,10 @@ struct Builder {
         // Escape hides the overlay (view.hide; unset in --windowed, where it does nothing). It is claimed
         // only while no tab is being dragged: a claim comes before Prax's own Escape, which cancels a drag (ui.cpp
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
-        if (hides && prUiDragging(ui) == nullptr && prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing &&
-                view.hide)
+        // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
+        asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
+        if (hides && asking == nullptr && prUiDragging(ui) == nullptr &&
+                prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing && view.hide)
             view.hide();
         // Command-Escape is stop (view.stop) on a friend's tab, and does nothing on the others. It hides nothing. It is
         // captured on every tab, like nexus's other Command chords, so a terminal never takes it as Meta-Escape.
@@ -1083,6 +1147,12 @@ struct Builder {
         if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend || !view.promptOpen) {
             view.cutComing = false;
         }
+        page(window, composing);
+        secretDialog(window);
+    }
+
+    // What the selected tab shows: the sprint tab's page, a terminal, or a friend's transcript and prompt.
+    void page(PrLayoutNode window, bool composing) {
         const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
         if (!onSprint && view.board != nullptr)
             view.board->hidden();

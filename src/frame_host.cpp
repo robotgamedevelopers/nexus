@@ -46,9 +46,44 @@ void FrameHost::pollLink() {
     mirror.apply(*model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected)
         view->promptOpen = true;
+    // The open secret requests, from the server's state; a link not connected loses the dialog and what was typed.
+    if (secrets.port != nullptr) {
+        if (s.phase == sync::LinkPhase::Connected) {
+            secrets.prompt.received(s.sessions.requests());
+        } else {
+            secrets.prompt.lost();
+        }
+    }
     phase = s.phase;
     heardMsAgo = s.heardMsAgo;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
+}
+
+const SecretAsk* LinkSecrets::showing() {
+    const sync::SecretRequest* r = prompt.showing();
+    if (r == nullptr) {
+        return nullptr;
+    }
+    if (shown_.id != r->id) {
+        shown_ = SecretAsk{r->id, r->account, r->what, r->askerName, r->why};
+    }
+    return &shown_;
+}
+
+void LinkSecrets::submit() {
+    sync::Action action;
+    if (port != nullptr && prompt.submit(&action.request, &action.secret)) {
+        action.kind = sync::ActionKind::SecretAnswer;
+        port->send(std::move(action));
+    }
+}
+
+void LinkSecrets::cancel() {
+    sync::Action action;
+    if (port != nullptr && prompt.cancel(&action.request)) {
+        action.kind = sync::ActionKind::SecretCancel;
+        port->send(std::move(action));
+    }
 }
 
 void FrameHost::wire() {
@@ -62,6 +97,8 @@ void FrameHost::wire() {
 void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     link = port;
     host = serverHost;
+    secrets.port = port;
+    view->secrets = &secrets;
     view->promptOpen = false;
     view->status = sync::linkStatus(sync::LinkPhase::Connecting, host, 0, "");
     view->submit = [this](std::size_t i, bool queue) {
@@ -144,6 +181,11 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
+    // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
+    if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
+        return false;
+    }
     if (board != nullptr && board->event(e)) {
         return true;
     }

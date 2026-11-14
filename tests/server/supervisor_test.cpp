@@ -446,6 +446,52 @@ void testFailedStarts() {
     CHECK(t.held() && contains(o.effects.back().text, "The last: no login. run login."));
 }
 
+// ---- sign-in: the secret dialog stored the account's login (Supervisor.tla SignIn) ----
+
+// A session held for want of a credential starts its driver for the prompt waiting the moment the login arrives,
+// without a restart or another prompt; so does one held by failed starts, from a count of 0. One not held is left as
+// it is.
+void testSignIn() {
+    for (Billing b : {Billing::ApiKey, Billing::None}) {
+        Supervisor s = working();
+        s.prompt("waits", kStart + 2);
+        s.message(Credential{b, ""}, kStart + 3);
+        s.exited("exited with status 0", kStart + 4);
+        CHECK(s.held() && s.phase() == Phase::None && s.state().waiting.size() == 1);
+        Output o = s.signedIn(kStart + 5);
+        CHECK(!s.held() && s.failedStarts() == 0 && kinds(o) == std::vector<Kind>{Kind::Start});
+        CHECK(s.state().waiting == std::vector<std::string>{"waits"});
+    }
+    {
+        Supervisor s = make();
+        s.prompt("x", kStart);
+        for (int i = 0; i < 3; ++i) {
+            s.exited("could not be started: no such file", kStart + 1);
+        }
+        CHECK(s.held() && s.failedStarts() == 3);
+        Output o = s.signedIn(kStart + 2);
+        CHECK(!s.held() && s.failedStarts() == 0 && kinds(o) == std::vector<Kind>{Kind::Start});
+    }
+    {
+        // Held with nothing waiting: the hold lifts and nothing starts until a prompt.
+        Supervisor s = working();
+        s.message(Credential{Billing::None, ""}, kStart + 2);
+        s.exited("exited with status 0", kStart + 3);
+        CHECK(s.held() && s.state().waiting.empty());
+        Output o = s.signedIn(kStart + 4);
+        CHECK(!s.held() && o.commands.empty() && s.phase() == Phase::None);
+    }
+    {
+        // Not held: nothing changes.
+        Supervisor s = working();
+        Output o = s.signedIn(kStart + 2);
+        CHECK(o.commands.empty() && o.effects.empty() && s.phase() == Phase::Working && !s.held());
+        Supervisor idle = make();
+        o = idle.signedIn(kStart);
+        CHECK(o.commands.empty() && o.effects.empty() && idle.phase() == Phase::None);
+    }
+}
+
 // ---- activity: the window's state cursor ----
 
 // Busy from the prompt until the turn's done (the start, the turn, the stop); Idle with nothing running, waiting or to
@@ -1113,6 +1159,7 @@ const Group kGroups[] = {
     {"account", testAccount},
     {"place", testPlace},
     {"activity", testActivity},
+    {"signin", testSignIn},
 };
 
 } // namespace

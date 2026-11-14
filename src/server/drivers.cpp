@@ -502,6 +502,30 @@ void Drivers::made(sync::SessionId id) {
     showResolved(id, resolve(id));
 }
 
+void Drivers::signedIn(const std::string& account) {
+    const Millis now = options_.clock();
+    for (auto& [id, t] : slots_) {
+        const sync::StoredSession* s = store_.find(id);
+        if (s == nullptr || s->info.account != account || !t.sup.held()) {
+            continue;
+        }
+        log(id, "the account " + account + " signed in: its driver may start again");
+        run(id, t.sup.signedIn(now), now, false);
+    }
+}
+
+void Drivers::tellSecret(sync::SessionId id, const std::string& line) {
+    auto it = slots_.find(id);
+    if (id == 0 || it == slots_.end() || !it->second.proc) {
+        return;
+    }
+    const Phase phase = it->second.sup.phase();
+    if (phase != Phase::Idle && phase != Phase::Working && phase != Phase::Stopping) {
+        return;
+    }
+    tell(*it->second.proc, line, options_.clock());
+}
+
 // A session's driver as the drivers file now says, for what the window shows of it: a session with no supervisor
 // shows down when its friend has none configured, idle otherwise (nothing runs in it); one with a supervisor is told,
 // and shows what that makes of it (Supervisor::activity).
@@ -714,6 +738,17 @@ void Drivers::release(Millis now) {
     }
 }
 
+// A line for the driver that is no step of its supervisor's (the server's features, a secret's answer): queued after
+// what it was told before, and held like the rest until the batch is durable.
+void Drivers::tell(Process& p, const std::string& line, Millis now) {
+    p.pending += line;
+    if (holding_) {
+        held_.push_back(Held{p.pid, 0});
+    } else {
+        flushInput(p, now);
+    }
+}
+
 // Writes what the driver will take now; a driver that stopped reading its input loses what is left.
 void Drivers::flushInput(Process& p, Millis now) {
     while (!p.pending.empty() && p.in >= 0) {
@@ -741,7 +776,7 @@ void Drivers::flushInput(Process& p, Millis now) {
 }
 
 // Up to `limit` bytes of the driver's output, as messages to its supervisor.
-void Drivers::readSome(Slot& t, Output& out, Millis now, std::size_t limit) {
+void Drivers::readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std::size_t limit) {
     Process& p = *t.proc;
     std::vector<driver::DriverReader::Item> items;
     char buffer[16 * 1024];
@@ -766,10 +801,23 @@ void Drivers::readSome(Slot& t, Output& out, Millis now, std::size_t limit) {
         }
     }
     for (driver::DriverReader::Item& item : items) {
-        if (item.message) {
-            append(out, t.sup.message(*item.message, now));
-        } else {
+        if (!item.message) {
             append(out, t.sup.refused(item.error, now));
+            continue;
+        }
+        const Phase before = t.sup.phase();
+        const bool talking = before == Phase::Idle || before == Phase::Working || before == Phase::Stopping;
+        if (const driver::AskSecret* ask = std::get_if<driver::AskSecret>(&*item.message); ask != nullptr && talking) {
+            if (options_.secrets) {
+                asks_.push_back(Ask{id, *ask});
+            }
+            continue;   // a server that takes no secrets told the driver none, and skips its ask (rule 8)
+        }
+        append(out, t.sup.message(*item.message, now));
+        const Phase after = t.sup.phase();
+        // Its hello: what this server takes beyond version 1, before anything else it is told.
+        if (options_.secrets && before == Phase::Starting && (after == Phase::Idle || after == Phase::Working)) {
+            tell(p, driver::encode(driver::ServerInfo{{"secrets"}}).line, now);
         }
     }
 }
@@ -787,7 +835,7 @@ void Drivers::collect(sync::SessionId id, Slot& t, Output& out, Millis now) {
     int status = 0;
     while (::waitpid(p.pid, &status, 0) < 0 && errno == EINTR) {
     }
-    readSome(t, out, now, kReadChunk);
+    readSome(id, t, out, now, kReadChunk);
     if (p.out >= 0) {
         // Its output is still held open (by a process it started): what is read so far is all it gets.
         std::vector<driver::DriverReader::Item> rest;
@@ -871,7 +919,7 @@ bool Drivers::serve(Millis now, bool* changed) {
             if (!holding_) {
                 flushInput(*t.proc, now);
             }
-            readSome(t, out, now, kReadChunk);
+            readSome(id, t, out, now, kReadChunk);
         }
         if (t.proc) {
             collect(id, t, out, now);
@@ -906,6 +954,9 @@ bool Drivers::serve(Millis now, bool* changed) {
         if (r.signedIn) {
             hub_->reportSignedIn(r.account, *r.signedIn);
             log(r.id, "the account " + r.account + (*r.signedIn ? " is signed in" : " needs sign-in"));
+            if (changed != nullptr) {
+                *changed = true;    // one that needs sign-in may have opened a secret request (Hub::reportSignedIn)
+            }
         }
         const sync::StoredSession* s = store_.find(r.id);
         if (r.usageLimit && s != nullptr && s->info.account == r.account) {
@@ -918,6 +969,28 @@ bool Drivers::serve(Millis now, bool* changed) {
             }
             if (changed != nullptr) {
                 *changed = true;
+            }
+        }
+    }
+    // The drivers' asks for secrets: each opens a request, or is answered at once (busy, no-client); a malformed one
+    // ends its driver as a line refused (docs/secrets.md). The answer goes back through tellSecret().
+    const std::vector<Ask> asks = std::move(asks_);
+    asks_.clear();
+    for (const Ask& a : asks) {
+        if (hub_ == nullptr) {
+            break;
+        }
+        std::string refused;
+        const bool asked = hub_->askSecret(sync::SecretAsker{a.id, a.ask.ask, friendOf(a.id)}, a.ask.account,
+                                           a.ask.what, a.ask.why, &refused);
+        if (changed != nullptr) {
+            *changed = true;
+        }
+        auto it = slots_.find(a.id);
+        if (!asked && !hub_->failed() && it != slots_.end()) {
+            log(a.id, "the driver's ask for a secret was refused: " + refused);
+            if (!run(a.id, it->second.sup.refused("its ask-secret: " + refused, now), now, false, changed)) {
+                return false;
             }
         }
     }

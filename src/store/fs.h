@@ -37,7 +37,8 @@ public:
     virtual ~Fs() = default;
     virtual Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) = 0;  // NotFound if missing
     virtual Status make_dir(const std::string& dir) = 0;   // with its parents; nothing if it is there
-    virtual Status list(const std::string& dir, std::vector<std::string>& names) = 0;  // NotFound if missing
+    // Its files and directories, by name. NotFound if missing.
+    virtual Status list(const std::string& dir, std::vector<std::string>& names) = 0;
     virtual Status size(const std::string& path, std::uint64_t& out) = 0;               // NotFound if missing
     // Up to `n` bytes from `off` (fewer at the end of the file). NotFound if missing.
     virtual Status read(const std::string& path, std::uint64_t off, std::uint64_t n, Bytes& out) = 0;
@@ -48,6 +49,12 @@ public:
     virtual Status sync_dir(const std::string& dir) = 0;
     virtual Status rename(const std::string& from, const std::string& to) = 0;  // replaces `to`
     virtual Status remove(const std::string& path) = 0;
+    // A new file holding `data`, durable when this returns: created mode 0600 (Failed if the name is taken, a symbolic
+    // link among them), written and synced through the one descriptor that created it, never opened again by name.
+    virtual Status write_new(const std::string& path, std::span<const std::uint8_t> data) = 0;
+    // `dir`, private: made 0700 with its parents if missing. Failed if it is a symbolic link, not a directory, not the
+    // server's user's, or open to anyone else (any of its mode's 077 bits set).
+    virtual Status private_dir(const std::string& dir) = 0;
 
     Status read_all(const std::string& path, Bytes& out) {
         return read(path, 0, std::numeric_limits<std::uint64_t>::max(), out);
@@ -126,6 +133,8 @@ public:
     Status sync_dir(const std::string& dir) override;
     Status rename(const std::string& from, const std::string& to) override;
     Status remove(const std::string& path) override;
+    Status write_new(const std::string& path, std::span<const std::uint8_t> data) override;   // create, append, sync
+    Status private_dir(const std::string& dir) override;                                      // make_dir
 
     void fail_at(std::uint64_t k);       // 0: never
     bool crashed() const { return dead_; }
