@@ -9,8 +9,8 @@ BrokenRemove(a) ==
          /\ dflt' = [f \in Friends |-> IF dflt[f] = a THEN None ELSE dflt[f]]
          /\ told' = {}
          /\ Done("remove", None, a, 0, TRUE)
-         /\ UNCHANGED <<known, ses, nextSes>>
+         /\ UNCHANGED <<prov, known, ses, nextSes>>
     ELSE Refused("remove", None, a, 0, {})
 
-BrokenSpec == Init /\ [][NextWith(AddAccount, BrokenRemove, Unlink, SetDefault, SetSession, Rotate, Create)]_vars
+BrokenSpec == Init /\ [][NextWith(AddAccount, BrokenRemove, Unlink, SetDefault, SetSession, Rotate, Create, ReloadDropLink, ReloadProvider)]_vars
 =============================================================================

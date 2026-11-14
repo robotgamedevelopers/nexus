@@ -8,10 +8,10 @@ BrokenRotate(s) ==
     THEN LET n == AnyNext(ses[s].friend, ses[s].acct) IN
          IF n = None
          THEN Refused("rotate", None, None, s, {s})
-         ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = Provider[n]]
+         ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]
               /\ Done("rotate", None, n, s, TRUE) /\ told' = {s}
-              /\ UNCHANGED <<acct, known, links, dflt, nextSes>>
+              /\ UNCHANGED <<acct, prov, known, links, dflt, nextSes>>
     ELSE Refused("rotate", None, None, s, {})
 
-BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, BrokenRotate, Create)]_vars
+BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, BrokenRotate, Create, ReloadDropLink, ReloadProvider)]_vars
 =============================================================================

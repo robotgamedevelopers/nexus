@@ -8,5 +8,5 @@ BrokenSet(s, a) ==
          /\ UNCHANGED model
     ELSE Refused("set", None, a, s, IF ses[s].made THEN {s} ELSE {})
 
-BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, BrokenSet, Rotate, Create)]_vars
+BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, BrokenSet, Rotate, Create, ReloadDropLink, ReloadProvider)]_vars
 =============================================================================

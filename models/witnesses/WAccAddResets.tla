@@ -7,7 +7,7 @@ BrokenAdd(a) ==
     THEN AddAccount(a)
     ELSE /\ acct' = [acct EXCEPT ![a] = "out"]
          /\ Done("add", None, a, 0, FALSE) /\ told' = {}
-         /\ UNCHANGED <<known, links, dflt, ses, nextSes>>
+         /\ UNCHANGED <<prov, known, links, dflt, ses, nextSes>>
 
-BrokenSpec == Init /\ [][NextWith(BrokenAdd, RemoveAccount, Unlink, SetDefault, SetSession, Rotate, Create)]_vars
+BrokenSpec == Init /\ [][NextWith(BrokenAdd, RemoveAccount, Unlink, SetDefault, SetSession, Rotate, Create, ReloadDropLink, ReloadProvider)]_vars
 =============================================================================
