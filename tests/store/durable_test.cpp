@@ -4,7 +4,7 @@
 // actions are skipped and the rest applied once, in order, and no id is ever minted twice.
 //
 //   durable_test            runs every group
-//   durable_test <group>    runs one: restart resend crash take migrate kinds
+//   durable_test <group>    runs one: restart resend crash batch batch_flush take migrate kinds
 
 #include "server/durable.h"
 #include "store/codec.h"
@@ -249,6 +249,121 @@ void test_crash() {
     CHECK(taken > 100);
 }
 
+// Group commit (DurableStore::beginBatch, flush), as the server's loop does it: the same run of actions, in batches of
+// one to four, each batch made durable by one flush. A crash at every write and sync: the reopened state is the state
+// after some prefix of the actions, at least every one whose batch's flush returned (only those are acknowledged).
+void test_batch() {
+    std::vector<std::string> states;
+    std::size_t acked = 0;
+    bool reference = true;
+    store::StoreOptions options;
+    options.compact_bytes = 300;
+    auto state = [](const Hub& hub, const server::DurableStore& ds) {
+        return all(hub.state()) + "next " + std::to_string(ds.nextId()) + " " + std::to_string(ds.applied("a")) + "/" +
+            std::to_string(ds.applied("b"));
+    };
+    const int sizes[] = {1, 3, 4, 2, 4};    // 14 actions
+    std::uint64_t flushes = 0;
+    auto run = [&](store::MemFs& fs) {
+        acked = 0;
+        flushes = 0;
+        server::DurableStore ds;
+        std::string why;
+        if (!ds.open(fs, "store", &why, options))
+            return;
+        Hub hub(ds);
+        if (reference)
+            states.push_back(state(hub, ds));
+        std::uint64_t num[2] = {0, 0};
+        int i = 0;
+        for (int size : sizes) {
+            ds.beginBatch();
+            for (int k = 0; k < size; ++k, ++i) {
+                const int w = i % 3 == 2 ? 1 : 0;
+                Action a;
+                if (i < 2) {
+                    a = ensure(++num[w], i == 0 ? "ada" : "bo");
+                } else {
+                    a = act(++num[w], i % 4 == 3 ? ActionKind::Queue : ActionKind::Send, i % 2 ? 2 : 1,
+                            "p" + std::to_string(i));
+                }
+                hub.apply(a, nullptr, w ? "b" : "a");
+                if (hub.failed())
+                    return;
+                if (reference)
+                    states.push_back(state(hub, ds));
+            }
+            if (!ds.flush(&why))
+                return;
+            ++flushes;
+            acked = static_cast<std::size_t>(i);
+        }
+    };
+    {
+        store::MemFs ref;
+        run(ref);
+        reference = false;
+        CHECK(acked == 14 && states.size() == 15 && flushes == 5);
+    }
+    std::uint64_t taken = 0;
+    for (std::uint64_t point = 1;; ++point) {
+        bool reached = false;
+        for (std::uint64_t plan = 0; plan < 6; ++plan) {
+            store::MemFs fs;
+            fs.fail_at(point);
+            run(fs);
+            if (!fs.crashed())
+                break;
+            reached = true;
+            store::Rng rng(point * 7 + plan);
+            fs.crash(plan == 0 ? fs.plan_all(false) : plan == 1 ? fs.plan_all(true) : fs.plan(rng));
+            server::DurableStore ds;
+            CHECK(openOn(fs, ds, options));
+            Hub hub(ds);
+            const std::string got = state(hub, ds);
+            bool found = false;
+            for (std::size_t i = acked; i < states.size(); ++i)
+                found = found || states[i] == got;
+            CHECK(found);
+            ++taken;
+        }
+        if (!reached)
+            break;
+    }
+    CHECK(taken > 30);
+}
+
+// A batch that is never flushed is lost whole by a crash that keeps nothing volatile, and one flush makes all of it
+// durable: no step of a batch is durable through its own commit.
+void test_batch_flush() {
+    store::MemFs fs;
+    {
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        Hub hub(ds);
+        ds.beginBatch();
+        hub.apply(ensure(1, "ada"), nullptr, "a");
+        hub.apply(act(2, ActionKind::Send, 1, "one"), nullptr, "a");
+        CHECK(ds.applied("a") == 2);    // applied here at once
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        CHECK(ds.applied("a") == 0 && ds.size() == 0);
+        Hub hub(ds);
+        ds.beginBatch();
+        hub.apply(ensure(1, "ada"), nullptr, "a");
+        hub.apply(act(2, ActionKind::Send, 1, "one"), nullptr, "a");
+        std::string why;
+        CHECK(ds.flush(&why));
+    }
+    fs.crash(fs.plan_all(false));
+    server::DurableStore ds;
+    CHECK(openOn(fs, ds));
+    CHECK(ds.applied("a") == 2 && ds.size() == 1);
+}
+
 EntryRef entry(EntryKind kind, const std::string& text) {
     return std::make_shared<const SessionEntry>(SessionEntry{kind, text, true});
 }
@@ -373,7 +488,8 @@ struct Group {
 };
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
-                         {"take", test_take}, {"migrate", test_migrate}, {"kinds", test_kinds}};
+                         {"batch", test_batch}, {"batch_flush", test_batch_flush}, {"take", test_take},
+                         {"migrate", test_migrate}, {"kinds", test_kinds}};
 
 } // namespace
 

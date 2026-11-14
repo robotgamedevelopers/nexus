@@ -286,7 +286,7 @@ Status Store::commit(std::uint64_t session, std::span<const Change> changes, con
                                std::to_string(applied(client) + 1) + ", not " + std::to_string(num));
     }
     Status s = journal_.append(encode_record(session, changes, client, num));
-    if (s.is_ok()) {
+    if (s.is_ok() && !batching_) {
         s = journal_.sync();
     }
     if (!s.is_ok()) {
@@ -294,7 +294,29 @@ Status Store::commit(std::uint64_t session, std::span<const Change> changes, con
         return s;
     }
     apply(session, changes, client, num);
+    if (batching_) {
+        return Status::ok();    // durable, and compacted if need be, at flush()
+    }
     // The step is durable whatever compaction does: a failure here only stops later steps.
+    if (journal_.log_bytes() > options_.compact_bytes && !(s = journal_.compact(encode_snapshot())).is_ok()) {
+        failed_ = true;
+    }
+    return Status::ok();
+}
+
+Status Store::flush() {
+    batching_ = false;
+    if (failed_ || journal_.failed()) {
+        return Status::failed("store " + dir_ + ": an earlier write or sync failed, so what is on disk is unknown; "
+                              "restart the server to reopen the store from what is durable");
+    }
+    // SyncFile("log") once, for every record the batch appended (a no-op when it appended none).
+    Status s = journal_.sync();
+    if (!s.is_ok()) {
+        failed_ = true;
+        return s;
+    }
+    // The batch is durable whatever compaction does: a failure here only stops later steps.
     if (journal_.log_bytes() > options_.compact_bytes && !(s = journal_.compact(encode_snapshot())).is_ok()) {
         failed_ = true;
     }

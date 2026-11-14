@@ -232,7 +232,7 @@ if(NEXUS_LINK)
     target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
 
     # The server the window talks to with --server: headless, on the machine that keeps going.
-    add_library(nexus_server STATIC src/server/server.cpp)
+    add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo)
     add_executable(nexus-server src/server/main.cpp)

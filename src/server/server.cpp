@@ -27,7 +27,9 @@
 #include "server/driver_table.h"
 #include "server/drivers.h"
 #include "server/durable.h"
+#include "server/flush_gate.h"
 #include "server/home.h"
+#include "server/pass.h"
 #include "store/fs.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
@@ -253,6 +255,10 @@ private:
 
 bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
+    // A test seam, set only by tests/link/link_e2e.cpp's flush run (server/flush_gate.h).
+    if (const char* gate = std::getenv(kFlushGateVariable)) {
+        fs_ = withFlushGate(std::move(fs_), gate);
+    }
     if (!store_.open(*fs_, paths_.store, why))
         return false;
     // The machine a friend's instance names to run here: the config's, else the short host name.
@@ -588,6 +594,13 @@ int Server::run() {
             std::fprintf(stderr, "nexus-server: config push: %s\n", pushed.c_str());
         }
         bool changed = false;
+        // One batch per pass (group commit): every step this pass makes, from the drivers and from every window's
+        // actions, is applied and appended, then made durable by one flush. Nothing of the batch leaves the server
+        // before that flush has returned: no driver is told anything (Drivers::hold), no state is set on a link, and
+        // no link ticks (mosh's acknowledgement of a window's actions goes out on its next tick). With one flush per
+        // action, a window's burst of N actions held every window's state back for N flushes; now it is one.
+        store_.beginBatch();
+        drivers_->hold();
         if (!drivers_->serve(nowMs(), &changed)) {
             std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
             status = 1;
@@ -603,7 +616,8 @@ int Server::run() {
                 continue;
             }
             std::string problem;
-            // Each action is durable (with the client's counter) before the next tick can acknowledge it.
+            // Each action is durable (with the client's counter), by the flush below, before the next tick can
+            // acknowledge it.
             for (const sync::Action& a : s.link->take(&problem)) {
                 std::string refused;
                 hub_->apply(a, &refused, s.client);
@@ -628,10 +642,21 @@ int Server::run() {
             status = 1;
             break;
         }
-        if (changed) {
-            for (Link& s : links_) {
-                s.link->setState(hub_->state());
-            }
+        // The flush, then the drivers released and the state set (server/pass.h).
+        const PassEnd end{
+            [&](std::string* w) { return store_.flush(w); },
+            [&] { drivers_->release(nowMs()); },
+            [&] {
+                for (Link& s : links_) {
+                    s.link->setState(hub_->state());
+                }
+            }};
+        if (!endPass(end, changed, &why)) {
+            // The batch's flush failed: what reached the disk is unknown, so nothing of it is told to anyone.
+            std::fprintf(stderr, "nexus-server: the store failed (%s); stopping without acknowledging the actions "
+                "since\n", why.c_str());
+            status = 1;
+            break;
         }
         // The control socket last: a new link may end an earlier one, and the links' fds above are by index.
         if (fds[0].revents & POLLIN) {

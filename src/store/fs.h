@@ -21,9 +21,21 @@ namespace nexus::store {
 //   - a create, rename or remove is durable once sync_dir(dir) returns; before that a crash may keep any subset of
 //     the directory's pending changes, applied in order; a rename is atomic (both names change or neither);
 //   - make_dir is durable when it returns.
+//
+// A file the store appends to all the time (the journal's log) is opened once, by open_append, and kept open: an
+// AppendFile is that file, not its name, as an open descriptor is. Once another file is renamed over its name, or the
+// filesystem crashes, the AppendFile still refers to what it opened, so its owner opens the name again.
+class AppendFile {
+public:
+    virtual ~AppendFile() = default;
+    virtual Status append(std::span<const std::uint8_t> data) = 0;
+    virtual Status sync() = 0;
+};
+
 class Fs {
 public:
     virtual ~Fs() = default;
+    virtual Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) = 0;  // NotFound if missing
     virtual Status make_dir(const std::string& dir) = 0;   // with its parents; nothing if it is there
     virtual Status list(const std::string& dir, std::vector<std::string>& names) = 0;  // NotFound if missing
     virtual Status size(const std::string& path, std::uint64_t& out) = 0;               // NotFound if missing
@@ -65,9 +77,14 @@ private:
 // between, in order.
 //
 // Crash injection: fail_at(k) makes the k-th mutating call from now (create, append, truncate, sync, sync_dir,
-// rename, remove; 1 is the next one) fail without effect, as if the process died just before it, and every later
-// call fail too. crash() then turns what is volatile into one state a real crash could leave, and the store is
-// reopened on it.
+// rename, remove, and an AppendFile's append and sync; 1 is the next one) fail without effect, as if the process died
+// just before it, and every later call fail too. crash() then turns what is volatile into one state a real crash
+// could leave, and the store is reopened on it.
+//
+// An AppendFile is bound to the file it opened (its inode), as a descriptor is: after a rename over its name it writes
+// to the file that is no longer named, whose bytes no crash keeps; after crash() every AppendFile opened before it
+// refuses, as the process that held it is gone. A store that does not open its log again after a compaction or a
+// crash loses records in the unit tests as it would on disk.
 class MemFs : public Fs {
 public:
     // How one file came through a crash. `revert`: the durable bytes and nothing written since. Otherwise the bytes
@@ -91,6 +108,13 @@ public:
         int ino = -1;
     };
 
+    // A copy is the disk as it is now, for the tests to crash in different ways: the AppendFiles open on this one
+    // stay with it, and none is open on the copy.
+    MemFs() = default;
+    MemFs(const MemFs& other);
+    MemFs& operator=(const MemFs&) = delete;
+
+    Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override;
     Status make_dir(const std::string& dir) override;
     Status list(const std::string& dir, std::vector<std::string>& names) override;
     Status size(const std::string& path, std::uint64_t& out) override;
@@ -133,6 +157,7 @@ private:
         std::map<std::string, int> dur;
         std::vector<DirOp> pending;
     };
+    class Open;
     Status step(const char* what, const std::string& path);
     File* file(const std::string& path);
     const File* file(const std::string& path) const;
@@ -142,6 +167,8 @@ private:
     std::map<std::string, Dir> dirs_;
     std::vector<File> files_;
     std::vector<bool> live_;
+    std::map<int, int> opened_;     // inode: AppendFiles open on it (kept alive while any is)
+    std::uint64_t epoch_ = 0;       // crashes so far: an AppendFile from an earlier epoch refuses
     std::uint64_t calls_ = 0;
     std::uint64_t fail_at_ = 0;
     bool dead_ = false;

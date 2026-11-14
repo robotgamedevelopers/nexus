@@ -14,7 +14,8 @@
 // on no account starts no driver that needs one), instance_dir, instance_elsewhere, instance_moved and
 // instance_default (a session's instance: its directory, a machine other than this one, a move of its directory or
 // machine while its driver runs, and a session naming none, which takes its friend's default), window (busy with a
-// reply streaming after tool lines, idle, then down; with a state dir it writes each state there for `nexus --state`).
+// reply streaming after tool lines, idle, then down; with a state dir it writes each state there for `nexus --state`),
+// held (a prompt sent while the drivers are held for a batch is written only once they are released).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -578,6 +579,51 @@ void resume(Server& s, const std::string& dir, const std::string& fake) {
 // The session's account changed: its driver is ended once the turn open has ended (never counted as a failed start),
 // and the next prompt starts one again in the same session, its id, transcript and turn numbers kept. A change of
 // model leaves the driver running.
+// Group commit's hold (Drivers::hold, release): a prompt sent while the drivers are held opens its turn and is kept,
+// its bytes unwritten, for as long as the hold lasts; the friend cannot answer what it was never sent. Released (the
+// batch's flush has returned), it is written once, and the turn is answered as ever. Then a turn whose driver hangs on
+// a stop: held, the stop's line, the end of its input, SIGTERM and SIGKILL are each kept as their deadlines pass, and
+// the driver, which would end at any one of the last three, runs on (were one carried out, serve() would collect the
+// exit); released, they go out in order and the driver ends.
+void held(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Back.\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"a\"}\nhang\n");
+    s.drivers->hold();
+    s.send("hi");
+    CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Working && s.drivers->unwritten(kAda) > 0; }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi"}));
+    CHECK(s.drivers->holding());
+    s.drivers->release(now());
+    CHECK(s.drivers->unwritten(kAda) == 0);
+    CHECK(s.serveUntil([&] { return s.transcript().size() == 2 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Back."}));
+
+    s.send("again");
+    CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    const pid_t running = s.drivers->pid(kAda);
+    CHECK(running > 0);
+    s.drivers->hold();
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    bool closed = false;
+    bool termed = false;
+    CHECK(s.serveUntil([&] {
+        closed = closed || s.sup().stage() == Stage::Closed;
+        termed = termed || s.sup().stage() == Stage::Termed;
+        return s.sup().stage() == Stage::Killed;
+    }, 10));
+    CHECK(closed && termed);
+    // A while longer, held: an exit would be collected by now.
+    CHECK(!s.serveUntil([&] { return s.drivers->pid(kAda) != running; }, 0.3));
+    CHECK(s.drivers->pid(kAda) == running);
+    CHECK(::kill(running, 0) == 0);
+    CHECK(s.drivers->holding());
+    s.drivers->release(now());
+    CHECK(s.serveUntil([&] { return none(s); }, 10));
+    CHECK(s.drivers->pid(kAda) != running);
+    s.end();
+}
+
 void account(Server& s, const std::string& dir, const std::string& fake) {
     // each start runs the script from the top: the first answers with text until stopped, the second at once
     setUp(dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
@@ -978,7 +1024,7 @@ int main(int argc, char** argv) {
                 {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
                 {"usage_limit", usageLimit}, {"no_account", noAccount}, {"instance_dir", instanceDir},
                 {"instance_elsewhere", instanceElsewhere}, {"instance_moved", instanceMoved},
-                {"instance_removed", instanceRemoved}, {"instance_default", instanceDefault}};
+                {"instance_removed", instanceRemoved}, {"instance_default", instanceDefault}, {"held", held}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

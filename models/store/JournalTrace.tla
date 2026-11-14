@@ -10,7 +10,9 @@
 (*     snapshots the walk wrote, and                                       *)
 (*   Trace: one record per step: each filesystem call the journal made     *)
 (*     (op create, append, truncate, sync, syncdir, rename, remove, with   *)
-(*     the file's name and, for append and truncate, the byte count), the  *)
+(*     the file's name and, for append and truncate, the byte count; a     *)
+(*     write to the log also carries lens, each record's length, as the    *)
+(*     code writes every record since the last sync in one write), the     *)
 (*     recovery's decision (op recover: k, s, cut), each crash (op crash:  *)
 (*     which pending directory changes it kept, and each changed file's    *)
 (*     fate) and each acknowledgement (op ack: the record number); and     *)
@@ -23,11 +25,17 @@
 (* decision and the acknowledgements to be the code's. A step the spec    *)
 (* cannot take has no successor: TLC reports a deadlock. Every Journal    *)
 (* invariant is checked on the trace too.                                  *)
+(*                                                                         *)
+(* One write to the log is the spec's AppendRec once per record in it,    *)
+(* taken one after another while l stays on the write (sub counts the     *)
+(* records taken); the sizes are matched once the last is taken. So an    *)
+(* acknowledgement after a write with no sync of the log has no Ack the   *)
+(* spec can take (the walk's --fault no-sync: rejected, as a deadlock).   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, JournalTraceData
 
 VARIABLES data, dur, dnow, ddur, dpend, pc, seq, dseq, hist, whist, acked, writes, crashes, compacts, torn, wrong,
-          broken, found, l
+          broken, found, l, sub
 
 Unbounded == 1000000
 
@@ -44,14 +52,13 @@ Matches(k) ==
     /\ acked = r.acked
     /\ r.op = "recover" => found = [k |-> r.k, s |-> r.s, cut |-> r.cut]
 
-TraceMatches == Matches(l)
+\* Between the records of one write the files are mid-step: nothing to match.
+TraceMatches == sub = 0 => Matches(l)
 
 FateOf(fs) == [n \in J!Names |-> IF n \in DOMAIN fs THEN fs[n] ELSE J!NoFate]
 
 Step(r) ==
-    IF r.op = "append" THEN
-        IF r.name = "log" THEN J!AppendRec(r.n)
-        ELSE r.name = "snapshot.tmp" /\ J!AppendSnap(r.n)
+    IF r.op = "append" THEN r.name = "snapshot.tmp" /\ J!AppendSnap(r.n)
     ELSE IF r.op = "sync" THEN J!SyncFile(r.name)
     ELSE IF r.op = "syncdir" THEN J!SyncDir
     ELSE IF r.op = "create" THEN
@@ -68,14 +75,24 @@ Step(r) ==
     ELSE FALSE
 
 traceVars == <<data, dur, dnow, ddur, dpend, pc, seq, dseq, hist, whist, acked, writes, crashes, compacts, torn, wrong,
-               broken, found, l>>
+               broken, found, l, sub>>
 
-TraceInit == l = 1 /\ J!Init
+TraceInit == l = 1 /\ sub = 0 /\ J!Init
+
+\* A write to the log: its records' AppendRec steps, one per TLC step.
+IsWrite(r) == r.op = "append" /\ r.name = "log"
 
 TraceNext ==
     /\ l < Len(Trace)
-    /\ l' = l + 1
-    /\ Step(Trace[l + 1])
+    /\ LET r == Trace[l + 1] IN
+       IF IsWrite(r) THEN
+           /\ sub < Len(r.lens)
+           /\ J!AppendRec(r.lens[sub + 1])
+           /\ IF sub + 1 = Len(r.lens) THEN l' = l + 1 /\ sub' = 0 ELSE l' = l /\ sub' = sub + 1
+       ELSE
+           /\ l' = l + 1
+           /\ sub' = 0
+           /\ Step(r)
 
 \* the end of the trace: stutter, so that a trace read to its end is no deadlock
 Done == l = Len(Trace) /\ UNCHANGED traceVars

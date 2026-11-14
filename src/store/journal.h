@@ -30,12 +30,18 @@ namespace nexus::store {
 // starts at a clean end. Records the snapshot covers are skipped; the first record after the snapshot must be
 // seq + 1 (a gap is a disk fault: Failed).
 //
-// Durability: append() writes and does not sync; sync() makes every record appended so far durable. A record is
-// acknowledged only after sync() returns. compact() first syncs the log, then writes the snapshot under its temporary
-// name, syncs it, renames it into place and syncs the directory, and only then replaces the log by an empty one
-// (create log.new, rename it over log, sync the directory). A crash anywhere in that leaves either the old snapshot
-// with the whole old log, or the new snapshot with the old log or the empty one; the records the snapshot covers are
-// skipped on replay.
+// Durability: append() keeps the record in memory and writes nothing; sync() writes every record appended since the
+// last sync to the log in one write, then syncs it, so that a batch of records costs one write and one flush. A
+// record is acknowledged only after sync() returns. The log is opened once (Fs::open_append) and kept open; it is
+// opened again after open() has cut it and after compaction has put a new log under its name. In the model, the one
+// write is the batch's AppendRec steps, one per record, taken together (the trace walk binds them so). A crash before
+// the write loses the batch, which nobody was told of; a crash between the write and the flush may keep any prefix of
+// it, torn, as Journal.tla's crash already allows.
+//
+// compact() first syncs the log, then writes the snapshot under its temporary name, syncs it, renames it into place
+// and syncs the directory, and only then replaces the log by an empty one (create log.new, rename it over log, sync
+// the directory). A crash anywhere in that leaves either the old snapshot with the whole old log, or the new snapshot
+// with the old log or the empty one; the records the snapshot covers are skipped on replay.
 //
 // After any failed write or sync the journal refuses every later call: what reached the disk is unknown until the
 // process restarts and open() reads it back.
@@ -48,7 +54,8 @@ public:
     //   AcceptTorn  open keeps a record whose checksum fails when its length fits
     //   CutTooFar   open cuts a torn tail one whole record early
     //   NoTruncate  open leaves the torn tail in place and appends after it
-    //   NoSync      sync() reports success without syncing
+    //   NoSync      sync() writes the batch and reports success without syncing it: a record acknowledged before it
+    //               is durable
     enum class Fault { None, AcceptTorn, CutTooFar, NoTruncate, NoSync };
 
     // Told what open() found, before it truncates: the last record number (k), the snapshot's (s) and the bytes of
@@ -88,6 +95,8 @@ private:
     std::string dir_;
     Fault fault_;
     Observer* observer_;
+    std::unique_ptr<AppendFile> log_;   // the log, open while the journal is
+    Bytes unwritten_;                   // the records appended since the last sync, back to back
     std::uint64_t last_ = 0;
     std::uint64_t durable_ = 0;
     std::uint64_t log_bytes_ = 0;
