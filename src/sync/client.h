@@ -6,9 +6,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "model.h"
 #include "sync/actions.h"
+#include "sync/mirror.h"
 
 namespace nexus::sync {
 
@@ -35,10 +37,18 @@ bool blankText(const std::string& text);
 // draft is too long (an empty or blank draft sends nothing, as Model::send).
 bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* text, std::string* why);
 
-// The stop of tab i's friend's work (Command-Escape) as an action: true, with the friend's name (the tab the action
-// names), when i is a friend's tab; otherwise false. A stop carries no text, changes nothing in the window, and is
-// sent whatever the tab shows and whether or not the link is up (it waits in the outbox, in order): the server decides,
-// against its state when it processes the stop.
-bool stopTarget(const Model& model, std::size_t i, std::string* tab);
+// The session tab i shows, which an action from it names: 0 when i is not a friend's tab, or when no state the mirror
+// applied has held a session of its friend yet (the window then sends nothing from it; its draft stays).
+SessionId sessionOf(const Model& model, std::size_t i, const Mirror& mirror);
+
+// The friends whose session a window ensures (ActionKind::Ensure) when its link starts: one per friend tab, in the
+// tabs' order. The server makes a session only for a friend that has none.
+std::vector<std::string> friendsToEnsure(const Model& model);
+
+// The stop of tab i's friend's work (Command-Escape) as an action: true, with the session the tab shows (the session
+// the action names), when i is a friend's tab that shows one; otherwise false. A stop carries no text, changes nothing
+// in the window, and is sent whatever the session shows and whether or not the link is up (it waits in the outbox, in
+// order): the server decides, against its state when it processes the stop.
+bool stopTarget(const Model& model, std::size_t i, const Mirror& mirror, SessionId* session);
 
 } // namespace nexus::sync

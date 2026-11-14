@@ -22,10 +22,12 @@
 // --backdrop draws the screenshot see-through,
 // as the overlay is, over coloured stripes in place of the screen behind it.
 //
-// --server HOST makes the friend tabs the server's: the window runs `nexus-server new` on HOST over ssh and keeps in
-// step with it over mosh's transport (link/client.h). A prompt goes to the server, and the transcripts and queues show
-// what the server holds (sync/mirror.h). Until the server is first heard there is no prompt, only the line that says
-// the window is connecting (or why it could not); afterwards that line shows only while the server is not heard.
+// --server HOST makes the friend tabs show the server's sessions: the window runs `nexus-server new` on HOST over ssh,
+// asks for a session with each friend (the server makes one for a friend that has none), and keeps in step with it over
+// mosh's transport (link/client.h). Each friend tab shows its friend's first session, the window's own choice. A prompt
+// goes to that session, and the transcripts and queues show what the server holds (sync/mirror.h). Until the server is
+// first heard there is no prompt, only the line that says the window is connecting (or why it could not); afterwards
+// that line shows only while the server is not heard.
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
 //              [--bench FRAMES] [--print-window-config] [--server HOST]
@@ -137,8 +139,8 @@ void keepSelection(App& a) {
         std::fprintf(stderr, "nexus: %s\n", error.c_str());
 }
 
-// Saves the terminal tabs, each with the directory its shell works in now, if that changed (a terminal opened, closed or
-// moved, or a shell changed directory), and the selection with them. Called at each frame's start and as the window
+// Saves the terminal tabs, each with the directory its shell works in now, if that changed (a terminal opened, closed
+// or moved, or a shell changed directory), and the selection with them. Called at each frame's start and as the window
 // closes, so a quit of any kind leaves them saved.
 void keepTerminals(App& a) {
     if (!a.keep || a.terminals == nullptr)
@@ -157,13 +159,13 @@ void keepTerminals(App& a) {
 }
 
 #if NEXUS_LINK
-// Each frame: the server's latest tabs into the model, and the link's state into the line where the prompt stands.
+// Each frame: the server's latest sessions into the model, and the link's state into the line where the prompt stands.
 // The prompt opens once the server is first heard, and stays.
 void pollLink(App& a) {
     link::ClientLink::Snapshot s;
     if (a.link == nullptr || !a.link->poll(&s))
         return;
-    a.mirror.apply(*a.model, s.tabs);
+    a.mirror.apply(*a.model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected)
         a.view.promptOpen = true;
     const std::string status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
@@ -766,11 +768,21 @@ int main(int argc, char** argv) {
         a.view.submit = [](std::size_t i, bool queue) {
             std::string text;
             std::string why;
-            if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
+            // The session the tab shows, the window's own choice; none until the server's state has one of the
+            // friend's (the window ensured one at launch), and then the draft stays.
+            const sync::SessionId session = sync::sessionOf(model, i, a.mirror);
+            if (session == 0 && i < model.tab_count() && model.tab(i).kind == TabKind::Friend) {
+                why = "No session with " + model.tab(i).name + " yet: the prompt is kept.";
+            } else if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
                 a.promptProblem.clear();
-                a.link->send(queue ? sync::ActionKind::Queue : sync::ActionKind::Send, model.tab(i).name,
-                    std::move(text));
-            } else if (!why.empty()) {
+                sync::Action action;
+                action.kind = queue ? sync::ActionKind::Queue : sync::ActionKind::Send;
+                action.session = session;
+                action.text = std::move(text);
+                a.link->send(std::move(action));
+                return;
+            }
+            if (!why.empty()) {
                 a.promptProblem = why;
                 if (a.view.status.empty())
                     a.view.status = why;
@@ -783,6 +795,13 @@ int main(int argc, char** argv) {
                 prAppWake(app);
         };
         a.link = std::make_unique<link::ClientLink>(std::move(options));
+        // A session with each friend the window shows: the server makes one only for a friend that has none.
+        for (const std::string& name : sync::friendsToEnsure(model)) {
+            sync::Action ensure;
+            ensure.kind = sync::ActionKind::Ensure;
+            ensure.friendName = name;
+            a.link->send(std::move(ensure));
+        }
     }
 #endif
     a.bench = bench;

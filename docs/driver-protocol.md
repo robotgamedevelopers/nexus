@@ -1,9 +1,10 @@
 # The driver protocol, version 1
 
 nexus-server reaches each friend through a driver: a small program that sits between the server and one AI harness
-(Claude, Codex and others). The server starts one driver process per friend tab and talks to it over the driver's
-standard input and output. This page is the whole contract a driver must keep. The reference code is
-`src/driver/protocol.h`; `tests/driver/fake_driver.cpp` is a driver that plays a script.
+(Claude, Codex and others). The server starts one driver process per session (a conversation with a friend, which
+the server identifies by an id of its own) and talks to it over the driver's standard input and output. This page
+is the whole contract a driver must keep. The reference code is `src/driver/protocol.h`;
+`tests/driver/fake_driver.cpp` is a driver that plays a script.
 
 ## Starting and ending
 
@@ -61,7 +62,7 @@ starts, a turn open or not, and applies from the next `send` on: a turn never ch
 the harness does not take is answered by an `error` without a turn (code `other` for a value it does not have,
 `harness` when the harness refuses it), and the setting stays as it was.
 
-The server numbers turns from 1 for each tab, strictly increasing and never reused, across restarts of the driver: a
+The server numbers turns from 1 for each session, strictly increasing and never reused, across restarts of the driver: a
 driver that has just started may see its first `send` with any turn number. A driver checks the order: each `send`'s
 turn must be greater than the last turn that driver process saw.
 

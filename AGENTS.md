@@ -19,7 +19,7 @@ The rules for an AI working in this repository. Each one holds on every change.
 - Use Prax fully: take the highest Prax layer that does the job, and never rewrite what Prax already has.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
-- `nexus-server` reaches each friend through a driver, a child process per friend (per session, after the session-id step), over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
+- `nexus-server` reaches each friend through a driver, a child process per session, over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
 - A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the session id, and starts a driver again with `--resume`.
 - A prompt is written to a driver at most once. A turn left open when its driver exits or the server restarts is cut with a notice and never sent again (`models/Supervisor.tla`). Which program is each friend's driver comes from the file `drivers` in the server's directory (`src/server/driver_table.h`).
 
@@ -51,6 +51,14 @@ Friend tabs
 - Enter sends, Command-Enter queues, and Shift-Enter breaks the line.
 - Command-Escape stops the friend's work.
 - With `--server`, sending and queuing go through `nexus-server`, and the server's state is what the tab shows. Before the server is reached, the prompt is replaced by one plain line giving the link's state.
+
+Sessions
+- A session has an id, a harness (Claude for now), an account, a model and an effort, plus its transcript, its queue and its driver. `nexus-server` mints the id: from 1, durable, and never reused, across restarts (`IdsNeverReused` and `SessionsKept` in `models/Link.tla`; `store_unit_ids`). The store, the wire and the drivers are keyed by session id, never by friend name or by tab. A session is never removed; its friend is one of its attributes.
+- Several sessions may be with one friend, and share a harness and an account, or not. How they are used is still to be decided; the server keeps it possible.
+- A window asks and the server decides. A create makes a session with a friend, copying the account, model and effort of the session it names, or taking the friend's defaults (`hub_create_copies_settings`); an ensure makes one only for a friend that has none (`EnsureMakesOne`). A create or ensure past the limit on sessions, or a send, queue or stop naming a session the server does not hold, is refused and counted, and makes nothing.
+- A change of a session's model or effort applies from its next turn: a turn never changes model halfway (`WrittenWithSetting` and `SettingLeavesTurn` in `models/Supervisor.tla`). The driver is told them by a `settings` line before the send that first runs with them; a field put back to the harness's default, which that line cannot say, ends the driver once no turn is open, and the next starts on the defaults (`WSupSettingNotCleared`). A change of its account keeps its id and its transcript, and ends its driver once no turn is open, so that the next starts for the new account (`NoSendOnOldAccount`, `AccountKeepsTurn`; `friends_functional_account`). What an account is to a driver (the environment it starts with) is part 5 of the friends work; until then a driver logs in as the `--account` its line in the `drivers` file names (`accounts/<name>/` under `~/.nexus/server`), whatever the session's account says.
+- A store from before sessions (keyed by friend tab) opens as one session per friend, transcripts, queues and drivers intact, and is written in the sessions format from then on (`store_unit_migrate`, `durable_unit_migrate`).
+- The window asks for a session with each friend at launch, and each friend tab shows its friend's first session (`ShowsFirst`). Which session a tab shows is the window's own state, never the server's.
 
 The sprint tab
 - It keeps nova-sprint's original branding and logo. The app itself is called "nexus" (its bundle display name), but the board is not rebranded.
@@ -92,14 +100,12 @@ Keys and contexts
 - Escape always backs out one context: a pop-up, the session menu, a drag. The last context is the overlay itself, so only with nothing else open does Escape hide it. Terminal tabs still give Escape to the terminal.
 
 Sessions
-- A session has an id, a harness (Claude for now) and an account, a model and an effort, plus its transcript, its queue and its driver. The server makes the id; the server keys everything by session id, never by friend name or by tab. Today the server keys by friend name; the session-id step changes that, after part 3 and before the Claude driver.
-- Several sessions may share a harness and an account, or not. How they are used is still to be decided; the design keeps it possible.
 - A friend's tab holds that friend's sessions as subtabs, like a menu bar or a cross menu: friends run across the strip, and the selected friend's sessions drop down in a column under its tab. The column shows only while switching, and hides once a session is chosen.
 - Command-Up/Down move between the sessions in the current friend's tab. (In a friend's tab this replaces Command-Up/Down gliding to the ends; Home and End still glide.)
 - Command-N makes a new session with this friend as a subtab in this tab; Command-Shift-N makes it a tab of its own (like a browser's new tab and new window). A new session starts with the current session's account, model and effort.
 - A session can be dragged out of the column into the strip to become its own tab.
-- Switching a session's account happens inside its tab: the session keeps its id and its transcript, and its driver restarts under the new account. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far.
-- Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. A change applies from the next turn; a turn never changes model halfway. Nothing shows the model or effort otherwise.
+- Switching a session's account happens inside its tab. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far (part 5 of the friends work, `docs/roadmap.sexp`).
+- Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Stopping
 - Command-Escape always sends a stop to the server, whatever the window shows (no turn seen, or the link down: then it waits in order with the other actions). The client never filters a stop.

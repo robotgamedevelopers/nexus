@@ -34,7 +34,8 @@ struct Unknown {
 
 // ---- Server to driver ----
 
-// A prompt: opens turn `turn`, which the server numbers from 1, strictly increasing within a tab and never reused.
+// A prompt: opens turn `turn`, which the server numbers from 1, strictly increasing within a session and never
+// reused.
 struct Send {
     std::uint64_t turn = 0;
     std::string prompt;

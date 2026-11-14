@@ -1,6 +1,6 @@
-// What mosh's Transport does with the states it carries, without its sockets, clock or crypto: a test-only copy of
-// the bookkeeping in mosh 1.4.0 src/network/transportsender-impl.h and networktransport-impl.h, so that unit tests and
-// the trace walk drive nexus's states (sync/actions.h, sync/tabs.h) through the same calls, in the same order, under
+// What mosh's Transport does with the states it carries, without its sockets, clock or crypto: a test-only copy of the
+// bookkeeping in mosh 1.4.0 src/network/transportsender-impl.h and networktransport-impl.h, so that unit tests and the
+// trace walk drive nexus's states (sync/actions.h, sync/sessions.h) through the same calls, in the same order, under
 // loss, duplication and reordering chosen by a seeded generator.
 //
 //   sender:   keeps the states it sent (the first one acknowledged), subtracts the acknowledged one from every state

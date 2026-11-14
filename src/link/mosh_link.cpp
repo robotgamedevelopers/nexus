@@ -16,8 +16,8 @@ namespace nexus::link {
 
 namespace {
 
-using ServerTransport = Network::Transport<sync::Tabs, sync::Actions>;
-using ClientTransport = Network::Transport<sync::Actions, sync::Tabs>;
+using ServerTransport = Network::Transport<sync::Sessions, sync::Actions>;
+using ClientTransport = Network::Transport<sync::Actions, sync::Sessions>;
 
 // Runs one call into mosh: false, with what it threw, on an exception. mosh throws NetworkException for the socket,
 // CryptoException for a packet that does not authenticate, and our states throw BadDiff or std::logic_error.
@@ -45,20 +45,20 @@ void freezeClock() {
     freeze_timestamp();
 }
 
-// Both ends start from the empty states (mosh's state 0, which each end assumes the other holds); the server's tabs
+// Both ends start from the empty states (mosh's state 0, which each end assumes the other holds); the server's sessions
 // are its first change.
 struct ServerSession::Impl {
-    sync::Tabs initialMine;
+    sync::Sessions initialMine;
     sync::Actions initialRemote;
     ServerTransport transport;
     sync::Applier applier;
-    Impl(const sync::Tabs& state, std::uint64_t applied, std::uint64_t next)
+    Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next)
         : initialRemote(next), transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
         transport.set_current_state(state);
     }
 };
 
-ServerSession::ServerSession(const sync::Tabs& state, std::uint64_t applied, std::uint64_t next) {
+ServerSession::ServerSession(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next) {
     std::string why;
     if (!guarded([&] { impl_ = std::make_unique<Impl>(state, applied, next); }, &why))
         throw std::runtime_error("no UDP port for the session (mosh binds one of 60001 to 60999): " + why);
@@ -95,7 +95,7 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
     return impl_->applier.apply(actions, problem);
 }
 
-void ServerSession::setState(const sync::Tabs& state) {
+void ServerSession::setState(const sync::Sessions& state) {
     impl_->transport.set_current_state(state);
 }
 
@@ -117,7 +117,7 @@ std::uint64_t ServerSession::applied() const {
 
 struct ClientSession::Impl {
     sync::Actions initialMine;
-    sync::Tabs initialRemote;
+    sync::Sessions initialRemote;
     ClientTransport transport;
     Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next)
         : initialMine(next), transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
@@ -140,11 +140,11 @@ bool ClientSession::receive(std::string* why) {
     return guarded([&] { impl_->transport.recv(); }, why);
 }
 
-std::uint64_t ClientSession::add(sync::ActionKind kind, std::string tab, std::string text) {
-    return impl_->transport.get_current_state().add(kind, std::move(tab), std::move(text));
+std::uint64_t ClientSession::add(sync::Action action) {
+    return impl_->transport.get_current_state().add(std::move(action));
 }
 
-const sync::Tabs& ClientSession::state() const {
+const sync::Sessions& ClientSession::state() const {
     return impl_->transport.get_latest_remote_state().state;
 }
 

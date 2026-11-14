@@ -3,7 +3,8 @@
 // processes, no clock: the walk plays the driver and the person, keeps the time itself, and commits each step's
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
-//   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue] <out.tla>
+//   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue | --faulty-setting |
+//                                   --faulty-account] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
@@ -25,6 +26,8 @@
 //   --faulty-turn    a restart finds the next turn number as 1, as if the store had not kept it
 //   --faulty-resume  a restart finds no session id, as if the store had not kept it
 //   --faulty-queue   a restart finds the queue empty, as if the store had not kept it
+//   --faulty-setting a restart finds the model and effort empty, as if the store had not kept them
+//   --faulty-account a restart finds the account empty, as if the store had not kept it
 
 #include <cstdint>
 #include <cstdio>
@@ -49,8 +52,14 @@ constexpr std::size_t kPrompts = 100;
 constexpr std::size_t kMaxWaiting = 2;
 constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
+constexpr std::size_t kMaxSwitches = 12;
 
-enum class Fault { None, Turn, Resume, Queue };
+enum class Fault { None, Turn, Resume, Queue, Setting, Account };
+
+// A model and effort as the spec writes a setting: a record of the two, "" for the harness's default.
+std::string settingName(const std::string& model, const std::string& effort) {
+    return "[m |-> \"" + model + "\", e |-> \"" + effort + "\"]";
+}
 
 std::string str(const std::string& s) {
     return "\"" + s + "\"";
@@ -117,7 +126,7 @@ class Walk {
 public:
     explicit Walk(Fault fault) : fault_(fault) {
         Output out;
-        sup_.emplace(config(), committed_, now_, &out);
+        sup_.emplace(configured(), committed_, now_, &out);
         carryOut(out);
         records_.push_back(record("init", "", 0, "", out));
     }
@@ -154,6 +163,9 @@ public:
         if ((r < 194 || (s.shuttingDown() && !alive)) && restarts_ < kMaxRestarts) {
             return restart();
         }
+        if (r < 215 && switches_ < kMaxSwitches) {
+            return rng.chance(2) ? setting(rng) : account(rng);
+        }
         if (alive) {
             return message(rng);
         }
@@ -176,6 +188,30 @@ public:
     std::size_t count(Effect::What w) const { return counts_[static_cast<int>(w)]; }
 
 private:
+    // The session's model and effort, and its account, as the store keeps them: a restart starts from them.
+    Config configured() const {
+        Config c = config();
+        c.model = model_;
+        c.effort = effort_;
+        c.account = account_;
+        return c;
+    }
+
+    bool setting(Rng& rng) {
+        ++switches_;
+        const char* models[] = {"", "m", "n"};
+        model_ = models[rng.below(3)];
+        effort_ = rng.chance(2) ? "high" : "";
+        return take("setting", "", 0, settingName(model_, effort_), sup_->setOptions(model_, effort_, now_));
+    }
+
+    bool account(Rng& rng) {
+        ++switches_;
+        const char* accounts[] = {"", "x", "y"};
+        account_ = accounts[rng.below(3)];
+        return take("account", "", 0, account_, sup_->setAccount(account_, now_));
+    }
+
     bool prompt() {
         ++sent_;
         return take("prompt", "", 0, "", sup_->prompt("p" + std::to_string(sent_), now_));
@@ -206,12 +242,16 @@ private:
         const char* how[] = {"exited with status 0", "exited with status 1", "was killed by signal 9"};
         Output out = sup_->exited(how[rng.below(3)], now_);
         --procs_;
+        toldModel_.clear();
+        toldEffort_.clear();
         return take("exit", "", 0, "", std::move(out));
     }
 
     bool restart() {
         ++restarts_;
         procs_ = 0;     // the old server's driver reads the end of its input and exits
+        toldModel_.clear();
+        toldEffort_.clear();
         sync::DriverState state = committed_;
         if (fault_ == Fault::Turn) {
             state.nextTurn = 1;
@@ -223,8 +263,16 @@ private:
         if (fault_ == Fault::Queue) {
             queue.clear();
         }
+        Config c = configured();
+        if (fault_ == Fault::Setting) {
+            c.model.clear();
+            c.effort.clear();
+        }
+        if (fault_ == Fault::Account) {
+            c.account.clear();
+        }
         Output out;
-        sup_.emplace(config(), state, now_, &out, std::move(queue));
+        sup_.emplace(std::move(c), state, now_, &out, std::move(queue));
         return take("restart", "", 0, "", std::move(out));
     }
 
@@ -362,6 +410,8 @@ private:
             if (c.kind == Command::Kind::Start) {
                 ++procs_;
                 resumed_.clear();
+                toldModel_.clear();     // a driver starts on the harness's defaults
+                toldEffort_.clear();
                 for (std::size_t i = 0; i + 1 < c.argv.size(); ++i) {
                     if (c.argv[i] == "--resume") {
                         resumed_ = c.argv[i + 1];
@@ -373,7 +423,15 @@ private:
                     fail("the supervisor wrote a line that does not decode: " + d.error);
                 }
                 if (const driver::Send* send = std::get_if<driver::Send>(&*d.message)) {
-                    written_.push_back({promptId(send->prompt), send->turn});
+                    written_.push_back({promptId(send->prompt), send->turn, settingName(toldModel_, toldEffort_)});
+                } else if (const driver::Settings* set = std::get_if<driver::Settings>(&*d.message)) {
+                    // As the driver applies it: a field left out (empty) stays as it is.
+                    if (!set->model.empty()) {
+                        toldModel_ = set->model;
+                    }
+                    if (!set->effort.empty()) {
+                        toldEffort_ = set->effort;
+                    }
                 } else if (const driver::Stop* stop = std::get_if<driver::Stop>(&*d.message)) {
                     stops_.push_back(stop->turn);
                 }
@@ -385,7 +443,9 @@ private:
                        const Output& out) const {
         const Supervisor& s = *sup_;
         std::ostringstream o;
-        o << "[op |-> " << str(op) << ", kind |-> " << str(kind) << ", t |-> " << t << ", v |-> " << str(v)
+        // A setting's value is a record; every other value a string.
+        const std::string value = std::string(op) == "setting" ? v : str(v);
+        o << "[op |-> " << str(op) << ", kind |-> " << str(kind) << ", t |-> " << t << ", v |-> " << value
           << ", sent |-> " << sent_ << ", restarts |-> " << restarts_ << ", phase |-> " << str(phaseName(s.phase()))
           << ", stage |-> " << str(stageName(s.stage())) << ", open |-> " << s.state().openTurn << ", prompt |-> "
           << promptId(s.openPrompt()) << ", next |-> " << s.state().nextTurn << ", waiting |-> <<";
@@ -402,7 +462,8 @@ private:
           << (s.noCredential() ? "TRUE" : "FALSE") << ", down |-> "
           << (s.shuttingDown() ? "TRUE" : "FALSE") << ", procs |-> " << procs_ << ", written |-> <<";
         for (std::size_t i = 0; i < written_.size(); ++i) {
-            o << (i ? ", " : "") << "[p |-> " << written_[i].first << ", t |-> " << written_[i].second << "]";
+            o << (i ? ", " : "") << "[p |-> " << written_[i].p << ", t |-> " << written_[i].t << ", v |-> "
+              << written_[i].v << "]";
         }
         o << ">>, stops |-> <<";
         for (std::size_t i = 0; i < stops_.size(); ++i) {
@@ -415,7 +476,10 @@ private:
             o << (i ? ", " : "") << "[k |-> " << str(effectKind(e.what)) << ", t |-> " << e.turn << ", p |-> "
               << (prompt ? promptId(e.text) : 0) << "]";
         }
-        o << ">>, resumed |-> " << str(resumed_) << "]";
+        o << ">>, resumed |-> " << str(resumed_) << ", setting |-> " << settingName(s.model(), s.effort())
+          << ", told |-> " << settingName(toldModel_, toldEffort_)
+          << ", account |-> " << str(s.account()) << ", drv |-> " << str(s.driverAccount()) << ", retiring |-> "
+          << (s.retiring() ? "TRUE" : "FALSE") << ", switches |-> " << switches_ << "]";
         return o.str();
     }
 
@@ -427,11 +491,22 @@ private:
     std::size_t sent_ = 0;
     std::size_t restarts_ = 0;
     std::vector<std::string> committedQueue_;   // the tab's queue as the store holds it
-    std::vector<std::pair<std::size_t, std::uint64_t>> written_;
+    struct Written {
+        std::size_t p;
+        std::uint64_t t;
+        std::string v;
+    };
+    std::vector<Written> written_;
+    std::size_t switches_ = 0;
+    std::string model_;
+    std::string effort_;
+    std::string account_;
     std::vector<std::uint64_t> stops_;          // the turn of every stop written
     std::size_t queued_ = 0;
     std::size_t taken_ = 0;
     std::string resumed_;
+    std::string toldModel_;     // what the driver alive was told, from the settings lines written to it
+    std::string toldEffort_;
     std::size_t counts_[7] = {};
     std::vector<std::string> records_;
 };
@@ -452,7 +527,8 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         std::fprintf(stderr, "supervisor_walk: cannot write %s\n", path);
         return 1;
     }
-    const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue"};
+    const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue", ", faulty setting",
+                            ", faulty account"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
         << faults[static_cast<int>(fault)] << ".\n";
@@ -461,6 +537,10 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
     out << "TraceMaxFailedStarts == " << kMaxFailed << "\n";
     out << "TraceMaxRestarts == " << kMaxRestarts << "\n";
     out << "TraceSessions == {\"a\", \"b\"}\n";
+    out << "TraceModels == {\"m\", \"n\"}\n";
+    out << "TraceEfforts == {\"high\"}\n";
+    out << "TraceAccounts == {\"x\", \"y\"}\n";
+    out << "TraceMaxSwitches == " << kMaxSwitches << "\n";
     out << "Trace == <<\n";
     const auto& records = w.records();
     for (std::size_t k = 0; k < records.size(); ++k) {
@@ -497,6 +577,12 @@ int main(int argc, char** argv) {
         } else if (a == "--faulty-resume") {
             fault = Fault::Resume;
             ++faults;
+        } else if (a == "--faulty-setting") {
+            fault = Fault::Setting;
+            ++faults;
+        } else if (a == "--faulty-account") {
+            fault = Fault::Account;
+            ++faults;
         } else if (a == "--faulty-queue") {
             fault = Fault::Queue;
             ++faults;
@@ -507,7 +593,7 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
         std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
-                     "--faulty-queue] <out.tla>\n");
+                     "--faulty-queue | --faulty-setting | --faulty-account] <out.tla>\n");
         return 2;
     }
     return walk(seed, steps, fault, rest[2].c_str());

@@ -56,10 +56,10 @@ void ClientLink::nudge() {
     }
 }
 
-void ClientLink::send(sync::ActionKind kind, std::string tab, std::string text) {
+void ClientLink::send(sync::Action action) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        pending_.push_back(sync::Action{0, kind, std::move(tab), std::move(text)});
+        pending_.push_back(std::move(action));
         ++sent_;
         snapshot_.sent = sent_;
         snapshot_.acknowledged = false;
@@ -123,7 +123,7 @@ void ClientLink::run() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (sync::Action& a : pending_) {
-                session->add(a.kind, std::move(a.tab), std::move(a.text));
+                session->add(std::move(a));
                 ++handed;
             }
             pending_.clear();
@@ -152,7 +152,7 @@ void ClientLink::run() {
         if (s.stateNum != lastNum || status != lastStatus || s.acknowledged != lastAcknowledged ||
                 s.sent != lastHanded) {
             lastHanded = s.sent;
-            s.tabs = session->state();
+            s.sessions = session->state();
             lastNum = s.stateNum;
             lastStatus = status;
             lastAcknowledged = s.acknowledged;

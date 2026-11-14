@@ -8,15 +8,16 @@ namespace nexus::sync {
 
 namespace {
 
-// A diff: the number of its first action, how many follow, and each action's kind, tab and text. The numbers of the
-// rest follow from the first, so a diff is always one unbroken run.
+// A diff: the number of its first action, how many follow, and each action's kind, session, friend and text. The
+// numbers of the rest follow from the first, so a diff is always one unbroken run.
 std::string encode(std::uint64_t start, const std::vector<Action>& held, std::size_t from) {
     Writer w;
     w.u64(start);
     w.u64(held.size() - from);
     for (std::size_t i = from; i < held.size(); ++i) {
         w.byte(static_cast<std::uint8_t>(held[i].kind));
-        w.str(held[i].tab);
+        w.u64(held[i].session);
+        w.str(held[i].friendName);
         w.str(held[i].text);
     }
     return w.take();
@@ -28,10 +29,11 @@ Actions::Actions() : held_(std::make_shared<const std::vector<Action>>()) {}
 
 Actions::Actions(std::uint64_t next) : first_(next == 0 ? 1 : next), held_(std::make_shared<const std::vector<Action>>()) {}
 
-std::uint64_t Actions::add(ActionKind kind, std::string tab, std::string text) {
+std::uint64_t Actions::add(Action action) {
     auto held = std::make_shared<std::vector<Action>>(*held_);
     const std::uint64_t num = next();
-    held->push_back(Action{num, kind, std::move(tab), std::move(text)});
+    action.num = num;
+    held->push_back(std::move(action));
     held_ = std::move(held);
     return num;
 }
@@ -71,12 +73,14 @@ std::vector<Action> Actions::parse(const std::string& diff) {
         Action a;
         a.num = start + i;
         const std::uint8_t kind = r.byte();
-        if (kind < static_cast<std::uint8_t>(ActionKind::Send) || kind > static_cast<std::uint8_t>(ActionKind::Stop)) {
-            throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", none of send (1), queue (2) "
-                "and stop (3)");
+        if (kind < static_cast<std::uint8_t>(ActionKind::Send) ||
+                kind > static_cast<std::uint8_t>(ActionKind::SetEffort)) {
+            throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", none of send (1) to set "
+                "effort (8)");
         }
         a.kind = static_cast<ActionKind>(kind);
-        a.tab = r.str();
+        a.session = r.u64();
+        a.friendName = r.str();
         a.text = r.str();
         out.push_back(std::move(a));
     }

@@ -14,18 +14,30 @@
 #include <string>
 #include <vector>
 
+#include "sync/sessions.h"
+
 namespace nexus::sync {
 
+// Each action names a session by its id (sync/sessions.h), never a tab: a window keeps which session each of its tabs
+// shows to itself. What an action does is decided by the server, against the sessions it holds when it applies it.
 enum class ActionKind : std::uint8_t {
-    Send = 1,   // a prompt sent to a friend's tab: it goes in the transcript
-    Queue = 2,  // a prompt queued in a friend's tab, for later
-    Stop = 3,   // stop the friend's work in a tab (no text): applied at once, never queued behind anything
+    Send = 1,       // a prompt sent in a session: it goes in the transcript
+    Queue = 2,      // a prompt queued in a session, for later
+    Stop = 3,       // stop the friend's work in a session (no text): applied at once, never queued behind anything
+    Create = 4,     // a new session with a friend (friendName): its account, model and effort copied from `session`,
+                    // or, with session 0, the friend's defaults
+    Ensure = 5,     // a session with a friend (friendName) only if the friend has none: what a window sends for each
+                    // friend it shows, so that each has a session to show
+    SetAccount = 6, // the session's account, model or effort becomes `text` (empty: the harness's default), from its
+    SetModel = 7,   // next turn on
+    SetEffort = 8,
 };
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
     ActionKind kind = ActionKind::Send;
-    std::string tab;        // the friend's name, which names the tab on both sides
+    SessionId session = 0;  // the session it names; a create's to copy from (0: none); an ensure's is 0
+    std::string friendName; // a create's and an ensure's friend; empty for the rest
     std::string text;
     bool operator==(const Action&) const = default;
 };
@@ -37,8 +49,8 @@ public:
     // a window, reconnecting, goes on with its numbers (link/mosh_link.h). Both ends must be given the same number.
     explicit Actions(std::uint64_t next);
 
-    // The client's one write: appends an action with the next number and returns that number.
-    std::uint64_t add(ActionKind kind, std::string tab, std::string text);
+    // The client's one write: appends `action` (its num ignored) with the next number and returns that number.
+    std::uint64_t add(Action action);
 
     std::uint64_t first() const { return first_; }              // the number of the oldest action held
     std::uint64_t next() const { return first_ + held_->size(); } // the number the next action gets

@@ -7,11 +7,14 @@
 (* walk, playing the driver, the person and the clock, and writes          *)
 (* SupervisorTraceData.tla beside this module. It defines the instance     *)
 (* (TracePrompts, TraceMaxWaiting, TraceMaxFailedStarts, TraceMaxRestarts, *)
+(* TraceModels, TraceEfforts, TraceAccounts, TraceMaxSwitches,            *)
 (* TraceSessions) and Trace: one record per step. Trace[1] is the start    *)
 (* (op "init"); each later record is the event the code was given (op,    *)
 (* and for a message its kind, turn and value), and after it the code's    *)
-(* whole state, every send and stop it has written, the entries the step appended *)
-(* to the tab, and the --resume of its last start.                         *)
+(* whole state, every send and stop it has written, the entries the step  *)
+(* appended to the tab, the --resume of its last start, and the model and  *)
+(* effort the driver alive was told, read from the settings lines written  *)
+(* to it (each send records them as they are when it is written).          *)
 (*                                                                         *)
 (* Each step of this spec takes the Supervisor action the record names.    *)
 (* TraceMatches requires the spec's state to equal the code's, field by   *)
@@ -20,21 +23,25 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, SupervisorTraceData
 
-VARIABLES s, sent, restarts, l
+VARIABLES s, sent, restarts, switches, l
 
 L == INSTANCE Supervisor WITH Prompts <- TracePrompts, MaxWaiting <- TraceMaxWaiting,
                               MaxFailedStarts <- TraceMaxFailedStarts, MaxRestarts <- TraceMaxRestarts,
-                              Sessions <- TraceSessions
+                              Sessions <- TraceSessions, Models <- TraceModels, Efforts <- TraceEfforts,
+                              Accounts <- TraceAccounts,
+                              MaxSwitches <- TraceMaxSwitches
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
-           "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed"}
+           "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
+           "account", "drv", "retiring"}
 
 Matches(k) ==
     LET r == Trace[k] IN
     /\ sent = r.sent
     /\ restarts = r.restarts
+    /\ switches = r.switches
     /\ \A f \in Fields : s[f] = r[f]
 
 TraceMatches == Matches(l)
@@ -51,9 +58,11 @@ Step(r) ==
       [] r.op = "timeout"  -> L!Timeout
       [] r.op = "shutdown" -> L!Shutdown
       [] r.op = "restart"  -> L!Restart
+      [] r.op = "setting"  -> L!SetSetting(r.v)
+      [] r.op = "account"  -> L!SetAccount(r.v)
       [] OTHER             -> FALSE
 
-traceVars == <<s, sent, restarts, l>>
+traceVars == <<s, sent, restarts, switches, l>>
 
 TraceInit == l = 1 /\ L!Init
 
@@ -86,5 +95,9 @@ StopForOpen == L!StopForOpen
 StopEndsWhatRuns == L!StopEndsWhatRuns
 NoLatchedStop == L!NoLatchedStop
 TakesAtTurnEnd == L!TakesAtTurnEnd
+WrittenWithSetting == L!WrittenWithSetting
+SettingLeavesTurn == L!SettingLeavesTurn
+NoSendOnOldAccount == L!NoSendOnOldAccount
+AccountKeepsTurn == L!AccountKeepsTurn
 
 =============================================================================

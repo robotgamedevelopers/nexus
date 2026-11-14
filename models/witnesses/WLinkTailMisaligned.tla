@@ -4,21 +4,28 @@
 EXTENDS MCLink
 
 BrokenFirst(s) == Max(0, Len(s) - W - 1)
-BrokenSnap(trs, qs, ops) == [t \in TabNames |-> LET s == trs[t] IN
-                                                [first   |-> BrokenFirst(s),
-                                                 entries |-> SubSeq(s, TailFirst(s) + 1, Len(s)) \o OpenOf(ops, t),
-                                                 queue   |-> qs[t]]]
+BrokenSnap(sess, trs, qs, ops) ==
+    [i \in Ids |-> IF sess[i] = NoSes THEN NoSnap
+                   ELSE LET s == trs[i] IN
+                        [friend  |-> sess[i].friend,
+                         first   |-> BrokenFirst(s),
+                         entries |-> SubSeq(s, TailFirst(s) + 1, Len(s)) \o OpenOf(ops, i),
+                         queue   |-> qs[i]]]
 
 BrokenApplier(c, first, lst) ==
     IF first > applied[c] + 1 \/ lst <= applied[c]
     THEN UNCHANGED <<applied, done, server>>
-    ELSE LET r == ApplyAll(c, applied[c] + 1, lst, [trs |-> tr, qs |-> q, sts |-> stops]) IN
+    ELSE LET r == ApplyAll(c, applied[c] + 1, lst, Server) IN
          /\ applied' = [applied EXCEPT ![c] = lst]
          /\ done' = [done EXCEPT ![c] = @ \o Numbers(applied[c] + 1, lst)]
          /\ tr' = r.trs
          /\ q' = r.qs
          /\ stops' = r.sts
-         /\ snaps' = Append(snaps, BrokenSnap(r.trs, r.qs, op))
+         /\ ses' = r.ses
+         /\ nextSid' = r.nxt
+         /\ minted' = r.mint
+         /\ skipped' = r.skip
+         /\ snaps' = Append(snaps, BrokenSnap(r.ses, r.trs, r.qs, op))
          /\ UNCHANGED <<op, made>>
 
 BrokenDeliver(c, first, lst) == DeliverWith(BrokenApplier, c, first, lst)

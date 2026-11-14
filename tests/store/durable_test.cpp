@@ -1,12 +1,15 @@
-// Unit tests of nexus-server's tabs on the store (server/durable.h): the Hub over a DurableStore on MemFs, in memory.
-// No time, no sockets, no network, no files. What a restart must keep: every tab, every queue and every client's
-// applied counter, so that a reconnecting window's resent actions are skipped and the rest applied once, in order.
+// Unit tests of nexus-server's sessions on the store (server/durable.h): the Hub over a DurableStore on MemFs, in
+// memory. No time, no sockets, no network, no files. What a restart must keep: every session (its id, what it is, its
+// transcript and queue), the next id, and every client's applied counter, so that a reconnecting window's resent
+// actions are skipped and the rest applied once, in order, and no id is ever minted twice.
 //
 //   durable_test            runs every group
-//   durable_test <group>    runs one: restart resend crash take
+//   durable_test <group>    runs one: restart resend crash take migrate
 
 #include "server/durable.h"
+#include "store/codec.h"
 #include "store/fs.h"
+#include "store/journal.h"
 #include "sync/actions.h"
 #include "sync/hub.h"
 
@@ -41,12 +44,36 @@ bool openOn(store::MemFs& fs, server::DurableStore& ds, store::StoreOptions opti
     return true;
 }
 
-// A tab as text: each entry's kind and text, then the queue.
-std::string text(const Tabs& tabs, const std::string& name) {
-    const TabView* v = tabs.find(name);
+Action act(std::uint64_t num, ActionKind kind, SessionId session, std::string text = {}) {
+    Action a;
+    a.num = num;
+    a.kind = kind;
+    a.session = session;
+    a.text = std::move(text);
+    return a;
+}
+
+Action ensure(std::uint64_t num, std::string friendName) {
+    Action a;
+    a.num = num;
+    a.kind = ActionKind::Ensure;
+    a.friendName = std::move(friendName);
+    return a;
+}
+
+Action create(std::uint64_t num, std::string friendName, SessionId from) {
+    Action a = ensure(num, std::move(friendName));
+    a.kind = ActionKind::Create;
+    a.session = from;
+    return a;
+}
+
+// A session as text: its friend, the index of its first entry shown, each entry's kind and text, then the queue.
+std::string text(const Sessions& sessions, SessionId id) {
+    const SessionView* v = sessions.find(id);
     if (v == nullptr)
         return "-";
-    std::string out = std::to_string(v->first) + ":";
+    std::string out = v->info.friendName + " " + std::to_string(v->first) + ":";
     for (const EntryRef& e : v->entries)
         out += "[" + std::to_string(int(e->kind)) + e->text + "]";
     out += "|";
@@ -55,14 +82,15 @@ std::string text(const Tabs& tabs, const std::string& name) {
     return out;
 }
 
-std::string all(const Tabs& tabs) {
+std::string all(const Sessions& sessions) {
     std::string out;
-    for (const TabRef& t : tabs.tabs())
-        out += t->name + "=" + text(tabs, t->name) + " ";
+    for (const SessionRef& s : sessions.sessions()) {
+        out += std::to_string(s->id) + "=" + text(sessions, s->id) + " ";
+    }
     return out;
 }
 
-// A server's restart: its sessions, Hub and memory go; the store is opened again on what is durable.
+// A server's restart: its links, Hub and memory go; the store is opened again on what is durable.
 void test_restart() {
     store::MemFs fs;
     std::string before;
@@ -72,14 +100,16 @@ void test_restart() {
         CHECK(ds.report().fresh);
         Hub hub(ds);
         Applier ap(ds.applied("w1"));
-        std::vector<Action> acts = {{1, ActionKind::Send, "ada", "hello"}, {2, ActionKind::Queue, "ada", "later"},
-                                    {3, ActionKind::Send, "bo", "hi"}, {4, ActionKind::Send, "ada", "  "}};
+        std::vector<Action> acts = {ensure(1, "ada"), ensure(2, "bo"), act(3, ActionKind::Send, 1, "hello"),
+                                    act(4, ActionKind::Queue, 1, "later"), act(5, ActionKind::Send, 2, "hi"),
+                                    act(6, ActionKind::Send, 1, "  ")};
         std::string why;
         for (const Action& a : ap.apply(acts))
             hub.apply(a, &why, "w1");
         CHECK(why.find("empty prompt") != std::string::npos);
-        CHECK(ds.applied("w1") == 4);  // the refused one counts too
-        CHECK(hub.apply(Action{1, ActionKind::Send, "cy", "x"}, nullptr, "w2"));
+        CHECK(ds.applied("w1") == 6);  // the refused one counts too
+        CHECK(hub.apply(ensure(1, "cy"), nullptr, "w2"));
+        CHECK(hub.apply(act(2, ActionKind::Send, 3, "x"), nullptr, "w2"));
         before = all(hub.state());
     }
     fs.crash(fs.plan_all(false));   // a kill at the worst moment: nothing volatile survives
@@ -88,12 +118,18 @@ void test_restart() {
     CHECK(!ds.report().fresh);
     Hub hub(ds);
     CHECK(all(hub.state()) == before);
-    CHECK(text(hub.state(), "ada") == "0:[0hello][1(received)][2An empty prompt was not sent.]|[later]");
-    CHECK(ds.applied("w1") == 4 && ds.applied("w2") == 1 && ds.applied("w3") == 0);
+    CHECK(text(hub.state(), 1) == "ada 0:[0hello][1(received)][2An empty prompt was not sent.]|[later]");
+    CHECK(ds.applied("w1") == 6 && ds.applied("w2") == 2 && ds.applied("w3") == 0);
+    // the ids go on from where they were: an ensure for a friend with a session makes none, a create the next id
+    CHECK(ds.nextId() == 4);
+    CHECK(hub.apply(ensure(3, "cy"), nullptr, "w2"));
+    CHECK(ds.size() == 3);
+    CHECK(hub.apply(create(4, "cy", 3), nullptr, "w2"));
+    CHECK(ds.size() == 4 && ds.find(4) != nullptr && ds.find(4)->info.friendName == "cy" && ds.nextId() == 5);
 }
 
 // A window reconnecting after a restart sends again what it has no acknowledgement for, under the same numbers: the
-// server's session starts its Applier from the stored counter, so those applied before are skipped.
+// server's link starts its Applier from the stored counter, so those applied before are skipped.
 void test_resend() {
     store::MemFs fs;
     {
@@ -101,43 +137,43 @@ void test_resend() {
         CHECK(openOn(fs, ds));
         Hub hub(ds);
         Applier ap(ds.applied("w"));
-        for (const Action& a : ap.apply({{1, ActionKind::Send, "ada", "one"}, {2, ActionKind::Send, "ada", "two"}}))
+        for (const Action& a : ap.apply({ensure(1, "ada"), act(2, ActionKind::Send, 1, "one"),
+                                         act(3, ActionKind::Send, 1, "two")}))
             hub.apply(a, nullptr, "w");
     }
     fs.crash(fs.plan_all(false));
     server::DurableStore ds;
     CHECK(openOn(fs, ds));
     Hub hub(ds);
-    // The window never saw the acknowledgement of 1 and 2: it starts its new session at 1 and sends 1, 2 and 3.
+    // The window never saw the acknowledgement of 1 to 3: it starts its new link at 1 and sends 1 to 4.
     Actions window(1);
-    window.add(ActionKind::Send, "ada", "one");
-    window.add(ActionKind::Send, "ada", "two");
-    window.add(ActionKind::Send, "ada", "three");
-    Actions serverSide(1);
-    serverSide.apply_string(window.diff_from(Actions(1)));
+    window.add(ensure(0, "ada"));
+    window.add(act(0, ActionKind::Send, 1, "one"));
+    window.add(act(0, ActionKind::Send, 1, "two"));
+    window.add(act(0, ActionKind::Send, 1, "three"));
     Applier ap(ds.applied("w"));
     std::vector<Action> fresh = ap.apply(Actions::parse(window.diff_from(Actions(1))));
-    CHECK(fresh.size() == 1 && fresh[0].num == 3);
+    CHECK(fresh.size() == 1 && fresh[0].num == 4);
     for (const Action& a : fresh)
         CHECK(hub.apply(a, nullptr, "w"));
-    CHECK(text(hub.state(), "ada") == "0:[0one][1(received)][0two][1(received)][0three][1(received)]|");
-    CHECK(ds.applied("w") == 3);
-    // A session that starts past the counter would skip actions: the Applier refuses it whole.
+    CHECK(text(hub.state(), 1) == "ada 0:[0one][1(received)][0two][1(received)][0three][1(received)]|");
+    CHECK(ds.applied("w") == 4 && ds.size() == 1);
+    // A link that starts past the counter would skip actions: the Applier refuses it whole.
     Applier late(ds.applied("w"));
     std::string refused;
-    CHECK(late.apply({{5, ActionKind::Send, "ada", "five"}}, &refused).empty());
+    CHECK(late.apply({act(6, ActionKind::Send, 1, "six")}, &refused).empty());
     CHECK(!refused.empty());
     // A store that is asked to apply an action twice refuses, whatever the caller does.
     std::string why;
-    CHECK(!hub.apply(Action{3, ActionKind::Send, "ada", "three"}, &why, "w"));
-    CHECK(why.find("its next action is 4, not 3") != std::string::npos);
-    CHECK(text(hub.state(), "ada") == "0:[0one][1(received)][0two][1(received)][0three][1(received)]|");
+    CHECK(!hub.apply(act(4, ActionKind::Send, 1, "three"), &why, "w"));
+    CHECK(why.find("its next action is 5, not 4") != std::string::npos);
+    CHECK(text(hub.state(), 1) == "ada 0:[0one][1(received)][0two][1(received)][0three][1(received)]|");
     // Numbers that go on from where a window was: both ends start at the same number.
-    Actions resumed(4);
-    resumed.add(ActionKind::Queue, "ada", "four");
-    std::vector<Action> four = Applier(ds.applied("w")).apply(Actions::parse(resumed.diff_from(Actions(4))));
-    CHECK(four.size() == 1 && four[0].num == 4);
-    CHECK(resumed.init_diff() == resumed.diff_from(Actions(4)));
+    Actions resumed(5);
+    resumed.add(act(0, ActionKind::Queue, 1, "five"));
+    std::vector<Action> five = Applier(ds.applied("w")).apply(Actions::parse(resumed.diff_from(Actions(5))));
+    CHECK(five.size() == 1 && five[0].num == 5);
+    CHECK(resumed.init_diff() == resumed.diff_from(Actions(5)));
 }
 
 // A crash at every write and sync of a run of actions from two windows: the reopened state is the state after some
@@ -148,6 +184,10 @@ void test_crash() {
     bool reference = true;
     store::StoreOptions options;
     options.compact_bytes = 300;
+    auto state = [](const Hub& hub, const server::DurableStore& ds) {
+        return all(hub.state()) + "next " + std::to_string(ds.nextId()) + " " + std::to_string(ds.applied("a")) + "/" +
+            std::to_string(ds.applied("b"));
+    };
     auto run = [&](store::MemFs& fs) {
         acked = 0;
         server::DurableStore ds;
@@ -156,18 +196,22 @@ void test_crash() {
             return;
         Hub hub(ds);
         if (reference)
-            states.push_back(all(hub.state()) + std::to_string(ds.applied("a")) + "/" + std::to_string(ds.applied("b")));
+            states.push_back(state(hub, ds));
         std::uint64_t num[2] = {0, 0};
-        for (int i = 0; i < 12; ++i) {
+        for (int i = 0; i < 14; ++i) {
             const int w = i % 3 == 2 ? 1 : 0;
-            Action a{++num[w], i % 4 == 3 ? ActionKind::Queue : ActionKind::Send, i % 2 ? "bo" : "ada",
-                     "p" + std::to_string(i)};
+            Action a;
+            if (i < 2) {
+                a = ensure(++num[w], i == 0 ? "ada" : "bo");
+            } else {
+                a = act(++num[w], i % 4 == 3 ? ActionKind::Queue : ActionKind::Send, i % 2 ? 2 : 1,
+                        "p" + std::to_string(i));
+            }
             hub.apply(a, nullptr, w ? "b" : "a");
             if (hub.failed())
                 return;
             if (reference)
-                states.push_back(all(hub.state()) + std::to_string(ds.applied("a")) + "/" +
-                                 std::to_string(ds.applied("b")));
+                states.push_back(state(hub, ds));
             ++acked;
         }
     };
@@ -175,7 +219,7 @@ void test_crash() {
         store::MemFs ref;
         run(ref);
         reference = false;
-        CHECK(acked == 12 && states.size() == 13);
+        CHECK(acked == 14 && states.size() == 15);
     }
     std::uint64_t taken = 0;
     for (std::uint64_t point = 1;; ++point) {
@@ -192,8 +236,7 @@ void test_crash() {
             server::DurableStore ds;
             CHECK(openOn(fs, ds, options));
             Hub hub(ds);
-            const std::string got = all(hub.state()) + std::to_string(ds.applied("a")) + "/" +
-                std::to_string(ds.applied("b"));
+            const std::string got = state(hub, ds);
             bool found = false;
             for (std::size_t i = acked; i < states.size(); ++i)
                 found = found || states[i] == got;
@@ -206,37 +249,93 @@ void test_crash() {
     CHECK(taken > 100);
 }
 
+EntryRef entry(EntryKind kind, const std::string& text) {
+    return std::make_shared<const SessionEntry>(SessionEntry{kind, text, true});
+}
+
 // A queued prompt delivered at a turn's end, and the friend's text still growing, across a restart: the take is
 // durable (the prompt left the queue once, and is in the transcript once); the open entry is not, and a closed entry
 // is kept once.
 void test_take() {
     store::MemFs fs;
-    std::string before;
     {
         server::DurableStore ds;
         CHECK(openOn(fs, ds));
         Hub hub(ds);
-        CHECK(hub.apply(Action{1, ActionKind::Queue, "ada", "one"}, nullptr, "w1"));
-        CHECK(hub.apply(Action{2, ActionKind::Queue, "ada", "two"}, nullptr, "w1"));
+        CHECK(hub.apply(ensure(1, "ada"), nullptr, "w1"));
+        CHECK(hub.apply(act(2, ActionKind::Queue, 1, "one"), nullptr, "w1"));
+        CHECK(hub.apply(act(3, ActionKind::Queue, 1, "two"), nullptr, "w1"));
         std::string why;
-        CHECK(hub.commit("ada", {takeQueued(), TabChange{std::make_shared<const TabEntry>(TabEntry{EntryKind::Person,
-            "one", true}), {}}}, &why));
-        CHECK(hub.setOpen("ada", "the reply so"));
-        CHECK(hub.commit("ada", {TabChange{std::make_shared<const TabEntry>(TabEntry{EntryKind::Friend,
-            "the reply so far", true}), {}}}, &why));
-        CHECK(hub.setOpen("ada", "and then"));
+        CHECK(hub.commit(1, {takeQueued(), SessionChange{entry(EntryKind::Person, "one"), {}}}, &why));
+        CHECK(hub.setOpen(1, "the reply so"));
+        CHECK(hub.commit(1, {SessionChange{entry(EntryKind::Friend, "the reply so far"), {}}}, &why));
+        CHECK(hub.setOpen(1, "and then"));
         // a take of more than the queue holds is refused whole
-        CHECK(!hub.commit("ada", {takeQueued(), takeQueued()}, &why));
+        CHECK(!hub.commit(1, {takeQueued(), takeQueued()}, &why));
         CHECK(why.find("a dequeue from a queue with nothing left in it") != std::string::npos);
-        CHECK(text(hub.state(), "ada") == "0:[0one][1the reply so far][1and then]|[two]");
-        before = text(hub.state(), "ada");
+        CHECK(text(hub.state(), 1) == "ada 0:[0one][1the reply so far][1and then]|[two]");
     }
     fs.crash(fs.plan_all(false));
     server::DurableStore ds;
     CHECK(openOn(fs, ds));
     Hub hub(ds);
-    CHECK(text(hub.state(), "ada") == "0:[0one][1the reply so far]|[two]");
-    CHECK(ds.applied("w1") == 2);
+    CHECK(text(hub.state(), 1) == "ada 0:[0one][1the reply so far]|[two]");
+    CHECK(ds.applied("w1") == 3);
+}
+
+// A store an older server left, keyed by friend tab: opened through the DurableStore, each tab is a session the hub
+// shows, with its friend and the harness the server runs, transcripts and queues intact, counters kept; a resent
+// action is still skipped, and an ensure for a migrated friend makes nothing new.
+void test_migrate() {
+    store::MemFs fs;
+    {
+        // a fresh store, then its journal replaced by a friend-tab snapshot (format 2)
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+    }
+    {
+        store::Writer w;
+        w.u8(2);
+        w.u32(2);
+        for (const char* name : {"ada", "bo"}) {
+            w.str(name);
+            w.u32(1);
+            w.u8(0);
+            w.u8(1);
+            w.str(std::string("to ") + name);
+            w.u32(name[0] == 'a' ? 1 : 0);
+            if (name[0] == 'a') {
+                w.str("waiting");
+            }
+            w.u64(1);
+            w.u64(0);
+            w.str("");
+            w.u32(0);
+        }
+        w.u32(1);
+        w.str("w1");
+        w.u64(5);
+        store::Journal j(fs, "store");
+        store::Journal::Recovery rec;
+        CHECK(j.open(rec).is_ok());
+        CHECK(j.append(store::Bytes{0}).is_ok());       // a record for the snapshot to stand for
+        CHECK(j.compact(w.out()).is_ok());
+    }
+    server::DurableStore ds;
+    store::StoreOptions options;
+    options.legacy_harness = "claude";
+    CHECK(openOn(fs, ds, options));
+    CHECK(ds.report().migrated == 2);
+    Hub hub(ds);
+    CHECK(all(hub.state()) == "1=ada 0:[0to ada]|[waiting] 2=bo 0:[0to bo]| ");
+    CHECK(hub.state().find(1)->info.harness == "claude");
+    CHECK(ds.applied("w1") == 5 && ds.nextId() == 3);
+    // the window resends 5 (skipped) and goes on with 6, an ensure for ada: nothing new
+    std::vector<Action> fresh = Applier(ds.applied("w1")).apply({act(5, ActionKind::Send, 1, "again"),
+                                                                 ensure(6, "ada")});
+    CHECK(fresh.size() == 1 && fresh[0].num == 6);
+    CHECK(hub.apply(fresh[0], nullptr, "w1"));
+    CHECK(ds.size() == 2 && ds.nextId() == 3 && ds.applied("w1") == 6);
 }
 
 struct Group {
@@ -245,7 +344,7 @@ struct Group {
 };
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
-                         {"take", test_take}};
+                         {"take", test_take}, {"migrate", test_migrate}};
 
 } // namespace
 

@@ -99,7 +99,7 @@ target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
-add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/actions.cpp src/sync/tabs.cpp src/sync/hub.cpp
+add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/actions.cpp src/sync/sessions.cpp src/sync/hub.cpp
     src/sync/mirror.cpp src/sync/client.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
@@ -130,7 +130,7 @@ target_include_directories(nexus_driver PUBLIC src)
 target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
 
-# The driver supervisor (src/server/supervisor.h): what nexus-server does with one friend tab's driver, as a pure
+# The driver supervisor (src/server/supervisor.h): what nexus-server does with one session's driver, as a pure
 # state machine; the drivers file (src/server/driver_table.h); and the server's home and config (src/server/home.h).
 # No OS, no time, no processes.
 add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp)
