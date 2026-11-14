@@ -1,0 +1,125 @@
+schema-tables-baseline 7
+package nexuswire
+
+table 2537019088dd9582.b11e8b146c5a21d8
+    field value id=0x7ce4fd9430e80cea kind=12
+
+table 678cbc61d1a17693.b11e8b146c5a21d8
+    field value id=0x7ce4fd9430e80cea kind=12
+
+table Action
+    field kind id=0xef9c96d721673243 kind=7 enum=ActionKind
+    field session id=0x3ca2c49553a457d7 kind=9
+    field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
+    field text id=0xfa04f4ef1995407e kind=17 type=string
+    field account id=0xa23fd2965dc429bc kind=17 type=string
+
+table ActionsDiff
+    field start id=0xee5d97ad45ad251f kind=9
+    field actions id=0xaab8aab6b2814644 kind=14 elem=13 type=Action array=unbounded
+
+table ClientCounter
+    field client id=0xc47ea73e7986f3de kind=17 type=string
+    field applied id=0x8bf75481a1d237ca kind=9
+
+table Driver
+    field next_turn id=0x86077082e7dbf9aa kind=9
+    field open_turn id=0xb0c9e7244d27f5b1 kind=9
+    field session id=0x3ca2c49553a457d7 kind=17 type=string
+    field waiting id=0xeac9afef1a00b5e8 kind=14 elem=12 type=DriverWaitingText array=unbounded
+
+table EntryChange
+    field kind id=0xef9c96d721673243 kind=7 enum=EntryKind
+    field closed id=0x85530f5090e836c5 kind=1
+    field offset id=0x0268b0f8129435ca kind=9
+    field tail id=0xd94c56ef0798d723 kind=17 type=string
+
+table Hello
+    field proto id=0xf94687246d893231 kind=8
+    field min_peer id=0x6276593b48242efc kind=8
+
+table Record
+    field session id=0x3ca2c49553a457d7 kind=9
+    field changes id=0xdf387c9af6145dca kind=14 elem=15 union=Change array=unbounded
+    field client id=0xc47ea73e7986f3de kind=17 type=string
+    field applied id=0x8bf75481a1d237ca kind=9
+
+table SessionChange
+    field id id=0x08b72e07b55c3ac0 kind=9
+    field changed id=0xdf38879af614707b kind=1
+    field info id=0xf5d6a8c57ab94f05 kind=13 type=SessionInfo
+    field activity id=0xa62952ad3187308c kind=7 enum=Activity default=Idle
+    field first id=0x89d7ed7f996f1d41 kind=9
+    field keep_from id=0x9c234ff528703a45 kind=9
+    field entries id=0xc5b2a72c0845a253 kind=14 elem=13 type=EntryChange array=unbounded
+    field queue_changed id=0x1e51c98fb1beabbb kind=1
+    field queue id=0xb11e8b146c5a21d8 kind=14 elem=12 type=SessionChangeQueueText array=unbounded
+
+table SessionInfo
+    field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
+    field harness id=0x211fcbbafe5331ab kind=17 type=string
+    field account id=0xa23fd2965dc429bc kind=17 type=string
+    field model id=0x9de543933e6e703a kind=17 type=string
+    field effort id=0x0083c43b32948f2f kind=17 type=string
+    field instance id=0x414a134c24ef8152 kind=17 type=string
+
+table SessionsDiff
+    field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
+
+table Snapshot
+    field next_session id=0x17b96c48ba4cbde7 kind=9
+    field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=StoreSession array=unbounded
+    field clients id=0x6a29dc2880500ef7 kind=14 elem=13 type=ClientCounter array=unbounded
+
+table StoreEntry
+    field kind id=0xef9c96d721673243 kind=7 enum=EntryKind
+    field closed id=0x85530f5090e836c5 kind=1
+    field text id=0xfa04f4ef1995407e kind=17 type=string
+
+table StoreSession
+    field id id=0x08b72e07b55c3ac0 kind=9
+    field info id=0xf5d6a8c57ab94f05 kind=13 type=SessionInfo
+    field transcript id=0xe4285b4aabc7d56b kind=14 elem=13 type=StoreEntry array=unbounded
+    field queue id=0xb11e8b146c5a21d8 kind=14 elem=12 type=StoreSessionQueueText array=unbounded
+    field driver id=0xc85b78e3dea334ff kind=13 type=Driver
+
+table b0c44bf7b8de9adf.eac9afef1a00b5e8
+    field value id=0x7ce4fd9430e80cea kind=12
+
+enum ActionKind
+    variant Send id=0x57adf424d57c8a0f
+    variant Queue id=0xc7637275f670c938
+    variant Stop id=0xd9ad53251f2330a5
+    variant Create id=0x382a2aa3984474dd
+    variant Ensure id=0x218797f87c32a177
+    variant SetAccount id=0x157f28d9654db366
+    variant SetModel id=0x12ade388683d5800
+    variant SetEffort id=0x7aa5e74b9dd7baa5
+    variant AddAccount id=0xe8b69819a6b671db
+    variant RemoveAccount id=0x49d09394f5773664
+    variant AddFriend id=0xf7368f51997e9bcc
+    variant LinkAccount id=0xff7b88c2ff4bff78
+    variant UnlinkAccount id=0xdea837e630d4d73d
+    variant SetDefault id=0xd9292b9837d05494
+
+enum Activity
+    variant Idle id=0xc92905d14a9421f3
+    variant Busy id=0x2a02d2a7e41d6700
+    variant Down id=0x032c13736048bf35
+
+enum EntryKind
+    variant Person id=0x40d76f1f51639ec0
+    variant Friend id=0x9f57a2661b8a7e2d
+    variant Notice id=0x9117fb5195e75151
+    variant Tool id=0x5a71f1fb3a12c6a7
+
+union Change
+    arm append id=0x3e7fe942f71f1e61 payload=StoreEntry
+    arm enqueue id=0x0c88bce25446069d kind=17 type=string
+    arm set_driver id=0xd0aef91bc49cc38a payload=Driver
+    arm dequeue id=0x85aac62a460aa5e5 kind=none
+    arm set_info id=0x5d21aec9380ade68 payload=SessionInfo
+
+## history
+### 2026-11-14 (UTC) — first baseline: nexus step 1, the formats mirrored from docs/formats.md
+- baseline created over 16 tables — data written BEFORE this point is not covered by it

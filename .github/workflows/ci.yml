@@ -1,7 +1,8 @@
 # CI for nexus: the build with its unit and functional tests, the model under the sanitizers, and the TLA+ models
 # with their trace checks, and the Claude driver (drivers/claude), as four jobs in parallel on the fleet's macOS runners
 # (never GitHub-hosted); and the build
-# without the window, its unit and functional tests and the sanitizers' programs on the fleet's Linux runners. Every pull request runs it, whatever its base,
+# without the window, its unit and functional tests and the sanitizers' programs, and the code generated from
+# schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners. Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -128,8 +129,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: Build the model checks and wire_test
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -181,6 +182,8 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways
+          build/tests/wire/wire_test
 
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
   # tests (a scripted query: no process, clock or network), and the protocol's conformance cases run against it as a
@@ -293,6 +296,34 @@ jobs:
         shell: bash
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
+  # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
+  # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
+  # always what the pin makes of the schema files, and schema/tables.baseline has refused any edit that changes what
+  # stored data means. Go comes from the runner's machine (the fleet's sdk/bin); the compiler is built once per pin and
+  # runner, and kept outside the workspace under ~/.cache/nexus-ci/<runner>/schema.
+  schema-generated:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Linux, X64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Regenerate at the pin
+        shell: bash
+        run: cmake "-DSCHEMA_CACHE=$HOME/.cache/nexus-ci/$RUNNER_NAME/schema" -P cmake/schema.cmake
+      - name: The checked-in code is what the pin generates
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed=$(git status --porcelain -- schema tests/wire/next)
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            git --no-pager diff --stat -- schema tests/wire/next
+            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen and tests/wire/next/gen"
+            exit 1
+          fi
+
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
   sanitizers-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -319,8 +350,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: Build the model checks and wire_test
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -372,6 +403,8 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways
+          build/tests/wire/wire_test
 
 
   model:
