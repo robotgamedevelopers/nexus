@@ -30,7 +30,8 @@ endforeach()
 # MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (131,024
 # distinct states, 20 s). Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
 # distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
-tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 4)
+# Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores).
+tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
