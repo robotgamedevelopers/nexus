@@ -486,9 +486,11 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         const double time = 1000.0 + frames++ / 60.0;
         a.view.time = time;
         board->frame(time, display);
+        board->wait();      // a screenshot waits for the page's thread, so that it shows the page as of this frame
         PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
             .display = display, .preferences = {}};
         prUiFrame(ui, &desc, buildOffscreen, &off);
+        board->wait();
     };
     if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Sprint) {
         // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
@@ -510,7 +512,8 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         bool typed = false;
         for (int i = 0; i < 500 && terminals->text(id).find("Darwin") == std::string::npos; ++i) {
             frame();
-            if (!typed && i == 10) {
+            // Once the shell has started (on the terminals' thread) and drawn its prompt.
+            if (!typed && i >= 10 && terminals->text(id).find_first_not_of(" \n") != std::string::npos) {
                 PrAppEvent e{};
                 e.kind = PrAppEventKind_Text;
                 e.input.text = PrStringView{command, std::strlen(command)};

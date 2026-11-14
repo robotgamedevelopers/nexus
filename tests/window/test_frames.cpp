@@ -18,6 +18,7 @@
 // own, under the build tree. Usage: nexus_frame_tests SLOW_SSH [CASE...]
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -186,7 +187,7 @@ struct Window {
     Look look;
     View view;
     BoardServer server;
-    double boardMs = 0;
+    std::atomic<double> boardMs{0};    // read on the board's page thread (board.h)
     std::unique_ptr<PraxTerminals> terminals;
     std::unique_ptr<PraxBoard> board;
     FrameHost host;
@@ -228,8 +229,8 @@ struct Window {
         b.url = kUrl;
         b.answer = BoardServer::answer;
         b.answerContext = &server;
-        b.now = [](void* c) { return *static_cast<double*>(c); };
-        b.wallNow = [](void* c) { return 1794326567000.0 + *static_cast<double*>(c); };
+        b.now = [](void* c) { return static_cast<std::atomic<double>*>(c)->load(); };
+        b.wallNow = [](void* c) { return 1794326567000.0 + static_cast<std::atomic<double>*>(c)->load(); };
         b.clockContext = &boardMs;
         b.open = [](const std::string&) {};
         board = std::make_unique<PraxBoard>(b);
@@ -274,7 +275,7 @@ struct Window {
             std::this_thread::sleep_until(next);
         }
         time += 1.0 / 120;
-        boardMs += 1000.0 / 120;
+        boardMs = boardMs.load() + 1000.0 / 120;
         hitch.begin();
         view.extent = extent;
         host.beginFrame(kit, fonts, time, prAppDisplayDefault());

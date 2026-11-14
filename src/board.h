@@ -1,10 +1,18 @@
 // The sprint tab's page: nova-sprint's served board in Prax's HTML stack (view.h Board), as Prax's browser and its
-// incremental example host a page. One DOM agent, one QuickJS engine and one page, run on the window's thread: each
-// frame runs the page's due tasks for a few milliseconds, records the page into a frozen draw list in CSS pixels
-// (prHtmlViewPaint), and the window's tree shows it in a replaced node whose painter embeds the list, as the incremental
-// example's pane does. The list fills the page's canvas with its own background, so the page is opaque edge to edge over
-// the window's see-through fill. After each paint the Cost breakdown panel's place is measured, so that nexus's style
-// (sprint.h sprintPageStyle) stretches the panel to one gap above the bottom of the first screen.
+// incremental example host a page. One DOM agent, one QuickJS engine and one page, run on a thread of the board's own,
+// the agent's thread, as Prax's browser runs each tab's page on its own thread: the window never waits on the page
+// (AGENTS.md, the frame budget). That thread makes the page (its network, TLS, script engine and fonts) when the tab
+// first shows, runs the page's tasks as they come due, moves its scroll, and records the page into a frozen draw list
+// in CSS pixels (prHtmlViewPaint) whenever it changed; the window's tree shows the latest list in a replaced node whose
+// painter embeds it, as the incremental example's pane does. The list fills the page's canvas with its own background,
+// so the page is opaque edge to edge over the window's see-through fill. After each paint the Cost breakdown panel's
+// place is measured, so that nexus's style (sprint.h sprintPageStyle) stretches the panel to one gap above the bottom of
+// the first screen.
+//
+// The window's thread hands the page's thread what it needs as messages: each frame's time, display and visibility,
+// the pane's extent, the text scale, the events routed to the page, and home. The page's thread hands back what the
+// window shows, under a lock: the latest list, the load's state, when it next has work, and the links to open, which
+// the window's thread opens. Each new list wakes the app for a frame.
 //
 // The address comes from the sprint's record (sprint.h findSprintBoard), looked up on a thread of its own so that the
 // window never waits on it. Until there is a page to show, show() gives one line that says what is happening or what
@@ -24,9 +32,14 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <future>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "pr/app.h"
 #include "pr/draw_list.h"
@@ -92,55 +105,117 @@ public:
     void home() override;
 
     // For tests and the screenshot: true once the document has loaded and its first answers have painted, with nothing
-    // due now; the text of the page's body; the line show() gives while there is no page.
+    // due now (as of the last step of the page's thread); the line show() gives while there is no page.
     bool settled();
-    std::string bodyText();
     std::string problem() const { return said_; }
     // The page's canvas colour at the last paint, which the recorded list fills edge to edge.
-    PrColor canvas() const { return canvas_; }
+    PrColor canvas();
     // How far past an end the page is drawn now, CSS px (scroll_glide.h GlideScroller::overscroll).
-    double overscroll() const { return scroller_.overscroll(); }
-    PrHtmlPage* page() const { return page_; }
+    double overscroll();
     // The page's rectangle in the window, px, at the last layout.
     PrRect pane() const { return pane_; }
-    // The URL of the document the page shows, or empty before it has one.
-    std::string documentUrl() const;
+
+    // For tests: waits until the page's thread has taken up everything handed to it so far and said what came of it.
+    void wait();
+    // For tests: runs `fn` on the page's thread with the page (null before it is made), and waits for it.
+    void onPage(const std::function<void(PrHtmlPage* page)>& fn);
+    // For tests, on the page's thread: the text of the page's body, and the URL of the document the page shows (empty
+    // before it has one).
+    std::string bodyText();
+    std::string documentUrl();
 
 private:
+    // What the window's thread hands the page's thread.
+    struct Message {
+        enum class Kind { Event, WindowKey, Hidden, Home, Run } kind;
+        PrAppEvent event{};                     // Event: placed in the page's CSS px; its text is in `text`
+        std::string text;
+        std::function<void(PrHtmlPage*)> run;  // Run
+        double time = 0;                        // the window's frame when it was handed over, s
+    };
+    // What the page's thread hands back, as of its last step.
+    struct Shown {
+        bool opened = false;                    // the page is made
+        bool failed = false;                    // its load failed (`error` says why) and it tries again at `retryAt`
+        std::string error;
+        double retryAt = 0;
+        PrDrawList* recorded = nullptr;         // the page as last painted, frozen, one reference held here
+        PrColor canvas{};
+        double overscroll = 0;
+        bool settled = false;
+        bool busy = false;                      // work is due now: tasks, a paint, the scroll moving
+        double nextTask = -1;                   // ms until the page's next timer, or -1 for none
+        std::vector<std::string> opens;         // links to open in the system's browser
+    };
+
     void takeAddress();
+    bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
+    void post(Message message);
+    void openLink(const std::string& url);
+
+    // The page's thread.
+    void run();
+    void step(std::vector<Message>& inbox);
+    void publish();
     void openPage();
+    void closePage();
     void navigate();
     void runTasks();
-    void paint(PrVec2 extent);
+    void paint();
     void addPageStyle();
     SpendFit measureSpend();
     void fitSpend();
-    bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
     PrDomElement* scroller();
     bool scrollEvent(const PrAppEvent& event);
     void endScroll();
+    std::string pageUrl() const;
 
     static double clockNow(void* context);
     static double clockWallNow(void* context);
-    void openLink(const std::string& url);
 
     static void loaded(void* context, PrHtmlPage* page, PrStatus status);
     static void windowOpened(void* context, PrHtmlPage* page);
     static void openWindow(void* context, PrHtmlPage* page, PrStringView url);
     static void linkClicked(void* context, PrDomEvent* event);
     static void realmOpened(void* context, JSContext* ctx, PrHtmlPage* page);
-    static void wake(void* context);
 
     Desc desc_;
     PrKit* kit_;
     PrApp* app_;
 
-    // The address: found on a thread, or given.
+    // The window's thread's.
     std::future<SprintBoardAddress> finding_;
-    std::string url_;
+    std::string url_;                       // the address, once found (found on a thread, or given)
     double findAgainAt_ = 0;
+    std::string problem_;                   // why the address lookup failed
+    std::string said_;                      // the line show() gave last, or empty if it showed the page
+    PrDrawList* showing_ = nullptr;         // the list the pane embeds, one reference held here
+    double windowTime_ = 0;
+    PrAppDisplay windowDisplay_ = prAppDisplayDefault();
+    PrRect pane_{};                         // the page's rectangle in the window, px, at the last layout
+    bool pressInPage_ = false;
+    bool shown_ = false;                    // the sprint tab showed at the last round
+    float windowZoom_ = 1;
 
-    // Prax: fonts, network, agent, engine, page and view.
+    // Between the threads, under `mutex_`: the inbox, the frame's state for the page's thread, and what it shows.
+    std::mutex mutex_;
+    std::condition_variable wake_;          // the page's thread, while it has no page or the page is off screen
+    std::condition_variable stepped_;       // a step ended (wait)
+    bool ending_ = false;
+    std::vector<Message> inbox_;
+    std::uint64_t posted_ = 0;              // what was handed over, counted, and what the page's thread took up
+    std::uint64_t taken_ = 0;
+    std::uint64_t done_ = 0;
+    double time_ = 0;                       // the window's last frame
+    PrAppDisplay display_ = prAppDisplayDefault();
+    bool onScreen_ = false;
+    std::string address_;                   // url_, for the page's thread
+    PrVec2 extent_{};                       // the pane's, px
+    float zoom_ = 1;
+    PrDomAgent* waiting_ = nullptr;         // the agent the page's thread waits on, to wake it
+    Shown out_;
+
+    // The page's thread's own. Prax: fonts, network, agent, engine, page and view.
     PrFontSet* fonts_ = nullptr;
     PrTextShaper* shaper_ = nullptr;
     PrTextFont* font_ = nullptr;
@@ -159,30 +234,30 @@ private:
     PrHtmlPage* page_ = nullptr;
     PrHtmlView* view_ = nullptr;
     std::string prelude_;
-
-    // The page's state on the window's side.
+    std::string pageUrl_;               // the address, as handed over
+    double frameTime_ = 0;              // the window's last frame, s
+    PrAppDisplay pageDisplay_ = prAppDisplayDefault();
+    bool visible_ = false;              // on screen: the tab shows and the window is visible
+    PrVec2 pageExtent_{};               // the pane's, px
+    float pageZoom_ = 1;
     enum class Load { None, Loading, Loaded, Failed };
     Load load_ = Load::None;
     bool ownLoad_ = false;              // the load in flight is the board's own (navigate)
     std::string home_;                  // the board's document's URL, without its fragment, as its own load ended
     std::string loadError_;
     double retryAt_ = 0;
-    std::string problem_;               // why the address lookup failed
-    std::string said_;                  // the line show() gave last, or empty if it showed the page
-    PrDrawList* recorded_ = nullptr;    // the page as last painted, frozen; the painter's context
+    PrDrawList* recorded_ = nullptr;    // the page as last painted, frozen
     PrColor canvas_{};                  // the page's canvas colour at the last paint
     bool dirty_ = true;
     PrVec2 viewport_{};                 // the extent the page was last painted at, in CSS px
     SpendFit spend_;                    // the Cost breakdown as last styled; its top -1 for none
-    float zoom_ = 1;
-    PrAppDisplay display_ = prAppDisplayDefault();
-    PrRect pane_{};                     // the page's rectangle in the window, px, at the last layout
-    bool pressInPage_ = false;
-    bool shown_ = false;                // the sprint tab showed at the last round
+    float paintedZoom_ = 0;
     bool hiddenSet_ = false;            // the page's visibility is hidden
+    std::vector<std::string> opens_;    // links to open, until published
     // The page's scroll as keys and the wheel move it (scroll_glide.h).
     GlideScroller scroller_;
-    double frameTime_ = 0;
+
+    std::thread thread_;                // last: it starts once everything above is made
 };
 
 } // namespace nexus
