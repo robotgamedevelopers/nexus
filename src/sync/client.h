@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "cursor.h"
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/mirror.h"
@@ -27,6 +28,15 @@ constexpr std::uint64_t kQuietMs = 6000;
 // Failed: "<host>: <problem>". Connected and heard within kQuietMs: empty. Connected and not heard for longer:
 // "No contact with <host> for <seconds> s".
 std::string linkStatus(LinkPhase phase, const std::string& host, std::uint64_t heardMsAgo, const std::string& problem);
+
+// The window has lost the server: not yet connected, the bootstrap failed, or not heard for longer than kQuietMs. What
+// the window shows of the server's sessions is then stale.
+bool linkLost(LinkPhase phase, std::uint64_t heardMsAgo);
+
+// The state cursor of a friend's tab (AGENTS.md "The state cursor"), from the server's state only: Lost while the link
+// is lost (never Busy or Idle then: what the window holds is stale), and while no state has held the session the tab
+// shows; otherwise the session's activity in the newest state the window applied (Mirror::activity).
+CursorState cursorOf(LinkPhase phase, std::uint64_t heardMsAgo, const Mirror& mirror, std::size_t tabId);
 
 // Every byte an ASCII space, tab, newline, vertical tab, form feed or carriage return (the empty text too): the rule
 // Model::send uses (model.cpp blank).

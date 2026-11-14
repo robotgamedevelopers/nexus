@@ -13,9 +13,14 @@ bool sameEntry(const EntryRef& a, const EntryRef& b) {
     return a == b || *a == *b;
 }
 
-// EntryKind on the wire: Person 0, Friend 1, Notice 2.
+// EntryKind on the wire: Person 0, Friend 1, Notice 2, Tool 3.
 bool validKind(std::uint8_t k) {
-    return k <= static_cast<std::uint8_t>(EntryKind::Notice);
+    return k <= static_cast<std::uint8_t>(EntryKind::Tool);
+}
+
+// Activity on the wire: Idle 0, Busy 1, Down 2.
+bool validActivity(std::uint8_t a) {
+    return a <= static_cast<std::uint8_t>(Activity::Down);
 }
 
 // The entry `s` holds at transcript index i, or null.
@@ -36,7 +41,8 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// One changed session: what it is (its friend, harness, account, model and effort); its first index; the index k of
+// One changed session: what it is (its friend, harness, account, model and effort); its activity;
+// its first index; the index k of
 // the first entry `a` does not hold as it is; the entries from k to the end, each its kind, closed flag, the length of
 // text `a` holds of it (non-zero only for an entry `a` holds open that only grew) and the rest of its text; then a
 // byte, 1 if the queue changed, and if so the queue.
@@ -46,6 +52,7 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
     w.str(b.info.account);
     w.str(b.info.model);
     w.str(b.info.effort);
+    w.byte(static_cast<std::uint8_t>(b.activity));
     w.u64(b.first);
     std::uint64_t k = b.first;
     while (k < b.total()) {
@@ -90,6 +97,11 @@ SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionV
     t->info.account = r.str();
     t->info.model = r.str();
     t->info.effort = r.str();
+    const std::uint8_t activity = r.byte();
+    if (!validActivity(activity)) {
+        throw BadDiff(name + ": activity " + std::to_string(activity) + ", none of idle 0, busy 1 or down 2");
+    }
+    t->activity = static_cast<Activity>(activity);
     t->first = r.u64();
     const std::uint64_t k = r.u64();
     const std::uint64_t count = r.u64();
@@ -165,8 +177,8 @@ SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionV
 } // namespace
 
 bool SessionView::operator==(const SessionView& x) const {
-    if (id != x.id || !(info == x.info) || first != x.first || entries.size() != x.entries.size() ||
-            queue != x.queue) {
+    if (id != x.id || !(info == x.info) || activity != x.activity || first != x.first ||
+            entries.size() != x.entries.size() || queue != x.queue) {
         return false;
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {

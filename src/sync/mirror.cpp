@@ -42,6 +42,11 @@ const SessionEntry* Mirror::open(std::size_t id) const {
     return it == seen_.end() ? nullptr : it->second.open.get();
 }
 
+const Activity* Mirror::activity(std::size_t id) const {
+    auto it = seen_.find(id);
+    return it == seen_.end() || !it->second.held ? nullptr : &it->second.activity;
+}
+
 bool Mirror::apply(Model& model, const Sessions& state) {
     bool changed = false;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
@@ -57,9 +62,19 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             session_[tab.id] = view->id;     // the friend's first session, from now on
         }
         if (view == nullptr) {
+            auto had = seen_.find(tab.id);
+            if (had != seen_.end() && had->second.held) {
+                had->second.held = false;
+                changed = true;
+            }
             continue;
         }
         Shown& seen = seen_[tab.id];
+        if (!seen.held || seen.activity != view->activity) {
+            seen.held = true;
+            seen.activity = view->activity;
+            changed = true;
+        }
         if (view->first > seen.next) {
             model.append(i, Entry{EntryKind::Notice, notShownNotice(view->first - seen.next)});
             seen.next = view->first;

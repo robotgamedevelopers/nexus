@@ -196,6 +196,7 @@ struct Harness {
     void frame() {
         beginWindowFrame(view, kit, fonts);
         time += 1.0 / 60;
+        view.time = time;   // as the window's beginFrame gives it the frame's time
         PrUiFrameDesc desc{
             .time = time,
             .delta = 1.0 / 60,
@@ -1034,6 +1035,155 @@ void longUnbrokenTextWraps() {
     CHECK(e.size() == 2 && h.height(e[1]) > 3 * style::kLinePitch);
 }
 
+// Each tool call is one compact line: tool lines in a row stand together in one item of the column, each one line
+// high however long its summary (cut at the column's edge, never wrapped), and close together.
+void toolLinesAreOneCompactLine() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Friend, "Let me look."});
+    h.model.append(0, Entry{EntryKind::Tool, "Bash: ls src"});
+    h.model.append(0, Entry{EntryKind::Tool, "Read: " + std::string(400, 'x')});
+    h.model.append(0, Entry{EntryKind::Friend, "Done."});
+    h.frame();
+    h.frame();
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 3);
+    if (e.size() != 3) {
+        return;
+    }
+    CHECK(h.hasText(e[1], "Bash: ls src"));
+    std::vector<PrLayoutNode> lines;
+    for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
+            n = prLayoutNodeNextSibling(h.tree, n)) {
+        lines.push_back(n);
+    }
+    CHECK(lines.size() == 2);
+    PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
+    for (PrLayoutNode line : lines) {
+        CHECK(near(h.height(line), style::kToolPitch));
+        CHECK(h.bounds(line).right <= column.right + 0.5f);
+    }
+    if (lines.size() == 2) {
+        CHECK(near(h.bounds(lines[1]).top - h.bounds(lines[0]).bottom, style::kToolGap));
+    }
+}
+
+// The friend's text still growing shows after the transcript, as it grows, and goes when it closes (the transcript
+// then holds it); the queue stays after it.
+void growingTextShowsAfterTheTranscript() {
+    Harness h;
+    std::string growing;
+    h.view.growing = [&](std::size_t id) -> const std::string* {
+        return id == h.model.tab(0).id && !growing.empty() ? &growing : nullptr;
+    };
+    h.model.append(0, Entry{EntryKind::Person, "hi"});
+    h.frame();
+    CHECK(h.entries().size() == 1);
+    growing = "Hel";
+    h.frame();
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 2 && h.hasText(e.back(), "Hel"));
+    growing = "Hello, there";
+    h.frame();
+    e = h.entries();
+    CHECK(e.size() == 2 && h.hasText(e.back(), "Hello, there"));
+    h.model.set_draft(0, "later");
+    h.model.queue(0);
+    h.frame();
+    e = h.entries();
+    CHECK(e.size() == 3 && h.hasText(e[1], "Hello, there") && h.hasText(e[2], "later"));
+    growing.clear();
+    h.model.append(0, Entry{EntryKind::Friend, "Hello, there."});
+    h.frame();
+    e = h.entries();
+    CHECK(e.size() == 3 && h.hasText(e[1], "Hello, there.") && !h.hasText(e[1], "Hello, there"));
+    h.commandDigit(2);
+    CHECK(h.entries().empty());     // emma's tab: alex's growing text is alex's
+}
+
+// The state cursor: on its own line just under the last text, before the queue; the busy one breathes (its fill
+// changes with the frame's time, and the window asks for frames while it shows); the others are steady; none without
+// the hook or for None.
+void stateCursorUnderTheLastText() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Friend, "Hello."});
+    CursorState state = CursorState::None;
+    h.view.cursor = [&](std::size_t) { return state; };
+    h.frame();
+    CHECK(h.entries().size() == 1 && !h.view.breathing && !windowWantsFrame(h.view));
+    h.model.set_draft(0, "later");
+    h.model.queue(0);
+    for (CursorState s : {CursorState::Busy, CursorState::Idle, CursorState::Down, CursorState::Lost}) {
+        state = s;
+        h.frame();
+        h.frame();
+        std::vector<PrLayoutNode> e = h.entries();
+        CHECK(e.size() == 3);
+        if (e.size() != 3) {
+            continue;
+        }
+        const PrLayoutNode cursor = e[1];
+        CHECK(prLayoutNodeFirstChild(h.tree, cursor) == kPrLayoutNodeNone);     // a block, no text
+        CHECK(near(h.bounds(cursor).top - h.bounds(e[0]).bottom, style::kCursorGap));
+        CHECK(near(h.height(cursor), style::kCursorHeight));
+        CHECK(h.hasText(e[2], "later"));
+        CHECK(h.view.breathing == (s == CursorState::Busy) && windowWantsFrame(h.view) == (s == CursorState::Busy));
+        const PrColor first = fillOf(h, cursor);
+        CHECK(first.a == 1);
+        // A quarter of a breath later.
+        const double later = h.time + kBreathSeconds / 4;
+        while (h.time < later) {
+            h.frame();
+        }
+        const PrColor second = fillOf(h, h.entries()[1]);
+        const bool same = first.r == second.r && first.g == second.g && first.b == second.b;
+        CHECK(same == (s != CursorState::Busy));
+        if (s == CursorState::Lost) {
+            CHECK(near(255 * second.r, 255 * second.g) && near(255 * second.g, 255 * second.b));     // grey
+        }
+        if (s == CursorState::Idle) {
+            CHECK(second.b > second.r && second.b > second.g);      // blue
+        }
+        if (s == CursorState::Down) {
+            CHECK(second.r > second.g && second.r > second.b);      // red
+        }
+    }
+    // The text scale scales it.
+    state = CursorState::Idle;
+    h.larger();
+    h.frame();
+    h.frame();
+    CHECK(h.entries().size() == 3 && near(h.height(h.entries()[1]), style::kCursorHeight * style::textScale(1)));
+    // Without the hook there is none, and nothing breathes.
+    state = CursorState::Busy;
+    h.frame();
+    CHECK(h.view.breathing);
+    h.view.cursor = nullptr;
+    h.frame();
+    CHECK(h.entries().size() == 2 && !h.view.breathing);
+}
+
+// Nothing stands under or around an open prompt but its box: the link's line shows only in the prompt's place before
+// it opens, and why a prompt was not sent shows at the end of the transcript.
+void nothingAroundTheOpenPrompt() {
+    Harness h;
+    h.view.status = "No contact with studio for 7 s";
+    h.view.problem = "This prompt is 40 KiB; the limit is 32 KiB.";
+    h.frame();
+    h.frame();
+    PrLayoutNode footer = prLayoutNodeParent(h.tree, h.view.promptBox);
+    CHECK(prLayoutNodeFirstChild(h.tree, footer) == h.view.promptBox);
+    CHECK(prLayoutNodeNextSibling(h.tree, h.view.promptBox) == kPrLayoutNodeNone);
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), h.view.status));
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(!e.empty() && h.hasText(e.back(), h.view.problem));
+    h.view.problem.clear();
+    h.view.promptOpen = false;
+    h.view.status = "Connecting to studio";
+    h.frame();
+    CHECK(h.view.promptBox == kPrLayoutNodeNone && h.hasText(prLayoutTreeRoot(h.tree), "Connecting to studio"));
+    CHECK(h.entries().empty());
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -1592,6 +1742,10 @@ int main() {
     noFriendsShowsTheNotice();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
+    toolLinesAreOneCompactLine();
+    growingTextShowsAfterTheTranscript();
+    stateCursorUnderTheLastText();
+    nothingAroundTheOpenPrompt();
     commandTAddsAndShowsATerminal();
     commandWOnAFriendDoesNothing();
     commandWClosesTheTerminal();

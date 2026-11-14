@@ -93,7 +93,7 @@ endif()
 
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
-add_library(nexus_model STATIC src/model.cpp src/overlay.cpp)
+add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 

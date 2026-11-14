@@ -377,7 +377,7 @@ void testText() {
         Output o = s.message(Tool{1, "Bash", "ls"}, kStart + 3);
         CHECK((whats(o) == std::vector<What>{What::Reply, What::Tool}) && o.effects[1].text == "Bash: ls");
         o = s.message(Tool{1, "Bash", "ls -la src"}, kStart + 4);
-        CHECK(o.effects[0].text == "Bash: ls -" && entryKind(What::Tool) == EntryKind::Friend);
+        CHECK(o.effects[0].text == "Bash: ls -" && entryKind(What::Tool) == EntryKind::Tool);
     }
     // A cut keeps the text gathered, before the notice.
     {
@@ -443,6 +443,69 @@ void testFailedStarts() {
         o = t.exited("exited with status 1", at + 3);
     }
     CHECK(t.held() && contains(o.effects.back().text, "The last: no login. run login."));
+}
+
+// ---- activity: the window's state cursor ----
+
+// Busy from the prompt until the turn's done (the start, the turn, the stop); Idle with nothing running, waiting or to
+// be taken; Down after a driver ends before it finished a turn, while starting is held back, and with no credential;
+// a driver ended for an account change stays Idle; the next prompt makes it Busy again.
+void testActivity() {
+    using sync::Activity;
+    Supervisor s = make();
+    CHECK(s.activity() == Activity::Idle);
+    s.prompt("x", kStart);
+    CHECK(s.phase() == Phase::Starting && s.activity() == Activity::Busy);
+    s.message(Hello{1, "h"}, kStart + 1);
+    CHECK(s.phase() == Phase::Working && s.activity() == Activity::Busy);
+    s.stop(kStart + 2);
+    CHECK(s.phase() == Phase::Stopping && s.activity() == Activity::Busy);
+    s.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
+    CHECK(s.phase() == Phase::Idle && s.activity() == Activity::Idle);
+    // A prompt queued while a turn is open: still Busy at the turn's end, since the queued one is taken at once.
+    s.prompt("y", kStart + 4);
+    s.queued("q", kStart + 5);
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 6);
+    CHECK(s.state().openTurn == 3 && s.activity() == Activity::Busy);
+    s.message(Done{3, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 7);
+    CHECK(s.activity() == Activity::Idle);
+    // A crash mid-turn: Down, while it is being ended and after; the next prompt is Busy again.
+    s.prompt("z", kStart + 8);
+    s.refused("bad line", kStart + 9);
+    CHECK(s.phase() == Phase::Ending && s.activity() == Activity::Down);
+    s.exited("exited with status 1", kStart + 10);
+    CHECK(s.phase() == Phase::None && s.crashed() && s.activity() == Activity::Down);
+    s.prompt("again", kStart + 11);
+    CHECK(s.activity() == Activity::Busy);
+    // A driver that says hello is up: no longer crashed, Idle once nothing runs (here the start is stopped).
+    {
+        Supervisor c = s;
+        c.stop(kStart + 12);
+        CHECK(c.state().waiting.empty() && c.phase() == Phase::Starting && c.activity() == Activity::Busy);
+        c.message(Hello{1, "h"}, kStart + 13);
+        CHECK(c.phase() == Phase::Idle && !c.crashed() && c.activity() == Activity::Idle);
+    }
+    // Failed starts in a row, then held: Down, with the prompt still waiting.
+    for (Millis at = kStart + 12; !s.held(); ++at) {
+        s.exited("exited with status 2", at);
+    }
+    CHECK(!s.state().waiting.empty() && s.activity() == Activity::Down);
+    // No credential: Down at once, even while the turn it ends is still open.
+    Supervisor n = working("w");
+    n.message(Error{"not signed in", "sign in", 1, ErrorCode::NoCredential}, kStart + 3);
+    CHECK(n.held() && n.state().openTurn == 1 && n.activity() == Activity::Down);
+    // An account change ends an idle driver quietly: never Down.
+    Supervisor a = working("w");
+    a.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    a.setAccount("work", kStart + 4);
+    CHECK(a.retiring() && a.activity() == Activity::Idle);
+    a.exited("exited with status 0", kStart + 5);
+    CHECK(a.activity() == Activity::Idle);
+    // The server stopping is not the friend being down.
+    Supervisor d = working("w");
+    d.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    d.shutdown(kStart + 4);
+    CHECK(d.phase() == Phase::Ending && d.activity() == Activity::Idle);
 }
 
 // ---- the session's model, effort and account ----
@@ -945,6 +1008,7 @@ const Group kGroups[] = {
     {"restart", testRestart},
     {"settings", testSettings},
     {"account", testAccount},
+    {"activity", testActivity},
 };
 
 } // namespace

@@ -5,6 +5,8 @@
 
 #include "model.h"
 
+#include "cursor.h"
+
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -730,6 +732,54 @@ void sprint_tab_alone_without_friends() {
     CHECK(!m.close_tab(0) && !m.set_draft(0, "x") && m.select_tab(0));
 }
 
+// The busy cursor's breathe, with time as an argument: dimmest at the start of each breath, brightest halfway, once
+// every kBreathSeconds, rising then falling; a time before 0 counts as 0.
+void cursor_breathes_once_a_breath() {
+    using nexus::breathLevel;
+    using nexus::kBreathLevels;
+    using nexus::kBreathSeconds;
+    CHECK(breathLevel(0) == 0);
+    CHECK(breathLevel(-5) == 0);
+    CHECK(breathLevel(kBreathSeconds / 2) == kBreathLevels - 1);
+    for (double t0 : {0.0, 1000.0, 1000.25}) {
+        for (int i = 0; i < 100; ++i) {
+            const double t = t0 + kBreathSeconds * i / 100;
+            CHECK(breathLevel(t) == breathLevel(t + kBreathSeconds));     // periodic
+            const int level = breathLevel(t);
+            CHECK(level >= 0 && level < kBreathLevels);
+        }
+    }
+    int last = breathLevel(0);
+    for (int i = 1; i <= 50; ++i) {          // rises through the first half
+        const int level = breathLevel(kBreathSeconds * i / 100);
+        CHECK(level >= last);
+        last = level;
+    }
+    for (int i = 51; i <= 100; ++i) {        // and falls through the second
+        const int level = breathLevel(kBreathSeconds * i / 100);
+        CHECK(level <= last);
+        last = level;
+    }
+}
+
+// The cursor's colours: the busy one breathes in lightness only, brighter than the steady idle blue at every level;
+// red is red; the lost grey has no chroma and is dimmer than every blue, so it never reads as one.
+void cursor_colours() {
+    using nexus::CursorState;
+    using nexus::cursorColor;
+    using nexus::kBreathLevels;
+    const nexus::Oklch dim = cursorColor(CursorState::Busy, 0);
+    const nexus::Oklch bright = cursorColor(CursorState::Busy, kBreathLevels - 1);
+    CHECK(bright.l > dim.l && bright.c == dim.c && bright.h == dim.h);
+    const nexus::Oklch idle = cursorColor(CursorState::Idle, 0);
+    CHECK(idle.l == cursorColor(CursorState::Idle, kBreathLevels - 1).l);   // steady
+    CHECK(dim.l > idle.l && idle.h > 200 && idle.h < 280 && dim.h > 200 && dim.h < 280);
+    const nexus::Oklch down = cursorColor(CursorState::Down, 7);
+    CHECK(down.c > 0.1f && (down.h < 45 || down.h > 345));
+    const nexus::Oklch lost = cursorColor(CursorState::Lost, 7);
+    CHECK(lost.c == 0 && lost.l < idle.l && lost.l < dim.l);
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -781,6 +831,8 @@ const Case kCases[] = {
     {"sprint_tab_never_moves", sprint_tab_never_moves},
     {"sprint_tab_never_closes", sprint_tab_never_closes},
     {"sprint_tab_alone_without_friends", sprint_tab_alone_without_friends},
+    {"cursor_breathes_once_a_breath", cursor_breathes_once_a_breath},
+    {"cursor_colours", cursor_colours},
 };
 
 } // namespace

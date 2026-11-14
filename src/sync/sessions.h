@@ -51,9 +51,17 @@ struct SessionEntry {
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
 
+// What the friend of a session is doing, as the server holds it now (server/supervisor.h Supervisor::activity): Busy
+// while a turn is open or about to begin (a prompt waits, the driver starts, a stop is out); Idle when nothing runs and
+// nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
+// failed to start too many times in a row, or has no login) until the person's next prompt. In memory only, never in
+// the store: a server that starts again works it out afresh. The window's state cursor shows it (sync/client.h).
+enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2 };
+
 struct SessionView {
     SessionId id = 0;
     SessionInfo info;
+    Activity activity = Activity::Idle;
     std::uint64_t first = 0;            // the transcript index (from 0) of entries[0]
     std::vector<EntryRef> entries;      // the transcript's tail, oldest first, through its newest entry
     std::vector<std::string> queue;     // prompts queued for later, oldest first

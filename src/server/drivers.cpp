@@ -374,10 +374,12 @@ std::vector<sync::SessionChange> Drivers::changes(const Output& out, const Super
     return changes;
 }
 
-// The friend's text still growing, as the session's open entry: in memory only, never in the store. True when it
-// changed.
+// The friend's text still growing, as the session's open entry, and what the friend is doing (the window's state
+// cursor): in memory only, never in the store. True when either changed.
 bool Drivers::showOpen(sync::SessionId id, const Slot& t) {
-    return hub_->setOpen(id, t.sup.gathered());
+    const bool open = hub_->setOpen(id, t.sup.gathered());
+    const bool activity = hub_->setActivity(id, t.sup.activity());
+    return open || activity;
 }
 
 // The step's effects and durable state, in one step of the store.

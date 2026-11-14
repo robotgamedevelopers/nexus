@@ -7,7 +7,9 @@ namespace nexus {
 
 struct FriendInfo { std::string name; std::string model; };
 
-enum class EntryKind { Person, Friend, Notice };
+// Person: the person's prompt; Friend: the friend's text; Notice: a line from nexus; Tool: the friend used a tool, one
+// line naming it and what it does (its name, a colon, its summary).
+enum class EntryKind { Person, Friend, Notice, Tool };
 
 struct Entry { EntryKind kind; std::string text; };
 

@@ -121,6 +121,8 @@ std::string entry(EntryKind kind, const std::string& text) {
                 return "[k |-> \"X\", text |-> <<" + text.substr(4) + ">>]";
             }
             return "[k |-> \"N\", text |-> <<" + std::to_string(std::strtoull(text.c_str(), nullptr, 10)) + ">>]";
+        case EntryKind::Tool:
+            break;      // the walk makes no tool lines: a tool line is the friend's entry, as any closed one is
     }
     return "";
 }

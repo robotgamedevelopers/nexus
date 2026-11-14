@@ -399,12 +399,33 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     return true;
 }
 
+bool Hub::setActivity(SessionId id, Activity activity) {
+    if (store_.find(id) == nullptr) {
+        return false;
+    }
+    auto it = activity_.find(id);
+    const Activity was = it == activity_.end() ? Activity::Idle : it->second;
+    if (was == activity) {
+        return false;
+    }
+    if (activity == Activity::Idle) {
+        activity_.erase(it);
+    } else {
+        activity_[id] = activity;
+    }
+    refresh(id);
+    return true;
+}
+
 // The session's new tail, in place of its old one; every other session is shared with the state before.
 void Hub::refresh(SessionId id) {
     const StoredSession* stored = store_.find(id);
     auto open = open_.find(id);
-    auto fresh = std::make_shared<const SessionView>(tailOf(id, stored->info, stored->transcript, stored->queue,
-        limits_.tail, open == open_.end() ? nullptr : open->second));
+    SessionView view = tailOf(id, stored->info, stored->transcript, stored->queue, limits_.tail,
+        open == open_.end() ? nullptr : open->second);
+    auto activity = activity_.find(id);
+    view.activity = activity == activity_.end() ? Activity::Idle : activity->second;
+    auto fresh = std::make_shared<const SessionView>(std::move(view));
     std::vector<SessionRef> sessions = state_.sessions();
     auto it = std::lower_bound(sessions.begin(), sessions.end(), id,
         [](const SessionRef& s, SessionId n) { return s->id < n; });

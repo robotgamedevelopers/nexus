@@ -36,6 +36,18 @@ constexpr float kPromptGap = 0.72f * kU;      // the plus to the text field
 constexpr float kPlusSide = 1.3f * kU;        // the plus icon's box; the kit draws its glyph inset in it
 constexpr float kPromptMaxLines = 8;          // the prompt grows to this many lines, then scrolls
 constexpr float kColumnInset = 0.6f * kU;     // above the first transcript entry
+// A tool line: one compact line, monospaced and dim, cut at the column's edge; tool lines in a row stand close
+// together.
+// Not in the reference; chosen by eye.
+constexpr float kToolSize = 0.78f * kBodySize;
+constexpr float kToolPitch = 1.3f * kToolSize;
+constexpr float kToolGap = 0.3f * kU;
+// The state cursor: a block the height of a line of body text and about a character wide, on its own line just under
+// the last text (kCursorGap below it in place of kGap). Not in the reference; chosen by eye.
+constexpr float kCursorWidth = 0.5f * kU;
+constexpr float kCursorHeight = 1.0f * kU;
+constexpr float kCursorRadius = 0.12f * kU;
+constexpr float kCursorGap = 0.5f * kU;
 
 // The person's text scale, set from the keyboard (view.cpp kTextKeys) for every tab at once. It multiplies every size
 // above, so all text, spacing and radii scale together, as changing kBodySize would. It moves in steps of

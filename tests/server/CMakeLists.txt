@@ -97,6 +97,13 @@ tlc_test(tlc_supervisor_witness_setting_not_cleared WSupSettingNotCleared WSupSe
 tlc_test(tlc_supervisor_witness_account_ignored WSupAccountIgnored WSupAccountIgnored.cfg action
          PROPERTY NoSendOnOldAccount)
 tlc_test(tlc_supervisor_witness_account_cuts WSupAccountCuts WSupAccountCuts.cfg action PROPERTY AccountKeepsTurn)
+# The state cursor's activity (ActivityOf): idle while a prompt waits, a crash shown as idle, and down that turns idle
+# when its driver is collected.
+tlc_test(tlc_supervisor_witness_idle_while_waiting WSupIdleWhileWaiting WSupIdleWhileWaiting.cfg invariant
+         PROPERTY BrokenIdleWaitsForPerson)
+tlc_test(tlc_supervisor_witness_crash_idle WSupCrashIdle WSupCrashIdle.cfg action PROPERTY BrokenCrashShowsDown)
+tlc_test(tlc_supervisor_witness_down_forgotten WSupDownForgotten WSupDownForgotten.cfg action
+         PROPERTY BrokenDownLeavesByWork)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)
@@ -114,3 +121,7 @@ tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTr
 # The account's seed is one whose walk sets an account before a restart.
 tlc_test(tlc_supervisor_trace_faulty_account_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY account)
+# The code's activity (the window's state cursor) is bound too: a walk whose recorded activity reads a crash as idle is
+# rejected.
+tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)

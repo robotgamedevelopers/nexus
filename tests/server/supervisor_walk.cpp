@@ -4,7 +4,7 @@
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
 //   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue | --faulty-setting |
-//                                   --faulty-account] <out.tla>
+//                                   --faulty-account | --faulty-activity] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
@@ -28,6 +28,7 @@
 //   --faulty-queue   a restart finds the queue empty, as if the store had not kept it
 //   --faulty-setting a restart finds the model and effort empty, as if the store had not kept them
 //   --faulty-account a restart finds the account empty, as if the store had not kept it
+//   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 
 #include <cstdint>
 #include <cstdio>
@@ -54,7 +55,7 @@ constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
 constexpr std::size_t kMaxSwitches = 12;
 
-enum class Fault { None, Turn, Resume, Queue, Setting, Account };
+enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity };
 
 // A model and effort as the spec writes a setting: a record of the two, "" for the harness's default.
 std::string settingName(const std::string& model, const std::string& effort) {
@@ -83,6 +84,15 @@ const char* stageName(Stage s) {
         case Stage::Closed: return "closed";
         case Stage::Termed: return "termed";
         case Stage::Killed: return "killed";
+    }
+    return "?";
+}
+
+const char* activityName(sync::Activity a) {
+    switch (a) {
+        case sync::Activity::Idle: return "idle";
+        case sync::Activity::Busy: return "busy";
+        case sync::Activity::Down: return "down";
     }
     return "?";
 }
@@ -479,8 +489,18 @@ private:
         o << ">>, resumed |-> " << str(resumed_) << ", setting |-> " << settingName(s.model(), s.effort())
           << ", told |-> " << settingName(toldModel_, toldEffort_)
           << ", account |-> " << str(s.account()) << ", drv |-> " << str(s.driverAccount()) << ", retiring |-> "
-          << (s.retiring() ? "TRUE" : "FALSE") << ", switches |-> " << switches_ << "]";
+          << (s.retiring() ? "TRUE" : "FALSE") << ", crashed |-> " << (s.crashed() ? "TRUE" : "FALSE")
+          << ", activity |-> " << str(activityName(activity())) << ", switches |-> " << switches_ << "]";
         return o.str();
+    }
+
+    // The code's activity; with the activity fault, a crash reads as idle, as a cursor that forgot it would show.
+    sync::Activity activity() const {
+        const sync::Activity a = sup_->activity();
+        if (fault_ == Fault::Activity && a == sync::Activity::Down && !sup_->held()) {
+            return sync::Activity::Idle;
+        }
+        return a;
     }
 
     Fault fault_;
@@ -528,7 +548,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         return 1;
     }
     const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue", ", faulty setting",
-                            ", faulty account"};
+                            ", faulty account", ", faulty activity"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
         << faults[static_cast<int>(fault)] << ".\n";
@@ -583,6 +603,9 @@ int main(int argc, char** argv) {
         } else if (a == "--faulty-account") {
             fault = Fault::Account;
             ++faults;
+        } else if (a == "--faulty-activity") {
+            fault = Fault::Activity;
+            ++faults;
         } else if (a == "--faulty-queue") {
             fault = Fault::Queue;
             ++faults;
@@ -593,7 +616,7 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
         std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
-                     "--faulty-queue | --faulty-setting | --faulty-account] <out.tla>\n");
+                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-activity] <out.tla>\n");
         return 2;
     }
     return walk(seed, steps, fault, rest[2].c_str());

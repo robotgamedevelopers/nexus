@@ -184,12 +184,13 @@ struct Server {
 
     const Supervisor& sup() { return *drivers->supervisor(kAda); }
 
-    // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "N " a notice.
+    // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "T " a tool line, "N " a notice.
     std::vector<std::string> transcript() const {
         std::vector<std::string> out;
         if (const sync::StoredSession* t = store.find(kAda)) {
             for (const sync::EntryRef& e : t->transcript) {
                 out.push_back(std::string(e->kind == EntryKind::Person ? "P " : e->kind == EntryKind::Friend ? "F " :
+                    e->kind == EntryKind::Tool ? "T " :
                     "N ") + e->text);
             }
         }
@@ -198,6 +199,12 @@ struct Server {
     sync::DriverState driver() const {
         const sync::StoredSession* t = store.find(kAda);
         return t != nullptr ? t->driver : sync::DriverState{};
+    }
+
+    // What the windows are sent of ada's activity (the state cursor).
+    sync::Activity activity() const {
+        const sync::SessionView* v = hub->state().find(kAda);
+        return v != nullptr ? v->activity : sync::Activity::Idle;
     }
 
     // Shutdown: every driver ended and collected, and none left running.
@@ -239,7 +246,7 @@ void normal(Server& s, const std::string& dir, const std::string& fake) {
         "emit {\"kind\":\"done\",\"outcome\":\"ok\",\"session_cost_usd\":0.02}\n");
     s.send("hi");
     CHECK(s.serveUntil([&] { return s.transcript().size() == 3 && idle(s); }, 10));
-    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Hello.", "F Read: a file"}));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Hello.", "T Read: a file"}));
     CHECK(s.driver().session == "s-1");
     CHECK(s.driver().nextTurn == 2);
     CHECK(s.sup().alive());
@@ -250,10 +257,15 @@ void stop(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
         "emit {\"kind\":\"text\",\"delta\":\"ing\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    CHECK(s.activity() == sync::Activity::Idle);
     s.send("go");
+    CHECK(s.activity() == sync::Activity::Busy);     // the driver starts for the prompt
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    CHECK(s.activity() == sync::Activity::Busy);
     CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.activity() == sync::Activity::Busy);     // stopping
     CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK(s.activity() == sync::Activity::Idle);
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Working", "N Stopped."}));
     const pid_t first = s.drivers->pid(kAda);
     s.send("again");
@@ -376,6 +388,7 @@ void exitMidTurn(Server& s, const std::string& dir, const std::string& fake) {
         CHECK(has(t[3], "cut short. Whether ada got the prompt is unknown"));
     }
     CHECK(s.driver().openTurn == 0 && s.driver().waiting.empty() && s.driver().nextTurn == 2);
+    CHECK(s.activity() == sync::Activity::Down);     // the driver crashed: down until the next prompt
 }
 
 // A line that is not a message: the driver is ended and the turn cut.

@@ -425,32 +425,41 @@ SessionView tailFor(const std::string& name, const std::vector<EntryRef>& t, std
     return tailOf(sid(name), infoOf(name), t, std::move(queue), tail, std::move(open));
 }
 
-// A random server history: each step appends, grows the open entry, closes it, queues or makes a session.
+// A random server history: each step appends (an entry of any kind, a tool line included), grows the open entry,
+// closes it, queues, changes the session's activity or makes a session.
 struct History {
     std::map<std::string, std::vector<EntryRef>> transcripts;
     std::map<std::string, std::vector<std::string>> queues;
+    std::map<std::string, Activity> activities;
     Tail tail{3, 400};
     Sessions state() const {
         std::vector<SessionRef> tabs;
-        for (const auto& [name, t] : transcripts)
-            tabs.push_back(std::make_shared<const SessionView>(tailFor(name, t, queues.at(name), tail)));
+        for (const auto& [name, t] : transcripts) {
+            SessionView v = tailFor(name, t, queues.at(name), tail);
+            v.activity = activities.at(name);
+            tabs.push_back(std::make_shared<const SessionView>(std::move(v)));
+        }
         return Sessions(std::move(tabs));
     }
     void step(Rng& rng) {
         const std::string name = kTabNames[rng.below(3)];
         auto& t = transcripts[name];
         queues[name];
-        const std::size_t what = rng.below(5);
+        activities[name];
+        const std::size_t what = rng.below(6);
         if (what == 0 && !t.empty() && !t.back()->closed) {
             t.back() = entry(t.back()->kind, t.back()->text + randomText(rng), false);
         } else if (what == 1 && !t.empty() && !t.back()->closed) {
             t.back() = entry(t.back()->kind, t.back()->text, true);
         } else if (what == 2) {
             queues[name].push_back(randomText(rng));
+        } else if (what == 3) {
+            activities[name] = static_cast<Activity>(rng.below(3));
         } else {
-            if (!t.empty() && !t.back()->closed)
+            if (!t.empty() && !t.back()->closed) {
                 t.back() = entry(t.back()->kind, t.back()->text, true);
-            t.push_back(entry(static_cast<EntryKind>(rng.below(3)), randomText(rng), rng.chance(3) == false));
+            }
+            t.push_back(entry(static_cast<EntryKind>(rng.below(4)), randomText(rng), rng.chance(3) == false));
         }
     }
 };
@@ -1020,6 +1029,120 @@ void hub_open_entry() {
     CHECK(again.state().find(sid("ada"))->entries.size() == 2);
 }
 
+std::vector<FriendInfo> friends2();
+
+// A session's activity and a tool line cross the wire; a change of activity alone is a change of the state; an
+// activity the wire does not define is refused, changing nothing.
+void sessions_activity_and_tool_lines() {
+    std::vector<EntryRef> t = {entry(EntryKind::Person, "q"), entry(EntryKind::Tool, "Bash: ls src")};
+    SessionView busy = tailFor("ada", t, {}, Tail{});
+    busy.activity = Activity::Busy;
+    SessionView down = busy;
+    down.activity = Activity::Down;
+    const Sessions a({std::make_shared<const SessionView>(busy)});
+    const Sessions b({std::make_shared<const SessionView>(down)});
+    CHECK(!(a == b));
+    Sessions c;
+    c.apply_string(a.init_diff());
+    CHECK(c == a && c.find(sid("ada"))->activity == Activity::Busy);
+    CHECK(c.find(sid("ada"))->entries[1]->kind == EntryKind::Tool);
+    const std::string d = b.diff_from(a);
+    CHECK(!d.empty());
+    c.apply_string(d);
+    CHECK(c == b && c.find(sid("ada"))->activity == Activity::Down);
+    // The two whole diffs differ in one byte, the activity's: Down is 2; 3 is no activity.
+    std::string bad = b.init_diff();
+    const std::string good = a.init_diff();
+    std::size_t at = bad.size();
+    for (std::size_t i = 0; i < bad.size() && i < good.size(); ++i) {
+        if (bad[i] != good[i]) {
+            at = i;
+            break;
+        }
+    }
+    CHECK(at < bad.size() && bad[at] == 2);
+    if (at < bad.size()) {
+        bad[at] = 3;
+        Sessions e = a;
+        bool threw = false;
+        try {
+            e.apply_string(bad);
+        } catch (const BadDiff&) {
+            threw = true;
+        }
+        CHECK(threw && e == a);
+    }
+}
+
+// The hub's activity of a session: in memory only, Idle until set, refused for a session the store does not hold.
+void hub_activity() {
+    MemoryStore store;
+    Hub hub(store);
+    CHECK(!hub.setActivity(sid("ada"), Activity::Busy));
+    withSessions(hub, {"ada", "bo"});
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Idle);
+    CHECK(!hub.setActivity(sid("ada"), Activity::Idle));     // no change
+    const SessionRef bo = hub.state().sessions()[1];
+    CHECK(hub.setActivity(sid("ada"), Activity::Busy));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Busy);
+    CHECK(hub.state().sessions()[1] == bo);                  // the other session is shared, untouched
+    CHECK(!hub.setActivity(sid("ada"), Activity::Busy));
+    CHECK(hub.setActivity(sid("ada"), Activity::Down));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
+    // it stays as the session changes
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
+    CHECK(hub.setActivity(sid("ada"), Activity::Idle));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Idle);
+    // a new hub over the same store starts Idle: not durable
+    CHECK(hub.setActivity(sid("bo"), Activity::Busy));
+    Hub again(store);
+    CHECK(again.state().find(sid("bo"))->activity == Activity::Idle);
+}
+
+// The mirror holds the activity of the session a tab shows from the last state applied that held it.
+void mirror_activity() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    CHECK(mirror.activity(id) == nullptr);
+    std::vector<EntryRef> t = {entry(EntryKind::Person, "q")};
+    SessionView v = tailFor("ada", t, {}, Tail{});
+    v.activity = Activity::Busy;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));
+    CHECK(mirror.activity(id) != nullptr && *mirror.activity(id) == Activity::Busy);
+    CHECK(!mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));    // the same: no change
+    v.activity = Activity::Idle;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));     // the activity alone changed
+    CHECK(*mirror.activity(id) == Activity::Idle);
+    CHECK(mirror.activity(m.tab(1).id) == nullptr);          // bo's: no state has held one
+    CHECK(mirror.apply(m, Sessions()));                       // a state without the session
+    CHECK(mirror.activity(id) == nullptr);
+}
+
+// The state cursor from the server's state only: grey whenever the link is lost or no state has held the session, so
+// never blue on stale state; otherwise the session's activity.
+void cursor_from_the_servers_state() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    CHECK(cursorOf(LinkPhase::Connected, 0, mirror, id) == CursorState::Lost);     // no session yet
+    SessionView v = tailFor("ada", {}, {}, Tail{});
+    for (Activity a : {Activity::Busy, Activity::Idle, Activity::Down}) {
+        v.activity = a;
+        mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)}));
+        const CursorState want = a == Activity::Busy ? CursorState::Busy
+            : a == Activity::Idle ? CursorState::Idle : CursorState::Down;
+        CHECK(cursorOf(LinkPhase::Connected, 0, mirror, id) == want);
+        CHECK(cursorOf(LinkPhase::Connected, kQuietMs - 1, mirror, id) == want);
+        CHECK(cursorOf(LinkPhase::Connected, kQuietMs, mirror, id) == CursorState::Lost);
+        CHECK(cursorOf(LinkPhase::Connecting, 0, mirror, id) == CursorState::Lost);
+        CHECK(cursorOf(LinkPhase::Failed, 0, mirror, id) == CursorState::Lost);
+    }
+    CHECK(!linkLost(LinkPhase::Connected, kQuietMs - 1));
+    CHECK(linkLost(LinkPhase::Connected, kQuietMs));
+}
+
 void sessions_tail_carries_open_apart() {
     std::vector<EntryRef> t;
     for (int i = 0; i < 5; ++i) {
@@ -1323,6 +1446,10 @@ const Case kCases[] = {
     {"ensure_each_friend", ensure_each_friend},
     {"stop_target_rules", stop_target_rules},
     {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
+    {"sessions_activity_and_tool_lines", sessions_activity_and_tool_lines},
+    {"hub_activity", hub_activity},
+    {"mirror_activity", mirror_activity},
+    {"cursor_from_the_servers_state", cursor_from_the_servers_state},
 };
 
 } // namespace

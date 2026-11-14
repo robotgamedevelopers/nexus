@@ -184,6 +184,10 @@ public:
     // (false). Returns true when the state changed.
     bool setOpen(SessionId id, const std::string& text);
 
+    // What the friend of session `id` is doing now (sync/sessions.h Activity), as its Responder works it out: in memory
+    // only, Idle until set. A session the store does not hold has none (false). Returns true when the state changed.
+    bool setActivity(SessionId id, Activity activity);
+
     const Sessions& state() const { return state_; }
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
@@ -198,6 +202,7 @@ private:
     Limits limits_;
     Responder* responder_;
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
+    std::map<SessionId, Activity> activity_; // each session's activity, if not Idle
     Sessions state_;
 };
 

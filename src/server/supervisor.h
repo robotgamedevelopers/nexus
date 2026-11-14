@@ -173,6 +173,7 @@ public:
     int failedStarts() const { return failed_; }
     bool held() const { return held_; }                     // no driver is started until the next prompt
     bool noCredential() const { return noCredential_; }     // the driver alive said it has no credential
+    bool crashed() const { return crashed_; }   // the last driver failed, and none has said hello since
     bool shuttingDown() const { return down_; }
     const std::string& model() const { return config_.model; }
     const std::string& effort() const { return config_.effort; }
@@ -180,6 +181,12 @@ public:
     const std::string& driverAccount() const { return driverAccount_; }    // the alive driver's; empty with none
     bool retiring() const { return retiring_; }     // the driver is being ended for an account change
     const std::string& openPrompt() const { return openPrompt_; }
+    // What the friend is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
+    // held back (failed starts, or no credential); otherwise Busy while a turn is open or about to begin (a prompt
+    // waits, or a driver starts); otherwise Down when the last driver failed (crashed, broke the protocol, missed a
+    // deadline) and none has said hello since, unless the server is stopping; otherwise Idle, which is only ever with
+    // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
+    sync::Activity activity() const;
 
 private:
     void effect(Effect::What what, std::string text, std::uint64_t turn = 0);
@@ -212,6 +219,7 @@ private:
     int failed_ = 0;
     bool held_ = false;
     bool noCredential_ = false;
+    bool crashed_ = false;              // the last driver failed (abandoned), and none has said hello since
     bool down_ = false;
     std::string lastFailure_;           // why the last driver ended, for the notice that holds starts back
     std::string lastCause_;             // the cause the driver gave with its last error, if any

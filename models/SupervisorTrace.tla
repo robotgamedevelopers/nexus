@@ -14,7 +14,8 @@
 (* whole state, every send and stop it has written, the entries the step  *)
 (* appended to the tab, the --resume of its last start, and the model and  *)
 (* effort the driver alive was told, read from the settings lines written  *)
-(* to it (each send records them as they are when it is written).          *)
+(* to it (each send records them as they are when it is written), and the  *)
+(* code's activity (Supervisor::activity, the window's state cursor).      *)
 (*                                                                         *)
 (* Each step of this spec takes the Supervisor action the record names.    *)
 (* TraceMatches requires the spec's state to equal the code's, field by   *)
@@ -35,7 +36,7 @@ ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
            "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
-           "account", "drv", "retiring"}
+           "account", "drv", "retiring", "crashed"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -43,6 +44,7 @@ Matches(k) ==
     /\ restarts = r.restarts
     /\ switches = r.switches
     /\ \A f \in Fields : s[f] = r[f]
+    /\ L!ActivityOf(s) = r.activity
 
 TraceMatches == Matches(l)
 
@@ -99,5 +101,8 @@ WrittenWithSetting == L!WrittenWithSetting
 SettingLeavesTurn == L!SettingLeavesTurn
 NoSendOnOldAccount == L!NoSendOnOldAccount
 AccountKeepsTurn == L!AccountKeepsTurn
+IdleWaitsForPerson == L!IdleWaitsForPerson
+CrashShowsDown == L!CrashShowsDown
+DownLeavesByWork == L!DownLeavesByWork
 
 =============================================================================

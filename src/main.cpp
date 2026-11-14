@@ -27,7 +27,9 @@
 // mosh's transport (link/client.h). Each friend tab shows its friend's first session, the window's own choice. A prompt
 // goes to that session, and the transcripts and queues show what the server holds (sync/mirror.h). Until the server is
 // first heard there is no prompt, only the line that says the window is connecting (or why it could not); afterwards
-// that line shows only while the server is not heard.
+// nothing is drawn around the prompt, and the state cursor under the last text says what the server's state is
+// (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The friend's open
+// entry is drawn as it grows, tool calls as one compact line each, and Command-Escape sends a stop the server decides.
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
 //              [--bench FRAMES] [--print-window-config] [--server HOST]
@@ -121,7 +123,8 @@ struct App {
     std::string host;                       // --server
     std::unique_ptr<link::ClientLink> link;
     sync::Mirror mirror;
-    std::string promptProblem;              // why the last prompt was not sent, until one is
+    sync::LinkPhase phase = sync::LinkPhase::Connecting;   // the link's state, as last polled, for the state cursor
+    std::uint64_t heardMsAgo = 0;
 #endif
 };
 
@@ -159,17 +162,21 @@ void keepTerminals(App& a) {
 }
 
 #if NEXUS_LINK
-// Each frame: the server's latest sessions into the model, and the link's state into the line where the prompt stands.
-// The prompt opens once the server is first heard, and stays.
+// Each frame: the server's latest sessions into the model, and the link's state into the line in the prompt's place
+// (which shows only until the prompt opens) and the state cursor. The prompt opens once the server is first heard,
+// and stays.
 void pollLink(App& a) {
     link::ClientLink::Snapshot s;
-    if (a.link == nullptr || !a.link->poll(&s))
+    if (a.link == nullptr || !a.link->poll(&s)) {
         return;
+    }
     a.mirror.apply(*a.model, s.sessions);
-    if (s.phase == sync::LinkPhase::Connected)
+    if (s.phase == sync::LinkPhase::Connected) {
         a.view.promptOpen = true;
-    const std::string status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
-    a.view.status = status.empty() ? a.promptProblem : status;
+    }
+    a.phase = s.phase;
+    a.heardMsAgo = s.heardMsAgo;
+    a.view.status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
 }
 #endif
 
@@ -286,6 +293,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     if (a.terminals != nullptr)
         a.terminals->observe(f->time);
     keepTerminals(a);
+    a.view.time = f->time;
 #if NEXUS_LINK
     pollLink(a);
 #endif
@@ -774,7 +782,7 @@ int main(int argc, char** argv) {
             if (session == 0 && i < model.tab_count() && model.tab(i).kind == TabKind::Friend) {
                 why = "No session with " + model.tab(i).name + " yet: the prompt is kept.";
             } else if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
-                a.promptProblem.clear();
+                a.view.problem.clear();
                 sync::Action action;
                 action.kind = queue ? sync::ActionKind::Queue : sync::ActionKind::Send;
                 action.session = session;
@@ -783,10 +791,27 @@ int main(int argc, char** argv) {
                 return;
             }
             if (!why.empty()) {
-                a.promptProblem = why;
-                if (a.view.status.empty())
-                    a.view.status = why;
+                a.view.problem = why;
             }
+        };
+        // Command-Escape: a stop of the session the tab shows, sent whatever the window shows and whether or not the
+        // link is up (it waits in order with the other actions); the server decides what it stops. Before any state has
+        // held a session of the friend there is no session to name, and nothing is sent.
+        a.view.stop = [] {
+            sync::SessionId session = 0;
+            if (sync::stopTarget(model, model.active(), a.mirror, &session)) {
+                sync::Action action;
+                action.kind = sync::ActionKind::Stop;
+                action.session = session;
+                a.link->send(std::move(action));
+            }
+        };
+        a.view.growing = [](std::size_t id) -> const std::string* {
+            const sync::SessionEntry* open = a.mirror.open(id);
+            return open != nullptr ? &open->text : nullptr;
+        };
+        a.view.cursor = [](std::size_t id) {
+            return sync::cursorOf(a.phase, a.heardMsAgo, a.mirror, id);
         };
         link::ClientLink::Options options;
         options.bootstrap.host = a.host;
