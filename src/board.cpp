@@ -32,10 +32,9 @@ namespace nexus {
 
 namespace {
 
-// How long a frame runs the page's due tasks, in milliseconds: a long load renders as it goes, and the window's own
-// rounds keep their time. Prax's browser runs its pages for 8 ms at a time on a thread of their own; this runs on the
-// window's thread, so half that.
-constexpr double kTaskBudget = 4;
+// How long a step of the page's thread runs the page's due tasks, in milliseconds, before it paints: a long load
+// renders as it goes. As Prax's browser runs its pages, on a thread of their own.
+constexpr double kTaskBudget = 8;
 
 // How long after a failed load, or a failed lookup of the address, the board tries again, while it shows.
 constexpr double kRetrySeconds = 10;
@@ -139,6 +138,10 @@ private:
 
 } // namespace
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The window's thread
+
 PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.app) {
     if (!desc_.url.empty()) {
         url_ = desc_.url;
@@ -147,50 +150,41 @@ PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.
         PrApp* app = app_;
         finding_ = std::async(std::launch::async, [find, app] {
             SprintBoardAddress address = find();
-            if (app != nullptr)
+            if (app != nullptr) {
                 prAppWake(app);
+            }
             return address;
         });
     }
     const ZoneNames zones = localZoneNames();
     prelude_ = sprintPrelude(zones.standard, zones.daylight);
+    thread_ = std::thread([this] { run(); });
 }
 
 PraxBoard::~PraxBoard() {
-    // The page's view, then the engine (its objects' finalizers reach the page's window), then the page, the agent and
-    // the network, as Prax's browser closes (tab.cpp TaskKind_Shutdown, main.cpp closeShared).
-    prHtmlViewDestroy(view_);
-    prJsHtmlEngineDestroy(engine_);
-    prHtmlPageDestroy(page_);
-    prDomAgentDestroy(agent_);
-    if (net_ != nullptr) {
-        NetParts parts{fetcher_, network_, http_};
-        if (nullNet_) {
-            prNetNullRun(net_);
-            destroyOnLoop(&parts);
-        } else {
-            prNetPostBlocking(net_, destroyOnLoop, &parts);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ending_ = true;
+        if (waiting_ != nullptr) {
+            prDomAgentStop(waiting_);
         }
-        prTlsDestroy(tls_);
-        prNetDestroy(net_);
     }
-    prHtmlStorageProviderDestroy(localStorage_);
-    prHtmlStorageProviderDestroy(sessionStorage_);
-    prImageCodecDestroy(images_);
-    prCompressCodecDestroy(compress_);
-    prDrawListRelease(recorded_);
-    prTextFontRelease(font_);
-    prTextShaperDestroy(shaper_);
-    prFontSetDestroy(fonts_);
-    if (finding_.valid())
+    wake_.notify_all();
+    thread_.join();     // the page's thread frees the page as it ends (closePage)
+    prDrawListRelease(showing_);
+    prDrawListRelease(out_.recorded);
+    if (finding_.valid()) {
         finding_.wait();
+    }
 }
 
 void PraxBoard::takeAddress() {
-    if (!url_.empty() || !finding_.valid())
+    if (!url_.empty() || !finding_.valid()) {
         return;
-    if (finding_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    }
+    if (finding_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
         return;
+    }
     SprintBoardAddress address = finding_.get();
     if (!address.url.empty()) {
         url_ = address.url;
@@ -198,7 +192,435 @@ void PraxBoard::takeAddress() {
         return;
     }
     problem_ = address.error;
-    findAgainAt_ = frameTime_ + kRetrySeconds;
+    findAgainAt_ = windowTime_ + kRetrySeconds;
+}
+
+void PraxBoard::post(Message message) {
+    message.time = windowTime_;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        inbox_.push_back(std::move(message));
+        ++posted_;
+        if (waiting_ != nullptr) {
+            prDomAgentWake(waiting_);
+        }
+    }
+    wake_.notify_one();
+}
+
+void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
+    windowTime_ = seconds;
+    windowDisplay_ = display;
+    const bool onScreen = shown_ && (!desc_.visible || desc_.visible());
+    if (onScreen) {
+        takeAddress();
+        if (url_.empty() && !finding_.valid() && windowTime_ >= findAgainAt_) {
+            std::function<SprintBoardAddress()> find = desc_.find ? desc_.find : [] { return findSprintBoard(); };
+            PrApp* app = app_;
+            finding_ = std::async(std::launch::async, [find, app] {
+                SprintBoardAddress address = find();
+                if (app != nullptr) {
+                    prAppWake(app);
+                }
+                return address;
+            });
+        }
+    }
+    // The frame, for the page's thread: while the page is on screen, and once as it leaves.
+    std::vector<std::string> opens;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool tick = onScreen || onScreen_;
+        time_ = seconds;
+        display_ = display;
+        onScreen_ = onScreen;
+        address_ = url_;
+        opens.swap(out_.opens);
+        if (tick) {
+            ++posted_;
+            if (waiting_ != nullptr) {
+                prDomAgentWake(waiting_);
+            }
+        }
+    }
+    wake_.notify_one();
+    for (const std::string& url : opens) {
+        openLink(url);
+    }
+}
+
+void PraxBoard::openLink(const std::string& url) {
+    if (desc_.open) {
+        desc_.open(url);
+        return;
+    }
+    if (app_ == nullptr) {
+        return;
+    }
+    const PrStatus status = prAppOpenUrl(app_, sv(url));
+    if (status != PrStatus_Ok) {
+        std::fprintf(stderr, "nexus: the system could not open %s (status %d)\n", url.c_str(), int(status));
+    }
+}
+
+bool PraxBoard::show(PrLayoutNode parent, PrVec2 extent, std::string* problem) {
+    said_.clear();
+    bool page = showPage(parent, extent, &said_);
+    if (!page) {
+        *problem = said_;
+    }
+    return page;
+}
+
+bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem) {
+    shown_ = true;
+    PrUi* ui = kit_->ui;
+    PrLayoutTree* tree = kit_->tree;
+    const bool onScreen = !desc_.visible || desc_.visible();
+    if (url_.empty()) {
+        *problem = problem_.empty() ? "looking up the sprint board's address (nova-config service show sprint-run)"
+                                    : problem_;
+        if (onScreen && !finding_.valid()) {
+            prUiRequestFrameAt(ui, std::max(windowTime_, findAgainAt_));
+        }
+        return false;
+    }
+    bool opened = false;
+    bool failed = false;
+    double retryAt = 0;
+    bool busy = false;
+    double nextTask = -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (extent.x != extent_.x || extent.y != extent_.y) {
+            extent_ = extent;
+            ++posted_;
+            if (waiting_ != nullptr) {
+                prDomAgentWake(waiting_);
+            }
+        }
+        opened = out_.opened;
+        failed = out_.failed;
+        if (failed) {
+            *problem = out_.error;
+        }
+        retryAt = out_.retryAt;
+        busy = out_.busy;
+        nextTask = out_.nextTask;
+        if (out_.recorded != showing_) {
+            prDrawListRelease(showing_);
+            showing_ = out_.recorded;
+            if (showing_ != nullptr) {
+                prDrawListRetain(showing_);
+            }
+        }
+    }
+    wake_.notify_one();
+    if (!opened) {
+        *problem = "opening the sprint board at " + url_;
+        if (onScreen) {
+            prUiRequestFrame(ui);
+        }
+        return false;
+    }
+    if (failed) {
+        if (onScreen) {
+            prUiRequestFrameAt(ui, retryAt);
+        }
+        return false;
+    }
+    if (showing_ == nullptr) {
+        *problem = "loading the sprint board from " + url_;
+        if (onScreen) {
+            prUiRequestFrame(ui);
+        }
+        return false;
+    }
+    // The pane: a replaced element of the extent given, whose painter embeds the page (incremental.cpp 729-737).
+    PrLayoutNode pane = prLayoutTreeFrameReplaced(tree, parent, 0, 0);
+    PrKitPlace place{};
+    place.width = prKitPx(extent.x);
+    place.height = prKitPx(extent.y);
+    place.flex = PrKitFlex_Fixed;
+    prKitPlace(kit_, pane, &place);
+    PrLayoutContent content{.kind = PrLayoutContentKind_Painter};
+    content.painter = PrLayoutPainter{.context = showing_, .paint = paintPage, .measure = nullptr,
+        .retain = retainPage, .release = releasePage};
+    prLayoutTreeFrameSetContent(tree, pane, &content);
+    PrRect bounds = prLayoutRectToPx(prLayoutNodeBounds(tree, pane, PrLayoutCoordinates_Viewport));
+    if (bounds.right - bounds.left >= 1 && bounds.bottom - bounds.top >= 1) {
+        pane_ = bounds;
+    }
+    // The next frame: now if the page has work due (its thread wakes the app when a new paint is ready), at its next
+    // timer, or none.
+    if (onScreen) {
+        if (busy) {
+            prUiRequestFrame(ui);
+        } else if (nextTask > 0) {
+            prUiRequestFrameAt(ui, windowTime_ + nextTask / 1000);
+        }
+    }
+    return true;
+}
+
+void PraxBoard::hidden() {
+    if (shown_) {
+        post(Message{Message::Kind::Hidden, {}, {}, {}});
+    }
+    shown_ = false;
+    pressInPage_ = false;
+}
+
+void PraxBoard::setTextScale(float k) {
+    if (k <= 0 || k == windowZoom_) {
+        return;
+    }
+    windowZoom_ = k;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        zoom_ = k;
+        ++posted_;
+        if (waiting_ != nullptr) {
+            prDomAgentWake(waiting_);
+        }
+    }
+    wake_.notify_one();
+}
+
+void PraxBoard::home() {
+    post(Message{Message::Kind::Home, {}, {}, {}});
+}
+
+bool PraxBoard::event(const PrAppEvent& e) {
+    if (!shown_ || showing_ == nullptr) {
+        return false;
+    }
+    PrVec2 at{};
+    const bool positioned = prAppEventPosition(&e, &at);
+    const bool inPage = positioned && at.x >= pane_.left && at.x < pane_.right && at.y >= pane_.top &&
+        at.y < pane_.bottom;
+    BoardRoute route = routeBoardEvent(e, inPage, pressInPage_);
+    if (e.kind == PrAppEventKind_PointerDown) {
+        pressInPage_ = route == BoardRoute::Page;
+    }
+    if (route == BoardRoute::Window) {
+        // A key of the window's (a tab's Command-digit, say) ends a held arrow's scrolling.
+        if (e.kind == PrAppEventKind_KeyDown) {
+            post(Message{Message::Kind::WindowKey, {}, {}, {}});
+        }
+        return false;
+    }
+    // A drag's data and a trackpad's touches are the platform's, valid only while the event is delivered: they stay on
+    // this thread, and the page does not see them.
+    const bool platformData = e.kind == PrAppEventKind_TrackpadTouches || e.kind == PrAppEventKind_DragEnter ||
+        e.kind == PrAppEventKind_DragOver || e.kind == PrAppEventKind_DragLeave || e.kind == PrAppEventKind_Drop ||
+        e.kind == PrAppEventKind_DragPromise;
+    if (!platformData) {
+        // In the page's CSS px: its position from the pane's corner, and a trackpad's pixel deltas, over the text scale.
+        Message m{Message::Kind::Event, prAppEventPlaced(&e, PrVec2{pane_.left, pane_.top}, windowZoom_), {}, {}};
+        const PrStringView text = prAppEventText(&m.event);
+        m.text.assign(text.data != nullptr ? text.data : "", text.size);
+        post(std::move(m));
+    }
+    if (e.kind == PrAppEventKind_PointerUp) {
+        pressInPage_ = false;
+    }
+    return route == BoardRoute::Page;
+}
+
+bool PraxBoard::settled() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return out_.settled;
+}
+
+PrColor PraxBoard::canvas() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return out_.canvas;
+}
+
+double PraxBoard::overscroll() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return out_.overscroll;
+}
+
+void PraxBoard::wait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    const std::uint64_t posted = posted_;
+    wake_.notify_one();
+    stepped_.wait(lock, [&] { return done_ >= posted || ending_; });
+}
+
+void PraxBoard::onPage(const std::function<void(PrHtmlPage* page)>& fn) {
+    post(Message{Message::Kind::Run, {}, {}, fn});
+    wait();
+}
+
+std::string PraxBoard::bodyText() {
+    std::string text;
+    onPage([&](PrHtmlPage* page) {
+        if (page == nullptr) {
+            return;
+        }
+        PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page));
+        PrDomElement* body = document != nullptr ? prDomDocumentBody(document) : nullptr;
+        text = body != nullptr ? taken(prDomNodeTextContent(prDomElementAsNode(body))) : std::string();
+    });
+    return text;
+}
+
+std::string PraxBoard::documentUrl() {
+    std::string url;
+    onPage([&](PrHtmlPage*) { url = pageUrl(); });
+    return url;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The page's thread
+
+void PraxBoard::run() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    for (;;) {
+        if (ending_) {
+            break;
+        }
+        if (inbox_.empty() && taken_ == posted_) {
+            if (agent_ != nullptr && onScreen_) {
+                // Until a task can run, a message comes, the layout thread finishes, or the window wakes it.
+                waiting_ = agent_;
+                lock.unlock();
+                prDomAgentWait(agent_, -1);
+                lock.lock();
+                waiting_ = nullptr;
+            } else {
+                wake_.wait(lock, [this] { return ending_ || !inbox_.empty() || taken_ != posted_; });
+            }
+            if (ending_) {
+                break;
+            }
+        }
+        std::vector<Message> inbox;
+        inbox.swap(inbox_);
+        const std::uint64_t taken = posted_;
+        taken_ = taken;
+        frameTime_ = time_;
+        pageDisplay_ = display_;
+        visible_ = onScreen_;
+        pageUrl_ = address_;
+        pageExtent_ = extent_;
+        pageZoom_ = zoom_;
+        lock.unlock();
+        step(inbox);
+        publish();
+        lock.lock();
+        done_ = taken;
+        stepped_.notify_all();
+    }
+    done_ = posted_;
+    stepped_.notify_all();
+    lock.unlock();
+    closePage();
+}
+
+void PraxBoard::step(std::vector<Message>& inbox) {
+    if (page_ != nullptr && hiddenSet_ == visible_) {
+        prHtmlPageSetVisibility(page_, PrHtmlVisibility(visible_ ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden));
+        hiddenSet_ = !visible_;
+    }
+    // Each message at the frame it came in, as the window's thread would have taken it then; then this frame.
+    const double now = frameTime_;
+    for (Message& m : inbox) {
+        frameTime_ = std::min(m.time, now);
+        switch (m.kind) {
+            case Message::Kind::Run:
+                m.run(page_);
+                break;
+            case Message::Kind::Hidden:
+                endScroll();
+                break;
+            case Message::Kind::WindowKey:
+                if (scroller_.held()) {
+                    scroller_.release(frameTime_);
+                }
+                break;
+            case Message::Kind::Home:
+                if (page_ != nullptr && !pageUrl_.empty() && !home_.empty()) {
+                    const bool away = withoutFragment(pageUrl()) != home_ ||
+                        (prHtmlPageIsNavigating(page_) && !ownLoad_);
+                    if (away) {
+                        endScroll();
+                        navigate();
+                    }
+                }
+                break;
+            case Message::Kind::Event:
+                if (view_ != nullptr && recorded_ != nullptr) {
+                    prAppEventSetText(&m.event, PrStringView{m.text.data(), m.text.size()});
+                    scrollEvent(m.event);
+                    dirty_ = true;
+                }
+                break;
+        }
+    }
+    frameTime_ = now;
+    if (!visible_) {
+        endScroll();
+        return;
+    }
+    if (pageUrl_.empty()) {
+        return;
+    }
+    if (page_ == nullptr) {
+        openPage();
+        navigate();
+    } else if (load_ == Load::Failed && frameTime_ >= retryAt_) {
+        navigate();
+    }
+    if (PrDomElement* s = scroller(); s != nullptr && scroller_.busy()) {
+        PageScroll page(s);
+        if (scroller_.frame(page, frameTime_)) {
+            dirty_ = true;
+        }
+    }
+    runTasks();
+    if (load_ != Load::Failed) {
+        paint();
+    }
+}
+
+void PraxBoard::publish() {
+    const double delay = agent_ != nullptr ? prDomAgentNextTaskDelay(agent_) : -1;
+    const bool settled = page_ != nullptr && load_ == Load::Loaded && recorded_ != nullptr && !dirty_ &&
+        !prHtmlPageIsFetching(page_);
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (out_.recorded != recorded_) {
+            prDrawListRelease(out_.recorded);
+            out_.recorded = recorded_;
+            if (recorded_ != nullptr) {
+                prDrawListRetain(recorded_);
+            }
+            changed = true;
+        }
+        const bool failed = load_ == Load::Failed;
+        changed = changed || out_.opened != (page_ != nullptr) || out_.failed != failed || !opens_.empty();
+        out_.opened = page_ != nullptr;
+        out_.failed = failed;
+        out_.error = loadError_;
+        out_.retryAt = retryAt_;
+        out_.canvas = canvas_;
+        out_.overscroll = scroller_.overscroll();
+        out_.settled = settled;
+        out_.busy = dirty_ || scroller_.busy() || delay == 0;
+        out_.nextTask = delay;
+        for (std::string& url : opens_) {
+            out_.opens.push_back(std::move(url));
+        }
+        opens_.clear();
+    }
+    if (changed && app_ != nullptr) {
+        prAppWake(app_);   // a frame shows it (pr/studio_app.h)
+    }
 }
 
 void PraxBoard::openPage() {
@@ -206,8 +628,9 @@ void PraxBoard::openPage() {
     fonts_ = prFontSetCreate(desc_.fonts);
     for (const Alias& a : kAliases) {
         PrStringView family = prFontSetGenericFamily(desc_.fonts, a.generic);
-        if (family.size != 0)
+        if (family.size != 0) {
             prFontSetAlias(fonts_, sv(a.name), family);
+        }
     }
     // The page's text is shaped on the agent's layout thread as well as this one: a shaper of its own (Prax's browser).
     shaper_ = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -240,8 +663,8 @@ void PraxBoard::openPage() {
     localStorage_ = prHtmlStorageProviderCreate(&storage);
     sessionStorage_ = prHtmlStorageProviderCreate(&storage);
 
+    // A task posted to the agent (a fetch's answer, say) ends the page's thread's wait by itself (prDomAgentWait).
     agent_ = prDomAgentCreate(nullptr);
-    prDomAgentSetWake(agent_, wake, this);
     // The board draws its charts with SVG made by createElementNS, and reads URLs.
     static PrJsHtmlBind* const kBinds[] = {prJsSvgBind, prJsUrlBind};
     PrJsHtmlEngineDesc engine{.binds = kBinds, .bindCount = 2, .console = nullptr, .context = this,
@@ -270,8 +693,37 @@ void PraxBoard::openPage() {
     PrHtmlViewDesc view{.page = page_, .compositor = nullptr, .jobBudget = 0, .canvasFilled = false,
         .updated = nullptr, .updatedContext = nullptr};
     view_ = prHtmlViewCreate(&view);
-    if (desc_.window != nullptr)
+    if (desc_.window != nullptr) {
         prHtmlViewSetWindow(view_, desc_.window);
+    }
+}
+
+// The page's view, then the engine (its objects' finalizers reach the page's window), then the page, the agent and the
+// network, as Prax's browser closes (tab.cpp TaskKind_Shutdown, main.cpp closeShared).
+void PraxBoard::closePage() {
+    prHtmlViewDestroy(view_);
+    prJsHtmlEngineDestroy(engine_);
+    prHtmlPageDestroy(page_);
+    prDomAgentDestroy(agent_);
+    if (net_ != nullptr) {
+        NetParts parts{fetcher_, network_, http_};
+        if (nullNet_) {
+            prNetNullRun(net_);
+            destroyOnLoop(&parts);
+        } else {
+            prNetPostBlocking(net_, destroyOnLoop, &parts);
+        }
+        prTlsDestroy(tls_);
+        prNetDestroy(net_);
+    }
+    prHtmlStorageProviderDestroy(localStorage_);
+    prHtmlStorageProviderDestroy(sessionStorage_);
+    prImageCodecDestroy(images_);
+    prCompressCodecDestroy(compress_);
+    prDrawListRelease(recorded_);
+    prTextFontRelease(font_);
+    prTextShaperDestroy(shaper_);
+    prFontSetDestroy(fonts_);
 }
 
 void PraxBoard::navigate() {
@@ -280,13 +732,13 @@ void PraxBoard::navigate() {
     loadError_.clear();
     if (fetcher_ == nullptr) {
         load_ = Load::Failed;
-        loadError_ = "cannot show the sprint board: this build has no network to fetch " + url_ + " with";
+        loadError_ = "cannot show the sprint board: this build has no network to fetch " + pageUrl_ + " with";
         retryAt_ = 1e300;
         return;
     }
-    if (prHtmlPageNavigate(page_, sv(url_)) != PrStatus_Ok) {
+    if (prHtmlPageNavigate(page_, sv(pageUrl_)) != PrStatus_Ok) {
         load_ = Load::Failed;
-        loadError_ = "cannot show the sprint board: \"" + url_ + "\" is not an address; give the board's "
+        loadError_ = "cannot show the sprint board: \"" + pageUrl_ + "\" is not an address; give the board's "
             "address in nexus's client config (a line `sprint-url http://<host>:<port>/` in ~/.nexus/client/config), "
             "or remove that line to read the sprint's record";
         retryAt_ = 1e300;
@@ -312,45 +764,25 @@ void PraxBoard::loaded(void* context, PrHtmlPage*, PrStatus status) {
     if (status == PrStatus_Ok) {
         b.load_ = Load::Loaded;
         b.loadError_.clear();
-        if (own)
-            b.home_ = std::string(withoutFragment(b.documentUrl()));
+        if (own) {
+            b.home_ = std::string(withoutFragment(b.pageUrl()));
+        }
         return;
     }
     b.load_ = Load::Failed;
-    b.loadError_ = "cannot load the sprint board from " + b.url_ + ": " + statusName(status) + "; check that the "
+    b.loadError_ = "cannot load the sprint board from " + b.pageUrl_ + ": " + statusName(status) + "; check that the "
         "sprint runs (`nova-sprint up`), or give the board's address in ~/.nexus/client/config (a line `sprint-url http://<host>:<port>/`); trying again every " +
         std::to_string(int(kRetrySeconds)) + " seconds";
     b.retryAt_ = b.frameTime_ + kRetrySeconds;
 }
 
-std::string PraxBoard::documentUrl() const {
-    if (page_ == nullptr)
+std::string PraxBoard::pageUrl() const {
+    if (page_ == nullptr) {
         return {};
+    }
     PrHtmlWindow* window = prHtmlPageWindow(page_);
     PrDomDocument* document = window != nullptr ? prHtmlWindowDocument(window) : nullptr;
     return document != nullptr ? taken(prDomDocumentUrl(document)) : std::string();
-}
-
-void PraxBoard::home() {
-    if (page_ == nullptr || url_.empty() || home_.empty())
-        return;
-    const bool away = withoutFragment(documentUrl()) != home_ || (prHtmlPageIsNavigating(page_) && !ownLoad_);
-    if (away) {
-        endScroll();
-        navigate();
-    }
-}
-
-void PraxBoard::openLink(const std::string& url) {
-    if (desc_.open) {
-        desc_.open(url);
-        return;
-    }
-    if (app_ == nullptr)
-        return;
-    const PrStatus status = prAppOpenUrl(app_, sv(url));
-    if (status != PrStatus_Ok)
-        std::fprintf(stderr, "nexus: the system could not open %s (status %d)\n", url.c_str(), int(status));
 }
 
 // Each window the page opens (one per document) gets the board's click listener, in the bubbling phase: after the
@@ -358,8 +790,9 @@ void PraxBoard::openLink(const std::string& url) {
 void PraxBoard::windowOpened(void* context, PrHtmlPage* page) {
     PrHtmlWindow* window = prHtmlPageWindow(page);
     PrDomEventTarget* target = window != nullptr ? prHtmlWindowAsEventTarget(window) : nullptr;
-    if (target == nullptr)
+    if (target == nullptr) {
         return;
+    }
     const PrStringView click{"click", 5};
     PrDomEventListener listener{.invoke = linkClicked, .context = context, .identity = kLinkListener,
         .retain = nullptr, .release = nullptr};
@@ -367,106 +800,70 @@ void PraxBoard::windowOpened(void* context, PrHtmlPage* page) {
     prDomEventTargetAddEventListener(target, click, &listener, &options);
 }
 
+// The window's thread opens it (frame).
 void PraxBoard::openWindow(void* context, PrHtmlPage*, PrStringView url) {
-    static_cast<PraxBoard*>(context)->openLink(std::string(url.data != nullptr ? url.data : "", url.size));
+    static_cast<PraxBoard*>(context)->opens_.emplace_back(url.data != nullptr ? url.data : "", url.size);
 }
 
 // A click the page has not canceled, on a link (the nearest a or area with an href on its path, which its activation
 // follows) that would leave the board: canceled, and the link opens in the browser.
 void PraxBoard::linkClicked(void* context, PrDomEvent* event) {
     PraxBoard& b = *static_cast<PraxBoard*>(context);
-    if (prDomEventDefaultPrevented(event))
+    if (prDomEventDefaultPrevented(event)) {
         return;
+    }
     PrDomEventTarget* path[kPathCapacity];
     const uint32_t count = std::min(prDomEventComposedPath(event, path, kPathCapacity), kPathCapacity);
     for (uint32_t i = 0; i < count; ++i) {
-        if (prHtmlAnchorElementQuery(path[i]) == nullptr && prHtmlAreaElementQuery(path[i]) == nullptr)
+        if (prHtmlAnchorElementQuery(path[i]) == nullptr && prHtmlAreaElementQuery(path[i]) == nullptr) {
             continue;
+        }
         const PrDomElement* link = prDomElementQuery(path[i]);
-        if (prDomElementGetAttribute(link, PrStringView{"href", 4}).data == nullptr)
+        if (prDomElementGetAttribute(link, PrStringView{"href", 4}).data == nullptr) {
             continue;
+        }
         const std::string href = taken(prHtmlHyperlinkComponent(link, PrUrlComponent_Href));
         const PrStringView target = prDomElementGetAttribute(link, PrStringView{"target", 6});
         const std::string_view targetName = target.data != nullptr ? std::string_view(target.data, target.size) :
             std::string_view();
-        if (linkLeavesBoard(href, b.documentUrl(), targetName)) {
+        if (linkLeavesBoard(href, b.pageUrl(), targetName)) {
             prDomEventPreventDefault(event);
-            b.openLink(href);
+            b.opens_.push_back(href);
         }
         return;
     }
 }
 
 void PraxBoard::realmOpened(void* context, JSContext* ctx, PrHtmlPage* page) {
-    if (page == nullptr)
+    if (page == nullptr) {
         return;
+    }
     const PraxBoard& b = *static_cast<const PraxBoard*>(context);
     prJsHtmlEngineRun(ctx, sv(b.prelude_), PrStringView{"nexus:prelude", 13}, 1, 1);
 }
 
-void PraxBoard::wake(void* context) {
-    PraxBoard& b = *static_cast<PraxBoard*>(context);
-    if (b.app_ != nullptr)
-        prAppWake(b.app_);
-}
-
-void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
-    frameTime_ = seconds;
-    display_ = display;
-    const bool onScreen = shown_ && (!desc_.visible || desc_.visible());
-    if (page_ != nullptr && hiddenSet_ == onScreen) {
-        prHtmlPageSetVisibility(page_, PrHtmlVisibility(onScreen ? PrHtmlVisibility_Visible : PrHtmlVisibility_Hidden));
-        hiddenSet_ = !onScreen;
-    }
-    if (!onScreen) {
-        endScroll();
-        return;
-    }
-    takeAddress();
-    if (url_.empty()) {
-        if (!finding_.valid() && frameTime_ >= findAgainAt_) {
-            std::function<SprintBoardAddress()> find = desc_.find ? desc_.find : [] { return findSprintBoard(); };
-            PrApp* app = app_;
-            finding_ = std::async(std::launch::async, [find, app] {
-                SprintBoardAddress address = find();
-                if (app != nullptr)
-                    prAppWake(app);
-                return address;
-            });
-        }
-        return;
-    }
-    if (page_ == nullptr) {
-        openPage();
-        navigate();
-    } else if (load_ == Load::Failed && frameTime_ >= retryAt_) {
-        navigate();
-    }
-    if (PrDomElement* s = scroller(); s != nullptr && scroller_.busy()) {
-        PageScroll page(s);
-        if (scroller_.frame(page, frameTime_))
-            dirty_ = true;
-    }
-    runTasks();
-}
-
 void PraxBoard::runTasks() {
-    if (nullNet_)
+    if (nullNet_) {
         prNetNullRun(net_);
-    if (prDomAgentRun(agent_, kTaskBudget))
+    }
+    if (prDomAgentRun(agent_, kTaskBudget)) {
         dirty_ = true;
-    if (nullNet_ && prNetNullRun(net_))
+    }
+    if (nullNet_ && prNetNullRun(net_)) {
         dirty_ = true;
+    }
 }
 
 void PraxBoard::addPageStyle() {
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
     PrDomElement* head = document != nullptr ? prDomDocumentHead(document) : nullptr;
-    if (head == nullptr || prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) != nullptr)
+    if (head == nullptr || prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) != nullptr) {
         return;
+    }
     PrDomElement* style = nullptr;
-    if (prDomElementCreate(document, PrStringView{"style", 5}, nullptr, &style) != PrStatus_Ok)
+    if (prDomElementCreate(document, PrStringView{"style", 5}, nullptr, &style) != PrStatus_Ok) {
         return;
+    }
     prDomElementSetAttribute(style, PrStringView{"id", 2}, sv(kSprintStyleId));
     prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spend_)));
     prDomNodeAppendChild(prDomElementAsNode(head), prDomElementAsNode(style));
@@ -476,12 +873,14 @@ void PraxBoard::addPageStyle() {
 SpendFit PraxBoard::measureSpend() {
     SpendFit fit;
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
-    if (document == nullptr)
+    if (document == nullptr) {
         return fit;
+    }
     PrDomElement* spend = nullptr;
     if (prCssNodeQuerySelector(prDomDocumentAsNode(document), sv(kSpendSelector), &spend) != PrStatus_Ok ||
-        spend == nullptr)
+            spend == nullptr) {
         return fit;
+    }
     // The top in the viewport, plus the page's scroll: the top in the document, wherever the page is scrolled.
     PrDomElement* scrolling = prCssDocumentScrollingElement(document);
     double scrolled = scrolling != nullptr ? prCssElementScrollTop(scrolling) : 0;
@@ -492,8 +891,9 @@ SpendFit PraxBoard::measureSpend() {
         PrDomRect r = prCssElementGetBoundingClientRect(before);
         fit.gap = box.y - (r.y + r.height);
     }
-    if (PrDomElement* after = prDomNodeNextElementSibling(prDomElementAsNode(spend)))
+    if (PrDomElement* after = prDomNodeNextElementSibling(prDomElementAsNode(spend))) {
         fit.below = prCssElementGetBoundingClientRect(after).y - (box.y + box.height);
+    }
     return fit;
 }
 
@@ -503,149 +903,57 @@ void PraxBoard::fitSpend() {
     // measures depends on the panel's height, and the gap below is at least the margin the style gives, so one restyle
     // settles them.
     if (std::fabs(fit.top - spend_.top) < 0.5 && std::fabs(fit.gap - spend_.gap) < 0.5 &&
-        std::fabs(fit.below - spend_.below) < 0.5)
+            std::fabs(fit.below - spend_.below) < 0.5) {
         return;
+    }
     spend_ = fit;
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
     PrDomElement* style = document != nullptr
         ? prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) : nullptr;
-    if (style == nullptr)
+    if (style == nullptr) {
         return;
+    }
     prDomNodeSetTextContent(prDomElementAsNode(style), sv(sprintPageStyle(spend_)));
     dirty_ = true;
 }
 
-void PraxBoard::paint(PrVec2 extent) {
-    PrVec2 viewport{extent.x / zoom_, extent.y / zoom_};
-    if (viewport.x != viewport_.x || viewport.y != viewport_.y) {
+// Records the page at the pane's extent if it changed since the last paint.
+void PraxBoard::paint() {
+    if (pageExtent_.x <= 0 || pageExtent_.y <= 0) {
+        return;     // the pane has not been laid out yet
+    }
+    PrVec2 viewport{pageExtent_.x / pageZoom_, pageExtent_.y / pageZoom_};
+    if (viewport.x != viewport_.x || viewport.y != viewport_.y || pageZoom_ != paintedZoom_) {
         prHtmlViewSetViewport(view_, viewport);
         viewport_ = viewport;
+        paintedZoom_ = pageZoom_;
         dirty_ = true;
     }
-    PrAppDisplay display = display_;
-    display.pixelRatio *= zoom_;
+    PrAppDisplay display = pageDisplay_;
+    display.pixelRatio *= pageZoom_;
     prHtmlViewSetDisplay(view_, &display);
-    if (!dirty_ || prHtmlPageIsRenderBlocked(page_))
+    if (!dirty_ || prHtmlPageIsRenderBlocked(page_)) {
         return;
+    }
     addPageStyle();
     PrDrawList* list = prDrawListCreate();
     // Past an end, the page is drawn rubber-banded (scroll_glide.h): moved by how far past, over its own background.
     const float over = float(scroller_.overscroll());
-    if (over != 0)
-        prDrawListRect(list, PrRect{0, 0, extent.x, extent.y}, PrDrawPaint{.color = prColor16FromColor(canvas_)});
+    if (over != 0) {
+        prDrawListRect(list, PrRect{0, 0, pageExtent_.x, pageExtent_.y},
+            PrDrawPaint{.color = prColor16FromColor(canvas_)});
+    }
     prDrawListPushTransformAffine2(list, prAffine2Concat(prAffine2Translate(PrVec2{0, -over}),
-        prAffine2Scale(PrVec2{zoom_, zoom_})));
+        prAffine2Scale(PrVec2{pageZoom_, pageZoom_})));
     canvas_ = prHtmlViewPaint(view_, list);
     prDrawListPopTransform(list);
     prDrawListFreeze(list);
     prDrawListRelease(recorded_);
     recorded_ = list;
     dirty_ = false;
-    // The Cost breakdown's place as laid out in this paint: if it moved, the style is set again and the next frame paints
+    // The Cost breakdown's place as laid out in this paint: if it moved, the style is set again and the next step paints
     // the panel down to one gap above the bottom of the screen.
     fitSpend();
-}
-
-bool PraxBoard::show(PrLayoutNode parent, PrVec2 extent, std::string* problem) {
-    said_.clear();
-    bool page = showPage(parent, extent, &said_);
-    if (!page)
-        *problem = said_;
-    return page;
-}
-
-bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem) {
-    shown_ = true;
-    PrUi* ui = kit_->ui;
-    PrLayoutTree* tree = kit_->tree;
-    const bool onScreen = !desc_.visible || desc_.visible();
-    if (url_.empty()) {
-        *problem = problem_.empty() ? "looking up the sprint board's address (nova-config service show sprint-run)"
-                                    : problem_;
-        if (onScreen && !finding_.valid())
-            prUiRequestFrameAt(ui, std::max(frameTime_, findAgainAt_));
-        return false;
-    }
-    if (page_ == nullptr) {
-        *problem = "opening the sprint board at " + url_;
-        if (onScreen)
-            prUiRequestFrame(ui);
-        return false;
-    }
-    if (load_ == Load::Failed) {
-        *problem = loadError_;
-        if (onScreen)
-            prUiRequestFrameAt(ui, retryAt_);
-        return false;
-    }
-    paint(extent);
-    if (recorded_ == nullptr) {
-        *problem = "loading the sprint board from " + url_;
-        if (onScreen)
-            prUiRequestFrame(ui);
-        return false;
-    }
-    // The pane: a replaced element of the extent given, whose painter embeds the page (incremental.cpp 729-737).
-    PrLayoutNode pane = prLayoutTreeFrameReplaced(tree, parent, 0, 0);
-    PrKitPlace place{};
-    place.width = prKitPx(extent.x);
-    place.height = prKitPx(extent.y);
-    place.flex = PrKitFlex_Fixed;
-    prKitPlace(kit_, pane, &place);
-    PrLayoutContent content{.kind = PrLayoutContentKind_Painter};
-    content.painter = PrLayoutPainter{.context = recorded_, .paint = paintPage, .measure = nullptr,
-        .retain = retainPage, .release = releasePage};
-    prLayoutTreeFrameSetContent(tree, pane, &content);
-    PrRect bounds = prLayoutRectToPx(prLayoutNodeBounds(tree, pane, PrLayoutCoordinates_Viewport));
-    if (bounds.right - bounds.left >= 1 && bounds.bottom - bounds.top >= 1)
-        pane_ = bounds;
-    // The next frame: now if the page has work due, at its next timer, or none.
-    if (onScreen && agent_ != nullptr) {
-        double delay = prDomAgentNextTaskDelay(agent_);
-        if (delay == 0 || dirty_ || scroller_.busy())
-            prUiRequestFrame(ui);
-        else if (delay > 0)
-            prUiRequestFrameAt(ui, frameTime_ + delay / 1000);
-    }
-    return true;
-}
-
-void PraxBoard::hidden() {
-    endScroll();
-    shown_ = false;
-    pressInPage_ = false;
-}
-
-void PraxBoard::setTextScale(float k) {
-    if (k > 0 && k != zoom_) {
-        zoom_ = k;
-        dirty_ = true;
-    }
-}
-
-bool PraxBoard::event(const PrAppEvent& e) {
-    if (!shown_ || view_ == nullptr || recorded_ == nullptr)
-        return false;
-    PrVec2 at{};
-    const bool positioned = prAppEventPosition(&e, &at);
-    const bool inPage = positioned && at.x >= pane_.left && at.x < pane_.right && at.y >= pane_.top &&
-        at.y < pane_.bottom;
-    BoardRoute route = routeBoardEvent(e, inPage, pressInPage_);
-    if (e.kind == PrAppEventKind_PointerDown)
-        pressInPage_ = route == BoardRoute::Page;
-    if (route == BoardRoute::Window) {
-        // A key of the window's (a tab's Command-digit, say) ends a held arrow's scrolling.
-        if (e.kind == PrAppEventKind_KeyDown && scroller_.held())
-            scroller_.release(frameTime_);
-        return false;
-    }
-    // In the page's CSS px: its position from the pane's corner, and a trackpad's pixel deltas, over the text scale.
-    PrAppEvent copy = prAppEventPlaced(&e, PrVec2{pane_.left, pane_.top}, zoom_);
-    scrollEvent(copy);
-    if (e.kind == PrAppEventKind_PointerUp)
-        pressInPage_ = false;
-    dirty_ = true;
-    return route == BoardRoute::Page;
 }
 
 PrDomElement* PraxBoard::scroller() {
@@ -657,8 +965,9 @@ namespace {
 
 // Which way a key scrolls the page, as Prax's view scrolls by keys (html_view.cpp scrollByKey): -1 up, 1 down, 0 none.
 int keyDirection(const PrAppEvent& e) {
-    if ((e.modifiers & style::kOption) != 0)
+    if ((e.modifiers & style::kOption) != 0) {
         return 0;
+    }
     switch (e.keyboard.key) {
         case PrAppKey_Up: case PrAppKey_PageUp: case PrAppKey_Home: return -1;
         case PrAppKey_Down: case PrAppKey_PageDown: case PrAppKey_End: return 1;
@@ -671,8 +980,9 @@ int keyDirection(const PrAppEvent& e) {
 // Up or Down, -1 or 1, else 0; with `plain`, only with no Command, Control or Option (which change what it does).
 int arrowOf(const PrAppEvent& e, bool plain) {
     const PrAppModifierFlags chord = style::kCommand | PrAppModifierFlag_Control | style::kOption;
-    if (plain && (e.modifiers & chord) != 0)
+    if (plain && (e.modifiers & chord) != 0) {
         return 0;
+    }
     return e.keyboard.key == PrAppKey_Up ? -1 : e.keyboard.key == PrAppKey_Down ? 1 : 0;
 }
 
@@ -719,20 +1029,6 @@ void PraxBoard::endScroll() {
         scroller_.hide(page, frameTime_);
         dirty_ = true;
     }
-}
-
-bool PraxBoard::settled() {
-    // The board's 1 s poll and its transitions keep tasks coming: settled is loaded, painted since the last task, and
-    // no fetch waiting, the first poll's answer included.
-    return page_ != nullptr && load_ == Load::Loaded && recorded_ != nullptr && !dirty_ && !prHtmlPageIsFetching(page_);
-}
-
-std::string PraxBoard::bodyText() {
-    if (page_ == nullptr)
-        return {};
-    PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
-    PrDomElement* body = document != nullptr ? prDomDocumentBody(document) : nullptr;
-    return body != nullptr ? taken(prDomNodeTextContent(prDomElementAsNode(body))) : std::string();
 }
 
 } // namespace nexus

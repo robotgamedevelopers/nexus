@@ -413,12 +413,13 @@ void Sessions::apply_string(const std::string& diff) {
         }
     }
     // Format 1 ends with its sessions; from format 2 what a later format adds after them is skipped. From format 3 the
-    // open secret requests follow (none when a diff ends with its sessions).
+    // open secret requests follow, always (a diff cut short before them is refused, not read as none), and what a
+    // later format adds after them is skipped.
     if (format_ < 2) {
         r.end();
     }
     std::vector<SecretRequest> requests;
-    if (format_ >= kSecretsFormat && !r.done()) {
+    if (format_ >= kSecretsFormat) {
         requests = readRequests(r, diff.size());
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));

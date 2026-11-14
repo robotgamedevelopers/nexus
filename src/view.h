@@ -22,6 +22,7 @@
 #include "pr/ui.h"
 
 #include "cursor.h"
+#include "hitch.h"
 #include "model.h"
 
 namespace nexus {
@@ -75,8 +76,9 @@ struct SecretAsk {
     std::string why;            // the asker's one-line reason, shown as quoted text
 };
 
-// The secret dialog's side of the window, with a server (main.cpp over sync/secrets.h SecretPrompt). Our own seam, so
-// that the dialog runs in the headless window tests without a link. The value lives behind it, never in the view.
+// The secret dialog's side of the window, with a server (frame_host.h LinkSecrets over sync/secrets.h SecretPrompt).
+// Our own seam, so that the dialog runs in the headless window tests without a link. The value lives behind it, never in
+// the view.
 struct Secrets {
     virtual ~Secrets() = default;
     virtual const SecretAsk* showing() = 0;         // the request the dialog shows, or null for none
@@ -91,6 +93,23 @@ struct KitTabsFree {
     void operator()(PrKitTabs* tabs) const { prKitTabsDestroy(tabs); }
 };
 using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
+
+// A friend's transcript as the view lays it out (view.cpp transcript). Only the items in sight, and a screen's height
+// either side, are declared each round; spacers stand for the rest, so the scroll covers the whole transcript and a
+// round costs the same with fifty entries or fifty thousand. An item is an entry, or a run of tool lines, which stand
+// together. Each item's height is the one it took at its last layout, or until then an estimate from its text.
+struct TranscriptItems {
+    std::size_t entries = 0;                    // the transcript's entries grouped into items so far
+    std::vector<std::uint32_t> first;           // each item's first entry
+    std::vector<std::uint32_t> lines;           // its lines (line feeds and one, summed over a run of tool lines)
+    std::vector<std::uint32_t> chars;           // its bytes of text
+    std::vector<std::uint32_t> count;           // its entries (more than one for a run of tool lines)
+    std::vector<float> height;                  // px with the gap after it, as last laid out; 0 until it is
+    std::vector<std::pair<std::uint32_t, PrLayoutNode>> declared;  // the items the last round declared, and nodes
+    PrLayoutNode column = kPrLayoutNodeNone;    // the transcript's column, as the last round built it
+    float width = 0;                            // the column's width at the last layout, px
+    int steps = 0;                              // the text scale the heights were laid out at
+};
 
 struct View {
     Model* model = nullptr;
@@ -116,6 +135,19 @@ struct View {
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
+    // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
+    std::function<void()> paste;
+    // Text cut to fit the prompt (kPromptBytes): one dim line at the end of the transcript of the friend's tab it was
+    // cut on (`cutTab`, by Tab::id), saying how much was left out (cutLine), until that draft changes. The transcript
+    // goes to its end once to show it (`cutFollow`). While the cut text is on its way into the prompt (`cutComing`, a
+    // Paste event for the next frame), the change it makes is not a change of the draft; once it is in, `cutDraft` is
+    // the draft the line stands for.
+    std::string cut;
+    std::size_t cutTab = ~std::size_t(0);
+    std::string cutDraft;
+    bool cutComing = false;
+    bool cutFollow = false;
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
@@ -136,6 +168,7 @@ struct View {
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
     std::vector<float> scrolls;
+    std::vector<TranscriptItems> items;         // each friend's transcript as laid out, by Tab::id
     std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
@@ -143,14 +176,35 @@ struct View {
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
+    HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
 };
+
+// The most a prompt holds, in bytes: the server's text limit (sync/hub.h Limits::text), past which the server refuses a
+// prompt anyway. A text area relays out the whole of its text at each edit, so a prompt of a megabyte took 100 ms a
+// keystroke; within this it stays well inside a frame.
+constexpr std::size_t kPromptBytes = 32 * 1024;
+
+// The line the transcript ends with after text of `given` bytes was cut to `kept` to fit the prompt, e.g. "1,015,808 of
+// 1,048,576 bytes were left out: the prompt holds 32 KB."
+std::string cutLine(std::size_t given, std::size_t kept);
+
+// The bytes the prompt of the friend's tab that shows can still take: kPromptBytes less its draft, plus the bytes
+// selected in it (`ui`'s selection of view.prompt), which what comes in replaces. Zero on any other tab.
+std::size_t promptRoom(const View& view, PrUi* ui);
+
+// Notes that text of `given` bytes was cut to `kept` on the friend's tab that shows (View::cut): `coming`, the kept text
+// is still on its way into the prompt.
+void promptCut(View& view, std::size_t given, std::size_t kept, bool coming);
+
+// The longest prefix of `text` of at most `room` bytes that ends on a whole UTF-8 character.
+PrStringView cutText(PrStringView text, std::size_t room);
 
 // Called at the start of each frame, before its rounds: applies a text scale the keys asked for in the last frame to the
 // look and the kit's theme (which changes only between rounds). Returns true if it changed the scale.
 bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts);
 
-// True if a text scale is asked for and not yet applied, or a busy cursor breathes: another frame would show something
-// different.
+// True if a text scale is asked for and not yet applied, a busy cursor breathes, or cut text is on its way into the
+// prompt: another frame would show something different.
 bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies

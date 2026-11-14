@@ -62,7 +62,7 @@ struct Action {
     std::string text;
     std::string account;    // the account an account action names; empty for the rest (and not on the wire for them)
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
-    SecretValue secret;     // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
+    SecretValue secret{};   // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
                             // when mosh's acknowledgement subtracts it (Actions::subtract)
     bool operator==(const Action&) const = default;
 };

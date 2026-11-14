@@ -40,6 +40,34 @@ int modeOf(const std::string& path) {
     return lstat(path.c_str(), &st) == 0 ? int(st.st_mode & 0777) : -1;
 }
 
+// The writer's thread makes a wrapped store's writes: the newest of those waiting, every one made by flush and by the
+// writer's end, and a failure logged rather than reported to the caller, who has moved on.
+void writerWritesTheNewest() {
+    const std::string path = "writer-test/nexus/order.txt";
+    {
+        StoreWriter writer;
+        TabOrderStore store = writer.wrap(fileTabOrderStore(path));
+        std::string error;
+        CHECK(store.write(formatTabOrder({"a"}), &error));
+        CHECK(store.write(formatTabOrder({"b"}), &error));
+        writer.flush();
+        std::string text;
+        CHECK(store.read(&text, &error));
+        std::vector<std::string> names;
+        CHECK(parseTabOrder(text, &names, &error) && names == std::vector<std::string>{"b"});
+        CHECK(store.write(formatTabOrder({"c"}), &error));
+    }
+    std::string text;
+    std::string error;
+    CHECK(fileTabOrderStore(path).read(&text, &error));
+    std::vector<std::string> names;
+    CHECK(parseTabOrder(text, &names, &error) && names == std::vector<std::string>{"c"});
+    StoreWriter writer;
+    TabOrderStore broken = writer.wrap(fileTabOrderStore("/dev/null/nexus/order.txt"));
+    CHECK(broken.write(formatTabOrder({"a"}), &error));     // handed over; the failure is logged on the writer's thread
+    writer.flush();
+}
+
 // The window's home under a HOME inside this test's working directory: the stores' files are in ~/.nexus/client, which
 // the first write makes, mode 0700 (and ~/.nexus above it); the config is read from there, and no config is the
 // defaults.
@@ -151,6 +179,7 @@ int main() {
     CHECK(back.tab_count() == 6);
     CHECK(loadSelectedTab(selected, back, &warning) == 5 && warning.empty());
 #if !defined(_WIN32)
+    writerWritesTheNewest();
     clientHomeFiles();
 #endif
     if (failures != 0) {
