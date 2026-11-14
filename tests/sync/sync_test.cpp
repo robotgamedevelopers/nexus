@@ -336,7 +336,7 @@ void applier_exactly_once() {
     auto range = [](std::uint64_t from, std::uint64_t to) {
         std::vector<Action> v;
         for (std::uint64_t n = from; n <= to; ++n)
-            v.push_back(Action{n, ActionKind::Send, sid("ada"), "", std::to_string(n)});
+            v.push_back(Action{n, ActionKind::Send, sid("ada"), "", std::to_string(n), {}});
         return v;
     };
     CHECK(ap.apply(range(1, 2)).size() == 2);
@@ -680,8 +680,8 @@ void hub_send_and_queue() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hello"}));
-    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "later"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hello", {}}));
+    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "later", {}}));
     const SessionView* t = hub.state().find(sid("ada"));
     CHECK(t != nullptr && t->entries.size() == 2 && t->first == 0);
     CHECK(t->entries[0]->kind == EntryKind::Person && t->entries[0]->text == "hello" && t->entries[0]->closed);
@@ -701,16 +701,16 @@ void hub_limits() {
     Hub hub(store, limits);
     withSessions(hub, {"ada", "bo"});
     std::string why;
-    CHECK(!hub.apply(Action{1, ActionKind::Send, sid("ada"), "", std::string(11, 'x')}, &why));
+    CHECK(!hub.apply(Action{1, ActionKind::Send, sid("ada"), "", std::string(11, 'x'), {}}, &why));
     CHECK(why.find("limit") != std::string::npos);
     CHECK(hub.state().find(sid("ada"))->entries.back()->kind == EntryKind::Notice);
-    CHECK(!hub.apply(Action{2, ActionKind::Send, sid("ada"), "", " \t\n"}, &why));
-    CHECK(hub.apply(Action{3, ActionKind::Queue, sid("ada"), "", "123456"}));
-    CHECK(!hub.apply(Action{4, ActionKind::Queue, sid("ada"), "", "1234567"}, &why));   // 13 bytes queued: over
-    CHECK(hub.apply(Action{5, ActionKind::Queue, sid("ada"), "", "12345"}));
-    CHECK(!hub.apply(Action{6, ActionKind::Queue, sid("ada"), "", "1"}, &why));         // a third prompt: over
+    CHECK(!hub.apply(Action{2, ActionKind::Send, sid("ada"), "", " \t\n", {}}, &why));
+    CHECK(hub.apply(Action{3, ActionKind::Queue, sid("ada"), "", "123456", {}}));
+    CHECK(!hub.apply(Action{4, ActionKind::Queue, sid("ada"), "", "1234567", {}}, &why));   // 13 bytes queued: over
+    CHECK(hub.apply(Action{5, ActionKind::Queue, sid("ada"), "", "12345", {}}));
+    CHECK(!hub.apply(Action{6, ActionKind::Queue, sid("ada"), "", "1", {}}, &why));         // a third prompt: over
     CHECK(hub.state().find(sid("ada"))->queue.size() == 2);
-    CHECK(hub.apply(Action{7, ActionKind::Send, sid("bo"), "", "hi"}));
+    CHECK(hub.apply(Action{7, ActionKind::Send, sid("bo"), "", "hi", {}}));
     // a third session: refused, and none made
     CHECK(!hub.apply(ensure(8, "cy"), &why));
     CHECK(why.find("limit") != std::string::npos);
@@ -723,10 +723,10 @@ void hub_shares_untouched_sessions() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada", "bo"});
-    hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "a"});
-    hub.apply(Action{2, ActionKind::Send, sid("bo"), "", "b"});
+    hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "a", {}});
+    hub.apply(Action{2, ActionKind::Send, sid("bo"), "", "b", {}});
     const Sessions before = hub.state();
-    hub.apply(Action{3, ActionKind::Send, sid("bo"), "", "c"});
+    hub.apply(Action{3, ActionKind::Send, sid("bo"), "", "c", {}});
     CHECK(before.find(sid("ada")) == hub.state().find(sid("ada")));
     CHECK(before.find(sid("bo")) != hub.state().find(sid("bo")));
 }
@@ -928,28 +928,28 @@ void hub_stop_reaches_the_responder_once() {
     Hub hub(store, Limits{}, &r);
     std::string why;
     // a session the server does not hold: refused, counted, and no session made
-    CHECK(!hub.apply(Action{1, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(!hub.apply(Action{1, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(why == "no session 1");
     CHECK(store.applied("w") == 1);
     CHECK(store.find(sid("ada")) == nullptr && hub.state().find(sid("ada")) == nullptr);
     CHECK(r.stopped.empty() && r.sentTo.empty());
     CHECK(hub.apply(ensure(2, "ada"), &why, "w"));
-    CHECK(hub.apply(Action{3, ActionKind::Send, sid("ada"), "", "hi"}, &why, "w"));
+    CHECK(hub.apply(Action{3, ActionKind::Send, sid("ada"), "", "hi", {}}, &why, "w"));
     // a stop that carries text: refused, counted, and not passed on
     why.clear();
-    CHECK(!hub.apply(Action{4, ActionKind::Stop, sid("ada"), "", "x"}, &why, "w"));
+    CHECK(!hub.apply(Action{4, ActionKind::Stop, sid("ada"), "", "x", {}}, &why, "w"));
     CHECK(why == "a stop that carried text was not applied: a stop carries none");
     CHECK(store.applied("w") == 4);
     CHECK(r.stopped.empty());
     // a stop: to the responder, once, with nothing in the store
     const std::size_t entries = store.find(sid("ada"))->transcript.size();
-    CHECK(hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(r.stopped == std::vector<SessionId>{1});
     CHECK(r.sentTo.back() == "1 committed");
     CHECK(store.applied("w") == 5);
     CHECK(store.find(sid("ada"))->transcript.size() == entries);
     // the same number again is the store's to refuse: the Applier never gives it twice
-    CHECK(!hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(!hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(r.stopped.size() == 1 && r.sentTo.back() == "1 not committed");
 }
 
@@ -957,9 +957,9 @@ void hub_stop_without_responder_changes_nothing() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
     const Sessions before = hub.state();
-    CHECK(hub.apply(Action{2, ActionKind::Stop, sid("ada"), "", ""}));
+    CHECK(hub.apply(Action{2, ActionKind::Stop, sid("ada"), "", "", {}}));
     CHECK(hub.state() == before);
 }
 
@@ -968,10 +968,10 @@ void hub_queue_goes_to_the_responder() {
     RecordingResponder r;
     Hub hub(store, Limits{}, &r);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Queue, sid("ada"), "", "later"}));
+    CHECK(hub.apply(Action{1, ActionKind::Queue, sid("ada"), "", "later", {}}));
     CHECK(hub.state().find(sid("ada"))->queue == std::vector<std::string>{"later"});
     r.deliver = true;
-    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "now"}));
+    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "now", {}}));
     // the oldest left the queue, as the person's entry; the new one waits
     const SessionView* t = hub.state().find(sid("ada"));
     CHECK(t->queue == std::vector<std::string>{"now"});
@@ -1001,7 +1001,7 @@ void hub_open_entry() {
     CHECK(!hub.setOpen(sid("ada"), "part"));                 // a session the store does not hold
     CHECK(hub.state().find(sid("ada")) == nullptr);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
     CHECK(!hub.setOpen(sid("ada"), "123456789"));            // past the text limit
     CHECK(!hub.setOpen(sid("ada"), ""));                     // none to drop
     CHECK(hub.setOpen(sid("ada"), "part"));
