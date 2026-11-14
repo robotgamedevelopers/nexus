@@ -722,16 +722,19 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
     }
     // The friend tabs in the order the person last left them (tab_order.h). The stores of what the window keeps across
-    // launches are each a file in its home, which a screenshot of a state file never reads.
+    // launches are each a file in its home, which a screenshot of a state file never reads. They are read here, before
+    // the window shows, and written by the writer's thread, so that no frame waits on the disk; the writer makes every
+    // waiting write before nexus exits.
+    static StoreWriter writer;
     static TabOrderStore order;
     static TabOrderStore terminalStore;
     static TabOrderStore selection;
     static TabOrderStore scale;
     if (!fromState) {
-        order = fileTabOrderStore();
-        terminalStore = fileTerminalsStore();
-        selection = fileSelectedTabStore();
-        scale = fileTextScaleStore();
+        order = writer.wrap(fileTabOrderStore());
+        terminalStore = writer.wrap(fileTerminalsStore());
+        selection = writer.wrap(fileSelectedTabStore());
+        scale = writer.wrap(fileTextScaleStore());
         std::string orderWarning;
         friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
         if (!orderWarning.empty())

@@ -190,10 +190,12 @@ struct Window {
     std::unique_ptr<PraxBoard> board;
     FrameHost host;
     FakeLink link;
+    // The preference files on a slow disk, written through the writer as the app writes them (main.cpp).
     std::string keptTerminals;
     std::string keptSelection;
-    TabOrderStore terminalStore = slowStore("terminals.txt", 200, &keptTerminals);
-    TabOrderStore selectionStore = slowStore("selected-tab.txt", 200, &keptSelection);
+    StoreWriter writer;
+    TabOrderStore terminalStore = writer.wrap(slowStore("terminals.txt", 200, &keptTerminals));
+    TabOrderStore selectionStore = writer.wrap(slowStore("selected-tab.txt", 200, &keptSelection));
     double time = 1000;
     PrVec2 extent{1200, 800};
     std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now();

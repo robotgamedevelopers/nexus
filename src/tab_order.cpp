@@ -1,7 +1,12 @@
 #include "tab_order.h"
 
 #include <cerrno>
+#include <condition_variable>
+#include <cstdio>
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 #include "pr/file.h"
 
@@ -462,6 +467,88 @@ bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& d
         return true;
     *error = "the terminals could not be saved to " + store.where + ": " + why;
     return false;
+}
+
+// One store's waiting write: the newest text, while `waiting`.
+struct StoreSlot {
+    std::string where;
+    std::function<bool(const std::string& text, std::string* error)> write;
+    std::string text;
+    bool waiting = false;
+};
+
+struct StoreWriter::Impl {
+    std::mutex mutex;
+    std::condition_variable wake;       // a write waits, or the writer ends
+    std::condition_variable done;       // every write handed over is made
+    std::deque<std::shared_ptr<StoreSlot>> queue;   // the stores with a write waiting, oldest first
+    std::size_t writing = 0;            // writes taken from the queue and not yet made
+    bool ending = false;
+    std::thread thread;
+
+    void run() {
+        std::unique_lock<std::mutex> lock(mutex);
+        for (;;) {
+            wake.wait(lock, [this] { return ending || !queue.empty(); });
+            if (queue.empty()) {
+                return;     // ending, with nothing left to write
+            }
+            std::shared_ptr<StoreSlot> slot = queue.front();
+            queue.pop_front();
+            std::string text = std::move(slot->text);
+            slot->waiting = false;
+            ++writing;
+            lock.unlock();
+            std::string error;
+            if (!slot->write(text, &error)) {
+                std::fprintf(stderr, "nexus: %s could not be written (%s); it is written again at the next change\n",
+                    slot->where.empty() ? "a kept preference" : slot->where.c_str(), error.c_str());
+            }
+            lock.lock();
+            --writing;
+            if (queue.empty() && writing == 0) {
+                done.notify_all();
+            }
+        }
+    }
+};
+
+StoreWriter::StoreWriter() : impl_(std::make_unique<Impl>()) {
+    impl_->thread = std::thread([impl = impl_.get()] { impl->run(); });
+}
+
+StoreWriter::~StoreWriter() {
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->ending = true;
+    }
+    impl_->wake.notify_all();
+    impl_->thread.join();
+}
+
+TabOrderStore StoreWriter::wrap(TabOrderStore store) {
+    auto slot = std::make_shared<StoreSlot>();
+    slot->where = store.where;
+    slot->write = std::move(store.write);
+    Impl* impl = impl_.get();
+    store.write = [impl, slot](const std::string& text, std::string*) {
+        {
+            std::lock_guard<std::mutex> lock(impl->mutex);
+            slot->text = text;
+            if (!slot->waiting) {
+                slot->waiting = true;
+                impl->queue.push_back(slot);
+            }
+        }
+        impl->wake.notify_one();
+        return true;
+    };
+    return store;
+}
+
+void StoreWriter::flush() {
+    std::unique_lock<std::mutex> lock(impl_->mutex);
+    impl_->done.wait(lock, [this] { return impl_->queue.empty() && impl_->writing == 0; });
 }
 
 } // namespace nexus
