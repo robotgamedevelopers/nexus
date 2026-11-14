@@ -299,12 +299,13 @@ tlc_test(tlc_overlay_trace_faulty_hide_unkeyed_rejected OverlayTrace OverlayTrac
 tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
          OVERLAY SEED 1 STEPS 1000 FAULTY hotkey-hides)
 
-# The secret dialog (docs/secrets.md): Secrets.tla on four small instances, every property; its two larger instances
-# nightly; a witness per property. Bound to the code by trace checks when the code lands (roadmap: 5b).
+# The secret dialog (docs/secrets.md): Secrets.tla on three small instances, every property, and a witness per
+# property, per commit (each a second or two); its three larger instances nightly (MCSecretsTwo.cfg took 7 s of the
+# model job's 2 minutes). Bound to the code by trace checks when the code lands (roadmap: 5b).
 tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
 tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
 tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)
-tlc_test(tlc_secrets_spec_two  MCSecrets MCSecretsTwo.cfg   pass WORKERS 4)
+tlc_test(tlc_secrets_spec_two  MCSecrets MCSecretsTwo.cfg   pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_secrets_spec_wide  MCSecrets MCSecretsWide.cfg  pass WORKERS 8 NIGHTLY CAP 600)
 tlc_test(tlc_secrets_spec_mixed MCSecrets MCSecretsMixed.cfg pass WORKERS 8 NIGHTLY CAP 600)
 tlc_test(tlc_secrets_witness_reply_carries_value WSecReplyCarriesValue WSecReplyCarriesValue.cfg invariant
