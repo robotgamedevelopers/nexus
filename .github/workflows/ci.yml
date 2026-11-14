@@ -163,7 +163,9 @@ jobs:
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
           done
-          # the secret dialog's walks: each fails if a value's bytes reach anything but the keeper
+          # the secret dialog: every unit group (the leak test among them), then its walks, each failing if a value's
+          # bytes reach anything but the keeper
+          build/tests/server/secrets_test
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
           done
@@ -373,8 +375,8 @@ jobs:
       - name: Build the programs it runs
         run: >-
           cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
-          link_walk secrets_walk store_test durable_test journal_walk driver_protocol_test supervisor_test supervisor_walk
-          wire_test
+          link_walk secrets_walk secrets_test store_test durable_test journal_walk driver_protocol_test supervisor_test
+          supervisor_walk wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -406,7 +408,9 @@ jobs:
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
           done
-          # the secret dialog's walks: each fails if a value's bytes reach anything but the keeper
+          # the secret dialog: every unit group (the leak test among them), then its walks, each failing if a value's
+          # bytes reach anything but the keeper
+          build/tests/server/secrets_test
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
           done
