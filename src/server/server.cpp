@@ -421,6 +421,13 @@ int Server::run() {
         }
         link::freezeClock();
         bool changed = false;
+        // One batch per pass (group commit): every step this pass makes, from the drivers and from every window's
+        // actions, is applied and appended, then made durable by one flush. Nothing of the batch leaves the server
+        // before that flush has returned: no driver is told anything (Drivers::hold), no state is set on a link, and
+        // no link ticks (mosh's acknowledgement of a window's actions goes out on its next tick). With one flush per
+        // action, a window's burst of N actions held every window's state back for N flushes; now it is one.
+        store_.beginBatch();
+        drivers_->hold();
         if (!drivers_->serve(nowMs(), &changed)) {
             std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
             status = 1;
@@ -436,7 +443,8 @@ int Server::run() {
                 continue;
             }
             std::string problem;
-            // Each action is durable (with the client's counter) before the next tick can acknowledge it.
+            // Each action is durable (with the client's counter), by the flush below, before the next tick can
+            // acknowledge it.
             for (const sync::Action& a : s.link->take(&problem)) {
                 std::string refused;
                 hub_->apply(a, &refused, s.client);
@@ -461,6 +469,14 @@ int Server::run() {
             status = 1;
             break;
         }
+        if (!store_.flush(&why)) {
+            // The batch's flush failed: what reached the disk is unknown, so nothing of it is told to anyone.
+            std::fprintf(stderr, "nexus-server: the store failed (%s); stopping without acknowledging the actions "
+                "since\n", why.c_str());
+            status = 1;
+            break;
+        }
+        drivers_->release(nowMs());
         if (changed) {
             for (Link& s : links_) {
                 s.link->setState(hub_->state());

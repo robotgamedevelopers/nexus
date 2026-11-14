@@ -546,6 +546,23 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     std::map<std::string, int> sends;
     std::map<std::string, int> queues;
     const auto sending = Clock::now();
+    // The longest any window goes without a new state from the server, from the first prompt to convergence: what a
+    // person at that window would see as the server not answering.
+    std::vector<std::uint64_t> heardNum;
+    for (Window* w : windows)
+        heardNum.push_back(w->session->stateNum());
+    std::vector<Clock::time_point> heardAt(windows.size(), sending);
+    double longestGap = 0;
+    auto watch = [&] {
+        for (std::size_t i = 0; i < windows.size(); ++i) {
+            const std::uint64_t n = windows[i]->session->stateNum();
+            if (n != heardNum[i]) {
+                longestGap = std::max(longestGap, std::chrono::duration<double>(Clock::now() - heardAt[i]).count());
+                heardNum[i] = n;
+                heardAt[i] = Clock::now();
+            }
+        }
+    };
     std::vector<int> next(static_cast<std::size_t>(clients), 0);
     for (int p = 0; p < prompts; ++p) {
         const std::size_t c = rng.below(static_cast<std::size_t>(clients));
@@ -559,8 +576,10 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
             windows[c]->session->add(act(sync::ActionKind::Send, sid(tab), text));
             ++sends[tab];
         }
-        if (rng.chance(4))
+        if (rng.chance(4)) {
             step(windows, nullptr, 0);
+            watch();
+        }
     }
     auto converged = [&] {
         for (Window* w : windows) {
@@ -582,9 +601,9 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         for (Window* w : windows)
             sum += w->session->stateNum();
         return sum;
-    }, [&] { step(windows, nullptr, 20); }));
-    std::printf("%d prompts from %d windows applied and seen by every window in %.2f s\n", prompts, clients,
-        seconds(sending));
+    }, [&] { step(windows, nullptr, 20); watch(); }));
+    std::printf("%d prompts from %d windows applied and seen by every window in %.2f s; the longest any window went "
+        "without a new state: %.2f s\n", prompts, clients, seconds(sending), longestGap);
     // Every window holds the same state (the server's), and its view agrees with every other's.
     for (Window* w : windows)
         CHECK(w->session->state() == windows[0]->session->state());

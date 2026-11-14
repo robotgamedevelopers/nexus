@@ -388,6 +388,11 @@ const Supervisor* Drivers::supervisor(sync::SessionId id) const {
     return it == slots_.end() ? nullptr : &it->second.sup;
 }
 
+std::size_t Drivers::unwritten(sync::SessionId id) const {
+    auto it = slots_.find(id);
+    return it == slots_.end() || !it->second.proc ? 0 : it->second.proc->pending.size();
+}
+
 pid_t Drivers::pid(sync::SessionId id) const {
     auto it = slots_.find(id);
     return it == slots_.end() || !it->second.proc ? -1 : it->second.proc->pid;
@@ -490,22 +495,47 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
         case Command::Kind::Write:
             if (p != nullptr) {
                 p->pending += c.line;
-                flushInput(*p, now);
+                if (!holding_) {
+                    flushInput(*p, now);
+                }
             }
             return;
         case Command::Kind::CloseInput:
             if (p != nullptr) {
                 p->closeInput = true;
-                flushInput(*p, now);
+                if (!holding_) {
+                    flushInput(*p, now);
+                }
             }
             return;
         case Command::Kind::Terminate:
         case Command::Kind::Kill:
             if (p != nullptr) {
-                ::killpg(p->pid, c.kind == Command::Kind::Terminate ? SIGTERM : SIGKILL);
+                const int sig = c.kind == Command::Kind::Terminate ? SIGTERM : SIGKILL;
+                if (holding_) {
+                    heldSignals_.emplace_back(p->pid, sig);
+                } else {
+                    ::killpg(p->pid, sig);
+                }
             }
             return;
     }
+}
+
+// The batch is durable: what its steps told the drivers goes out, in the order they told it. Every process a signal was
+// kept for is still uncollected (only serve() collects, and the server releases before it serves again), so its pid
+// still names its group.
+void Drivers::release(Millis now) {
+    holding_ = false;
+    for (auto& [id, t] : slots_) {
+        if (t.proc) {
+            flushInput(*t.proc, now);
+        }
+    }
+    for (const auto& [pid, sig] : heldSignals_) {
+        ::killpg(pid, sig);
+    }
+    heldSignals_.clear();
 }
 
 // Writes what the driver will take now; a driver that stopped reading its input loses what is left.
@@ -655,7 +685,9 @@ bool Drivers::serve(Millis now, bool* changed) {
     for (auto& [id, t] : slots_) {
         Output out;
         if (t.proc) {
-            flushInput(*t.proc, now);
+            if (!holding_) {
+                flushInput(*t.proc, now);
+            }
             readSome(t, out, now, kReadChunk);
         }
         if (t.proc) {

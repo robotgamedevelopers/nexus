@@ -20,8 +20,8 @@
 // removed.
 //
 // One journal (journal.h) in the store's directory. Every commit is one record of the journal, appended and synced
-// before commit returns Ok: a session's changes and the counter of the action that made them land together or not at
-// all, and nothing the server acknowledges or sends is lost to a crash. When the log passes StoreOptions::compact_bytes
+// before commit returns Ok, or, in a batch, before flush() returns Ok: a session's changes and the counter of the
+// action that made them land together or not at all, and nothing the server acknowledges or sends is lost to a crash. When the log passes StoreOptions::compact_bytes
 // the whole state is written as the journal's snapshot and the log starts again.
 //
 // A record: u8 format (3); u8 the oldest format a reader must know to read it (3); u64 session (0: none); u32 count,
@@ -126,6 +126,16 @@ public:
     Status commit(std::uint64_t session, std::span<const Change> changes, const std::string& client = std::string(),
                   std::uint64_t num = 0);
 
+    // A batch (group commit): from begin_batch() until flush(), each commit appends its step's record and applies it
+    // here, but does not sync it; flush() makes every step of the batch durable with one sync (the journal's sync
+    // covers every record appended before it), then compacts if the log has grown past compact_bytes. Nothing done
+    // with a step committed in a batch may leave the process (an acknowledgement, a state sent, a prompt written to a
+    // driver) until flush() has returned Ok: a crash before then loses the whole batch, and nothing of it was told.
+    // Outside a batch, commit syncs each step before it returns, as it always has. Failed: as commit.
+    void begin_batch() { batching_ = true; }
+    Status flush();
+    bool batching() const { return batching_; }
+
     const std::map<std::uint64_t, Session>& sessions() const { return sessions_; }
     const Session* session(std::uint64_t id) const;
     std::uint64_t next_session() const { return next_session_; }   // the id the next session made gets
@@ -146,6 +156,7 @@ private:
     StoreOptions options_;
     Journal journal_;
     bool failed_ = false;
+    bool batching_ = false;
     std::map<std::uint64_t, Session> sessions_;
     std::uint64_t next_session_ = 1;
     std::map<std::string, std::uint64_t> applied_;

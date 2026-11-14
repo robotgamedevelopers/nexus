@@ -120,6 +120,29 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     return true;
 }
 
+void DurableStore::beginBatch() {
+    if (store_ != nullptr) {
+        store_->begin_batch();
+    }
+}
+
+bool DurableStore::flush(std::string* why) {
+    if (store_ == nullptr) {
+        if (why != nullptr) {
+            *why = "the store is not open";
+        }
+        return false;
+    }
+    const store::Status s = store_->flush();
+    if (!s.is_ok()) {
+        if (why != nullptr) {
+            *why = s.message();
+        }
+        return false;
+    }
+    return true;
+}
+
 std::uint64_t DurableStore::applied(const std::string& client) const {
     return store_ == nullptr ? 0 : store_->applied(client);
 }

@@ -108,8 +108,20 @@ public:
     int waitMs(Millis now) const;
     bool serve(Millis now, bool* changed);
 
+    // Group commit (DurableStore::beginBatch, flush): from hold() until release(), what a step tells a driver (bytes
+    // written to its input, its input closed, a signal) is kept, not carried out, so that nothing of a step leaves the
+    // server before the batch's flush has made it durable. A crash before then loses the batch and told no driver
+    // anything: a prompt is still written at most once (AtMostOnce in models/Supervisor.tla; the reversed witness
+    // WSupWriteBeforeFlush is a write carried out before its step is durable). release() carries out what was kept,
+    // in order, and is called only once the flush has returned. A driver may be started while held: what it is
+    // started with is durable already, and it is told nothing until release().
+    void hold() { holding_ = true; }
+    void release(Millis now);
+    bool holding() const { return holding_; }
+
     const Supervisor* supervisor(sync::SessionId id) const;   // for the tests
     pid_t pid(sync::SessionId id) const;                      // -1 when no driver runs
+    std::size_t unwritten(sync::SessionId id) const;          // bytes for its driver not yet written: for the tests
 
 private:
     struct Process {
@@ -153,6 +165,8 @@ private:
     Output pendingOut_;
     std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
     Millis resolveAt_ = 0;
+    bool holding_ = false;
+    std::vector<std::pair<pid_t, int>> heldSignals_;    // process group and signal, kept while holding
 };
 
 } // namespace nexus::server

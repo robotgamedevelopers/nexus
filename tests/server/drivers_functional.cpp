@@ -10,7 +10,8 @@
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
 // change restarts the session's driver), window (busy with a reply streaming after tool lines, idle, then down; with a
-// state dir it writes each state there for `nexus --state`).
+// state dir it writes each state there for `nexus --state`), held (a prompt sent while the drivers are held for a
+// batch is written only once they are released).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -566,6 +567,24 @@ void resume(Server& s, const std::string& dir, const std::string& fake) {
 // The session's account changed: its driver is ended once the turn open has ended (never counted as a failed start),
 // and the next prompt starts one again in the same session, its id, transcript and turn numbers kept. A change of
 // model leaves the driver running.
+// Group commit's hold (Drivers::hold, release): a prompt sent while the drivers are held opens its turn and is kept,
+// its bytes unwritten, for as long as the hold lasts; the friend cannot answer what it was never sent. Released (the
+// batch's flush has returned), it is written once, and the turn is answered as ever.
+void held(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Back.\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.drivers->hold();
+    s.send("hi");
+    CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Working && s.drivers->unwritten(kAda) > 0; }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi"}));
+    CHECK(s.drivers->holding());
+    s.drivers->release(now());
+    CHECK(s.drivers->unwritten(kAda) == 0);
+    CHECK(s.serveUntil([&] { return s.transcript().size() == 2 && idle(s); }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Back."}));
+    s.end();
+}
+
 void account(Server& s, const std::string& dir, const std::string& fake) {
     // each start runs the script from the top: the first answers with text until stopped, the second at once
     setUp(dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
@@ -729,7 +748,7 @@ int main(int argc, char** argv) {
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured},
-                {"stop_hammered", stopHammered}, {"account", account}, {"window", window}};
+                {"stop_hammered", stopHammered}, {"account", account}, {"window", window}, {"held", held}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());
