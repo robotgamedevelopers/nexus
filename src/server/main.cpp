@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
         return nexus::server::serve(paths);
     if (command == "stop")
         return nexus::server::stop(paths);
-    if (command == "config")
+    if (command == "config") {
         return nexus::server::config(paths, configArgs);
+    }
     return usage();
 }

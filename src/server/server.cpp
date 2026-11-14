@@ -266,16 +266,19 @@ bool Server::openStore(std::string* why) {
     if (!config_->open(&configWhy)) {
         std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
     } else if (!config_->committed(&registry, &report)) {
-        for (const std::string& l : report)
+        for (const std::string& l : report) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
         std::fprintf(stderr, "nexus-server: config: the committed accounts and friends do not read, so the server "
             "holds none until `nexus-server config reload` applies good ones\n");
         hub_->keepWith(config_.get());
     } else {
-        for (const std::string& l : report)
+        for (const std::string& l : report) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
-        for (const std::string& l : hub_->useAccounts(registry, config_.get()))
+        }
+        for (const std::string& l : hub_->useAccounts(registry, config_.get())) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
         std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
             registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
             config_->dir().c_str());
@@ -412,13 +415,16 @@ void Server::configApply(int fd, const std::string& request) {
         config_->applying(true);
         ok = hub_->applyAccounts(next, message, &lines);
         config_->applying(false);
-        for (const std::string& n : config_->notes())
+        for (const std::string& n : config_->notes()) {
             lines.push_back(n);
-        for (Link& s : links_)
+        }
+        for (Link& s : links_) {
             s.link->setState(hub_->state());
+        }
     }
-    if (ok && lines.empty())
+    if (ok && lines.empty()) {
         lines.push_back("nothing changed: the files already said what the server holds");
+    }
     std::string reply;
     for (const std::string& l : lines) {
         reply += (ok ? "applied: " : "refused: ") + l + "\n";
@@ -700,17 +706,20 @@ int config(const Paths& p, const std::vector<std::string>& args) {
         accounts::Registry head;
         std::vector<std::string> errors;
         if (!repo.working(&working, &errors)) {
-            for (const std::string& e : errors)
+            for (const std::string& e : errors) {
                 std::printf("error: %s\n", e.c_str());
+            }
             std::printf("ERROR %zu problem%s; nothing was changed\n", errors.size(), errors.size() == 1 ? "" : "s");
             return 1;
         }
         std::vector<std::string> headErrors;
-        if (!repo.committed(&head, &headErrors))
+        if (!repo.committed(&head, &headErrors)) {
             head = accounts::Registry{};
+        }
         const std::vector<std::string> lines = accounts::changes(head, working);
-        for (const std::string& l : lines)
+        for (const std::string& l : lines) {
             std::printf("would apply: %s\n", l.c_str());
+        }
         std::printf("OK the files read and agree; %s\n", lines.empty() ? "they hold what the server last applied" :
             "`nexus-server config reload` applies them (sessions on accounts no longer linked move, and are told)");
         return 0;
@@ -718,30 +727,35 @@ int config(const Paths& p, const std::vector<std::string>& args) {
     if (verb == "history" && args.size() == 1) {
         std::vector<std::string> lines;
         std::string why;
-        if (!repo.history(&lines, &why))
+        if (!repo.history(&lines, &why)) {
             return fail(why);
-        for (const std::string& l : lines)
+        }
+        for (const std::string& l : lines) {
             std::printf("%s\n", l.c_str());
+        }
         return 0;
     }
     if (verb == "remote" && args.size() <= 2) {
         std::string url;
         std::string why;
         if (args.size() == 1) {
-            if (!repo.remote(&url, &why))
+            if (!repo.remote(&url, &why)) {
                 return fail(why);
+            }
             std::printf("%s\n", url.empty() ? "none" : url.c_str());
             return 0;
         }
-        if (args[1] == "--clear")
+        if (args[1] == "--clear") {
             return repo.clearRemote(&why) ? 0 : fail(why);
+        }
         return repo.setRemote(args[1], &why) ? 0 : fail(why);
     }
     if ((verb == "reload" && args.size() == 1) || (verb == "restore" && args.size() == 2)) {
         const int fd = connectControl(p.socket);
-        if (fd < 0)
+        if (fd < 0) {
             return fail(errnoText("no server answers on " + p.socket) + "; `nexus-server new` starts it, and a "
                 "server that starts applies what the repository's last commit holds");
+        }
         const std::string request = verb == "reload" ? std::string("config reload") : "config restore " + args[1];
         if (!writeAll(fd, request + "\n")) {
             close(fd);
@@ -755,8 +769,9 @@ int config(const Paths& p, const std::vector<std::string>& args) {
                 break;
             }
             std::printf("%s\n", line.c_str());
-            if (line.rfind("ERROR", 0) == 0)
+            if (line.rfind("ERROR", 0) == 0) {
                 break;
+            }
         }
         close(fd);
         return status;
