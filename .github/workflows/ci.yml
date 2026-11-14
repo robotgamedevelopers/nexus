@@ -471,10 +471,13 @@ jobs:
             node: true
           - shard: witnesses
             run: '^tlc_witness'
+          # The secret dialog's instances and witnesses (models/Secrets.tla): no walk until its code lands.
+          - shard: secrets
+            run: '^tlc_secrets_'
           - shard: window
             run: ''
             build: trace_walk overlay_walk glide_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness)'
+            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
