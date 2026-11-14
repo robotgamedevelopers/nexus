@@ -29,9 +29,11 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
+#include "accounts/registry.h"
 #include "sync/actions.h"
 #include "sync/sessions.h"
 
@@ -155,6 +157,16 @@ public:
     virtual void configured(SessionId id, const SessionInfo& info) = 0;
 };
 
+// Where the accounts and friends are kept between runs: nexus-server's config repository (server/config_repo.h), the
+// files accounts.json and friends.json a person or an AI edits by hand. The hub hands it the registry an action makes
+// before it takes that registry as its own, with a one-line message saying what changed and who asked; refused (with
+// why: the files hold hand edits not yet applied, or the disk failed), the hub keeps the registry it had.
+class AccountsKeeper {
+public:
+    virtual ~AccountsKeeper() = default;
+    virtual bool keep(const accounts::Registry& registry, const std::string& message, std::string* why) = 0;
+};
+
 class Hub {
 public:
     // The state starts as every session the store already holds. Actions go to `responder` when one is given.
@@ -188,17 +200,56 @@ public:
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
 
+    // The accounts and friends (models/Accounts.tla). Until useAccounts(), the hub holds none, and a session's account
+    // is any printable setting, as before accounts. From it on, every decision about a session's account is made
+    // against `registry`, the one last applied (the config repository's committed files):
+    //  - a create or an ensure takes the account of the session it copies when that is linked to its friend (or none),
+    //    else the friend's default; a session on an account runs its provider's harness;
+    //  - a set of a session's account takes one linked to its friend, or none, whatever its provider or sign-in, and is
+    //    refused with a notice otherwise;
+    //  - the account actions (AddAccount ... SetDefault) change the registry, kept by `keeper` first;
+    //  - after every change of the registry, and at useAccounts(), the sessions are settled: each on an account no
+    //    longer linked to its friend moves to the friend's default when signed in, else its first signed-in linked
+    //    account, else none, and each whose account's provider changed takes its harness; each one changed is told,
+    //    with a notice in its transcript, and its responder is told the session's new settings.
+    // Returns the lines that say what settling did (empty: nothing).
+    std::vector<std::string> useAccounts(accounts::Registry registry, AccountsKeeper* keeper);
+    const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
+
+    // A hand edit of the files (`nexus-server config reload`), or an earlier version of them (`config restore`):
+    // `next` becomes the registry, kept by the keeper with `message`, and the sessions are settled. Refused whole,
+    // changing nothing, when it is not consistent (accounts::problems) or the keeper refuses it; `report` gets every
+    // problem then, else every change made, the sessions' included.
+    bool applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report);
+
+    // A sign-in (or its loss) reported for an account: the server's own state, in memory only (every account needs
+    // sign-in at a start until its driver or the sign-in reports it).
+    void reportSignedIn(const std::string& account, bool signedIn);
+    const std::set<std::string>& signedIn() const { return signedIn_; }
+
+    // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
+    // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
+    // why, when the session is not held, the hub holds no accounts, or there was none to move to.
+    bool rotate(SessionId id, std::string* why = nullptr);
+
 private:
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
     bool set(const Action& action, std::string* why, const std::string& client);
+    bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
+    bool settle(std::vector<std::string>* report, const std::string& cause);
+    bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
+    std::string harnessOf(const std::string& account, const std::string& otherwise) const;
     void refresh(SessionId id);
     SessionStore& store_;
     Limits limits_;
     Responder* responder_;
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
     Sessions state_;
+    std::optional<accounts::Registry> accounts_;
+    AccountsKeeper* keeper_ = nullptr;
+    std::set<std::string> signedIn_;
 };
 
 } // namespace nexus::sync

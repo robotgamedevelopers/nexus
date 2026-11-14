@@ -97,13 +97,20 @@ add_library(nexus_model STATIC src/model.cpp src/overlay.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
+# The accounts and friends nexus-server holds (src/accounts/registry.h): their rules, their JSON files' text (with
+# Prax's JSON), and the accounts the server picks. No OS, no time.
+add_library(nexus_accounts STATIC src/accounts/registry.cpp)
+target_include_directories(nexus_accounts PUBLIC src)
+target_compile_options(nexus_accounts PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
+
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/actions.cpp src/sync/sessions.cpp src/sync/hub.cpp
     src/sync/mirror.cpp src/sync/client.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_sync PUBLIC nexus_model)
+target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
 
 # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
 # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.

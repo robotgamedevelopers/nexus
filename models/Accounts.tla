@@ -230,7 +230,7 @@ Create(f, from) ==
 \* The steps, with the actions a reversed witness breaks passed in.
 NextWith(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _)) ==
     \/ \E a \in Accts : Add(a) \/ Rm(a) \/ Report(a, "in") \/ Report(a, "out") \/ ReloadDropAccount(a)
-    \/ \E a \in Accts, p \in Providers : ReloadProvider(a, p)
+    \/ \E a \in Accts, p \in Providers : Pv(a, p)
     \/ \E f \in Friends : AddFriend(f) \/ ReloadDropFriend(f)
     \/ \E f \in Friends, a \in Accts : LinkAccount(f, a) \/ Ul(f, a) \/ DropLink(f, a)
     \/ \E f \in Friends, a \in Accts \cup {None} : Def(f, a)

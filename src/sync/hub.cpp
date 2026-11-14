@@ -193,6 +193,9 @@ bool Hub::counted(const Action& action, const std::string& refused, std::string*
 }
 
 bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    if (action.kind >= ActionKind::AddAccount) {
+        return accountAction(action, why, client);
+    }
     if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure) {
         if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
             return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
@@ -220,6 +223,15 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
             info.account = from->info.account;
             info.model = from->info.model;
             info.effort = from->info.effort;
+        }
+        if (accounts_) {
+            // The account copied only when linked to this friend (or none), else the friend's default.
+            const accounts::Friend* f = accounts_->friendNamed(action.friendName);
+            const bool copied = action.kind == ActionKind::Create && action.session != 0;
+            if (!copied || !(info.account.empty() || accounts_->linked(action.friendName, info.account))) {
+                info.account = f == nullptr ? std::string() : f->preferred;
+            }
+            info.harness = harnessOf(info.account, info.harness);
         }
         return make(action, info, why, client);
     }
@@ -325,8 +337,18 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             std::to_string(limits_.setting) + " printable characters.";
     }
     SessionInfo info = session->info;
+    if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !action.text.empty() &&
+            !accounts_->linked(info.friendName, action.text)) {
+        refused = "The account was not changed: " + action.text + " is not one of " + info.friendName +
+            "'s accounts" + (accounts_->account(action.text) == nullptr ? " (no account " + action.text +
+            " is set up in accounts.json)" : "") + ". Link it to " + info.friendName + " first: add it to " +
+            info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` (docs/accounts.md).";
+    }
     if (action.kind == ActionKind::SetAccount) {
         info.account = action.text;
+        if (accounts_) {
+            info.harness = harnessOf(info.account, info.harness);
+        }
     } else if (action.kind == ActionKind::SetModel) {
         info.model = action.text;
     } else {
@@ -397,6 +419,235 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     }
     refresh(id);
     return true;
+}
+
+std::string Hub::harnessOf(const std::string& account, const std::string& otherwise) const {
+    const accounts::Account* a = accounts_ && !account.empty() ? accounts_->account(account) : nullptr;
+    return a == nullptr ? otherwise : a->provider;
+}
+
+// A session's new settings, from the server rather than the person, with the notice that tells it why: one step.
+bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notice) {
+    std::string failed;
+    if (!store_.commit(id, {infoChange(info), SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0,
+                       &failed)) {
+        return false;
+    }
+    refresh(id);
+    if (responder_ != nullptr) {
+        responder_->configured(id, info);
+    }
+    return true;
+}
+
+// Every session on an account no longer linked to its friend moves off it; every session whose account's provider
+// changed takes its harness. Each is told. False when the store did not take a step.
+bool Hub::settle(std::vector<std::string>* report, const std::string& cause) {
+    for (SessionId id : store_.ids()) {
+        const StoredSession* s = store_.find(id);
+        SessionInfo info = s->info;
+        if (info.account.empty()) {
+            continue;
+        }
+        const std::string was = info.account;
+        std::string notice;
+        if (!accounts_->linked(info.friendName, was)) {
+            info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
+            info.harness = harnessOf(info.account, info.harness);
+            notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
+                "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
+                "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
+                "friends.json to choose another.";
+        } else if (info.harness != harnessOf(was, info.harness)) {
+            info.harness = harnessOf(was, info.harness);
+            notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
+                "now runs " + info.harness + ".";
+        } else {
+            continue;
+        }
+        if (!moveTo(id, info, notice)) {
+            return false;
+        }
+        if (report != nullptr) {
+            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): account " + was + " -> " +
+                (info.account.empty() ? std::string("none") : info.account) + ", harness " + info.harness);
+        }
+    }
+    return true;
+}
+
+std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsKeeper* keeper) {
+    accounts_ = std::move(registry);
+    keeper_ = keeper;
+    std::vector<std::string> report;
+    settle(&report, "as the server started");
+    return report;
+}
+
+bool Hub::applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report) {
+    std::vector<std::string> lines = accounts::problems(next);
+    std::string failed;
+    if (!accounts_) {
+        lines.push_back("this server holds no accounts: it was started without its config repository");
+    } else if (lines.empty() && keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
+        lines.push_back(failed);
+    }
+    if (!lines.empty()) {
+        if (report != nullptr) {
+            *report = std::move(lines);
+        }
+        return false;
+    }
+    lines = accounts::changes(*accounts_, next);
+    accounts_ = next;
+    const bool ok = settle(&lines, "the accounts and friends were changed: " + message);
+    if (report != nullptr) {
+        *report = std::move(lines);
+    }
+    return ok;
+}
+
+void Hub::reportSignedIn(const std::string& account, bool signedIn) {
+    if (signedIn) {
+        signedIn_.insert(account);
+    } else {
+        signedIn_.erase(account);
+    }
+}
+
+bool Hub::rotate(SessionId id, std::string* why) {
+    auto refuse = [&](const std::string& what) {
+        if (why != nullptr) {
+            *why = what;
+        }
+        return false;
+    };
+    const StoredSession* s = store_.find(id);
+    if (s == nullptr) {
+        return refuse("no session " + std::to_string(id));
+    }
+    if (!accounts_) {
+        return refuse("this server holds no accounts to rotate to");
+    }
+    SessionInfo info = s->info;
+    const std::string was = info.account.empty() ? std::string("in use") : info.account;
+    const std::string next = accounts::nextUp(*accounts_, signedIn_, info.friendName, info.account);
+    if (next.empty()) {
+        const std::string notice = "The account " + was + " reached its usage limit, and " + info.friendName +
+            " has no other signed-in account to move to. Link another account to " + info.friendName + " in "
+            "friends.json, or sign in one it has (docs/accounts.md).";
+        std::string failed;
+        if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
+            return refuse(failed);
+        }
+        refresh(id);
+        return refuse("session " + std::to_string(id) + ": " + info.friendName + " has no other signed-in account");
+    }
+    info.account = next;
+    info.harness = harnessOf(next, info.harness);
+    if (!moveTo(id, info, "The account " + was + " reached its usage limit, so this session now runs on the account " +
+                next + ", the next signed-in account of " + info.friendName + "'s.")) {
+        return refuse("session " + std::to_string(id) + ": the store did not take the move");
+    }
+    return true;
+}
+
+// An account action: the registry it makes, kept by the keeper, then taken, then the sessions settled; refused and
+// counted, changing nothing, when it does not fit the registry the hub holds.
+bool Hub::accountAction(const Action& action, std::string* why, const std::string& client) {
+    if (!accounts_) {
+        return counted(action, "no account action is taken: this server holds no accounts (it was started without "
+            "its config repository)", why, client);
+    }
+    accounts::Registry next = *accounts_;
+    const std::string& a = action.account;
+    const std::string& f = action.friendName;
+    accounts::Friend* fr = next.friendNamed(f);
+    std::string refused;
+    switch (action.kind) {
+        case ActionKind::AddAccount:
+            if (!accounts::isName(a) || !accounts::isProvider(action.text)) {
+                refused = "an account is set up with a name (1 to 64 letters, digits, '-', '_' or '.', not starting "
+                    "with '.') and a provider (lowercase, as claude): \"" + a + "\" of \"" + action.text + "\" is not";
+            } else if (next.account(a) != nullptr) {
+                refused = "the account " + a + " is already set up";
+            } else {
+                next.accounts.push_back(accounts::Account{a, action.text});
+            }
+            break;
+        case ActionKind::RemoveAccount:
+            if (next.account(a) == nullptr) {
+                refused = "no account " + a + " is set up";
+            } else {
+                next.accounts.erase(std::find_if(next.accounts.begin(), next.accounts.end(),
+                    [&](const accounts::Account& x) { return x.name == a; }));
+                for (accounts::Friend& x : next.friends) {
+                    x.accounts.erase(std::remove(x.accounts.begin(), x.accounts.end(), a), x.accounts.end());
+                    if (x.preferred == a) {
+                        x.preferred.clear();
+                    }
+                }
+            }
+            break;
+        case ActionKind::AddFriend:
+            if (!accounts::isName(f)) {
+                refused = "a friend's name is 1 to 64 letters, digits, '-', '_' or '.', not starting with '.': \"" + f +
+                    "\" is not";
+            } else if (fr != nullptr) {
+                refused = "the friend " + f + " is already set up";
+            } else {
+                next.friends.push_back(accounts::Friend{f, {}, {}});
+            }
+            break;
+        case ActionKind::LinkAccount:
+            if (fr == nullptr) {
+                refused = "no friend " + f + " is set up";
+            } else if (next.account(a) == nullptr) {
+                refused = "no account " + a + " is set up";
+            } else if (std::find(fr->accounts.begin(), fr->accounts.end(), a) != fr->accounts.end()) {
+                refused = f + " is already linked to " + a;
+            } else {
+                fr->accounts.push_back(a);
+            }
+            break;
+        case ActionKind::UnlinkAccount:
+            if (fr == nullptr || std::find(fr->accounts.begin(), fr->accounts.end(), a) == fr->accounts.end()) {
+                refused = f + " is not linked to " + a;
+            } else {
+                fr->accounts.erase(std::remove(fr->accounts.begin(), fr->accounts.end(), a), fr->accounts.end());
+                if (fr->preferred == a) {
+                    fr->preferred.clear();
+                }
+            }
+            break;
+        default:    // SetDefault
+            if (fr == nullptr) {
+                refused = "no friend " + f + " is set up";
+            } else if (!a.empty() && std::find(fr->accounts.begin(), fr->accounts.end(), a) == fr->accounts.end()) {
+                refused = a + " is not one of " + f + "'s accounts: link it first";
+            } else {
+                fr->preferred = a;
+            }
+            break;
+    }
+    if (!refused.empty()) {
+        return counted(action, "the accounts were not changed: " + refused, why, client);
+    }
+    const std::vector<std::string> lines = accounts::changes(*accounts_, next);
+    std::string message;
+    for (const std::string& l : lines) {
+        message += (message.empty() ? "" : "; ") + l;
+    }
+    message += client.empty() ? std::string(" (asked by an action)") : " (asked by the window " + client + ")";
+    std::string failed;
+    if (keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
+        return counted(action, "the accounts were not changed: " + failed, why, client);
+    }
+    accounts_ = std::move(next);
+    if (!count(action, why, client)) {
+        return false;
+    }
+    return settle(nullptr, message);
 }
 
 // The session's new tail, in place of its old one; every other session is shared with the state before.
