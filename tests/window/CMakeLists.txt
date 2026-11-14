@@ -114,6 +114,18 @@ if(NEXUS_WINDOW)
         add_test(NAME window_frame_budget COMMAND nexus_frame_tests $<TARGET_FILE:nexus_slow_ssh>
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/frame_work)
         set_tests_properties(window_frame_budget PROPERTIES LABELS functional TIMEOUT 90)
+        # The proof that a real hitch fails every run: 10 ms of busy work on one frame, in a case whose frame count is
+        # fixed (matched by frame number) and in one that waits on real time (matched by its place among the events).
+        add_test(NAME window_frame_budget_injected COMMAND nexus_frame_tests $<TARGET_FILE:nexus_slow_ssh>
+            --inject typing_over_a_long_history 100 typing_over_a_long_history
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/frame_work)
+        set_tests_properties(window_frame_budget_injected PROPERTIES LABELS functional TIMEOUT 60
+            PASS_REGULAR_EXPRESSION "HITCH in every run: frame 100, phase keep")
+        add_test(NAME window_frame_budget_injected_paced COMMAND nexus_frame_tests $<TARGET_FILE:nexus_slow_ssh>
+            --inject text_scale 20 text_scale
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/frame_work)
+        set_tests_properties(window_frame_budget_injected_paced PROPERTIES LABELS functional TIMEOUT 60
+            PASS_REGULAR_EXPRESSION "HITCH in every run: frame 20, phase keep")
     endif()
 
     # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
