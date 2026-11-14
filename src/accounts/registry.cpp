@@ -18,7 +18,7 @@ PrStringView pr(std::string_view s) {
 }
 
 std::string_view view(PrStringView s) {
-    return s.data == nullptr ? std::string_view() : std::string_view(s.data, s.length);
+    return s.data == nullptr ? std::string_view() : std::string_view(s.data, s.size);
 }
 
 // A JSON string, escaped as Prax's writer escapes it.
