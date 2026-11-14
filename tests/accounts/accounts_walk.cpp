@@ -77,7 +77,7 @@ struct Walk {
         std::map<sync::SessionId, std::size_t> n;
         for (sync::SessionId id : store.ids()) {
             for (const sync::EntryRef& e : store.find(id)->transcript) {
-                n[id] += e->kind == sync::EntryKind::Notice ? 1 : 0;
+                n[id] += e->kind == EntryKind::Notice ? 1 : 0;
             }
         }
         return n;
