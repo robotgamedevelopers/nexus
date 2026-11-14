@@ -1184,6 +1184,41 @@ void nothingAroundTheOpenPrompt() {
     CHECK(h.entries().empty());
 }
 
+// A long transcript declares only the entries in sight and a screen either side (view.h TranscriptItems), with tool
+// runs kept together; scrolled to the top, the oldest entry shows, and back at the bottom the newest.
+void longTranscriptDeclaresWhatIsInSight() {
+    Harness h;
+    for (int i = 0; i < 2000; ++i) {
+        const EntryKind kind = i % 3 == 0 ? EntryKind::Person : i % 3 == 1 ? EntryKind::Friend : EntryKind::Tool;
+        h.model.append(0, Entry{kind, "entry " + std::to_string(i)});
+    }
+    h.frame();
+    h.frame();
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() < 80);
+    CHECK(!e.empty() && h.hasText(e.back(), "entry 1999"));
+    PrRect port = h.bounds(h.view.transcript);
+    PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    for (int i = 0; i < 40; ++i) {
+        h.push(scrollEvent(middle, PrVec2{0, -1000000}));
+        h.frame();
+    }
+    e = h.entries();
+    CHECK(e.size() < 80);
+    bool oldest = false;
+    for (PrLayoutNode n : e)
+        oldest = oldest || h.hasText(n, "entry 0");
+    CHECK(oldest);
+    for (int i = 0; i < 40; ++i) {
+        h.push(scrollEvent(middle, PrVec2{0, 1000000}));
+        h.frame();
+    }
+    e = h.entries();
+    CHECK(!e.empty() && h.hasText(e.back(), "entry 1999"));
+    CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
@@ -1198,17 +1233,20 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     h.frame();
     PrRect port = h.bounds(h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
-    CHECK(e.size() == 30 + queued);
+    // Only the entries in sight and a screen either side are declared (view.h TranscriptItems): the newest is last
+    // before the queue.
+    CHECK(e.size() > queued && h.hasText(e[e.size() - 1 - queued], "line 29"));
     // At the bottom: the last item shows, at the foot of the transcript.
     CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
     CHECK(!e.empty() && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
     h.model.append(0, Entry{EntryKind::Friend, "newest"});
     h.frame();
     e = h.entries();
-    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
-    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
+    CHECK(e.size() > queued && h.hasText(e[e.size() - 1 - queued], "newest"));
+    CHECK(h.bounds(e.back()).bottom <= port.bottom + 0.5f);
+    CHECK(h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
     // A new entry goes above the queued prompts; still at the bottom.
-    CHECK(e.size() == 31 + queued && h.bounds(e[30]).bottom < h.bounds(e.back()).bottom + 0.5f);
+    CHECK(h.bounds(e[e.size() - 1 - queued]).bottom < h.bounds(e.back()).bottom + 0.5f);
 
     // Scrolled up: an entry in view stays where it is on screen while entries arrive below.
     PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
@@ -1740,6 +1778,7 @@ int main() {
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
+    longTranscriptDeclaresWhatIsInSight();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     toolLinesAreOneCompactLine();

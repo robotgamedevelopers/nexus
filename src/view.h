@@ -72,6 +72,23 @@ struct KitTabsFree {
 };
 using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
 
+// A friend's transcript as the view lays it out (view.cpp transcript). Only the items in sight, and a screen's height
+// either side, are declared each round; spacers stand for the rest, so the scroll covers the whole transcript and a
+// round costs the same with fifty entries or fifty thousand. An item is an entry, or a run of tool lines, which stand
+// together. Each item's height is the one it took at its last layout, or until then an estimate from its text.
+struct TranscriptItems {
+    std::size_t entries = 0;                    // the transcript's entries grouped into items so far
+    std::vector<std::uint32_t> first;           // each item's first entry
+    std::vector<std::uint32_t> lines;           // its lines (line feeds and one, summed over a run of tool lines)
+    std::vector<std::uint32_t> chars;           // its bytes of text
+    std::vector<std::uint32_t> count;           // its entries (more than one for a run of tool lines)
+    std::vector<float> height;                  // px with the gap after it, as last laid out; 0 until it is
+    std::vector<std::pair<std::uint32_t, PrLayoutNode>> declared;  // the items the last round declared, and nodes
+    PrLayoutNode column = kPrLayoutNodeNone;    // the transcript's column, as the last round built it
+    float width = 0;                            // the column's width at the last layout, px
+    int steps = 0;                              // the text scale the heights were laid out at
+};
+
 struct View {
     Model* model = nullptr;
     Look* look = nullptr;
@@ -113,6 +130,7 @@ struct View {
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;
     std::vector<float> scrolls;
+    std::vector<TranscriptItems> items;         // each friend's transcript as laid out, by Tab::id
     std::size_t shown = ~std::size_t(0);        // the friend (Tab::id) the transcript showed last round
     std::size_t prompted = ~std::size_t(0);     // the friend (Tab::id) whose draft the prompt edited last round
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
