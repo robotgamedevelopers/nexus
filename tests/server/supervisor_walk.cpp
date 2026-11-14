@@ -4,7 +4,7 @@
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
 //   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue | --faulty-setting |
-//                                   --faulty-account | --faulty-dir] <out.tla>
+//                                   --faulty-account | --faulty-activity | --faulty-dir] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
@@ -21,9 +21,10 @@
 //             walk ticks one millisecond early and requires that nothing happens
 //   shutdown  the server stops
 //   restart   the server starts again from the durable state committed last, the driver of the old one gone
-//   setting, account, place
+//   setting, account, place, configure
 //             the person changes the model and effort, or the account; an edit moves the session's instance
-//             (/work, the model's "", or /work/d, its "d"; on this machine or another)
+//             (/work, the model's "", or /work/d, its "d"; on this machine or another); the drivers file loses the
+//             friend's driver, or gives it back
 //
 // The faults, for the tests that show the check can fail:
 //   --faulty-turn    a restart finds the next turn number as 1, as if the store had not kept it
@@ -31,6 +32,7 @@
 //   --faulty-queue   a restart finds the queue empty, as if the store had not kept it
 //   --faulty-setting a restart finds the model and effort empty, as if the store had not kept them
 //   --faulty-account a restart finds the account empty, as if the store had not kept it
+//   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 //   --faulty-dir     a restart finds no directory for the harness session, as if the store had not kept it
 
 #include <cstdint>
@@ -58,7 +60,7 @@ constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
 constexpr std::size_t kMaxSwitches = 12;
 
-enum class Fault { None, Turn, Resume, Queue, Setting, Account, Dir };
+enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity, Dir };
 
 // The walk's directories: /work (where the session starts, the model's "") and /work/d (its "d").
 const char* const kWork = "/work";
@@ -99,6 +101,15 @@ const char* stageName(Stage s) {
         case Stage::Closed: return "closed";
         case Stage::Termed: return "termed";
         case Stage::Killed: return "killed";
+    }
+    return "?";
+}
+
+const char* activityName(sync::Activity a) {
+    switch (a) {
+        case sync::Activity::Idle: return "idle";
+        case sync::Activity::Busy: return "busy";
+        case sync::Activity::Down: return "down";
     }
     return "?";
 }
@@ -156,7 +167,7 @@ public:
         if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
         }
-        if (r < 100 && sent_ < kPrompts && !s.shuttingDown()) {
+        if (r < 100 && sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
             return prompt();
         }
         if (r < 130 && sent_ < kPrompts && !s.shuttingDown() && s.queue().size() < kMaxWaiting) {
@@ -181,14 +192,17 @@ public:
             return restart();
         }
         if (r < 215 && switches_ < kMaxSwitches) {
-            const std::size_t which = rng.below(3);
-            return which == 0 ? setting(rng) : which == 1 ? account(rng) : place(rng);
+            const std::size_t which = rng.below(4);
+            return which == 0 ? setting(rng) : which == 1 ? account(rng) : which == 2 ? place(rng) : configure();
         }
         if (alive) {
             return message(rng);
         }
-        if (sent_ < kPrompts && !s.shuttingDown()) {
+        if (sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
             return prompt();
+        }
+        if (unconfigured_ && switches_ < kMaxSwitches) {
+            return configure();
         }
         if (s.deadline()) {
             return timeout();
@@ -214,7 +228,20 @@ private:
         c.account = account_;
         c.cwd = dir_;
         c.here = here_;
+        if (unconfigured_) {
+            c.command.clear();
+        }
         return c;
+    }
+
+    // The drivers file loses the friend's driver, or gives it back (the server's Drivers::showResolved): no prompt
+    // is sent to the supervisor while it has none, as the server refuses it for want of a driver.
+    bool configure() {
+        ++switches_;
+        unconfigured_ = !unconfigured_;
+        Config c = configured();
+        return take("configure", "", 0, unconfigured_ ? "none" : "driver", sup_->configure(c.command, c.cwd,
+            c.configured, now_));
     }
 
     bool place(Rng& rng) {
@@ -511,11 +538,22 @@ private:
         o << ">>, resumed |-> " << str(resumed_) << ", setting |-> " << settingName(s.model(), s.effort())
           << ", told |-> " << settingName(toldModel_, toldEffort_)
           << ", account |-> " << str(s.account()) << ", drv |-> " << str(s.driverAccount()) << ", retiring |-> "
-          << (s.retiring() ? "TRUE" : "FALSE") << ", dir |-> " << str(dirName(s.cwd())) << ", here |-> "
-          << (s.here() ? "TRUE" : "FALSE") << ", ddir |-> " << str(dirName(s.driverCwd())) << ", sdir |-> "
+          << (s.retiring() ? "TRUE" : "FALSE") << ", crashed |-> " << (s.crashed() ? "TRUE" : "FALSE")
+          << ", unconf |-> " << (s.unconfigured() ? "TRUE" : "FALSE")
+          << ", activity |-> " << str(activityName(activity())) << ", dir |-> " << str(dirName(s.cwd()))
+          << ", here |-> " << (s.here() ? "TRUE" : "FALSE") << ", ddir |-> " << str(dirName(s.driverCwd())) << ", sdir |-> "
           << str(dirName(s.state().sessionDir)) << ", summary |-> " << (s.state().summary ? "TRUE" : "FALSE")
           << ", switches |-> " << switches_ << "]";
         return o.str();
+    }
+
+    // The code's activity; with the activity fault, a crash reads as idle, as a cursor that forgot it would show.
+    sync::Activity activity() const {
+        const sync::Activity a = sup_->activity();
+        if (fault_ == Fault::Activity && a == sync::Activity::Down && !sup_->held()) {
+            return sync::Activity::Idle;
+        }
+        return a;
     }
 
     Fault fault_;
@@ -534,6 +572,7 @@ private:
     };
     std::vector<Written> written_;
     std::size_t switches_ = 0;
+    bool unconfigured_ = false;         // the friend has no driver configured
     std::string model_;
     std::string effort_;
     std::string account_;
@@ -566,7 +605,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         return 1;
     }
     const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue", ", faulty setting",
-                            ", faulty account", ", faulty dir"};
+                            ", faulty account", ", faulty activity", ", faulty dir"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
         << faults[static_cast<int>(fault)] << ".\n";
@@ -622,6 +661,9 @@ int main(int argc, char** argv) {
         } else if (a == "--faulty-account") {
             fault = Fault::Account;
             ++faults;
+        } else if (a == "--faulty-activity") {
+            fault = Fault::Activity;
+            ++faults;
         } else if (a == "--faulty-dir") {
             fault = Fault::Dir;
             ++faults;
@@ -635,7 +677,8 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
         std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
-                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-dir] <out.tla>\n");
+                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir] "
+                     "<out.tla>\n");
         return 2;
     }
     return walk(seed, steps, fault, rest[2].c_str());

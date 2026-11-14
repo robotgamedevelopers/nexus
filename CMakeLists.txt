@@ -93,7 +93,7 @@ endif()
 
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
-add_library(nexus_model STATIC src/model.cpp src/overlay.cpp)
+add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
@@ -106,8 +106,8 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
-add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/actions.cpp src/sync/sessions.cpp src/sync/hub.cpp
-    src/sync/mirror.cpp src/sync/client.cpp)
+add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
@@ -215,9 +215,12 @@ if(NEXUS_LINK)
     target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
 
     # The server the window talks to with --server: headless, on the machine that keeps going.
-    add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
+    add_library(nexus_server STATIC src/server/server.cpp)
+    target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo)
+    add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers nexus_config_repo)
+    target_link_libraries(nexus-server PRIVATE nexus_server)
 endif()
 
 if(NEXUS_WINDOW AND (APPLE OR WIN32))

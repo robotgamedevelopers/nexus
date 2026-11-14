@@ -27,10 +27,18 @@
 // mosh's transport (link/client.h). Each friend tab shows its friend's first session, the window's own choice. A prompt
 // goes to that session, and the transcripts and queues show what the server holds (sync/mirror.h). Until the server is
 // first heard there is no prompt, only the line that says the window is connecting (or why it could not); afterwards
-// that line shows only while the server is not heard.
+// nothing is drawn around the prompt, and the state cursor under the last text says what the server's state is
+// (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The friend's open
+// entry is drawn as it grows, tool calls as one compact line each, and Command-Escape sends a stop the server decides.
 //
-// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
-//              [--bench FRAMES] [--print-window-config] [--server HOST]
+// --state FILE draws the screenshot's friend tabs from a server's state file (sync/sessions.h stateFile; the friends
+// layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window), as the
+// window shows it once the server is heard; --lost draws it as the window does once it has lost the server. It draws
+// from the file alone: no home, no config, no friends from nova-config, no saved tab order, and no sprint board; the
+// friend tabs are the friends of the state's sessions, in order of session id.
+//
+// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
+//              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
 
 #include <algorithm>
 #include <atomic>
@@ -38,6 +46,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -74,6 +85,7 @@
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
+#include "sync/wire.h"
 #endif
 
 namespace {
@@ -106,6 +118,7 @@ struct App {
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
     std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
+    std::function<SprintBoardAddress()> findBoard; // the board's address; unset, the sprint's (board.h)
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
     // Kept across launches (tab_order.h); a screenshot keeps nothing. The terminal tabs reopened at launch, by Tab::id,
@@ -121,7 +134,8 @@ struct App {
     std::string host;                       // --server
     std::unique_ptr<link::ClientLink> link;
     sync::Mirror mirror;
-    std::string promptProblem;              // why the last prompt was not sent, until one is
+    sync::LinkPhase phase = sync::LinkPhase::Connecting;   // the link's state, as last polled, for the state cursor
+    std::uint64_t heardMsAgo = 0;
 #endif
 };
 
@@ -159,17 +173,21 @@ void keepTerminals(App& a) {
 }
 
 #if NEXUS_LINK
-// Each frame: the server's latest sessions into the model, and the link's state into the line where the prompt stands.
-// The prompt opens once the server is first heard, and stays.
+// Each frame: the server's latest sessions into the model, and the link's state into the line in the prompt's place
+// (which shows only until the prompt opens) and the state cursor. The prompt opens once the server is first heard,
+// and stays.
 void pollLink(App& a) {
     link::ClientLink::Snapshot s;
-    if (a.link == nullptr || !a.link->poll(&s))
+    if (a.link == nullptr || !a.link->poll(&s)) {
         return;
+    }
     a.mirror.apply(*a.model, s.sessions);
-    if (s.phase == sync::LinkPhase::Connected)
+    if (s.phase == sync::LinkPhase::Connected) {
         a.view.promptOpen = true;
-    const std::string status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
-    a.view.status = status.empty() ? a.promptProblem : status;
+    }
+    a.phase = s.phase;
+    a.heardMsAgo = s.heardMsAgo;
+    a.view.status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
 }
 #endif
 
@@ -286,6 +304,7 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     if (a.terminals != nullptr)
         a.terminals->observe(f->time);
     keepTerminals(a);
+    a.view.time = f->time;
 #if NEXUS_LINK
     pollLink(a);
 #endif
@@ -460,11 +479,13 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PraxBoard::Desc boardDesc;
     boardDesc.kit = kit;
     boardDesc.fonts = a.fonts;
+    boardDesc.find = a.findBoard;
     auto board = std::make_unique<PraxBoard>(boardDesc);
     a.view.board = board.get();
     int frames = 0;
     auto frame = [&] {
         const double time = 1000.0 + frames++ / 60.0;
+        a.view.time = time;
         board->frame(time, display);
         PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
             .display = display, .preferences = {}};
@@ -593,19 +614,6 @@ void seedDemo(Model& model, std::size_t tab) {
 } // namespace
 
 int main(int argc, char** argv) {
-    // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
-    // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged
-    // (clientConfig also says when there is no home to read it from).
-    std::string home;
-    std::string homeWhy;
-    const bool haveHome = clientHome(&home, &homeWhy);
-    const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
-    startErrorLog(madeHome ? home : std::string());
-    if (haveHome && !madeHome) {
-        std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
-    }
-    // No dialog for it: launch shows nothing but a hotkey that failed (AGENTS.md). With no home, Windows has no log.
-    clientConfig();
     const char* shot = nullptr;
     std::size_t tab = 1;
     bool tabGiven = false;
@@ -616,9 +624,16 @@ int main(int argc, char** argv) {
     bool printConfig = false;
     unsigned bench = 0;
     const char* server = nullptr;
-    for (int i = 1; i < argc; ++i) {
+    const char* state = nullptr;
+    bool lost = false;
+    bool usage = false;
+    for (int i = 1; i < argc && !usage; ++i) {
         if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
             server = argv[++i];
+        } else if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
+            state = argv[++i];
+        } else if (std::strcmp(argv[i], "--lost") == 0) {
+            lost = true;
         } else if (std::strcmp(argv[i], "--windowed") == 0) {
             windowed = true;
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
@@ -637,11 +652,40 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--print-window-config") == 0) {
             printConfig = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
-                "[--backdrop]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
-            return 2;
+            usage = true;
         }
     }
+    // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
+    // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged
+    // (clientConfig also says when there is no home to read it from). A screenshot of a state file reads neither.
+    if (state == nullptr) {
+        std::string home;
+        std::string homeWhy;
+        const bool haveHome = clientHome(&home, &homeWhy);
+        const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
+        startErrorLog(madeHome ? home : std::string());
+        if (haveHome && !madeHome) {
+            std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
+        }
+        // No dialog for it: launch shows nothing but a hotkey that failed (AGENTS.md). With no home, Windows has no
+        // log.
+        clientConfig();
+    }
+    if (usage) {
+        std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
+            "[--backdrop] [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
+        return 2;
+    }
+    if ((state != nullptr && (shot == nullptr || server != nullptr || demo)) || (lost && state == nullptr)) {
+        std::fprintf(stderr, "nexus: --state draws a screenshot only, without --server or --demo; --lost needs --state\n");
+        return 2;
+    }
+#if !NEXUS_LINK
+    if (state != nullptr) {
+        std::fprintf(stderr, "nexus: this build has no --state (it was configured with -DNEXUS_LINK=OFF)\n");
+        return 2;
+    }
+#endif
     if (server != nullptr) {
 #if NEXUS_LINK
         if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
@@ -670,11 +714,39 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    FriendList friends = loadFriends();
-    if (friends.error.empty())
-        std::printf("nexus: %zu friends from nova-config\n", friends.friends.size());
-    else
-        std::fprintf(stderr, "nexus: %s\n", friends.error.c_str());
+    // The friends: from nova-config, or, for a screenshot of a state file, the friends of its sessions in order of id.
+    const bool fromState = state != nullptr;
+    FriendList friends;
+#if NEXUS_LINK
+    sync::Sessions held;
+    if (fromState) {
+        std::ifstream in(state, std::ios::binary);
+        if (!in) {
+            std::fprintf(stderr, "nexus: could not read %s\n", state);
+            return 2;
+        }
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string why;
+        if (!sync::readStateFile(bytes, &held, &why)) {
+            std::fprintf(stderr, "nexus: %s: %s\n", state, why.c_str());
+            return 2;
+        }
+        for (const sync::SessionRef& s : held.sessions()) {
+            const std::string& name = s->info.friendName;
+            if (std::none_of(friends.friends.begin(), friends.friends.end(),
+                             [&](const FriendInfo& f) { return f.name == name; })) {
+                friends.friends.push_back(FriendInfo{name, s->info.model});
+            }
+        }
+    }
+#endif
+    if (!fromState) {
+        friends = loadFriends();
+        if (friends.error.empty())
+            std::printf("nexus: %zu friends from nova-config\n", friends.friends.size());
+        else
+            std::fprintf(stderr, "nexus: %s\n", friends.error.c_str());
+    }
     // The fleet's machines, by which a terminal tab in ssh is named. A screenshot runs no ssh.
     MachineList machines;
     if (shot == nullptr) {
@@ -684,18 +756,27 @@ int main(int argc, char** argv) {
         else
             std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
     }
-    // The friend tabs in the order the person last left them (tab_order.h).
-    static const TabOrderStore order = fileTabOrderStore();
-    std::string orderWarning;
-    friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
-    if (!orderWarning.empty())
-        std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
+    // The friend tabs in the order the person last left them (tab_order.h). The stores of what the window keeps across
+    // launches are each a file in its home, which a screenshot of a state file never reads.
+    static TabOrderStore order;
+    static TabOrderStore terminalStore;
+    static TabOrderStore selection;
+    static TabOrderStore scale;
+    if (!fromState) {
+        order = fileTabOrderStore();
+        terminalStore = fileTerminalsStore();
+        selection = fileSelectedTabStore();
+        scale = fileTextScaleStore();
+        std::string orderWarning;
+        friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
+        if (!orderWarning.empty())
+            std::fprintf(stderr, "nexus: %s\n", orderWarning.c_str());
+    }
     // The sprint tab first, then the friends.
     static Model model(friends.friends, true);
     // The terminal tabs open when nexus last quit, after the friends in the order they stood, each to start a new shell
     // in its directory when the window opens (tab_order.h). A screenshot reopens none.
     const bool live = shot == nullptr;
-    static const TabOrderStore terminalStore = fileTerminalsStore();
     std::vector<std::pair<std::size_t, std::string>> reopen;
     if (live) {
         std::string terminalsWarning;
@@ -707,7 +788,6 @@ int main(int argc, char** argv) {
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it
     // is or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A screenshot without
     // --tab shows the sprint tab, whatever was saved.
-    static const TabOrderStore selection = fileSelectedTabStore();
     if (!tabGiven && live) {
         std::string selectionWarning;
         tab = loadSelectedTab(selection, model, &selectionWarning) + 1;
@@ -732,11 +812,13 @@ int main(int argc, char** argv) {
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
         a.view.hide = [] { carryOut(a, a.rules.escape(overlayVisible(a))); };
-    a.view.moved = [] {
-        std::string error;
-        if (!saveTabOrder(order, model, &error))
-            std::fprintf(stderr, "nexus: %s\n", error.c_str());
-    };
+    if (!fromState) {
+        a.view.moved = [] {
+            std::string error;
+            if (!saveTabOrder(order, model, &error))
+                std::fprintf(stderr, "nexus: %s\n", error.c_str());
+        };
+    }
     // Each change of the selected tab, and of the terminal tabs, is saved as it happens, so a quit of any kind leaves
     // them saved. A screenshot saves nothing.
     if (live) {
@@ -748,7 +830,6 @@ int main(int argc, char** argv) {
     }
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
-    static const TabOrderStore scale = fileTextScaleStore();
     if (live) {
         std::string scaleWarning;
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
@@ -774,7 +855,7 @@ int main(int argc, char** argv) {
             if (session == 0 && i < model.tab_count() && model.tab(i).kind == TabKind::Friend) {
                 why = "No session with " + model.tab(i).name + " yet: the prompt is kept.";
             } else if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
-                a.promptProblem.clear();
+                a.view.problem.clear();
                 sync::Action action;
                 action.kind = queue ? sync::ActionKind::Queue : sync::ActionKind::Send;
                 action.session = session;
@@ -783,9 +864,19 @@ int main(int argc, char** argv) {
                 return;
             }
             if (!why.empty()) {
-                a.promptProblem = why;
-                if (a.view.status.empty())
-                    a.view.status = why;
+                a.view.problem = why;
+            }
+        };
+        // Command-Escape: a stop of the session the tab shows, sent whatever the window shows and whether or not the
+        // link is up (it waits in order with the other actions); the server decides what it stops. Before any state has
+        // held a session of the friend there is no session to name, and nothing is sent.
+        a.view.stop = [] {
+            sync::SessionId session = 0;
+            if (sync::stopTarget(model, model.active(), a.mirror, &session)) {
+                sync::Action action;
+                action.kind = sync::ActionKind::Stop;
+                action.session = session;
+                a.link->send(std::move(action));
             }
         };
         link::ClientLink::Options options;
@@ -802,6 +893,24 @@ int main(int argc, char** argv) {
             ensure.friendName = name;
             a.link->send(std::move(ensure));
         }
+    }
+    // --state: the server's state from a file, as the window holds it once the server is heard (or, with --lost, once
+    // it has lost the server).
+    if (fromState) {
+        a.mirror.apply(model, held);
+        a.findBoard = [] { return SprintBoardAddress{"", "a screenshot of a state file shows no sprint board"}; };
+        a.phase = sync::LinkPhase::Connected;
+        a.heardMsAgo = lost ? sync::kQuietMs : 0;
+    }
+    // The open entry as it grows, and the state cursor, from what the window holds of the server's state.
+    if (server != nullptr || state != nullptr) {
+        a.view.growing = [](std::size_t id) -> const std::string* {
+            const sync::SessionEntry* open = a.mirror.open(id);
+            return open != nullptr ? &open->text : nullptr;
+        };
+        a.view.cursor = [](std::size_t id) {
+            return sync::cursorOf(a.phase, a.heardMsAgo, a.mirror, id);
+        };
     }
 #endif
     a.bench = bench;

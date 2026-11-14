@@ -105,9 +105,16 @@ void ClientLink::run() {
     Connect connect;
     if (!bootstrap(options_.bootstrap, runCommand, &connect, &why))
         return fail(why);
+    // A server whose format this window no longer reads: one plain line, at once, never a link that cannot be read.
+    // The link uses the format the server answered with, which is never newer than the one the window stated.
+    const std::string refused = sync::serverRefusal(connect.format);
+    if (!refused.empty()) {
+        connect.key.assign(connect.key.size(), '\0');
+        return fail(refused);
+    }
     std::unique_ptr<ClientSession> session;
     try {
-        session = std::make_unique<ClientSession>(connect.key, ip, connect.port);
+        session = std::make_unique<ClientSession>(connect.key, ip, connect.port, 1, connect.format);
     } catch (const std::exception& e) {
         return fail(e.what());
     }

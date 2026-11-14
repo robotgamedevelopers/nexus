@@ -94,8 +94,8 @@ std::string quoted(const std::vector<std::string>& command) {
 EntryKind entryKind(Effect::What what) {
     switch (what) {
         case Effect::What::Prompt: return EntryKind::Person;
-        case Effect::What::Reply:
-        case Effect::What::Tool: return EntryKind::Friend;
+        case Effect::What::Reply: return EntryKind::Friend;
+        case Effect::What::Tool: return EntryKind::Tool;
         case Effect::What::Error:
         case Effect::What::Stopped:
         case Effect::What::Cut:
@@ -117,10 +117,12 @@ Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Outpu
     *out = finish();
 }
 
-void Supervisor::configure(std::vector<std::string> command, std::string cwd, std::string configured) {
+Output Supervisor::configure(std::vector<std::string> command, std::string cwd, std::string configured, Millis now) {
     config_.command = std::move(command);
     config_.cwd = std::move(cwd);
     config_.configured = std::move(configured);
+    advance(now);
+    return finish();
 }
 
 Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
@@ -141,6 +143,19 @@ Output Supervisor::setAccount(std::string account, Millis now) {
     config_.account = std::move(account);
     advance(now);
     return finish();
+}
+
+sync::Activity Supervisor::activity() const {
+    if (held_) {
+        return sync::Activity::Down;
+    }
+    if (state_.openTurn != 0 || (!state_.waiting.empty() && config_.here) || phase_ == Phase::Starting) {
+        return sync::Activity::Busy;
+    }
+    if (config_.command.empty() || !config_.here || (crashed_ && !down_)) {
+        return sync::Activity::Down;
+    }
+    return sync::Activity::Idle;
 }
 
 std::optional<Millis> Supervisor::deadline() const {
@@ -211,6 +226,7 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
         const Hello* hello = std::get_if<Hello>(&message);
         if (hello != nullptr && hello->protocol == kProtocolVersion) {
             phase_ = Phase::Idle;
+            crashed_ = false;
             deadline_.reset();
         } else if (hello != nullptr) {
             end(config_.name + "'s driver speaks driver protocol version " + std::to_string(hello->protocol) +
@@ -439,6 +455,7 @@ void Supervisor::abandon(const std::string& why) {
     flush();
     effect(Effect::What::Notice, why);
     lastFailure_ = why;
+    crashed_ = true;
     if (state_.openTurn != 0) {
         cutOpen();
     }

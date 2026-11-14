@@ -4,9 +4,12 @@ namespace nexus::server {
 
 namespace {
 
+// The store keeps an entry's kind as it was written; a kind this build does not know (a later server's) is shown as a
+// notice, a plain dim line, and never handed on as a kind the window cannot draw.
 sync::EntryRef toRef(const store::Entry& e) {
-    return std::make_shared<const sync::SessionEntry>(
-        sync::SessionEntry{static_cast<EntryKind>(e.kind), e.text, e.closed});
+    const EntryKind kind = e.kind <= static_cast<std::uint8_t>(EntryKind::Tool) ? static_cast<EntryKind>(e.kind) :
+        EntryKind::Notice;
+    return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, e.text, e.closed});
 }
 
 sync::DriverState toState(const store::Driver& d) {

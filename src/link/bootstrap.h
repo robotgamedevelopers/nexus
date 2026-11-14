@@ -5,22 +5,26 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include "friends.h"
+#include "sync/formats.h"
 
 namespace nexus::link {
 
 struct Connect {
     std::string port;
     std::string key;
+    std::uint32_t format = 1;   // the state format the server sends on this link: 1 when the line states none
 };
 
-// The line nexus-server new prints.
-std::string connectLine(const std::string& port, const std::string& key);
+// The line nexus-server new prints. `format` 0 states none: the line a window that stated no format reads (one from
+// before formats, which takes nothing after the key).
+std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format = 0);
 // True for exactly a CONNECT line: "NEXUS CONNECT", a port of 1 to 65535, and a key of 22 base64 characters (mosh's
-// printable 128-bit key), separated by single spaces.
+// printable 128-bit key), then, optionally, "format" and a number from 1, separated by single spaces.
 bool parseConnect(const std::string& line, Connect* out);
 
 // The line ssh runs on the server's machine: `exec "$SHELL" -l -c '<command>'`, each word of the command quoted.
@@ -31,9 +35,13 @@ struct Bootstrap {
     std::string host;                                           // as ssh takes it
     std::vector<std::string> command = {"nexus-server", "new"}; // run there in the login shell
     int timeoutSeconds = 30;
+    // The state format the window reads, stated to nexus-server new in its environment (sync/formats.h); 0 states
+    // none, as a window before formats did.
+    std::uint32_t stateFormat = sync::kStateFormat;
 };
 
 // The ssh command that runs it: no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
+// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format.
 Command bootstrapCommand(const Bootstrap& b);
 
 // Runs the command over ssh with `run` and reads its output for the CONNECT line. False, with why (what ssh or the

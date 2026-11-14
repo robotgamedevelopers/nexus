@@ -86,7 +86,7 @@ endforeach()
 tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
-         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY harness)
+         PROPERTY TraceMatches ACCWALK SEED 2 STEPS 400 FAULTY harness)
 tlc_test(tlc_accounts_trace_faulty_instance_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY instance)
 

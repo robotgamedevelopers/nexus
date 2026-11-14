@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "pr/color_space.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
@@ -42,6 +43,8 @@ enum class Part : unsigned char {
     Prompt,
     StripRow,
     BoardBox,
+    Tools,
+    Cursor,
 };
 
 // The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
@@ -142,6 +145,18 @@ struct BoxRecipe {
                 box.overflowX = PrLayoutOverflow_Hidden;
                 box.overflowY = PrLayoutOverflow_Hidden;
                 break;
+            case Part::Tools:
+                box.display = PrLayoutDisplay_Flex;
+                box.minWidth = px(0);
+                box.overflowX = PrLayoutOverflow_Hidden;
+                break;
+            case Part::Cursor:
+                // Just under the last text: the column's gap less kCursorGap is taken back above it.
+                box.display = PrLayoutDisplay_Block;
+                box.width = px(kCursorWidth * k);
+                box.height = px(kCursorHeight * k);
+                box.margin[PrRectSide_Top] = px(-(kGap - kCursorGap) * k);
+                break;
         }
     }
 };
@@ -227,6 +242,15 @@ struct FlexRecipe {
                 flex.grow = 1;
                 flex.basis = px(0);
                 break;
+            case Part::Tools:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.rowGap = px(kToolGap * k);
+                flex.shrink = 0;
+                break;
+            case Part::Cursor:
+                flex.alignSelf = PrLayoutAlignment_FlexStart;
+                flex.shrink = 0;
+                break;
             default:
                 break;
         }
@@ -236,6 +260,32 @@ struct FlexRecipe {
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
     signed char s = static_cast<signed char>(look.textSteps);
     return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
+}
+
+// The state cursor's fill: its state's OKLCH colour (cursor.h) at a breath level, in sRGB for the layout. One record
+// per state and level (kBreathLevels for the busy one), so the breathe makes a bounded set of records.
+struct CursorRecipe {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Decoration;
+    unsigned char state;
+    unsigned char level;
+    signed char steps;
+
+    void make(const Look&, PrLayoutDecorationStyle& d) const {
+        const Oklch c = cursorColor(CursorState(state), level);
+        const double in[3] = {c.l, c.c, c.h};
+        double out[3] = {};
+        prColorConvert(PrColorSpace_Oklch, PrColorSpace_Srgb, in, out);
+        auto channel = [](double v) { return float(std::clamp(v, 0.0, 1.0)); };
+        d.background = prColor16FromColor(PrColor{channel(out[0]), channel(out[1]), channel(out[2]), 1});
+        radius(d, kCursorRadius * textScale(steps));
+    }
+};
+
+PrLayoutStyleIndex cursorStyle(PrUi* ui, const Look& look, CursorState state, int level) {
+    signed char s = static_cast<signed char>(look.textSteps);
+    return pr::uiStyle(ui, look, BoxRecipe{Part::Cursor, s},
+        CursorRecipe{static_cast<unsigned char>(state), static_cast<unsigned char>(level), s},
+        FlexRecipe{Part::Cursor, s});
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -579,8 +629,13 @@ struct Builder {
             prUiFollowEnd(ui, scroller);
         view.transcript = scroller;
         // The kit's labels and text area wrap, breaking inside a word that fits no line (PrKitWrap_Wrap, kit_theme.h
-        // 99), so a long URL or token wraps inside its box instead of running past it.
+        // 99), so a long URL or token wraps inside its box instead of running past it. A tool line never wraps: it is
+        // one compact line, cut at the column's edge, and tool lines in a row stand together, close.
+        PrLayoutNode tools = kPrLayoutNodeNone;
         for (const Entry& e : tab.transcript) {
+            if (e.kind != EntryKind::Tool) {
+                tools = kPrLayoutNodeNone;
+            }
             switch (e.kind) {
                 case EntryKind::Person: {
                     PrLayoutNode entry = element(column, Part::Entry);
@@ -594,7 +649,33 @@ struct Builder {
                 case EntryKind::Notice:
                     label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
                     break;
+                case EntryKind::Tool: {
+                    if (tools == kPrLayoutNodeNone) {
+                        tools = element(column, Part::Tools);
+                    }
+                    PrKitTextStyle line = textStyle(PrKitTextRole_Mono, PrKitTone_Muted);
+                    line.wrap = PrKitWrap_Clip;
+                    label(tools, e.text, line);
+                    break;
+                }
             }
+        }
+        // The friend's text still growing (the open entry), after the transcript; it joins the transcript, closed,
+        // when its block ends.
+        const std::string* growing = view.growing ? view.growing(tab.id) : nullptr;
+        if (growing != nullptr && !growing->empty()) {
+            label(column, *growing, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+        }
+        // Why the last prompt was not sent: dim, at the end of the transcript, so that nothing stands by the prompt.
+        if (!view.problem.empty()) {
+            label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+        }
+        // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
+        const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
+        view.breathing = state == CursorState::Busy;
+        if (state != CursorState::None) {
+            const int level = state == CursorState::Busy ? breathLevel(view.time) : 0;
+            prUiElement(ui, column, 0, cursorStyle(ui, look, state, level), 0);
         }
         // The tab's queue, after its transcript and apart from it: each prompt held for later, oldest first, in a
         // dimmer bubble marked "queued".
@@ -676,6 +757,7 @@ struct Builder {
 
     void build(PrLayoutNode parent) {
         PrLayoutNode window = element(parent, Part::Window);
+        view.breathing = false;     // until a friend's transcript draws a busy cursor this round
         // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
         // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
         // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
@@ -759,9 +841,11 @@ struct Builder {
         }
         transcript(window);
         PrLayoutNode footer = element(window, Part::Footer);
-        // The link's state, plainly, where the prompt stands; until the server is reached there is no prompt to type in.
-        if (!view.status.empty() && model.tab_count() != 0)
+        // The link's state, plainly, in the prompt's place until the server is reached: there is no prompt to type in.
+        // Once it is open, nothing stands under or around the prompt but its box (the state cursor shows a link lost).
+        if (!view.status.empty() && model.tab_count() != 0 && !view.promptOpen) {
             label(footer, view.status, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+        }
         if (model.tab_count() != 0 && view.promptOpen) {
             prompt(footer, composing);
         } else {
@@ -788,9 +872,9 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     p.text3 = kNotice;
     p.text4 = kFaint;
     p.textSelection = kSelection;
-    auto type = [&](PrKitTextRole role, float size, float lineHeight) {
+    auto type = [&](PrKitTextRole role, float size, float lineHeight, bool mono = false) {
         PrKitType& t = theme.types[role];
-        t.mono = false;
+        t.mono = mono;
         t.italic = false;
         t.size = size * k;
         t.weight = 400;
@@ -800,6 +884,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
     type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
     type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no friends
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
+    type(PrKitTextRole_Mono, kToolSize, kToolPitch, true);           // a tool line
     return theme;
 }
 
@@ -820,7 +905,7 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
 }
 
 bool windowWantsFrame(const View& view) {
-    return view.look->textSteps != view.askedTextSteps;
+    return view.look->textSteps != view.askedTextSteps || view.breathing;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {

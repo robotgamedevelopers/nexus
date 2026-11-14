@@ -4,16 +4,19 @@
 //
 //   store_test            runs every group
 //   store_test <group>    runs one: codec memfs journal journal_crash store ids store_crash driver migrate dequeue
+//                         formats
 
 #include "store/codec.h"
 #include "store/fs.h"
 #include "store/journal.h"
 #include "store/store.h"
+#include "fixtures/main_store.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -618,7 +621,8 @@ void test_store() {
     CHECK(digest(*c2.s, {"w"}) == compacted);
     CHECK(c2.s->applied("w") == 40 && c2.s->session(1)->transcript.size() == 27 && c2.s->next_session() == 3);
 
-    // a record the store cannot read: refused at open, saying what to do
+    // a record of a later format that declares it needs a reader of a later format (byte 2, ' ', 32): refused at
+    // open, saying what to do
     MemFs fs3;
     {
         Journal j(fs3, "store");
@@ -629,7 +633,8 @@ void test_store() {
     }
     Opened bad = open_store(fs3);
     CHECK(bad.st.code() == Status::Code::Failed);
-    CHECK(bad.st.message().find("record 1 is not one this store writes") != std::string::npos);
+    CHECK(bad.st.message().find("record 1 of its journal is in format 9") != std::string::npos);
+    CHECK(bad.st.message().find("run the newer nexus-server") != std::string::npos);
 
     // a failed write: the step is not taken, and every later one is refused until the store is opened again
     MemFs fs4;
@@ -1012,66 +1017,6 @@ Change dequeue() {
     return c;
 }
 
-// A store from before instances (a snapshot of format 3, records of format 2: a session's info of five fields) opens
-// with each session on no instance, and a session's instance written after is kept across a restart, in records of
-// format 3.
-void test_instance() {
-    Writer snap;
-    snap.u8(3);
-    snap.u64(2);
-    snap.u32(1);
-    snap.u64(1);
-    for (const char* f : {"ada", "claude", "work", "", ""}) {
-        snap.str(f);
-    }
-    snap.u32(0);
-    snap.u32(0);
-    snap.u64(1);
-    snap.u64(0);
-    snap.str("");
-    snap.u32(0);
-    snap.u32(0);
-    Writer rec;
-    rec.u8(2);
-    rec.u64(1);
-    rec.u32(1);
-    rec.u8(std::uint8_t(Change::Kind::SetInfo));
-    for (const char* f : {"ada", "claude", "home", "fast", ""}) {
-        rec.str(f);
-    }
-    rec.str("w1");
-    rec.u64(4);
-    MemFs fs = legacy_store(snap.out(), {rec.out()});
-    {
-        Opened o = open_store(fs);
-        CHECK_OK(o.st);
-        CHECK(o.report.migrated == 0);
-        CHECK(about(o.s->session(1)->info) == "ada/claude/home/fast/" && o.s->session(1)->info.instance.empty());
-        CHECK(o.s->applied("w1") == 4);
-        // A driver from before: no summary owed, its harness session's directory not known.
-        CHECK(!o.s->session(1)->driver.summary && o.s->session(1)->driver.session_dir.empty());
-        Change c = info("ada");
-        c.info.instance = "rocketnet";
-        Change d = setDriver(3, 0, "", {});
-        d.driver.summary = true;
-        d.driver.session_dir = "/work/rocketnet";
-        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}, "w1", 5));
-    }
-    {
-        Journal j(fs, "store");
-        Journal::Recovery r;
-        CHECK_OK(j.open(r));
-        CHECK(!r.records.empty() && r.records.back()[0] == 3);
-    }
-    fs.crash(fs.plan_all(false));
-    {
-        Opened o = open_store(fs);
-        CHECK_OK(o.st);
-        CHECK(o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
-        CHECK(o.s->session(1)->driver.summary && o.s->session(1)->driver.session_dir == "/work/rocketnet");
-    }
-}
-
 void test_dequeue() {
     MemFs fs;
     Opened o = open_store(fs);
@@ -1149,6 +1094,324 @@ void test_dequeue() {
     }
 }
 
+// A store of `records` alone, journaled as they are (no snapshot).
+MemFs journaled(const std::vector<Bytes>& records, const Bytes& snapshot = Bytes{}) {
+    MemFs fs;
+    Journal j(fs, "store");
+    Journal::Recovery rec;
+    CHECK_OK(j.open(rec));
+    if (!snapshot.empty()) {
+        CHECK_OK(j.append(Bytes{0}));       // a record for the snapshot to stand for
+        CHECK_OK(j.compact(snapshot));
+    }
+    for (const Bytes& r : records) {
+        CHECK_OK(j.append(r));
+    }
+    CHECK_OK(j.sync());
+    return fs;
+}
+
+template <std::size_t N>
+Bytes fixture(const std::uint8_t (&bytes)[N]) {
+    return Bytes(bytes, bytes + N);
+}
+
+// What main's steps leave (fixtures/main_store_fixture.cpp).
+void check_main_steps(const Store& s) {
+    CHECK(s.session(1) != nullptr && about(s.session(1)->info) == "ada/claude/work/opus/high");
+    CHECK(texts(s.session(1)) ==
+          "[0:Why did the nightly go red?][1:Looking at the log.][2:Stopped.]||turn 2 open 0 session s-1");
+    CHECK(s.applied("w1") == 2 && s.next_session() == 2);
+}
+
+// A record of a later format than this build's (5), written the way a framed format is: `reader` the oldest format its
+// reader must know; a change of a kind this build does not know (9), an entry of a kind it does not know (7) with a
+// field after its text, and a field after the record's counter.
+Bytes later_record(std::uint8_t reader) {
+    Writer w;
+    w.u8(5);
+    w.u8(reader);
+    w.u64(1);
+    w.u32(3);
+    w.u8(9);
+    {
+        Writer frame;
+        frame.str("a change a later format adds");
+        w.bytes(frame.out());
+    }
+    w.u8(std::uint8_t(Change::Kind::Append));
+    {
+        Writer entry;
+        entry.u8(7);
+        entry.u8(1);
+        entry.str("from a later server");
+        entry.u64(42);              // a later field of an entry
+        Writer frame;
+        frame.bytes(entry.out());
+        w.bytes(frame.out());
+    }
+    w.u8(std::uint8_t(Change::Kind::Enqueue));
+    {
+        Writer frame;
+        frame.str("later");
+        frame.u32(7);               // a later field of a change
+        w.bytes(frame.out());
+    }
+    w.str("w1");
+    w.u64(3);
+    w.str("a later field of the record");
+    return w.out();
+}
+
+// Across versions (store.h, docs/formats.md): main's stores (records of format 2, a snapshot of format 3) are read and
+// go on in this format; an unframed record holding a kind its format does not have is refused, saying so; a record or
+// snapshot of a later format is read, past what it adds, unless it declares a reader this build is not.
+void test_formats() {
+    // main's two records, then a step of this build's, then reopened
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            check_main_steps(*o.s);
+            CHECK_OK(o.s->commit(1, std::vector<Change>{append("ls -la", 3)}, "w1", 3));
+            o.s.reset();
+            Opened o2 = open_store(fs);
+            CHECK_OK(o2.st);
+            CHECK(o2.s != nullptr && texts(o2.s->session(1)).find("[3:ls -la]|") != std::string::npos);
+        }
+    }
+    // main's snapshot
+    {
+        MemFs fs = journaled({}, fixture(kMainSnapshot3));
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            check_main_steps(*o.s);
+        }
+    }
+    // a format 2 record with an entry of kind 3, which format 2 never had: refused, naming the record and the kind
+    {
+        Writer w;
+        w.u8(2);
+        w.u64(1);
+        w.u32(1);
+        w.u8(std::uint8_t(Change::Kind::Append));
+        w.u8(3);
+        w.u8(1);
+        w.str("tool");
+        w.str("w1");
+        w.u64(3);
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), w.out()});
+        Opened o = open_store(fs);
+        CHECK(o.st.code() == Status::Code::Failed);
+        CHECK(o.st.message().find("record 3 of its journal (an entry of kind 3, which format 2 does not have") !=
+              std::string::npos);
+    }
+    // a later format this build can read: what it adds is skipped, the unknown entry kind kept as it is
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(3)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            CHECK(texts(o.s->session(1)) == "[0:Why did the nightly go red?][1:Looking at the log.][2:Stopped.]"
+                                            "[7:from a later server]|[later]|turn 2 open 0 session s-1");
+            CHECK(o.s->applied("w1") == 3);
+        }
+    }
+    // a later format that declares this build cannot read it: refused, saying which nexus-server can
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(5)});
+        Opened o = open_store(fs);
+        CHECK(o.st.code() == Status::Code::Failed);
+        CHECK(o.st.message().find("record 3 of its journal is in format 5") != std::string::npos);
+        CHECK(o.st.message().find("run the newer nexus-server") != std::string::npos);
+    }
+    // a later snapshot format this build can read: a later field of a session, of an entry and of the snapshot
+    // skipped; one that declares a later reader refused
+    for (std::uint8_t reader : {std::uint8_t(4), std::uint8_t(6)}) {
+        Writer w;
+        w.u8(6);
+        w.u8(reader);
+        w.u64(2);
+        w.u32(1);
+        Writer session;
+        session.u64(1);
+        for (const char* s : {"ada", "claude", "", "", ""}) {
+            session.str(s);
+        }
+        session.u32(1);
+        {
+            Writer entry;
+            entry.u8(3);
+            entry.u8(1);
+            entry.str("ls");
+            entry.str("a later field of an entry");
+            session.bytes(entry.out());
+        }
+        session.u32(0);
+        session.u64(1);
+        session.u64(0);
+        session.str("");
+        session.u32(0);
+        session.u8(0);              // the tails appended to format 4 since it began: no summary, no directory,
+        session.str("");            // no instance
+        session.str("");
+        session.str("a later field of a session");
+        w.bytes(session.out());
+        w.u32(1);
+        w.str("w1");
+        w.u64(4);
+        w.str("a later field of the snapshot");
+        MemFs fs = journaled({}, w.out());
+        Opened o = open_store(fs);
+        if (reader == 4) {
+            CHECK_OK(o.st);
+            CHECK(o.s != nullptr && texts(o.s->session(1)) == "[3:ls]|" && o.s->applied("w1") == 4);
+        } else {
+            CHECK(o.st.code() == Status::Code::Failed);
+            CHECK(o.st.message().find("its snapshot is in format 6") != std::string::npos);
+        }
+    }
+}
+
+// A session's info and driver as main writes them in the framed formats, before the tails (store.h): an info of five
+// fields, and a driver of four.
+void put_main_info(Writer& w, std::initializer_list<const char*> fields) {
+    for (const char* f : fields) {
+        w.str(f);
+    }
+}
+
+void put_main_driver(Writer& w, std::uint64_t next, const std::string& session) {
+    w.u64(next);
+    w.u64(0);
+    w.str(session);
+    w.u32(0);
+}
+
+// The tails (a session's instance, a driver's summary flag and its session's directory) are appended inside formats 3
+// and 4's frames, so neither format's number changed. Old to new: main's stores, unframed (records of format 2, a
+// snapshot of format 3) and framed as main writes them (a record of format 3, a snapshot of format 4, without the
+// tails), open with each session on no instance (its friend's default), no summary owed and its session's directory
+// not known. New to old: this build's record is main's, each tail at its frame's end, which a reader from before skips
+// as it skips what any later frame adds. Both kept across a crash and a compaction.
+void test_instance() {
+    auto defaults = [](const Session* t) {
+        return t != nullptr && t->info.instance.empty() && !t->driver.summary && t->driver.session_dir.empty();
+    };
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && defaults(o.s->session(1)));
+    }
+    {
+        MemFs fs = journaled({}, fixture(kMainSnapshot3));
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && defaults(o.s->session(1)));
+    }
+    Writer snap;
+    snap.u8(4);
+    snap.u8(4);
+    snap.u64(2);
+    snap.u32(1);
+    {
+        Writer session;
+        session.u64(1);
+        put_main_info(session, {"ada", "claude", "work", "", ""});
+        session.u32(0);
+        session.u32(0);
+        put_main_driver(session, 2, "s-1");
+        snap.bytes(session.out());
+    }
+    snap.u32(0);
+    Writer rec;
+    rec.u8(3);
+    rec.u8(3);
+    rec.u64(1);
+    rec.u32(1);
+    rec.u8(std::uint8_t(Change::Kind::SetInfo));
+    {
+        Writer frame;
+        put_main_info(frame, {"ada", "claude", "home", "fast", ""});
+        rec.bytes(frame.out());
+    }
+    rec.str("w1");
+    rec.u64(4);
+    MemFs fs = journaled({rec.out()}, snap.out());
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s == nullptr) {
+            return;
+        }
+        CHECK(about(o.s->session(1)->info) == "ada/claude/home/fast/" && defaults(o.s->session(1)));
+        CHECK(o.s->session(1)->driver.session == "s-1" && o.s->applied("w1") == 4);
+        Change c = info("ada");
+        c.info.instance = "rocketnet";
+        Change d = setDriver(3, 0, "", {});
+        d.driver.summary = true;
+        d.driver.session_dir = "/work/rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}, "w1", 5));
+    }
+    {
+        Writer want;
+        want.u8(3);
+        want.u8(3);
+        want.u64(1);
+        want.u32(2);
+        want.u8(std::uint8_t(Change::Kind::SetInfo));
+        Writer infoFrame;
+        put_main_info(infoFrame, {"ada", "claude", "", "", ""});
+        infoFrame.str("rocketnet");
+        want.bytes(infoFrame.out());
+        want.u8(std::uint8_t(Change::Kind::SetDriver));
+        Writer driverFrame;
+        put_main_driver(driverFrame, 3, "");
+        driverFrame.u8(1);
+        driverFrame.str("/work/rocketnet");
+        want.bytes(driverFrame.out());
+        want.str("w1");
+        want.u64(5);
+        Journal j(fs, "store");
+        Journal::Recovery r;
+        CHECK_OK(j.open(r));
+        CHECK(!r.records.empty() && r.records.back() == want.out());
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
+        CHECK(o.s != nullptr && o.s->session(1)->driver.summary &&
+              o.s->session(1)->driver.session_dir == "/work/rocketnet");
+    }
+    // Through a snapshot of this build's: a store that compacts at every step.
+    StoreOptions small;
+    small.compact_bytes = 1;
+    MemFs fs2;
+    {
+        Opened o = open_store(fs2, small);
+        CHECK_OK(o.st);
+        CHECK_OK(o.s->commit(1, made("ada")));
+        Change c = info("ada");
+        c.info.instance = "rocketnet";
+        Change d = setDriver(3, 0, "s-2", {});
+        d.driver.summary = true;
+        d.driver.session_dir = "/work/rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}));
+    }
+    fs2.crash(fs2.plan_all(false));
+    {
+        Opened o = open_store(fs2, small);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->driver.summary &&
+              o.s->session(1)->driver.session_dir == "/work/rocketnet" && o.s->session(1)->driver.session == "s-2");
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -1166,6 +1429,7 @@ const Group kGroups[] = {
     {"migrate", test_migrate},
     {"dequeue", test_dequeue},
     {"instance", test_instance},
+    {"formats", test_formats},
 };
 
 } // namespace

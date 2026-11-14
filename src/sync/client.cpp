@@ -24,6 +24,29 @@ std::string linkStatus(LinkPhase phase, const std::string& host, std::uint64_t h
     return std::string();
 }
 
+bool linkLost(LinkPhase phase, std::uint64_t heardMsAgo) {
+    return phase != LinkPhase::Connected || heardMsAgo >= kQuietMs;
+}
+
+CursorState cursorOf(LinkPhase phase, std::uint64_t heardMsAgo, const Mirror& mirror, std::size_t tabId) {
+    if (linkLost(phase, heardMsAgo)) {
+        return CursorState::Lost;
+    }
+    const Activity* activity = mirror.activity(tabId);
+    if (activity == nullptr) {
+        return CursorState::Lost;
+    }
+    switch (*activity) {
+        case Activity::Busy:
+            return CursorState::Busy;
+        case Activity::Down:
+            return CursorState::Down;
+        case Activity::Idle:
+            break;
+    }
+    return CursorState::Idle;
+}
+
 bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* text, std::string* why) {
     if (i >= model.tab_count() || model.tab(i).kind != TabKind::Friend)
         return false;

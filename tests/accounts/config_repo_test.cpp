@@ -291,8 +291,13 @@ int main(int argc, char** argv) {
         spit(mdir + "/token.txt", "x");
         CHECK(runGit(mdir, {"add", "-f", "token.txt"}).status == 0);
         CHECK(runGit(mdir, {"commit", "-q", "-m", "the merge"}).status == 0);
+        // Taken out again by a second merge, so that no ordinary commit names it.
+        CHECK(runGit(mdir, {"checkout", "-q", "-b", "side2"}).status == 0);
+        CHECK(runGit(mdir, {"commit", "-q", "--allow-empty", "-m", "a second side commit"}).status == 0);
+        CHECK(runGit(mdir, {"checkout", "-q", "-"}).status == 0);
+        CHECK(runGit(mdir, {"merge", "-q", "--no-ff", "--no-commit", "side2"}).status == 0);
         CHECK(runGit(mdir, {"rm", "-q", "--cached", "token.txt"}).status == 0);
-        CHECK(runGit(mdir, {"commit", "-q", "-m", "the token out of the index"}).status == 0);
+        CHECK(runGit(mdir, {"commit", "-q", "-m", "the token out of the index, in a merge"}).status == 0);
         CHECK(runGit(mdir, {"log", "--all", "--format=", "--name-only"}).out.find("token.txt") ==
               std::string::npos);    // what a plain log lists: the merge's file is not there
         CHECK(!merged.setRemote(work + "/remote.git", &why) && why.find("holds token.txt") != std::string::npos);

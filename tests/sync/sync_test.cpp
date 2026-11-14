@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -425,32 +427,41 @@ SessionView tailFor(const std::string& name, const std::vector<EntryRef>& t, std
     return tailOf(sid(name), infoOf(name), t, std::move(queue), tail, std::move(open));
 }
 
-// A random server history: each step appends, grows the open entry, closes it, queues or makes a session.
+// A random server history: each step appends (an entry of any kind, a tool line included), grows the open entry,
+// closes it, queues, changes the session's activity or makes a session.
 struct History {
     std::map<std::string, std::vector<EntryRef>> transcripts;
     std::map<std::string, std::vector<std::string>> queues;
+    std::map<std::string, Activity> activities;
     Tail tail{3, 400};
     Sessions state() const {
         std::vector<SessionRef> tabs;
-        for (const auto& [name, t] : transcripts)
-            tabs.push_back(std::make_shared<const SessionView>(tailFor(name, t, queues.at(name), tail)));
+        for (const auto& [name, t] : transcripts) {
+            SessionView v = tailFor(name, t, queues.at(name), tail);
+            v.activity = activities.at(name);
+            tabs.push_back(std::make_shared<const SessionView>(std::move(v)));
+        }
         return Sessions(std::move(tabs));
     }
     void step(Rng& rng) {
         const std::string name = kTabNames[rng.below(3)];
         auto& t = transcripts[name];
         queues[name];
-        const std::size_t what = rng.below(5);
+        activities[name];
+        const std::size_t what = rng.below(6);
         if (what == 0 && !t.empty() && !t.back()->closed) {
             t.back() = entry(t.back()->kind, t.back()->text + randomText(rng), false);
         } else if (what == 1 && !t.empty() && !t.back()->closed) {
             t.back() = entry(t.back()->kind, t.back()->text, true);
         } else if (what == 2) {
             queues[name].push_back(randomText(rng));
+        } else if (what == 3) {
+            activities[name] = static_cast<Activity>(rng.below(3));
         } else {
-            if (!t.empty() && !t.back()->closed)
+            if (!t.empty() && !t.back()->closed) {
                 t.back() = entry(t.back()->kind, t.back()->text, true);
-            t.push_back(entry(static_cast<EntryKind>(rng.below(3)), randomText(rng), rng.chance(3) == false));
+            }
+            t.push_back(entry(static_cast<EntryKind>(rng.below(4)), randomText(rng), rng.chance(3) == false));
         }
     }
 };
@@ -547,72 +558,6 @@ void sessions_removed_tab() {
     c.apply_string(b.diff_from(a));
     CHECK(c == b);
     CHECK(c.find(sid("ada")) == nullptr);
-}
-
-// The session encoding only grows at its end: a diff in main's encoding before instances (50565c6: no instance, no
-// trailer) is read with each session on no instance; a diff with instances is that same encoding with the instances
-// appended after the last session; and a diff whose sessions have no instance is byte for byte main's.
-void sessions_instance_appended() {
-    Writer w;   // main's encoding, field by field: two sessions, each sent whole
-    w.u64(2);
-    for (const char* name : {"ada", "bo"}) {
-        w.u64(sid(name));
-        w.byte(1);
-        w.str(name);        // friend, harness, account, model, effort
-        w.str("claude");
-        w.str("work");
-        w.str("");
-        w.str("");
-        w.u64(0);           // first, k, count
-        w.u64(0);
-        w.u64(1);
-        w.byte(0);          // the entry: a person's, closed, offset 0, its text
-        w.byte(1);
-        w.u64(0);
-        w.str("hi");
-        w.byte(1);          // the queue, changed, empty
-        w.u64(0);
-    }
-    const std::string old = w.take();
-    Sessions read;
-    read.apply_string(old);
-    CHECK(read.sessions().size() == 2);
-    for (const char* name : {"ada", "bo"}) {
-        const SessionView* s = read.find(sid(name));
-        CHECK(s != nullptr);
-        if (s != nullptr) {
-            CHECK(s->info.friendName == name);
-            CHECK(s->info.account == "work");
-            CHECK(s->info.instance.empty());
-            CHECK(s->entries.size() == 1 && s->entries[0]->text == "hi");
-        }
-    }
-    // The same sessions with instances: main's bytes, then each session's instance.
-    auto with = [&](const std::string& ada, const std::string& bo) {
-        std::vector<SessionRef> v;
-        for (const auto& [name, inst] : {std::pair<std::string, std::string>{"ada", ada}, {"bo", bo}}) {
-            SessionView t = tailOf(sid(name), SessionInfo{name, "claude", "work", "", "", inst},
-                {entry(EntryKind::Person, "hi")}, {}, Tail{});
-            v.push_back(std::make_shared<const SessionView>(std::move(t)));
-        }
-        return Sessions(std::move(v));
-    };
-    CHECK(with("", "").init_diff() == old);
-    const Sessions b = with("studio", "");
-    const std::string d = b.init_diff();
-    Writer trailer;
-    trailer.str("studio");
-    trailer.str("");
-    CHECK(d == old + trailer.take());
-    Sessions c;
-    c.apply_string(d);
-    CHECK(c == b);
-    CHECK(c.find(sid("ada"))->info.instance == "studio");
-    // A diff that sends one session carries one instance: the kept one keeps its own.
-    const Sessions moved = with("studio", "laptop");
-    c.apply_string(moved.diff_from(b));
-    CHECK(c == moved);
-    CHECK(c.find(sid("bo"))->info.instance == "laptop");
 }
 
 void sessions_malformed_refused_unchanged() {
@@ -1086,6 +1031,343 @@ void hub_open_entry() {
     CHECK(again.state().find(sid("ada"))->entries.size() == 2);
 }
 
+std::vector<FriendInfo> friends2();
+
+// A session's activity and a tool line cross the wire; a change of activity alone is a change of the state; an
+// activity this build does not know reads busy.
+void sessions_activity_and_tool_lines() {
+    std::vector<EntryRef> t = {entry(EntryKind::Person, "q"), entry(EntryKind::Tool, "Bash: ls src")};
+    SessionView busy = tailFor("ada", t, {}, Tail{});
+    busy.activity = Activity::Busy;
+    SessionView down = busy;
+    down.activity = Activity::Down;
+    const Sessions a({std::make_shared<const SessionView>(busy)});
+    const Sessions b({std::make_shared<const SessionView>(down)});
+    CHECK(!(a == b));
+    Sessions c;
+    c.apply_string(a.init_diff());
+    CHECK(c == a && c.find(sid("ada"))->activity == Activity::Busy);
+    CHECK(c.find(sid("ada"))->entries[1]->kind == EntryKind::Tool);
+    const std::string d = b.diff_from(a);
+    CHECK(!d.empty());
+    c.apply_string(d);
+    CHECK(c == b && c.find(sid("ada"))->activity == Activity::Down);
+    // The two whole diffs differ in one byte, the activity's: Down is 2. 3 is an activity this build does not know (a
+    // later server's): it reads busy, the friend neither idle nor down, and the diff is not refused.
+    std::string later = b.init_diff();
+    const std::string good = a.init_diff();
+    std::size_t at = later.size();
+    for (std::size_t i = 0; i < later.size() && i < good.size(); ++i) {
+        if (later[i] != good[i]) {
+            at = i;
+            break;
+        }
+    }
+    CHECK(at < later.size() && later[at] == 2);
+    if (at < later.size()) {
+        later[at] = 3;
+        Sessions e;
+        e.apply_string(later);
+        CHECK(e.find(sid("ada")) != nullptr && e.find(sid("ada"))->activity == Activity::Busy);
+    }
+}
+
+// The two states of the format 1 fixtures (fixtures/main_state_fixture.cpp builds the same).
+Sessions mainState(const std::string& open) {
+    const std::vector<EntryRef> ada = {entry(EntryKind::Person, "Why did the nightly go red?"),
+        entry(EntryKind::Friend, "Looking at the log."), entry(EntryKind::Notice, "Stopped.")};
+    const std::vector<EntryRef> bo = {entry(EntryKind::Person, "hi")};
+    SessionView a = tailOf(1, SessionInfo{"ada", "claude", "work", "opus", "high"}, ada, {"after that, the PR"}, Tail{},
+        entry(EntryKind::Friend, open, false));
+    SessionView b = tailOf(2, SessionInfo{"bo", "claude", "", "", ""}, bo, {}, Tail{});
+    return Sessions({std::make_shared<const SessionView>(a), std::make_shared<const SessionView>(b)});
+}
+
+std::string fixture(const std::string& name) {
+    std::ifstream in(std::string(NEXUS_SYNC_FIXTURES) + "/" + name, std::ios::binary);
+    CHECK(static_cast<bool>(in));
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+// Format 1 is what a nexus from before formats sends and reads, byte for byte: this build reads the bytes main wrote
+// (an older server's state, in a newer window), and writes, for a link of format 1, the very bytes main writes (a
+// newer server's state, in an older window). A session of format 1 reads idle; a tool line goes to it as the friend's
+// text and its activity not at all.
+void state_format_1_from_main() {
+    const std::string init = fixture("main-state-1.init");
+    const std::string grow = fixture("main-state-1.grow");
+    Sessions before = mainState("The nightly");
+    Sessions after = mainState("The nightly went red in the link walk");
+    Sessions read;
+    read.setFormat(1);
+    read.apply_string(init);
+    CHECK(read == before);
+    read.apply_string(grow);
+    CHECK(read == after);
+    CHECK(read.find(1)->activity == Activity::Idle);
+    before.setFormat(1);
+    after.setFormat(1);
+    CHECK(before.init_diff() == init);
+    CHECK(after.diff_from(before) == grow);
+    // What format 1 cannot carry.
+    SessionView v = tailFor("ada", {entry(EntryKind::Tool, "Read: a file")}, {}, Tail{});
+    v.activity = Activity::Busy;
+    Sessions tool({std::make_shared<const SessionView>(v)});
+    tool.setFormat(1);
+    Sessions old;
+    old.setFormat(1);
+    old.apply_string(tool.init_diff());
+    CHECK(old.find(sid("ada"))->entries[0]->kind == EntryKind::Friend);
+    CHECK(old.find(sid("ada"))->entries[0]->text == "Read: a file");
+    CHECK(old.find(sid("ada"))->activity == Activity::Idle);
+}
+
+// A reader of format 2 reads a later format: what that format adds after the fields it knows, in an entry's frame, a
+// session's frame or after the sessions, is skipped; an entry kind it does not know reads as a notice (a plain dim
+// line), and an activity it does not know as busy.
+void state_format_2_reads_later_formats() {
+    Writer entry1;
+    entry1.byte(9);             // a kind of a later format
+    entry1.byte(1);             // closed
+    entry1.u64(0);
+    entry1.str("a line of a kind this build does not know");
+    entry1.str("a field a later format adds to an entry");
+    Writer session;
+    for (const char* s : {"ada", "claude", "", "", ""}) {
+        session.str(s);
+    }
+    session.byte(7);            // an activity of a later format
+    session.u64(0);             // first
+    session.u64(0);             // from entry 0
+    session.u64(1);             // one entry
+    session.str(entry1.take());
+    session.byte(1);            // the queue
+    session.u64(1);
+    session.str("queued");
+    session.str("studio");      // the instance, appended to format 2 since it began
+    session.u64(42);            // a field a later format adds to a session
+    session.str("more of it");
+    Writer diff;
+    diff.u64(1);
+    diff.u64(1);                // session 1
+    diff.byte(1);
+    diff.str(session.take());
+    diff.str("a field a later format adds after the sessions");
+    Sessions s;
+    CHECK(s.format() == kStateFormat);
+    s.apply_string(diff.take());
+    const SessionView* v = s.find(1);
+    CHECK(v != nullptr);
+    if (v != nullptr) {
+        CHECK(v->info.friendName == "ada" && v->activity == Activity::Busy);
+        CHECK(v->entries.size() == 1 && v->entries[0]->kind == EntryKind::Notice && v->entries[0]->closed);
+        CHECK(v->entries[0]->text == "a line of a kind this build does not know");
+        CHECK(v->queue == std::vector<std::string>{"queued"});
+        CHECK(v->info.instance == "studio");
+    }
+}
+
+// A session of format 2 as main wrote it before instances (its frame ends with the queue), by hand: friend "ada",
+// account "work", idle, one closed entry of the person's, "hi", and the queue empty. The instance is appended to the
+// frame when given, as this build writes it.
+std::string mainSessionFrame(const std::string* instance) {
+    Writer entry1;
+    entry1.byte(0);             // the person's
+    entry1.byte(1);             // closed
+    entry1.u64(0);
+    entry1.str("hi");
+    Writer session;
+    for (const char* f : {"ada", "claude", "work", "", ""}) {
+        session.str(f);
+    }
+    session.byte(0);            // idle
+    session.u64(0);             // first
+    session.u64(0);             // from entry 0
+    session.u64(1);             // one entry
+    session.str(entry1.take());
+    session.byte(1);            // the queue, changed, empty
+    session.u64(0);
+    if (instance != nullptr) {
+        session.str(*instance);
+    }
+    Writer diff;
+    diff.u64(1);
+    diff.u64(sid("ada"));
+    diff.byte(1);
+    diff.str(session.take());
+    return diff.take();
+}
+
+// The instance crosses the wire as a field appended to format 2's session frame, so no format number changed: a
+// diff main wrote before instances (old to new) reads each session on no instance, its friend's default; this build's
+// diff is main's with the instance at the frame's end (new to old: a reader from before skips it, as format 2's readers
+// skip what a frame adds); a diff that sends one session carries its instance, and a kept one keeps its own; and a
+// window of format 1 is sent no instance, byte for byte main's (fixtures/main-state-1.init).
+void sessions_instance_appended() {
+    auto with = [](const std::string& ada, const std::string& bo) {
+        std::vector<SessionRef> v;
+        for (const auto& [name, inst] : {std::pair<std::string, std::string>{"ada", ada}, {"bo", bo}}) {
+            SessionView t = tailOf(sid(name), SessionInfo{name, "claude", "work", "", "", inst},
+                {entry(EntryKind::Person, "hi")}, {}, Tail{});
+            v.push_back(std::make_shared<const SessionView>(std::move(t)));
+        }
+        return Sessions(std::move(v));
+    };
+    Sessions read;
+    read.apply_string(mainSessionFrame(nullptr));
+    const SessionView* a = read.find(sid("ada"));
+    CHECK(a != nullptr && a->info.account == "work" && a->info.instance.empty());
+    CHECK(a != nullptr && a->entries.size() == 1 && a->entries[0]->text == "hi");
+    // New to old: this build's bytes are main's, the instance appended inside the frame.
+    SessionView one = tailOf(sid("ada"), SessionInfo{"ada", "claude", "work", "", "", "studio"},
+        {entry(EntryKind::Person, "hi")}, {}, Tail{});
+    const Sessions b({std::make_shared<const SessionView>(one)});
+    const std::string studio = "studio";
+    CHECK(b.init_diff() == mainSessionFrame(&studio));
+    Sessions c;
+    c.apply_string(b.init_diff());
+    CHECK(c == b && c.find(sid("ada"))->info.instance == "studio");
+    // One session sent, one kept.
+    const Sessions both = with("studio", "");
+    const Sessions moved = with("studio", "laptop");
+    Sessions d;
+    d.apply_string(both.init_diff());
+    CHECK(d == both);
+    d.apply_string(moved.diff_from(both));
+    CHECK(d == moved && d.find(sid("bo"))->info.instance == "laptop" && d.find(sid("ada"))->info.instance == "studio");
+    // Format 1: no instance, main's bytes exactly.
+    const Sessions mainOne = mainState("The nightly");
+    std::vector<SessionRef> placed;
+    for (const SessionRef& r : mainOne.sessions()) {
+        SessionView v = *r;
+        v.info.instance = "studio";
+        placed.push_back(std::make_shared<const SessionView>(std::move(v)));
+    }
+    Sessions withInstances(std::move(placed));
+    withInstances.setFormat(1);
+    CHECK(withInstances.init_diff() == fixture("main-state-1.init"));
+}
+
+// The link's format is the older of the two stated, and a floor refuses an older end in one plain line; no format is
+// refused today.
+void link_formats_agree() {
+    CHECK(linkFormat(1, kStateFormat) == 1);
+    CHECK(linkFormat(kStateFormat, 1) == 1);
+    CHECK(linkFormat(kStateFormat + 5, kStateFormat) == kStateFormat);
+    CHECK(windowRefusal(1).empty() && serverRefusal(1).empty());
+    CHECK(windowRefusal(kStateFormat).empty() && serverRefusal(kStateFormat).empty());
+    const std::string window = windowRefusal(1, 2);
+    CHECK(window.find("too old") != std::string::npos && window.find('\n') == std::string::npos);
+    const std::string server = serverRefusal(1, 2);
+    CHECK(server.find("nexus-server is too old") != std::string::npos && server.find("nexus-server stop") !=
+        std::string::npos && server.find('\n') == std::string::npos);
+}
+
+// A state file says its format and is read in it: this build's round trip; one of format 1 (main's bytes); one of a
+// later format read as this build reads a later server's; and refused, in one line, what is not a state file.
+void state_files() {
+    Sessions busy = mainState("The nightly");
+    std::string why;
+    Sessions read;
+    CHECK(stateFile(busy).rfind("nexus-state 2\n", 0) == 0);
+    CHECK(readStateFile(stateFile(busy), &read, &why) && read == busy);
+    CHECK(readStateFile("nexus-state 1\n" + fixture("main-state-1.init"), &read, &why) && read == busy);
+    CHECK(readStateFile("nexus-state 9\n" + busy.init_diff(), &read, &why) && read == busy);
+    for (const std::string& bad : {std::string(), std::string("nexus-state\n"), std::string("nexus-state 0\n"),
+                                   std::string("nexus-state 2x\n"), busy.init_diff()}) {
+        why.clear();
+        CHECK(!readStateFile(bad, &read, &why) && why.find("not a state file") == 0 && why.find('\n') ==
+              std::string::npos);
+    }
+    why.clear();
+    CHECK(!readStateFile("nexus-state 2\nnot a diff", &read, &why) && why.find("not a state of format 2") == 0);
+}
+
+// The hub's activity of a session: in memory only, Idle until set, refused for a session the store does not hold.
+void hub_activity() {
+    MemoryStore store;
+    Hub hub(store);
+    CHECK(!hub.setActivity(sid("ada"), Activity::Busy));
+    withSessions(hub, {"ada", "bo"});
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Idle);
+    CHECK(!hub.setActivity(sid("ada"), Activity::Idle));     // no change
+    const SessionRef bo = hub.state().sessions()[1];
+    CHECK(hub.setActivity(sid("ada"), Activity::Busy));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Busy);
+    CHECK(hub.state().sessions()[1] == bo);                  // the other session is shared, untouched
+    CHECK(!hub.setActivity(sid("ada"), Activity::Busy));
+    CHECK(hub.setActivity(sid("ada"), Activity::Down));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
+    // it stays as the session changes
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
+    CHECK(hub.setActivity(sid("ada"), Activity::Idle));
+    CHECK(hub.state().find(sid("ada"))->activity == Activity::Idle);
+    // a new hub over the same store starts Idle: not durable
+    CHECK(hub.setActivity(sid("bo"), Activity::Busy));
+    Hub again(store);
+    CHECK(again.state().find(sid("bo"))->activity == Activity::Idle);
+}
+
+// The mirror holds the activity of the session a tab shows from the last state applied that held it.
+void mirror_activity() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    CHECK(mirror.activity(id) == nullptr);
+    std::vector<EntryRef> t = {entry(EntryKind::Person, "q")};
+    SessionView v = tailFor("ada", t, {}, Tail{});
+    v.activity = Activity::Busy;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));
+    CHECK(mirror.activity(id) != nullptr && *mirror.activity(id) == Activity::Busy);
+    CHECK(!mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));    // the same: no change
+    v.activity = Activity::Idle;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));     // the activity alone changed
+    CHECK(*mirror.activity(id) == Activity::Idle);
+    CHECK(mirror.activity(m.tab(1).id) == nullptr);          // bo's: no state has held one
+    CHECK(mirror.apply(m, Sessions()));                       // a state without the session
+    CHECK(mirror.activity(id) == nullptr);
+}
+
+// A state without the tab's session takes its open entry with it: no growing text is left to draw beside the grey
+// cursor.
+void mirror_drops_open_with_the_session() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    SessionView v = tailFor("ada", {entry(EntryKind::Person, "q")}, {}, Tail{}, entry(EntryKind::Friend, "gro", false));
+    v.activity = Activity::Busy;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));
+    CHECK(mirror.open(id) != nullptr && mirror.open(id)->text == "gro");
+    CHECK(mirror.apply(m, Sessions()));
+    CHECK(mirror.open(id) == nullptr);
+    CHECK(mirror.activity(id) == nullptr);
+    CHECK(!mirror.apply(m, Sessions()));      // nothing left to drop
+}
+
+// The state cursor from the server's state only: grey whenever the link is lost or no state has held the session, so
+// never blue on stale state; otherwise the session's activity.
+void cursor_from_the_servers_state() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    CHECK(cursorOf(LinkPhase::Connected, 0, mirror, id) == CursorState::Lost);     // no session yet
+    SessionView v = tailFor("ada", {}, {}, Tail{});
+    for (Activity a : {Activity::Busy, Activity::Idle, Activity::Down}) {
+        v.activity = a;
+        mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)}));
+        const CursorState want = a == Activity::Busy ? CursorState::Busy
+            : a == Activity::Idle ? CursorState::Idle : CursorState::Down;
+        CHECK(cursorOf(LinkPhase::Connected, 0, mirror, id) == want);
+        CHECK(cursorOf(LinkPhase::Connected, kQuietMs - 1, mirror, id) == want);
+        CHECK(cursorOf(LinkPhase::Connected, kQuietMs, mirror, id) == CursorState::Lost);
+        CHECK(cursorOf(LinkPhase::Connecting, 0, mirror, id) == CursorState::Lost);
+        CHECK(cursorOf(LinkPhase::Failed, 0, mirror, id) == CursorState::Lost);
+    }
+    CHECK(!linkLost(LinkPhase::Connected, kQuietMs - 1));
+    CHECK(linkLost(LinkPhase::Connected, kQuietMs));
+}
+
 void sessions_tail_carries_open_apart() {
     std::vector<EntryRef> t;
     for (int i = 0; i < 5; ++i) {
@@ -1390,6 +1672,15 @@ const Case kCases[] = {
     {"ensure_each_friend", ensure_each_friend},
     {"stop_target_rules", stop_target_rules},
     {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
+    {"sessions_activity_and_tool_lines", sessions_activity_and_tool_lines},
+    {"hub_activity", hub_activity},
+    {"mirror_activity", mirror_activity},
+    {"mirror_drops_open_with_the_session", mirror_drops_open_with_the_session},
+    {"state_format_1_from_main", state_format_1_from_main},
+    {"state_format_2_reads_later_formats", state_format_2_reads_later_formats},
+    {"link_formats_agree", link_formats_agree},
+    {"state_files", state_files},
+    {"cursor_from_the_servers_state", cursor_from_the_servers_state},
 };
 
 } // namespace

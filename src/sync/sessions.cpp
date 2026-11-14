@@ -13,9 +13,26 @@ bool sameEntry(const EntryRef& a, const EntryRef& b) {
     return a == b || *a == *b;
 }
 
-// EntryKind on the wire: Person 0, Friend 1, Notice 2.
-bool validKind(std::uint8_t k) {
-    return k <= static_cast<std::uint8_t>(EntryKind::Notice);
+// EntryKind on the wire: Person 0, Friend 1, Notice 2, Tool 3 (from format 2). Format 1 has no Tool: a tool line goes
+// to a window of format 1 as the friend's text, as servers before format 2 sent it. A kind this build does not know (a
+// later server's) is read as a notice, which the window draws as a plain dim line.
+std::uint8_t kindOnWire(EntryKind k, std::uint32_t format) {
+    if (format < 2 && k == EntryKind::Tool) {
+        return static_cast<std::uint8_t>(EntryKind::Friend);
+    }
+    return static_cast<std::uint8_t>(k);
+}
+
+EntryKind kindRead(std::uint8_t k) {
+    return k <= static_cast<std::uint8_t>(EntryKind::Tool) ? static_cast<EntryKind>(k) : EntryKind::Notice;
+}
+
+// Activity on the wire, from format 2: Idle 0, Busy 1, Down 2. Format 1 carries none, and a session of it reads idle:
+// that server cannot say, and idle claims least (the person may send, which is always safe, where busy would have them
+// wait on nothing). A value this build does not know (a later server's) reads busy: the server said the friend is
+// neither idle nor down, so not waiting on the person.
+Activity activityRead(std::uint8_t a) {
+    return a <= static_cast<std::uint8_t>(Activity::Down) ? static_cast<Activity>(a) : Activity::Busy;
 }
 
 // The entry `s` holds at transcript index i, or null.
@@ -36,18 +53,44 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// One changed session: what it is (its friend, harness, account, model and effort); its first index; the index k of
-// the first entry `a` does not hold as it is; the entries from k to the end, each its kind, closed flag, the length of
-// text `a` holds of it (non-zero only for an entry `a` holds open that only grew) and the rest of its text; then a
-// byte, 1 if the queue changed, and if so the queue. Its instance is not here but in the diff's trailer (diff_from):
-// fields are only ever appended, so a window of another version reads what it knows.
-void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
-    w.str(b.info.friendName);
-    w.str(b.info.harness);
-    w.str(b.info.account);
-    w.str(b.info.model);
-    w.str(b.info.effort);
-    w.u64(b.first);
+// One entry: its kind, closed flag, the length of text `a` holds of it (non-zero only for an entry `a` holds open that
+// only grew) and the rest of its text. From format 2 these are framed by their length, and fields a later format adds
+// go after them.
+void writeEntry(Writer& w, const SessionEntry& e, const EntryRef* had, std::uint32_t format) {
+    std::size_t offset = 0;
+    if (had != nullptr && !(*had)->closed && (*had)->kind == e.kind && (*had)->text.size() <= e.text.size() &&
+            e.text.compare(0, (*had)->text.size(), (*had)->text) == 0) {
+        offset = (*had)->text.size();
+    }
+    Writer body;
+    Writer& out = format < 2 ? w : body;
+    out.byte(kindOnWire(e.kind, format));
+    out.byte(e.closed ? 1 : 0);
+    out.u64(offset);
+    out.u64(e.text.size() - offset);
+    out.raw(e.text.data() + offset, e.text.size() - offset);
+    if (format >= 2) {
+        w.str(body.take());
+    }
+}
+
+// One changed session: what it is (its friend, harness, account, model and effort); from format 2 its activity; its
+// first index; the index k of the first entry `a` does not hold as it is; the entries from k to the end; then a byte, 1
+// if the queue changed, and if so the queue. From format 2 the whole is framed by its length, and fields added since
+// go after the queue, each only ever appended: its instance (empty: the friend's default instance). A window of
+// format 1 is not sent the instance.
+void writeSession(Writer& w, const SessionView& b, const SessionView* a, std::uint32_t format) {
+    Writer body;
+    Writer& out = format < 2 ? w : body;
+    out.str(b.info.friendName);
+    out.str(b.info.harness);
+    out.str(b.info.account);
+    out.str(b.info.model);
+    out.str(b.info.effort);
+    if (format >= 2) {
+        out.byte(static_cast<std::uint8_t>(b.activity));
+    }
+    out.u64(b.first);
     std::uint64_t k = b.first;
     while (k < b.total()) {
         const EntryRef* had = entryAt(a, k);
@@ -56,33 +99,53 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
         }
         ++k;
     }
-    w.u64(k);
-    w.u64(b.total() - k);
+    out.u64(k);
+    out.u64(b.total() - k);
     for (std::uint64_t i = k; i < b.total(); ++i) {
-        const SessionEntry& e = *b.entries[static_cast<std::size_t>(i - b.first)];
-        const EntryRef* had = entryAt(a, i);
-        std::size_t offset = 0;
-        if (had != nullptr && !(*had)->closed && (*had)->kind == e.kind && (*had)->text.size() <= e.text.size() &&
-                e.text.compare(0, (*had)->text.size(), (*had)->text) == 0) {
-            offset = (*had)->text.size();
-        }
-        w.byte(static_cast<std::uint8_t>(e.kind));
-        w.byte(e.closed ? 1 : 0);
-        w.u64(offset);
-        w.u64(e.text.size() - offset);
-        w.raw(e.text.data() + offset, e.text.size() - offset);
+        writeEntry(out, *b.entries[static_cast<std::size_t>(i - b.first)], entryAt(a, i), format);
     }
     const bool queueChanged = a == nullptr || a->queue != b.queue;
-    w.byte(queueChanged ? 1 : 0);
+    out.byte(queueChanged ? 1 : 0);
     if (queueChanged) {
-        w.u64(b.queue.size());
+        out.u64(b.queue.size());
         for (const std::string& q : b.queue) {
-            w.str(q);
+            out.str(q);
         }
+    }
+    if (format >= 2) {
+        out.str(b.info.instance);
+        w.str(body.take());
     }
 }
 
-std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId id, const SessionView* a) {
+// Entry i, read from `r` (format 1) or from its frame (format 2 on, whose fields past the text are skipped).
+EntryRef readEntry(Reader& r, const std::string& name, std::uint64_t i, const SessionView* a, std::uint32_t format) {
+    std::string frame;
+    if (format >= 2) {
+        frame = r.str();
+    }
+    Reader framed(frame);
+    Reader& in = format < 2 ? r : framed;
+    const EntryKind kind = kindRead(in.byte());
+    const std::uint8_t closed = in.byte();
+    if (closed > 1) {
+        throw BadDiff(name + ": entry " + std::to_string(i) + " has closed flag " + std::to_string(closed));
+    }
+    const std::uint64_t offset = in.u64();
+    std::string text = in.str();
+    if (offset != 0) {
+        const EntryRef* had = entryAt(a, i);
+        if (had == nullptr || (*had)->closed || (*had)->kind != kind || (*had)->text.size() != offset) {
+            throw BadDiff(name + ": entry " + std::to_string(i) + " grows from " + std::to_string(offset) +
+                " bytes, which this state does not hold open");
+        }
+        text = (*had)->text + text;
+    }
+    return std::make_shared<const SessionEntry>(SessionEntry{kind, std::move(text), closed == 1});
+}
+
+// A changed session's fields, from `r`; `left` bounds the counts it may declare (the bytes there are to read).
+SessionRef readFields(Reader& r, std::size_t left, SessionId id, const SessionView* a, std::uint32_t format) {
     auto t = std::make_shared<SessionView>();
     t->id = id;
     const std::string name = named(id);
@@ -91,6 +154,7 @@ std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId 
     t->info.account = r.str();
     t->info.model = r.str();
     t->info.effort = r.str();
+    t->activity = format >= 2 ? activityRead(r.byte()) : Activity::Idle;
     t->first = r.u64();
     const std::uint64_t k = r.u64();
     const std::uint64_t count = r.u64();
@@ -103,7 +167,7 @@ std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId 
         throw BadDiff(name + ": diff sends " + std::to_string(count) + " entries from entry " + std::to_string(k) +
             ", past the last entry number there can be");
     }
-    // Each entry takes at least four bytes, so a count past what is left of the diff is malformed.
+    // Each entry takes at least one byte, so a count past what is left of the diff is malformed.
     if (count > left) {
         throw BadDiff(name + ": diff says it sends " + std::to_string(count) + " entries in " + std::to_string(left) +
             " bytes");
@@ -120,27 +184,7 @@ std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId 
         t->entries.push_back(*had);
     }
     for (std::uint64_t i = k; i < k + count; ++i) {
-        const std::uint8_t kind = r.byte();
-        if (!validKind(kind)) {
-            throw BadDiff(name + ": entry " + std::to_string(i) + " has kind " + std::to_string(kind));
-        }
-        const std::uint8_t closed = r.byte();
-        if (closed > 1) {
-            throw BadDiff(name + ": entry " + std::to_string(i) + " has closed flag " + std::to_string(closed));
-        }
-        const std::uint64_t offset = r.u64();
-        std::string text = r.str();
-        if (offset != 0) {
-            const EntryRef* had = entryAt(a, i);
-            if (had == nullptr || (*had)->closed || static_cast<std::uint8_t>((*had)->kind) != kind ||
-                    (*had)->text.size() != offset) {
-                throw BadDiff(name + ": entry " + std::to_string(i) + " grows from " + std::to_string(offset) +
-                    " bytes, which this state does not hold open");
-            }
-            text = (*had)->text + text;
-        }
-        t->entries.push_back(std::make_shared<const SessionEntry>(
-            SessionEntry{static_cast<EntryKind>(kind), std::move(text), closed == 1}));
+        t->entries.push_back(readEntry(r, name, i, a, format));
     }
     const std::uint8_t queueChanged = r.byte();
     if (queueChanged == 0) {
@@ -160,14 +204,29 @@ std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId 
     } else {
         throw BadDiff(name + ": queue flag " + std::to_string(queueChanged) + ", neither 0 nor 1");
     }
+    // From format 2, the fields appended after the queue; a frame from before them gives their defaults.
+    if (format >= 2 && !r.done()) {
+        t->info.instance = r.str();
+    }
     return t;
+}
+
+// A changed session: in format 1 read straight from the diff; from format 2 from its frame, whose fields past the
+// queue (a later format's) are skipped.
+SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionView* a, std::uint32_t format) {
+    if (format < 2) {
+        return readFields(r, left, id, a, format);
+    }
+    const std::string frame = r.str();
+    Reader framed(frame);
+    return readFields(framed, frame.size(), id, a, format);
 }
 
 } // namespace
 
 bool SessionView::operator==(const SessionView& x) const {
-    if (id != x.id || !(info == x.info) || first != x.first || entries.size() != x.entries.size() ||
-            queue != x.queue) {
+    if (id != x.id || !(info == x.info) || activity != x.activity || first != x.first ||
+            entries.size() != x.entries.size() || queue != x.queue) {
         return false;
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {
@@ -238,17 +297,14 @@ const SessionView* Sessions::first(const std::string& friendName) const {
 }
 
 // A diff: the number of sessions; then for each, in id order, its id and a byte: 0 when `existing` holds it as it is,
-// else 1 and the session (writeSession). A session `existing` holds and this state lacks is not named, which removes
-// it. Then the trailer, fields added since, each only ever appended (a window of another version reads the fields it
-// knows): the instance of each session sent, in the same order. The trailer is left out when every session sent has
-// no instance, and a diff that ends before it (a server of an older version) gives each session sent no instance.
+// else 1 and the session (writeSession), in this state's format. A session `existing` holds and this state lacks is
+// not named, which removes it.
 std::string Sessions::diff_from(const Sessions& existing) const {
     if (*this == existing) {
         return std::string();
     }
     Writer w;
     w.u64(sessions_->size());
-    std::vector<const SessionView*> sent;
     for (const SessionRef& b : *sessions_) {
         w.u64(b->id);
         const SessionView* a = existing.find(b->id);
@@ -257,13 +313,7 @@ std::string Sessions::diff_from(const Sessions& existing) const {
             continue;
         }
         w.byte(1);
-        writeSession(w, *b, a);
-        sent.push_back(b.get());
-    }
-    if (std::any_of(sent.begin(), sent.end(), [](const SessionView* s) { return !s->info.instance.empty(); })) {
-        for (const SessionView* s : sent) {
-            w.str(s->info.instance);
-        }
+        writeSession(w, *b, a, format_);
     }
     return w.take();
 }
@@ -284,7 +334,6 @@ void Sessions::apply_string(const std::string& diff) {
     }
     std::vector<SessionRef> sessions;
     sessions.reserve(static_cast<std::size_t>(n));
-    std::vector<std::shared_ptr<SessionView>> sent;
     for (std::uint64_t i = 0; i < n; ++i) {
         const SessionId id = r.u64();
         if (id == 0) {
@@ -302,20 +351,16 @@ void Sessions::apply_string(const std::string& diff) {
             }
             sessions.push_back(*had);
         } else if (changed == 1) {
-            sent.push_back(readSession(r, diff.size(), id, a));
-            sessions.push_back(sent.back());
+            sessions.push_back(readSession(r, diff.size(), id, a, format_));
         } else {
             throw BadDiff("sessions diff marks " + named(id) + " with " + std::to_string(changed) +
                 ", neither 0 nor 1");
         }
     }
-    // The trailer, when the diff has one: each sent session's instance.
-    if (!r.done()) {
-        for (const std::shared_ptr<SessionView>& t : sent) {
-            t->info.instance = r.str();
-        }
+    // Format 1 ends with its sessions; from format 2 what a later format adds after them is skipped.
+    if (format_ < 2) {
+        r.end();
     }
-    r.end();
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
 }
 
@@ -333,6 +378,44 @@ bool Sessions::operator==(const Sessions& x) const {
             return false;
         }
     }
+    return true;
+}
+
+namespace {
+constexpr const char* kStateFileTag = "nexus-state ";
+}
+
+std::string stateFile(const Sessions& state) {
+    return kStateFileTag + std::to_string(state.format()) + "\n" + state.init_diff();
+}
+
+bool readStateFile(const std::string& bytes, Sessions* out, std::string* why) {
+    const std::size_t tag = std::char_traits<char>::length(kStateFileTag);
+    const std::size_t end = bytes.find('\n');
+    std::uint32_t format = 0;
+    bool number = bytes.compare(0, tag, kStateFileTag) == 0 && end != std::string::npos && end > tag && end - tag < 10;
+    for (std::size_t i = tag; number && i < end; ++i) {
+        number = bytes[i] >= '0' && bytes[i] <= '9';
+        format = format * 10 + std::uint32_t(bytes[i] - '0');
+    }
+    if (!number || format == 0) {
+        *why = "not a state file: it does not start with a line \"nexus-state <format>\"";
+        return false;
+    }
+    if (format < kOldestServerFormat) {
+        *why = "a state of format " + std::to_string(format) + ", older than this build reads (" +
+            std::to_string(kOldestServerFormat) + " on)";
+        return false;
+    }
+    Sessions state;
+    state.setFormat(linkFormat(format, kStateFormat));
+    try {
+        state.apply_string(bytes.substr(end + 1));
+    } catch (const BadDiff& e) {
+        *why = std::string("not a state of format ") + std::to_string(format) + ": " + e.what();
+        return false;
+    }
+    *out = state;
     return true;
 }
 

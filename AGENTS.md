@@ -39,6 +39,8 @@ Prax goes to Prax's author as a request, never a fork.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
 - `nexus-server` reaches each friend through a driver, a child process per session, over the driver protocol: versioned and documented in `docs/driver-protocol.md`, which changes in the same pull request as `src/driver/protocol.h`. A change an older reader cannot skip raises `kProtocolVersion`.
+- A window and `nexus-server` never have to be the same version, and a server reads every store an older one left (`docs/formats.md`, which changes in the same pull request as `src/sync/formats.h` or a codec). The state and the store frame each record that can grow by its length; a later version only appends fields; a field an older writer lacks reads the default that claims least; an unknown entry kind shows as a notice, an unknown activity as busy. A window and a server agree on the older of their state formats when the window connects, and refuse only a format declared incompatible (none today), in one plain line. A store record or snapshot is refused only when it declares a reader newer than this build. The fixtures of main's formats are bytes main's code wrote, tested old to new and new to old (`sync_unit`, `store_unit_formats`, `link_e2e_older_server`).
+- `nexus --screenshot --state FILE` draws from the state file alone: no home, no config, no nova-config, no saved tab order, no sprint board; its friend tabs are the friends of the state's sessions (`window_state_screenshot`).
 - A driver holds no state the server cannot rebuild: the server keeps the turn numbers and the session id, and starts a driver again with `--resume`.
 - A prompt is written to a driver at most once. A turn left open when its driver exits or the server restarts is cut with a notice and never sent again (`models/Supervisor.tla`). Which program is each friend's driver comes from the file `drivers` in the server's directory (`src/server/driver_table.h`).
 
@@ -68,8 +70,18 @@ Tabs
 
 Friend tabs
 - Enter sends, Command-Enter queues, and Shift-Enter breaks the line.
-- Command-Escape stops the friend's work.
-- With `--server`, sending and queuing go through `nexus-server`, and the server's state is what the tab shows. Before the server is reached, the prompt is replaced by one plain line giving the link's state.
+- Command-Escape stops the friend's work. Escape alone does not stop: it leaves the innermost context, and with none open hides the overlay.
+- With `--server`, sending, queuing and stopping go through `nexus-server`, and the server's state is what the tab shows. Before the server is reached, the prompt is replaced by one plain line giving the link's state.
+- Nothing stands under or around the prompt but its box: no labels, hints or placeholder text (a tool for experts). A link lost once the prompt is open shows in the state cursor, and why a prompt was not sent shows at the end of the transcript (`window_input` `nothingAroundTheOpenPrompt`).
+- The friend's reply streams: its text shows after the transcript as it grows, and joins the transcript, closed, when its block ends (`LiveSound` and `EachClosedOnce` in `models/Link.tla`; `window_input` `growingTextShowsAfterTheTranscript`).
+- Each tool call is one compact line in the transcript, the tool and a short summary of what it does, never wrapped and with nothing to expand; tool lines in a row stand close together (`window_input` `toolLinesAreOneCompactLine`).
+
+Stopping
+- Command-Escape always sends a stop to the server, whatever the window shows (no turn seen, or the link down: then it waits in order with the other actions). The client never filters a stop (`sync_unit` `stop_never_filtered_by_the_window`).
+- Stops arrive in order. Each one stops the friend's work running when the server processes it, an open turn or a driver starting one, and the next queued prompt then goes. A stop that finds nothing running is dropped and never affects a later turn, so pressing it repeatedly is always safe (`StopEndsWhatRuns` and `NoLatchedStop` in `models/Supervisor.tla`).
+
+The state cursor
+- Under the last text in a friend's tab, on its own line, a cursor shows the session's state, from the server's state only: pulsing light blue while a turn is open (starting and stopping included); steady dark blue when it is waiting for the person; steady red when the friend is down (its driver crashed, keeps failing to start, or has no login, or the friend has no driver configured: the drivers file names none, from the session's making on, until the file gives one, which the server reads again each second while a friend has none); dim grey when the window has lost the server (never blue then). Colours are OKLCH; the pulse is a slow brightness breathe, about 1.5 s (`src/cursor.h`). Nothing shows the queue or anything else there. The server works it out (`ActivityOf`, `IdleWaitsForPerson`, `CrashShowsDown`, `DownLeavesByWork` and `NoDriverShowsDown` in `models/Supervisor.tla`, bound to the code by its trace); the window shows it (`sync_unit` `cursor_from_the_servers_state`, `window_input` `stateCursorUnderTheLastText`).
 
 Sessions
 - A session has an id, a harness (Claude for now), an account, a model and an effort, plus its transcript, its queue and its driver. `nexus-server` mints the id: from 1, durable, and never reused, across restarts (`IdsNeverReused` and `SessionsKept` in `models/Link.tla`; `store_unit_ids`). The store, the wire and the drivers are keyed by session id, never by friend name or by tab. A session is never removed; its friend is one of its attributes.
@@ -136,13 +148,6 @@ Sessions
 - A session can be dragged out of the column into the strip to become its own tab.
 - Switching a session's account happens inside its tab. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far (part 5 of the friends work, `docs/roadmap.sexp`).
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
-
-Stopping
-- Command-Escape always sends a stop to the server, whatever the window shows (no turn seen, or the link down: then it waits in order with the other actions). The client never filters a stop.
-- Stops arrive in order. Each one stops the friend's work running when the server processes it, an open turn or a driver starting one, and the next queued prompt then goes. A stop that finds nothing running is dropped and never affects a later turn, so pressing it repeatedly is always safe.
-
-The state cursor
-- Under the last text in a friend's tab, a cursor shows the session's state, from the server's state only: pulsing light blue while a turn is open (starting and stopping included); steady dark blue when it is waiting for the person; steady red when the friend is down (its driver crashed, keeps failing to start, or has no login); dim grey when the window has lost the server (never blue then). Colours are OKLCH; the pulse is a slow brightness breathe, about 1.5 s.
 
 Tabs
 - Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. With Command-Up/Down for sessions, the arrows make one grid: friends across, sessions down.

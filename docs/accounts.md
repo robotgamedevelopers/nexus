@@ -140,14 +140,22 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 | `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
 | `instances` | each friend | no (none) | a list of instances, in order; the first is the friend's default instance |
 | `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its friend's instances (two friends may use the same name) |
-| `machine` | each instance | yes | the host name of the machine it runs on, as `studio` (1 to 253 letters, digits, `-` or `.`, not starting with `-` or `.`; never a user, a port or an address with them); this server's own host when it is the short form of `hostname` |
+| `machine` | each instance | yes | the machine it runs on, by its name in the fleet, as `studio` (1 to 253 letters, digits, `-` or `.`, not starting with `-` or `.`; never a user, a port or an address with them); this server's own when it equals, ignoring case, the server's machine (below) |
 | `dir` | each instance | yes | the absolute path, on that machine, of the directory it works in (starting with `/`, printable, at most 4096 bytes) |
 
 The two files must agree: every account a friend links to is set up in accounts.json, and every default is one of its
-friend's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other: the next session of it starts
-there. (What a running session's driver does on a move, restart there resuming when the directory is the same
-repository and start fresh with a summary when it is not, is roadmap work; today the move takes effect when its driver
-next starts.) A file that is empty or missing means none.
+friend's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other, and every session of it is
+told. A session's driver that is running ends once no turn is open (an open turn runs to its end first), and the next
+starts where the instance now is: in the same directory it resumes the conversation; in another it starts afresh, and
+its first prompt carries a summary of the conversation so far (the harness keeps its conversations by directory). An
+instance moved to another machine starts no driver here until a driver on another machine exists (roadmap work). A
+session that names no instance while its friend has some belongs to the friend's default instance, and is told. A
+file that is empty or missing means none.
+
+The server's machine is the name the `machine` fields are compared with. It is the server's short host name (the
+`hostname` up to its first `.`), unless the server's config, `~/.nexus/server/config` (one `key value` per line,
+`#` for a comment), says `machine <name>`, the name the fleet knows it by. When the host name cannot be read and the config
+names none, the server has no machine: no instance is on it, and it says so in its log.
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
 the order they hold, and a newline at the end. Write them the same way and a save never reshuffles your edit (any valid
@@ -226,7 +234,9 @@ A server from before accounts has no accounts.json: at its first start with this
 taken from the drivers file (each driver line's `--account <name>` becomes an account whose provider is that line's
 harness, linked to that harness's friends as their default; and each friend gets one instance, named after this
 machine, on this machine, in the directory its `friend` line gives), committed as an upgrade, and each session moves
-onto its friend's default account and instance, told, so that it runs as it ran before.
+onto its friend's default account and instance, told, so that it runs as it ran before. The upgrade's commit leaves a
+mark in the repository, taken off only once every session has moved: a server that stops before then (a store that
+failed, say) moves them at its next start, and a session already moved is not moved twice.
 
 ### A remote (optional)
 
