@@ -39,7 +39,8 @@
 (* Not modelled: what a change of a session's account does to its driver  *)
 (* (Supervisor.tla), the sessions' transcripts and queues (Link.tla), the  *)
 (* files' text and the store's durability, and names' and limits' checks   *)
-(* (unit-tested: accounts_unit_*). The code is bound by AccountsTrace.tla. *)
+(* (unit-tested: the accounts_unit tests). AccountsTrace.tla binds the   *)
+(* code.                                                                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
