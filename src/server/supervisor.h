@@ -79,8 +79,9 @@ struct Config {
     std::string account;                // the session's account: a driver runs under the one it was started with
     // What goes before the prompt of the first send after the session moved to another directory, where its harness
     // session cannot be resumed: a summary of the conversation so far (Drivers gives it from the transcript). Called
-    // only then; unset, nothing goes before it.
-    std::function<std::string()> summarize;
+    // only then, with the prompt it goes before (already the transcript's, which the summary leaves out); unset,
+    // nothing goes before it.
+    std::function<std::string(const std::string& prompt)> summarize;
     bool here = true;                   // the session's instance is on this machine (setPlace): else no driver starts
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;

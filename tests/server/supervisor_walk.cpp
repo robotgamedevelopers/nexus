@@ -142,7 +142,7 @@ Config config() {
     c.name = "ada";
     c.command = {"driver"};
     c.cwd = kWork;
-    c.summarize = [] { return std::string(kSummary); };
+    c.summarize = [](const std::string&) { return std::string(kSummary); };
     c.configured = "the walk";
     c.timing = Timing{100, 200, 50, 50};
     c.maxFailedStarts = kMaxFailed;

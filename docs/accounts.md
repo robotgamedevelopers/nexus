@@ -54,7 +54,8 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 
 **No secret ever goes in these files.** They hold names only. Each account's login lives in
 `~/.nexus/server/accounts/<name>/` (a 0700 directory of 0600 files), outside this directory, and is set up by the
-in-app sign-in, never through an AI and never by editing a file.
+in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
+the server's sign-in check and the drivers read the one path (`src/server/home.h`, `accountsDir`).
 
 ## accounts.json
 
@@ -150,11 +151,14 @@ starts where the instance now is: in the same directory it resumes the conversat
 its first prompt carries a summary of the conversation so far (the harness keeps its conversations by directory). An
 instance moved to another machine starts no driver here until a driver on another machine exists (roadmap work). A
 session that names no instance while its friend has some belongs to the friend's default instance, and is told. A
-file that is empty or missing means none.
+session whose friend has no instances (every one removed, say) works here, in the directory of its friend's line in the
+drivers file. A file that is empty or missing means none.
 
 The server's machine is the name the `machine` fields are compared with. It is the server's short host name (the
 `hostname` up to its first `.`), unless the server's config, `~/.nexus/server/config` (one `key value` per line,
-`#` for a comment), says `machine <name>`, the name the fleet knows it by. When the host name cannot be read and the config
+`#` for a comment), says `machine <name>`, the name the fleet knows it by. An instance is on this server's machine when
+its `machine` equals, ignoring case, either that name or the full host name: on a Mac whose `hostname` is
+`studio.local`, both `studio` and `studio.local` are this machine. When the host name cannot be read and the config
 names none, the server has no machine: no instance is on it, and it says so in its log.
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
@@ -243,7 +247,11 @@ failed, say) moves them at its next start, and a session already moved is not mo
 To keep the history somewhere else too, make a **private** repository of your own (the suggested name is
 `<owner>/nexus-config`) and give it to the server:
 
-- `nexus-server config remote <url>` sets it (for example `git@github.com:<owner>/nexus-config.git`).
+- `nexus-server config remote <url>` sets it (for example `git@github.com:<owner>/nexus-config.git`). A url with a
+  credential in it (a password, as `https://user:secret@...`, or any user part on https, as `https://token@...`) is
+  refused: credentials never go in the remote URL; nexus pushes with the machine's git credentials (below). An ssh
+  login name, as the `git@` above, is not a credential. A remote that holds one anyway (set with git by hand) is
+  printed and logged with its user part left out.
 - `nexus-server config remote` prints it, or `none`.
 - `nexus-server config remote --clear` removes it.
 
@@ -264,6 +272,13 @@ only the files tracked now. If any commit ever held a file other than its three,
 publish that commit. The message names the file and the two ways out: make a new repository (move the directory
 aside, start nexus-server, copy the two files in, `nexus-server config reload`), or rewrite the history so that no
 commit holds it; and if it was a credential, replace the credential. The server never creates the remote repository.
+
+## Known limits
+
+- The upgrade's mark (above, under History) is taken off once every session has moved. If the server cannot remove it
+  (the repository's `.git` not writable, say), it logs why, and each later start applies the friends' defaults again to
+  the sessions then on no account. Sessions on an account are never moved by it. Fix what the log names, and the next
+  start removes the mark.
 
 ## Versions
 

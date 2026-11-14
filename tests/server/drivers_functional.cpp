@@ -735,8 +735,8 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     std::filesystem::create_directories(dir + "/a");
     std::filesystem::create_directories(dir + "/b");
     setUpInstance(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
-        "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n",
-        accounts::Instance{"here", "testhost", dir + "/a"});
+        "send\nrecord-send " + dir + "/sends\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", accounts::Instance{"here", "testhost", dir + "/a"});
     s.send("q");
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2 && s.driver().session == "s-1"; }, 10));
     CHECK(s.driver().sessionDir == dir + "/a");
@@ -756,6 +756,11 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(told(s, "ada now works in " + dir + "/b, and the conversation so far was held in " + dir + "/a"));
     CHECK(s.driver().sessionDir == dir + "/b" && !s.driver().summary);
     CHECK(readFile(dir + "/starts") == "2\n");
+    // The first send there carries the summary of the turns before its prompt, then the prompt, once.
+    const std::string sends = readFile(dir + "/sends");
+    CHECK(has(sends, "send 1:\nq\nsend 2:\n[nexus: this conversation with ada was held in another working directory"));
+    CHECK(has(sends, "The person: q\n") && !has(sends, "The person: r\n"));
+    CHECK(has(sends, "[nexus: the person's prompt follows.]\n\nr\n"));
     // Its machine edited to another: the driver is ended, and the next prompt is not sent.
     CHECK(s.hub->applyAccounts(withInstance({"here", "macbook", dir + "/b"}), "moved away", &report));
     CHECK(s.serveUntil([&] { return s.drivers->pid(kAda) < 0; }, 10));
@@ -763,6 +768,31 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return told(s, "on the machine macbook, and this server runs on testhost"); }, 10));
     s.serveUntil([] { return false; }, 0.3);
     CHECK(s.drivers->pid(kAda) < 0 && readFile(dir + "/starts") == "2\n");
+}
+
+// The instance moved to another machine while its driver was known here, then every instance removed: the session is
+// on no instance, so it works here, in the drivers file's directory, and the next prompt starts a driver there (it
+// never stays down until a restart).
+void instanceRemoved(Server& s, const std::string& dir, const std::string& fake) {
+    std::filesystem::create_directories(dir + "/a");
+    setUpInstance(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", accounts::Instance{"here", "testhost", dir + "/a"});
+    s.send("q");
+    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
+    std::vector<std::string> report;
+    CHECK(s.hub->applyAccounts(withInstance({"here", "macbook", dir + "/a"}), "moved away", &report));
+    CHECK(s.serveUntil([&] { return s.drivers->pid(kAda) < 0; }, 10));
+    CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Down; }, 10));
+    accounts::Registry none;
+    none.accounts = {{"a1", "fake"}};
+    none.friends = {{"ada", {"a1"}, "a1", {}}};
+    CHECK(s.hub->applyAccounts(none, "no instances", &report));
+    CHECK(s.store.find(kAda)->info.instance.empty());
+    CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Idle; }, 10));
+    s.send("r");
+    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
+    CHECK(readFile(dir + "/starts") == "2\n");
+    CHECK(has(readFile(dir + "/starts.log"), "cwd=" + dir + "\n"));
 }
 
 // A session that names no instance, while its friend has some (as a store that failed before the session was
@@ -948,7 +978,7 @@ int main(int argc, char** argv) {
                 {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
                 {"usage_limit", usageLimit}, {"no_account", noAccount}, {"instance_dir", instanceDir},
                 {"instance_elsewhere", instanceElsewhere}, {"instance_moved", instanceMoved},
-                {"instance_default", instanceDefault}};
+                {"instance_removed", instanceRemoved}, {"instance_default", instanceDefault}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

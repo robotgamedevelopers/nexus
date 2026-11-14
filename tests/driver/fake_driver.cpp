@@ -23,6 +23,7 @@
 //                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), then
 //                        `account=<name>` (only when given), and each named environment variable as `VAR=<value>` or
 //                        `VAR unset`
+//   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
 //   option <name>        anywhere in the script, for the whole run:
@@ -115,7 +116,7 @@ struct Script {
 };
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "hang", "exit", "signal", "stderr",
-    "record", "count-starts"};
+    "record", "record-send", "count-starts"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
     "done-without-cause"};
 
@@ -286,6 +287,7 @@ private:
         if (send.turn <= lastTurn_)
             badSend(send, "does not follow turn " + std::to_string(lastTurn_));
         lastTurn_ = send.turn;
+        lastPrompt_ = send.prompt;
         if (nextBlock_ == script_.sends.size()) {
             if (!option("done-without-cause"))
                 emit(Error{"the script has no reply for send " + std::to_string(nextBlock_ + 1), "add a send block "
@@ -335,6 +337,12 @@ private:
             std::fprintf(stderr, "%s\n", step.arg.c_str());
         } else if (step.op == "record") {
             record(step.arg);
+        } else if (step.op == "record-send") {
+            std::ofstream out(step.arg, std::ios::app);
+            out << "send " << turn << ":\n" << lastPrompt_ << "\n";
+            if (!out) {
+                scriptBug("cannot record to " + step.arg);
+            }
         } else {
             countStarts(step.arg);
         }
@@ -400,6 +408,7 @@ private:
     Arguments arguments_;
     Reader in_;
     std::uint64_t lastTurn_ = 0;
+    std::string lastPrompt_;    // the prompt of the send being answered, for record-send
     std::size_t nextBlock_ = 0;
     int start_ = 0;             // which start this is, once count-starts has run
 };

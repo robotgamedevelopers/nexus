@@ -120,7 +120,9 @@ public:
     // The history, newest first: one line per commit, "<hash> <date> <message>".
     bool history(std::vector<std::string>* lines, std::string* why);
 
-    // The remote: its url (empty: none), set or cleared. Setting checks the history first.
+    // The remote: its url as shown (empty: none; any credential in it left out, remoteShown()), set or cleared. Setting
+    // checks the history first, and refuses a url that carries a credential (remoteCredential()): nexus pushes with the
+    // machine's git credentials.
     bool remote(std::string* url, std::string* why);
     bool setRemote(const std::string& url, std::string* why);
     bool clearRemote(std::string* why);
@@ -144,8 +146,10 @@ private:
         std::string outText;
         std::string errText;
         std::int64_t deadline = 0;
-        std::string url;
+        std::string url;        // as shown
+        std::string raw;        // as git holds it, only to take out of what git says
     };
+    bool rawRemote(std::string* url, std::string* why);
     bool readAt(const std::string& rev, accounts::Registry* out, std::vector<std::string>* errors, bool* upgraded);
     bool onlyKnownHistory(std::string* why);
     void endPush();
@@ -160,5 +164,13 @@ private:
 // files are, the schema's page, and the verbs (docs/accounts.md). The drivers pass it on in part 4 of the sign-in work;
 // for now it is here, tested, for them to use.
 std::string configBrief(const std::string& serverDir);
+
+// Whether a remote url carries a credential: a password anywhere (`user:secret@`), or any user part on a scheme other
+// than ssh (`https://token@host/...`). An ssh login (`git@host:path`, `ssh://git@host/path`) is a name, not a
+// credential.
+bool remoteCredential(const std::string& url);
+
+// The url with any credential remoteCredential() finds left out (its whole user part), for printing and logging.
+std::string remoteShown(const std::string& url);
 
 } // namespace nexus::server

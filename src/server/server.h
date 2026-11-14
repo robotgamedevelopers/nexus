@@ -36,6 +36,8 @@ struct Paths {
     std::string log;        // <dir>/server.log: a server `new` started writes here
     std::string store;      // <dir>/store: the sessions and the applied counters (src/store)
     std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
+    std::string accounts;   // $HOME/.nexus/server/accounts whatever --dir says: the logins, where the drivers read them
+                            // (server/home.h accountsDir)
 };
 
 // Who asks for a session: a client id (empty: none), the number of its first action in the session, and the state

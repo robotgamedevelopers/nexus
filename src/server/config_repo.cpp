@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -574,11 +575,11 @@ bool ConfigRepo::pushStart(std::int64_t nowMs, std::string* why) {
         *why = "a push is still running";
         return false;
     }
-    std::string url;
-    if (!remote(&url, why)) {
+    std::string raw;
+    if (!rawRemote(&raw, why)) {
         return false;
     }
-    if (url.empty()) {
+    if (raw.empty()) {
         *why = "no remote is set";
         return false;
     }
@@ -592,7 +593,8 @@ bool ConfigRepo::pushStart(std::int64_t nowMs, std::string* why) {
     setNonBlocking(c.out);
     setNonBlocking(c.err);
     c.deadline = nowMs + kPushMs;
-    c.url = url;
+    c.url = remoteShown(raw);
+    c.raw = raw;
     push_ = std::move(c);
     return true;
 }
@@ -643,6 +645,7 @@ bool ConfigRepo::pushServe(std::int64_t nowMs, std::string* result) {
         drain(&push_.err, &push_.errText);
     }
     const std::string url = push_.url;
+    const std::string raw = push_.raw;
     const std::string again = "; the change stays committed here, and the next commit pushes again";
     if (nowMs >= push_.deadline) {
         ::kill(-push_.pid, SIGKILL);
@@ -668,6 +671,12 @@ bool ConfigRepo::pushServe(std::int64_t nowMs, std::string* result) {
     push_.pid = -1;     // collected
     endPush();
     *result = g.status == 0 ? "pushed to " + url : gitWhy("pushing to " + url, g) + again;
+    // What git said may name the url as it holds it: never with its credential.
+    if (raw != url && !raw.empty()) {
+        for (std::size_t at = result->find(raw); at != std::string::npos; at = result->find(raw, at + url.size())) {
+            result->replace(at, raw.size(), url);
+        }
+    }
     return true;
 }
 
@@ -685,7 +694,70 @@ bool ConfigRepo::history(std::vector<std::string>* lines, std::string* why) {
     return true;
 }
 
+namespace {
+
+// A url's user part: [*begin, *end), its '@' included. False when it has none. With a scheme, the user part is before
+// the host, in the part up to the first '/', '?' or '#' after "://"; without one (scp-like, `user@host:path`, or a
+// path), in the part up to the first '/'.
+bool userPart(const std::string& url, std::size_t* begin, std::size_t* end, bool* ssh) {
+    const std::size_t scheme = url.find("://");
+    std::size_t from = 0;
+    std::size_t to = 0;
+    if (scheme == std::string::npos) {
+        to = url.find('/');
+        *ssh = true;
+    } else {
+        from = scheme + 3;
+        to = url.find_first_of("/?#", from);
+        std::string kind = url.substr(0, scheme);
+        std::transform(kind.begin(), kind.end(), kind.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        *ssh = kind == "ssh" || kind == "git+ssh" || kind == "ssh+git";
+    }
+    if (to == std::string::npos) {
+        to = url.size();
+    }
+    const std::size_t at = url.rfind('@', to == 0 ? 0 : to - 1);
+    if (at == std::string::npos || at < from || at >= to) {
+        return false;
+    }
+    *begin = from;
+    *end = at + 1;
+    return true;
+}
+
+} // namespace
+
+bool remoteCredential(const std::string& url) {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    bool ssh = false;
+    if (!userPart(url, &begin, &end, &ssh)) {
+        return false;
+    }
+    return !ssh || url.substr(begin, end - begin).find(':') != std::string::npos;
+}
+
+std::string remoteShown(const std::string& url) {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    bool ssh = false;
+    if (!remoteCredential(url) || !userPart(url, &begin, &end, &ssh)) {
+        return url;
+    }
+    return url.substr(0, begin) + url.substr(end);
+}
+
 bool ConfigRepo::remote(std::string* url, std::string* why) {
+    if (!rawRemote(url, why)) {
+        return false;
+    }
+    *url = remoteShown(*url);
+    return true;
+}
+
+bool ConfigRepo::rawRemote(std::string* url, std::string* why) {
     const GitResult g = runGit(dir_, {"config", "--get", "remote.origin.url"});
     if (g.status == 1) {
         url->clear();
@@ -702,6 +774,13 @@ bool ConfigRepo::remote(std::string* url, std::string* why) {
 bool ConfigRepo::setRemote(const std::string& url, std::string* why) {
     if (url.empty() || url[0] == '-') {
         *why = "a remote is a git url, as git@github.com:<owner>/nexus-config.git";
+        return false;
+    }
+    if (remoteCredential(url)) {
+        *why = "the remote " + remoteShown(url) + " was given with a user or password part, so it was not set: "
+            "credentials never go in the remote URL; nexus pushes with the machine's git credentials. Set it without "
+            "them (as git@github.com:<owner>/nexus-config.git, or https://github.com/<owner>/nexus-config.git), and "
+            "if that part was a token, replace the token";
         return false;
     }
     if (!onlyKnownHistory(why)) {

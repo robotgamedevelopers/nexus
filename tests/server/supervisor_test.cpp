@@ -630,7 +630,7 @@ bool resumes(const Output& o) {
 void testPlace() {
     Config c = config();
     int summaries = 0;
-    c.summarize = [&summaries] {
+    c.summarize = [&summaries](const std::string&) {
         ++summaries;
         return std::string("SUM ");
     };

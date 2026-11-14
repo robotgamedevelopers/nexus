@@ -35,9 +35,17 @@ struct ServerSettings {
 // when neither gives one, and then no instance is taken to be on this machine.
 std::string serverMachine(const std::string& configured, const std::string& hostName);
 
-// Whether a friend's instance on `machine` runs on this server's machine, `self` (serverMachine()): the same name, in
-// any case. Never when `self` is empty.
-bool sameMachine(const std::string& machine, const std::string& self);
+// Whether a friend's instance on `machine` runs on this server's machine: the same name, in any case, as `self`
+// (serverMachine(): the config's machine, else the short host name) or as `hostName`, the full host name
+// (gethostname's, as `studio.local`). An empty name matches nothing.
+bool sameMachine(const std::string& machine, const std::string& self, const std::string& hostName = std::string());
+
+// Where the harness logins are, under HOME whatever --dir says: the one path the server's sign-in check and the Claude
+// driver both read (drivers/claude/src/account.ts accountsDir, held to this line by its unit test).
+inline const char* const kAccountsUnderHome = ".nexus/server/accounts";
+
+// `home` (HOME, without a trailing '/') with kAccountsUnderHome: the directory of the account logins, one per name.
+std::string accountsDir(const std::string& home);
 
 // `home` (HOME) with .nexus/server added in `dir`, the ~/.nexus above it in `top`, and HOME itself, without a trailing
 // '/', in `resolved`: the one place the server resolves its home. False, with why, when `home` is null or empty.

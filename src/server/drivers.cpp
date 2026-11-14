@@ -167,11 +167,23 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
 }
 
 // What goes before the prompt of a driver started afresh in another directory: the conversation's newest entries,
-// oldest first, within kSummaryBytes, each said whose it is.
-std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript) {
+// oldest first, within kSummaryBytes, each said whose it is. Only the turns before `prompt`: the transcript already
+// ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
+// after.
+std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript,
+                      const std::string& prompt) {
+    auto before = transcript.rbegin();
+    while (before != transcript.rend() && !((*before)->kind == EntryKind::Person && (*before)->text == prompt)) {
+        ++before;
+    }
+    if (before == transcript.rend()) {
+        before = transcript.rbegin();   // not shown (cannot be, but then nothing is left out)
+    } else {
+        ++before;
+    }
     std::vector<std::string> parts;
     std::size_t bytes = 0;
-    for (auto it = transcript.rbegin(); it != transcript.rend() && bytes < kSummaryBytes; ++it) {
+    for (auto it = before; it != transcript.rend() && bytes < kSummaryBytes; ++it) {
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
             (*it)->kind == EntryKind::Friend ? "You" : "nexus";
         std::string part = std::string(who) + ": " + tailOf((*it)->text, kSummaryBytes - bytes) + "\n";
@@ -236,7 +248,7 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     // The session's instance (none named: its friend's default): its machine must be this server's (a driver on another
     // machine is roadmap work, docs/roadmap.sexp), and its directory is where the driver works.
     if (const accounts::Instance* in = instanceOf(info)) {
-        if (!sameMachine(in->machine, options_.machine)) {
+        if (!sameMachine(in->machine, options_.machine, options_.hostName)) {
             const std::string here = options_.machine.empty() ? std::string("a machine with no name (gethostname "
                 "failed, and the server's config sets no machine)") : options_.machine;
             return refuse("Session " + std::to_string(id) + " belongs to " + friendName + "'s instance " + in->name +
@@ -330,11 +342,11 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     c.cwd = driver.cwd;
     if (stored != nullptr) {
         const accounts::Instance* in = instanceOf(stored->info);
-        c.here = in == nullptr || sameMachine(in->machine, options_.machine);
+        c.here = in == nullptr || sameMachine(in->machine, options_.machine, options_.hostName);
     }
-    c.summarize = [this, id, name = c.name]() {
+    c.summarize = [this, id, name = c.name](const std::string& prompt) {
         const sync::StoredSession* s = store_.find(id);
-        return s == nullptr ? std::string() : summaryOf(name, s->transcript);
+        return s == nullptr ? std::string() : summaryOf(name, s->transcript, prompt);
     };
     c.configured = options_.table;
     c.timing = options_.timing;
@@ -464,7 +476,8 @@ void Drivers::sent(sync::SessionId id, bool committed) {
 // next turn (one started later reads them from the store and the accounts). An account change ends its driver once no
 // turn is open, so the next starts under the new account, with the same session and transcript; so does a change of
 // the instance's directory (the next starts there, afresh when the harness session was made elsewhere) or a move of
-// the instance to another machine (then none starts here).
+// the instance to another machine (then none starts here). A session left with no instance works in the drivers file's
+// directory, here.
 void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     auto it = slots_.find(id);
     if (it == slots_.end()) {
@@ -474,7 +487,13 @@ void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     Output out = it->second.sup.setOptions(info.model, info.effort, now);
     append(out, it->second.sup.setAccount(info.account, now));
     if (const accounts::Instance* in = instanceOf(info)) {
-        append(out, it->second.sup.setPlace(in->dir, sameMachine(in->machine, options_.machine), now));
+        const bool here = sameMachine(in->machine, options_.machine, options_.hostName);
+        append(out, it->second.sup.setPlace(in->dir, here, now));
+    } else {
+        // No instance (its friend has none now): the drivers file's directory, on this machine, so that a session
+        // whose instance was elsewhere is never left not here.
+        const ResolvedDriver line = resolveFriend(info.friendName, nullptr);
+        append(out, it->second.sup.setPlace(line.problem.empty() ? line.cwd : it->second.sup.cwd(), true, now));
     }
     run(id, std::move(out), now, false);
 }

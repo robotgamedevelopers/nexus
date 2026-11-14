@@ -548,7 +548,8 @@ void Supervisor::writeNext() {
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
     // After a move to another directory, the first send carries the summary before the prompt.
-    const std::string summary = state_.summary && config_.summarize ? config_.summarize() : std::string();
+    const std::string summary = state_.summary && config_.summarize ? config_.summarize(state_.waiting.front()) :
+        std::string();
     if (state_.summary) {
         state_.summary = false;     // durable with the turn, below
     }

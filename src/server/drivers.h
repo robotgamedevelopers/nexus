@@ -75,6 +75,8 @@ public:
         std::string machine{};          // this server's machine, by its name in the fleet (server/home.h
                                         // serverMachine): an instance on another machine, or every instance while
                                         // this is empty, starts no driver here yet
+        std::string hostName{};         // this machine's full host name, which an instance may name instead
+                                        // (server/home.h sameMachine)
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.

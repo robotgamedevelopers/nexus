@@ -54,11 +54,24 @@ std::string serverMachine(const std::string& configured, const std::string& host
     return accounts::isMachine(shortName) ? shortName : std::string();
 }
 
-bool sameMachine(const std::string& machine, const std::string& self) {
-    return !self.empty() && machine.size() == self.size() &&
-        std::equal(machine.begin(), machine.end(), self.begin(), [](char a, char b) {
-            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-        });
+namespace {
+bool sameName(const std::string& a, const std::string& b) {
+    return !b.empty() && a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+        return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+    });
+}
+} // namespace
+
+bool sameMachine(const std::string& machine, const std::string& self, const std::string& hostName) {
+    return sameName(machine, self) || sameName(machine, hostName);
+}
+
+std::string accountsDir(const std::string& home) {
+    std::string h = home;
+    while (!h.empty() && h.back() == '/') {
+        h.pop_back();
+    }
+    return h + "/" + kAccountsUnderHome;
 }
 
 } // namespace nexus::server

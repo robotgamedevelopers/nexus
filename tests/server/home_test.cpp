@@ -95,6 +95,14 @@ void serverConfig() {
     CHECK(serverMachine("", "").empty());
     CHECK(sameMachine("studio", "studio") && sameMachine("Studio", "STUDIO"));
     CHECK(!sameMachine("studio", "studio-2") && !sameMachine("", "") && !sameMachine("studio", ""));
+    // The full host name matches too, in any case: an instance may name `studio.local` or `studio`.
+    CHECK(sameMachine("studio.local", "studio", "studio.local"));
+    CHECK(sameMachine("Studio.Local", "studio", "studio.local"));
+    CHECK(sameMachine("studio", "studio", "studio.local") && !sameMachine("studio.lan", "studio", "studio.local"));
+    CHECK(!sameMachine("studio.local", "studio") && !sameMachine("", "studio", "") && !sameMachine("x", "", ""));
+
+    // The logins: under HOME, whatever --dir says.
+    CHECK(accountsDir("/h") == "/h/.nexus/server/accounts" && accountsDir("/h//") == "/h/.nexus/server/accounts");
 }
 
 } // namespace

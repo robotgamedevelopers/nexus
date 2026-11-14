@@ -259,6 +259,35 @@ int main(int argc, char** argv) {
           std::string::npos);
     CHECK(!repo.pushRunning());
 
+    // A remote url with a credential in it is refused, saying why, and the remote stays as it was; one put in by hand
+    // is never printed with it: not by remote(), the note of a commit, nor what the push says.
+    CHECK(!repo.setRemote("https://user:s3cret@github.com/owner/nexus-config.git", &why));
+    CHECK(why.find("credentials never go in the remote URL; nexus pushes with the machine's git credentials") !=
+          std::string::npos && why.find("s3cret") == std::string::npos);
+    CHECK(!repo.setRemote("https://t0ken@github.com/owner/nexus-config.git", &why) && why.find("t0ken") ==
+          std::string::npos);
+    CHECK(repo.remote(&url, &why) && url == work + "/remote.git");
+    CHECK(runGit(dir, {"config", "remote.origin.url", "file://user:s3cret@localhost" + work + "/missing.git"}).status ==
+          0);
+    CHECK(repo.remote(&url, &why) && url == "file://localhost" + work + "/missing.git");
+    CHECK(repo.keep(other, "account home set up once more", &why));
+    CHECK(has(repo.notes(), "pushing to file://localhost" + work + "/missing.git") && !has(repo.notes(), "s3cret"));
+    const std::string hidden = pushed(repo);
+    CHECK(hidden.find("pushing to file://localhost" + work + "/missing.git") != std::string::npos);
+    CHECK(hidden.find("s3cret") == std::string::npos);
+    CHECK(repo.setRemote(work + "/remote.git", &why));
+    CHECK(repo.keep(sample(), "account home removed once more", &why));
+    CHECK(pushed(repo) == "pushed to " + work + "/remote.git");
+    // An ssh login is a name, not a credential; a password is, on any scheme.
+    CHECK(!server::remoteCredential("git@github.com:owner/nexus-config.git"));
+    CHECK(!server::remoteCredential("ssh://git@github.com/owner/nexus-config.git"));
+    CHECK(!server::remoteCredential("https://github.com/owner/nexus-config.git"));
+    CHECK(!server::remoteCredential(work + "/remote.git") && !server::remoteCredential("host:dir/a@b"));
+    CHECK(server::remoteCredential("ssh://git:pw@github.com/owner/x.git"));
+    CHECK(server::remoteShown("ssh://git:pw@github.com/owner/x.git") == "ssh://github.com/owner/x.git");
+    CHECK(server::remoteShown("HTTPS://tok@github.com/x.git?a@b") == "HTTPS://github.com/x.git?a@b");
+    CHECK(server::remoteShown("git@github.com:owner/x.git") == "git@github.com:owner/x.git");
+
     // A credential forced into the history: nothing is pushed, and no remote is set, even once it is out of the index;
     // the refusal never suggests a push.
     CHECK(runGit(dir, {"add", "-f", "accounts/work/credential"}).status == 0);

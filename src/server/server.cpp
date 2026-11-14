@@ -256,23 +256,24 @@ bool Server::openStore(std::string* why) {
     if (!store_.open(*fs_, paths_.store, why))
         return false;
     // The machine a friend's instance names to run here: the config's, else the short host name.
-    const std::string machine = serverMachine(settings_.machine, hostName());
+    const std::string host = hostName();
+    const std::string machine = serverMachine(settings_.machine, host);
     if (machine.empty()) {
         std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
-                                                                  machine});
+                                                                  machine, host});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
     // An account is taken as signed in from the start when its credential is there, until its driver says otherwise
-    // (a no-credential or authentication error): for a claude account, its oauth-token (drivers/claude/src/account.ts).
-    const std::string accountsDir = paths_.dir + "/accounts/";
-    hub_->probeSignInWith([accountsDir](const accounts::Account& a) {
-        return a.provider == "claude" && access((accountsDir + a.name + "/oauth-token").c_str(), F_OK) == 0;
+    // (a no-credential or authentication error): for a claude account, its oauth-token, where the driver reads it
+    // (server/home.h accountsDir, under HOME whatever --dir says; drivers/claude/src/account.ts).
+    hub_->probeSignInWith([logins = paths_.accounts](const accounts::Account& a) {
+        return a.provider == "claude" && access((logins + "/" + a.name + "/oauth-token").c_str(), F_OK) == 0;
     });
     std::string configWhy;
     accounts::Registry registry;
@@ -744,6 +745,7 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     out->log = d + "/server.log";
     out->store = d + "/store";
     out->drivers = d + "/drivers";
+    out->accounts = accountsDir(out->home);
     sockaddr_un addr;
     if (!socketAddress(out->socket, &addr)) {
         *why = out->socket + " is longer than a Unix socket's address holds (" + std::to_string(sizeof addr.sun_path - 1) +

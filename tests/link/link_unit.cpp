@@ -4,6 +4,7 @@
 // numeric, which getaddrinfo answers without asking anyone).
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -174,6 +175,18 @@ void resolve_host_uses_ssh_hostname() {
     CHECK(why.find("bad config") != std::string::npos);
 }
 
+// The server's paths: --dir moves its own files, never the logins, which stay under HOME where the drivers read them
+// (the sign-in check reads paths.accounts).
+void server_logins_stay_under_home() {
+    ::setenv("HOME", "/h/", 1);
+    server::Paths p;
+    std::string why;
+    CHECK(server::paths("", &p, &why));
+    CHECK(p.dir == "/h/.nexus/server" && p.accounts == "/h/.nexus/server/accounts");
+    CHECK(server::paths("/t/other", &p, &why));
+    CHECK(p.dir == "/t/other" && p.drivers == "/t/other/drivers" && p.accounts == "/h/.nexus/server/accounts");
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -188,6 +201,7 @@ const Case kCases[] = {
     {"bootstrap_reads_connect_line", bootstrap_reads_connect_line},
     {"bootstrap_failures_say_why_without_key", bootstrap_failures_say_why_without_key},
     {"resolve_host_uses_ssh_hostname", resolve_host_uses_ssh_hostname},
+    {"server_logins_stay_under_home", server_logins_stay_under_home},
 };
 
 } // namespace
