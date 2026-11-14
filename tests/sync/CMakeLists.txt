@@ -10,6 +10,8 @@ set(warnings ${NEXUS_WARNINGS})
 
 add_executable(sync_test sync_test.cpp)
 target_link_libraries(sync_test PRIVATE nexus_sync)
+# The state format 1 fixtures, written by a nexus from before formats (fixtures/main_state_fixture.cpp).
+target_compile_definitions(sync_test PRIVATE NEXUS_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_compile_options(sync_test PRIVATE ${warnings})
 
 add_executable(link_walk link_walk.cpp)

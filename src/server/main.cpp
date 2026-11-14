@@ -2,7 +2,9 @@
 //
 // Usage: nexus-server new [--dir DIR] [--client ID --next N]
 //                                         a session for a window: prints `NEXUS CONNECT <port> <key>` and exits; with
-//                                         --client, the window's id and the number of its first action in the session
+//                                         --client, the window's id and the number of its first action in the session;
+//                                         NEXUS_STATE_FORMAT in its environment, the state format the window reads
+//                                         (sync/formats.h), which the line then states after the key
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
 //        nexus-server stop [--dir DIR]    stops the running server
 //
@@ -29,6 +31,7 @@
 #include <vector>
 
 #include "server/server.h"
+#include "sync/formats.h"
 
 namespace {
 
@@ -109,8 +112,18 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
-    if (command == "new")
+    if (command == "new") {
+        // The state format the window reads, which it states in the environment (sync/formats.h); unset or not a
+        // number from 1, the window states none and reads format 1.
+        if (const char* stated = std::getenv(nexus::sync::kStateFormatVariable)) {
+            char* end = nullptr;
+            const unsigned long format = std::strtoul(stated, &end, 10);
+            if (end != stated && *end == 0 && format != 0 && format < 1000000000UL) {
+                client.format = static_cast<std::uint32_t>(format);
+            }
+        }
         return nexus::server::newSession(paths, selfPath(), client);
+    }
     if (command == "serve")
         return nexus::server::serve(paths);
     if (command == "stop")

@@ -13,6 +13,9 @@
 // always the newest entry whole), so a diff from a state however far behind sends at most each session's tail and its
 // queue, never the whole history. The client keeps what it has seen (sync/mirror.h) and marks the entries it never
 // saw. The diff from a state that holds an entry still open sends only the text that entry grew by.
+//
+// Across versions: a diff is written in the format of the link it goes on (sync/formats.h, docs/formats.md), which a
+// window and a server of different versions agree on when the link is made.
 
 #pragma once
 
@@ -23,6 +26,7 @@
 #include <vector>
 
 #include "model.h"
+#include "sync/formats.h"
 
 namespace nexus::sync {
 
@@ -51,9 +55,17 @@ struct SessionEntry {
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
 
+// What the friend of a session is doing, as the server holds it now (server/supervisor.h Supervisor::activity): Busy
+// while a turn is open or about to begin (a prompt waits, the driver starts, a stop is out); Idle when nothing runs and
+// nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
+// failed to start too many times in a row, or has no login) until the person's next prompt. In memory only, never in
+// the store: a server that starts again works it out afresh. The window's state cursor shows it (sync/client.h).
+enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2 };
+
 struct SessionView {
     SessionId id = 0;
     SessionInfo info;
+    Activity activity = Activity::Idle;
     std::uint64_t first = 0;            // the transcript index (from 0) of entries[0]
     std::vector<EntryRef> entries;      // the transcript's tail, oldest first, through its newest entry
     std::vector<std::string> queue;     // prompts queued for later, oldest first
@@ -95,6 +107,10 @@ public:
     std::string init_diff() const;
     // Throws BadDiff, changing nothing, on malformed bytes or a diff from a state other than this one.
     void apply_string(const std::string& diff);
+    // The format (sync/formats.h) diff_from writes and apply_string reads: a link's, agreed when it is made. A copy
+    // keeps it; equality ignores it.
+    std::uint32_t format() const { return format_; }
+    void setFormat(std::uint32_t format) { format_ = format; }
     bool operator==(const Sessions& x) const;
     bool compare(const Sessions& x) const { return !(*this == x); }  // mosh's verbose check: true when they differ
     void subtract(const Sessions*) {}   // a state is the whole picture, not a stream: nothing to forget
@@ -102,6 +118,14 @@ public:
 
 private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
+    std::uint32_t format_ = kStateFormat;
 };
+
+// A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the
+// line "nexus-state <format>" and the state's init_diff in that format, so the file says how to read it.
+std::string stateFile(const Sessions& state);
+// The state a file holds, read in its format (a later one than this build's as this build reads a later server's).
+// False, saying why in one line, on bytes that are not a state file or a format older than this build's floor.
+bool readStateFile(const std::string& bytes, Sessions* out, std::string* why);
 
 } // namespace nexus::sync

@@ -54,7 +54,7 @@ set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account)
+                 stop_hammered account window unconfigured)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -97,6 +97,16 @@ tlc_test(tlc_supervisor_witness_setting_not_cleared WSupSettingNotCleared WSupSe
 tlc_test(tlc_supervisor_witness_account_ignored WSupAccountIgnored WSupAccountIgnored.cfg action
          PROPERTY NoSendOnOldAccount)
 tlc_test(tlc_supervisor_witness_account_cuts WSupAccountCuts WSupAccountCuts.cfg action PROPERTY AccountKeepsTurn)
+# The state cursor's activity (ActivityOf): idle while a prompt waits, a crash shown as idle, and down that turns idle
+# when its driver is collected.
+tlc_test(tlc_supervisor_witness_idle_while_waiting WSupIdleWhileWaiting WSupIdleWhileWaiting.cfg invariant
+         PROPERTY BrokenIdleWaitsForPerson)
+tlc_test(tlc_supervisor_witness_crash_idle WSupCrashIdle WSupCrashIdle.cfg action PROPERTY BrokenCrashShowsDown)
+tlc_test(tlc_supervisor_witness_down_forgotten WSupDownForgotten WSupDownForgotten.cfg action
+         PROPERTY BrokenDownLeavesByWork)
+# A friend with no driver configured shown idle.
+tlc_test(tlc_supervisor_witness_no_driver_idle WSupNoDriverIdle WSupNoDriverIdle.cfg invariant
+         PROPERTY BrokenNoDriverShowsDown)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)
@@ -113,4 +123,8 @@ tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTr
          PROPERTY TraceMatches SUPWALK SEED 12 STEPS 600 FAULTY queue)
 # The account's seed is one whose walk sets an account before a restart.
 tlc_test(tlc_supervisor_trace_faulty_account_rejected SupervisorTrace SupervisorTrace.cfg invariant
-         PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY account)
+         PROPERTY TraceMatches SUPWALK SEED 10 STEPS 600 FAULTY account)
+# The code's activity (the window's state cursor) is bound too: a walk whose recorded activity reads a crash as idle is
+# rejected.
+tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)

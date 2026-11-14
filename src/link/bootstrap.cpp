@@ -55,8 +55,8 @@ std::string ended(const CommandResult& r) {
 
 } // namespace
 
-std::string connectLine(const std::string& port, const std::string& key) {
-    return kConnect + port + " " + key;
+std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format) {
+    return kConnect + port + " " + key + (format == 0 ? std::string() : " format " + std::to_string(format));
 }
 
 bool parseConnect(const std::string& line, Connect* out) {
@@ -67,7 +67,23 @@ bool parseConnect(const std::string& line, Connect* out) {
     if (space == std::string::npos)
         return false;
     const std::string port = rest.substr(0, space);
-    const std::string key = rest.substr(space + 1);
+    std::string key = rest.substr(space + 1);
+    std::uint32_t format = 1;
+    const std::size_t stated = key.find(' ');
+    if (stated != std::string::npos) {
+        const std::string tail = key.substr(stated + 1);
+        key.resize(stated);
+        const char kFormat[] = "format ";
+        if (tail.compare(0, sizeof(kFormat) - 1, kFormat) != 0) {
+            return false;
+        }
+        const std::string number = tail.substr(sizeof(kFormat) - 1);
+        if (number.empty() || number.size() > 9 || number[0] == '0' ||
+                number.find_first_not_of("0123456789") != std::string::npos) {
+            return false;
+        }
+        format = static_cast<std::uint32_t>(std::stoul(number));
+    }
     if (port.empty() || port.size() > 5 || port[0] == '0')
         return false;
     for (char c : port) {
@@ -83,7 +99,7 @@ bool parseConnect(const std::string& line, Connect* out) {
             return false;
     }
     if (out != nullptr)
-        *out = Connect{port, key};
+        *out = Connect{port, key, format};
     return true;
 }
 
@@ -95,7 +111,12 @@ std::string remoteLine(const std::vector<std::string>& command) {
 }
 
 Command bootstrapCommand(const Bootstrap& b) {
-    const std::string line = remoteLine(b.command);
+    std::vector<std::string> command;
+    if (b.stateFormat != 0) {
+        command = {"env", std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat)};
+    }
+    command.insert(command.end(), b.command.begin(), b.command.end());
+    const std::string line = remoteLine(command);
     Command c;
     c.program = b.ssh;
     c.arguments = {"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", b.host, "--", line};

@@ -7,21 +7,45 @@ namespace nexus::store {
 
 namespace {
 
-constexpr std::uint8_t kRecordFormat = 2;     // 1: a friend tab's, by name, still read and migrated
-constexpr std::uint8_t kSnapshotFormat = 3;   // 2: friend tabs; 1: friend tabs before drivers; both still read
+// The formats this build writes, and the oldest format of a reader each declares it can be read by (store.h). Every
+// older format is still read. 3 and 4 frame each change, entry and session by its length, so that a later format's
+// additions are skipped by this build, as long as that format declares this one can read it.
+constexpr std::uint8_t kRecordFormat = 3;       // 2: by session, unframed; 1: a friend tab's, by name, migrated
+constexpr std::uint8_t kRecordReader = 3;       // the oldest record format a reader must know to read ours
+constexpr std::uint8_t kSnapshotFormat = 4;     // 3: by session, unframed; 2: friend tabs; 1: before drivers
+constexpr std::uint8_t kSnapshotReader = 4;
+
+// The entry kinds the unframed formats had: Person 0, Friend 1, Notice 2. A later kind (Tool 3) comes only in a framed
+// format, and a framed format may hold kinds this build does not know: they are kept as they are, and the server shows
+// them as notices (server/durable.cpp).
+constexpr std::uint8_t kUnframedKinds = 3;
 
 void put_entry(Writer& w, const Entry& e) {
-    w.u8(e.kind);
-    w.u8(e.closed ? 1 : 0);
-    w.str(e.text);
+    Writer frame;
+    frame.u8(e.kind);
+    frame.u8(e.closed ? 1 : 0);
+    frame.str(e.text);
+    w.bytes(frame.out());
 }
 
+// An entry of a framed format: what it adds past the text is skipped.
 bool get_entry(Reader& r, Entry& e) {
+    const Bytes frame = r.bytes();
+    Reader in(frame);
+    e.kind = in.u8();
+    const std::uint8_t closed = in.u8();
+    e.text = in.str();
+    e.closed = closed == 1;
+    return in.ok() && closed <= 1;
+}
+
+// An entry of an unframed format, whose kinds are only the first three.
+bool get_unframed_entry(Reader& r, Entry& e) {
     e.kind = r.u8();
-    std::uint8_t closed = r.u8();
+    const std::uint8_t closed = r.u8();
     e.text = r.str();
     e.closed = closed == 1;
-    return closed <= 1;
+    return closed <= 1 && e.kind < kUnframedKinds;
 }
 
 void put_driver(Writer& w, const Driver& d) {
@@ -61,33 +85,48 @@ void get_info(Reader& r, Info& i) {
     i.effort = r.str();
 }
 
+// A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
+void put_change(Writer& w, const Change& c) {
+    if (c.kind == Change::Kind::Append) {
+        put_entry(w, c.entry);
+    } else if (c.kind == Change::Kind::Enqueue) {
+        w.str(c.prompt);
+    } else if (c.kind == Change::Kind::SetDriver) {
+        put_driver(w, c.driver);
+    } else if (c.kind == Change::Kind::SetInfo) {
+        put_info(w, c.info);
+    }
+}
+
 Bytes encode_record(std::uint64_t session, std::span<const Change> changes, const std::string& client,
                     std::uint64_t num) {
     Writer w;
     w.u8(kRecordFormat);
+    w.u8(kRecordReader);
     w.u64(session);
     w.u32(std::uint32_t(changes.size()));
     for (const Change& c : changes) {
         w.u8(std::uint8_t(c.kind));
-        if (c.kind == Change::Kind::Append) {
-            put_entry(w, c.entry);
-        } else if (c.kind == Change::Kind::Enqueue) {
-            w.str(c.prompt);
-        } else if (c.kind == Change::Kind::SetDriver) {
-            put_driver(w, c.driver);
-        } else if (c.kind == Change::Kind::SetInfo) {
-            put_info(w, c.info);
-        }
+        Writer frame;
+        put_change(frame, c);
+        w.bytes(frame.out());
     }
     w.str(client);
     w.u64(num);
     return std::move(w.out());
 }
 
-Status unreadable(const std::string& dir, const std::string& what) {
-    return Status::failed("store " + dir + ": " + what + " is not one this store writes (a newer nexus-server's, or "
-                          "damaged after its checksum was taken); run the nexus-server that wrote it, or move " + dir +
-                          " aside to start empty");
+Status unreadable(const std::string& dir, const std::string& what, const std::string& why = std::string()) {
+    return Status::failed("store " + dir + ": " + what + (why.empty() ? std::string() : " (" + why + ")") +
+                          " is not one this store writes (a newer nexus-server's, or damaged after its checksum was "
+                          "taken); run the nexus-server that wrote it, or move " + dir + " aside to start empty");
+}
+
+// A framed record or snapshot that declares it needs a reader of a format this build does not know.
+Status tooNew(const std::string& dir, const std::string& what, unsigned format, unsigned reader, unsigned ours) {
+    return Status::failed("store " + dir + ": " + what + " is in format " + std::to_string(format) + ", which only a "
+                          "nexus-server that reads format " + std::to_string(reader) + " or later can read, and this "
+                          "one reads up to " + std::to_string(ours) + "; run the newer nexus-server that wrote it");
 }
 
 } // namespace
@@ -251,14 +290,23 @@ std::uint64_t Store::legacy_session(const std::string& tab, bool make) {
 }
 
 Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq) {
+    const std::string what = "record " + std::to_string(seq) + " of its journal";
     Reader r(rec);
     const std::uint8_t format = r.u8();
-    if (format != 1 && format != kRecordFormat) {
-        return unreadable(dir_, "record " + std::to_string(seq));
+    if (format == 0) {
+        return unreadable(dir_, what);
+    }
+    const bool framed = format >= 3;
+    if (framed) {
+        // A framed format names the oldest one its reader must know: a later one this build can read says so.
+        const std::uint8_t reader = r.u8();
+        if (reader > kRecordFormat) {
+            return tooNew(dir_, what, format, reader, kRecordFormat);
+        }
     }
     std::uint64_t session = 0;
     std::string tab;
-    if (format == kRecordFormat) {
+    if (format >= 2) {
         session = r.u64();
     } else {
         tab = r.str();
@@ -267,45 +315,59 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
     std::vector<Change> changes;
     for (std::uint32_t i = 0; i < n && r.ok(); ++i) {
         Change c;
-        std::uint8_t kind = r.u8();
+        const std::uint8_t kind = r.u8();
+        Bytes frame;
+        if (framed) {
+            frame = r.bytes();
+        }
+        Reader framedIn(frame);
+        Reader& in = framed ? framedIn : r;
         if (kind == std::uint8_t(Change::Kind::Append)) {
             c.kind = Change::Kind::Append;
-            if (!get_entry(r, c.entry)) {
-                return unreadable(dir_, "record " + std::to_string(seq));
+            if (framed ? !get_entry(in, c.entry) : !get_unframed_entry(in, c.entry)) {
+                return unreadable(dir_, what, "an entry of kind " + std::to_string(c.entry.kind) + ", which format " +
+                    std::to_string(format) + " does not have, or a bad closed flag");
             }
         } else if (kind == std::uint8_t(Change::Kind::Enqueue)) {
             c.kind = Change::Kind::Enqueue;
-            c.prompt = r.str();
+            c.prompt = in.str();
         } else if (kind == std::uint8_t(Change::Kind::SetDriver)) {
             c.kind = Change::Kind::SetDriver;
-            get_driver(r, c.driver);
+            get_driver(in, c.driver);
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
-        } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format == kRecordFormat) {
+        } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format >= 2) {
             c.kind = Change::Kind::SetInfo;
-            get_info(r, c.info);
+            get_info(in, c.info);
+        } else if (framed) {
+            continue;   // a change a later format adds: skipped, its frame read past
         } else {
-            return unreadable(dir_, "record " + std::to_string(seq));
+            return unreadable(dir_, what, "a change of kind " + std::to_string(kind));
+        }
+        if (framed && !framedIn.ok()) {
+            return unreadable(dir_, what);
         }
         changes.push_back(std::move(c));
     }
     std::string client = r.str();
     std::uint64_t num = r.u64();
-    if (!r.ok() || !r.done()) {
-        return unreadable(dir_, "record " + std::to_string(seq));
+    // An unframed record ends there; a framed one may go on with what a later format adds, which is skipped.
+    if (!r.ok() || (!framed && !r.done())) {
+        return unreadable(dir_, what);
     }
     if (format == 1) {
         // A friend tab's record: its tab is a session, made (as the next) if no snapshot or record named it before.
         legacy_read_ = true;
         if (!changes.empty() && tab.empty()) {
-            return unreadable(dir_, "record " + std::to_string(seq));
+            return unreadable(dir_, what);
         }
         if (!changes.empty()) {
             session = legacy_session(tab, true);
         }
     }
-    if (!refusal(session, changes).empty()) {
-        return unreadable(dir_, "record " + std::to_string(seq));
+    const std::string refused = refusal(session, changes);
+    if (!refused.empty()) {
+        return unreadable(dir_, what, refused);
     }
     apply(session, changes, client, num);
     return Status::ok();
@@ -314,20 +376,23 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
 Bytes Store::encode_snapshot() const {
     Writer w;
     w.u8(kSnapshotFormat);
+    w.u8(kSnapshotReader);
     w.u64(next_session_);
     w.u32(std::uint32_t(sessions_.size()));
     for (const auto& [id, t] : sessions_) {
-        w.u64(id);
-        put_info(w, t.info);
-        w.u32(std::uint32_t(t.transcript.size()));
+        Writer frame;
+        frame.u64(id);
+        put_info(frame, t.info);
+        frame.u32(std::uint32_t(t.transcript.size()));
         for (const Entry& e : t.transcript) {
-            put_entry(w, e);
+            put_entry(frame, e);
         }
-        w.u32(std::uint32_t(t.queue.size()));
+        frame.u32(std::uint32_t(t.queue.size()));
         for (const std::string& q : t.queue) {
-            w.str(q);
+            frame.str(q);
         }
-        put_driver(w, t.driver);
+        put_driver(frame, t.driver);
+        w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
     for (const auto& [client, num] : applied_) {
@@ -338,53 +403,74 @@ Bytes Store::encode_snapshot() const {
 }
 
 Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
+    const std::string what = "its snapshot";
     Reader r(snap);
     const std::uint8_t format = r.u8();
-    if (format != 1 && format != 2 && format != kSnapshotFormat) {
-        return unreadable(dir_, "the snapshot");
+    if (format == 0) {
+        return unreadable(dir_, what);
     }
-    if (format == kSnapshotFormat) {
+    const bool framed = format >= 4;
+    if (framed) {
+        const std::uint8_t reader = r.u8();
+        if (reader > kSnapshotFormat) {
+            return tooNew(dir_, what, format, reader, kSnapshotFormat);
+        }
+    }
+    const bool bySession = format >= 3;
+    if (bySession) {
         next_session_ = r.u64();
         if (next_session_ == 0) {
-            return unreadable(dir_, "the snapshot");
+            return unreadable(dir_, what);
         }
     } else {
         legacy_read_ = true;
     }
     std::uint32_t count = r.u32();
     for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
+        Bytes frame;
+        if (framed) {
+            frame = r.bytes();
+        }
+        Reader framedIn(frame);
+        Reader& in = framed ? framedIn : r;
         std::uint64_t id = 0;
         Info info;
-        if (format == kSnapshotFormat) {
-            id = r.u64();
-            get_info(r, info);
+        if (bySession) {
+            id = in.u64();
+            get_info(in, info);
             if (id == 0 || id >= next_session_ || sessions_.count(id) != 0) {
-                return unreadable(dir_, "the snapshot");
+                return unreadable(dir_, what);
             }
         } else {
-            const std::string tab = r.str();
+            const std::string tab = in.str();
             if (legacy_.count(tab) != 0) {
-                return unreadable(dir_, "the snapshot");
+                return unreadable(dir_, what);
             }
             id = legacy_session(tab, true);     // in the order written: by name, so ids 1, 2, ... in name order
             info = sessions_[id].info;
         }
         Session& t = sessions_[id];
         t.info = std::move(info);
-        std::uint32_t entries = r.u32();
-        for (std::uint32_t k = 0; k < entries && r.ok(); ++k) {
+        std::uint32_t entries = in.u32();
+        for (std::uint32_t k = 0; k < entries && in.ok(); ++k) {
             Entry e;
-            if (!get_entry(r, e)) {
-                return unreadable(dir_, "the snapshot");
+            if (framed ? !get_entry(in, e) : !get_unframed_entry(in, e)) {
+                return unreadable(dir_, what, "session " + std::to_string(id) + " has an entry of kind " +
+                    std::to_string(e.kind) + ", which format " + std::to_string(format) + " does not have, or a bad "
+                    "closed flag");
             }
             t.transcript.push_back(std::move(e));
         }
-        std::uint32_t prompts = r.u32();
-        for (std::uint32_t k = 0; k < prompts && r.ok(); ++k) {
-            t.queue.push_back(r.str());
+        std::uint32_t prompts = in.u32();
+        for (std::uint32_t k = 0; k < prompts && in.ok(); ++k) {
+            t.queue.push_back(in.str());
         }
         if (format != 1) {
-            get_driver(r, t.driver);
+            get_driver(in, t.driver);
+        }
+        // A framed session may go on with what a later format adds, which is skipped.
+        if (framed && !framedIn.ok()) {
+            return unreadable(dir_, what);
         }
     }
     std::uint32_t clients = r.u32();
@@ -392,8 +478,8 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
         std::string c = r.str();
         applied_[c] = r.u64();
     }
-    if (!r.ok() || !r.done()) {
-        return unreadable(dir_, "the snapshot");
+    if (!r.ok() || (!framed && !r.done())) {
+        return unreadable(dir_, what);
     }
     return Status::ok();
 }

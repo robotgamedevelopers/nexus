@@ -1,4 +1,5 @@
-// Unit tests of the window's bootstrap (src/link/bootstrap.h): the CONNECT line, the line ssh runs, and the bootstrap
+// Unit tests of the window's bootstrap (src/link/bootstrap.h): the CONNECT line, the request nexus-server new makes of
+// the running server (src/server/server.h), the line ssh runs, and the bootstrap
 // and host lookup over a fake command runner. No processes, no sockets, no network (the one address resolved is
 // numeric, which getaddrinfo answers without asking anyone).
 
@@ -8,6 +9,8 @@
 #include <vector>
 
 #include "link/bootstrap.h"
+#include "server/server.h"
+#include "sync/formats.h"
 
 namespace {
 
@@ -30,7 +33,38 @@ const char kKey[] = "AbCdEfGhIjKlMnOpQrSt+/";
 void connect_line_roundtrip() {
     Connect c;
     CHECK(parseConnect(connectLine("60001", kKey), &c));
-    CHECK(c.port == "60001" && c.key == kKey);
+    CHECK(c.port == "60001" && c.key == kKey && c.format == 1);    // a line that states no format: format 1
+    CHECK(connectLine("60001", kKey) == "NEXUS CONNECT 60001 " + std::string(kKey));   // as before formats
+    CHECK(parseConnect(connectLine("60001", kKey, 2), &c));
+    CHECK(c.port == "60001" && c.key == kKey && c.format == 2);
+    CHECK(connectLine("60001", kKey, 2) == "NEXUS CONNECT 60001 " + std::string(kKey) + " format 2");
+}
+
+// What a window that states a format asks of nexus-server new, and what the server makes of each request: a window
+// before formats states none, and is answered as before.
+void new_request_states_the_format() {
+    server::Client c;
+    CHECK(server::newRequest(c) == "new");
+    c.id = "window-1";
+    c.next = 12;
+    CHECK(server::newRequest(c) == "new window-1 12");
+    c.format = 2;
+    CHECK(server::newRequest(c) == "new window-1 12 format 2");
+    server::Client read;
+    CHECK(server::parseNewRequest("new window-1 12 format 2", &read));
+    CHECK(read.id == "window-1" && read.next == 12 && read.format == 2);
+    CHECK(server::parseNewRequest("new format 3", &read));
+    CHECK(read.id.empty() && read.next == 1 && read.format == 3);
+    CHECK(server::parseNewRequest("new", &read) && read.format == 0);
+    for (const char* bad : {"new format", "new format 0", "new format x", "new window-1", "new window-1 0",
+            "new window-1 12 format", "new window-1 12 13", "news", "new  format 2", ""}) {
+        CHECK(!server::parseNewRequest(bad, &read));
+    }
+    // No format is refused today; a window stating none is served format 1.
+    server::Client none;
+    CHECK(server::formatRefusalReply(none).empty());
+    none.format = 1;
+    CHECK(server::formatRefusalReply(none).empty());
 }
 
 void connect_line_refusals() {
@@ -61,9 +95,13 @@ void bootstrap_command_shape() {
     b.host = "studio";
     const Command c = bootstrapCommand(b);
     CHECK(c.program == "/usr/bin/ssh");
+    // The window states the state format it reads in nexus-server new's environment, which a server before formats
+    // ignores.
     const std::vector<std::string> want = {"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "studio", "--",
-        remoteLine({"nexus-server", "new"})};
+        remoteLine({"env", "NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat), "nexus-server", "new"})};
     CHECK(c.arguments == want);
+    b.stateFormat = 0;      // states none, as a window before formats
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new"}));
 }
 
 CommandResult result(CommandResult::End end, int code, std::string out, std::string err) {
@@ -143,6 +181,7 @@ struct Case {
 
 const Case kCases[] = {
     {"connect_line_roundtrip", connect_line_roundtrip},
+    {"new_request_states_the_format", new_request_states_the_format},
     {"connect_line_refusals", connect_line_refusals},
     {"remote_line_quotes_each_word", remote_line_quotes_each_word},
     {"bootstrap_command_shape", bootstrap_command_shape},

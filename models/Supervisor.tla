@@ -99,9 +99,10 @@ Init ==
     /\ switches = 0
     /\ s = [phase |-> "none", stage |-> "none", open |-> 0, prompt |-> 0, next |-> 1, waiting |-> <<>>,
             queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
-            nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
+            nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE,
-            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE]
+            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
+            unconf |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -114,9 +115,10 @@ Flush(x) == IF x.gathered THEN [Fx(x, E("F", x.open, 0)) EXCEPT !.gathered = FAL
 \* The open turn ends without its done: a notice that it was cut short. The prompt is never written again.
 CutOpen(x) == [Fx(x, E("X", x.open, 0)) EXCEPT !.fate[x.prompt] = "cut", !.open = 0, !.prompt = 0]
 
-\* The driver is gone or going: the text gathered, a notice of why, and the open turn cut.
+\* The driver is gone or going: the text gathered, a notice of why, and the open turn cut. It failed (crashed): the
+\* friend shows down until a driver says hello again (Activity).
 Abandon(x) ==
-    LET y == Fx(Flush(x), E("N", 0, 0)) IN
+    LET y == [Fx(Flush(x), E("N", 0, 0)) EXCEPT !.crashed = TRUE] IN
     IF y.open # 0 THEN CutOpen(y) ELSE y
 
 \* End the driver with no turn open: close its input; TERM and KILL follow on deadlines.
@@ -145,11 +147,13 @@ Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
 WriteNext(x) == WriteNextWith(Told, x)
 
 \* Start a driver when a prompt waits and none is alive, with --resume the last session id, under the session's
-\* account.
+\* account. With no driver configured the start names no program, and so nothing to resume: it fails, as the exit
+\* that follows says.
 StartDriver(x) ==
     IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down
     THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
-                    !.resumed = x.session, !.drv = x.account, !.told = Default, !.retiring = FALSE]
+                    !.resumed = IF x.unconf THEN "" ELSE x.session, !.drv = x.account, !.told = Default,
+                    !.retiring = FALSE]
     ELSE x
 
 \* With no turn open, a driver started under an account that is no longer the session's, or told a field the session
@@ -159,10 +163,11 @@ RetireWith(C(_), x) ==
     IF x.phase = "idle" /\ (x.drv # x.account \/ C(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
 Retire(x) == RetireWith(Cleared, x)
 
-\* When no turn is open, no prompt waits and starting is not held back: the oldest queued prompt joins the waiting
-\* prompts, shown as the person's entry. One per turn: it waits, or is written as the turn that opens.
+\* When a driver is configured, no turn is open, no prompt waits and starting is not held back: the oldest queued
+\* prompt joins the waiting prompts, shown as the person's entry. One per turn: it waits, or is written as the turn
+\* that opens.
 Take(x) ==
-    IF x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
+    IF ~x.unconf /\ x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
     THEN LET p == Head(x.queue) IN
          [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
     ELSE x
@@ -194,7 +199,8 @@ NoCredential(m, x) ==
 \* A message from the driver.
 ReceiveWith(x, m, Txt(_, _)) ==
     CASE x.phase = "ending"   -> x
-      [] x.phase = "starting" -> IF m.kind = "hello" /\ m.v = "1" THEN [x EXCEPT !.phase = "idle"] ELSE End(x)
+      [] x.phase = "starting" -> IF m.kind = "hello" /\ m.v = "1" THEN [x EXCEPT !.phase = "idle", !.crashed = FALSE]
+                                 ELSE End(x)
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
       [] m.kind = "session"    -> [x EXCEPT !.session = m.v]
@@ -226,9 +232,11 @@ Messages(x) ==
 Keep == UNCHANGED <<sent, restarts, switches>>
 
 \* The person sends prompt p: refused with a notice past the bound; otherwise it shows, waits, and goes out when it can.
-\* A prompt also lifts the hold that failed starts put on starting drivers.
+\* A prompt also lifts the hold that failed starts put on starting drivers. With no driver configured the server
+\* refuses it before it reaches the supervisor (Drivers::send): no step here.
 PromptWith(Adv(_)) ==
     /\ ~s.down
+    /\ ~s.unconf
     /\ sent < Prompts
     /\ sent' = sent + 1
     /\ UNCHANGED <<restarts, switches>>
@@ -325,7 +333,7 @@ Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
               !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0, !.drv = "", !.told = Default,
-              !.retiring = FALSE]
+              !.retiring = FALSE, !.crashed = FALSE]
 Restart == RestartWith(Restarted)
 
 \* The person sets the session's model and effort (v): the next send is written with it, and an idle driver told a
@@ -347,8 +355,18 @@ SetAccountWith(Ac(_, _), a) ==
 AccountSet(x, a) == Advance([x EXCEPT !.account = a])
 SetAccount(a) == SetAccountWith(AccountSet, a)
 
+\* The drivers file loses the friend's driver (c), or gives it back: the next start runs what it names, and with
+\* one again, what waits for it goes on (Supervisor::configure). It counts as a change of the person's.
+Reconfigure(c) ==
+    /\ switches < MaxSwitches
+    /\ c # s.unconf
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Advance([Fresh EXCEPT !.unconf = c])
+
 NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) ==
     \/ P
+    \/ \E c \in BOOLEAN : Reconfigure(c)
     \/ Q
     \/ St
     \/ \E m \in Messages(s) : M(m)
@@ -401,6 +419,8 @@ TypeOK ==
     /\ (s.procs = 0) => s.told = Default
     /\ s.account \in Accounts \cup {""}
     /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
+    /\ s.crashed \in BOOLEAN
+    /\ s.unconf \in BOOLEAN
     /\ s.retiring => s.phase = "ending"
 
 \* At most one driver process alive.
@@ -500,8 +520,9 @@ TextKept ==
 \* No prompt is written to a driver that said it has no credential: it exits next.
 NoSendWithoutCredential == [][Len(s'.written) > Len(s.written) => ~s.nocred]_vars
 
-\* A driver is started only when not held back, and with --resume the last session id.
-StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = s'.session]_vars
+\* A driver is started only when not held back, and with --resume the last session id (a start with no driver
+\* configured names no program, and resumes nothing).
+StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = IF s'.unconf THEN "" ELSE s'.session]_vars
 
 \* A send is written with the setting the session has when it is written: a change applies from the next turn.
 WrittenWithSetting ==
@@ -521,10 +542,57 @@ NoSendOnOldAccount == [][Len(s'.written) > Len(s.written) => s'.drv = s'.account
 \* A change of the account never ends a turn: the driver is ended only once no turn is open.
 AccountKeepsTurn == [][s'.account # s.account => s'.open = s.open /\ s'.written = s.written]_vars
 
+----------------------------------------------------------------------------
+\* What the friend is doing, as the window's state cursor shows it (Supervisor::activity; sync/sessions.h Activity):
+\* "down" while starting is held back; else "busy" while a turn is open or about to begin (a prompt waits, or a driver
+\* starts); else "down" when no driver is configured, or when the last driver failed and none has said hello since,
+\* unless the server is stopping; else "idle". The trace binds the code's to this one at every step
+\* (SupervisorTrace.tla).
+ActivityOf(x) ==
+    IF x.blocked THEN "down"
+    ELSE IF x.open # 0 \/ x.waiting # <<>> \/ x.phase = "starting" THEN "busy"
+    ELSE IF x.unconf \/ (x.crashed /\ ~x.down) THEN "down"
+    ELSE "idle"
+
+\* Idle (steady dark blue) is "waiting for the person": nothing runs, nothing waits, and nothing queued will be taken
+\* without them (or the server is stopping, and takes nothing).
+IdleWaitsForPersonWith(A(_)) ==
+    A(s) = "idle" => /\ s.open = 0
+                     /\ s.waiting = <<>>
+                     /\ s.phase \in {"none", "idle", "ending"}
+                     /\ s.queue = <<>> \/ s.down
+IdleWaitsForPerson == IdleWaitsForPersonWith(ActivityOf)
+
+\* A friend with no driver configured shows down (steady red), never idle: a prompt to it reaches no driver, and
+\* nothing queued is taken. Only work still running (a turn open, a prompt waiting, a driver starting) shows busy.
+NoDriverShowsDownWith(A(_)) ==
+    s.unconf /\ s.open = 0 /\ s.waiting = <<>> /\ s.phase # "starting" => A(s) = "down"
+NoDriverShowsDown == NoDriverShowsDownWith(ActivityOf)
+
+\* A driver that ends without being asked to (not ended for an account change, a setting, a missing credential or the
+\* server stopping) never leaves the friend showing idle: it shows down, or busy when the work goes on (a prompt
+\* waits, so another starts). Each step's half takes the activity as an argument, for the witnesses; the property
+\* itself has its [] at the top, the only form TLC checks.
+CrashShowsDownStep(A(_)) ==
+    s'.procs < s.procs /\ s.phase # "ending" /\ restarts' = restarts => A(s') \in {"down", "busy"}
+CrashShowsDown == [][CrashShowsDownStep(ActivityOf)]_vars
+
+\* Down (red) never quietly turns into idle: it leaves only for busy (the person's prompt, a queued one, a start), when
+\* a driver says hello, when the friend's driver is configured again, or by a restart or the server stopping.
+DownLeavesByWorkStep(A(_)) ==
+    A(s) = "down" /\ A(s') = "idle" =>
+        \/ s.phase = "starting" /\ s'.phase = "idle"
+        \/ s.unconf /\ ~s'.unconf
+        \/ restarts' > restarts
+        \/ s'.down
+DownLeavesByWork == [][DownLeavesByWorkStep(ActivityOf)]_vars
+
 \* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
-\* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).
+\* the person's next prompt), while the friend has no driver configured (until it has one again), or while the server
+\* is stopping (the prompt is durable, for the next server).
 Settles ==
     \A p \in 1 .. Prompts :
-        s.fate[p] \in {"queued", "waiting", "open"} ~> (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down)
+        s.fate[p] \in {"queued", "waiting", "open"} ~>
+            (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ s.down)
 
 =============================================================================

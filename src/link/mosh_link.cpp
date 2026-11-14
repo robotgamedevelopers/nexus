@@ -47,20 +47,29 @@ void freezeClock() {
 
 // Both ends start from the empty states (mosh's state 0, which each end assumes the other holds); the server's sessions
 // are its first change.
+// Every state the server's end holds is in the link's format, so each diff mosh takes is written in it.
+static sync::Sessions inFormat(sync::Sessions state, std::uint32_t format) {
+    state.setFormat(format);
+    return state;
+}
+
 struct ServerSession::Impl {
+    std::uint32_t format;
     sync::Sessions initialMine;
     sync::Actions initialRemote;
     ServerTransport transport;
     sync::Applier applier;
-    Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next)
-        : initialRemote(next), transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
-        transport.set_current_state(state);
+    Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next, std::uint32_t f)
+        : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(next),
+          transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
+        transport.set_current_state(inFormat(state, format));
     }
 };
 
-ServerSession::ServerSession(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next) {
+ServerSession::ServerSession(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next,
+                             std::uint32_t format) {
     std::string why;
-    if (!guarded([&] { impl_ = std::make_unique<Impl>(state, applied, next); }, &why))
+    if (!guarded([&] { impl_ = std::make_unique<Impl>(state, applied, next, format); }, &why))
         throw std::runtime_error("no UDP port for the session (mosh binds one of 60001 to 60999): " + why);
 }
 
@@ -96,7 +105,7 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
 }
 
 void ServerSession::setState(const sync::Sessions& state) {
-    impl_->transport.set_current_state(state);
+    impl_->transport.set_current_state(inFormat(state, impl_->format));
 }
 
 bool ServerSession::tick(std::string* why) {
@@ -119,14 +128,16 @@ struct ClientSession::Impl {
     sync::Actions initialMine;
     sync::Sessions initialRemote;
     ClientTransport transport;
-    Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next)
-        : initialMine(next), transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
+    Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next,
+         std::uint32_t format)
+        : initialMine(next), initialRemote(inFormat(sync::Sessions(), format)),
+          transport(initialMine, initialRemote, key.c_str(), ip.c_str(), port.c_str()) {}
 };
 
 ClientSession::ClientSession(const std::string& key, const std::string& ip, const std::string& port,
-                             std::uint64_t next) {
+                             std::uint64_t next, std::uint32_t format) {
     std::string why;
-    if (!guarded([&] { impl_ = std::make_unique<Impl>(key, ip, port, next); }, &why))
+    if (!guarded([&] { impl_ = std::make_unique<Impl>(key, ip, port, next, format); }, &why))
         throw std::runtime_error("cannot start the session with " + ip + " port " + port + ": " + why);
 }
 

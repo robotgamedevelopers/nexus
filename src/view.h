@@ -1,7 +1,8 @@
 // The window, declared each round as a Prax layout tree over lib/ui and Studio Kit: the tab strip (kit tabs), the
 // transcript and the prompt (a kit text area). Prax lays it out, paints it, routes input to it, edits the prompt's text
 // and keeps the transcript at its newest entry. The view keeps only what Prax does not: each friend's transcript scroll
-// while another tab shows.
+// while another tab shows. Under a friend's transcript come the open entry as it grows, then the state cursor on its
+// own line (cursor.h), coloured from the server's state and breathing while a turn is open.
 
 #pragma once
 
@@ -19,6 +20,7 @@
 #include "pr/layout_tree.h"
 #include "pr/ui.h"
 
+#include "cursor.h"
 #include "model.h"
 
 namespace nexus {
@@ -79,7 +81,17 @@ struct View {
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing
-    std::function<void()> stop;                 // Command-Escape: stops the friend's work; nothing to stop yet
+    std::function<void()> stop;                 // Command-Escape on a friend's tab: stops the friend's work (with a
+                                                // server, a stop action for the server to decide); unset, nothing
+    // With a server: the friend's text still growing in the session a friend's tab (by Tab::id) shows, the open entry
+    // (sync/mirror.h Mirror::open), shown after the transcript as it grows; null or empty for none. Unset: none.
+    std::function<const std::string*(std::size_t id)> growing;
+    // With a server: the state cursor of a friend's tab (by Tab::id), under its last text (cursor.h). Unset: none.
+    std::function<CursorState(std::size_t id)> cursor;
+    double time = 0;                            // the frame's time in seconds, for the busy cursor's breathe
+    bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
+    std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
+                                                // end of the transcript, never beside the prompt
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
@@ -113,7 +125,8 @@ struct View {
 // look and the kit's theme (which changes only between rounds). Returns true if it changed the scale.
 bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts);
 
-// True if a text scale is asked for and not yet applied: another frame would show something different.
+// True if a text scale is asked for and not yet applied, or a busy cursor breathes: another frame would show something
+// different.
 bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies

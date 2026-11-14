@@ -43,10 +43,16 @@ public:
     // holds it: the entry at seen(id).next, still open. Null when there is none.
     const SessionEntry* open(std::size_t id) const;
 
+    // What the friend of the session behind a friend's tab (by Tab::id) is doing, as the last state applied that held
+    // the session says: null until a state has held it, or when the last state applied did not.
+    const Activity* activity(std::size_t id) const;
+
 private:
     struct Shown {
         std::uint64_t next = 0;
         EntryRef open;
+        bool held = false;              // the last state applied held the session
+        Activity activity = Activity::Idle;
     };
     std::map<std::size_t, SessionId> session_;  // tab id -> the session it shows: the window's own, never sent
     std::map<std::size_t, Shown> seen_;

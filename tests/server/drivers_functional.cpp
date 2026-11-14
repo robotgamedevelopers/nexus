@@ -3,13 +3,14 @@
 // and the real clock. Each case starts from an empty directory, and checks that every process it started is gone at
 // its end: no child of this process is left, collected or not.
 //
-//   drivers_functional <nexus-fake-driver> <dir> <case>
+//   drivers_functional <nexus-fake-driver> <dir> <case> [<state dir>]
 //
 // The cases: normal, stop, silent, exit_mid_turn, malformed, ignores_stop, kill (ignores EOF and SIGTERM, so only
 // SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
-// change restarts the session's driver).
+// change restarts the session's driver), window (busy with a reply streaming after tool lines, idle, then down; with a
+// state dir it writes each state there for `nexus --state`).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -184,12 +185,13 @@ struct Server {
 
     const Supervisor& sup() { return *drivers->supervisor(kAda); }
 
-    // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "N " a notice.
+    // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "T " a tool line, "N " a notice.
     std::vector<std::string> transcript() const {
         std::vector<std::string> out;
         if (const sync::StoredSession* t = store.find(kAda)) {
             for (const sync::EntryRef& e : t->transcript) {
                 out.push_back(std::string(e->kind == EntryKind::Person ? "P " : e->kind == EntryKind::Friend ? "F " :
+                    e->kind == EntryKind::Tool ? "T " :
                     "N ") + e->text);
             }
         }
@@ -198,6 +200,12 @@ struct Server {
     sync::DriverState driver() const {
         const sync::StoredSession* t = store.find(kAda);
         return t != nullptr ? t->driver : sync::DriverState{};
+    }
+
+    // What the windows are sent of ada's activity (the state cursor).
+    sync::Activity activity() const {
+        const sync::SessionView* v = hub->state().find(kAda);
+        return v != nullptr ? v->activity : sync::Activity::Idle;
     }
 
     // Shutdown: every driver ended and collected, and none left running.
@@ -239,7 +247,7 @@ void normal(Server& s, const std::string& dir, const std::string& fake) {
         "emit {\"kind\":\"done\",\"outcome\":\"ok\",\"session_cost_usd\":0.02}\n");
     s.send("hi");
     CHECK(s.serveUntil([&] { return s.transcript().size() == 3 && idle(s); }, 10));
-    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Hello.", "F Read: a file"}));
+    CHECK((s.transcript() == std::vector<std::string>{"P hi", "F Hello.", "T Read: a file"}));
     CHECK(s.driver().session == "s-1");
     CHECK(s.driver().nextTurn == 2);
     CHECK(s.sup().alive());
@@ -250,10 +258,16 @@ void stop(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
         "emit {\"kind\":\"text\",\"delta\":\"ing\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    // ada's session was made before her driver was configured: down until the drivers file is read again.
+    CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Idle; }, 10));
     s.send("go");
+    CHECK(s.activity() == sync::Activity::Busy);     // the driver starts for the prompt
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
+    CHECK(s.activity() == sync::Activity::Busy);
     CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.activity() == sync::Activity::Busy);     // stopping
     CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK(s.activity() == sync::Activity::Idle);
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Working", "N Stopped."}));
     const pid_t first = s.drivers->pid(kAda);
     s.send("again");
@@ -342,12 +356,34 @@ void queueUnconfigured(Server& s, const std::string& dir, const std::string& fak
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped."}));
     CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"next"});
     CHECK(s.driver().waiting.empty());
+    CHECK(s.activity() == sync::Activity::Down);    // a driver idle, but none configured: nothing queued is taken
     std::filesystem::rename(table + ".away", table);
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "later")));
     CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped.", "P next", "F Second",
         "P later"}));
     CHECK(s.store.find(kAda)->queue.empty());
+}
+
+// A friend with no driver configured shows down (steady red), not idle: from the session's making, through a prompt
+// refused for want of a driver and one queued, which stays queued. Once the drivers file gives one, the server reads
+// it again within kResolveMs: the friend shows idle, and the queued prompt goes to the new driver without another
+// action of the person's.
+void unconfigured(Server& s, const std::string& dir, const std::string& fake) {
+    CHECK(s.activity() == sync::Activity::Down);
+    s.send("anyone?");
+    CHECK(s.transcript().size() == 2 && has(s.transcript().back(), "ada"));
+    CHECK(s.activity() == sync::Activity::Down);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "later")));
+    CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"later"});
+    s.serveUntil([] { return false; }, 1.5);    // read again past kResolveMs: still none
+    CHECK(s.activity() == sync::Activity::Down && s.drivers->pid(kAda) < 0);
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Here.\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 2 && idle(s); }, 10));
+    CHECK(s.store.find(kAda)->queue.empty());
+    CHECK(s.transcript().size() == 4 && s.transcript()[2] == "P later" && s.transcript()[3] == "F Here.");
+    CHECK(s.activity() == sync::Activity::Idle);
 }
 
 // No hello: ended after the hello deadline, counted as a failed start, and started again for the prompt still waiting.
@@ -364,6 +400,50 @@ void silent(Server& s, const std::string& dir, const std::string& fake) {
 }
 
 // An exit with a turn open: the text so far, why, and the turn cut; the prompt is never written again.
+// Where the window case writes the states it reaches, if anywhere (the optional fourth argument).
+std::string stateDir;
+
+// The hub's state now, as a window's first diff, into stateDir/<name>.state for `nexus --state` to draw.
+void writeState(Server& s, const std::string& name) {
+    if (!stateDir.empty()) {
+        writeFile(stateDir + "/" + name + ".state", sync::stateFile(s.hub->state()));
+    }
+}
+
+// What the window draws, from the server's state through the fake driver: a reply streaming after two tool lines
+// (busy), the turn ended (idle), then the driver crashing on the next prompt (down). Each state is written for the
+// window's screenshots when a state directory is given.
+void window(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"I'll start with the failed job's log.\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"tool\",\"name\":\"Bash\",\"summary\":\"gh run view 4211 --log-failed\"}\n"
+        "emit {\"kind\":\"tool\",\"name\":\"Read\",\"summary\":\"tests/sync/link_walk.cpp\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"The nightly went red in the link walk: seed 17 \"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"loses a diff when the\"}\nawait-stop\n"
+        "emit {\"kind\":\"text\",\"delta\":\" window reconnects mid-fragment.\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"On it.\"}\nemit {\"kind\":\"text-end\"}\nexit 1\n");
+    s.send("Why did the nightly build go red?");
+    const std::string growing = "The nightly went red in the link walk: seed 17 loses a diff when the";
+    CHECK(s.serveUntil([&] {
+        const sync::SessionView* v = s.hub->state().find(kAda);
+        return v != nullptr && !v->entries.empty() && !v->entries.back()->closed && v->entries.back()->text == growing;
+    }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P Why did the nightly build go red?",
+        "F I'll start with the failed job's log.", "T Bash: gh run view 4211 --log-failed",
+        "T Read: tests/sync/link_walk.cpp"}));
+    CHECK(s.activity() == sync::Activity::Busy);
+    writeState(s, "busy");
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.serveUntil([&] { return idle(s) && s.activity() == sync::Activity::Idle; }, 10));
+    CHECK(s.activity() == sync::Activity::Idle);
+    writeState(s, "idle");
+    s.send("Can you fix it?");
+    CHECK(s.serveUntil([&] { return none(s) && s.activity() == sync::Activity::Down; }, 10));
+    CHECK(s.activity() == sync::Activity::Down);
+    writeState(s, "down");
+}
+
 void exitMidTurn(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"par\"}\nexit 5\n");
     s.send("q");
@@ -376,6 +456,7 @@ void exitMidTurn(Server& s, const std::string& dir, const std::string& fake) {
         CHECK(has(t[3], "cut short. Whether ada got the prompt is unknown"));
     }
     CHECK(s.driver().openTurn == 0 && s.driver().waiting.empty() && s.driver().nextTurn == 2);
+    CHECK(s.activity() == sync::Activity::Down);     // the driver crashed: down until the next prompt
 }
 
 // A line that is not a message: the driver is ended and the turn cut.
@@ -579,13 +660,16 @@ void escapedOutput(Server& s, const std::string& dir, const std::string&) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: drivers_functional <nexus-fake-driver> <dir> <case>\n");
+    if (argc != 4 && argc != 5) {
+        std::fprintf(stderr, "usage: drivers_functional <nexus-fake-driver> <dir> <case> [<state dir>]\n");
         return 2;
     }
     const std::string fake = argv[1];
     const std::string dir = argv[2];
     const std::string name = argv[3];
+    if (argc == 5) {
+        stateDir = argv[4];
+    }
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     ::signal(SIGPIPE, SIG_IGN);     // as the server does: a driver gone mid-write is an error from write
@@ -644,7 +728,8 @@ int main(int argc, char** argv) {
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
-                {"stop_hammered", stopHammered}, {"account", account}};
+                {"unconfigured", unconfigured},
+                {"stop_hammered", stopHammered}, {"account", account}, {"window", window}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

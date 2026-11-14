@@ -91,4 +91,13 @@ if(NEXUS_WINDOW)
     add_test(NAME window_terminal COMMAND nexus_terminal_tests $<TARGET_FILE_DIR:nexus_fake_ssh>
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
     set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)
+
+    # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
+    # from the fake driver), with HOME an empty directory: it draws from the file alone (state_screenshot.cmake).
+    if(NEXUS_LINK AND TARGET nexus)
+        add_test(NAME window_state_screenshot COMMAND ${CMAKE_COMMAND} -DNEXUS=$<TARGET_FILE:nexus>
+            -DSTATE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/busy.state -DWORK=${CMAKE_CURRENT_BINARY_DIR}/state_screenshot
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/state_screenshot.cmake)
+        set_tests_properties(window_state_screenshot PROPERTIES LABELS functional TIMEOUT 60)
+    endif()
 endif()

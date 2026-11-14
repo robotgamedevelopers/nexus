@@ -72,7 +72,7 @@ SprintId == N               \* the sprint tab's id, when there is one: the first
 Pinned == IF Sprint THEN 1 ELSE 0   \* the tabs before the friends at the start
 Tabs == DOMAIN order        \* positions in the strip
 Count == Cardinality(Tabs)  \* how many tabs stand in it
-Kinds == {"Person", "Friend", "Notice"}
+Kinds == {"Person", "Friend", "Notice", "Tool"}
 Texts == Drafts \cup {e.text : e \in AppendEntries}
 Entry == [kind : Kinds, text : Texts]
 NoEntry == [kind |-> "None", text |-> ""]
