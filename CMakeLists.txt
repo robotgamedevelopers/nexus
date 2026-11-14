@@ -198,7 +198,7 @@ if(NEXUS_WINDOW)
     add_library(nexus_view STATIC src/view.cpp)
     target_include_directories(nexus_view PUBLIC src)
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_view PUBLIC nexus_window_logic
+    target_link_libraries(nexus_view PUBLIC nexus_window_logic nexus_hitch
         prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
     # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
@@ -215,6 +215,13 @@ if(NEXUS_WINDOW)
     target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
         prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
         prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
+
+    # What the window does around the view each frame (src/frame_host.h): built by the app, and driven by the
+    # frame-budget test.
+    add_library(nexus_frame STATIC src/frame_host.cpp)
+    target_include_directories(nexus_frame PUBLIC src)
+    target_compile_options(nexus_frame PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_frame PUBLIC nexus_view nexus_terminals nexus_board nexus_sync nexus_hitch)
 endif()
 
 if(NEXUS_LINK)
@@ -256,7 +263,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
         endif()
     endif()
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus PRIVATE nexus_view nexus_terminals nexus_board
+    target_link_libraries(nexus PRIVATE nexus_frame nexus_view nexus_terminals nexus_board
         prax::studio_app prax::gpu prax::image prax::compress)
     if(NEXUS_LINK)
         target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)

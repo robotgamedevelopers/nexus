@@ -557,6 +557,7 @@ struct Builder {
         view.transcript = kPrLayoutNodeNone;
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
+        HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
         view.terminals->show(tab.id, window);
     }
 
@@ -606,6 +607,7 @@ struct Builder {
             if (tab.kind != TabKind::Terminal)
                 continue;
             const std::size_t id = tab.id;
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             if (view.terminals->ended(id)) {
                 model.close_tab(i);
                 view.terminals->close(id);
@@ -787,12 +789,14 @@ struct Builder {
         // neither a terminal nor the prompt sees them.
         if (prUiKeyCaptured(ui, keys, PrAppKey('T'), style::kCommand) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             if (!view.terminals->open(id))
                 model.close_tab(model.active());
         }
         if (prUiKeyCaptured(ui, keys, PrAppKey('W'), style::kCommand) && model.tab_count() != 0 &&
                 model.tab(model.active()).kind == TabKind::Terminal) {
             const std::size_t id = model.tab(model.active()).id;
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             model.close_tab(model.active());
             view.terminals->close(id);
         }

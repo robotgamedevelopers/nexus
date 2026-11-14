@@ -21,6 +21,7 @@
 #include "pr/ui.h"
 
 #include "cursor.h"
+#include "hitch.h"
 #include "model.h"
 
 namespace nexus {
@@ -119,6 +120,7 @@ struct View {
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
+    HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
 };
 
 // Called at the start of each frame, before its rounds: applies a text scale the keys asked for in the last frame to the

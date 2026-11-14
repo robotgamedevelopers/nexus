@@ -99,6 +99,23 @@ if(NEXUS_WINDOW)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
     set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)
 
+    # The frame budget (test_frames.cpp): the window's real frame code (src/frame_host.h) driven against slow fakes, each
+    # frame's main-thread work measured by the hitch detector on the real clock against 8.3 ms (120 Hz). Real shells,
+    # real time and the system's fonts: a functional test, in a working directory of its own. slow_ssh stands in for an
+    # ssh whose host never answers.
+    if(NEXUS_LINK)
+        add_executable(nexus_slow_ssh slow_ssh.cpp)
+        target_compile_options(nexus_slow_ssh PRIVATE ${NEXUS_WARNINGS})
+        add_executable(nexus_frame_tests test_frames.cpp)
+        target_compile_options(nexus_frame_tests PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(nexus_frame_tests PRIVATE nexus_frame nexus_link)
+        add_dependencies(nexus_frame_tests nexus_slow_ssh)
+        file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/frame_work)
+        add_test(NAME window_frame_budget COMMAND nexus_frame_tests $<TARGET_FILE:nexus_slow_ssh>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/frame_work)
+        set_tests_properties(window_frame_budget PROPERTIES LABELS functional TIMEOUT 90)
+    endif()
+
     # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
     # from the fake driver), with HOME an empty directory: it draws from the file alone (state_screenshot.cmake).
     if(NEXUS_LINK AND TARGET nexus)
