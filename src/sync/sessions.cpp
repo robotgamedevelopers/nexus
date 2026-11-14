@@ -36,7 +36,7 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// One changed session: what it is (its friend, harness, account, model and effort); its first index; the index k of
+// One changed session: what it is (its friend, harness, account, model, effort and instance); its first index; the index k of
 // the first entry `a` does not hold as it is; the entries from k to the end, each its kind, closed flag, the length of
 // text `a` holds of it (non-zero only for an entry `a` holds open that only grew) and the rest of its text; then a
 // byte, 1 if the queue changed, and if so the queue.
@@ -46,6 +46,7 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
     w.str(b.info.account);
     w.str(b.info.model);
     w.str(b.info.effort);
+    w.str(b.info.instance);
     w.u64(b.first);
     std::uint64_t k = b.first;
     while (k < b.total()) {
@@ -90,6 +91,7 @@ SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionV
     t->info.account = r.str();
     t->info.model = r.str();
     t->info.effort = r.str();
+    t->info.instance = r.str();
     t->first = r.u64();
     const std::uint64_t k = r.u64();
     const std::uint64_t count = r.u64();

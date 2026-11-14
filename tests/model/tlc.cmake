@@ -112,10 +112,10 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
 elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness")
+    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness" OR FAULTY STREQUAL "instance")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay or harness")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay, harness or instance")
     endif()
     execute_process(COMMAND "${ACCWALK}" ${walk_args} "${WORK}/AccountsTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

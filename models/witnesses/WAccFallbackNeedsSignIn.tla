@@ -16,7 +16,7 @@ BrokenUnlink(f, a) ==
          /\ ses' = BrokenSettled(nl, nd, prov)
          /\ told' = SettledTold(nl, prov)
          /\ Done("unlink", f, a, 0, TRUE)
-         /\ UNCHANGED <<acct, prov, known, nextSes>>
+         /\ UNCHANGED <<insts, acct, prov, known, nextSes>>
     ELSE Refused("unlink", f, a, 0, {})
 
 BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, BrokenUnlink, SetDefault, SetSession, Rotate, Create, ReloadDropLink, ReloadProvider)]_vars

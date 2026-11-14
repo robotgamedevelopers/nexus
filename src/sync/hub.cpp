@@ -223,6 +223,9 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
             info.account = from->info.account;
             info.model = from->info.model;
             info.effort = from->info.effort;
+            if (from->info.friendName == action.friendName) {
+                info.instance = from->info.instance;
+            }
         }
         if (accounts_) {
             // The account copied only when linked to this friend (or none), else the friend's default.
@@ -232,6 +235,11 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
                 info.account = f == nullptr ? std::string() : f->preferred;
             }
             info.harness = harnessOf(info.account, info.harness);
+            // The instance copied from a session of the same friend while the friend still has it, else the friend's
+            // default instance (its first), or none.
+            if (f == nullptr || f->instance(info.instance) == nullptr) {
+                info.instance = f == nullptr || f->instances.empty() ? std::string() : f->instances.front().name;
+            }
         }
         return make(action, info, why, client);
     }
@@ -447,7 +455,25 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause) {
     for (SessionId id : store_.ids()) {
         const StoredSession* s = store_.find(id);
         SessionInfo info = s->info;
+        // An instance the friend no longer has: the session moves to the friend's default instance, or none, told.
+        const accounts::Friend* fr = accounts_->friendNamed(info.friendName);
+        std::string instanceNotice;
+        if (!info.instance.empty() && (fr == nullptr || fr->instance(info.instance) == nullptr)) {
+            const std::string wasInstance = info.instance;
+            info.instance = fr == nullptr || fr->instances.empty() ? std::string() : fr->instances.front().name;
+            instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.friendName + "'s (" +
+                cause + "), so this session now belongs to " + (info.instance.empty() ? std::string("none of its "
+                "instances") : "its instance " + info.instance) + ". Add an instance to " + info.friendName +
+                " in friends.json to choose another.";
+            if (report != nullptr) {
+                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+                    wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
+            }
+        }
         if (info.account.empty()) {
+            if (!instanceNotice.empty() && !moveTo(id, info, instanceNotice)) {
+                return false;
+            }
             continue;
         }
         const std::string was = info.account;
@@ -463,11 +489,15 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause) {
             info.harness = harnessOf(was, info.harness);
             notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
                 "now runs " + info.harness + ".";
-        } else {
+        } else if (instanceNotice.empty()) {
             continue;
         }
-        if (!moveTo(id, info, notice)) {
+        if (!moveTo(id, info, instanceNotice.empty() ? notice : notice.empty() ? instanceNotice :
+                    instanceNotice + " " + notice)) {
             return false;
+        }
+        if (notice.empty()) {
+            continue;   // its instance alone moved: said above
         }
         if (report != nullptr) {
             report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): account " + was + " -> " +
@@ -581,18 +611,34 @@ std::vector<std::string> Hub::adoptDefaults() {
     for (SessionId id : store_.ids()) {
         SessionInfo info = store_.find(id)->info;
         const accounts::Friend* f = accounts_->friendNamed(info.friendName);
-        if (!info.account.empty() || f == nullptr || f->preferred.empty()) {
+        if (f == nullptr) {
             continue;
         }
-        info.account = f->preferred;
-        info.harness = harnessOf(info.account, info.harness);
-        if (!moveTo(id, info, "This session runs on the account " + info.account + ", which the drivers file gave " +
-                    info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
-                    "(docs/accounts.md).")) {
+        std::string notice;
+        std::string line;
+        if (info.account.empty() && !f->preferred.empty()) {
+            info.account = f->preferred;
+            info.harness = harnessOf(info.account, info.harness);
+            notice = "This session runs on the account " + info.account + ", which the drivers file gave " +
+                info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
+                "(docs/accounts.md).";
+            line = "account none -> " + info.account;
+        }
+        if (info.instance.empty() && !f->instances.empty()) {
+            // Before instances, a friend ran on this machine in its drivers file's directory: that instance.
+            info.instance = f->instances.front().name;
+            line += (line.empty() ? "" : ", ") + std::string("instance none -> ") + info.instance;
+        }
+        if (line.empty()) {
+            continue;
+        }
+        if (!moveTo(id, info, notice.empty() ? "This session belongs to " + info.friendName + "'s instance " +
+                    info.instance + ", where its driver ran before instances were set up (docs/accounts.md)." :
+                    notice)) {
             break;
         }
-        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): account none -> " +
-                         info.account + ", as the drivers file ran it");
+        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): " + line +
+                         ", as the drivers file ran it");
     }
     return report;
 }

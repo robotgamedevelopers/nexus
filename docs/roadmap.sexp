@@ -51,10 +51,10 @@
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
-     ("client-config" "Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own")
+     ("client-config" "Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per friend or a tab per instance of a friend (the server sends every session's friend and instance names, and keeps no tabs of its own)")
      ("client-template" "A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched)")
      ("client-promote" "Promote one machine's client config to the template, with a pending update for every other machine" :later t)
-     ("ui-rules-to-config" "The window's rules that are one person's setup move into the client config: the sprint tab first and pinned at Command-1, the friend tabs, the terminals")
+     ("ui-rules-to-config" "The window's rules that are one person's setup move into the client config: today's fixed zones (sprint, then friends, then terminals) become the default tab groups, in the default order dashboards, friends, terminals (tab-groups)")
      ("server-config-json" "The server's key-value config and its drivers file become documented JSON in nexus-config, with a version, check, reload and history like accounts.json")
      ("config-remote-signin" "Pushing the config repository to a remote stays opt-in (built: `nexus-server config remote`); later, an in-app GitHub sign-in for the pushes, through the secret dialog, in place of the git credentials of the user nexus-server runs as" :later t)
      ("config-history-pruning" "Question: does the config repository's history ever need pruning, and if so how, without rewriting what was pushed" :later t)
@@ -72,6 +72,7 @@
   (:id "tab-kinds" :type :roadmap :title "Tab kinds"
    :rows (
      ("tab-kinds-data" "Tab kinds are pluggable, described as data that nexus renders with Prax: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI")
+     ("tab-groups" "The tab strip is made of tab groups, generalizing today's fixed zones (sprint, then friends, then terminals): a dashboards group (the sprint board is one dashboard), a friends group (a tab per friend or per instance, as configured) and a terminals group; later groups for editor, files, chat, mail and social. Which groups exist, their order and their contents are client config, set by talking with your AI; the default order is dashboards, friends, terminals. Each group's definition carries its behaviour: whether Cmd-W closes its tabs (a group is not closable unless its config says so; terminals are closable by default), how a new tab is made (Cmd-T for terminals), and dragging moves a tab within its group only")
      ("editor-tab" "Editor tab, modelled on Sublime Text 3: fast open, a command palette, multiple cursors, Goto Anything; keyboard-first and the same on every OS, with nexus's own look; Prax's highest text layers first. After the friends layer" :later t)
      ("files-tab" "File explorer tab. Open: whose files (this machine's, the server's, a fleet machine's)" :later t)
      ("chat-tab" "Chat tab: a Chatto client. Open: which Chatto, and its product and API, to confirm first" :later t)
@@ -81,6 +82,7 @@
    :columns (("done" "done"))
    :cells (
      ("tab-kinds-data" "done" "t-tab-kinds-data")
+     ("tab-groups" "done" "t-tab-groups")
      ("editor-tab" "done" "t-editor-tab")
      ("files-tab" "done" "t-files-tab")
      ("chat-tab" "done" "t-chat-tab")
@@ -95,7 +97,8 @@
   (:id "t-config-remote-signin" :type :task :title "In-app GitHub sign-in for config pushes" :state :todo)
   (:id "t-config-history-pruning" :type :task :title "Config history pruning: whether and how" :state :todo)
   (:id "t-tab-kinds-data" :type :task :title "Tab kinds as data, chosen per machine in the client config" :state :todo)
-  (:id "t-editor-tab" :type :task :title "Editor tab after Sublime Text 3" :state :todo)
+  (:id "t-tab-groups" :type :task :title "Tab groups (dashboards, friends, terminals; later more) as client config, each with its own close, new-tab and drag rules" :state :todo)
+  (:id "t-editor-tab":type :task :title "Editor tab after Sublime Text 3" :state :todo)
   (:id "t-files-tab" :type :task :title "File explorer tab" :state :todo)
   (:id "t-chat-tab" :type :task :title "Chat tab: a Chatto client" :state :todo)
   (:id "t-mail-tab" :type :task :title "Mail tab" :state :todo)
@@ -128,13 +131,14 @@
    :evidence ("models/ClaudeDriver.tla: ctest -L model tlc_claude_driver tlc_claude_driver_witness_*" "drivers/claude/test/walk.ts, drivers/claude/test/unit/driver.test.ts: ctest -L model tlc_claude_driver_trace_*"))
   (:id "t-friends-accounts" :type :work-set :children ("t-accounts-server" "t-accounts-secret-dialog"
                                                        "t-accounts-sign-in" "t-accounts-drivers"
-                                                       "t-accounts-window"))
-  (:id "t-accounts-server" :type :task :title "5a. Accounts and friends on the server: providers have accounts; friends link to any number of accounts of any providers, with a default; a session runs on one of its friend's accounts, set by the person or rotated by the server at a usage limit; accounts.json and friends.json in a git repository of their own, edited through the person's AI with `nexus-server config check`, `reload`, `history`, `restore` and `remote`" :state :done
+                                                       "t-accounts-window" "t-accounts-remote-instance"))
+  (:id "t-accounts-server" :type :task :title "5a. Accounts and friends on the server: providers have accounts; friends link to any number of accounts of any providers, with a default; a friend has instances (a machine and a working directory each), and a session belongs to one of them; a session runs on one of its friend's accounts, set by the person or rotated by the server at a usage limit; accounts.json and friends.json in a git repository of their own, edited through the person's AI with `nexus-server config check`, `reload`, `history`, `restore` and `remote`" :state :done
    :evidence ("models/Accounts.tla: ctest -L model tlc_accounts tlc_accounts_witness_*" "tests/accounts/accounts_walk.cpp: ctest -L model tlc_accounts_trace_*" "tests/accounts/accounts_test.cpp: ctest -L unit accounts_unit_*" "tests/accounts/config_repo_test.cpp: ctest -L functional accounts_functional_config_repo"))
   (:id "t-accounts-secret-dialog" :type :task :title "5b. Secret dialog: the window's own dialog for a credential, sent to the server and written 0600 under ~/.nexus/server/accounts/<name>/; never shown, logged, or seen by an AI" :state :todo)
   (:id "t-accounts-sign-in" :type :task :title "5c. Sign-in: each provider's login flow through the secret dialog; the server reports each account signed in or needing sign-in, and rotation picks only signed-in accounts" :state :todo)
   (:id "t-accounts-drivers" :type :task :title "5d. Drivers take the session's account (the environment each driver starts with) in place of the drivers file's --account, and tell their AI where the config lives and its verbs (configBrief); each driver reports a usage limit as the protocol's `usage-limit` error (the Claude driver now reports a rate limit as `harness`; its model, ClaudeDriver.tla, changes with it), so that the server rotates the session; a driver per provider; a switch the harness cannot resume, within or across providers, starts fresh seeded with a summary of the conversation so far" :state :todo)
   (:id "t-accounts-window" :type :task :title "5e. Window: Command-A selects a session's account from its friend's, or leaves the choice to the server's rotation; several accounts of one friend may run at once" :state :todo)
+  (:id "t-accounts-remote-instance" :type :task :title "5f. A driver on the instance's machine: a session whose instance is on another machine than the server's gets its driver started there, in the instance's directory, over the fleet's ssh by the machine's name (today it gets a notice and no driver). Moving an instance (an edit of its machine or directory): the next session starts there; a running session's driver restarts there, resuming the conversation when the directory is the same repository, else starting fresh seeded with a summary of the conversation so far" :state :todo)
   (:id "t-friends-window" :type :task :title "6. Window: a friend tab shows the conversation" :state :todo)
   ; Feedback for Prax's author (a gap nexus works around, AGENTS.md): no table renders it.
   (:id "prax-json-strict-utf8" :type :task :title "Prax feedback: a strict mode for lib/json and lib/core's UTF-8" :state :todo

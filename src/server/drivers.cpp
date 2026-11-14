@@ -195,6 +195,21 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
         r.command.clear();
         return r;
     };
+    // The session's instance: its machine must be this server's host (a driver on another machine is roadmap work,
+    // docs/roadmap.sexp), and its directory is where the driver works.
+    const accounts::Friend* fr = hub_ != nullptr && hub_->accounts() != nullptr ?
+        hub_->accounts()->friendNamed(friendName) : nullptr;
+    const accounts::Instance* in = fr != nullptr && !info.instance.empty() ? fr->instance(info.instance) : nullptr;
+    if (in != nullptr) {
+        const std::string shortHost = options_.host.substr(0, options_.host.find('.'));
+        if (!options_.host.empty() && in->machine != options_.host && in->machine != shortHost) {
+            return refuse("Session " + std::to_string(id) + " belongs to " + friendName + "'s instance " + in->name +
+                ", on the machine " + in->machine + ", and this server runs on " + shortHost + "; nexus-server does "
+                "not yet start a driver on another machine, so the prompt was not sent. Make a session of an instance "
+                "of " + friendName + " on " + shortHost + ", or add one in friends.json (docs/accounts.md).");
+        }
+        r.cwd = in->dir;
+    }
     if (info.account.empty()) {
         if (takesAccount && hub_ != nullptr && hub_->accounts() != nullptr) {
             return refuse("Session " + std::to_string(id) + " with " + friendName + " runs on no account, and " +

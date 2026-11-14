@@ -2,14 +2,15 @@
 // a seeded random walk and writes the trace as AccountsTraceData.tla, for TLC to check against models/Accounts.tla
 // (models/AccountsTrace.tla). No files, no clock: the registry is the hub's, the sign-ins are reported by the walk.
 //
-//   accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness] <out.tla>
+//   accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance] <out.tla>
 //
 // Each step is one of the model's operations, given to the code the way the server gives it: an account action from a
 // window (add, remove, friend, link, unlink, default, set, create) through Hub::apply; a hand edit (dropfriend,
-// droplink, dropaccount, provider) as the registry it leaves, through Hub::applyAccounts, the way `nexus-server config
+// droplink, dropaccount, provider, addinst, dropinst) as the registry it leaves, through Hub::applyAccounts, the way `nexus-server config
 // reload` applies the files; a sign-in reported (in, out) through Hub::reportSignedIn; a usage limit (rotate) through
 // Hub::rotate. After it the walk records the code's whole state: each account absent, signed in or needing sign-in,
-// its provider, the friends with their links and defaults, each session's friend, account and harness, the next id,
+// its provider, the friends with their links, defaults and instances, each session's friend, instance, account and
+// harness, the next id,
 // the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
 // the step or refused it.
 //
@@ -20,6 +21,7 @@
 // walk writing the session's old settings back into the store after the step:
 //   --faulty-stay      a session left on an account no longer linked to its friend
 //   --faulty-harness   a session left on its old harness when its account's provider changed
+//   --faulty-instance  a session left on an instance its friend no longer has
 
 #include <cstdint>
 #include <cstdio>
@@ -42,6 +44,7 @@ const std::vector<std::string> kAccts{"a1", "a2", "a3"};
 const std::map<std::string, std::string> kProvider{{"a1", "claude"}, {"a2", "claude"}, {"a3", "codex"}};
 const std::vector<std::string> kProviders{"claude", "codex"};
 const std::vector<std::string> kFriends{"f", "g"};
+const std::vector<std::string> kInsts{"i1", "i2"};
 constexpr sync::SessionId kMaxSes = 3;
 const char* const kStartHarness = "claude";    // the hub's harness for a session of no account (no responder)
 const char* const kNone = "none";
@@ -137,15 +140,27 @@ struct Walk {
             const accounts::Friend* f = reg().friendNamed(kFriends[i]);
             o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> " << q(orNone(f == nullptr ? "" : f->preferred));
         }
+        o << "), insts |-> (";
+        for (std::size_t i = 0; i < kFriends.size(); ++i) {
+            const accounts::Friend* f = reg().friendNamed(kFriends[i]);
+            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> <<";
+            if (f != nullptr) {
+                for (std::size_t j = 0; j < f->instances.size(); ++j) {
+                    o << (j == 0 ? "" : ", ") << q(f->instances[j].name);
+                }
+            }
+            o << ">>";
+        }
         o << "), ses |-> <<";
         for (sync::SessionId id = 1; id <= kMaxSes; ++id) {
             const sync::StoredSession* s = store.find(id);
             o << (id == 1 ? "" : ", ");
             if (s == nullptr) {
-                o << "[made |-> FALSE, friend |-> \"none\", acct |-> \"none\", harness |-> \"none\"]";
+                o << "[made |-> FALSE, friend |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\"]";
             } else {
-                o << "[made |-> TRUE, friend |-> " << q(s->info.friendName) << ", acct |-> " << q(orNone(s->info.account))
-                  << ", harness |-> " << q(s->info.harness) << "]";
+                o << "[made |-> TRUE, friend |-> " << q(s->info.friendName) << ", inst |-> " <<
+                    q(orNone(s->info.instance)) << ", acct |-> " << q(orNone(s->info.account)) << ", harness |-> " <<
+                    q(s->info.harness) << "]";
             }
         }
         o << ">>, nextSes |-> " << store.nextId() << ", told |-> {";
@@ -169,12 +184,15 @@ int main(int argc, char** argv) {
             faulty = "stay";
         } else if (std::strcmp(argv[i], "--faulty-harness") == 0) {
             faulty = "harness";
+        } else if (std::strcmp(argv[i], "--faulty-instance") == 0) {
+            faulty = "instance";
         } else {
             args.emplace_back(argv[i]);
         }
     }
     if (args.size() != 3) {
-        std::fprintf(stderr, "usage: accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness] <out.tla>\n");
+        std::fprintf(stderr, "usage: accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance] "
+                     "<out.tla>\n");
         return 2;
     }
     state = std::strtoull(args[0].c_str(), nullptr, 10) * 0x9E3779B97F4A7C15ULL + 1;
@@ -201,7 +219,7 @@ int main(int argc, char** argv) {
         std::string p = kNone;
         sync::SessionId s = 0;
         bool ok = false;
-        const std::size_t choice = pick(50);   // weighted toward the steps that move sessions
+        const std::size_t choice = pick(56);   // weighted toward the steps that move sessions
         if (choice < 3) {
             op = "add";
             a = pickOf(kAccts);
@@ -283,6 +301,24 @@ int main(int argc, char** argv) {
             op = "rotate";
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             ok = w.hub.rotate(s);
+        } else if (choice >= 50) {
+            // An edit of a friend's instances: one added at the end, or one taken out.
+            op = choice < 53 ? "addinst" : "dropinst";
+            f = pickOf(kFriends);
+            a = pickOf(kInsts);
+            accounts::Registry next = w.reg();
+            if (accounts::Friend* x = next.friendNamed(f)) {
+                if (op == "addinst") {
+                    x->instances.push_back(accounts::Instance{a, "studio", "/work/" + a});
+                } else {
+                    std::erase_if(x->instances, [&](const accounts::Instance& i) { return i.name == a; });
+                }
+                ok = w.edit(next);
+            } else {
+                // No such friend in the files: an instance of it makes them inconsistent (refused); none to drop is
+                // the files as they are.
+                ok = op == "dropinst" && w.edit(next);
+            }
         } else {
             if (w.store.nextId() > kMaxSes) {
                 --step;     // the model's refusal past its limit is not the code's (Limits::sessions): not walked
@@ -300,7 +336,9 @@ int main(int argc, char** argv) {
                 const sync::SessionInfo now = w.store.find(id)->info;
                 const bool stray = faulty == "stay" && unlinking && now.account != before.account;
                 const bool harness = faulty == "harness" && op == "provider" && now.harness != before.harness;
-                if (stray || harness) {
+                const bool instance = faulty == "instance" && (op == "dropinst" || op == "dropfriend") &&
+                    now.instance != before.instance;
+                if (stray || harness || instance) {
                     std::string why;
                     w.store.commit(id, {sync::infoChange(before)}, std::string(), 0, &why);
                     ++faults;
@@ -341,6 +379,7 @@ int main(int argc, char** argv) {
         << "TraceProvider == (\"a1\" :> \"claude\" @@ \"a2\" :> \"claude\" @@ \"a3\" :> \"codex\")\n"
         << "TraceProviders == {\"claude\", \"codex\"}\n"
         << "TraceFriends == {\"f\", \"g\"}\n"
+        << "TraceInsts == {\"i1\", \"i2\"}\n"
         << "TraceMaxSes == " << kMaxSes << "\n"
         << "TraceStartHarness == \"" << kStartHarness << "\"\n"
         << "Trace == <<\n";

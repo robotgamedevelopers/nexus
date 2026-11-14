@@ -7,12 +7,13 @@
 (* tests/accounts/accounts_walk.cpp drives the code with a seeded random   *)
 (* walk and writes AccountsTraceData.tla beside this module. It defines    *)
 (* the instance (TraceAccts, TraceProvider, TraceProviders, TraceFriends,  *)
-(* TraceMaxSes, TraceStartHarness) and Trace: one record per step. Trace[1]*)
-(* is the start (op "init"); each later record is the operation the code   *)
-(* was given (op, with its friend f, account a, session s and provider p), *)
-(* whether the code took it (ok), and after it the code's whole state: the *)
-(* accounts, providers, friends, links, defaults, sessions and next id,    *)
-(* and the sessions the step gave a notice (told).                         *)
+(* TraceInsts, TraceMaxSes, TraceStartHarness) and Trace: one record per   *)
+(* step. Trace[1] is the start (op "init"); each later record is the       *)
+(* operation the code was given (op, with its friend f, account or         *)
+(* instance a, session s and provider p), whether the code took it (ok),   *)
+(* and after it the code's whole state: the accounts, providers, friends,  *)
+(* links, defaults, instances, sessions and next id, and the sessions the  *)
+(* step gave a notice (told).                                              *)
 (*                                                                         *)
 (* Each step of this spec takes the Accounts action the record names.      *)
 (* TraceMatches requires the spec's state to equal the code's, variable by *)
@@ -22,10 +23,11 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, AccountsTraceData
 
-VARIABLES acct, prov, known, links, dflt, ses, nextSes, told, last, l
+VARIABLES acct, prov, known, links, dflt, insts, ses, nextSes, told, last, l
 
 L == INSTANCE Accounts WITH Accts <- TraceAccts, Provider <- TraceProvider, Providers <- TraceProviders,
-                            Friends <- TraceFriends, MaxSes <- TraceMaxSes, StartHarness <- TraceStartHarness
+                            Friends <- TraceFriends, Insts <- TraceInsts, MaxSes <- TraceMaxSes,
+                            StartHarness <- TraceStartHarness
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
@@ -36,6 +38,7 @@ Matches(k) ==
     /\ known = r.known
     /\ links = r.links
     /\ dflt = r.dflt
+    /\ insts = r.insts
     /\ ses = r.ses
     /\ nextSes = r.nextSes
     /\ told = r.told
@@ -56,13 +59,15 @@ Step(r) ==
       [] r.op = "droplink"    -> L!ReloadDropLink(r.f, r.a)
       [] r.op = "dropaccount" -> L!ReloadDropAccount(r.a)
       [] r.op = "provider"    -> L!ReloadProvider(r.a, r.p)
+      [] r.op = "addinst"     -> L!ReloadAddInstance(r.f, r.a)
+      [] r.op = "dropinst"    -> L!ReloadDropInstance(r.f, r.a)
       [] r.op = "set"         -> L!SetSession(r.s, r.a)
       [] r.op = "rotate"      -> L!Rotate(r.s)
       [] r.op = "create"      -> L!Create(r.f, r.s)
       [] OTHER                -> FALSE
 
-modelVars == <<acct, prov, known, links, dflt, ses, nextSes, told, last>>
-traceVars == <<acct, prov, known, links, dflt, ses, nextSes, told, last, l>>
+modelVars == <<acct, prov, known, links, dflt, insts, ses, nextSes, told, last>>
+traceVars == <<acct, prov, known, links, dflt, insts, ses, nextSes, told, last, l>>
 
 TraceInit == l = 1 /\ L!Init
 
@@ -80,6 +85,7 @@ TypeOK == L!TypeOK
 LinksSound == L!LinksSound
 DefaultLinked == L!DefaultLinked
 SessionLinked == L!SessionLinked
+InstanceHeld == L!InstanceHeld
 HarnessMatches == L!HarnessMatches
 IdsDense == L!IdsDense
 MovedIsTold == L!MovedIsTold

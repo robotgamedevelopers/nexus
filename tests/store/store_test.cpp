@@ -942,7 +942,7 @@ void test_migrate() {
         Journal j(fs, "store");
         Journal::Recovery rec;
         CHECK_OK(j.open(rec));
-        CHECK(!rec.snapshot.empty() && rec.snapshot[0] == 3 && rec.records.empty());
+        CHECK(!rec.snapshot.empty() && rec.snapshot[0] == 4 && rec.records.empty());
     }
     fs.crash(fs.plan_all(false));
     {
@@ -1010,6 +1010,60 @@ Change dequeue() {
     Change c;
     c.kind = Change::Kind::Dequeue;
     return c;
+}
+
+// A store from before instances (a snapshot of format 3, records of format 2: a session's info of five fields) opens
+// with each session on no instance, and a session's instance written after is kept across a restart, in records of
+// format 3.
+void test_instance() {
+    Writer snap;
+    snap.u8(3);
+    snap.u64(2);
+    snap.u32(1);
+    snap.u64(1);
+    for (const char* f : {"ada", "claude", "work", "", ""}) {
+        snap.str(f);
+    }
+    snap.u32(0);
+    snap.u32(0);
+    snap.u64(1);
+    snap.u64(0);
+    snap.str("");
+    snap.u32(0);
+    snap.u32(0);
+    Writer rec;
+    rec.u8(2);
+    rec.u64(1);
+    rec.u32(1);
+    rec.u8(std::uint8_t(Change::Kind::SetInfo));
+    for (const char* f : {"ada", "claude", "home", "fast", ""}) {
+        rec.str(f);
+    }
+    rec.str("w1");
+    rec.u64(4);
+    MemFs fs = legacy_store(snap.out(), {rec.out()});
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.report.migrated == 0);
+        CHECK(about(o.s->session(1)->info) == "ada/claude/home/fast/" && o.s->session(1)->info.instance.empty());
+        CHECK(o.s->applied("w1") == 4);
+        Change c = info("ada");
+        c.info.instance = "rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c}, "w1", 5));
+    }
+    {
+        Journal j(fs, "store");
+        Journal::Recovery r;
+        CHECK_OK(j.open(r));
+        CHECK(!r.records.empty() && r.records.back()[0] == 3);
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
+    }
 }
 
 void test_dequeue() {
@@ -1105,6 +1159,7 @@ const Group kGroups[] = {
     {"driver", test_driver},
     {"migrate", test_migrate},
     {"dequeue", test_dequeue},
+    {"instance", test_instance},
 };
 
 } // namespace

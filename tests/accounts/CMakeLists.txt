@@ -21,7 +21,7 @@ target_compile_options(accounts_walk PRIVATE ${warnings})
 add_dependencies(model_checks accounts_test accounts_walk)
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
-              hub_adopt_defaults hub_probe)
+              hub_adopt_defaults hub_probe instances hub_instances)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -32,6 +32,8 @@ endforeach()
 # distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
 tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 4)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
+tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant
@@ -66,19 +68,23 @@ tlc_test(tlc_accounts_witness_reload_unchecked   WAccReloadUnchecked   WAccReloa
          PROPERTY DefaultLinked)
 tlc_test(tlc_accounts_witness_provider_keeps_harness WAccProviderKeepsHarness WAccProviderKeepsHarness.cfg invariant
          PROPERTY HarnessMatches)
+tlc_test(tlc_accounts_witness_drop_instance_stays WAccDropInstanceStays WAccDropInstanceStays.cfg invariant
+         PROPERTY InstanceHeld)
 
 # Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla. Each walk of 400
-# steps has the server move 11 to 19 sessions (settles and rotations) and takes TLC about two seconds.
+# steps has the server move 6 to 20 sessions (settles and rotations) and takes TLC about two seconds.
 foreach(seed 1 2 3 4)
     tlc_test(tlc_accounts_trace_seed_${seed} AccountsTrace AccountsTrace.cfg pass ACCWALK SEED ${seed} STEPS 400)
 endforeach()
 
-# The binding can fail: a hub that leaves a session on an account no longer linked to its friend, or on its old
-# harness when its account's provider changed, must be rejected.
+# The binding can fail: a hub that leaves a session on an account no longer linked to its friend, on its old harness
+# when its account's provider changed, or on an instance its friend no longer has, must be rejected.
 tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
-         PROPERTY TraceMatches ACCWALK SEED 5 STEPS 400 FAULTY harness)
+         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY harness)
+tlc_test(tlc_accounts_trace_faulty_instance_rejected AccountsTrace AccountsTrace.cfg invariant
+         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY instance)
 
 # The config repository (src/server/config_repo.h): real git in a directory of the test's own, with HOME there too and
 # a bare repository beside it as the remote, by path; no network. POSIX, like nexus-server.

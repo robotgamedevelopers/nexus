@@ -66,6 +66,8 @@ public:
         std::string home;               // the home directory, for a friend with no directory
         Timing timing;
         std::function<Millis()> clock;  // now, for the prompts the hub hands over
+        std::string host{};             // this server's host name (its short form, as "studio"): an instance on
+                                        // another machine starts no driver here yet
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.

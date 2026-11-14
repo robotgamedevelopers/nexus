@@ -7,8 +7,12 @@ namespace nexus::store {
 
 namespace {
 
-constexpr std::uint8_t kRecordFormat = 2;     // 1: a friend tab's, by name, still read and migrated
-constexpr std::uint8_t kSnapshotFormat = 3;   // 2: friend tabs; 1: friend tabs before drivers; both still read
+constexpr std::uint8_t kRecordFormat = 3;     // 2: a session's info without its instance, still read; 1: a friend
+                                              // tab's, by name, still read and migrated
+constexpr std::uint8_t kRecordNoInstance = 2;
+constexpr std::uint8_t kSnapshotFormat = 4;   // 3: without instances, still read; 2: friend tabs; 1: friend tabs before
+                                              // drivers; both still read and migrated
+constexpr std::uint8_t kSnapshotNoInstance = 3;
 
 void put_entry(Writer& w, const Entry& e) {
     w.u8(e.kind);
@@ -51,14 +55,16 @@ void put_info(Writer& w, const Info& i) {
     w.str(i.account);
     w.str(i.model);
     w.str(i.effort);
+    w.str(i.instance);
 }
 
-void get_info(Reader& r, Info& i) {
+void get_info(Reader& r, Info& i, bool withInstance) {
     i.friend_name = r.str();
     i.harness = r.str();
     i.account = r.str();
     i.model = r.str();
     i.effort = r.str();
+    i.instance = withInstance ? r.str() : std::string();   // a session from before instances: its friend's default
 }
 
 Bytes encode_record(std::uint64_t session, std::span<const Change> changes, const std::string& client,
@@ -253,12 +259,12 @@ std::uint64_t Store::legacy_session(const std::string& tab, bool make) {
 Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq) {
     Reader r(rec);
     const std::uint8_t format = r.u8();
-    if (format != 1 && format != kRecordFormat) {
+    if (format != 1 && format != kRecordNoInstance && format != kRecordFormat) {
         return unreadable(dir_, "record " + std::to_string(seq));
     }
     std::uint64_t session = 0;
     std::string tab;
-    if (format == kRecordFormat) {
+    if (format != 1) {
         session = r.u64();
     } else {
         tab = r.str();
@@ -281,9 +287,9 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             get_driver(r, c.driver);
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
-        } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format == kRecordFormat) {
+        } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format != 1) {
             c.kind = Change::Kind::SetInfo;
-            get_info(r, c.info);
+            get_info(r, c.info, format == kRecordFormat);
         } else {
             return unreadable(dir_, "record " + std::to_string(seq));
         }
@@ -340,10 +346,10 @@ Bytes Store::encode_snapshot() const {
 Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
     Reader r(snap);
     const std::uint8_t format = r.u8();
-    if (format != 1 && format != 2 && format != kSnapshotFormat) {
+    if (format != 1 && format != 2 && format != kSnapshotNoInstance && format != kSnapshotFormat) {
         return unreadable(dir_, "the snapshot");
     }
-    if (format == kSnapshotFormat) {
+    if (format >= kSnapshotNoInstance) {
         next_session_ = r.u64();
         if (next_session_ == 0) {
             return unreadable(dir_, "the snapshot");
@@ -355,9 +361,9 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
     for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
         std::uint64_t id = 0;
         Info info;
-        if (format == kSnapshotFormat) {
+        if (format >= kSnapshotNoInstance) {
             id = r.u64();
-            get_info(r, info);
+            get_info(r, info, format == kSnapshotFormat);
             if (id == 0 || id >= next_session_ || sessions_.count(id) != 0) {
                 return unreadable(dir_, "the snapshot");
             }

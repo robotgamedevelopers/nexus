@@ -36,7 +36,7 @@ endif()
 add_custom_target(store_checks DEPENDS store_test durable_test journal_walk)
 add_dependencies(model_checks store_checks)
 
-foreach(group codec memfs journal journal_crash store ids store_crash driver migrate dequeue)
+foreach(group codec memfs journal journal_crash store ids store_crash driver migrate dequeue instance)
     add_test(NAME store_unit_${group} COMMAND store_test ${group})
     set_tests_properties(store_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

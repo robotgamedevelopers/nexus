@@ -89,7 +89,7 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
 
 namespace nexus::server {
 
-accounts::Registry accountsFromDrivers(const DriverTable& table) {
+accounts::Registry accountsFromDrivers(const DriverTable& table, const std::string& machine) {
     accounts::Registry r;
     std::map<std::string, std::string> accountOf;   // harness: the account its line passes
     for (const auto& [harness, command] : table.drivers) {
@@ -103,9 +103,20 @@ accounts::Registry accountsFromDrivers(const DriverTable& table) {
         }
     }
     for (const auto& [name, f] : table.friends) {
+        if (!accounts::isName(name)) {
+            continue;
+        }
+        accounts::Friend fr{name, {}, {}};
         auto a = accountOf.find(f.harness);
-        if (a != accountOf.end() && accounts::isName(name) && r.account(a->second)->provider == f.harness) {
-            r.friends.push_back(accounts::Friend{name, {a->second}, a->second});
+        if (a != accountOf.end() && r.account(a->second)->provider == f.harness) {
+            fr.accounts = {a->second};
+            fr.preferred = a->second;
+        }
+        if (accounts::isName(machine) && accounts::isMachine(machine) && accounts::isDir(f.cwd)) {
+            fr.instances.push_back(accounts::Instance{machine, machine, f.cwd});
+        }
+        if (!fr.accounts.empty() || !fr.instances.empty()) {
+            r.friends.push_back(std::move(fr));
         }
     }
     return r;

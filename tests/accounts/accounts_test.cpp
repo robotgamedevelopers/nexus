@@ -165,6 +165,69 @@ void consistency() {
     CHECK(has(accounts::problems(r), "the friend \"bo\" is there twice"));
 }
 
+// A friend's instances: the friend on a machine, in a directory. Read, written in the one layout, checked, and told
+// apart in a reload's report.
+void instances() {
+    Registry r = sample();
+    r.friends[0].instances = {{"studio", "studio", "/Volumes/nova/ai/rowan"}, {"rocketnet", "studio", "/work/rocketnet"},
+                              {"laptop", "macbook.local", "/Users/me"}};
+    CHECK(accounts::problems(r).empty());
+    const std::string f = accounts::friendsText(r);
+    CHECK(f.find("      \"instances\": [\n        {\n          \"name\": \"studio\",\n          \"machine\": \"studio\",\n"
+                 "          \"dir\": \"/Volumes/nova/ai/rowan\"\n        },") != std::string::npos);
+    CHECK(f.find("\"default\": null,\n      \"instances\": []\n    }") != std::string::npos);   // bo has none
+    Registry back;
+    CHECK(accounts::readFriends(f, "friends.json", &back).ok && back.friends == r.friends);
+    CHECK(accounts::friendsText(back) == f);
+    CHECK(r.friends[0].instance("rocketnet") != nullptr && r.friends[0].instance("nope") == nullptr);
+    // A file without "instances" (as before them) reads as none.
+    CHECK(accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\"}]}", "f", &back).ok &&
+          back.friends[0].instances.empty());
+
+    // Refusals, with the file's line.
+    accounts::Read rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": "
+        "{}}]}", "f", &back);
+    CHECK(!rd.ok && has(rd.errors, "\"instances\" is an object, not a list"));
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": [\"studio\"]}]}",
+                               "f", &back);
+    CHECK(!rd.ok && has(rd.errors, "holds a string, not an instance"));
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": [\n"
+        "{\"name\": \"s\", \"machine\": \"studio\", \"dir\": \"relative/path\"}]}]}", "/h/friends.json", &back);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: the friend \"ada\"'s instance \"s\"'s dir \"relative/path\" is "
+                        "not an absolute path"));
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+        "{\"name\": \"s\", \"machine\": \"me@studio:22\", \"dir\": \"/w\"}]}]}", "f", &back);
+    CHECK(!rd.ok && has(rd.errors, "machine \"me@studio:22\" is not a host name"));
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+        "{\"name\": \"s\", \"machine\": \"studio\"}]}]}", "f", &back);
+    CHECK(!rd.ok && has(rd.errors, "has no \"dir\""));
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"instances\": ["
+        "{\"name\": \"s\", \"machine\": \"studio\", \"dir\": \"/w\", \"host\": \"x\"}]}]}", "f", &back);
+    CHECK(!rd.ok && has(rd.errors, "has a field \"host\""));
+    CHECK(!accounts::isMachine("-studio") && !accounts::isMachine("a b") && accounts::isMachine("studio.local"));
+    CHECK(!accounts::isDir("") && !accounts::isDir("~/x") && !accounts::isDir("/a\nb") && accounts::isDir("/"));
+
+    // Consistency: each named once within its friend; the same name in two friends is fine.
+    Registry twice = r;
+    twice.friends[0].instances.push_back({"studio", "studio", "/elsewhere"});
+    CHECK(has(accounts::problems(twice), "the friend \"ada\"'s instance \"studio\" is there twice"));
+    twice = r;
+    twice.friends[1].instances = {{"studio", "studio", "/x"}};
+    CHECK(accounts::problems(twice).empty());
+    twice.friends[1].instances[0].machine = "-x";
+    CHECK(has(accounts::problems(twice), "has the machine \"-x\", which is not a host name"));
+
+    // A reload's report.
+    Registry moved = r;
+    moved.friends[0].instances[1].dir = "/work/rocketnet-2";
+    moved.friends[0].instances.pop_back();
+    moved.friends[0].instances.push_back({"mini", "mini-m5", "/w"});
+    const std::vector<std::string> lines = accounts::changes(r, moved);
+    CHECK(has(lines, "friend ada's instance rocketnet moved: studio /work/rocketnet -> studio /work/rocketnet-2"));
+    CHECK(has(lines, "friend ada's instance laptop removed"));
+    CHECK(has(lines, "friend ada's instance mini set up, on mini-m5 in /w"));
+}
+
 void picks() {
     const Registry r = sample();
     std::set<std::string> up = {"home", "cx"};
@@ -445,6 +508,43 @@ void hubProbe() {
     CHECK(hub.signedIn() == (std::set<std::string>{"cx", "new"}));
 }
 
+// The hub and instances: a create takes the instance of the session it copies when that is the same friend's, else
+// the friend's first; a session whose instance goes moves to the first, told; a friend with none gives none.
+void hubInstances() {
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    std::string why;
+    Registry r = sample();
+    r.friends[0].instances = {{"studio", "studio", "/a"}, {"rocketnet", "studio", "/b"}};
+    CHECK(hub.useAccounts(r, &keeper).empty());
+    CHECK(hub.apply(sync::Action{1, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
+    CHECK(store.find(1)->info.instance == "studio");
+    CHECK(hub.apply(sync::Action{2, sync::ActionKind::Create, 0, "bo", "", ""}, &why, "w"));
+    CHECK(store.find(2)->info.instance.empty());
+    // Copying: put session 1 on rocketnet (an edit that drops studio moves it there), then copy it.
+    Registry edit = r;
+    edit.friends[0].instances.erase(edit.friends[0].instances.begin());
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "friend ada's instance studio removed"));
+    CHECK(has(report, "session 1 (ada): instance studio -> rocketnet"));
+    CHECK(store.find(1)->info.instance == "rocketnet");
+    CHECK(has({lastNotice(store, 1)}, "The instance studio is no longer one of ada's"));
+    edit.friends[0].instances.insert(edit.friends[0].instances.begin(), {"studio", "studio", "/a"});
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(store.find(1)->info.instance == "rocketnet");     // its instance is still there: it stays
+    CHECK(hub.apply(sync::Action{3, sync::ActionKind::Create, 1, "ada", "", ""}, &why, "w"));
+    CHECK(store.find(3)->info.instance == "rocketnet");
+    CHECK(hub.apply(sync::Action{4, sync::ActionKind::Create, 1, "bo", "", ""}, &why, "w"));
+    CHECK(store.find(4)->info.instance.empty());            // another friend's: never copied
+    // The friend dropped: its sessions belong to no instance, told.
+    edit.friends.erase(edit.friends.begin());
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(store.find(1)->info.instance.empty() && store.find(3)->info.instance.empty());
+    CHECK(has(report, "session 3 (ada): instance rocketnet -> none"));
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -461,6 +561,8 @@ const Group kGroups[] = {
     {"hub_store_fails", hubStoreFails},
     {"hub_adopt_defaults", hubAdoptDefaults},
     {"hub_probe", hubProbe},
+    {"instances", instances},
+    {"hub_instances", hubInstances},
 };
 
 } // namespace

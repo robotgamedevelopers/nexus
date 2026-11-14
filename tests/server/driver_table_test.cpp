@@ -80,18 +80,28 @@ void resolve() {
     CHECK(has(resolveDriver(parseDriverTable("", "/h"), "ada", "/d/drivers").problem, "ada has no driver"));
 }
 
-// The accounts the drivers file implies, for a server that had none: each line's --account, its friends linked to it.
+// The accounts and friends the drivers file implies, for a server that had none: each line's --account, its friends
+// linked to it, and each friend's one instance, on this machine in its directory.
 void seed() {
     const DriverTable t = parseDriverTable(
         "driver claude /bin/drv --account work --model x\n"
         "driver codex /bin/cx\n"
         "driver odd /bin/odd --account -rf\n"
-        "friend ada claude\nfriend bo claude\nfriend cy codex\nfriend dee odd\n", "/h");
-    const nexus::accounts::Registry r = accountsFromDrivers(t);
+        "friend ada claude\nfriend bo claude /w/bo\nfriend cy codex\nfriend dee odd\n", "/h");
+    using nexus::accounts::Friend;
+    using nexus::accounts::Instance;
+    const nexus::accounts::Registry r = accountsFromDrivers(t, "studio");
     CHECK((r.accounts == std::vector<nexus::accounts::Account>{{"work", "claude"}}));
-    CHECK((r.friends == std::vector<nexus::accounts::Friend>{{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}}));
+    CHECK((r.friends == std::vector<Friend>{
+        {"ada", {"work"}, "work", {Instance{"studio", "studio", "/h"}}},
+        {"bo", {"work"}, "work", {Instance{"studio", "studio", "/w/bo"}}},
+        {"cy", {}, "", {Instance{"studio", "studio", "/h"}}},
+        {"dee", {}, "", {Instance{"studio", "studio", "/h"}}}}));
     CHECK(nexus::accounts::problems(r).empty());
-    CHECK(accountsFromDrivers(parseDriverTable("", "/h")) == nexus::accounts::Registry{});
+    CHECK(accountsFromDrivers(parseDriverTable("", "/h"), "studio") == nexus::accounts::Registry{});
+    // A host name that is not a machine's: no instances, the accounts as before.
+    const nexus::accounts::Registry odd = accountsFromDrivers(t, "");
+    CHECK(odd.friends.size() == 2 && odd.friends[0].instances.empty());
 }
 
 } // namespace

@@ -30,11 +30,25 @@ struct Account {
     bool operator==(const Account&) const = default;
 };
 
+// An instance of a friend: that friend running on one machine, from one working directory (rowan on studio in
+// /Volumes/nova/ai/rowan, rowan on studio in a rocketnet checkout, rowan on the macbook). A friend's identity and its
+// accounts are the friend's, shared by all its instances; a session belongs to one instance. The machine is a fleet
+// host name, the one it runs on now: moving it is an ordinary edit.
+struct Instance {
+    std::string name;       // unique within its friend
+    std::string machine;    // a host name, as `studio`
+    std::string dir;        // an absolute path on that machine
+    bool operator==(const Instance&) const = default;
+};
+
 struct Friend {
     std::string name;
     std::vector<std::string> accounts;  // linked, in link order (the order a rotation goes through them)
     std::string preferred;              // the default account: one of `accounts`, or empty for none
+    std::vector<Instance> instances{};  // in the file's order; the first is the friend's default instance
     bool operator==(const Friend&) const = default;
+
+    const Instance* instance(std::string_view instanceName) const;
 };
 
 struct Registry {
@@ -53,9 +67,14 @@ struct Registry {
 // driver's rule for an account, drivers/claude/src/account.ts). A provider's: 1 to 32 lowercase letters, digits or '-'.
 bool isName(std::string_view name);
 bool isProvider(std::string_view provider);
+// A machine's name: 1 to 253 letters, digits, '-' or '.', not starting with '-' or '.' (a host name, never an address with a
+// user or a port). A directory: an absolute path, of printable characters, at most 4096 bytes.
+bool isMachine(std::string_view machine);
+bool isDir(std::string_view dir);
 
 // Why the registry is not consistent, each problem with what to change and in which file; empty when it is: names and
-// providers well formed, no name twice, every link to an account set up and each once, every default linked.
+// providers well formed, no name twice, every link to an account set up and each once, every default linked, every instance named once
+// within its friend, on a machine, in an absolute directory.
 std::vector<std::string> problems(const Registry& registry);
 
 // The files' text, in the one layout this code writes.

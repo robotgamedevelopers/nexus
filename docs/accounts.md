@@ -11,6 +11,17 @@ with the commands below.
   drivers come). It is set up on its own, by name.
 - A **friend** is who you talk to in a tab. A friend links to any number of accounts, of any providers, in an order,
   and one of them may be its **default**. An account may serve any number of friends.
+- An **instance** of a friend is that friend on one machine, working from one directory: `rowan` on `studio` in
+  `/Volumes/nova/ai/rowan`, `rowan` on `studio` in a rocketnet checkout, `rowan` on the `macbook`. A friend has any
+  number of instances; the first is its default. The friend (its name, its accounts and its default account) is
+  shared by all its instances. A machine is the one the instance runs on now: moving it is an ordinary edit.
+- A **session** belongs to one instance of its friend, or to none when the friend has none. A new session takes the
+  instance of the session it copies when that is the same friend's and still one of its instances, else the
+  friend's default instance. Its driver works in the instance's directory. Today a driver runs only on the server's
+  own machine: a prompt in a session whose instance is on another machine is not sent, and the session is told so
+  (a driver on the instance's machine is roadmap work). When an edit removes a session's instance (or its friend),
+  the session moves to the friend's default instance, or none, and is told. Every session's friend and instance
+  reach the windows, so a window can show a tab per friend or per instance, as its own config says.
 - A **session** (a conversation with a friend) runs on one of its friend's linked accounts, or on none (the harness's
   own login). A new session takes the account of the session it copies when that account is linked to its friend,
   else the friend's default. A session's harness is its account's provider, so switching a session's account can
@@ -89,14 +100,32 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
         "home",
         "codex-main"
       ],
-      "default": "work"
+      "default": "work",
+      "instances": [
+        {
+          "name": "studio",
+          "machine": "studio",
+          "dir": "/Volumes/nova/ai/rowan"
+        },
+        {
+          "name": "rocketnet",
+          "machine": "studio",
+          "dir": "/Users/me/rocketnet"
+        },
+        {
+          "name": "macbook",
+          "machine": "macbook",
+          "dir": "/Users/me/work"
+        }
+      ]
     },
     {
       "name": "reviewer",
       "accounts": [
         "home"
       ],
-      "default": null
+      "default": null,
+      "instances": []
     }
   ]
 }
@@ -109,9 +138,16 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 | `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
 | `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the order is the order a rotation at a usage limit goes through them |
 | `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
+| `instances` | each friend | no (none) | a list of instances, in order; the first is the friend's default instance |
+| `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its friend's instances (two friends may use the same name) |
+| `machine` | each instance | yes | the host name of the machine it runs on, as `studio` (1 to 253 letters, digits, `-` or `.`, not starting with `-` or `.`; never a user, a port or an address with them); this server's own host when it is the short form of `hostname` |
+| `dir` | each instance | yes | the absolute path, on that machine, of the directory it works in (starting with `/`, printable, at most 4096 bytes) |
 
 The two files must agree: every account a friend links to is set up in accounts.json, and every default is one of its
-friend's accounts. A file that is empty or missing means none.
+friend's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other: the next session of it starts
+there. (What a running session's driver does on a move, restart there resuming when the directory is the same
+repository and start fresh with a summary when it is not, is roadmap work; today the move takes effect when its driver
+next starts.) A file that is empty or missing means none.
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
 the order they hold, and a newline at the end. Write them the same way and a save never reshuffles your edit (any valid
@@ -188,8 +224,9 @@ transports file, ssh and https only, the identity `nexus`, and a deadline on eve
 
 A server from before accounts has no accounts.json: at its first start with this version, the accounts and friends are
 taken from the drivers file (each driver line's `--account <name>` becomes an account whose provider is that line's
-harness, linked to that harness's friends as their default), committed as an upgrade, and each session moves onto its
-friend's default, told, so that it runs on the account it ran on before.
+harness, linked to that harness's friends as their default; and each friend gets one instance, named after this
+machine, on this machine, in the directory its `friend` line gives), committed as an upgrade, and each session moves
+onto its friend's default account and instance, told, so that it runs as it ran before.
 
 ### A remote (optional)
 

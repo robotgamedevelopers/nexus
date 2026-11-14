@@ -48,6 +48,16 @@ void onSignal(int) {
     gStop = 1;
 }
 
+// This machine's host name, short (as "studio", not "studio.local"): the machine a friend's instance here names.
+std::string hostName() {
+    char name[256] = {};
+    if (gethostname(name, sizeof name - 1) != 0) {
+        return std::string();
+    }
+    const std::string full(name);
+    return full.substr(0, full.find('.'));
+}
+
 // Milliseconds on the steady clock: the drivers' deadlines.
 Millis nowMs() {
     return static_cast<Millis>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -257,7 +267,8 @@ bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     if (!store_.open(*fs_, paths_.store, why))
         return false;
-    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs});
+    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
+                                                                  hostName()});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
@@ -286,11 +297,12 @@ bool Server::openStore(std::string* why) {
             all << in.rdbuf();
             text = all.str();
         }
-        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home));
-        if (!seed.accounts.empty()) {
+        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home), hostName());
+        if (!seed.accounts.empty() || !seed.friends.empty()) {
             std::string why;
-            if (config_->keep(seed, "upgrade: the accounts and friends taken from the drivers file's --account, so "
-                              "that every session runs on the account it ran on before", &why)) {
+            if (config_->keep(seed, "upgrade: the accounts and friends taken from the drivers file (its --account "
+                              "values, and each friend's directory on this machine as its instance), so that every "
+                              "session runs as it ran before", &why)) {
                 seeded = true;
                 std::fprintf(stderr, "nexus-server: config: accounts.json and friends.json made from %s\n",
                     paths_.drivers.c_str());
@@ -317,7 +329,8 @@ bool Server::openStore(std::string* why) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
         }
         if (seeded) {
-            // The sessions from before accounts ran on their friend's --account: they keep it.
+            // The sessions from before accounts ran on their friend's --account, in its directory here: they
+            // keep both.
             for (const std::string& l : hub_->adoptDefaults()) {
                 std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
             }

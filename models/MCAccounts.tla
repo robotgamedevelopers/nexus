@@ -6,4 +6,6 @@ EXTENDS Accounts
 ProvidersMixed == [a \in {"a1", "a2", "a3"} |-> IF a = "a3" THEN "codex" ELSE "claude"]
 \* One of each.
 ProvidersTwo == [a \in {"a1", "a3"} |-> IF a = "a3" THEN "codex" ELSE "claude"]
+\* One Claude account.
+ProvidersOne == [a \in {"a1"} |-> "claude"]
 =============================================================================

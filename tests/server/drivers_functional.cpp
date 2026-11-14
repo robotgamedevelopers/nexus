@@ -11,7 +11,8 @@
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
 // change restarts the session's driver), sign_in and no_credential (what a driver says of its account's login reaches
 // the hub), usage_limit (a usage limit moves the session to its friend's next signed-in account), no_account (a session
-// on no account starts no driver that needs one).
+// on no account starts no driver that needs one), instance_dir and instance_elsewhere (a session's instance: its
+// directory, and a machine other than this one).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -117,6 +118,9 @@ int children() {
 }
 #endif
 
+// The host this server runs on, as gethostname gives it.
+const char* const kHost = "testhost.local";
+
 // ada's session: the first the server makes.
 constexpr sync::SessionId kAda = 1;
 
@@ -135,7 +139,7 @@ struct Server {
             std::fprintf(stderr, "drivers_functional: %s\n", why.c_str());
             std::exit(1);
         }
-        drivers = std::make_unique<Drivers>(store, Drivers::Options{dir + "/drivers", dir, kTiming, now});
+        drivers = std::make_unique<Drivers>(store, Drivers::Options{dir + "/drivers", dir, kTiming, now, kHost});
         hub = std::make_unique<sync::Hub>(store, sync::Limits{}, drivers.get());
         drivers->attach(*hub);
         CHECK(drivers->start(now()));
@@ -604,6 +608,51 @@ void noAccount(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(!std::filesystem::exists(dir + "/starts"));
 }
 
+// ada with one instance, `instance`, and her session on it (as the first start after instances puts it): the
+// drivers file's line, the account a1.
+void setUpInstance(Server& s, const std::string& dir, const std::string& fake, const std::string& script,
+                   const accounts::Instance& instance) {
+    writeFile(dir + "/ada.script", script);
+    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+        "\n");
+    accounts::Registry r;
+    r.accounts = {{"a1", "fake"}};
+    r.friends = {{"ada", {"a1"}, "a1", {instance}}};
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    CHECK(s.hub->adoptDefaults().size() == 1);
+    CHECK(s.store.find(kAda)->info.instance == instance.name && s.store.find(kAda)->info.account == "a1");
+}
+
+// A session's instance on this machine: its driver works in the instance's directory, not the drivers file's.
+void instanceDir(Server& s, const std::string& dir, const std::string& fake) {
+    std::filesystem::create_directories(dir + "/checkout");
+    setUpInstance(s, dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", accounts::Instance{"here", "testhost", dir + "/checkout"});
+    s.send("q");
+    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
+    CHECK(has(readFile(dir + "/starts.log"), "cwd=" + dir + "/checkout\n"));
+}
+
+// A session's instance on another machine: no driver starts here yet, and the session is told so.
+void instanceElsewhere(Server& s, const std::string& dir, const std::string& fake) {
+    setUpInstance(s, dir, fake, "count-starts " + dir + "/starts\n" + std::string(kHello) + "send\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", accounts::Instance{"laptop", "macbook", "/Users/me"});
+    s.send("q");
+    const auto told = [&] {
+        for (const std::string& line : s.transcript()) {
+            if (has(line, "belongs to ada's instance laptop, on the machine macbook, and this server runs on testhost; "
+                          "nexus-server does not yet start a driver on another machine")) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(s.serveUntil(told, 10));
+    s.serveUntil([] { return false; }, 0.3);
+    CHECK(s.drivers->pid(kAda) < 0);
+    CHECK(!std::filesystem::exists(dir + "/starts"));
+}
+
 // ada's driver as a shell script, for what the fake driver does not do: start processes of its own.
 void setUpShell(const std::string& dir, const std::string& script) {
     writeFile(dir + "/ada.sh", script);
@@ -736,7 +785,8 @@ int main(int argc, char** argv) {
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"stop_hammered", stopHammered}, {"account", account}, {"sign_in", signIn},
-                {"no_credential", noCredential}, {"usage_limit", usageLimit}, {"no_account", noAccount}};
+                {"no_credential", noCredential}, {"usage_limit", usageLimit}, {"no_account", noAccount},
+                {"instance_dir", instanceDir}, {"instance_elsewhere", instanceElsewhere}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

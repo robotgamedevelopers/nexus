@@ -208,6 +208,8 @@ bool stringField(Reader& r, PrJsonValueIndex object, const std::string& key, con
 
 const char* const kNameRule = "1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-'";
 const char* const kProviderRule = "1 to 32 lowercase letters, digits or '-', as \"claude\"";
+const char* const kMachineRule = "1 to 253 letters, digits, '-' or '.', not starting with '-' or '.', as \"studio\"";
+const char* const kDirRule = "starting with '/', printable, at most 4096 bytes, as \"/Users/me/work\"";
 const char* const kAccountsExample =
     "{ \"version\": 1, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\" } ] }";
 const char* const kFriendsExample =
@@ -246,6 +248,15 @@ Friend* Registry::friendNamed(std::string_view name) {
     return nullptr;
 }
 
+const Instance* Friend::instance(std::string_view instanceName) const {
+    for (const Instance& i : instances) {
+        if (i.name == instanceName) {
+            return &i;
+        }
+    }
+    return nullptr;
+}
+
 bool Registry::linked(std::string_view friendName, std::string_view account) const {
     const Friend* f = friendNamed(friendName);
     return f != nullptr && contains(f->accounts, account);
@@ -267,6 +278,22 @@ bool isProvider(std::string_view provider) {
     }
     return std::all_of(provider.begin(), provider.end(),
         [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+}
+
+bool isMachine(std::string_view machine) {
+    if (machine.empty() || machine.size() > 253 || machine.front() == '.' || machine.front() == '-') {
+        return false;
+    }
+    return std::all_of(machine.begin(), machine.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.';
+    });
+}
+
+bool isDir(std::string_view dir) {
+    if (dir.empty() || dir.size() > 4096 || dir.front() != '/') {
+        return false;
+    }
+    return std::all_of(dir.begin(), dir.end(), [](char c) { return static_cast<unsigned char>(c) >= 0x20 && c != 0x7f; });
 }
 
 std::vector<std::string> problems(const Registry& r) {
@@ -309,6 +336,24 @@ std::vector<std::string> problems(const Registry& r) {
                           "which is not in its \"accounts\"; add it to \"accounts\", or set \"default\" to one of " +
                           "them or to null");
         }
+        std::set<std::string> instances;
+        for (const Instance& i : f.instances) {
+            const std::string named = "friends.json: the friend \"" + f.name + "\"'s instance \"" + i.name + "\"";
+            if (!isName(i.name)) {
+                out.push_back(named + " is not a name (" + kNameRule + "); rename it");
+            }
+            if (!instances.insert(i.name).second) {
+                out.push_back(named + " is there twice; keep one, or rename one");
+            }
+            if (!isMachine(i.machine)) {
+                out.push_back(named + " has the machine \"" + i.machine + "\", which is not a host name (" +
+                              kMachineRule + "); correct it");
+            }
+            if (!isDir(i.dir)) {
+                out.push_back(named + " has the dir \"" + i.dir + "\", which is not an absolute path (" + kDirRule +
+                              "); correct it");
+            }
+        }
     }
     return out;
 }
@@ -333,7 +378,15 @@ std::string friendsText(const Registry& r) {
             s += std::string(k == 0 ? "\n" : ",\n") + "        " + quoted(f.accounts[k]);
         }
         s += f.accounts.empty() ? "],\n" : "\n      ],\n";
-        s += "      \"default\": " + (f.preferred.empty() ? std::string("null") : quoted(f.preferred)) + "\n    }";
+        s += "      \"default\": " + (f.preferred.empty() ? std::string("null") : quoted(f.preferred)) + ",\n";
+        s += "      \"instances\": [";
+        for (std::size_t k = 0; k < f.instances.size(); ++k) {
+            const Instance& in = f.instances[k];
+            s += std::string(k == 0 ? "\n" : ",\n") + "        {\n          \"name\": " + quoted(in.name) +
+                 ",\n          \"machine\": " + quoted(in.machine) + ",\n          \"dir\": " + quoted(in.dir) +
+                 "\n        }";
+        }
+        s += f.instances.empty() ? "]\n    }" : "\n      ]\n    }";
     }
     s += r.friends.empty() ? "]\n}\n" : "\n  ]\n}\n";
     return s;
@@ -406,7 +459,7 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
             continue;
         }
         Friend f;
-        bool ok = onlyKeys(r, e, {"name", "accounts", "default"}, "a friend");
+        bool ok = onlyKeys(r, e, {"name", "accounts", "default", "instances"}, "a friend");
         ok = stringField(r, e, "name", "a friend", true, false, &f.name) && ok;
         const std::string named = f.name.empty() ? std::string("a friend") : "the friend \"" + f.name + "\"";
         ok = stringField(r, e, "default", named, false, true, &f.preferred) && ok;
@@ -424,6 +477,48 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
                 } else {
                     f.accounts.emplace_back(view(prJsonString(r.doc(), a)));
                 }
+            }
+        }
+        const PrJsonValueIndex is = prJsonMember(r.doc(), e, pr("instances"));
+        if (is != kPrJsonMissing && prJsonKind(r.doc(), is) != PrJsonKind_Array) {
+            r.errorAt(is, named + "'s \"instances\" is " + kindName(prJsonKind(r.doc(), is)) + ", not a list",
+                      "make it a list of instances, as [{ \"name\": \"studio\", \"machine\": \"studio\", \"dir\": "
+                      "\"/Users/me/work\" }], or [] for none");
+            ok = false;
+        } else if (is != kPrJsonMissing) {
+            for (PrJsonValueIndex x = prJsonFirst(r.doc(), is); x != kPrJsonMissing; x = prJsonAfter(r.doc(), is, x)) {
+                if (prJsonKind(r.doc(), x) != PrJsonKind_Object) {
+                    r.errorAt(x, named + "'s \"instances\" holds " + kindName(prJsonKind(r.doc(), x)) +
+                              ", not an instance", "write each instance as { \"name\": \"studio\", \"machine\": "
+                              "\"studio\", \"dir\": \"/Users/me/work\" }");
+                    ok = false;
+                    continue;
+                }
+                Instance in;
+                const std::string what = "an instance of " + named;
+                bool good = onlyKeys(r, x, {"name", "machine", "dir"}, what);
+                good = stringField(r, x, "name", what, true, false, &in.name) && good;
+                const std::string inst = in.name.empty() ? what : named + "'s instance \"" + in.name + "\"";
+                good = stringField(r, x, "machine", inst, true, false, &in.machine) && good;
+                good = stringField(r, x, "dir", inst, true, false, &in.dir) && good;
+                if (good && !isName(in.name)) {
+                    r.errorAt(x, inst + " is not a name (" + kNameRule + ")", "rename it");
+                    good = false;
+                }
+                if (good && !isMachine(in.machine)) {
+                    r.errorAt(x, inst + "'s machine \"" + in.machine + "\" is not a host name (" + kMachineRule + ")",
+                              "correct it");
+                    good = false;
+                }
+                if (good && !isDir(in.dir)) {
+                    r.errorAt(x, inst + "'s dir \"" + in.dir + "\" is not an absolute path (" + kDirRule + ")",
+                              "correct it");
+                    good = false;
+                }
+                if (good) {
+                    f.instances.push_back(std::move(in));
+                }
+                ok = good && ok;
             }
         }
         if (ok && !isName(f.name)) {
@@ -499,8 +594,12 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
     for (const Friend& f : after.friends) {
         const Friend* was = before.friendNamed(f.name);
         if (was == nullptr) {
+            std::vector<std::string> names;
+            for (const Instance& i : f.instances) {
+                names.push_back(i.name + " (" + i.machine + " " + i.dir + ")");
+            }
             out.push_back("friend " + f.name + " set up, accounts " + list(f.accounts) + ", default " +
-                          (f.preferred.empty() ? std::string("none") : f.preferred));
+                          (f.preferred.empty() ? std::string("none") : f.preferred) + ", instances " + list(names));
             continue;
         }
         if (was->accounts != f.accounts) {
@@ -509,6 +608,21 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
         if (was->preferred != f.preferred) {
             out.push_back("friend " + f.name + "'s default " + (was->preferred.empty() ? std::string("none") :
                           was->preferred) + " -> " + (f.preferred.empty() ? std::string("none") : f.preferred));
+        }
+        for (const Instance& i : f.instances) {
+            const Instance* old = was->instance(i.name);
+            if (old == nullptr) {
+                out.push_back("friend " + f.name + "'s instance " + i.name + " set up, on " + i.machine + " in " +
+                              i.dir);
+            } else if (*old != i) {
+                out.push_back("friend " + f.name + "'s instance " + i.name + " moved: " + old->machine + " " +
+                              old->dir + " -> " + i.machine + " " + i.dir);
+            }
+        }
+        for (const Instance& i : was->instances) {
+            if (f.instance(i.name) == nullptr) {
+                out.push_back("friend " + f.name + "'s instance " + i.name + " removed");
+            }
         }
     }
     for (const Friend& f : before.friends) {
