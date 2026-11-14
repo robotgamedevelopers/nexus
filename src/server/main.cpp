@@ -5,6 +5,10 @@
 //                                         --client, the window's id and the number of its first action in the session
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
 //        nexus-server stop [--dir DIR]    stops the running server
+//        nexus-server config <verb> [--dir DIR]
+//                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
+//                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
+//                                         remote [<url> | --clear]
 //
 // DIR is $HOME/.nexus/server unless given (server/home.h): the settings file config, the control socket server.sock,
 // the log server.log and the store store/ live there, and the file drivers, which names each friend's driver
@@ -35,6 +39,9 @@ namespace {
 int usage() {
     std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
                          "       nexus-server serve|stop [--dir DIR]\n"
+                         "       nexus-server config path|check|reload|history [--dir DIR]\n"
+                         "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
+                         "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
                          "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
                          "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
                          "  driver <harness> <program> [<argument>...]    and    friend <name> <harness> [<directory>]\n");
@@ -86,6 +93,7 @@ int main(int argc, char** argv) {
     std::string dir;
     nexus::server::Client client;
     bool haveNext = false;
+    std::vector<std::string> configArgs;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dir") == 0 && i + 1 < argc) {
             dir = argv[++i];
@@ -97,6 +105,8 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
+        } else if (command == "config") {
+            configArgs.push_back(argv[i]);
         } else {
             return usage();
         }
@@ -115,5 +125,7 @@ int main(int argc, char** argv) {
         return nexus::server::serve(paths);
     if (command == "stop")
         return nexus::server::stop(paths);
+    if (command == "config")
+        return nexus::server::config(paths, configArgs);
     return usage();
 }

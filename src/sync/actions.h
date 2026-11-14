@@ -31,7 +31,7 @@ enum class ActionKind : std::uint8_t {
     SetAccount = 6, // the session's account, model or effort becomes `text` (empty: the harness's default), from its
     SetModel = 7,   // next turn on
     SetEffort = 8,
-    // The accounts and friends (accounts/registry.h, docs/accounts.md), decided by the server against the ones it holds:
+    // The accounts and friends (accounts/registry.h, docs/accounts.md), decided by the server against its own:
     AddAccount = 9,     // an account (`account`) set up with its provider (`text`)
     RemoveAccount = 10, // an account (`account`) removed: every link to it goes, and its sessions move off it
     AddFriend = 11,     // a friend (friendName) set up, with no accounts

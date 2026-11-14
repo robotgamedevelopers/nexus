@@ -214,6 +214,9 @@ public:
     //    with a notice in its transcript, and its responder is told the session's new settings.
     // Returns the lines that say what settling did (empty: nothing).
     std::vector<std::string> useAccounts(accounts::Registry registry, AccountsKeeper* keeper);
+    // The keeper alone, when the registry the server last applied could not be read: the hub holds no accounts until
+    // applyAccounts() gives it some.
+    void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
     const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
 
     // A hand edit of the files (`nexus-server config reload`), or an earlier version of them (`config restore`):

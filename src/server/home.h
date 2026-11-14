@@ -6,6 +6,8 @@
 //   store/            the sessions and the applied counters (src/store)
 //   server.sock       the control socket, mode 0600
 //   server.log        the log of a server `new` started
+//   nexus-config/     the accounts and friends: accounts.json and friends.json, a git repository of their own
+//                     (server/config_repo.h, docs/accounts.md); no credential is ever in it
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always
 //                     under $HOME/.nexus/server, whatever --dir says
 //

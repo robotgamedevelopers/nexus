@@ -168,8 +168,30 @@ std::string Drivers::friendOf(sync::SessionId id) const {
 }
 
 // The session's driver: its friend's line of the drivers file.
+// The session's account, where the friend's line already passes one (`--account <name>`, the Claude driver's): the
+// session's account in its place. A line that passes none is left as it is: how a driver is given its account is part
+// 4 of the sign-in work (docs/roadmap.sexp). A session on another provider's account than its friend's harness has no
+// driver here until that provider's driver exists: refused with the fix.
 ResolvedDriver Drivers::resolve(sync::SessionId id) const {
-    return resolveFriend(friendOf(id));
+    ResolvedDriver r = resolveFriend(friendOf(id));
+    const sync::StoredSession* stored = store_.find(id);
+    if (!r.problem.empty() || stored == nullptr || stored->info.account.empty()) {
+        return r;
+    }
+    const sync::SessionInfo& info = stored->info;
+    if (!info.harness.empty() && info.harness != sync::kDefaultHarness) {
+        r.problem = "Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
+            info.harness + ", and nexus-server has no " + info.harness + " driver yet, so the prompt was not sent. "
+            "Set the session to one of " + info.friendName + "'s " + sync::kDefaultHarness + " accounts.";
+        r.command.clear();
+        return r;
+    }
+    for (std::size_t i = 1; i + 1 < r.command.size(); ++i) {
+        if (r.command[i] == "--account") {
+            r.command[i + 1] = info.account;
+        }
+    }
+    return r;
 }
 
 ResolvedDriver Drivers::resolveFriend(const std::string& friendName) const {

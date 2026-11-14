@@ -1,0 +1,519 @@
+// The accounts and friends (registry.h): their rules, their files' text, and the accounts the server picks.
+
+#include "accounts/registry.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <memory>
+
+#include "pr/json.h"
+
+namespace nexus::accounts {
+
+namespace {
+
+PrStringView pr(std::string_view s) {
+    return PrStringView{s.data(), s.size()};
+}
+
+std::string_view view(PrStringView s) {
+    return s.data == nullptr ? std::string_view() : std::string_view(s.data, s.length);
+}
+
+// A JSON string, escaped as Prax's writer escapes it.
+std::string quoted(std::string_view s) {
+    PrJsonWriter* w = prJsonWriterCreate();
+    prJsonWriterString(w, pr(s));
+    std::string out(view(prJsonWriterText(w)));
+    prJsonWriterDestroy(w);
+    return out;
+}
+
+// The line (from 1) of byte `at` in `text`.
+std::size_t lineOf(std::string_view text, std::size_t at) {
+    return 1 + static_cast<std::size_t>(std::count(text.begin(), text.begin() +
+        static_cast<std::ptrdiff_t>(std::min(at, text.size())), '\n'));
+}
+
+// The byte where each value of a document starts, in Prax's document order (a container, then its contents; an
+// object's member as its key, then its value), so that an error about a value can name its line. The text has
+// already been read by Prax, so it is JSON.
+std::vector<std::size_t> starts(std::string_view t) {
+    std::vector<std::size_t> out;
+    std::size_t i = 0;
+    while (i < t.size()) {
+        const char c = t[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',' || c == ':' || c == ']' || c == '}') {
+            ++i;
+        } else if (c == '"') {
+            out.push_back(i);
+            for (++i; i < t.size() && t[i] != '"'; ++i) {
+                if (t[i] == '\\') {
+                    ++i;
+                }
+            }
+            ++i;
+        } else if (c == '[' || c == '{') {
+            out.push_back(i);
+            ++i;
+        } else if (static_cast<unsigned char>(c) == 0xef && i == 0) {
+            i += 3;     // a byte order mark
+        } else {
+            out.push_back(i);
+            while (i < t.size() && t[i] != ',' && t[i] != ']' && t[i] != '}' && t[i] != ' ' && t[i] != '\n' &&
+                   t[i] != '\r' && t[i] != '\t') {
+                ++i;
+            }
+        }
+    }
+    return out;
+}
+
+const char* kindName(PrJsonKind k) {
+    switch (k) {
+        case PrJsonKind_Null: return "null";
+        case PrJsonKind_False:
+        case PrJsonKind_True: return "true or false";
+        case PrJsonKind_Number: return "a number";
+        case PrJsonKind_String: return "a string";
+        case PrJsonKind_Array: return "a list";
+        default: return "an object";
+    }
+}
+
+// One file's reading: the document, where its values start, and the errors found.
+class Reader {
+public:
+    Reader(std::string_view text, const std::string& path) : text_(text), path_(path), doc_(prJsonCreate()) {}
+    ~Reader() { prJsonDestroy(doc_); }
+    Reader(const Reader&) = delete;
+    Reader& operator=(const Reader&) = delete;
+
+    bool parse() {
+        std::size_t at = 0;
+        if (!prJsonParse(doc_, pr(text_), &at)) {
+            error(at, "this is not JSON (a missing comma, quote or bracket, or a trailing comma, near here)",
+                  "fix the text at this line; docs/accounts.md has an example of the whole file");
+            return false;
+        }
+        starts_ = starts(text_);
+        return true;
+    }
+
+    void error(std::size_t at, const std::string& what, const std::string& fix) {
+        read.errors.push_back(path_ + ":" + std::to_string(lineOf(text_, at)) + ": " + what + "; " + fix);
+    }
+    void errorAt(PrJsonValueIndex v, const std::string& what, const std::string& fix) {
+        error(v < starts_.size() ? starts_[v] : 0, what, fix);
+    }
+
+    PrJson* doc() { return doc_; }
+    Read read;
+
+private:
+    std::string_view text_;
+    std::string path_;
+    PrJson* doc_;
+    std::vector<std::size_t> starts_;
+};
+
+// The object at `object`'s members: refuses any key not in `allowed`, and a key twice.
+bool onlyKeys(Reader& r, PrJsonValueIndex object, const std::vector<std::string>& allowed, const std::string& what) {
+    bool ok = true;
+    std::set<std::string> seen;
+    for (PrJsonValueIndex k = prJsonFirst(r.doc(), object); k != kPrJsonMissing; k = prJsonAfter(r.doc(), object, k)) {
+        const std::string key(view(prJsonString(r.doc(), k)));
+        std::string list;
+        for (const std::string& a : allowed) {
+            list += (list.empty() ? "\"" : ", \"") + a + "\"";
+        }
+        if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) {
+            r.errorAt(k, what + " has a field \"" + key + "\", which is not one of its fields (" + list + ")",
+                      "remove it, or correct its spelling");
+            ok = false;
+        } else if (!seen.insert(key).second) {
+            r.errorAt(k, what + " has the field \"" + key + "\" twice", "keep one");
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+// The top: an object of "version" and the one list `list`. Returns the list's index, or kPrJsonMissing.
+PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& example) {
+    if (prJsonKind(r.doc(), 0) != PrJsonKind_Object) {
+        r.errorAt(0, "the file is " + std::string(kindName(prJsonKind(r.doc(), 0))) + ", not an object",
+                  "make it an object of \"version\" and \"" + list + "\", as " + example);
+        return kPrJsonMissing;
+    }
+    bool ok = onlyKeys(r, 0, {"version", list}, "the file");
+    const PrJsonValueIndex v = prJsonMember(r.doc(), 0, pr("version"));
+    if (v == kPrJsonMissing) {
+        r.errorAt(0, "the file has no \"version\"", "add \"version\": " + std::to_string(kVersion) + " at its top");
+        ok = false;
+    } else {
+        const double n = prJsonNumber(r.doc(), v, -1);
+        if (prJsonKind(r.doc(), v) != PrJsonKind_Number || n < 1 || n != std::floor(n)) {
+            r.errorAt(v, "\"version\" is not a whole number from 1", "set it to " + std::to_string(kVersion));
+            ok = false;
+        } else if (n > kVersion) {
+            r.errorAt(v, "\"version\" is " + std::to_string(static_cast<long long>(n)) + ", newer than this " +
+                      "nexus-server reads (" + std::to_string(kVersion) + ")",
+                      "run the nexus-server that wrote it, or update this one; the file was left as it is");
+            ok = false;
+        } else {
+            r.read.version = static_cast<int>(n);
+            // Version 1 is the first: nothing older to upgrade yet. An upgrade of version n to n + 1 goes here, in
+            // the order of the versions, and sets r.read.upgraded.
+            r.read.upgraded = r.read.version < kVersion;
+        }
+    }
+    const PrJsonValueIndex l = prJsonMember(r.doc(), 0, pr(list));
+    if (l == kPrJsonMissing) {
+        r.errorAt(0, "the file has no \"" + list + "\"", "add \"" + list + "\": [] (or the list) at its top");
+        return kPrJsonMissing;
+    }
+    if (prJsonKind(r.doc(), l) != PrJsonKind_Array) {
+        r.errorAt(l, "\"" + list + "\" is " + kindName(prJsonKind(r.doc(), l)) + ", not a list",
+                  "make it a list, [ ... ], as " + example);
+        return kPrJsonMissing;
+    }
+    return ok ? l : kPrJsonMissing;
+}
+
+// A string member: true with its value; false (an error made) when present and not a string, or absent and required.
+bool stringField(Reader& r, PrJsonValueIndex object, const std::string& key, const std::string& what, bool required,
+                 bool nullable, std::string* out) {
+    const PrJsonValueIndex v = prJsonMember(r.doc(), object, pr(key));
+    if (v == kPrJsonMissing || (nullable && prJsonKind(r.doc(), v) == PrJsonKind_Null)) {
+        if (required) {
+            r.errorAt(object, what + " has no \"" + key + "\"", "add \"" + key + "\": \"...\"");
+            return false;
+        }
+        out->clear();
+        return true;
+    }
+    if (prJsonKind(r.doc(), v) != PrJsonKind_String) {
+        r.errorAt(v, what + "'s \"" + key + "\" is " + kindName(prJsonKind(r.doc(), v)) + ", not a string",
+                  std::string("put it in double quotes") + (nullable ? ", or make it null for none" : ""));
+        return false;
+    }
+    *out = std::string(view(prJsonString(r.doc(), v)));
+    return true;
+}
+
+const char* const kNameRule = "1 to 64 letters, digits, '-', '_' or '.', not starting with '.'";
+const char* const kProviderRule = "1 to 32 lowercase letters, digits or '-', as \"claude\"";
+const char* const kAccountsExample =
+    "{ \"version\": 1, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\" } ] }";
+const char* const kFriendsExample =
+    "{ \"version\": 1, \"friends\": [ { \"name\": \"claude\", \"accounts\": [\"work\"], \"default\": \"work\" } ] }";
+
+bool contains(const std::vector<std::string>& v, std::string_view x) {
+    return std::find(v.begin(), v.end(), x) != v.end();
+}
+
+} // namespace
+
+const Account* Registry::account(std::string_view name) const {
+    for (const Account& a : accounts) {
+        if (a.name == name) {
+            return &a;
+        }
+    }
+    return nullptr;
+}
+
+const Friend* Registry::friendNamed(std::string_view name) const {
+    for (const Friend& f : friends) {
+        if (f.name == name) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+Friend* Registry::friendNamed(std::string_view name) {
+    for (Friend& f : friends) {
+        if (f.name == name) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+bool Registry::linked(std::string_view friendName, std::string_view account) const {
+    const Friend* f = friendNamed(friendName);
+    return f != nullptr && contains(f->accounts, account);
+}
+
+bool isName(std::string_view name) {
+    if (name.empty() || name.size() > 64 || name.front() == '.') {
+        return false;
+    }
+    return std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+               c == '.';
+    });
+}
+
+bool isProvider(std::string_view provider) {
+    if (provider.empty() || provider.size() > 32) {
+        return false;
+    }
+    return std::all_of(provider.begin(), provider.end(),
+        [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+}
+
+std::vector<std::string> problems(const Registry& r) {
+    std::vector<std::string> out;
+    std::set<std::string> names;
+    for (const Account& a : r.accounts) {
+        if (!isName(a.name)) {
+            out.push_back("accounts.json: the account \"" + a.name + "\" is not a name (" + kNameRule + "); rename it");
+        }
+        if (!isProvider(a.provider)) {
+            out.push_back("accounts.json: the account \"" + a.name + "\" has the provider \"" + a.provider +
+                          "\", which is not one (" + kProviderRule + "); correct it");
+        }
+        if (!names.insert(a.name).second) {
+            out.push_back("accounts.json: the account \"" + a.name + "\" is there twice; keep one");
+        }
+    }
+    std::set<std::string> friends;
+    for (const Friend& f : r.friends) {
+        if (!isName(f.name)) {
+            out.push_back("friends.json: the friend \"" + f.name + "\" is not a name (" + kNameRule + "); rename it");
+        }
+        if (!friends.insert(f.name).second) {
+            out.push_back("friends.json: the friend \"" + f.name + "\" is there twice; keep one");
+        }
+        std::set<std::string> links;
+        for (const std::string& a : f.accounts) {
+            if (r.account(a) == nullptr) {
+                out.push_back("friends.json: the friend \"" + f.name + "\" links to the account \"" + a + "\", which " +
+                              "accounts.json does not set up; add the account there, or take it out of \"" + f.name +
+                              "\"'s \"accounts\"");
+            }
+            if (!links.insert(a).second) {
+                out.push_back("friends.json: the friend \"" + f.name + "\" links to the account \"" + a + "\" twice; " +
+                              "keep one");
+            }
+        }
+        if (!f.preferred.empty() && !contains(f.accounts, f.preferred)) {
+            out.push_back("friends.json: the friend \"" + f.name + "\"'s \"default\" is \"" + f.preferred + "\", " +
+                          "which is not in its \"accounts\"; add it to \"accounts\", or set \"default\" to one of " +
+                          "them or to null");
+        }
+    }
+    return out;
+}
+
+std::string accountsText(const Registry& r) {
+    std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n  \"accounts\": [";
+    for (std::size_t i = 0; i < r.accounts.size(); ++i) {
+        s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(r.accounts[i].name) +
+             ",\n      \"provider\": " + quoted(r.accounts[i].provider) + "\n    }";
+    }
+    s += r.accounts.empty() ? "]\n}\n" : "\n  ]\n}\n";
+    return s;
+}
+
+std::string friendsText(const Registry& r) {
+    std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n  \"friends\": [";
+    for (std::size_t i = 0; i < r.friends.size(); ++i) {
+        const Friend& f = r.friends[i];
+        s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(f.name) +
+             ",\n      \"accounts\": [";
+        for (std::size_t k = 0; k < f.accounts.size(); ++k) {
+            s += std::string(k == 0 ? "\n" : ",\n") + "        " + quoted(f.accounts[k]);
+        }
+        s += f.accounts.empty() ? "],\n" : "\n      ],\n";
+        s += "      \"default\": " + (f.preferred.empty() ? std::string("null") : quoted(f.preferred)) + "\n    }";
+    }
+    s += r.friends.empty() ? "]\n}\n" : "\n  ]\n}\n";
+    return s;
+}
+
+Read readAccounts(std::string_view text, const std::string& path, Registry* registry) {
+    registry->accounts.clear();
+    Reader r(text, path);
+    if (text.find_first_not_of(" \t\r\n") == std::string_view::npos) {
+        r.read.ok = true;
+        r.read.version = kVersion;
+        return r.read;
+    }
+    if (!r.parse()) {
+        return r.read;
+    }
+    const PrJsonValueIndex list = top(r, "accounts", kAccountsExample);
+    if (list == kPrJsonMissing) {
+        return r.read;
+    }
+    for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
+        if (prJsonKind(r.doc(), e) != PrJsonKind_Object) {
+            r.errorAt(e, "an account is " + std::string(kindName(prJsonKind(r.doc(), e))) + ", not an object",
+                      std::string("write each account as ") + "{ \"name\": \"work\", \"provider\": \"claude\" }");
+            continue;
+        }
+        Account a;
+        const std::string what = "an account";
+        bool ok = onlyKeys(r, e, {"name", "provider"}, what);
+        ok = stringField(r, e, "name", what, true, false, &a.name) && ok;
+        const std::string named = a.name.empty() ? what : "the account \"" + a.name + "\"";
+        ok = stringField(r, e, "provider", named, true, false, &a.provider) && ok;
+        if (ok && !isName(a.name)) {
+            r.errorAt(e, named + " is not a name (" + kNameRule + ")", "rename it");
+            ok = false;
+        }
+        if (ok && !isProvider(a.provider)) {
+            r.errorAt(e, named + "'s provider \"" + a.provider + "\" is not one (" + kProviderRule + ")",
+                      "correct it");
+            ok = false;
+        }
+        if (ok) {
+            registry->accounts.push_back(std::move(a));
+        }
+    }
+    r.read.ok = r.read.errors.empty();
+    return r.read;
+}
+
+Read readFriends(std::string_view text, const std::string& path, Registry* registry) {
+    registry->friends.clear();
+    Reader r(text, path);
+    if (text.find_first_not_of(" \t\r\n") == std::string_view::npos) {
+        r.read.ok = true;
+        r.read.version = kVersion;
+        return r.read;
+    }
+    if (!r.parse()) {
+        return r.read;
+    }
+    const PrJsonValueIndex list = top(r, "friends", kFriendsExample);
+    if (list == kPrJsonMissing) {
+        return r.read;
+    }
+    for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
+        if (prJsonKind(r.doc(), e) != PrJsonKind_Object) {
+            r.errorAt(e, "a friend is " + std::string(kindName(prJsonKind(r.doc(), e))) + ", not an object",
+                      std::string("write each friend as ") +
+                      "{ \"name\": \"claude\", \"accounts\": [\"work\"], \"default\": \"work\" }");
+            continue;
+        }
+        Friend f;
+        bool ok = onlyKeys(r, e, {"name", "accounts", "default"}, "a friend");
+        ok = stringField(r, e, "name", "a friend", true, false, &f.name) && ok;
+        const std::string named = f.name.empty() ? std::string("a friend") : "the friend \"" + f.name + "\"";
+        ok = stringField(r, e, "default", named, false, true, &f.preferred) && ok;
+        const PrJsonValueIndex l = prJsonMember(r.doc(), e, pr("accounts"));
+        if (l != kPrJsonMissing && prJsonKind(r.doc(), l) != PrJsonKind_Array) {
+            r.errorAt(l, named + "'s \"accounts\" is " + kindName(prJsonKind(r.doc(), l)) + ", not a list",
+                      "make it a list of account names, as [\"work\", \"home\"], or [] for none");
+            ok = false;
+        } else if (l != kPrJsonMissing) {
+            for (PrJsonValueIndex a = prJsonFirst(r.doc(), l); a != kPrJsonMissing; a = prJsonAfter(r.doc(), l, a)) {
+                if (prJsonKind(r.doc(), a) != PrJsonKind_String) {
+                    r.errorAt(a, named + "'s \"accounts\" holds " + kindName(prJsonKind(r.doc(), a)) +
+                              ", not an account's name", "put each account's name in double quotes");
+                    ok = false;
+                } else {
+                    f.accounts.emplace_back(view(prJsonString(r.doc(), a)));
+                }
+            }
+        }
+        if (ok && !isName(f.name)) {
+            r.errorAt(e, named + " is not a name (" + kNameRule + ")", "rename it");
+            ok = false;
+        }
+        if (ok) {
+            registry->friends.push_back(std::move(f));
+        }
+    }
+    r.read.ok = r.read.errors.empty();
+    return r.read;
+}
+
+std::string nextUp(const Registry& registry, const std::set<std::string>& up, std::string_view friendName,
+                   std::string_view current) {
+    const Friend* f = registry.friendNamed(friendName);
+    if (f == nullptr || f->accounts.empty()) {
+        return std::string();
+    }
+    const auto at = std::find(f->accounts.begin(), f->accounts.end(), current);
+    const std::size_t n = f->accounts.size();
+    // From the one after `current` round to the one before it; with `current` not linked, from the first.
+    const std::size_t from = at == f->accounts.end() ? 0 : static_cast<std::size_t>(at - f->accounts.begin()) + 1;
+    const std::size_t count = at == f->accounts.end() ? n : n - 1;
+    for (std::size_t k = 0; k < count; ++k) {
+        const std::string& a = f->accounts[(from + k) % n];
+        if (up.count(a) != 0) {
+            return a;
+        }
+    }
+    return std::string();
+}
+
+std::string landing(const Registry& registry, const std::set<std::string>& up, std::string_view friendName) {
+    const Friend* f = registry.friendNamed(friendName);
+    if (f == nullptr) {
+        return std::string();
+    }
+    if (!f->preferred.empty() && up.count(f->preferred) != 0) {
+        return f->preferred;
+    }
+    for (const std::string& a : f->accounts) {
+        if (up.count(a) != 0) {
+            return a;
+        }
+    }
+    return std::string();
+}
+
+std::vector<std::string> changes(const Registry& before, const Registry& after) {
+    std::vector<std::string> out;
+    for (const Account& a : after.accounts) {
+        const Account* was = before.account(a.name);
+        if (was == nullptr) {
+            out.push_back("account " + a.name + " set up (" + a.provider + ")");
+        } else if (was->provider != a.provider) {
+            out.push_back("account " + a.name + "'s provider " + was->provider + " -> " + a.provider);
+        }
+    }
+    for (const Account& a : before.accounts) {
+        if (after.account(a.name) == nullptr) {
+            out.push_back("account " + a.name + " removed");
+        }
+    }
+    auto list = [](const std::vector<std::string>& v) {
+        std::string s;
+        for (const std::string& x : v) {
+            s += (s.empty() ? "" : ", ") + x;
+        }
+        return "[" + s + "]";
+    };
+    for (const Friend& f : after.friends) {
+        const Friend* was = before.friendNamed(f.name);
+        if (was == nullptr) {
+            out.push_back("friend " + f.name + " set up, accounts " + list(f.accounts) + ", default " +
+                          (f.preferred.empty() ? std::string("none") : f.preferred));
+            continue;
+        }
+        if (was->accounts != f.accounts) {
+            out.push_back("friend " + f.name + "'s accounts " + list(was->accounts) + " -> " + list(f.accounts));
+        }
+        if (was->preferred != f.preferred) {
+            out.push_back("friend " + f.name + "'s default " + (was->preferred.empty() ? std::string("none") :
+                          was->preferred) + " -> " + (f.preferred.empty() ? std::string("none") : f.preferred));
+        }
+    }
+    for (const Friend& f : before.friends) {
+        if (after.friendNamed(f.name) == nullptr) {
+            out.push_back("friend " + f.name + " removed");
+        }
+    }
+    return out;
+}
+
+} // namespace nexus::accounts

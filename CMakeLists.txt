@@ -152,6 +152,12 @@ if(NOT WIN32)
     target_include_directories(nexus_drivers PUBLIC src)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+
+    # The accounts and friends' config repository (src/server/config_repo.h): the files, and git as a child process.
+    add_library(nexus_config_repo STATIC src/server/config_repo.cpp)
+    target_include_directories(nexus_config_repo PUBLIC src)
+    target_compile_options(nexus_config_repo PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_config_repo PUBLIC nexus_sync)
 endif()
 
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
@@ -211,7 +217,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_executable(nexus-server src/server/main.cpp src/server/server.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers)
+    target_link_libraries(nexus-server PRIVATE nexus_link nexus_durable nexus_drivers nexus_config_repo)
 endif()
 
 if(NEXUS_WINDOW AND (APPLE OR WIN32))

@@ -21,6 +21,7 @@
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "server/config_repo.h"
 #include "server/drivers.h"
 #include "server/durable.h"
 #include "server/home.h"
@@ -236,11 +237,13 @@ private:
     bool listenControl(std::string* why);
     void control(int fd);
     bool endDrivers();
+    void configApply(int fd, const std::string& request);
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
+    std::unique_ptr<ConfigRepo> config_;
     std::vector<Link> links_;
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
@@ -254,6 +257,29 @@ bool Server::openStore(std::string* why) {
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
+    // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
+    // settled against them before any driver starts.
+    config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
+    std::string configWhy;
+    accounts::Registry registry;
+    std::vector<std::string> report;
+    if (!config_->open(&configWhy)) {
+        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
+    } else if (!config_->committed(&registry, &report)) {
+        for (const std::string& l : report)
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        std::fprintf(stderr, "nexus-server: config: the committed accounts and friends do not read, so the server "
+            "holds none until `nexus-server config reload` applies good ones\n");
+        hub_->keepWith(config_.get());
+    } else {
+        for (const std::string& l : report)
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        for (const std::string& l : hub_->useAccounts(registry, config_.get()))
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
+            registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
+            config_->dir().c_str());
+    }
     const store::OpenReport& r = store_.report();
     std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
         "cut\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
@@ -318,9 +344,14 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
+    if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
+        configApply(fd, request);
+        return;
+    }
     Client client;
     if (!parseNew(request, &client)) {
-        writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>` and `stop`\n");
+        writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, `stop`, `config reload` "
+            "and `config restore <commit>`\n");
         return;
     }
     // A client's new session ends its earlier one: the window has left it.
@@ -357,6 +388,45 @@ void Server::control(int fd) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
         std::fprintf(stderr, "nexus-server: %s\n", e.what());
     }
+}
+
+// `config reload` (the working files, hand-edited) or `config restore <commit>` (the files as that commit held them),
+// applied by the hub and committed, with what was applied or refused written back line by line, then OK or ERROR, and
+// to the log. Decided against the server's state as it is now.
+void Server::configApply(int fd, const std::string& request) {
+    std::vector<std::string> lines;
+    accounts::Registry next;
+    std::string message;
+    bool ok = false;
+    if (!config_) {
+        lines.push_back("the server has no config repository");
+    } else if (request == "config reload") {
+        ok = config_->working(&next, &lines);
+        message = "reload: the hand edit of accounts.json and friends.json applied (the person's or their AI's)";
+    } else {
+        const std::string commit = request.substr(std::string("config restore ").size());
+        ok = config_->at(commit, &next, &lines);
+        message = "restore: the files as commit " + commit + " held them, applied as a new version";
+    }
+    if (ok) {
+        config_->applying(true);
+        ok = hub_->applyAccounts(next, message, &lines);
+        config_->applying(false);
+        for (const std::string& n : config_->notes())
+            lines.push_back(n);
+        for (Link& s : links_)
+            s.link->setState(hub_->state());
+    }
+    if (ok && lines.empty())
+        lines.push_back("nothing changed: the files already said what the server holds");
+    std::string reply;
+    for (const std::string& l : lines) {
+        reply += (ok ? "applied: " : "refused: ") + l + "\n";
+        std::fprintf(stderr, "nexus-server: config %s: %s%s\n", request.c_str() + 7, ok ? "applied: " : "refused: ",
+            l.c_str());
+    }
+    reply += ok ? "OK\n" : "ERROR nothing was applied; the server keeps the accounts and friends it had\n";
+    writeAll(fd, reply);
 }
 
 // Ends every driver (input closed, then SIGTERM, then SIGKILL, each after its grace period) and waits for them. False
@@ -607,6 +677,96 @@ bool validClientId(const std::string& id) {
             return false;
     }
     return true;
+}
+
+int config(const Paths& p, const std::vector<std::string>& args) {
+    signal(SIGPIPE, SIG_IGN);
+    ConfigRepo repo(p.dir + "/nexus-config");
+    const std::string verb = args.empty() ? std::string() : args[0];
+    auto fail = [](const std::string& why) {
+        std::fprintf(stderr, "nexus-server: config: %s\n", why.c_str());
+        return 1;
+    };
+    if (verb == "path" && args.size() == 1) {
+        std::printf("%s\n%s\n%s\n", repo.dir().c_str(), repo.accountsPath().c_str(), repo.friendsPath().c_str());
+        return 0;
+    }
+    if (verb != "reload" && verb != "restore" && access((repo.dir() + "/.git").c_str(), F_OK) != 0) {
+        return fail(repo.dir() + " is not made yet: nexus-server makes it when it starts (`nexus-server new` starts "
+            "it); write accounts.json and friends.json there (docs/accounts.md), and the first start takes them");
+    }
+    if (verb == "check" && args.size() == 1) {
+        accounts::Registry working;
+        accounts::Registry head;
+        std::vector<std::string> errors;
+        if (!repo.working(&working, &errors)) {
+            for (const std::string& e : errors)
+                std::printf("error: %s\n", e.c_str());
+            std::printf("ERROR %zu problem%s; nothing was changed\n", errors.size(), errors.size() == 1 ? "" : "s");
+            return 1;
+        }
+        std::vector<std::string> headErrors;
+        if (!repo.committed(&head, &headErrors))
+            head = accounts::Registry{};
+        const std::vector<std::string> lines = accounts::changes(head, working);
+        for (const std::string& l : lines)
+            std::printf("would apply: %s\n", l.c_str());
+        std::printf("OK the files read and agree; %s\n", lines.empty() ? "they hold what the server last applied" :
+            "`nexus-server config reload` applies them (sessions on accounts no longer linked move, and are told)");
+        return 0;
+    }
+    if (verb == "history" && args.size() == 1) {
+        std::vector<std::string> lines;
+        std::string why;
+        if (!repo.history(&lines, &why))
+            return fail(why);
+        for (const std::string& l : lines)
+            std::printf("%s\n", l.c_str());
+        return 0;
+    }
+    if (verb == "remote" && args.size() <= 2) {
+        std::string url;
+        std::string why;
+        if (args.size() == 1) {
+            if (!repo.remote(&url, &why))
+                return fail(why);
+            std::printf("%s\n", url.empty() ? "none" : url.c_str());
+            return 0;
+        }
+        if (args[1] == "--clear")
+            return repo.clearRemote(&why) ? 0 : fail(why);
+        return repo.setRemote(args[1], &why) ? 0 : fail(why);
+    }
+    if ((verb == "reload" && args.size() == 1) || (verb == "restore" && args.size() == 2)) {
+        const int fd = connectControl(p.socket);
+        if (fd < 0)
+            return fail(errnoText("no server answers on " + p.socket) + "; `nexus-server new` starts it, and a "
+                "server that starts applies what the repository's last commit holds");
+        const std::string request = verb == "reload" ? std::string("config reload") : "config restore " + args[1];
+        if (!writeAll(fd, request + "\n")) {
+            close(fd);
+            return fail("the request could not be written to " + p.socket);
+        }
+        std::string line;
+        int status = 1;
+        while (readLine(fd, &line, 30000)) {
+            if (line == "OK") {
+                status = 0;
+                break;
+            }
+            std::printf("%s\n", line.c_str());
+            if (line.rfind("ERROR", 0) == 0)
+                break;
+        }
+        close(fd);
+        return status;
+    }
+    std::fprintf(stderr, "usage: nexus-server config path|check|reload|history [--dir DIR]\n"
+                         "       nexus-server config restore <commit> [--dir DIR]\n"
+                         "       nexus-server config remote [<url> | --clear] [--dir DIR]\n"
+                         "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
+                         "(docs/accounts.md)\n");
+    return 2;
 }
 
 int newSession(const Paths& p, const std::string& self, const Client& client) {

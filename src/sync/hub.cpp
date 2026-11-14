@@ -342,7 +342,8 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
         refused = "The account was not changed: " + action.text + " is not one of " + info.friendName +
             "'s accounts" + (accounts_->account(action.text) == nullptr ? " (no account " + action.text +
             " is set up in accounts.json)" : "") + ". Link it to " + info.friendName + " first: add it to " +
-            info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` (docs/accounts.md).";
+            info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` "
+            "(docs/accounts.md).";
     }
     if (action.kind == ActionKind::SetAccount) {
         info.account = action.text;
@@ -487,9 +488,7 @@ std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsK
 bool Hub::applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report) {
     std::vector<std::string> lines = accounts::problems(next);
     std::string failed;
-    if (!accounts_) {
-        lines.push_back("this server holds no accounts: it was started without its config repository");
-    } else if (lines.empty() && keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
+    if (lines.empty() && keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
         lines.push_back(failed);
     }
     if (!lines.empty()) {
@@ -498,7 +497,7 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
         }
         return false;
     }
-    lines = accounts::changes(*accounts_, next);
+    lines = accounts::changes(accounts_ ? *accounts_ : accounts::Registry{}, next);
     accounts_ = next;
     const bool ok = settle(&lines, "the accounts and friends were changed: " + message);
     if (report != nullptr) {

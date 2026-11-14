@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nexus::server {
 
@@ -57,5 +58,9 @@ int serve(const Paths& p);
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.
 int stop(const Paths& p);
+// `nexus-server config <verb> ...`: the accounts and friends (server/config_repo.h, docs/accounts.md). path, check,
+// history and remote work on the files and the repository directly; reload and restore ask the running server, which
+// decides.
+int config(const Paths& p, const std::vector<std::string>& args);
 
 } // namespace nexus::server
