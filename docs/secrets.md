@@ -31,12 +31,56 @@ below says what the binding covers, and what it does not yet.
    into one window and presses Enter, or presses Escape to cancel.
 5. Enter sends the value up that window's actions to the server, once, and closes that window's dialog. Escape sends
    a cancel. Nothing is ever sent to another window.
-6. The server takes the first answer for an open request, against the request's state when it processes it: it
-   writes the account's file and answers the asker `stored`; a cancel answers it `refused` (`cancelled`). A request
-   nobody answers in time ends `refused` (`timeout`).
+6. The server takes the first answer for an open request, against the request's state when it processes it. A value
+   not of a token's shape (nothing, more than 16 KiB, or anything but printable ASCII without spaces: two words, a
+   line break inside it, a pasted sentence) is refused `malformed`, saying why and never what. Otherwise it writes the
+   account's file and answers the asker `stored` once the file is durable; a file it cannot write yet does not cost the
+   paste (below, "One chance"). A cancel answers the asker `refused` (`cancelled`). A request nobody answers in time
+   ends `refused` (`timeout`).
 7. The request leaves the state, and every other window closes its dialog when its state no longer holds it.
-8. An answer for a request that is no longer open (answered in another window, cancelled, past its deadline, or from
-   before a restart) is dropped: nothing is stored, and the log records the request id and `late`, never the value.
+8. An answer for a request that is no longer open (answered in another window, cancelled, or from before a restart) is
+   dropped: nothing is stored, and the log records the request id and `late`, never the value. One answer is not
+   dropped: one that crossed its request's deadline on the way (the person pasted it as the deadline passed) is stored
+   while its request is still the newest of its account, since the person pasted it for exactly that file.
+
+## One chance: a pasted value is never lost
+
+The owner's rule (2026-11-14): a person pastes a key or signs in once, ever. nexus never loses what was pasted and
+never asks for it again; asking again is a bug. The model's invariant is `ReceivedNeverDropped` (`models/Secrets.tla`):
+while the server runs, a value it received is stored, or held and being written again.
+
+- **Held, not refused.** When the account's file cannot be written (a full disk, a directory the server refuses as it
+  lies, an I/O error), or the write lands but the directory's sync fails so its durability is not confirmed, the
+  server keeps the value in its memory (a `SecretValue`, wiped when it goes) and writes it again: 1 s later, then 2,
+  4, and so on, at most 60 s apart, until the write is durable. The asker hears nothing until then; its session says
+  once that the value arrived and is held, and `server.log` says why at each try, with the filesystem's error and
+  never the value. No further request opens for the account while a value is held. When it is written, the asker
+  hears `stored` (or, if its turn is gone, the session says so) and the account signs in if the file is its login.
+- **`stored` only when durable.** The asker never hears `stored` for a file that a crash could still take back.
+- **The window.** The held value lives only in the server's memory: if the server ends before the write succeeds
+  (stopped, crashed, the machine restarted), the value is gone, and `server.log` says so (`lost`). Then, and only
+  then, the account is asked again. The window is as small as the cause allows: the first write happens in the same
+  pass the answer arrives in, before the window is told the action arrived, so a server that is up with a writable
+  disk has nothing held at all; a value is held only while the disk refuses it, for as long as it refuses.
+
+Every way an ask ends, by whose it is:
+
+| outcome | whose | what happens |
+|---|---|---|
+| `busy` | neither: no value exists yet | refused at the ask, before any dialog; nothing was pasted |
+| `no-client` | neither: no value exists yet | refused at the ask, no window can take it; nothing was pasted |
+| `cancelled` | the person's | they pressed Escape: nothing was pasted |
+| `timeout` | the person's | nobody pasted in 10 minutes. An answer that crossed the deadline is stored (step 8) |
+| `malformed` | the person's input | told why (never what); asked again: nexus's own asks at once, a friend's AI by its own ask |
+| file cannot be written | ours | held and written again until durable; never refused (the old `unwritable`) |
+| durability not confirmed | ours | held and written again until durable (the old `stored` with `unconfirmed`) |
+| late: another window stored it | neither | already stored; nothing lost |
+| late: after a cancel | the person's | they cancelled it |
+| late: from before a restart | ours, the documented window | the request ended with the server; nexus asks again |
+| held when the server ended | ours, the documented window | logged `lost`; nexus asks again |
+
+A login the provider has revoked, or one that ended and cannot be renewed, is the one other case where a second paste
+is asked for, and the dialog says which (`docs/accounts.md`, "How long a login lasts").
 
 A server restart drops every open request without an answer: its asker is gone with it (a driver ends with the server,
 `docs/driver-protocol.md`), and the server's own sign-in asks again. Request ids are never reused, across restarts
@@ -46,21 +90,21 @@ request. A window that loses its link or quits loses its dialog and anything typ
 stays open for the other windows, or until its deadline.
 
 The asker hears exactly one answer per request: `stored`, or `refused` with one reason of `busy`, `no-client`,
-`cancelled`, `timeout` or `unwritable` (the value arrived and its file could not be written; the log says why, from the
-filesystem's error, never the value). Never the value, never its length, never which window answered.
+`cancelled`, `timeout` or `malformed`. Never the value, never its length, never which window answered. Servers before
+the one-chance rule also answered `unwritable` and `stored` with `unconfirmed`; this one never does (it holds the value
+instead), and a driver still reads both.
 
 `stored` goes out only once the file is in place: the value is written to a temporary 0600 file, synced, renamed over
 the old one and the directory synced before the hub hears it was kept, and the asker's driver line is held, with
 everything else the server's pass made, until the pass's flush (`server/pass.h`). A crash at any point leaves the old
 value or the new one, never part of one (`secrets_test files_crash`). If the rename succeeded and only the directory's
-sync failed, the answer says what is true: `stored` with the reason `unconfirmed` (the value is in its file; a crash
-before the disk settles may bring the old file back), the session line says so, and `server.log` gives the
-filesystem's error. A temporary file a crash or a failure left behind holds a value no one reads: the server removes
+sync failed, the value is held and written again like any failed write (above), since a crash before the disk settles
+may bring the old file back; `server.log` gives the filesystem's error. A temporary file a crash or a failure left behind holds a value no one reads: the server removes
 every `*.new` in every account's directory when it starts, before anything is asked, and logs each one it removed.
 
 The account's directory is the server's alone. Before a write the server checks it with `lstat`: a directory that is a
 symbolic link, is not a directory, belongs to another user, or is open to group or others (anything wider than 0700)
-is refused, `unwritable`, with the fix in the log; the server never follows a link there and never widens or narrows
+is not written to, with the fix in the log, and the value is held until the directory is fixed; the server never follows a link there and never widens or narrows
 a directory it did not make. The temporary file is created new (`O_CREAT|O_EXCL|O_NOFOLLOW`, 0600), and the value is
 written and synced through that one descriptor, never reopened by its path, so a link planted at its name stops the
 write rather than redirecting it. When the stored file is the account's login
@@ -124,7 +168,8 @@ mosh transport (encrypted with the session's key). Nothing else on the wire, in 
   synced and renamed over the old one, and the directory synced (`src/server/secret_files.h`). It never goes into the
   store, a record, a snapshot, the state, a transcript, a
   driver's input or `server.log`; the log line for an answer is the request id, the account and the outcome. The
-  request itself is not durable (it holds no secret, and it ends with the server).
+  request itself is not durable (it holds no secret, and it ends with the server). While a write fails, the value is
+  held in the server's memory and nowhere else ("One chance", above).
 
 ## How an AI asks: the driver protocol
 
@@ -135,7 +180,7 @@ version change. They land with the code, in the same pull request as `src/driver
 |---|---|---|---|
 | server to driver | `server` | `features` (array of strings, required) | what this server takes beyond version 1; `"secrets"` means it takes `ask-secret`. Written right after the driver's `hello`, so before any `send`. |
 | driver to server | `ask-secret` | `ask` (whole number from 1, required: the driver's own id, unique within its process), `account` (non-empty string, required), `what` (non-empty, required: a file name the account's provider documents, such as `"oauth-token"`), `why` (string, required, may be empty: one line, at most 200 bytes, shown in the dialog) | ask for a secret; written while a turn is open, from the AI's tool call |
-| server to driver | `secret` | `ask` (required), `outcome` (required: `"stored"` or `"refused"`), `reason` (required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"unwritable"`; optional with `stored`: `"unconfirmed"`, the value is in its file but its durability is not confirmed) | the one answer to an `ask-secret`; never carries the value |
+| server to driver | `secret` | `ask` (required), `outcome` (required: `"stored"` or `"refused"`), `reason` (required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"malformed"`; older servers also sent `"unwritable"`, and `"unconfirmed"` with `stored`) | the one answer to an `ask-secret`, sent only once the value is durable or the ask has ended; never carries the value |
 
 The driver gives its AI one tool, such as `nexus_ask_secret(account, what, why)`, which writes `ask-secret` and returns
 `stored` or `refused: <reason>` from the `secret` line. The server's side (the `server` line and both kinds) is in; the
@@ -176,8 +221,9 @@ when the secret cannot be asked for.
 ## Not in the model
 
 `Secrets.tla` leaves to the code and its tests: mosh's transport and its retransmission (each action is applied once,
-by number: `Link.tla`); the atomic file write and the directory's checks; a check on the value's shape (if one is
-added, it joins the model as a refusal reason with the code); the refusals before a request (names, link, provider,
+by number: `Link.tla`); the atomic file write and the directory's checks (the model has only a disk that fails and
+heals, and a write that may or may not land); the backoff's times (the model retries whenever the disk allows); the
+login's lifetime and its notices (`src/server/login_life.h`, pure and unit-tested); the refusals before a request (names, link, provider,
 reason) and the per-asker `busy` (one open, 5 a minute), which mint no id and change no state the model holds; and the
 asker's driver leaving while its request is open (above: the request ends by its answer or its deadline, as the
 model's do).
@@ -194,7 +240,10 @@ and every diff sent to each window. Wherever any run of 8 bytes, hex, base64 or 
 properties on those code records too (`CodeNoSecretToAsker`, `CodeNoSecretInTranscript`, `CodeNoSecretInLog`,
 `CodeNoSecretToWindows`), so a value that reaches a sink in the code fails TLC whatever the spec allows. The faulty
 walks must be rejected: `--faulty-store-late` (a late answer stored anyway) by `TraceMatches`, and `--faulty-echo` by
-`CodeNoSecretInLog`. The echo is injected into the code (`SecretDesk::injectEchoFault`, a test seam that puts the
+`CodeNoSecretInLog`. The walk also fails and heals the disk under the keeper (a write that fails, or lands
+unconfirmed), pastes a value not of a token's shape one time in five, lets answers cross deadlines and restarts the
+server with values held, so `ReceivedNeverDropped`, `StoredOnlyDurable` and `NoMalformedStored` are checked on the
+code's own traces. The echo is injected into the code (`SecretDesk::injectEchoFault`, a test seam that puts the
 value into the log event of a stored answer), not into the walk's record.
 
 Not in the walk yet: `Drivers`, the process table that writes each `secret` line to its driver's standard input. Driving

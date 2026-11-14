@@ -127,7 +127,8 @@ target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
 # nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link),
 # the secret dialog's account files over the same filesystem seam (src/server/secret_files.h), and where its answers and
 # log lines go (src/server/secret_lines.h, which writes the driver protocol's `secret` line).
-add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp src/server/secret_lines.cpp)
+add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp src/server/secret_lines.cpp
+            src/server/login_life.cpp)
 target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store nexus_driver)

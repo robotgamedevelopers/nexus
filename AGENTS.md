@@ -15,6 +15,12 @@ The rules for an AI working in this repository. Each one holds on every change.
    the tab-kinds rows).
 5. **Secrets are the one exception.** A credential enters only through the in-app secret dialog or sign-in, never
    through the AI, and is never shown, logged or put in a file the AI reads.
+6. **One chance.** A person pastes a key or signs in once, ever. nexus never loses what was pasted and never asks for
+   it again: asking again is a bug. A value whose file cannot be written yet is held and written again until it is
+   durable (`ReceivedNeverDropped` in `models/Secrets.tla`); the only window is a server that ends while a value is
+   held, and `docs/secrets.md` says so. A login that can be renewed is renewed by nexus before it ends; one that
+   cannot is noticed well ahead. The one second paste is for a login the provider revoked, or one that ended with no
+   way to renew it, and the dialog says which (`docs/accounts.md`, "How long a login lasts").
 
 The sprint tab, the friends and the terminals are one person's configuration, not hardwired; the locked rules below
 that fix them (such as the sprint tab pinned at Command-1) move into configuration with the client-config work.

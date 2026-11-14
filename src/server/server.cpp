@@ -30,6 +30,7 @@
 #include "server/flush_gate.h"
 #include "server/home.h"
 #include "server/pass.h"
+#include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
 #include "store/fs.h"
@@ -67,6 +68,15 @@ Millis nowMs() {
     return static_cast<Millis>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+
+// Milliseconds since 1970 on the system's clock: a stored login's age (server/login_life.h), against its file's time.
+long long wallMs() {
+    return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+// How often the stored logins' ends are checked: an hour, so a notice is at most an hour late against days of warning.
+constexpr Millis kLoginCheckMs = 60ULL * 60 * 1000;
 
 std::string errnoText(const std::string& what) {
     return what + ": " + std::strerror(errno);
@@ -246,6 +256,10 @@ private:
     std::unique_ptr<store::Fs> fs_;
     std::unique_ptr<store::Fs> secretFs_;
     std::unique_ptr<AccountFiles> secretFiles_;
+    // The stored logins' ends (server/login_life.h), checked at the start and each hour after.
+    LoginWatch loginWatch_;
+    Millis nextLoginCheck_ = 0;
+    void checkLogins();
     // The secret dialog's effects (docs/secrets.md): each answer to its asker's driver, each log line to server.log.
     SecretLines secretLines_{[this](sync::SessionId id, const std::string& line) {
                                  if (drivers_) {
@@ -298,11 +312,19 @@ bool Server::openStore(std::string* why) {
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
-    // An account is taken as signed in from the start when its credential is there, until its driver says otherwise
-    // (a no-credential or authentication error): for a claude account, its oauth-token, where the driver reads it
-    // (server/home.h accountsDir, under HOME whatever --dir says; drivers/claude/src/account.ts).
+    // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
+    // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
+    // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
     hub_->probeSignInWith([logins = paths_.accounts](const accounts::Account& a) {
-        return a.provider == "claude" && access((logins + "/" + a.name + "/oauth-token").c_str(), F_OK) == 0;
+        const std::string file = sync::loginFile(a.provider);
+        return !file.empty() &&
+            loginLive(a.provider, inspectLogin(logins + "/" + a.name + "/" + file),
+                      static_cast<std::uint64_t>(wallMs()));
+    });
+    // A login lost: ask in the window only when a paste can fix it, saying why (server/login_life.h loginAsk).
+    hub_->loginsWith([logins = paths_.accounts](const accounts::Account& a) {
+        return loginAsk(a.name, a.provider, inspectLogin(logins + "/" + a.name + "/" + sync::loginFile(a.provider)),
+                        static_cast<std::uint64_t>(wallMs()));
     });
     std::string configWhy;
     accounts::Registry registry;
@@ -552,6 +574,33 @@ bool Server::endDrivers() {
     return true;
 }
 
+// Each stored login's end (server/login_life.h): a notice in its account's sessions 30, 7 and 1 days ahead, and on the
+// day it is signed out and a new one asked for in the window, saying why.
+void Server::checkLogins() {
+    const accounts::Registry* registry = hub_->accounts();
+    if (registry == nullptr) {
+        return;
+    }
+    std::vector<LoginWatch::Login> logins;
+    for (const accounts::Account& a : registry->accounts) {
+        const std::string file = sync::loginFile(a.provider);
+        if (file.empty()) {
+            continue;
+        }
+        const LoginSeen seen = inspectLogin(paths_.accounts + "/" + a.name + "/" + file);
+        if (seen.file == LoginSeen::File::Usable) {
+            logins.push_back(LoginWatch::Login{a.name, a.provider, seen.storedAtMs});
+        }
+    }
+    for (const LoginWatch::Notice& n : loginWatch_.check(logins, static_cast<std::uint64_t>(wallMs()))) {
+        if (n.expired) {
+            hub_->needsSignIn(n.account, n.text);
+        } else {
+            hub_->tellAccount(n.account, n.text);
+        }
+    }
+}
+
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
@@ -588,7 +637,7 @@ int Server::run() {
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
         int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
-        if (const std::optional<std::uint64_t> due = hub_->secretDeadline()) {
+        if (const std::optional<std::uint64_t> due = hub_->secretWake()) {
             const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
             wait = std::min(wait, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
         }
@@ -633,10 +682,26 @@ int Server::run() {
             status = 1;
             break;
         }
-        // A secret request past its deadline is refused (timeout), in this pass's batch like any step.
+        // A secret request past its deadline is refused (timeout), and a held value whose time has come is written
+        // again (docs/secrets.md: a value that arrived is never dropped while the server runs), in this pass's batch
+        // like any step. nexus's own ask whose paste was refused malformed is asked again.
         if (const std::optional<std::uint64_t> due = hub_->secretDeadline();
                 due && *due <= static_cast<std::uint64_t>(nowMs())) {
             hub_->expireSecrets();
+            changed = true;
+        }
+        if (const std::optional<std::uint64_t> due = hub_->secretRetryAt();
+                due && *due <= static_cast<std::uint64_t>(nowMs())) {
+            hub_->retrySecrets();
+            changed = true;
+        }
+        if (hub_->reaskPending() && hub_->reaskSecrets()) {
+            changed = true;
+        }
+        // The stored logins' ends: notices ahead of one that cannot be renewed, and a new one asked for on its day.
+        if (nowMs() >= nextLoginCheck_) {
+            checkLogins();
+            nextLoginCheck_ = nowMs() + kLoginCheckMs;
             changed = true;
         }
         for (std::size_t k = 1; k < linkFds; ++k) {

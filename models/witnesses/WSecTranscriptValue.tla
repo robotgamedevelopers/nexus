@@ -11,6 +11,7 @@ LeakyStore(m) ==
     /\ replies' = replies \cup {Reply(r, "stored", "none")}
     /\ transcript' = {[id |-> r, what |-> "stored", acct |-> req[r].acct, value |-> m.v]}
     /\ log' = {[id |-> r, event |-> "stored"]}
+    /\ UNCHANGED held
 
 BrokenSpec == Init /\ [][NextWith(Ask, Sync, LAMBDA m : ReceiveWith(LeakyStore, DropLate, m), Timeout, Restart)]_vars
 =============================================================================

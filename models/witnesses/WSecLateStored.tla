@@ -1,6 +1,6 @@
 ----------------------------- MODULE WSecLateStored -----------------------------
-\* Reversed witness: an answer that arrives after its request was refused (cancelled, or past its deadline) is stored
-\* anyway, since the person did paste it. ClosedStaysClosed must reject it: the asker was already told "refused".
+\* Reversed witness: an answer that arrives after its request was cancelled (refused) is stored anyway, since the
+\* person did paste it. ClosedStaysClosed must reject it: the asker was already told "refused".
 EXTENDS MCSecrets
 
 Late(m) == IF m.kind = "secret" /\ req[m.id].st = "refused" THEN StoreOpen(m) ELSE DropLate(m)

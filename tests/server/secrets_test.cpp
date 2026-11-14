@@ -14,7 +14,9 @@
 //   secrets_test <group>    runs one
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -33,6 +35,7 @@
 #include "accounts/registry.h"
 #include "driver/protocol.h"
 #include "server/durable.h"
+#include "server/login_life.h"
 #include "leak_scan.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
@@ -215,12 +218,12 @@ void desk() {
     e = d.ask(3, asker(0, 0), "a2", kToken, "", false, 1002);
     CHECK(e.replies.size() == 1 && e.replies[0].reason == sync::reason::kNoClient && !d.isOpen(3));
     // The first answer is kept, and the asker hears stored, nothing more.
-    e = d.answer(1, sync::SecretValue(kValue), k);
+    e = d.answer(1, sync::SecretValue(kValue), k, 1000);
     CHECK(e.replies.size() == 1 && e.replies[0].stored && e.replies[0].reason.empty());
     CHECK(e.replies.size() == 1 && e.replies[0].asker == asker(1, 1) && e.replies[0].id == 1);
     CHECK(k.files["a1/oauth-token"] == kValue && d.stateOf(1) == sync::SecretState::Stored && e.changed);
     // A second answer, or a cancel, for it: late, nothing written, nobody answered again.
-    e = d.answer(1, sync::SecretValue(kOther), k);
+    e = d.answer(1, sync::SecretValue(kOther), k, 1000);
     CHECK(e.replies.empty() && k.writes == 1 && e.log.size() == 1 && e.log[0].event == "late" && !e.changed);
     e = d.cancel(1);
     CHECK(e.replies.empty() && e.log.size() == 1 && e.log[0].event == "late");
@@ -228,30 +231,70 @@ void desk() {
     d.ask(4, asker(1, 3), "a1", kToken, "", true, 2000);
     e = d.cancel(4);
     CHECK(e.replies.size() == 1 && e.replies[0].reason == sync::reason::kCancelled && e.changed);
-    // The file could not be written: refused, unwritable, the keeper's reason in the log alone.
+    // The file could not be written: never refused. The value is held, the asker not answered yet, the dialogs closed,
+    // and the keeper's reason in the log alone.
     d.ask(5, asker(1, 4), "a1", kToken, "", true, 3000);
     k.fail = true;
-    e = d.answer(5, sync::SecretValue(kValue), k);
+    e = d.answer(5, sync::SecretValue(kValue), k, 3000);
+    CHECK(e.replies.empty() && e.changed && !d.isOpen(5) && d.stateOf(5) == sync::SecretState::Holding);
+    CHECK(e.log.size() == 1 && e.log[0].event == "holding" && holds(e.log[0].detail, "the disk is full"));
+    CHECK(e.notes.size() == 1 && e.notes[0].what == "holding" && holds(e.notes[0].text, "nothing needs pasting again"));
+    CHECK(d.holding().size() == 1 && d.busy("a1") && d.waiting(1) && d.retryAt() == 3000 + sync::kSecretRetryFirstMs);
+    // Held: a new ask for a1 is busy, and a second answer for 5 (another window's) is late.
+    e = d.ask(51, asker(0, 0), "a1", kToken, "", true, 3001);
+    CHECK(e.replies.size() == 1 && e.replies[0].reason == sync::reason::kBusy);
+    e = d.answer(5, sync::SecretValue(kOther), k, 3001);
+    CHECK(e.log.size() == 1 && e.log[0].event == "late" && k.files.count("a1/oauth-token") == 1 &&
+          k.files["a1/oauth-token"] == kValue);
+    // Not before its time; at its time, still failing: held again, twice as far off.
+    e = d.retry(3999, k);
+    CHECK(e.log.empty() && d.stateOf(5) == sync::SecretState::Holding);
+    e = d.retry(4000, k);
+    CHECK(e.replies.empty() && e.notes.empty() && e.log.size() == 1 && e.log[0].event == "holding");
+    CHECK(d.retryAt() == 4000 + 2 * sync::kSecretRetryFirstMs);
+    // The backoff stops growing at a minute.
+    std::uint64_t at = 4000;
+    for (int i = 0; i < 12; ++i) {
+        at = *d.retryAt();
+        d.retry(at, k);
+    }
+    CHECK(*d.retryAt() - at == sync::kSecretRetryMaxMs);
+    // The disk fixed: the next retry writes it, the asker hears "stored", and the desk holds the value no longer.
     k.fail = false;
-    CHECK(e.replies.size() == 1 && e.replies[0].reason == sync::reason::kUnwritable);
-    CHECK(e.log.size() == 1 && e.log[0].event == "unwritable: the disk is full" && !d.isOpen(5));
-    // The value in its file, its durability unconfirmed: stored, and said so, never refused.
-    d.ask(50, asker(1, 40), "a1", kToken, "", true, 3000);
+    e = d.retry(*d.retryAt(), k);
+    CHECK(e.replies.size() == 1 && e.replies[0].stored && e.replies[0].id == 5 && e.replies[0].reason.empty());
+    CHECK(e.stored.size() == 1 && e.stored[0].id == 5 && d.stateOf(5) == sync::SecretState::Stored);
+    CHECK(d.holding().empty() && !d.retryAt() && !d.busy("a1") && k.files["a1/oauth-token"] == kValue);
+    // In its file, its durability unconfirmed: held as well, and "stored" only once a write is durable.
+    d.ask(50, asker(1, 40), "a1", kToken, "", true, 5000);
     k.unconfirmed = true;
-    e = d.answer(50, sync::SecretValue(kValue), k);
+    e = d.answer(50, sync::SecretValue(kOther), k, 5000);
+    CHECK(e.replies.empty() && d.stateOf(50) == sync::SecretState::Holding && k.files["a1/oauth-token"] == kOther);
+    CHECK(e.log.size() == 1 && e.log[0].event == "holding" && holds(e.log[0].detail, "the directory's sync failed"));
     k.unconfirmed = false;
-    CHECK(e.replies.size() == 1 && e.replies[0].stored && e.replies[0].reason == sync::reason::kUnconfirmed);
-    CHECK(d.stateOf(50) == sync::SecretState::Stored && e.notes.size() == 1 &&
-          holds(e.notes[0].text, "was stored, but the disk did not confirm it durable"));
-    CHECK(e.log.size() == 1 && e.log[0].event == "stored, unconfirmed: the directory's sync failed");
+    e = d.retry(5000 + sync::kSecretRetryFirstMs, k);
+    CHECK(e.replies.size() == 1 && e.replies[0].stored && d.stateOf(50) == sync::SecretState::Stored);
+    // Not the shape of a token: refused malformed at once, the request ended, nothing written; the person is told.
+    for (const char* bad : {"two words", "two\nlines", "tab\there", "caf\xc3\xa9"}) {
+        d.ask(52, asker(1, 42), "a2", kToken, "", true, 5100);
+        e = d.answer(52, sync::SecretValue(bad), k, 5100);
+        CHECK(e.replies.size() == 1 && !e.replies[0].stored && e.replies[0].reason == sync::reason::kMalformed);
+        CHECK(e.replies[0].account == "a2" && e.replies[0].what == kToken && k.files.count("a2/oauth-token") == 0);
+        CHECK(e.log.size() == 1 && e.log[0].event == "malformed" && !holds(e.log[0].line(), bad));
+        CHECK(e.notes.size() == 1 && holds(e.notes[0].text, "not one token") && !d.isOpen(52));
+    }
+    CHECK(sync::secretShape(kToken, sync::SecretValue(kValue)).empty());
+    CHECK(!sync::secretShape(kToken, sync::SecretValue("")).empty());
+    CHECK(!sync::secretShape(kToken, sync::SecretValue(std::string(sync::kSecretValueBytes + 1, 'x'))).empty());
+    CHECK(sync::secretShape(kToken, sync::SecretValue(std::string(sync::kSecretValueBytes, 'x'))).empty());
     // Refused before any request: busy, id 0, the reason in its lines, nothing opened.
     e = d.refuseAtOnce(asker(1, 41), "a1", kToken, "one of its asks is open already");
     CHECK(e.replies.size() == 1 && e.replies[0].id == 0 && !e.replies[0].stored &&
           e.replies[0].reason == sync::reason::kBusy && e.replies[0].asker == asker(1, 41) && !e.changed);
     CHECK(e.notes.size() == 1 && holds(e.notes[0].text, "not asked for: one of its asks is open already"));
-    CHECK(e.log.size() == 1 && holds(e.log[0].line(), "busy (not asked: session 1"));
+    CHECK(e.log.size() == 1 && holds(e.log[0].line(), "busy: not asked: session 1"));
     // The deadline: not a millisecond before it, then timeout; the other request stays open.
-    d.ask(6, asker(1, 5), "a1", kToken, "", true, 4000);
+    d.ask(6, asker(1, 5), "a9", kToken, "", true, 4000);
     d.ask(7, asker(0, 0), "a2", kToken, "", true, 4001);
     CHECK(d.deadline() == 4000 + sync::kSecretDeadlineMs);
     e = d.expire(4000 + sync::kSecretDeadlineMs - 1);
@@ -259,10 +302,40 @@ void desk() {
     e = d.expire(4000 + sync::kSecretDeadlineMs);
     CHECK(e.replies.size() == 1 && e.replies[0].id == 6 && e.replies[0].reason == sync::reason::kTimeout);
     CHECK(d.isOpen(7) && d.deadline() == 4001 + sync::kSecretDeadlineMs);
-    // The server ends: every open request is dropped, its asker not answered (it ends with the server).
+    // An answer that crossed the deadline, for the newest request of its account: still stored, its asker (told
+    // "timeout" already) not answered again, its session told.
+    CHECK(d.stateOf(6) == sync::SecretState::Expired);
+    e = d.answer(6, sync::SecretValue(kValue), k, 4000 + sync::kSecretDeadlineMs + 5);
+    CHECK(e.replies.empty() && d.stateOf(6) == sync::SecretState::Stored && k.files["a9/oauth-token"] == kValue);
+    CHECK(e.notes.size() == 1 && holds(e.notes[0].text, "stored after all") && e.stored.size() == 1);
+    // Once a newer request for its account has been open, an expired one's answer is late.
+    d.ask(8, asker(1, 6), "a9", kToken, "", true, 5000);
+    d.expire(5000 + sync::kSecretDeadlineMs);
+    d.ask(9, asker(1, 7), "a9", kToken, "", true, 5001 + sync::kSecretDeadlineMs);
+    d.cancel(9);
+    e = d.answer(8, sync::SecretValue(kOther), k, 5002 + sync::kSecretDeadlineMs);
+    CHECK(e.log.size() == 1 && e.log[0].event == "stored" && k.files["a9/oauth-token"] == kOther);
+    d.ask(10, asker(1, 8), "a9", kToken, "", true, 6000);
+    d.expire(6000 + sync::kSecretDeadlineMs);
+    d.ask(11, asker(1, 9), "a9", kToken, "", true, 6001 + sync::kSecretDeadlineMs);
+    e = d.answer(10, sync::SecretValue(kValue), k, 6002 + sync::kSecretDeadlineMs);
+    CHECK(e.log.size() == 1 && e.log[0].event == "late" && k.files["a9/oauth-token"] == kOther);
+    d.cancel(11);
+    // A value held when the server ends is lost, and said so; every open request is dropped, its asker not answered
+    // (it ends with the server); an expired request is forgotten.
+    d.ask(12, asker(1, 10), "a1", kToken, "", true, 7000);
+    k.fail = true;
+    d.answer(12, sync::SecretValue(kValue), k, 7000);
+    k.fail = false;
+    d.ask(13, asker(1, 11), "a2", kToken, "", true, 7000);
+    d.expire(7000 + sync::kSecretDeadlineMs);
+    d.ask(14, asker(0, 0), "a3", kToken, "", true, 8000 + sync::kSecretDeadlineMs);
     e = d.drop();
-    CHECK(e.replies.empty() && e.log.size() == 1 && e.log[0].event == "dropped");
-    CHECK(d.stateOf(7) == sync::SecretState::Dropped && d.open().empty() && !d.deadline());
+    CHECK(e.replies.empty() && e.log.size() == 2 && e.log[0].event == "dropped" && e.log[0].id == 14);
+    CHECK(e.log[1].event == "lost" && e.log[1].id == 12 && holds(e.log[1].detail, "must be pasted again"));
+    CHECK(d.stateOf(14) == sync::SecretState::Dropped && d.open().empty() && !d.deadline());
+    CHECK(d.stateOf(12) == sync::SecretState::Dropped && d.holding().empty() && !d.retryAt());
+    CHECK(d.stateOf(13) == sync::SecretState::Refused);
     CHECK(!d.stateOf(99));
     // It remembers the most recent ended requests only.
     for (std::uint64_t id = 100; id < 100 + sync::SecretDesk::kKeptEnded + 10; ++id) {
@@ -479,6 +552,52 @@ void hub() {
         s.now += 1;
         CHECK(s.hub->askSecret(asker(1, 11), "a1", kToken, "", &why));
         CHECK(s.store.applied(sync::kSecretIdsClient) == minted + 1 && s.hub->secrets().isOpen(minted + 1));
+    }
+    {
+        // One chance: a login whose file cannot be written is held, and the account signs in only once a retry makes
+        // it durable; the asker hears "stored" then, and nothing is asked again.
+        store::MemFs other;
+        Keeper k2;
+        Server s(other, k2);
+        std::string why;
+        CHECK(s.hub->askSecret(asker(1, 1), "a1", kToken, "", &why));
+        k2.fail = true;
+        CHECK(s.hub->apply(numbered(1, answer(1, kValue)), &why, "c1"));
+        CHECK(s.events.replies.empty() && s.responder.logins.empty() && s.hub->state().requests().empty());
+        CHECK(s.hub->secretRetryAt() == s.now + sync::kSecretRetryFirstMs &&
+              s.hub->secretWake() == s.hub->secretRetryAt());
+        CHECK(holds(s.transcript(1), "nothing needs pasting again"));
+        // The account's own sign-in asks nothing while its value is held.
+        s.hub->reportSignedIn("a1", false);
+        CHECK(s.hub->state().requests().empty() && s.store.applied(sync::kSecretIdsClient) == 1);
+        k2.fail = false;
+        s.now += sync::kSecretRetryFirstMs;
+        s.hub->retrySecrets();
+        CHECK(s.events.replies.size() == 1 && s.events.replies[0].stored && k2.files["a1/oauth-token"] == kValue);
+        CHECK(s.responder.logins == std::vector<std::string>{"a1"} && s.hub->signedIn().count("a1") == 1);
+        CHECK(!s.hub->secretRetryAt() && !s.hub->secretWake());
+        // nexus's own ask answered with something not of a token's shape: refused malformed, and asked again (on the
+        // server's next pass), with the reason in the dialog; the second paste is stored.
+        CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
+        const std::uint64_t first = s.store.applied(sync::kSecretIdsClient);
+        CHECK(s.hub->apply(numbered(2, answer(first, "two words")), &why, "c1"));
+        CHECK(s.events.replies.back().reason == sync::reason::kMalformed && s.hub->reaskPending());
+        CHECK(s.hub->reaskSecrets() == std::optional<std::string>("a2") && !s.hub->reaskPending());
+        const std::vector<sync::SecretRequest>& open = s.hub->state().requests();
+        CHECK(open.size() == 1 && open[0].id == first + 1 && holds(open[0].why, "was not one token"));
+        CHECK(sync::isSecretWhy(open[0].why));
+        CHECK(s.hub->apply(numbered(3, answer(first + 1, kOther)), &why, "c1"));
+        CHECK(s.events.replies.back().stored && k2.files["a2/oauth-token"] == kOther);
+        // Asked again only while nothing for the account is open or held by then.
+        CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
+        const std::uint64_t third = s.store.applied(sync::kSecretIdsClient);
+        CHECK(s.hub->apply(numbered(4, answer(third, "x y")), &why, "c1"));
+        CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
+        CHECK(!s.hub->reaskSecrets() && s.store.applied(sync::kSecretIdsClient) == third + 1);
+        // A friend's AI is not asked again by nexus: it hears malformed, and asks again itself.
+        CHECK(s.hub->askSecret(asker(1, 2), "a1", kToken, "", &why));
+        CHECK(s.hub->apply(numbered(5, answer(third + 2, "x y")), &why, "c1"));
+        CHECK(s.events.replies.back().reason == sync::reason::kMalformed && !s.hub->reaskPending());
     }
     {
         // A hub with no secret dialog wired: no asks; an answer is counted and dropped, its value nowhere.
@@ -849,6 +968,132 @@ void files_disk() {
 }
 #endif
 
+// ---- a login's life: how long it lasts, the notices before its end, and when a paste is asked for ----
+
+void logins() {
+    using server::LoginSeen;
+    using server::kDayMs;
+    const server::LoginTerm claude = server::loginTerm("claude");
+    CHECK(claude.lifetimeMs == 365 * kDayMs && !claude.renewable && holds(claude.makeNew, "claude setup-token"));
+    CHECK(server::loginTerm("other").lifetimeMs == 0);
+    CHECK(server::dateOf(0) == "1970-01-01" && server::dateOf(365 * kDayMs) == "1971-01-01");
+    const std::uint64_t t = 1000 * kDayMs;      // a made-up day the token was stored
+    const LoginSeen usable{LoginSeen::File::Usable, t, ""};
+    // A paste is asked for: the first login, a file not of a token's shape, one that ended, one the provider refused.
+    sync::Hub::LoginAsk a = server::loginAsk("a1", "claude", LoginSeen{}, t);
+    CHECK(a.ask && holds(a.text, "a1 has no Claude login yet") && sync::isSecretWhy(a.text));
+    a = server::loginAsk("a1", "claude", LoginSeen{LoginSeen::File::Malformed, 0, "not one token"}, t);
+    CHECK(a.ask && holds(a.text, "is not one token") && sync::isSecretWhy(a.text));
+    a = server::loginAsk("a1", "claude", usable, t + 365 * kDayMs);
+    CHECK(a.ask && holds(a.text, "ended on " + server::dateOf(t + 365 * kDayMs)) && holds(a.text, "cannot be renewed"));
+    CHECK(sync::isSecretWhy(a.text));
+    a = server::loginAsk("a1", "claude", usable, t + 10 * kDayMs);
+    CHECK(a.ask && holds(a.text, "revoked") && sync::isSecretWhy(a.text));
+    // Never asked when a paste would not fix it: the file as it lies; the sessions are told the fix instead.
+    a = server::loginAsk("a1", "claude", LoginSeen{LoginSeen::File::Unusable, 0, "run chmod 600 it"}, t);
+    CHECK(!a.ask && holds(a.text, "run chmod 600 it") && holds(a.text, "asks nothing"));
+    // An account name at its longest still gives a dialog line within its bound.
+    const std::string longest(64, 'n');
+    for (const LoginSeen& seen : {LoginSeen{}, usable}) {
+        CHECK(sync::isSecretWhy(server::loginAsk(longest, "claude", seen, t + 400 * kDayMs).text));
+    }
+    // Live at the start: usable and before its end.
+    CHECK(server::loginLive("claude", usable, t + 364 * kDayMs));
+    CHECK(!server::loginLive("claude", usable, t + 365 * kDayMs));
+    CHECK(!server::loginLive("claude", LoginSeen{}, t) && server::loginLive("other", usable, t + 9999 * kDayMs));
+    // The notices: 30, 7 and 1 days ahead, then the end; each once; a login stored again starts over.
+    server::LoginWatch w;
+    const std::vector<server::LoginWatch::Login> one{{"a1", "claude", t}, {"k", "other", t}};
+    CHECK(w.check(one, t + 300 * kDayMs).empty());
+    std::vector<server::LoginWatch::Notice> n = w.check(one, t + 336 * kDayMs);
+    CHECK(n.size() == 1 && n[0].account == "a1" && !n[0].expired && holds(n[0].text, "in 29 days"));
+    CHECK(holds(n[0].text, "ends on " + server::dateOf(t + 365 * kDayMs)) && holds(n[0].text, "cannot renew"));
+    CHECK(w.check(one, t + 340 * kDayMs).empty());
+    n = w.check(one, t + 359 * kDayMs);
+    CHECK(n.size() == 1 && holds(n[0].text, "in 6 days"));
+    n = w.check(one, t + 364 * kDayMs + 1);
+    CHECK(n.size() == 1 && holds(n[0].text, "in 1 day.") && !n[0].expired);
+    n = w.check(one, t + 365 * kDayMs);
+    CHECK(n.size() == 1 && n[0].expired && holds(n[0].text, "ended on") && sync::isSecretWhy(n[0].text));
+    CHECK(w.check(one, t + 366 * kDayMs).empty());
+    const std::uint64_t t2 = t + 366 * kDayMs;
+    CHECK(w.check({{"a1", "claude", t2}}, t2 + kDayMs).empty());
+    // A watch that starts late (a restart) tells only the notice due then.
+    server::LoginWatch late;
+    n = late.check(one, t + 365 * kDayMs);
+    CHECK(n.size() == 1 && n[0].expired);
+    // The hub: a lost login asks in the window only when the hook says a paste can fix it, else tells the sessions.
+    store::MemFs fs;
+    Keeper k;
+    Server s(fs, k);
+    std::string why;
+    CHECK(s.hub->adoptDefaults().size() == 1);   // session 1 runs on a1, f's preferred account
+    s.hub->loginsWith([](const accounts::Account&) {
+        return sync::Hub::LoginAsk{false, "the file is open: run chmod"};
+    });
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a1", false);
+    CHECK(s.hub->state().requests().empty() && s.store.applied(sync::kSecretIdsClient) == 0);
+    CHECK(holds(s.transcript(1), "the file is open: run chmod") && s.hub->signedIn().count("a1") == 0);
+    CHECK(!s.events.log.empty() && s.events.log.back().event == "login");
+    s.hub->loginsWith([](const accounts::Account& acct) {
+        return sync::Hub::LoginAsk{true, acct.name + "'s Claude login was refused: paste a new one"};
+    });
+    s.hub->reportSignedIn("a1", false);
+    CHECK(s.hub->state().requests().size() == 1 && s.hub->state().requests()[0].why == "a1's Claude login was refused: "
+          "paste a new one" && s.hub->state().requests()[0].asker == 0);
+    CHECK(s.hub->apply(numbered(1, cancel(1)), &why, "c1"));
+    // Its end: signed out, and asked for, saying why; a notice ahead of it in the account's sessions.
+    s.hub->reportSignedIn("a1", true);
+    s.hub->tellAccount("a1", "a1's Claude login ends on 2027-11-14, in 30 days");
+    CHECK(holds(s.transcript(1), "ends on 2027-11-14"));
+    s.hub->needsSignIn("a1", "a1's Claude login ended on 2027-11-14");
+    CHECK(s.hub->signedIn().count("a1") == 0 && s.hub->state().requests().size() == 1 &&
+          s.hub->state().requests()[0].why == "a1's Claude login ended on 2027-11-14");
+    // Nothing more asked while that request is open.
+    s.hub->needsSignIn("a1", "again");
+    s.hub->reportSignedIn("a1", false);
+    CHECK(s.hub->state().requests().size() == 1);
+}
+
+#ifndef _WIN32
+// Functional: real files. A login file as it lies, without its value ever in what is said of it.
+void login_files() {
+    using server::LoginSeen;
+    const std::filesystem::path dir = std::filesystem::current_path() / "logins_disk";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string path = (dir / "oauth-token").string();
+    CHECK(server::inspectLogin(path).file == LoginSeen::File::Missing);
+    auto write = [&](const std::string& text, mode_t mode) {
+        std::filesystem::remove(path);
+        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, mode);
+        CHECK(fd >= 0 && ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size()));
+        ::close(fd);
+        ::chmod(path.c_str(), mode);
+    };
+    const auto before = std::chrono::system_clock::now();
+    write(kValue + "\n", 0600);
+    LoginSeen seen = server::inspectLogin(path);
+    const std::uint64_t ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        before.time_since_epoch()).count());
+    CHECK(seen.file == LoginSeen::File::Usable && seen.storedAtMs + 2000 >= ms && seen.storedAtMs <= ms + 60000);
+    write(kValue, 0644);
+    seen = server::inspectLogin(path);
+    CHECK(seen.file == LoginSeen::File::Unusable && holds(seen.problem, "chmod 600") && !leaks(seen.problem));
+    write("two words " + kValue, 0600);
+    seen = server::inspectLogin(path);
+    CHECK(seen.file == LoginSeen::File::Malformed && !leaks(seen.problem));
+    std::filesystem::remove(path);
+    write(kValue, 0600);
+    std::filesystem::rename(path, dir / "elsewhere");
+    std::filesystem::create_symlink(dir / "elsewhere", path);
+    seen = server::inspectLogin(path);
+    CHECK(seen.file == LoginSeen::File::Unusable && holds(seen.problem, "symbolic link") && !leaks(seen.problem));
+    std::filesystem::remove_all(dir);
+}
+#endif
+
 struct Group {
     const char* name;
     void (*run)();
@@ -864,8 +1109,10 @@ const Group kGroups[] = {
     {"files_crash", files_crash, true},
     {"leak", leak, true},
     {"leak_scan", leak_scan, true},
+    {"login_life", logins, true},
 #ifndef _WIN32
     {"files_disk", files_disk, false},
+    {"login_files", login_files, false},
 #endif
 };
 

@@ -5,7 +5,7 @@ EXTENDS MCSecrets
 
 LeakyLate(m) ==
     /\ log' = {[id |-> m.id, event |-> "late", value |-> m.v]}
-    /\ UNCHANGED <<req, file, stores, replies>> /\ transcript' = {}
+    /\ UNCHANGED <<req, file, stores, replies, held>> /\ transcript' = {}
 
 BrokenSpec == Init /\ [][NextWith(Ask, Sync, LAMBDA m : ReceiveWith(StoreOpen, LeakyLate, m), Timeout, Restart)]_vars
 =============================================================================
