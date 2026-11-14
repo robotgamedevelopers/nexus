@@ -10,11 +10,11 @@ sync::EntryRef toRef(const store::Entry& e) {
 }
 
 sync::DriverState toState(const store::Driver& d) {
-    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting};
+    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir};
 }
 
 store::Driver toDriver(const sync::DriverState& d) {
-    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting};
+    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir};
 }
 
 sync::SessionInfo toInfo(const store::Info& i) {

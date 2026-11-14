@@ -70,6 +70,10 @@ tlc_test(tlc_accounts_witness_provider_keeps_harness WAccProviderKeepsHarness WA
          PROPERTY HarnessMatches)
 tlc_test(tlc_accounts_witness_drop_instance_stays WAccDropInstanceStays WAccDropInstanceStays.cfg invariant
          PROPERTY InstanceHeld)
+tlc_test(tlc_accounts_witness_add_instance_leaves_none WAccAddInstanceLeavesNone WAccAddInstanceLeavesNone.cfg
+         invariant PROPERTY InstanceHeld)
+tlc_test(tlc_accounts_witness_move_instance_silent WAccMoveInstanceSilent WAccMoveInstanceSilent.cfg action
+         PROPERTY MovedInstanceIsTold)
 
 # Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla. Each walk of 400
 # steps has the server move 6 to 20 sessions (settles and rotations) and takes TLC about two seconds.

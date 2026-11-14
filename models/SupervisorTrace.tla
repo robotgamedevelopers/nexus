@@ -7,7 +7,7 @@
 (* walk, playing the driver, the person and the clock, and writes          *)
 (* SupervisorTraceData.tla beside this module. It defines the instance     *)
 (* (TracePrompts, TraceMaxWaiting, TraceMaxFailedStarts, TraceMaxRestarts, *)
-(* TraceModels, TraceEfforts, TraceAccounts, TraceMaxSwitches,            *)
+(* TraceModels, TraceEfforts, TraceAccounts, TraceDirs, TraceMaxSwitches, *)
 (* TraceSessions) and Trace: one record per step. Trace[1] is the start    *)
 (* (op "init"); each later record is the event the code was given (op,    *)
 (* and for a message its kind, turn and value), and after it the code's    *)
@@ -28,14 +28,14 @@ VARIABLES s, sent, restarts, switches, l
 L == INSTANCE Supervisor WITH Prompts <- TracePrompts, MaxWaiting <- TraceMaxWaiting,
                               MaxFailedStarts <- TraceMaxFailedStarts, MaxRestarts <- TraceMaxRestarts,
                               Sessions <- TraceSessions, Models <- TraceModels, Efforts <- TraceEfforts,
-                              Accounts <- TraceAccounts,
+                              Accounts <- TraceAccounts, Dirs <- TraceDirs,
                               MaxSwitches <- TraceMaxSwitches
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
            "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
-           "account", "drv", "retiring"}
+           "account", "drv", "retiring", "dir", "here", "ddir", "sdir", "summary"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -60,6 +60,7 @@ Step(r) ==
       [] r.op = "restart"  -> L!Restart
       [] r.op = "setting"  -> L!SetSetting(r.v)
       [] r.op = "account"  -> L!SetAccount(r.v)
+      [] r.op = "place"    -> L!SetPlace(r.v, r.here)
       [] OTHER             -> FALSE
 
 traceVars == <<s, sent, restarts, switches, l>>
@@ -99,5 +100,10 @@ WrittenWithSetting == L!WrittenWithSetting
 SettingLeavesTurn == L!SettingLeavesTurn
 NoSendOnOldAccount == L!NoSendOnOldAccount
 AccountKeepsTurn == L!AccountKeepsTurn
+NoSendInOldPlace == L!NoSendInOldPlace
+PlaceKeepsTurn == L!PlaceKeepsTurn
+ResumesItsDir == L!ResumesItsDir
+SummaryOwed == L!SummaryOwed
+SummaryCarried == L!SummaryCarried
 
 =============================================================================

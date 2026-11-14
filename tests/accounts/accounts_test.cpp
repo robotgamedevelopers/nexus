@@ -415,8 +415,11 @@ class FailingStore : public sync::MemoryStore {
 public:
     bool commit(sync::SessionId id, const std::vector<sync::SessionChange>& changes, const std::string& client,
                 std::uint64_t num, std::string* why) override {
-        if (failing) {
+        if (failing || okLeft == 0) {
             broken = true;
+        }
+        if (okLeft > 0) {
+            --okLeft;
         }
         if (broken) {
             *why = "the disk took no more";
@@ -427,6 +430,7 @@ public:
     bool failed() const override { return broken; }
     bool failing = false;
     bool broken = false;
+    int okLeft = -1;    // commits still taken before it fails (-1: no such count)
 };
 
 // The store fails after the keeper has committed: what was committed is reported applied, never "nothing applied",
@@ -480,6 +484,29 @@ void hubAdoptDefaults() {
     CHECK(has({lastNotice(store, 1)}, "This session runs on the account work, which the drivers file gave ada"));
     CHECK(store.find(2)->info.account.empty() && store.find(3)->info.account.empty());
     CHECK(hub.adoptDefaults().empty());     // once on it, a session stays
+
+    // A store that fails part way: the server stops, and its next start (a new hub on the same store) adopts the
+    // rest; the session adopted before is left as it is.
+    FailingStore failing;
+    {
+        sync::Hub first(failing);
+        CHECK(first.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+        CHECK(first.apply(sync::Action{2, sync::ActionKind::Ensure, 0, "bo", "", ""}, &why, "w"));
+        Registry both = r;
+        both.friends[1].preferred = "work";
+        CHECK(first.useAccounts(both, nullptr).empty());
+        failing.okLeft = 1;
+        CHECK(first.adoptDefaults().size() == 1 && first.failed());
+        CHECK(failing.find(1)->info.account == "work" && failing.find(2)->info.account.empty());
+        const std::size_t told1 = failing.find(1)->transcript.size();
+        failing.broken = false;
+        failing.okLeft = -1;
+        sync::Hub next(failing);
+        CHECK(next.useAccounts(both, nullptr).empty());
+        CHECK((next.adoptDefaults() == std::vector<std::string>{
+            "session 2 (bo): account none -> work, as the drivers file ran it"}));
+        CHECK(failing.find(1)->transcript.size() == told1 && failing.find(2)->info.account == "work");
+    }
 }
 
 // The sign-in probe: asked of each account as it first appears (at the start, every one), before the sessions are
@@ -538,6 +565,34 @@ void hubInstances() {
     CHECK(store.find(3)->info.instance == "rocketnet");
     CHECK(hub.apply(sync::Action{4, sync::ActionKind::Create, 1, "bo", "", ""}, &why, "w"));
     CHECK(store.find(4)->info.instance.empty());            // another friend's: never copied
+    // An instance moved in place (its directory edited, its name kept): every session on it is told, and stays on it.
+    const std::size_t notices1 = store.find(1)->transcript.size();
+    const std::size_t notices2 = store.find(2)->transcript.size();
+    edit.friends[0].instances[1].dir = "/c";
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "session 1 (ada): instance rocketnet moved, on studio in /b -> on studio in /c"));
+    CHECK(has(report, "session 3 (ada): instance rocketnet moved"));
+    CHECK(store.find(1)->info.instance == "rocketnet" && store.find(1)->transcript.size() == notices1 + 1);
+    CHECK(has({lastNotice(store, 1)}, "ada's instance rocketnet moved"));
+    CHECK(has({lastNotice(store, 1)}, "is now on studio in /c"));
+    CHECK(store.find(2)->transcript.size() == notices2);    // bo's: not told
+    // A friend's first instance: its sessions on none take it, told (a session belongs to one of its friend's
+    // instances while it has any).
+    edit.friends[1].instances = {{"laptop", "laptop", "/home/bo"}};
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(store.find(2)->info.instance == "laptop" && store.find(4)->info.instance == "laptop");
+    CHECK(has(report, "session 2 (bo): instance none -> laptop"));
+    CHECK(has({lastNotice(store, 2)}, "bo's default instance, laptop (on laptop in /home/bo)"));
+    // The same at a start: a session on none whose friend has instances takes the default.
+    {
+        sync::MemoryStore store2;
+        sync::Hub hub2(store2);
+        CHECK(hub2.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "bo", "", ""}, &why, "w"));
+        CHECK(store2.find(1)->info.instance.empty());
+        Keeper keeper2;
+        CHECK(has(hub2.useAccounts(edit, &keeper2), "session 1 (bo): instance none -> laptop"));
+        CHECK(store2.find(1)->info.instance == "laptop");
+    }
     // The friend dropped: its sessions belong to no instance, told.
     edit.friends.erase(edit.friends.begin());
     CHECK(hub.applyAccounts(edit, "reload", &report));

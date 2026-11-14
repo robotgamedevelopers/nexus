@@ -27,8 +27,9 @@
 (* A friend also has instances: the friend on one machine, in one          *)
 (* working directory (named, in order; the first is the friend's default   *)
 (* instance), set by edits only (`ReloadAddInstance`,                      *)
-(* `ReloadDropInstance`). Accounts are the friend's, shared by all its     *)
-(* instances; a session belongs to one instance, or none. A create takes   *)
+(* `ReloadDropInstance`, `ReloadMoveInstance`). Accounts are the           *)
+(* friend's, shared by all its instances; a session belongs to one of its  *)
+(* friend's instances, or to none when the friend has none. A create takes *)
 (* the instance of the session it copies when that is the same friend's    *)
 (* and still one of its instances, else the friend's default instance.     *)
 (*                                                                         *)
@@ -39,8 +40,10 @@
 (* none; a session whose account's provider changed takes the new          *)
 (* harness; and each session moved or changed is told (a notice in its     *)
 (* transcript). An unlinked or removed default becomes none. A session     *)
-(* whose instance its friend no longer has moves to the friend's default   *)
-(* instance, or none, and is told.                                         *)
+(* whose instance its friend no longer has, or on none while its friend    *)
+(* has some, moves to the friend's default instance, or none, and is told; *)
+(* an instance moved in place (another machine or directory, the same      *)
+(* name) tells every session on it.                                        *)
 (*                                                                         *)
 (* `told` and `last` are history: the sessions given a notice by the step  *)
 (* just taken, and the operation with its arguments and result. No action  *)
@@ -107,8 +110,10 @@ FirstOr(sq) == IF sq = << >> THEN None ELSE Head(sq)
 \* on an account kept takes its provider's harness. Told: every session moved or whose harness changed.
 Stray(nl, s) == ses[s].made /\ ses[s].acct /= None /\ ses[s].acct \notin Range(nl[ses[s].friend])
 Landing(nl, nd, f) == IF nd[f] /= None /\ Up(nd[f]) THEN nd[f] ELSE FirstUp(nl[f])
-\* A session whose instance its friend no longer has (after instances ni) moves to the friend's first, or none.
-StrayInst(ni, s) == ses[s].made /\ ses[s].inst /= None /\ ses[s].inst \notin Range(ni[ses[s].friend])
+\* A session whose instance its friend no longer has (after instances ni), or on none while its friend has some,
+\* moves to the friend's first, or none.
+StrayInst(ni, s) == ses[s].made /\ IF ses[s].inst = None THEN ni[ses[s].friend] /= << >>
+                                   ELSE ses[s].inst \notin Range(ni[ses[s].friend])
 InstOf(ni, s) == IF StrayInst(ni, s) THEN FirstOr(ni[ses[s].friend]) ELSE ses[s].inst
 SettledI(nl, nd, np, ni) ==
     [s \in Ids |-> IF Stray(nl, s)
@@ -131,13 +136,15 @@ Refused(op, f, a, s, notice) ==
     /\ told' = notice
     /\ UNCHANGED model
 
-\* The accounts and friends become nl, nd, np, kn, ac, ni, and the sessions are settled, in one step.
-BecomeI(op, f, a, ac, np, kn, nl, nd, ni) ==
+\* The accounts and friends become nl, nd, np, kn, ac, ni, and the sessions are settled, in one step. mv: the
+\* instances moved in place (<<friend, instance>>: another machine or directory), whose sessions are told too.
+BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, mv) ==
     /\ acct' = ac /\ prov' = np /\ known' = kn /\ links' = nl /\ dflt' = nd /\ insts' = ni
     /\ ses' = SettledI(nl, nd, np, ni)
-    /\ told' = SettledToldI(nl, np, ni)
+    /\ told' = SettledToldI(nl, np, ni) \cup {s \in Ids : ses[s].made /\ <<ses[s].friend, ses[s].inst>> \in mv}
     /\ Done(op, f, a, 0, TRUE)
     /\ UNCHANGED nextSes
+BecomeI(op, f, a, ac, np, kn, nl, nd, ni) == BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, {})
 Become(op, f, a, ac, np, kn, nl, nd) == BecomeI(op, f, a, ac, np, kn, nl, nd, InstsFor(kn))
 
 \* The files agree: links name accounts set up, each once, only from friends set up; a default is linked or none;
@@ -226,6 +233,12 @@ ReloadProvider(a, p) == Reload(None, a, acct, [prov EXCEPT ![a] = p], known, lin
 ReloadAddInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Append(@, i)])
 \* An instance taken out of a friend's.
 ReloadDropInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Drop(@, i)])
+\* An instance of a friend's moved in place: its machine or directory edited, its name kept (the names alone are
+\* modelled, so nothing else changes; refused for an instance the friend does not have).
+ReloadMoveInstance(f, i) ==
+    IF i \in Range(insts[f])
+    THEN BecomeIM("moveinst", f, i, acct, prov, known, links, dflt, insts, {<<f, i>>})
+    ELSE Refused("moveinst", f, i, 0, {})
 
 \* The person's: the session's account, one linked to its friend or none, whatever its provider or sign-in. A
 \* refusal is a notice in the session's transcript.
@@ -265,8 +278,9 @@ Create(f, from) ==
     ELSE Refused("create", f, None, from, {})
 
 \* The steps, with the actions a reversed witness breaks passed in.
-NextWithI(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), DropInst(_, _)) ==
-    \/ \E f \in Friends, i \in Insts : ReloadAddInstance(f, i) \/ DropInst(f, i)
+NextWithIM(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
+           DropInst(_, _), MoveInst(_, _)) ==
+    \/ \E f \in Friends, i \in Insts : AddInst(f, i) \/ DropInst(f, i) \/ MoveInst(f, i)
     \/ \E a \in Accts : Add(a) \/ Rm(a) \/ Report(a, "in") \/ Report(a, "out") \/ ReloadDropAccount(a)
     \/ \E a \in Accts, p \in Providers : Pv(a, p)
     \/ \E f \in Friends : AddFriend(f) \/ ReloadDropFriend(f)
@@ -275,6 +289,9 @@ NextWithI(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLi
     \/ \E s \in Ids, a \in Accts \cup {None} : St(s, a)
     \/ \E s \in Ids : Rot(s)
     \/ \E f \in Friends, from \in 0..MaxSes : Cr(f, from)
+
+NextWithI(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), DropInst(_, _)) ==
+    NextWithIM(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, ReloadAddInstance, DropInst, ReloadMoveInstance)
 
 NextWith(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _)) ==
     NextWithI(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, ReloadDropInstance)
@@ -316,9 +333,11 @@ DefaultLinked == \A f \in Friends : dflt[f] = None \/ dflt[f] \in Range(links[f]
 SessionLinked ==
     \A s \in Ids : ses[s].made => (ses[s].acct = None \/ ses[s].acct \in Range(links[ses[s].friend]))
 
-\* A session belongs to one of its friend's instances, or none; instances only of friends set up, each named once.
+\* A session belongs to one of its friend's instances, or to none when its friend has none; instances only of friends
+\* set up, each named once.
 InstanceHeld ==
-    /\ \A s \in Ids : ses[s].made => (ses[s].inst = None \/ ses[s].inst \in Range(insts[ses[s].friend]))
+    /\ \A s \in Ids : ses[s].made => IF insts[ses[s].friend] = << >> THEN ses[s].inst = None
+                                     ELSE ses[s].inst \in Range(insts[ses[s].friend])
     /\ \A f \in Friends : Len(insts[f]) = Cardinality(Range(insts[f])) /\ (f \notin known => insts[f] = << >>)
 
 \* A session on an account runs its provider's harness.
@@ -356,6 +375,11 @@ SetExact ==
 
 \* A set or a rotation changes no other session.
 OnlyItsSession == [][last'.op \in {"set", "rotate"} => \A s \in Ids \ {last'.s} : ses'[s] = ses[s]]_vars
+
+\* An instance moved in place tells every session on it (its driver follows it there).
+MovedInstanceIsTold ==
+    [][last'.op = "moveinst" /\ last'.ok =>
+         {s \in Ids : ses[s].made /\ ses[s].friend = last'.f /\ ses[s].inst = last'.a} \subseteq told']_vars
 
 \* An operation refused changes nothing.
 RefusedChangesNothing == [][~last'.ok => UNCHANGED model]_vars

@@ -24,11 +24,12 @@
 // all, and nothing the server acknowledges or sends is lost to a crash. When the log passes StoreOptions::compact_bytes
 // the whole state is written as the journal's snapshot and the log starts again.
 //
-// A record: u8 format (2); u64 session (0: none); u32 count, then each change: u8 kind, and for an append u8 entry
+// A record: u8 format (3); u64 session (0: none); u32 count, then each change: u8 kind, and for an append u8 entry
 // kind, u8 closed, str text, for an enqueue str prompt, for a dequeue nothing (the queue's oldest prompt leaves it),
 // for a driver the driver, for an info the info; then str client (empty: none) and u64 its new counter.
-// An info: str friend, str harness, str account, str model, str effort. A driver: u64 next turn, u64 open turn, str
-// session, u32 waiting prompts (str). The snapshot: u8 format (3); u64 next session id; u32 sessions, each u64 id, the
+// An info: str friend, str harness, str account, str model, str effort, str instance. A driver: u64 next turn, u64
+// open turn, str session, u32 waiting prompts (str), u8 summary (1: the next send carries a summary), str the session's directory. Records of format
+// 2 and snapshots of format 3 have neither the instance nor the summary and directory, and are still read. The snapshot: u8 format (4); u64 next session id; u32 sessions, each u64 id, the
 // info, u32 entries (u8 kind, u8 closed, str text), u32 prompts (str), the driver; u32 clients, each str client, u64
 // counter. Little-endian; str is a u32 length and the bytes (codec.h).
 //
@@ -57,6 +58,8 @@ struct Driver {
     std::uint64_t open_turn = 0;
     std::string session;
     std::vector<std::string> waiting;
+    bool summary = false;     // the next send carries a summary of the conversation (its harness session was dropped)
+    std::string session_dir;  // the directory the harness session was made in (empty: not known)
     bool operator==(const Driver&) const = default;
 };
 

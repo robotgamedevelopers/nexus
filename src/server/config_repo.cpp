@@ -504,9 +504,48 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
     return true;
 }
 
+namespace {
+std::string adoptMark(const std::string& dir) {
+    return dir + "/.git/nexus-adopting";
+}
+} // namespace
+
+bool ConfigRepo::keepSeed(const accounts::Registry& seed, const std::string& message, std::string* why) {
+    const std::string mark = adoptMark(dir_);
+    const int fd = ::open(mark.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0 || ::fsync(fd) != 0) {
+        *why = "cannot write " + mark + ": " + std::strerror(errno);
+        if (fd >= 0) {
+            ::close(fd);
+        }
+        return false;
+    }
+    ::close(fd);
+    if (!keep(seed, message, why)) {
+        ::unlink(mark.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool ConfigRepo::adopting() const {
+    return ::access(adoptMark(dir_).c_str(), F_OK) == 0;
+}
+
+bool ConfigRepo::adopted(std::string* why) {
+    if (::unlink(adoptMark(dir_).c_str()) != 0 && errno != ENOENT) {
+        *why = "cannot remove " + adoptMark(dir_) + ": " + std::strerror(errno);
+        return false;
+    }
+    return true;
+}
+
 bool ConfigRepo::onlyKnownHistory(std::string* why) {
-    // Every path any commit touched, on every ref, and every path the index holds: a push publishes the history.
-    const GitResult log = runGit(dir_, {"-c", "core.quotePath=true", "log", "--all", "--format=", "--name-only"});
+    // Every path any commit touched, on every ref, merges included (each against each of its parents: a file added
+    // while a merge was made by hand is in no other commit), and every path the index holds: a push publishes the
+    // history.
+    const GitResult log = runGit(dir_, {"-c", "core.quotePath=true", "log", "--all", "--diff-merges=separate",
+                                        "--format=", "--name-only"});
     const GitResult index = runGit(dir_, {"-c", "core.quotePath=true", "ls-files"});
     if (log.status != 0 || index.status != 0) {
         *why = gitWhy("listing every file in the config repository's history", log.status != 0 ? log : index);

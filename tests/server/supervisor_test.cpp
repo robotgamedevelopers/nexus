@@ -6,6 +6,7 @@
 //   supervisor_test           runs every group
 //   supervisor_test <group>   runs one
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -549,6 +550,105 @@ void testAccount() {
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
 }
 
+bool hasArgs(const Output& o, const std::vector<std::string>& args) {
+    for (const Command& c : o.commands) {
+        if (c.kind == Kind::Start &&
+                std::search(c.argv.begin(), c.argv.end(), args.begin(), args.end()) != c.argv.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool resumes(const Output& o) {
+    return hasArgs(o, {"--resume"});
+}
+
+void testPlace() {
+    Config c = config();
+    int summaries = 0;
+    c.summarize = [&summaries] {
+        ++summaries;
+        return std::string("SUM ");
+    };
+    Output o;
+    Supervisor s(c, {}, kStart, &o);
+    // A driver in /w reports its harness session: kept with its directory.
+    s.prompt("one", kStart);
+    s.message(Hello{1, "h"}, kStart + 1);
+    o = s.message(Session{"s-1"}, kStart + 2);
+    CHECK(o.durable && s.state().session == "s-1" && s.state().sessionDir == "/w");
+    s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    CHECK(s.phase() == Phase::Idle && s.driverCwd() == "/w");
+
+    // The same directory, still here: nothing changes.
+    o = s.setPlace("/w", true, kStart + 4);
+    CHECK(o.commands.empty() && o.effects.empty() && s.phase() == Phase::Idle);
+
+    // Another directory: the idle driver is ended quietly, not counted as a failed start. The next starts there,
+    // afresh (the harness session was made in /w), with a notice; its first send carries the summary, once.
+    o = s.setPlace("/v", true, kStart + 5);
+    CHECK(ended(s, o) && s.retiring() && o.effects.empty() && s.cwd() == "/v");
+    o = s.exited("exited with status 0", kStart + 6);
+    CHECK(s.phase() == Phase::None && s.failedStarts() == 0 && o.commands.empty());
+    o = s.prompt("two", kStart + 7);
+    CHECK(hasArgs(o, {"--cwd", "/v"}) && !resumes(o) && s.driverCwd() == "/v");
+    CHECK(o.durable && s.state().session.empty() && s.state().sessionDir.empty() && s.state().summary);
+    CHECK(o.effects.size() == 2 && o.effects[1].what == What::Notice);
+    CHECK(contains(o.effects[1].text, "ada now works in /v, and the conversation so far was held in /w"));
+    CHECK(contains(o.effects[1].text, "starts afresh, given a summary of it with the next prompt"));
+    CHECK(summaries == 0);
+    o = s.message(Hello{1, "h"}, kStart + 8);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{2, "SUM two"}}));
+    CHECK(o.durable && !s.state().summary && summaries == 1);
+    s.message(Session{"s-2"}, kStart + 9);
+    CHECK(s.state().sessionDir == "/v");
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 10);
+
+    // A restart in the same directory (here, for an account) resumes, with no summary.
+    o = s.setAccount("work", kStart + 11);
+    CHECK(ended(s, o));
+    s.exited("exited with status 0", kStart + 12);
+    o = s.prompt("three", kStart + 13);
+    CHECK(hasArgs(o, {"--cwd", "/v", "--resume", "s-2"}) && o.effects.size() == 1);
+    o = s.message(Hello{1, "h"}, kStart + 14);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "three"}}) && summaries == 1);
+
+    // Working: a move waits for the turn's end; the driver is then ended, never given another prompt in /v.
+    o = s.setPlace("/u", true, kStart + 15);
+    CHECK(o.commands.empty() && s.phase() == Phase::Working);
+    s.queued("later", kStart + 16);
+    o = s.message(Done{3, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 17);
+    CHECK(o.taken == 1 && ended(s, o) && written(o).empty());
+
+    // On another machine: the idle driver is ended, and no driver starts and nothing queued is taken until the
+    // instance is here again.
+    Supervisor u = make();
+    u.prompt("one", kStart);
+    u.message(Hello{1, "h"}, kStart + 1);
+    u.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 2);
+    o = u.setPlace("/w", false, kStart + 3);
+    CHECK(ended(u, o) && !u.here());
+    u.exited("exited with status 0", kStart + 4);
+    o = u.queued("later", kStart + 5);
+    CHECK(o.taken == 0 && o.commands.empty());
+    o = u.setPlace("/w", true, kStart + 6);
+    CHECK(o.taken == 1 && kinds(o) == std::vector<Kind>{Kind::Start});
+
+    // A harness session from before its directory was kept (none recorded) is resumed; with no turns yet, a move
+    // gives no summary and no notice.
+    sync::DriverState old;
+    old.nextTurn = 3;
+    old.session = "old";
+    Supervisor v = make(old);
+    o = v.prompt("p", kStart);
+    CHECK(hasArgs(o, {"--resume", "old"}));
+    Supervisor w = make();
+    w.setPlace("/v", true, kStart);
+    o = w.prompt("p", kStart + 1);
+    CHECK(hasArgs(o, {"--cwd", "/v"}) && o.effects.size() == 1 && !w.state().summary);
+}
+
 // ---- the credential, errors, the session ----
 
 void testCredentialAndErrors() {
@@ -945,6 +1045,7 @@ const Group kGroups[] = {
     {"restart", testRestart},
     {"settings", testSettings},
     {"account", testAccount},
+    {"place", testPlace},
 };
 
 } // namespace

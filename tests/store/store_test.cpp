@@ -1048,9 +1048,14 @@ void test_instance() {
         CHECK(o.report.migrated == 0);
         CHECK(about(o.s->session(1)->info) == "ada/claude/home/fast/" && o.s->session(1)->info.instance.empty());
         CHECK(o.s->applied("w1") == 4);
+        // A driver from before: no summary owed, its harness session's directory not known.
+        CHECK(!o.s->session(1)->driver.summary && o.s->session(1)->driver.session_dir.empty());
         Change c = info("ada");
         c.info.instance = "rocketnet";
-        CHECK_OK(o.s->commit(1, std::vector<Change>{c}, "w1", 5));
+        Change d = setDriver(3, 0, "", {});
+        d.driver.summary = true;
+        d.driver.session_dir = "/work/rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}, "w1", 5));
     }
     {
         Journal j(fs, "store");
@@ -1063,6 +1068,7 @@ void test_instance() {
         Opened o = open_store(fs);
         CHECK_OK(o.st);
         CHECK(o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
+        CHECK(o.s->session(1)->driver.summary && o.s->session(1)->driver.session_dir == "/work/rocketnet");
     }
 }
 

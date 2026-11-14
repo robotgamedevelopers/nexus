@@ -276,6 +276,49 @@ int main(int argc, char** argv) {
           std::string::npos);
     CHECK(repo.clearRemote(&why) && repo.remote(&url, &why) && url.empty() && !repo.pushWanted());
 
+    // A file that only a merge commit brought in (added while the merge was made by hand) is in the history too: no
+    // remote is set. A log that leaves out merges' changes would not list it.
+    {
+        const std::string mdir = work + "/merged";
+        std::filesystem::create_directories(mdir);
+        ConfigRepo merged(mdir);
+        CHECK(merged.open(&why));
+        CHECK(merged.keep(sample(), "the accounts", &why));
+        CHECK(runGit(mdir, {"checkout", "-q", "-b", "side"}).status == 0);
+        CHECK(runGit(mdir, {"commit", "-q", "--allow-empty", "-m", "a side commit"}).status == 0);
+        CHECK(runGit(mdir, {"checkout", "-q", "-"}).status == 0);
+        CHECK(runGit(mdir, {"merge", "-q", "--no-ff", "--no-commit", "side"}).status == 0);
+        spit(mdir + "/token.txt", "x");
+        CHECK(runGit(mdir, {"add", "-f", "token.txt"}).status == 0);
+        CHECK(runGit(mdir, {"commit", "-q", "-m", "the merge"}).status == 0);
+        CHECK(runGit(mdir, {"rm", "-q", "--cached", "token.txt"}).status == 0);
+        CHECK(runGit(mdir, {"commit", "-q", "-m", "the token out of the index"}).status == 0);
+        CHECK(runGit(mdir, {"log", "--all", "--format=", "--name-only"}).out.find("token.txt") ==
+              std::string::npos);    // what a plain log lists: the merge's file is not there
+        CHECK(!merged.setRemote(work + "/remote.git", &why) && why.find("holds token.txt") != std::string::npos);
+    }
+
+    // The upgrade's mark: set with the seed's commit, still there for a server that opens the repository again (one
+    // stopped before its sessions adopted), and off once they have; a seed whose commit fails leaves no mark.
+    {
+        const std::string sdir = work + "/seeded";
+        std::filesystem::create_directories(sdir);
+        {
+            ConfigRepo seeded(sdir);
+            CHECK(seeded.open(&why));
+            CHECK(!seeded.adopting());
+            spit(sdir + "/.git/index.lock", "");
+            CHECK(!seeded.keepSeed(sample(), "upgrade", &why) && !seeded.adopting());
+            std::filesystem::remove(sdir + "/.git/index.lock");
+            CHECK(seeded.keepSeed(sample(), "upgrade", &why) && seeded.adopting());
+        }
+        ConfigRepo again(sdir);
+        CHECK(again.open(&why) && again.adopting());
+        CHECK(again.adopted(&why) && !again.adopting());
+        CHECK(again.adopted(&why));     // twice: nothing to take off
+        CHECK(runGit(sdir, {"status", "--porcelain"}).out.empty());     // never in the repository's files
+    }
+
     // A version newer than this server reads, committed by hand: refused, and the file left as it was.
     const std::string newer = "{\n  \"version\": 2,\n  \"accounts\": []\n}\n";
     spit(repo.accountsPath(), newer);

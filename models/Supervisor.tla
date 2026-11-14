@@ -57,6 +57,16 @@
 (* starts one on the defaults under the session's account. The ghost drv   *)
 (* is the account the driver alive was started under; each send written   *)
 (* records the setting the driver runs it with.                            *)
+(*                                                                         *)
+(* The session's place is its friend's instance: a directory (dir) and     *)
+(* whether it is on this machine (here), changed by edits (SetPlace). A    *)
+(* driver started in another directory (the ghost ddir), or any driver     *)
+(* while the instance is elsewhere, is ended like one under an old account; *)
+(* while elsewhere no driver starts and nothing queued is taken. The        *)
+(* harness keeps its sessions by directory: the session id is durable with *)
+(* the directory it was made in (sdir), and a start in another one drops   *)
+(* it and starts afresh, owing (summary, durable) the conversation's       *)
+(* summary to the first send, which carries it (each send's sum).          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -69,7 +79,8 @@ CONSTANTS
     Models,           \* the models the person may choose, besides "" (the harness's default)
     Efforts,          \* the efforts the person may choose, besides ""
     Accounts,         \* the accounts the person may choose ("" is the default)
-    MaxSwitches       \* how many times the person changes the setting or the account, in all
+    Dirs,             \* the directories the session's instance may move to ("" is where it starts)
+    MaxSwitches       \* how many times the person changes the setting, the account or the place, in all
 
 ASSUME MaxWaiting >= 1 /\ MaxFailedStarts >= 1
 
@@ -101,7 +112,8 @@ Init ==
             queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
             nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE,
-            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE]
+            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
+            dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -137,32 +149,42 @@ WriteNextWith(V(_), x) ==
     IF x.phase = "idle" /\ x.waiting # <<>>
     THEN LET p == Head(x.waiting) IN
          [x EXCEPT !.open = x.next, !.prompt = p, !.next = x.next + 1, !.waiting = Tail(x.waiting),
-                   !.written = Append(@, [p |-> p, t |-> x.next, v |-> V(x)]), !.fate[p] = "open",
-                   !.phase = "working", !.told = V(x)]
+                   !.written = Append(@, [p |-> p, t |-> x.next, v |-> V(x), sum |-> x.summary]), !.fate[p] = "open",
+                   !.phase = "working", !.told = V(x), !.summary = FALSE]
     ELSE x
 Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
             e |-> IF x.setting.e # "" THEN x.setting.e ELSE x.told.e]
 WriteNext(x) == WriteNextWith(Told, x)
 
-\* Start a driver when a prompt waits and none is alive, with --resume the last session id, under the session's
-\* account.
-StartDriver(x) ==
-    IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down
-    THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
-                    !.resumed = x.session, !.drv = x.account, !.told = Default, !.retiring = FALSE]
+\* Start a driver when a prompt waits and none is alive and the instance is here, in the session's directory, under
+\* the session's account, with --resume the last session id when it was made in that directory; one made in another
+\* is dropped (D), and when the conversation has turns the first send owes a summary, said in a notice.
+Drop(x) ==
+    IF x.session # "" /\ x.sdir # x.dir
+    THEN [(IF x.next > 1 THEN Fx(x, E("N", 0, 0)) ELSE x) EXCEPT !.session = "", !.sdir = "",
+                                                                 !.summary = @ \/ x.next > 1]
     ELSE x
+StartDriverWith(D(_), x) ==
+    IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down /\ x.here
+    THEN LET y == D(x) IN
+         [y EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
+                   !.resumed = y.session, !.drv = y.account, !.told = Default, !.retiring = FALSE, !.ddir = y.dir]
+    ELSE x
+StartDriver(x) == StartDriverWith(Drop, x)
 
-\* With no turn open, a driver started under an account that is no longer the session's, or told a field the session
-\* has put back to the default, is ended quietly: the next one starts on the defaults under the session's account.
+\* With no turn open, a driver started under an account that is no longer the session's, or in a directory that is no
+\* longer the session's, or any while the instance is elsewhere, or one told a field the session has put back to the
+\* default, is ended quietly: the next one starts on the defaults under the session's account, in its directory.
 Cleared(x) == (x.told.m # "" /\ x.setting.m = "") \/ (x.told.e # "" /\ x.setting.e = "")
+Moved(x) == x.ddir # x.dir \/ ~x.here
 RetireWith(C(_), x) ==
-    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
+    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x) \/ Moved(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
 Retire(x) == RetireWith(Cleared, x)
 
 \* When no turn is open, no prompt waits and starting is not held back: the oldest queued prompt joins the waiting
 \* prompts, shown as the person's entry. One per turn: it waits, or is written as the turn that opens.
 Take(x) ==
-    IF x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
+    IF x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.here /\ x.queue # <<>>
     THEN LET p == Head(x.queue) IN
          [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
     ELSE x
@@ -181,7 +203,8 @@ ExitedWith(x) ==
         count == ~y.finished /\ ~y.blocked /\ ~y.down /\ ~y.retiring
         f == IF count THEN y.failed + 1 ELSE y.failed
         z == [y EXCEPT !.phase = "none", !.stage = "none", !.procs = @ - 1, !.failed = f, !.finished = FALSE,
-                       !.nocred = FALSE, !.gathered = FALSE, !.drv = "", !.told = Default, !.retiring = FALSE]
+                       !.nocred = FALSE, !.gathered = FALSE, !.drv = "", !.told = Default, !.retiring = FALSE,
+                       !.ddir = ""]
     IN IF count /\ f >= MaxFailedStarts THEN [Fx(z, E("N", 0, 0)) EXCEPT !.blocked = TRUE] ELSE z
 
 \* An error of code no-credential (v): the driver ends the open turn, if any, and exits (protocol rule 11). No
@@ -197,7 +220,7 @@ ReceiveWith(x, m, Txt(_, _)) ==
       [] x.phase = "starting" -> IF m.kind = "hello" /\ m.v = "1" THEN [x EXCEPT !.phase = "idle"] ELSE End(x)
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
-      [] m.kind = "session"    -> [x EXCEPT !.session = m.v]
+      [] m.kind = "session"    -> [x EXCEPT !.session = m.v, !.sdir = x.ddir]
       [] m.kind = "error"      -> NoCredential(m, IF m.t = 0 THEN Fx(x, E("N", 0, 0))
                                                  ELSE IF m.t = x.open THEN Fx(x, E("E", m.t, 0)) ELSE x)
       [] m.kind = "text"       -> Txt(x, m)
@@ -325,7 +348,7 @@ Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
               !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0, !.drv = "", !.told = Default,
-              !.retiring = FALSE]
+              !.retiring = FALSE, !.ddir = ""]
 Restart == RestartWith(Restarted)
 
 \* The person sets the session's model and effort (v): the next send is written with it, and an idle driver told a
@@ -347,7 +370,19 @@ SetAccountWith(Ac(_, _), a) ==
 AccountSet(x, a) == Advance([x EXCEPT !.account = a])
 SetAccount(a) == SetAccountWith(AccountSet, a)
 
-NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) ==
+\* The session's instance changed (an edit): its directory is d, and h says whether it is on this machine. A driver
+\* started elsewhere is ended once no turn is open (Advance), and the next starts in d (Drop decides whether it resumes).
+SetPlaceWith(Pl(_, _, _), d, h) ==
+    /\ switches < MaxSwitches
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Pl(Fresh, d, h)
+PlaceSet(x, d, h) == Advance([x EXCEPT !.dir = d, !.here = h])
+SetPlace(d, h) == SetPlaceWith(PlaceSet, d, h)
+
+NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) == NextWithPlace(P, Q, St, M, Ex, T, R, Se, Ac, SetPlace)
+
+NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     \/ P
     \/ Q
     \/ St
@@ -359,16 +394,19 @@ NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) ==
     \/ R
     \/ \E v \in Settings : Se(v)
     \/ \E a \in Accounts \cup {""} : Ac(a)
+    \/ \E d \in Dirs \cup {""}, h \in BOOLEAN : Pl(d, h)
 
 NextWithAll(P, Q, St, M(_), Ex, T, R) == NextWithSet(P, Q, St, M, Ex, T, R, SetSetting, SetAccount)
 
 NextWith(P, M(_), Ex, T, R) == NextWithAll(P, QueuePrompt, Stop, M, Ex, T, R)
 
-\* Every step with A in place of Advance: the witnesses of the take, the setting and the account break it through this.
+\* Every step with A in place of Advance: the witnesses of the take, the setting, the account and the place break it
+\* through this.
 NextAdvance(A(_)) ==
-    NextWithSet(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
-                TimeoutA(End, End, A), RestartA(Restarted, A), SetSetting,
-                LAMBDA a : SetAccountWith(LAMBDA x, b : A([x EXCEPT !.account = b]), a)) \/ BrokenA(A)
+    NextWithPlace(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
+                  TimeoutA(End, End, A), RestartA(Restarted, A), SetSetting,
+                  LAMBDA a : SetAccountWith(LAMBDA x, b : A([x EXCEPT !.account = b]), a),
+                  LAMBDA d, h : SetPlaceWith(LAMBDA x, e, g : A([x EXCEPT !.dir = e, !.here = g]), d, h)) \/ BrokenA(A)
 
 \* Every step with Tk in place of Take: the take's witnesses break it through this.
 NextTake(Tk(_)) == NextAdvance(LAMBDA x : AdvanceWith(Tk, x))
@@ -402,6 +440,11 @@ TypeOK ==
     /\ s.account \in Accounts \cup {""}
     /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
     /\ s.retiring => s.phase = "ending"
+    /\ s.dir \in Dirs \cup {""}
+    /\ s.here \in BOOLEAN
+    /\ s.summary \in BOOLEAN
+    /\ (s.procs = 0) => s.ddir = ""
+    /\ (s.session = "") => s.sdir = ""
 
 \* At most one driver process alive.
 OneDriver == s.procs <= 1 /\ (s.procs = 1) = (s.phase # "none")
@@ -521,10 +564,27 @@ NoSendOnOldAccount == [][Len(s'.written) > Len(s.written) => s'.drv = s'.account
 \* A change of the account never ends a turn: the driver is ended only once no turn is open.
 AccountKeepsTurn == [][s'.account # s.account => s'.open = s.open /\ s'.written = s.written]_vars
 
-\* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
-\* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).
+\* A send is written only to a driver started in the session's directory, on this machine.
+NoSendInOldPlace == [][Len(s'.written) > Len(s.written) => s'.ddir = s'.dir /\ s'.here]_vars
+
+\* A change of the place never ends a turn: the driver is ended only once no turn is open.
+PlaceKeepsTurn == [][s'.dir # s.dir \/ s'.here # s.here => s'.open = s.open /\ s'.written = s.written]_vars
+
+\* A driver resumes a harness session only in the directory it was made in.
+ResumesItsDir == [][s'.procs > s.procs /\ s'.resumed # "" => s.sdir = s'.ddir]_vars
+
+\* A harness session dropped from a conversation with turns owes a summary, and the next send carries what is owed,
+\* once.
+SummaryOwed == [][s.session # "" /\ s'.session = "" /\ s.next > 1 /\ restarts' = restarts => s'.summary]_vars
+SummaryCarried ==
+    [][Len(s'.written) > Len(s.written) => s'.written[Len(s'.written)].sum = s.summary /\ ~s'.summary]_vars
+
+\* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is
+\* held back (until the person's next prompt), the server is stopping (the prompt is durable, for the next server), or
+\* the instance is on another machine (until it is here again).
 Settles ==
     \A p \in 1 .. Prompts :
-        s.fate[p] \in {"queued", "waiting", "open"} ~> (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down)
+        s.fate[p] \in {"queued", "waiting", "open"} ~>
+            (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down \/ ~s.here)
 
 =============================================================================

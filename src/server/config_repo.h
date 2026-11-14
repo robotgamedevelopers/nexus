@@ -102,6 +102,15 @@ public:
     // edits not yet applied, unless a reload is applying them (applying()).
     bool keep(const accounts::Registry& registry, const std::string& message, std::string* why) override;
 
+    // The upgrade from before accounts: `seed` (made from the drivers file) kept as keep() does, with a mark, in the
+    // repository's .git and never committed, that the sessions from before accounts are still to take their friends'
+    // default accounts (sync::Hub::adoptDefaults). The mark is set before the commit and taken off when the commit
+    // fails, so a server stopped between the two still adopts at its next start. adopting(): the mark is there.
+    // adopted(): the sessions took them, so the mark comes off (false, with why, when it cannot).
+    bool keepSeed(const accounts::Registry& seed, const std::string& message, std::string* why);
+    bool adopting() const;
+    bool adopted(std::string* why);
+
     // While set, keep() commits over the working files' hand edits: a reload is applying them.
     void applying(bool on) { applying_ = on; }
 

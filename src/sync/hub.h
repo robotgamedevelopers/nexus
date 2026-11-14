@@ -48,6 +48,8 @@ struct DriverState {
     std::uint64_t openTurn = 0;
     std::string session;
     std::vector<std::string> waiting;
+    bool summary = false;       // the next send carries a summary of the conversation (server/supervisor.h setPlace)
+    std::string sessionDir{};   // the directory the harness session was made in: resumed only there (empty: not known)
     bool operator==(const DriverState&) const = default;
 };
 
@@ -222,7 +224,9 @@ public:
 
     // After accounts.json was first made from the drivers file (the accounts its lines passed with --account): each
     // session on no account whose friend now has a default takes it, told, so that it runs on the account it ran on
-    // before. Returns what it did, a line per session.
+    // before. Returns what it did, a line per session. Idempotent: a session on an account is left as it is, so after a
+    // store that failed part way the server runs it again at its next start (server/config_repo.h keepSeed). A
+    // session's instance is settled with the rest (useAccounts): one with none takes its friend's default instance.
     std::vector<std::string> adoptDefaults();
 
     // A hand edit of the files (`nexus-server config reload`), or an earlier version of them (`config restore`):
@@ -254,7 +258,9 @@ private:
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
-    bool settle(std::vector<std::string>* report, const std::string& cause);
+    // `before`: the registry the hub held before this change, to find instances moved in place (null: none known).
+    bool settle(std::vector<std::string>* report, const std::string& cause,
+                const accounts::Registry* before = nullptr);
     void take(accounts::Registry next);
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;

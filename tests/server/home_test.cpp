@@ -73,14 +73,28 @@ void parsing() {
 void serverConfig() {
     std::vector<std::string> warnings;
     std::string why;
-    // The server takes no settings yet: none is fine, an unknown key a warning, a malformed line an error.
-    CHECK(readServerConfig("# nothing yet\n", "/s/config", &warnings, &why) && warnings.empty() && why.empty());
-    CHECK(readServerConfig("port 9\n", "/s/config", &warnings, &why));
-    CHECK(warnings.size() == 1 && has(warnings[0], "/s/config line 1:") && has(warnings[0], "takes no settings"));
-    CHECK(!readServerConfig("\nport\n", "/s/config", &warnings, &why));   // malformed, whatever the key: an error
+    ServerSettings s;
+    // None is fine, an unknown key a warning, a malformed line an error.
+    CHECK(readServerConfig("# nothing yet\n", "/s/config", &s, &warnings, &why) && warnings.empty() && why.empty());
+    CHECK(s.machine.empty());
+    CHECK(readServerConfig("port 9\n", "/s/config", &s, &warnings, &why));
+    CHECK(warnings.size() == 1 && has(warnings[0], "/s/config line 1:"));
+    CHECK(!readServerConfig("\nport\n", "/s/config", &s, &warnings, &why));   // malformed, whatever the key: an error
     CHECK(warnings.empty() && has(why, "/s/config line 2:") && has(why, "no value"));
-    CHECK(!readServerConfig("port 1\nport 2\n", "/s/config", &warnings, &why));
-    CHECK(warnings.size() == 1 && has(why, "/s/config line 2:") && has(why, "set again"));
+    CHECK(!readServerConfig("machine a\nmachine b\n", "/s/config", &s, &warnings, &why));
+    CHECK(has(why, "/s/config line 2:") && has(why, "set again"));
+    // machine: this machine's name in the fleet, a host name.
+    CHECK(readServerConfig("machine studio\n", "/s/config", &s, &warnings, &why) && s.machine == "studio");
+    CHECK(!readServerConfig("machine me@studio\n", "/s/config", &s, &warnings, &why) && has(why, "not a host name"));
+    CHECK(s.machine.empty());
+
+    // The server's machine: the config's, else the host name cut short; none when gethostname failed. An instance's
+    // machine matches it in any case, and never an empty one.
+    CHECK(serverMachine("studio", "Mac-Studio-2.local") == "studio");
+    CHECK(serverMachine("", "Mac-Studio.local") == "Mac-Studio");
+    CHECK(serverMachine("", "").empty());
+    CHECK(sameMachine("studio", "studio") && sameMachine("Studio", "STUDIO"));
+    CHECK(!sameMachine("studio", "studio-2") && !sameMachine("", "") && !sameMachine("studio", ""));
 }
 
 } // namespace

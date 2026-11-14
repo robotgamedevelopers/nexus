@@ -549,6 +549,72 @@ void sessions_removed_tab() {
     CHECK(c.find(sid("ada")) == nullptr);
 }
 
+// The session encoding only grows at its end: a diff in main's encoding before instances (50565c6: no instance, no
+// trailer) is read with each session on no instance; a diff with instances is that same encoding with the instances
+// appended after the last session; and a diff whose sessions have no instance is byte for byte main's.
+void sessions_instance_appended() {
+    Writer w;   // main's encoding, field by field: two sessions, each sent whole
+    w.u64(2);
+    for (const char* name : {"ada", "bo"}) {
+        w.u64(sid(name));
+        w.byte(1);
+        w.str(name);        // friend, harness, account, model, effort
+        w.str("claude");
+        w.str("work");
+        w.str("");
+        w.str("");
+        w.u64(0);           // first, k, count
+        w.u64(0);
+        w.u64(1);
+        w.byte(0);          // the entry: a person's, closed, offset 0, its text
+        w.byte(1);
+        w.u64(0);
+        w.str("hi");
+        w.byte(1);          // the queue, changed, empty
+        w.u64(0);
+    }
+    const std::string old = w.take();
+    Sessions read;
+    read.apply_string(old);
+    CHECK(read.sessions().size() == 2);
+    for (const char* name : {"ada", "bo"}) {
+        const SessionView* s = read.find(sid(name));
+        CHECK(s != nullptr);
+        if (s != nullptr) {
+            CHECK(s->info.friendName == name);
+            CHECK(s->info.account == "work");
+            CHECK(s->info.instance.empty());
+            CHECK(s->entries.size() == 1 && s->entries[0]->text == "hi");
+        }
+    }
+    // The same sessions with instances: main's bytes, then each session's instance.
+    auto with = [&](const std::string& ada, const std::string& bo) {
+        std::vector<SessionRef> v;
+        for (const auto& [name, inst] : {std::pair<std::string, std::string>{"ada", ada}, {"bo", bo}}) {
+            SessionView t = tailOf(sid(name), SessionInfo{name, "claude", "work", "", "", inst},
+                {entry(EntryKind::Person, "hi")}, {}, Tail{});
+            v.push_back(std::make_shared<const SessionView>(std::move(t)));
+        }
+        return Sessions(std::move(v));
+    };
+    CHECK(with("", "").init_diff() == old);
+    const Sessions b = with("studio", "");
+    const std::string d = b.init_diff();
+    Writer trailer;
+    trailer.str("studio");
+    trailer.str("");
+    CHECK(d == old + trailer.take());
+    Sessions c;
+    c.apply_string(d);
+    CHECK(c == b);
+    CHECK(c.find(sid("ada"))->info.instance == "studio");
+    // A diff that sends one session carries one instance: the kept one keeps its own.
+    const Sessions moved = with("studio", "laptop");
+    c.apply_string(moved.diff_from(b));
+    CHECK(c == moved);
+    CHECK(c.find(sid("bo"))->info.instance == "laptop");
+}
+
 void sessions_malformed_refused_unchanged() {
     Rng rng{3};
     History h;
@@ -1292,6 +1358,7 @@ const Case kCases[] = {
     {"sessions_diff_bounded_by_tail", sessions_diff_bounded_by_tail},
     {"sessions_copy_is_cheap_and_shared", sessions_copy_is_cheap_and_shared},
     {"sessions_removed_session", sessions_removed_tab},
+    {"sessions_instance_appended", sessions_instance_appended},
     {"sessions_malformed_refused_unchanged", sessions_malformed_refused_unchanged},
     {"sessions_through_mosh_bookkeeping", sessions_through_mosh_bookkeeping},
     {"hub_send_and_queue", hub_send_and_queue},

@@ -61,6 +61,7 @@ Step(r) ==
       [] r.op = "provider"    -> L!ReloadProvider(r.a, r.p)
       [] r.op = "addinst"     -> L!ReloadAddInstance(r.f, r.a)
       [] r.op = "dropinst"    -> L!ReloadDropInstance(r.f, r.a)
+      [] r.op = "moveinst"    -> L!ReloadMoveInstance(r.f, r.a)
       [] r.op = "set"         -> L!SetSession(r.s, r.a)
       [] r.op = "rotate"      -> L!Rotate(r.s)
       [] r.op = "create"      -> L!Create(r.f, r.s)
@@ -89,6 +90,7 @@ InstanceHeld == L!InstanceHeld
 HarnessMatches == L!HarnessMatches
 IdsDense == L!IdsDense
 MovedIsTold == L!MovedIsTold
+MovedInstanceIsTold == L!MovedInstanceIsTold
 ServerPicksSignedIn == L!ServerPicksSignedIn
 RotateMoves == L!RotateMoves
 SetExact == L!SetExact

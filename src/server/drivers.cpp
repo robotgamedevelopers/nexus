@@ -16,6 +16,8 @@
 #include <memory>
 #include <sstream>
 
+#include "server/home.h"
+
 extern char** environ;
 
 namespace nexus::server {
@@ -148,6 +150,42 @@ pid_t spawnDriver(const std::vector<std::string>& argv, int* in, int* out, std::
     return pid;
 }
 
+// The most of the conversation a summary carries. A judgement, not measured: enough of its recent turns to pick up
+// from, far within the protocol's line limit with the hub's longest prompt after it.
+constexpr std::size_t kSummaryBytes = 16 * 1024;
+
+// The end of `text` that fits in `bytes`, cut at a UTF-8 character's start.
+std::string tailOf(const std::string& text, std::size_t bytes) {
+    if (text.size() <= bytes) {
+        return text;
+    }
+    std::size_t from = text.size() - bytes;
+    while (from < text.size() && (static_cast<unsigned char>(text[from]) & 0xC0) == 0x80) {
+        ++from;
+    }
+    return text.substr(from);
+}
+
+// What goes before the prompt of a driver started afresh in another directory: the conversation's newest entries,
+// oldest first, within kSummaryBytes, each said whose it is.
+std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript) {
+    std::vector<std::string> parts;
+    std::size_t bytes = 0;
+    for (auto it = transcript.rbegin(); it != transcript.rend() && bytes < kSummaryBytes; ++it) {
+        const char* who = (*it)->kind == EntryKind::Person ? "The person" :
+            (*it)->kind == EntryKind::Friend ? "You" : "nexus";
+        std::string part = std::string(who) + ": " + tailOf((*it)->text, kSummaryBytes - bytes) + "\n";
+        bytes += part.size();
+        parts.push_back(std::move(part));
+    }
+    std::string text = "[nexus: this conversation with " + friendName + " was held in another working directory, "
+        "where its harness session stays, so it starts afresh here. Its newest entries so far, oldest first:]\n";
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        text += *it;
+    }
+    return text + "[nexus: the person's prompt follows.]\n\n";
+}
+
 } // namespace
 
 Drivers::Drivers(const sync::SessionStore& store, Options options) : store_(store), options_(std::move(options)) {}
@@ -195,18 +233,18 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
         r.command.clear();
         return r;
     };
-    // The session's instance: its machine must be this server's host (a driver on another machine is roadmap work,
-    // docs/roadmap.sexp), and its directory is where the driver works.
-    const accounts::Friend* fr = hub_ != nullptr && hub_->accounts() != nullptr ?
-        hub_->accounts()->friendNamed(friendName) : nullptr;
-    const accounts::Instance* in = fr != nullptr && !info.instance.empty() ? fr->instance(info.instance) : nullptr;
-    if (in != nullptr) {
-        const std::string shortHost = options_.host.substr(0, options_.host.find('.'));
-        if (!options_.host.empty() && in->machine != options_.host && in->machine != shortHost) {
+    // The session's instance (none named: its friend's default): its machine must be this server's (a driver on another
+    // machine is roadmap work, docs/roadmap.sexp), and its directory is where the driver works.
+    if (const accounts::Instance* in = instanceOf(info)) {
+        if (!sameMachine(in->machine, options_.machine)) {
+            const std::string here = options_.machine.empty() ? std::string("a machine with no name (gethostname "
+                "failed, and the server's config sets no machine)") : options_.machine;
             return refuse("Session " + std::to_string(id) + " belongs to " + friendName + "'s instance " + in->name +
-                ", on the machine " + in->machine + ", and this server runs on " + shortHost + "; nexus-server does "
-                "not yet start a driver on another machine, so the prompt was not sent. Make a session of an instance "
-                "of " + friendName + " on " + shortHost + ", or add one in friends.json (docs/accounts.md).");
+                ", on the machine " + in->machine + ", and this server runs on " + here + "; nexus-server does not "
+                "yet start a driver on another machine, so the prompt was not sent. Make a session of an instance of " +
+                friendName + " on this machine, or add one in friends.json (docs/accounts.md)" +
+                (options_.machine.empty() ? std::string(", and set `machine <name>` in the server's config") : "") +
+                ".");
         }
         r.cwd = in->dir;
     }
@@ -236,6 +274,21 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
         }
     }
     return r;
+}
+
+// The instance a session belongs to, as the hub holds its friend: the one it names, or its friend's default (its
+// first) when it names none. Null when the hub holds no accounts, the friend has no instances, or (until the hub settles
+// it) the one named is gone.
+const accounts::Instance* Drivers::instanceOf(const sync::SessionInfo& info) const {
+    const accounts::Friend* fr = hub_ != nullptr && hub_->accounts() != nullptr ?
+        hub_->accounts()->friendNamed(info.friendName) : nullptr;
+    if (fr == nullptr) {
+        return nullptr;
+    }
+    if (info.instance.empty()) {
+        return fr->instances.empty() ? nullptr : &fr->instances.front();
+    }
+    return fr->instance(info.instance);
 }
 
 ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
@@ -275,6 +328,14 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     }
     c.command = driver.command;
     c.cwd = driver.cwd;
+    if (stored != nullptr) {
+        const accounts::Instance* in = instanceOf(stored->info);
+        c.here = in == nullptr || sameMachine(in->machine, options_.machine);
+    }
+    c.summarize = [this, id, name = c.name]() {
+        const sync::StoredSession* s = store_.find(id);
+        return s == nullptr ? std::string() : summaryOf(name, s->transcript);
+    };
     c.configured = options_.table;
     c.timing = options_.timing;
     c.maxWaiting = hub_->limits().queue;
@@ -392,9 +453,11 @@ void Drivers::sent(sync::SessionId id, bool committed) {
     run(id, std::move(pendingOut_), options_.clock(), true);
 }
 
-// The session's account, model or effort changed, durably: a supervisor already running takes them from its next
-// turn (one started later reads them from the store). An account change ends its driver once no turn is open, so the
-// next starts under the new account, with the same session and transcript.
+// The session's account, model, effort or instance changed, durably: a supervisor already running takes them from its
+// next turn (one started later reads them from the store and the accounts). An account change ends its driver once no
+// turn is open, so the next starts under the new account, with the same session and transcript; so does a change of
+// the instance's directory (the next starts there, afresh when the harness session was made elsewhere) or a move of
+// the instance to another machine (then none starts here).
 void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     auto it = slots_.find(id);
     if (it == slots_.end()) {
@@ -403,6 +466,9 @@ void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     const Millis now = options_.clock();
     Output out = it->second.sup.setOptions(info.model, info.effort, now);
     append(out, it->second.sup.setAccount(info.account, now));
+    if (const accounts::Instance* in = instanceOf(info)) {
+        append(out, it->second.sup.setPlace(in->dir, sameMachine(in->machine, options_.machine), now));
+    }
     run(id, std::move(out), now, false);
 }
 

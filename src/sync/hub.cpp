@@ -451,14 +451,40 @@ bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notic
 
 // Every session on an account no longer linked to its friend moves off it; every session whose account's provider
 // changed takes its harness. Each is told. False when the store did not take a step.
-bool Hub::settle(std::vector<std::string>* report, const std::string& cause) {
+bool Hub::settle(std::vector<std::string>* report, const std::string& cause, const accounts::Registry* before) {
+    auto where = [](const accounts::Instance& in) { return "on " + in.machine + " in " + in.dir; };
     for (SessionId id : store_.ids()) {
         const StoredSession* s = store_.find(id);
         SessionInfo info = s->info;
-        // An instance the friend no longer has: the session moves to the friend's default instance, or none, told.
+        // A session belongs to one of its friend's instances, or to none when the friend has none. An instance the
+        // friend no longer has: the session moves to the friend's default instance (its first), or none, told. No
+        // instance while the friend has some: the default. Its instance moved in place (the same name, another
+        // machine or directory): told, and its driver follows (Drivers::configured).
         const accounts::Friend* fr = accounts_->friendNamed(info.friendName);
+        const accounts::Instance* in = fr == nullptr || info.instance.empty() ? nullptr : fr->instance(info.instance);
+        const accounts::Friend* frBefore = before == nullptr ? nullptr : before->friendNamed(info.friendName);
+        const accounts::Instance* inBefore = frBefore == nullptr || in == nullptr ? nullptr :
+            frBefore->instance(info.instance);
         std::string instanceNotice;
-        if (!info.instance.empty() && (fr == nullptr || fr->instance(info.instance) == nullptr)) {
+        if (info.instance.empty() && fr != nullptr && !fr->instances.empty()) {
+            const accounts::Instance& first = fr->instances.front();
+            info.instance = first.name;
+            instanceNotice = "This session now belongs to " + info.friendName + "'s default instance, " + first.name +
+                " (" + where(first) + "): a session belongs to one of its friend's instances (" + cause + ").";
+            if (report != nullptr) {
+                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance none -> " +
+                    info.instance);
+            }
+        } else if (inBefore != nullptr && (inBefore->machine != in->machine || inBefore->dir != in->dir)) {
+            instanceNotice = info.friendName + "'s instance " + in->name + " moved (" + cause + "): it was " +
+                where(*inBefore) + " and is now " + where(*in) + ". This session's driver restarts there once no "
+                "turn is open: in the same directory it resumes the conversation; in another it starts afresh, given "
+                "a summary of the conversation so far.";
+            if (report != nullptr) {
+                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+                    in->name + " moved, " + where(*inBefore) + " -> " + where(*in));
+            }
+        } else if (!info.instance.empty() && in == nullptr) {
             const std::string wasInstance = info.instance;
             info.instance = fr == nullptr || fr->instances.empty() ? std::string() : fr->instances.front().name;
             instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.friendName + "'s (" +
@@ -527,9 +553,10 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
         }
         return false;
     }
-    lines = accounts::changes(accounts_ ? *accounts_ : accounts::Registry{}, next);
+    const accounts::Registry before = accounts_ ? *accounts_ : accounts::Registry{};
+    lines = accounts::changes(before, next);
     take(next);
-    if (!settle(&lines, "the accounts and friends were changed: " + message)) {
+    if (!settle(&lines, "the accounts and friends were changed: " + message, &before)) {
         lines.push_back("the store failed while the sessions were moved, so the server stops; at its next start it "
             "moves them, against what was committed");
     }
@@ -614,31 +641,18 @@ std::vector<std::string> Hub::adoptDefaults() {
         if (f == nullptr) {
             continue;
         }
-        std::string notice;
-        std::string line;
-        if (info.account.empty() && !f->preferred.empty()) {
-            info.account = f->preferred;
-            info.harness = harnessOf(info.account, info.harness);
-            notice = "This session runs on the account " + info.account + ", which the drivers file gave " +
-                info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
-                "(docs/accounts.md).";
-            line = "account none -> " + info.account;
-        }
-        if (info.instance.empty() && !f->instances.empty()) {
-            // Before instances, a friend ran on this machine in its drivers file's directory: that instance.
-            info.instance = f->instances.front().name;
-            line += (line.empty() ? "" : ", ") + std::string("instance none -> ") + info.instance;
-        }
-        if (line.empty()) {
+        if (!info.account.empty() || f->preferred.empty()) {
             continue;
         }
-        if (!moveTo(id, info, notice.empty() ? "This session belongs to " + info.friendName + "'s instance " +
-                    info.instance + ", where its driver ran before instances were set up (docs/accounts.md)." :
-                    notice)) {
+        info.account = f->preferred;
+        info.harness = harnessOf(info.account, info.harness);
+        if (!moveTo(id, info, "This session runs on the account " + info.account + ", which the drivers file gave " +
+                    info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
+                    "(docs/accounts.md).")) {
             break;
         }
-        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): " + line +
-                         ", as the drivers file ran it");
+        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): account none -> " +
+                         info.account + ", as the drivers file ran it");
     }
     return report;
 }

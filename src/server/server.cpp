@@ -48,14 +48,13 @@ void onSignal(int) {
     gStop = 1;
 }
 
-// This machine's host name, short (as "studio", not "studio.local"): the machine a friend's instance here names.
+// This machine's host name, as gethostname gives it; empty when it fails (serverMachine() cuts it short).
 std::string hostName() {
     char name[256] = {};
     if (gethostname(name, sizeof name - 1) != 0) {
         return std::string();
     }
-    const std::string full(name);
-    return full.substr(0, full.find('.'));
+    return std::string(name);
 }
 
 // Milliseconds on the steady clock: the drivers' deadlines.
@@ -176,7 +175,7 @@ bool ensureHome(const Paths& p, std::string* why) {
 
 // The server's config: none is fine; a malformed line stops the server, naming the file and the line; an unknown key
 // is logged.
-bool readConfig(const std::string& path, std::string* why) {
+bool readConfig(const std::string& path, ServerSettings* settings, std::string* why) {
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) {
@@ -204,7 +203,7 @@ bool readConfig(const std::string& path, std::string* why) {
     }
     close(fd);
     std::vector<std::string> warnings;
-    const bool ok = readServerConfig(text, path, &warnings, why);
+    const bool ok = readServerConfig(text, path, settings, &warnings, why);
     for (const std::string& w : warnings) {
         std::fprintf(stderr, "nexus-server: %s\n", w.c_str());
     }
@@ -257,6 +256,7 @@ private:
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
     std::unique_ptr<ConfigRepo> config_;
+    ServerSettings settings_;
     std::vector<Link> links_;
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
@@ -267,8 +267,14 @@ bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     if (!store_.open(*fs_, paths_.store, why))
         return false;
+    // The machine a friend's instance names to run here: the config's, else the short host name.
+    const std::string machine = serverMachine(settings_.machine, hostName());
+    if (machine.empty()) {
+        std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
+            "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
+    }
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
-                                                                  hostName()});
+                                                                  machine});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
@@ -283,7 +289,6 @@ bool Server::openStore(std::string* why) {
     std::string configWhy;
     accounts::Registry registry;
     std::vector<std::string> report;
-    bool seeded = false;
     const bool opened = config_->open(&configWhy);
     if (!opened) {
         std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
@@ -297,13 +302,12 @@ bool Server::openStore(std::string* why) {
             all << in.rdbuf();
             text = all.str();
         }
-        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home), hostName());
+        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home), machine);
         if (!seed.accounts.empty() || !seed.friends.empty()) {
             std::string why;
-            if (config_->keep(seed, "upgrade: the accounts and friends taken from the drivers file (its --account "
+            if (config_->keepSeed(seed, "upgrade: the accounts and friends taken from the drivers file (its --account "
                               "values, and each friend's directory on this machine as its instance), so that every "
                               "session runs as it ran before", &why)) {
-                seeded = true;
                 std::fprintf(stderr, "nexus-server: config: accounts.json and friends.json made from %s\n",
                     paths_.drivers.c_str());
             } else {
@@ -328,15 +332,21 @@ bool Server::openStore(std::string* why) {
         for (const std::string& l : hub_->useAccounts(registry, config_.get())) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
         }
-        if (seeded) {
-            // The sessions from before accounts ran on their friend's --account, in its directory here: they
-            // keep both.
+        if (config_->adopting()) {
+            // The sessions from before accounts ran on their friend's --account: they keep it. Until all have, the
+            // mark stays, so a server stopped part way (a store that failed) adopts the rest at its next start.
             for (const std::string& l : hub_->adoptDefaults()) {
                 std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
             }
             if (hub_->failed()) {
-                *why = "the store failed while the sessions took the drivers file's accounts; restart the server";
+                *why = "the store failed while the sessions took the drivers file's accounts; restart the server, "
+                    "which takes them again";
                 return false;
+            }
+            std::string adoptWhy;
+            if (!config_->adopted(&adoptWhy)) {
+                std::fprintf(stderr, "nexus-server: config: %s; until it is removed, each start gives every session "
+                    "on no account its friend's default account again\n", adoptWhy.c_str());
             }
         }
         std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
@@ -515,7 +525,8 @@ bool Server::endDrivers() {
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
-    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &why) || !openStore(&why) || !listenControl(&why)) {
+    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why) || !openStore(&why) ||
+            !listenControl(&why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }

@@ -36,17 +36,17 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// One changed session: what it is (its friend, harness, account, model, effort and instance); its first index; the index k of
+// One changed session: what it is (its friend, harness, account, model and effort); its first index; the index k of
 // the first entry `a` does not hold as it is; the entries from k to the end, each its kind, closed flag, the length of
 // text `a` holds of it (non-zero only for an entry `a` holds open that only grew) and the rest of its text; then a
-// byte, 1 if the queue changed, and if so the queue.
+// byte, 1 if the queue changed, and if so the queue. Its instance is not here but in the diff's trailer (diff_from):
+// fields are only ever appended, so a window of another version reads what it knows.
 void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
     w.str(b.info.friendName);
     w.str(b.info.harness);
     w.str(b.info.account);
     w.str(b.info.model);
     w.str(b.info.effort);
-    w.str(b.info.instance);
     w.u64(b.first);
     std::uint64_t k = b.first;
     while (k < b.total()) {
@@ -82,7 +82,7 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a) {
     }
 }
 
-SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionView* a) {
+std::shared_ptr<SessionView> readSession(Reader& r, std::size_t left, SessionId id, const SessionView* a) {
     auto t = std::make_shared<SessionView>();
     t->id = id;
     const std::string name = named(id);
@@ -91,7 +91,6 @@ SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionV
     t->info.account = r.str();
     t->info.model = r.str();
     t->info.effort = r.str();
-    t->info.instance = r.str();
     t->first = r.u64();
     const std::uint64_t k = r.u64();
     const std::uint64_t count = r.u64();
@@ -240,13 +239,16 @@ const SessionView* Sessions::first(const std::string& friendName) const {
 
 // A diff: the number of sessions; then for each, in id order, its id and a byte: 0 when `existing` holds it as it is,
 // else 1 and the session (writeSession). A session `existing` holds and this state lacks is not named, which removes
-// it.
+// it. Then the trailer, fields added since, each only ever appended (a window of another version reads the fields it
+// knows): the instance of each session sent, in the same order. The trailer is left out when every session sent has
+// no instance, and a diff that ends before it (a server of an older version) gives each session sent no instance.
 std::string Sessions::diff_from(const Sessions& existing) const {
     if (*this == existing) {
         return std::string();
     }
     Writer w;
     w.u64(sessions_->size());
+    std::vector<const SessionView*> sent;
     for (const SessionRef& b : *sessions_) {
         w.u64(b->id);
         const SessionView* a = existing.find(b->id);
@@ -256,6 +258,12 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         }
         w.byte(1);
         writeSession(w, *b, a);
+        sent.push_back(b.get());
+    }
+    if (std::any_of(sent.begin(), sent.end(), [](const SessionView* s) { return !s->info.instance.empty(); })) {
+        for (const SessionView* s : sent) {
+            w.str(s->info.instance);
+        }
     }
     return w.take();
 }
@@ -276,6 +284,7 @@ void Sessions::apply_string(const std::string& diff) {
     }
     std::vector<SessionRef> sessions;
     sessions.reserve(static_cast<std::size_t>(n));
+    std::vector<std::shared_ptr<SessionView>> sent;
     for (std::uint64_t i = 0; i < n; ++i) {
         const SessionId id = r.u64();
         if (id == 0) {
@@ -293,10 +302,17 @@ void Sessions::apply_string(const std::string& diff) {
             }
             sessions.push_back(*had);
         } else if (changed == 1) {
-            sessions.push_back(readSession(r, diff.size(), id, a));
+            sent.push_back(readSession(r, diff.size(), id, a));
+            sessions.push_back(sent.back());
         } else {
             throw BadDiff("sessions diff marks " + named(id) + " with " + std::to_string(changed) +
                 ", neither 0 nor 1");
+        }
+    }
+    // The trailer, when the diff has one: each sent session's instance.
+    if (!r.done()) {
+        for (const std::shared_ptr<SessionView>& t : sent) {
+            t->info.instance = r.str();
         }
     }
     r.end();

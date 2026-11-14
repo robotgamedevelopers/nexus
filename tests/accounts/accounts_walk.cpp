@@ -6,12 +6,11 @@
 //
 // Each step is one of the model's operations, given to the code the way the server gives it: an account action from a
 // window (add, remove, friend, link, unlink, default, set, create) through Hub::apply; a hand edit (dropfriend,
-// droplink, dropaccount, provider, addinst, dropinst) as the registry it leaves, through Hub::applyAccounts, the way `nexus-server config
-// reload` applies the files; a sign-in reported (in, out) through Hub::reportSignedIn; a usage limit (rotate) through
-// Hub::rotate. After it the walk records the code's whole state: each account absent, signed in or needing sign-in,
-// its provider, the friends with their links, defaults and instances, each session's friend, instance, account and
-// harness, the next id,
-// the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
+// droplink, dropaccount, provider, addinst, dropinst, moveinst) as the registry it leaves, through Hub::applyAccounts,
+// the way `nexus-server config reload` applies the files; a sign-in reported (in, out) through Hub::reportSignedIn; a
+// usage limit (rotate) through Hub::rotate. After it the walk records the code's whole state: each account absent,
+// signed in or needing sign-in, its provider, the friends with their links, defaults and instances, each session's
+// friend, instance, account and harness, the next id, the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
 // the step or refused it.
 //
 // An account's provider is the registry's while it is set up; while it is not, the walk keeps the one it had (or the
@@ -23,6 +22,7 @@
 //   --faulty-harness   a session left on its old harness when its account's provider changed
 //   --faulty-instance  a session left on an instance its friend no longer has
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
         std::string p = kNone;
         sync::SessionId s = 0;
         bool ok = false;
-        const std::size_t choice = pick(56);   // weighted toward the steps that move sessions
+        const std::size_t choice = pick(58);   // weighted toward the steps that move sessions
         if (choice < 3) {
             op = "add";
             a = pickOf(kAccts);
@@ -302,12 +302,23 @@ int main(int argc, char** argv) {
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             ok = w.hub.rotate(s);
         } else if (choice >= 50) {
-            // An edit of a friend's instances: one added at the end, or one taken out.
-            op = choice < 53 ? "addinst" : "dropinst";
+            // An edit of a friend's instances: one added at the end, one taken out, or one moved in place (its
+            // directory changed, its name kept).
+            op = choice < 53 ? "addinst" : choice < 55 ? "dropinst" : "moveinst";
             f = pickOf(kFriends);
             a = pickOf(kInsts);
             accounts::Registry next = w.reg();
-            if (accounts::Friend* x = next.friendNamed(f)) {
+            accounts::Friend* x = next.friendNamed(f);
+            if (op == "moveinst") {
+                // The model's refusal of an instance the friend does not have is the code's too: not edited.
+                auto in = x == nullptr ? std::vector<accounts::Instance>::iterator() :
+                    std::find_if(x->instances.begin(), x->instances.end(),
+                                 [&](const accounts::Instance& i) { return i.name == a; });
+                if (x != nullptr && in != x->instances.end()) {
+                    in->dir = (in->dir.rfind("/work/", 0) == 0 ? "/moved/" : "/work/") + a;
+                    ok = w.edit(next);
+                }
+            } else if (x != nullptr) {
                 if (op == "addinst") {
                     x->instances.push_back(accounts::Instance{a, "studio", "/work/" + a});
                 } else {

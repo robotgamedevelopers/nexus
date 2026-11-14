@@ -43,7 +43,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown
-              restart settings account)
+              restart settings account place)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -55,7 +55,7 @@ if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account sign_in no_credential usage_limit no_account instance_dir
-                 instance_elsewhere)
+                 instance_elsewhere instance_moved instance_default)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -65,6 +65,7 @@ endif()
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4)
+tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 4)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
@@ -98,14 +99,18 @@ tlc_test(tlc_supervisor_witness_setting_not_cleared WSupSettingNotCleared WSupSe
 tlc_test(tlc_supervisor_witness_account_ignored WSupAccountIgnored WSupAccountIgnored.cfg action
          PROPERTY NoSendOnOldAccount)
 tlc_test(tlc_supervisor_witness_account_cuts WSupAccountCuts WSupAccountCuts.cfg action PROPERTY AccountKeepsTurn)
+tlc_test(tlc_supervisor_witness_place_ignored WSupPlaceIgnored WSupPlaceIgnored.cfg action PROPERTY NoSendInOldPlace)
+tlc_test(tlc_supervisor_witness_resume_elsewhere WSupResumeElsewhere WSupResumeElsewhere.cfg action
+         PROPERTY ResumesItsDir)
+tlc_test(tlc_supervisor_witness_summary_lost WSupSummaryLost WSupSummaryLost.cfg action PROPERTY SummaryOwed)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)
     tlc_test(tlc_supervisor_trace_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK SEED ${seed} STEPS 600)
 endforeach()
 
-# The binding can fail: a restart that loses the next turn number, the session id, the queue, the model and effort or
-# the account must be rejected. The queue's seed is one whose walk restarts with prompts queued.
+# The binding can fail: a restart that loses the next turn number, the session id, the queue, the model and effort, the
+# account or the harness session's directory must be rejected. The queue's seed is one whose walk restarts with prompts queued.
 foreach(fault turn resume setting)
     tlc_test(tlc_supervisor_trace_faulty_${fault}_rejected SupervisorTrace SupervisorTrace.cfg invariant
              PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY ${fault})
@@ -115,3 +120,6 @@ tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTr
 # The account's seed is one whose walk sets an account before a restart.
 tlc_test(tlc_supervisor_trace_faulty_account_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY account)
+# The directory's seed is one whose walk restarts with a harness session made in another directory than the session's.
+tlc_test(tlc_supervisor_trace_faulty_dir_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY dir)

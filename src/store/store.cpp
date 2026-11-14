@@ -7,11 +7,12 @@ namespace nexus::store {
 
 namespace {
 
-constexpr std::uint8_t kRecordFormat = 3;     // 2: a session's info without its instance, still read; 1: a friend
-                                              // tab's, by name, still read and migrated
+constexpr std::uint8_t kRecordFormat = 3;     // 2: a session's info without its instance and its driver without its
+                                              // summary flag, still read; 1: a friend tab's, by name, still read and
+                                              // migrated
 constexpr std::uint8_t kRecordNoInstance = 2;
-constexpr std::uint8_t kSnapshotFormat = 4;   // 3: without instances, still read; 2: friend tabs; 1: friend tabs before
-                                              // drivers; both still read and migrated
+constexpr std::uint8_t kSnapshotFormat = 4;   // 3: without instances and summary flags, still read; 2: friend tabs; 1:
+                                              // friend tabs before drivers; both still read and migrated
 constexpr std::uint8_t kSnapshotNoInstance = 3;
 
 void put_entry(Writer& w, const Entry& e) {
@@ -36,9 +37,12 @@ void put_driver(Writer& w, const Driver& d) {
     for (const std::string& p : d.waiting) {
         w.str(p);
     }
+    w.u8(d.summary ? 1 : 0);
+    w.str(d.session_dir);
 }
 
-void get_driver(Reader& r, Driver& d) {
+// withSummary: a driver of the formats with its summary flag and session directory (one from before has neither).
+void get_driver(Reader& r, Driver& d, bool withSummary) {
     d.next_turn = r.u64();
     d.open_turn = r.u64();
     d.session = r.str();
@@ -47,6 +51,8 @@ void get_driver(Reader& r, Driver& d) {
     for (std::uint32_t i = 0; i < n && r.ok(); ++i) {
         d.waiting.push_back(r.str());
     }
+    d.summary = withSummary && r.u8() != 0;
+    d.session_dir = withSummary ? r.str() : std::string();
 }
 
 void put_info(Writer& w, const Info& i) {
@@ -284,7 +290,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             c.prompt = r.str();
         } else if (kind == std::uint8_t(Change::Kind::SetDriver)) {
             c.kind = Change::Kind::SetDriver;
-            get_driver(r, c.driver);
+            get_driver(r, c.driver, format == kRecordFormat);
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
         } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format != 1) {
@@ -390,7 +396,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
             t.queue.push_back(r.str());
         }
         if (format != 1) {
-            get_driver(r, t.driver);
+            get_driver(r, t.driver, format == kSnapshotFormat);
         }
     }
     std::uint32_t clients = r.u32();
