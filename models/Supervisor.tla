@@ -546,19 +546,20 @@ IdleWaitsForPerson == IdleWaitsForPersonWith(ActivityOf)
 
 \* A driver that ends without being asked to (not ended for an account change, a setting, a missing credential or the
 \* server stopping) never leaves the friend showing idle: it shows down, or busy when the work goes on (a prompt
-\* waits, so another starts).
-CrashShowsDownWith(A(_)) ==
-    [][s'.procs < s.procs /\ s.phase # "ending" /\ restarts' = restarts => A(s') \in {"down", "busy"}]_vars
-CrashShowsDown == CrashShowsDownWith(ActivityOf)
+\* waits, so another starts). Each step's half takes the activity as an argument, for the witnesses; the property
+\* itself has its [] at the top, the only form TLC checks.
+CrashShowsDownStep(A(_)) ==
+    s'.procs < s.procs /\ s.phase # "ending" /\ restarts' = restarts => A(s') \in {"down", "busy"}
+CrashShowsDown == [][CrashShowsDownStep(ActivityOf)]_vars
 
 \* Down (red) never quietly turns into idle: it leaves only for busy (the person's prompt, a queued one, a start), when
 \* a driver says hello, or by a restart or the server stopping.
-DownLeavesByWorkWith(A(_)) ==
-    [][A(s) = "down" /\ A(s') = "idle" =>
-         \/ s.phase = "starting" /\ s'.phase = "idle"
-         \/ restarts' > restarts
-         \/ s'.down]_vars
-DownLeavesByWork == DownLeavesByWorkWith(ActivityOf)
+DownLeavesByWorkStep(A(_)) ==
+    A(s) = "down" /\ A(s') = "idle" =>
+        \/ s.phase = "starting" /\ s'.phase = "idle"
+        \/ restarts' > restarts
+        \/ s'.down
+DownLeavesByWork == [][DownLeavesByWorkStep(ActivityOf)]_vars
 
 \* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
 \* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).

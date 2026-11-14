@@ -8,7 +8,7 @@ BrokenActivity(x) ==
     ELSE IF x.open # 0 \/ x.waiting # <<>> \/ x.phase = "starting" THEN "busy"
     ELSE "idle"
 
-BrokenCrashShowsDown == CrashShowsDownWith(BrokenActivity)
+BrokenCrashShowsDown == [][CrashShowsDownStep(BrokenActivity)]_vars
 
 BrokenSpec == Init /\ [][Next]_vars
 =============================================================================

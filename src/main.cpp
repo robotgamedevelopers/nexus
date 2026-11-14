@@ -31,8 +31,12 @@
 // (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The friend's open
 // entry is drawn as it grows, tool calls as one compact line each, and Command-Escape sends a stop the server decides.
 //
-// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]]
-//              [--bench FRAMES] [--print-window-config] [--server HOST]
+// --state FILE draws the screenshot's friend tabs from a server's state, a sessions diff from the empty state (the
+// friends layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window),
+// as the window shows it once the server is heard; --lost draws it as the window does once it has lost the server.
+//
+// Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
+//              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
 
 #include <algorithm>
 #include <atomic>
@@ -40,6 +44,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -76,6 +82,7 @@
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
+#include "sync/wire.h"
 #endif
 
 namespace {
@@ -473,6 +480,7 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     int frames = 0;
     auto frame = [&] {
         const double time = 1000.0 + frames++ / 60.0;
+        a.view.time = time;
         board->frame(time, display);
         PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
             .display = display, .preferences = {}};
@@ -624,9 +632,15 @@ int main(int argc, char** argv) {
     bool printConfig = false;
     unsigned bench = 0;
     const char* server = nullptr;
+    const char* state = nullptr;
+    bool lost = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
             server = argv[++i];
+        } else if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
+            state = argv[++i];
+        } else if (std::strcmp(argv[i], "--lost") == 0) {
+            lost = true;
         } else if (std::strcmp(argv[i], "--windowed") == 0) {
             windowed = true;
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
@@ -646,10 +660,20 @@ int main(int argc, char** argv) {
             printConfig = true;
         } else {
             std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
-                "[--backdrop]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
+                "[--backdrop] [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
             return 2;
         }
     }
+    if ((state != nullptr && (shot == nullptr || server != nullptr || demo)) || (lost && state == nullptr)) {
+        std::fprintf(stderr, "nexus: --state draws a screenshot only, without --server or --demo; --lost needs --state\n");
+        return 2;
+    }
+#if !NEXUS_LINK
+    if (state != nullptr) {
+        std::fprintf(stderr, "nexus: this build has no --state (it was configured with -DNEXUS_LINK=OFF)\n");
+        return 2;
+    }
+#endif
     if (server != nullptr) {
 #if NEXUS_LINK
         if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
@@ -806,13 +830,6 @@ int main(int argc, char** argv) {
                 a.link->send(std::move(action));
             }
         };
-        a.view.growing = [](std::size_t id) -> const std::string* {
-            const sync::SessionEntry* open = a.mirror.open(id);
-            return open != nullptr ? &open->text : nullptr;
-        };
-        a.view.cursor = [](std::size_t id) {
-            return sync::cursorOf(a.phase, a.heardMsAgo, a.mirror, id);
-        };
         link::ClientLink::Options options;
         options.bootstrap.host = a.host;
         options.wake = [] {
@@ -827,6 +844,36 @@ int main(int argc, char** argv) {
             ensure.friendName = name;
             a.link->send(std::move(ensure));
         }
+    }
+    // --state: the server's state from a file, as the window holds it once the server is heard (or, with --lost, once
+    // it has lost the server).
+    if (state != nullptr) {
+        std::ifstream in(state, std::ios::binary);
+        if (!in) {
+            std::fprintf(stderr, "nexus: could not read %s\n", state);
+            return 2;
+        }
+        const std::string diff((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        sync::Sessions sessions;
+        try {
+            sessions.apply_string(diff);
+        } catch (const sync::BadDiff& e) {
+            std::fprintf(stderr, "nexus: %s is not a server's state: %s\n", state, e.what());
+            return 2;
+        }
+        a.mirror.apply(model, sessions);
+        a.phase = sync::LinkPhase::Connected;
+        a.heardMsAgo = lost ? sync::kQuietMs : 0;
+    }
+    // The open entry as it grows, and the state cursor, from what the window holds of the server's state.
+    if (server != nullptr || state != nullptr) {
+        a.view.growing = [](std::size_t id) -> const std::string* {
+            const sync::SessionEntry* open = a.mirror.open(id);
+            return open != nullptr ? &open->text : nullptr;
+        };
+        a.view.cursor = [](std::size_t id) {
+            return sync::cursorOf(a.phase, a.heardMsAgo, a.mirror, id);
+        };
     }
 #endif
     a.bench = bench;

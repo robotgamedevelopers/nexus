@@ -9,7 +9,7 @@ BrokenActivity(x) ==
     ELSE IF x.crashed /\ ~x.down /\ x.phase = "ending" THEN "down"
     ELSE "idle"
 
-BrokenDownLeavesByWork == DownLeavesByWorkWith(BrokenActivity)
+BrokenDownLeavesByWork == [][DownLeavesByWorkStep(BrokenActivity)]_vars
 
 BrokenSpec == Init /\ [][Next]_vars
 =============================================================================

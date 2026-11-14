@@ -3,13 +3,14 @@
 // and the real clock. Each case starts from an empty directory, and checks that every process it started is gone at
 // its end: no child of this process is left, collected or not.
 //
-//   drivers_functional <nexus-fake-driver> <dir> <case>
+//   drivers_functional <nexus-fake-driver> <dir> <case> [<state dir>]
 //
 // The cases: normal, stop, silent, exit_mid_turn, malformed, ignores_stop, kill (ignores EOF and SIGTERM, so only
 // SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
-// change restarts the session's driver).
+// change restarts the session's driver), window (busy with a reply streaming after tool lines, idle, then down; with a
+// state dir it writes each state there for `nexus --state`).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -376,6 +377,50 @@ void silent(Server& s, const std::string& dir, const std::string& fake) {
 }
 
 // An exit with a turn open: the text so far, why, and the turn cut; the prompt is never written again.
+// Where the window case writes the states it reaches, if anywhere (the optional fourth argument).
+std::string stateDir;
+
+// The hub's state now, as a window's first diff, into stateDir/<name>.state for `nexus --state` to draw.
+void writeState(Server& s, const std::string& name) {
+    if (!stateDir.empty()) {
+        writeFile(stateDir + "/" + name + ".state", s.hub->state().init_diff());
+    }
+}
+
+// What the window draws, from the server's state through the fake driver: a reply streaming after two tool lines
+// (busy), the turn ended (idle), then the driver crashing on the next prompt (down). Each state is written for the
+// window's screenshots when a state directory is given.
+void window(Server& s, const std::string& dir, const std::string& fake) {
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"I'll start with the failed job's log.\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"tool\",\"name\":\"Bash\",\"summary\":\"gh run view 4211 --log-failed\"}\n"
+        "emit {\"kind\":\"tool\",\"name\":\"Read\",\"summary\":\"tests/sync/link_walk.cpp\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"The nightly went red in the link walk: seed 17 \"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"loses a diff when the\"}\nawait-stop\n"
+        "emit {\"kind\":\"text\",\"delta\":\" window reconnects mid-fragment.\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nemit {\"kind\":\"text\",\"delta\":\"On it.\"}\nemit {\"kind\":\"text-end\"}\nexit 1\n");
+    s.send("Why did the nightly build go red?");
+    const std::string growing = "The nightly went red in the link walk: seed 17 loses a diff when the";
+    CHECK(s.serveUntil([&] {
+        const sync::SessionView* v = s.hub->state().find(kAda);
+        return v != nullptr && !v->entries.empty() && !v->entries.back()->closed && v->entries.back()->text == growing;
+    }, 10));
+    CHECK((s.transcript() == std::vector<std::string>{"P Why did the nightly build go red?",
+        "F I'll start with the failed job's log.", "T Bash: gh run view 4211 --log-failed",
+        "T Read: tests/sync/link_walk.cpp"}));
+    CHECK(s.activity() == sync::Activity::Busy);
+    writeState(s, "busy");
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.serveUntil([&] { return idle(s) && s.activity() == sync::Activity::Idle; }, 10));
+    CHECK(s.activity() == sync::Activity::Idle);
+    writeState(s, "idle");
+    s.send("Can you fix it?");
+    CHECK(s.serveUntil([&] { return none(s) && s.activity() == sync::Activity::Down; }, 10));
+    CHECK(s.activity() == sync::Activity::Down);
+    writeState(s, "down");
+}
+
 void exitMidTurn(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"par\"}\nexit 5\n");
     s.send("q");
@@ -592,13 +637,16 @@ void escapedOutput(Server& s, const std::string& dir, const std::string&) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: drivers_functional <nexus-fake-driver> <dir> <case>\n");
+    if (argc != 4 && argc != 5) {
+        std::fprintf(stderr, "usage: drivers_functional <nexus-fake-driver> <dir> <case> [<state dir>]\n");
         return 2;
     }
     const std::string fake = argv[1];
     const std::string dir = argv[2];
     const std::string name = argv[3];
+    if (argc == 5) {
+        stateDir = argv[4];
+    }
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     ::signal(SIGPIPE, SIG_IGN);     // as the server does: a driver gone mid-write is an error from write
@@ -657,7 +705,7 @@ int main(int argc, char** argv) {
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
-                {"stop_hammered", stopHammered}, {"account", account}};
+                {"stop_hammered", stopHammered}, {"account", account}, {"window", window}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());
