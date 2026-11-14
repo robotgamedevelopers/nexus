@@ -160,6 +160,35 @@ struct Server {
     }
 };
 
+// These tests check what the link does, never how fast this machine is. A wait for the link to get somewhere ends when
+// its condition holds, and fails only when nothing has moved for kStallSeconds. Every action the server applies is
+// durable before it is acknowledged, one F_FULLFSYNC (fsync off macOS) each (store/store.cpp, store/posix_fs.cpp), and
+// that sync waits on every other writer to the drive: on a loaded machine (the whole suite, model checks and builds at
+// once) the soak's 300 prompts took 38 s instead of 1.4 s, and a fixed deadline on a whole wait failed runs that were
+// still making progress. A link that hangs, or loses an action, makes no progress and still fails, kStallSeconds after
+// its last step. kStallSeconds is the bound the link gives one step of its own: the bootstrap's ssh
+// (link::Bootstrap::timeoutSeconds).
+constexpr int kStallSeconds = 30;
+
+// Calls step() until done() holds, or until progress() has not changed for kStallSeconds.
+bool whileProgressing(const std::function<bool()>& done, const std::function<std::uint64_t()>& progress,
+                      const std::function<void()>& step) {
+    std::uint64_t last = progress();
+    auto moved = Clock::now();
+    while (!done()) {
+        step();
+        const std::uint64_t now = progress();
+        if (now != last) {
+            last = now;
+            moved = Clock::now();
+        } else if (Clock::now() - moved > std::chrono::seconds(kStallSeconds)) {
+            return done();
+        }
+    }
+    return true;
+}
+
+// One step with nothing to watch but the clock (a server starting, a link connecting): up to `seconds`.
 bool waitFor(const std::function<bool()>& done, int seconds) {
     const auto deadline = Clock::now() + std::chrono::seconds(seconds);
     while (Clock::now() < deadline) {
@@ -227,7 +256,16 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
             if (link.poll(&s))
                 mirror.apply(model, s.sessions);
         };
-        CHECK(waitFor([&] { pump(); return s.phase != sync::LinkPhase::Connecting; }, 30));
+        // Until the link gets somewhere: the server's next state, or its acknowledging everything sent.
+        auto until = [&](const std::function<bool()>& done) {
+            return whileProgressing([&] { pump(); return done(); },
+                [&] { return s.stateNum * 2 + (s.acknowledged ? 1 : 0); },
+                [] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
+        };
+        // The link ends Connecting by itself, connected or failed, within its own bounds: ssh -G (10 s), then the
+        // bootstrap's ssh (timeoutSeconds). The wait is those, and one stall more.
+        CHECK(waitFor([&] { pump(); return s.phase != sync::LinkPhase::Connecting; },
+            10 + options.bootstrap.timeoutSeconds + kStallSeconds));
         if (s.phase == sync::LinkPhase::Failed)
             std::fprintf(stderr, "link_e2e: %s\n", s.problem.c_str());
         CHECK(s.phase == sync::LinkPhase::Connected);
@@ -244,10 +282,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         const std::size_t ada = tabOf(model, "ada");
         const std::size_t bo = tabOf(model, "bo");
         const std::size_t want = older ? 6 : 3;
-        CHECK(waitFor([&] {
-            pump();
-            return model.tab(ada).transcript.size() == want && model.tab(bo).queue.size() == 1;
-        }, 10));
+        CHECK(until([&] { return model.tab(ada).transcript.size() == want && model.tab(bo).queue.size() == 1; }));
         std::printf("round trip in %.3f s\n", seconds(sent));
         const std::vector<Entry>& t = model.tab(ada).transcript;
         CHECK(t.size() == want);
@@ -260,11 +295,11 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         }
         // The friend is idle once its turn ends; a window of format 1 hears no activity, and reads idle.
         const std::size_t adaId = model.tab(ada).id;
-        CHECK(waitFor([&] { pump(); const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
-            *a == sync::Activity::Idle; }, 10));
+        CHECK(until([&] { const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
+            *a == sync::Activity::Idle; }));
         CHECK(model.tab(bo).queue == std::vector<std::string>{"for later"});
         CHECK(model.tab(bo).transcript.empty());
-        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == (older ? 4u : 5u); }, 10));
+        CHECK(until([&] { return s.acknowledged && s.sent == (older ? 4u : 5u); }));
         CHECK(sessionsAsMinted(s.sessions));
     }   // each link shuts down at the end of its pass
     std::printf("roundtrip through %s: %s\n", host.c_str(), failures == 0 ? "ok" : "FAILED");
@@ -410,18 +445,16 @@ int outage(const std::string& binary, const std::string& dir) {
     w.session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", relay.port());
     std::vector<Window*> windows{&w};
     const std::size_t ada = tabOf(w.model, "ada");
-    auto settle = [&](int seconds, const std::function<bool()>& done) {
-        const auto deadline = Clock::now() + std::chrono::seconds(seconds);
-        while (Clock::now() < deadline && !done())
-            step(windows, &relay, 50);
-        return done();
+    auto settle = [&](const std::function<bool()>& done) {
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(windows, &relay, 50); });
     };
-    CHECK(settle(10, [&] { return w.session->stateNum() > 0; }));
+    CHECK(settle([&] { return w.session->stateNum() > 0; }));
     for (const sync::Action& a : ensures()) {
         w.session->add(a);
     }
     w.session->add(act(sync::ActionKind::Send, sid("ada"), "before"));
-    CHECK(settle(10, [&] { return w.model.tab(ada).transcript.size() == 2 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).transcript.size() == 2 && w.session->allAcknowledged(); }));
 
     // The network goes down for 8 s; three prompts are sent during it.
     relay.down = true;
@@ -446,7 +479,7 @@ int outage(const std::string& binary, const std::string& dir) {
     // Back up: everything sent arrives once, in order, and the window converges.
     relay.down = false;
     const auto back = Clock::now();
-    CHECK(settle(15, [&] { return w.model.tab(ada).transcript.size() == 8 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).transcript.size() == 8 && w.session->allAcknowledged(); }));
     std::printf("converged %.2f s after the network came back\n", seconds(back));
     const auto& t = w.model.tab(ada).transcript;
     const std::vector<std::string> want = {"before", "during 0", "during 1", "during 2"};
@@ -464,10 +497,12 @@ int outage(const std::string& binary, const std::string& dir) {
     while (seconds(cut2) < 2)
         step(windows, &relay, 50);
     relay.down = false;
-    CHECK(settle(10, [&] { return w.model.tab(ada).queue.size() == 1 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).queue.size() == 1 && w.session->allAcknowledged(); }));
     CHECK(w.model.tab(ada).transcript.size() == 8);
     w.session->shutdown();
-    settle(3, [&] { return w.session->shutdownDone(); });
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(windows, &relay, 50);
     std::printf("outage: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;
 }
@@ -541,10 +576,13 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         }
         return true;
     };
-    const auto deadline = Clock::now() + std::chrono::seconds(60);
-    while (Clock::now() < deadline && !converged())
-        step(windows, nullptr, 20);
-    CHECK(converged());
+    // Every window hears every state the server makes: the sum of their state numbers moves with each applied prompt.
+    CHECK(whileProgressing(converged, [&] {
+        std::uint64_t sum = 0;
+        for (Window* w : windows)
+            sum += w->session->stateNum();
+        return sum;
+    }, [&] { step(windows, nullptr, 20); }));
     std::printf("%d prompts from %d windows applied and seen by every window in %.2f s\n", prompts, clients,
         seconds(sending));
     // Every window holds the same state (the server's), and its view agrees with every other's.
@@ -649,7 +687,7 @@ int restart(const std::string& binary, const std::string& dir) {
     mkdir(dir.c_str(), 0700);
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
-    CHECK(waitFor([&] { return answering(dir); }, 10));
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
     const std::vector<std::pair<std::string, std::string>> before = {{"ada", "one"}, {"bo", "later"}, {"ada", "two"},
                                                                     {"ada", "three"}};
     auto session = [&](std::uint64_t next, Window* w) {
@@ -667,12 +705,17 @@ int restart(const std::string& binary, const std::string& dir) {
     auto add = [](Window& w, const std::pair<std::string, std::string>& a) {
         w.session->add(act(a.first == "bo" ? sync::ActionKind::Queue : sync::ActionKind::Send, sid(a.first), a.second));
     };
-    auto settle = [](Window& w, int seconds, const std::function<bool()>& done) {
+    auto settle = [](Window& w, const std::function<bool()>& done) {
         std::vector<Window*> ws{&w};
-        const auto deadline = Clock::now() + std::chrono::seconds(seconds);
-        while (Clock::now() < deadline && !done())
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(ws, nullptr, 20); });
+    };
+    // For as long as `seconds`, whatever happens: the timing the run itself is about.
+    auto run = [](Window& w, int seconds) {
+        std::vector<Window*> ws{&w};
+        const auto end = Clock::now() + std::chrono::seconds(seconds);
+        while (Clock::now() < end)
             step(ws, nullptr, 20);
-        return done();
     };
     // ada's texts, with the notice that ada has no driver as "no driver".
     auto adaTexts = [](const sync::Sessions& sessions) {
@@ -692,10 +735,10 @@ int restart(const std::string& binary, const std::string& dir) {
         }
         for (std::size_t i = 0; i < 3; ++i)
             add(w, before[i]);
-        CHECK(settle(w, 10, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
+        CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
         // The fourth is sent and the server killed at once: applied and durable, or not applied at all.
         add(w, before[3]);
-        settle(w, 1, [&] { return false; });
+        run(w, 1);
     }
     CHECK(kill(pid, SIGKILL) == 0);
     int status = 0;
@@ -705,12 +748,12 @@ int restart(const std::string& binary, const std::string& dir) {
 
     pid = startServe(binary, dir);
     CHECK(pid > 0);
-    CHECK(waitFor([&] { return answering(dir); }, 10));
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
     Window w;
     if (!session(1, &w))
         return 1;
     // The fresh sync: what was acknowledged before the kill is there before the window sends anything.
-    CHECK(settle(w, 10, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 4; }));
+    CHECK(settle(w, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 4; }));
     const std::vector<std::string> first = adaTexts(w.session->state());
     std::printf("after the restart the server holds %zu entries in ada\n", first.size());
     CHECK(first.size() == 4 || first.size() == 6);
@@ -726,7 +769,7 @@ int restart(const std::string& binary, const std::string& dir) {
     add(w, {"ada", "four"});
     const std::vector<std::string> want = {"one", "no driver", "two", "no driver", "three", "no driver",
                                            "four", "no driver"};
-    CHECK(settle(w, 15, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
+    CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
     CHECK(adaTexts(w.session->state()) == want);
     bo = w.session->state().find(sid("bo"));
     CHECK(sessionsAsMinted(w.session->state()));
@@ -742,7 +785,10 @@ int restart(const std::string& binary, const std::string& dir) {
         CHECK(why.find("applied its actions up to 8") != std::string::npos);
     }
     w.session->shutdown();
-    settle(w, 3, [&] { return w.session->shutdownDone(); });
+    std::vector<Window*> ws{&w};
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(ws, nullptr, 20);
     std::printf("restart: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;   // the Server stops the restarted server
 }
