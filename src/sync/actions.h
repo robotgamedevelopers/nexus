@@ -14,13 +14,21 @@
 #include <string>
 #include <vector>
 
+#include "sync/secrets.h"
 #include "sync/sessions.h"
 
 namespace nexus::sync {
 
 // Each action names a session by its id (sync/sessions.h), never a tab: a window keeps which session each of its tabs
 // shows to itself. What an action does is decided by the server, against the sessions it holds when it applies it.
+//
+// Across versions (docs/formats.md): up to state format 2 the actions are unframed, kinds 1 to 14. From format 3 each
+// action is its kind and then its fields framed by their length, so that a reader skips the fields it does not know and
+// reads an action of a kind it does not know as Unknown (counted, never applied). The secret dialog's two kinds come
+// with format 3 (sync/secrets.h); a window sends them only for a request it received, which only a server of format 3
+// sends.
 enum class ActionKind : std::uint8_t {
+    Unknown = 0,    // read, never written: a kind from a later window, which the server counts and does not apply
     Send = 1,       // a prompt sent in a session: it goes in the transcript
     Queue = 2,      // a prompt queued in a session, for later
     Stop = 3,       // stop the friend's work in a session (no text): applied at once, never queued behind anything
@@ -38,7 +46,13 @@ enum class ActionKind : std::uint8_t {
     LinkAccount = 12,   // the friend (friendName) may run on the account (`account`), after those it has
     UnlinkAccount = 13, // the friend no longer runs on the account: its sessions on it move off it
     SetDefault = 14,    // the friend's default account becomes `account` (empty: none)
+    // The secret dialog (sync/secrets.h), from format 3:
+    SecretAnswer = 15,  // the value the person pasted (`secret`) for request `request`
+    SecretCancel = 16,  // the person cancelled request `request` (Escape)
 };
+
+// The last kind this build knows.
+constexpr ActionKind kLastActionKind = ActionKind::SecretCancel;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
@@ -47,8 +61,15 @@ struct Action {
     std::string friendName; // a create's and an ensure's friend; empty for the rest
     std::string text;
     std::string account;    // the account an account action names; empty for the rest (and not on the wire for them)
+    std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
+    SecretValue secret;     // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
+                            // when mosh's acknowledgement subtracts it (Actions::subtract)
     bool operator==(const Action&) const = default;
 };
+
+// What an action is, for a log or a test's message: its number, its kind and, for a secret's, its request id. Never its
+// text or its value.
+std::string describe(const Action& action);
 
 class Actions {
 public:
@@ -79,12 +100,19 @@ public:
     void subtract(const Actions* prefix);
     void reset_input() {}
 
+    // The format (sync/formats.h) diffs are written and read in: the link's, agreed when it is made. A copy keeps it;
+    // equality ignores it. Up to format 2 a secret's action, which that format cannot carry, is written as a stop
+    // naming session 0, which every server refuses and counts: its value never leaves the window.
+    std::uint32_t format() const { return format_; }
+    void setFormat(std::uint32_t format) { format_ = format; }
+
     // The actions a diff carries, for the server, which reads them out of mosh's get_remote_diff(). Throws BadDiff.
-    static std::vector<Action> parse(const std::string& diff);
+    static std::vector<Action> parse(const std::string& diff, std::uint32_t format = kStateFormat);
 
 private:
     std::uint64_t first_ = 1;
     std::shared_ptr<const std::vector<Action>> held_;
+    std::uint32_t format_ = kStateFormat;
 };
 
 // The server's side of one client's list: applies each action exactly once, in number order. apply() takes the actions

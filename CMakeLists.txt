@@ -107,7 +107,7 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
-    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp)
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/secrets.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)

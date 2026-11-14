@@ -15,7 +15,13 @@ namespace nexus::sync {
 //      A server that states no format (one before formats were stated) sends 1, and a window that states none reads 1.
 //   2  each changed session and each entry framed by its length, the session's activity after its settings, and entry
 //      kind Tool. A reader of 2 reads any later format, skipping what it does not know.
-constexpr std::uint32_t kStateFormat = 2;
+//   3  the open secret requests after the sessions (sync/secrets.h), each framed by its length; and the actions, up,
+//      framed too (sync/actions.h), with the secret dialog's answer and cancel. A window of format 2 receives no
+//      requests, and the server counts it as unable to take one.
+constexpr std::uint32_t kStateFormat = 3;
+
+// The first format that carries secret requests down and secret answers up.
+constexpr std::uint32_t kSecretsFormat = 3;
 
 // The oldest format of each end this build still works with: a window stating an older one is refused by the server,
 // and a server answering with an older one is refused by the window, each with one plain line. Today every format

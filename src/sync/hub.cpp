@@ -193,6 +193,13 @@ bool Hub::counted(const Action& action, const std::string& refused, std::string*
 }
 
 bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    if (action.kind == ActionKind::SecretAnswer || action.kind == ActionKind::SecretCancel) {
+        return secretAction(action, why, client);
+    }
+    if (action.kind == ActionKind::Unknown) {
+        return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
+            client);
+    }
     if (action.kind >= ActionKind::AddAccount) {
         return accountAction(action, why, client);
     }
@@ -591,8 +598,137 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     if (signedIn) {
         signedIn_.insert(account);
-    } else {
-        signedIn_.erase(account);
+        return;
+    }
+    signedIn_.erase(account);
+    // An account with no login it can use: nexus itself asks for it in the window (docs/secrets.md), one paste, unless
+    // a request for it is open already. With no window that can take one, the ask is refused at once and logged.
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (secretKeeper_ != nullptr && a != nullptr && !loginFile(a->provider).empty() &&
+            std::none_of(desk_.open().begin(), desk_.open().end(),
+                         [&](const SecretRequest& r) { return r.account == account; })) {
+        askSecret(SecretAsker{}, account, loginFile(a->provider),
+                  account + " has no login it can use: paste its " + loginFile(a->provider) + " to sign it in");
+    }
+}
+
+void Hub::secretsWith(SecretKeeper* keeper, SecretEvents* events, std::function<bool()> takers,
+                      std::function<std::uint64_t()> clock) {
+    secretKeeper_ = keeper;
+    secretEvents_ = events;
+    takers_ = std::move(takers);
+    clock_ = std::move(clock);
+}
+
+bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const std::string& what,
+                    const std::string& why, std::string* refused) {
+    auto refuse = [&](const std::string& text) {
+        if (refused != nullptr) {
+            *refused = text;
+        }
+        return false;
+    };
+    if (secretKeeper_ == nullptr) {
+        return refuse("this server takes no secrets");
+    }
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr) {
+        return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
+    }
+    const std::vector<std::string> files = secretFiles(a->provider);
+    if (std::find(files.begin(), files.end(), what) == files.end()) {
+        std::string named;
+        for (const std::string& f : files) {
+            named += (named.empty() ? "" : ", ") + f;
+        }
+        return refuse("a " + a->provider + " account has no secret \"" + what + "\"" +
+            (files.empty() ? std::string(": its provider documents none") : "; it has " + named));
+    }
+    if (why.size() > kSecretWhyBytes ||
+            std::any_of(why.begin(), why.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20; })) {
+        return refuse("an ask's reason is one line of at most " + std::to_string(kSecretWhyBytes) + " bytes");
+    }
+    // The id first, durable, so that it is never minted again, across restarts.
+    const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
+    std::string failed;
+    if (!store_.commit(0, {}, kSecretIdsClient, id, &failed)) {
+        return refuse("the request's id was not kept: " + failed);
+    }
+    secretEffects(desk_.ask(id, asker, account, what, why, takers_ ? takers_() : false, clock_ ? clock_() : 0));
+    return true;
+}
+
+void Hub::expireSecrets() {
+    if (clock_) {
+        secretEffects(desk_.expire(clock_()));
+    }
+}
+
+void Hub::dropSecrets() {
+    secretEffects(desk_.drop());
+}
+
+// A secret answer or cancel: counted like any action, then given to the desk, which writes the value (never anywhere
+// else) or drops it.
+bool Hub::secretAction(const Action& action, std::string* why, const std::string& client) {
+    if (!count(action, why, client)) {
+        return false;
+    }
+    if (secretKeeper_ == nullptr) {
+        if (why != nullptr) {
+            *why = describe(action) + " dropped: this server takes no secrets";
+        }
+        return false;
+    }
+    if (action.kind == ActionKind::SecretCancel) {
+        secretEffects(desk_.cancel(action.request));
+        return true;
+    }
+    const std::optional<SecretState> before = desk_.stateOf(action.request);
+    std::string account;
+    std::string what;
+    for (const SecretRequest& r : desk_.open()) {
+        if (r.id == action.request) {
+            account = r.account;
+            what = r.what;
+        }
+    }
+    secretEffects(desk_.answer(action.request, action.secret, *secretKeeper_));
+    if (before == SecretState::Open && desk_.stateOf(action.request) == SecretState::Stored) {
+        const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+        if (a != nullptr && what == loginFile(a->provider)) {
+            reportSignedIn(account, true);
+            if (responder_ != nullptr) {
+                responder_->signedIn(account);
+            }
+        }
+    }
+    return true;
+}
+
+void Hub::secretEffects(const SecretEffects& effects) {
+    for (const SecretNote& n : effects.notes) {
+        if (secretEvents_ != nullptr) {
+            secretEvents_->noted(n);
+        }
+        if (n.asker != 0 && store_.find(n.asker) != nullptr) {
+            std::string failed;
+            if (store_.commit(n.asker, {SessionChange{entry(EntryKind::Notice, n.text), {}}}, std::string(), 0,
+                              &failed)) {
+                refresh(n.asker);
+            }
+        }
+    }
+    if (effects.changed) {
+        state_.setRequests(desk_.open());
+    }
+    if (secretEvents_ != nullptr) {
+        for (const SecretReply& r : effects.replies) {
+            secretEvents_->answered(r);
+        }
+        for (const SecretLog& l : effects.log) {
+            secretEvents_->logged(l);
+        }
     }
 }
 
@@ -800,6 +936,7 @@ void Hub::refresh(SessionId id) {
         sessions.insert(it, fresh);
     }
     state_ = Sessions(std::move(sessions));
+    state_.setRequests(desk_.open());
 }
 
 } // namespace nexus::sync
