@@ -270,14 +270,16 @@ void aTabInSshNamesTheMachine() {
         CHECK(h.terminals->title(id) == "space");
     }
     h.typeLine("exit");
+    // The text, the label and the program's title are read at different moments, and the title may come in a later
+    // frame than the text: all three are waited for together.
     const bool back = h.until([&] {
         return h.terminals->text(id).find("Connection to remote closed.") != std::string::npos &&
-            h.terminals->title(id) == usual;
+            h.terminals->title(id) == usual && h.terminals->programTitle(id) == "nova@remote: left behind";
     });
-    if (!back)
+    if (!back) {
         showLabel(h, id);
+    }
     CHECK(back);
-    CHECK(h.terminals->programTitle(id) == "nova@remote: left behind");
     // A fleet machine by its tailnet name, with options; then a host that is not one, shown as given. Each time the
     // usual label comes back.
     const std::pair<const char*, const char*> sessions[] = {
