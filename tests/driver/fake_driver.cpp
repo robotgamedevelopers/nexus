@@ -14,6 +14,8 @@
 //   tail <text>          write <text> with no newline after it (a last line cut short)
 //   flood <count> <json> emit the message <count> times, as fast as the pipe takes them
 //   await-stop           read until a stop of this send's turn arrives, then go on with the block
+//   await-secret <path>  read until a secret's answer arrives (or a stop of this send's turn), appending each line
+//                        read to <path> as it came, then go on with the block
 //   hang                 write nothing more and ignore what arrives, until standard input ends
 //   exit <code>          exit at once with that status, mid-turn if a turn is open
 //   signal <number>      end by that signal, sent to itself
@@ -115,8 +117,8 @@ struct Script {
     std::set<std::string> options;
 };
 
-const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "hang", "exit", "signal", "stderr",
-    "record", "record-send", "count-starts"};
+const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "await-secret", "hang", "exit",
+    "signal", "stderr", "record", "record-send", "count-starts"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
     "done-without-cause"};
 
@@ -182,6 +184,7 @@ struct Input {
     std::optional<ServerMessage> message;
     std::string error;
     std::optional<std::uint64_t> turn;
+    std::string line;           // the line as it came, when it was one
 };
 
 // The server's lines, read from standard input as they are needed.
@@ -210,15 +213,15 @@ public:
             }
             for (const LineReader::Line& line : lines_) {
                 if (!line.error.empty()) {
-                    pending_.push_back(Input{std::nullopt, line.error, std::nullopt});
+                    pending_.push_back(Input{std::nullopt, line.error, std::nullopt, std::string()});
                     continue;
                 }
                 Decoded<ServerMessage> d = decodeServerMessage(line.text);
                 if (d.message)
-                    pending_.push_back(Input{std::move(d.message), {}, std::nullopt});
+                    pending_.push_back(Input{std::move(d.message), {}, std::nullopt, line.text});
                 else
                     pending_.push_back(Input{std::nullopt, "line " + std::to_string(line.number) + ": " + d.error,
-                        readableTurn(line.text)});
+                        readableTurn(line.text), line.text});
             }
         }
         Input input = std::move(pending_.front());
@@ -325,6 +328,8 @@ private:
                 writeOut(line);
         } else if (step.op == "await-stop") {
             awaitStop(turn);
+        } else if (step.op == "await-secret") {
+            awaitSecret(step.arg, turn);
         } else if (step.op == "hang") {
             while (in_.next()) {
             }
@@ -371,6 +376,33 @@ private:
             if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
                 if (stop->turn == turn || option("stop-any-turn"))
                     return;
+            } else if (const Send* send = std::get_if<Send>(&*item->message)) {
+                badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
+            }
+        }
+        std::exit(0);
+    }
+
+    // Each line read written to `path` as it came, until a secret's answer, or a stop of `turn`, arrives.
+    void awaitSecret(const std::string& path, std::uint64_t turn) {
+        std::ofstream out(path, std::ios::app);
+        while (std::optional<Input> item = in_.next()) {
+            out << item->line << "\n";
+            out.flush();
+            if (!out) {
+                scriptBug("cannot record to " + path);
+            }
+            if (!item->message) {
+                badLine(*item);
+                continue;
+            }
+            if (std::holds_alternative<SecretAnswer>(*item->message)) {
+                return;
+            }
+            if (const Stop* stop = std::get_if<Stop>(&*item->message)) {
+                if (stop->turn == turn || option("stop-any-turn")) {
+                    return;
+                }
             } else if (const Send* send = std::get_if<Send>(&*item->message)) {
                 badSend(*send, "arrived while turn " + std::to_string(turn) + " is open");
             }

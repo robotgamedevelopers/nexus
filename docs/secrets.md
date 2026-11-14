@@ -13,7 +13,11 @@ drives the hub, the state's codec, the actions and each window's prompt at rando
 `models/SecretsTrace.tla`, with every safety property; two faulty walks must be rejected. The walk, and the leak test
 (`tests/server/secrets_test leak`: a fake value pasted, answered late, cancelled and dropped across three windows, a
 driver and a restart), fail if the value's bytes reach a session line, the store's files, a log line, a driver's line,
-an answer, a state sent to any window or an action's description.
+an answer, a state sent to any window or an action's description. Two functional cases run the whole path with real
+driver processes (`tests/server/drivers_functional`): `secret_ask` (a driver's ask refused `no-client`, then opened,
+pasted, stored and answered `stored`) and `secret_sign_in` (a driver's no-credential, nexus's own ask, and the prompt
+waiting answered once the value is pasted); each checks the file is 0600 in a 0700 directory and that the value is in
+no other file of the test's directory, the transcript or the log.
 
 ## The flow
 
