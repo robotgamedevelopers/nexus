@@ -159,6 +159,10 @@ add_library(nexus_config STATIC src/config.cpp)
 target_include_directories(nexus_config PUBLIC src)
 target_compile_options(nexus_config PRIVATE ${NEXUS_WARNINGS})
 
+# The formats across versions as schema's variable tables (schema/Nexus.schema), generated and checked in under
+# schema/gen: the library nexus_wire, and the target schema_generate that regenerates it at the pinned schema commit.
+include(cmake/schema.cmake)
+
 if(NEXUS_WINDOW_LOGIC)
     # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
@@ -259,6 +263,7 @@ add_subdirectory(tests/window)
 add_subdirectory(tests/store)
 add_subdirectory(tests/driver)
 add_subdirectory(tests/server)
+add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()
