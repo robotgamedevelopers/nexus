@@ -51,7 +51,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown
-              restart settings account place activity)
+              restart settings account place activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()

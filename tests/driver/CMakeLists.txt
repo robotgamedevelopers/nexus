@@ -91,7 +91,7 @@ tlc_test(tlc_claude_driver_trace_faulty_latch_rejected ClaudeDriverTrace ClaudeD
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).
 add_dependencies(model_checks driver_protocol_test)
 
-foreach(group roundtrip encode_refusals property chunking refusals strings numbers forward limit)
+foreach(group roundtrip encode_refusals property chunking refusals strings numbers forward secrets limit)
     add_test(NAME driver_unit_${group} COMMAND driver_protocol_test ${group})
     set_tests_properties(driver_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

@@ -54,7 +54,9 @@ const std::vector<std::string> kTexts = {"", "hi", "two\nlines\r\n", "\"q\" \\ /
 
 std::vector<ServerMessage> serverMessages() {
     std::vector<ServerMessage> all = {Stop{3}, Stop{kMaxTurn}, Send{kMaxTurn, "last"},
-        Settings{"claude-opus-5-5", "high"}, Settings{"opus", ""}, Settings{"", "low"}};
+        Settings{"claude-opus-5-5", "high"}, Settings{"opus", ""}, Settings{"", "low"},
+        ServerInfo{{"secrets"}}, ServerInfo{{}}, ServerInfo{{"secrets", "a feature from the future"}},
+        SecretAnswer{1, true, ""}, SecretAnswer{kMaxInteger, false, "busy"}, SecretAnswer{3, false, "no-client"}};
     std::uint64_t turn = 1;
     for (const std::string& t : kTexts)
         all.push_back(Send{turn++, t});
@@ -83,6 +85,9 @@ std::vector<DriverMessage> driverMessages() {
         Error{"no login", "log in", std::nullopt, ErrorCode::NoCredential},
         Error{"no such session", "start without --resume", std::nullopt, ErrorCode::SessionNotFound},
         Error{"the harness failed", "see its log", 9, ErrorCode::Harness},
+        AskSecret{1, "work", "oauth-token", "the login expired"},
+        AskSecret{kMaxInteger, "caf\xc3\xa9", "oauth-token", "\"quoted\" \\ \xe2\x9c\x93"},
+        AskSecret{2, "a", "b", ""},
     };
     for (const std::string& t : kTexts)
         all.push_back(Text{2, t});
@@ -545,6 +550,41 @@ void forward() {
     }
 }
 
+// ---- the secret dialog's kinds (docs/secrets.md) ----
+
+void secrets() {
+    // The server's features: each a string; an older driver skips the kind (forward, above).
+    const Decoded<ServerMessage> info = decodeServerMessage("{\"kind\":\"server\",\"features\":[\"secrets\",\"later\"]}");
+    CHECK(info.message && *info.message == ServerMessage(ServerInfo{{"secrets", "later"}}));
+    CHECK(!serverError("{\"kind\":\"server\",\"features\":[\"secrets\",1]}").empty());
+    CHECK(!serverError("{\"kind\":\"server\",\"features\":\"secrets\"}").empty());
+    CHECK(!serverError("{\"kind\":\"server\"}").empty());
+
+    // The answer: stored, or refused with a reason; any other outcome, or a refusal without its reason, is refused.
+    const Decoded<ServerMessage> stored = decodeServerMessage("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"stored\"}");
+    CHECK(stored.message && *stored.message == ServerMessage(SecretAnswer{4, true, ""}));
+    const Decoded<ServerMessage> refused =
+        decodeServerMessage("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"refused\",\"reason\":\"timeout\"}");
+    CHECK(refused.message && *refused.message == ServerMessage(SecretAnswer{4, false, "timeout"}));
+    CHECK(contains(serverError("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"maybe\"}"), "stored, refused"));
+    CHECK(!serverError("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"refused\"}").empty());
+    CHECK(!serverError("{\"kind\":\"secret\",\"ask\":0,\"outcome\":\"stored\"}").empty());
+    CHECK(!serverError("{\"kind\":\"secret\",\"outcome\":\"stored\"}").empty());
+
+    // The ask: a number from 1, an account and a file, and a reason of one line.
+    CHECK(contains(driverError("{\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a\",\"what\":\"b\",\"why\":\"x\\ny\"}"),
+                   "one line"));
+    CHECK(contains(driverError("{\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a\",\"what\":\"b\",\"why\":\"x\\ty\"}"),
+                   "one line"));
+    CHECK(!driverError("{\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"\",\"what\":\"b\",\"why\":\"\"}").empty());
+    CHECK(!driverError("{\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a\",\"what\":\"\",\"why\":\"\"}").empty());
+    CHECK(!driverError("{\"kind\":\"ask-secret\",\"ask\":0,\"account\":\"a\",\"what\":\"b\",\"why\":\"\"}").empty());
+    CHECK(!driverError("{\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a\",\"what\":\"b\"}").empty());
+    // The encoder refuses what the decoder refuses.
+    CHECK(!encodeError(AskSecret{1, "a", "b", "x\ny"}).empty());
+    CHECK(!encodeError(AskSecret{0, "a", "b", ""}).empty());
+}
+
 // ---- the line limit ----
 
 // The bytes of a text message's line, without its newline, besides its delta.
@@ -624,6 +664,7 @@ const Group kGroups[] = {
     {"strings", strings},
     {"numbers", numbers},
     {"forward", forward},
+    {"secrets", secrets},
     {"limit", limit},
 };
 
