@@ -1,5 +1,5 @@
-// The live functional test: the real driver (dist/src/main.js) on the real SDK and the subscription login of the user
-// session it runs in. It spends the subscription, so it is opt-in (`npm run test:live`) and never runs in CI.
+// The live functional test: the real driver (dist/src/main.js) on the real SDK and the subscription login of an
+// account under nexus-server's home. It spends the subscription, so it is opt-in (`npm run test:live`) and never runs in CI.
 //
 // It checks: hello, then credential subscription and the session id before any turn, with an API key planted in the
 // environment removed; a turn answered (text, done ok); a turn stopped mid-reply (done stopped); a model and effort
@@ -8,6 +8,9 @@
 //
 // When the subscription's usage limit is reached, Claude answers every turn with that error; the test then checks what
 // needs no reply (start, credential, key removal, resume) and exits 2 saying so.
+//
+// The account is named by NEXUS_LIVE_ACCOUNT: the driver's --account, a login at ~/.nexus/server/accounts/<name>/
+// under HOME, as for nexus-server (`NEXUS_LIVE_ACCOUNT=<name> npm run test:live`).
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
@@ -18,6 +21,12 @@ import { createInterface } from 'node:readline';
 import type { DriverMessage } from '../../src/protocol.js';
 
 const main = join(import.meta.dirname, '..', '..', 'src', 'main.js');
+const account = process.env['NEXUS_LIVE_ACCOUNT'] ?? '';
+if (account === '') {
+    process.stderr.write('live: NEXUS_LIVE_ACCOUNT is not set; set it to the account under ~/.nexus/server/accounts/ to run on '
+        + '(`NEXUS_LIVE_ACCOUNT=<name> npm run test:live`)\n');
+    process.exit(1);
+}
 const work = mkdtempSync(join(tmpdir(), 'nexus-claude-live-'));
 let failures = 0;
 const state = { limited: false };
@@ -38,7 +47,7 @@ class Driver {
 
     constructor(args: string[]) {
         const env = { ...process.env, ANTHROPIC_API_KEY: 'sk-ant-api03-planted-by-the-live-test-never-valid' };
-        this.child = spawn(process.execPath, [main, '--cwd', work, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+        this.child = spawn(process.execPath, [main, '--account', account, '--cwd', work, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
         createInterface({ input: this.child.stdout }).on('line', (line) => {
             this.out.push(JSON.parse(line) as DriverMessage);
             this.poke();

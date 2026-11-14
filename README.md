@@ -152,7 +152,7 @@ changed between turns. Build and test it:
 cd drivers/claude
 npm ci            # the pinned SDK and tools, from package-lock.json
 npm run check     # compile (strict), lint, unit tests
-npm run test:live # opt-in: the real driver on the real SDK; spends the subscription
+NEXUS_LIVE_ACCOUNT=<name> npm run test:live # opt-in: the real driver on the real SDK, on ~/.nexus/server/accounts/<name>; spends the subscription
 ```
 
 To try it, with `studio` a machine you can `ssh studio` to without a password prompt, and its UDP ports above
