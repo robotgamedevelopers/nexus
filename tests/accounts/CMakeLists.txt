@@ -1,0 +1,78 @@
+# Tests of the accounts and friends (src/accounts) and the hub's decisions about them (src/sync/hub.h), with three
+# labels:
+#   unit           accounts_test: the files' layout, every refusal with its line, the version rule, the consistency
+#                  rules, the accounts the server picks, and the hub's actions, sets, creates, reloads and rotations;
+#                  logic only
+#   model          TLC: Accounts.tla, its reversed witnesses, and the code's walks (accounts_walk) checked against it.
+#                  Needs TLA2TOOLS_JAR and java.
+#   model_nightly  TLC: Accounts.tla on its largest instance
+
+set(warnings ${NEXUS_WARNINGS})
+
+add_executable(accounts_test accounts_test.cpp)
+target_link_libraries(accounts_test PRIVATE nexus_sync)
+target_compile_options(accounts_test PRIVATE ${warnings})
+
+add_executable(accounts_walk accounts_walk.cpp)
+target_link_libraries(accounts_walk PRIVATE nexus_sync)
+target_compile_options(accounts_walk PRIVATE ${warnings})
+
+add_dependencies(model_checks accounts_test accounts_walk)
+
+foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate)
+    add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
+    set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+# TLC (tlc_test is tests/model's): Accounts.tla, all properties (states and times on two workers on a Linux bench).
+# MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (131,024
+# distinct states, 20 s). Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
+# distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
+tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 4)
+tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
+
+# Reversed witnesses: each broken variant must be rejected by the property named.
+tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant
+         PROPERTY SessionLinked)
+tlc_test(tlc_accounts_witness_unlink_silent      WAccUnlinkSilent      WAccUnlinkSilent.cfg      action
+         PROPERTY MovedIsTold)
+tlc_test(tlc_accounts_witness_unlink_keeps_default WAccUnlinkKeepsDefault WAccUnlinkKeepsDefault.cfg invariant
+         PROPERTY DefaultLinked)
+tlc_test(tlc_accounts_witness_rotate_any         WAccRotateAny         WAccRotateAny.cfg         action
+         PROPERTY ServerPicksSignedIn)
+tlc_test(tlc_accounts_witness_set_unlinked       WAccSetUnlinked       WAccSetUnlinked.cfg       invariant
+         PROPERTY SessionLinked)
+tlc_test(tlc_accounts_witness_cross_keeps_harness WAccCrossKeepsHarness WAccCrossKeepsHarness.cfg invariant
+         PROPERTY HarnessMatches)
+tlc_test(tlc_accounts_witness_rotate_stays       WAccRotateStays       WAccRotateStays.cfg       action
+         PROPERTY RotateMoves)
+tlc_test(tlc_accounts_witness_create_copies_foreign WAccCreateCopiesForeign WAccCreateCopiesForeign.cfg invariant
+         PROPERTY SessionLinked)
+tlc_test(tlc_accounts_witness_remove_keeps_links WAccRemoveKeepsLinks  WAccRemoveKeepsLinks.cfg  invariant
+         PROPERTY LinksSound)
+tlc_test(tlc_accounts_witness_add_resets         WAccAddResets         WAccAddResets.cfg         action
+         PROPERTY RefusedChangesNothing)
+tlc_test(tlc_accounts_witness_fallback_needs_sign_in WAccFallbackNeedsSignIn WAccFallbackNeedsSignIn.cfg action
+         PROPERTY ServerPicksSignedIn)
+tlc_test(tlc_accounts_witness_set_moves_other    WAccSetMovesOther     WAccSetMovesOther.cfg     action
+         PROPERTY OnlyItsSession)
+tlc_test(tlc_accounts_witness_default_unlinked   WAccDefaultUnlinked   WAccDefaultUnlinked.cfg   invariant
+         PROPERTY DefaultLinked)
+tlc_test(tlc_accounts_witness_set_ignored        WAccSetIgnored        WAccSetIgnored.cfg        action
+         PROPERTY SetExact)
+tlc_test(tlc_accounts_witness_reload_unchecked   WAccReloadUnchecked   WAccReloadUnchecked.cfg   invariant
+         PROPERTY DefaultLinked)
+tlc_test(tlc_accounts_witness_provider_keeps_harness WAccProviderKeepsHarness WAccProviderKeepsHarness.cfg invariant
+         PROPERTY HarnessMatches)
+
+# Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla.
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_accounts_trace_seed_${seed} AccountsTrace AccountsTrace.cfg pass ACCWALK SEED ${seed} STEPS 400)
+endforeach()
+
+# The binding can fail: a hub that leaves a session on an account no longer linked to its friend, or on its old
+# harness when its account's provider changed, must be rejected.
+foreach(fault stay harness)
+    tlc_test(tlc_accounts_trace_faulty_${fault}_rejected AccountsTrace AccountsTrace.cfg invariant
+             PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY ${fault})
+endforeach()

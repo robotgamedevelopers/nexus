@@ -478,7 +478,7 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause) {
 }
 
 std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsKeeper* keeper) {
-    accounts_ = std::move(registry);
+    take(std::move(registry));
     keeper_ = keeper;
     std::vector<std::string> report;
     settle(&report, "as the server started");
@@ -498,7 +498,7 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
         return false;
     }
     lines = accounts::changes(accounts_ ? *accounts_ : accounts::Registry{}, next);
-    accounts_ = next;
+    take(next);
     const bool ok = settle(&lines, "the accounts and friends were changed: " + message);
     if (report != nullptr) {
         *report = std::move(lines);
@@ -506,7 +506,18 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
     return ok;
 }
 
+// The registry becomes `next`; an account it no longer holds loses its sign-in.
+void Hub::take(accounts::Registry next) {
+    accounts_ = std::move(next);
+    for (auto it = signedIn_.begin(); it != signedIn_.end();) {
+        it = accounts_->account(*it) == nullptr ? signedIn_.erase(it) : std::next(it);
+    }
+}
+
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {
+    if (accounts_ && accounts_->account(account) == nullptr) {
+        return;
+    }
     if (signedIn) {
         signedIn_.insert(account);
     } else {
@@ -642,7 +653,7 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     if (keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
         return counted(action, "the accounts were not changed: " + failed, why, client);
     }
-    accounts_ = std::move(next);
+    take(std::move(next));
     if (!count(action, why, client)) {
         return false;
     }

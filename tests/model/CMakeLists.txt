@@ -47,7 +47,8 @@ add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
-#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [WORKERS w] [NIGHTLY [CAP s]] [LABEL] [OVERLAY])
+#          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
+#          [WORKERS w] [NIGHTLY [CAP s]] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
@@ -59,13 +60,15 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
 # (turn, resume, queue).
+# With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
+# (stay, harness). Called from tests/accounts.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
 # FAULTY one of its faults (settings, refusal, latch); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
 # tests/driver.
 find_program(NEXUS_NODE node)
 function(tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;DRIVERWALK;DRIVERTESTS"
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;DRIVERWALK;DRIVERTESTS"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
@@ -92,6 +95,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
+    elseif(T_ACCWALK)
+        list(APPEND defs -DACCWALK=$<TARGET_FILE:accounts_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SUPWALK)
         list(APPEND defs -DSUPWALK=$<TARGET_FILE:supervisor_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_GLIDEWALK)

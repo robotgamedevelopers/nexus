@@ -226,7 +226,8 @@ public:
     bool applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report);
 
     // A sign-in (or its loss) reported for an account: the server's own state, in memory only (every account needs
-    // sign-in at a start until its driver or the sign-in reports it).
+    // sign-in at a start until its driver or the sign-in reports it). Ignored for an account not set up; an account
+    // removed loses its sign-in, so one set up again needs sign-in again (models/Accounts.tla, Report and AddAccount).
     void reportSignedIn(const std::string& account, bool signedIn);
     const std::set<std::string>& signedIn() const { return signedIn_; }
 
@@ -242,6 +243,7 @@ private:
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
     bool settle(std::vector<std::string>* report, const std::string& cause);
+    void take(accounts::Registry next);
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
     void refresh(SessionId id);

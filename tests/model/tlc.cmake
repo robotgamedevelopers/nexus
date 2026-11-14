@@ -34,6 +34,8 @@
 #               driver.test.js), run under NODE with NEXUS_DRIVER_TRACE set; they write ClaudeDriverTraceData.tla
 #               into WORK, the traces of every test that keeps to the model
 #   NODE        with DRIVERWALK or DRIVERTESTS: node (Node 20.19 or newer)
+#   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
+#               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -107,6 +109,19 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
     if(NOT EXISTS "${WORK}/ClaudeDriverTraceData.tla")
         message(FATAL_ERROR "${program} wrote no ClaudeDriverTraceData.tla into ${WORK}")
+    endif()
+elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay or harness")
+    endif()
+    execute_process(COMMAND "${ACCWALK}" ${walk_args} "${WORK}/AccountsTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "accounts_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
