@@ -124,8 +124,9 @@ endif()
 target_include_directories(nexus_store PUBLIC src)
 target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
 
-# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link).
-add_library(nexus_durable STATIC src/server/durable.cpp)
+# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link),
+# and the secret dialog's account files over the same filesystem seam (src/server/secret_files.h).
+add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp)
 target_include_directories(nexus_durable PUBLIC src)
 target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store)

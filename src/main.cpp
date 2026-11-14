@@ -136,8 +136,55 @@ struct App {
     sync::Mirror mirror;
     sync::LinkPhase phase = sync::LinkPhase::Connecting;   // the link's state, as last polled, for the state cursor
     std::uint64_t heardMsAgo = 0;
+    std::unique_ptr<Secrets> secrets;       // the secret dialog over the link (LinkSecrets)
 #endif
 };
+
+#if NEXUS_LINK
+// The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
+// dialog shows the oldest the window has not answered (sync/secrets.h SecretPrompt). The value is held in the prompt
+// alone while it is typed, then in the one action that carries it to the server, which the link thread hands to mosh
+// and which is wiped once the server has acknowledged it. Nothing here waits: send() queues the action for the link's
+// thread.
+class LinkSecrets : public Secrets {
+public:
+    explicit LinkSecrets(App& app) : app_(app) {}
+
+    sync::SecretPrompt& prompt() { return prompt_; }
+
+    const SecretAsk* showing() override {
+        const sync::SecretRequest* r = prompt_.showing();
+        if (r == nullptr) {
+            return nullptr;
+        }
+        if (shown_.id != r->id) {
+            shown_ = SecretAsk{r->id, r->account, r->what, r->askerName, r->why};
+        }
+        return &shown_;
+    }
+    std::string_view typed() override { return prompt_.typed().bytes(); }
+    void type(std::string_view text) override { prompt_.type(text); }
+    void submit() override {
+        sync::Action action;
+        if (app_.link != nullptr && prompt_.submit(&action.request, &action.secret)) {
+            action.kind = sync::ActionKind::SecretAnswer;
+            app_.link->send(std::move(action));
+        }
+    }
+    void cancel() override {
+        sync::Action action;
+        if (app_.link != nullptr && prompt_.cancel(&action.request)) {
+            action.kind = sync::ActionKind::SecretCancel;
+            app_.link->send(std::move(action));
+        }
+    }
+
+private:
+    App& app_;
+    sync::SecretPrompt prompt_;
+    SecretAsk shown_;
+};
+#endif
 
 // Saves the selected tab if its text changed: a new selection, or a selected terminal whose place among the terminals
 // changed.
@@ -184,6 +231,15 @@ void pollLink(App& a) {
     a.mirror.apply(*a.model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected) {
         a.view.promptOpen = true;
+    }
+    // The open secret requests, from the server's state; a link not connected loses the dialog and what was typed.
+    if (a.secrets != nullptr) {
+        sync::SecretPrompt& prompt = static_cast<LinkSecrets&>(*a.secrets).prompt();
+        if (s.phase == sync::LinkPhase::Connected) {
+            prompt.received(s.sessions.requests());
+        } else {
+            prompt.lost();
+        }
     }
     a.phase = s.phase;
     a.heardMsAgo = s.heardMsAgo;
@@ -879,6 +935,8 @@ int main(int argc, char** argv) {
                 a.link->send(std::move(action));
             }
         };
+        a.secrets = std::make_unique<LinkSecrets>(a);
+        a.view.secrets = a.secrets.get();
         link::ClientLink::Options options;
         options.bootstrap.host = a.host;
         options.wake = [] {

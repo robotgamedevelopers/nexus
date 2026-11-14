@@ -30,6 +30,7 @@
 #include "server/flush_gate.h"
 #include "server/home.h"
 #include "server/pass.h"
+#include "server/secret_files.h"
 #include "store/fs.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
@@ -229,6 +230,24 @@ struct Link {
     std::unique_ptr<link::ServerSession> link;
 };
 
+// Where the secret dialog's effects go (docs/secrets.md): each asker's one answer to its driver, and each log line to
+// server.log. Neither ever holds a value (sync/secrets.h).
+class SecretLines : public sync::SecretEvents {
+public:
+    void attach(Drivers* drivers) { drivers_ = drivers; }
+    void answered(const sync::SecretReply& reply) override {
+        if (drivers_ != nullptr) {
+            drivers_->answered(reply);
+        }
+    }
+    void logged(const sync::SecretLog& line) override {
+        std::fprintf(stderr, "nexus-server: %s\n", line.line().c_str());
+    }
+
+private:
+    Drivers* drivers_ = nullptr;
+};
+
 class Server {
 public:
     explicit Server(const Paths& p) : paths_(p) {}
@@ -242,6 +261,9 @@ private:
     void configApply(int fd, const std::string& request);
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
+    std::unique_ptr<store::Fs> secretFs_;
+    std::unique_ptr<AccountFiles> secretFiles_;
+    SecretLines secretLines_;
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
@@ -269,9 +291,18 @@ bool Server::openStore(std::string* why) {
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
-                                                                  machine, host});
+                                                                  machine, host, true});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
+    // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
+    // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
+    secretFs_ = store::make_posix_fs();
+    secretFiles_ = std::make_unique<AccountFiles>(*secretFs_, paths_.accounts);
+    secretLines_.attach(drivers_.get());
+    hub_->secretsWith(secretFiles_.get(), &secretLines_, [this] {
+        return std::any_of(links_.begin(), links_.end(),
+                           [](const Link& l) { return l.link->format() >= sync::kSecretsFormat; });
+    }, [] { return static_cast<std::uint64_t>(nowMs()); });
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
@@ -565,6 +596,10 @@ int Server::run() {
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
         int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+        if (const std::optional<std::uint64_t> due = hub_->secretDeadline()) {
+            const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
+            wait = std::min(wait, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
+        }
         if (config_ && config_->pushRunning()) {
             wait = std::min(wait, config_->pushWaitMs(nowMs()));
         }
@@ -605,6 +640,12 @@ int Server::run() {
             std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
             status = 1;
             break;
+        }
+        // A secret request past its deadline is refused (timeout), in this pass's batch like any step.
+        if (const std::optional<std::uint64_t> due = hub_->secretDeadline();
+                due && *due <= static_cast<std::uint64_t>(nowMs())) {
+            hub_->expireSecrets();
+            changed = true;
         }
         for (std::size_t k = 1; k < linkFds; ++k) {
             if (!(fds[k].revents & POLLIN))
@@ -670,6 +711,8 @@ int Server::run() {
     }
     close(listen_);
     unlink(paths_.socket.c_str());
+    // Every open secret request ends unanswered with the server (its asker ends with it), each logged.
+    hub_->dropSecrets();
     // After the control socket closes, so no window sends a prompt to a driver being ended.
     if (!endDrivers() && status == 0) {
         std::fprintf(stderr, "nexus-server: the store failed while the drivers were ended; their turns are cut when "

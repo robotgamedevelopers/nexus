@@ -126,6 +126,15 @@ public:
         return *this;
     }
     Writer& turn(std::uint64_t turn) { return num("turn", double(turn)); }
+    Writer& strings(std::string_view key, const std::vector<std::string>& values) {
+        prJsonWriterKey(w_, pr(key));
+        prJsonWriterBeginArray(w_);
+        for (const std::string& v : values) {
+            prJsonWriterString(w_, pr(v));
+        }
+        prJsonWriterEndArray(w_);
+        return *this;
+    }
     Writer& begin(std::string_view key) {
         prJsonWriterKey(w_, pr(key));
         prJsonWriterBeginObject(w_);
@@ -181,6 +190,13 @@ struct ServerEncoder {
         if (!m.effort.empty())
             w.str("effort", m.effort);
     }
+    void operator()(const ServerInfo& m) { w.str("kind", "server").strings("features", m.features); }
+    void operator()(const SecretAnswer& m) {
+        w.str("kind", "secret").num("ask", double(m.ask)).str("outcome", m.stored ? "stored" : "refused");
+        if (!m.stored) {
+            w.str("reason", m.reason);
+        }
+    }
     void operator()(const Unknown&) { refuseUnknown(w); }
 };
 
@@ -214,6 +230,10 @@ struct DriverEncoder {
         if (m.turn)
             w.turn(*m.turn);
         w.str("code", errorCodeName(m.code));
+    }
+    void operator()(const AskSecret& m) {
+        w.str("kind", "ask-secret").num("ask", double(m.ask)).str("account", m.account).str("what", m.what)
+            .str("why", m.why);
     }
     void operator()(const Unknown&) { refuseUnknown(w); }
 
@@ -267,6 +287,30 @@ public:
     }
 
     std::uint64_t turn(bool required = true) { return integer("turn", required, 1, kMaxTurn).value_or(0); }
+
+    // An array of strings, every one of them read.
+    std::vector<std::string> strings(std::string_view key, bool required) {
+        std::vector<std::string> out;
+        const PrJsonValueIndex v = member(key);
+        if (v == kPrJsonMissing) {
+            if (required) {
+                fail(std::string("has no \"") + std::string(key) + "\"");
+            }
+            return out;
+        }
+        if (prJsonKind(doc_, v) != PrJsonKind_Array) {
+            fail(std::string("has \"") + std::string(key) + "\" that is not an array of strings");
+            return out;
+        }
+        for (PrJsonValueIndex e = prJsonFirst(doc_, v); e != kPrJsonMissing; e = prJsonAfter(doc_, v, e)) {
+            if (prJsonKind(doc_, e) != PrJsonKind_String) {
+                fail(std::string("has \"") + std::string(key) + "\" that is not an array of strings");
+                return {};
+            }
+            out.emplace_back(view(prJsonString(doc_, e)));
+        }
+        return out;
+    }
 
     std::optional<double> amount(std::string_view key) {
         const PrJsonValueIndex v = member(key);
@@ -468,6 +512,22 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
             f.fail("has neither \"model\" nor \"effort\"");
         return result<ServerMessage>(std::move(m), f);
     }
+    if (p.kind == "server") {
+        return result<ServerMessage>(ServerInfo{f.strings("features", true)}, f);
+    }
+    if (p.kind == "secret") {
+        SecretAnswer m;
+        m.ask = f.integer("ask", true, 1, kMaxInteger).value_or(0);
+        const std::string outcome = f.str("outcome", true);
+        if (outcome == "stored") {
+            m.stored = true;
+        } else if (outcome == "refused") {
+            m.reason = f.str("reason", true, true);
+        } else if (f.error().empty()) {
+            f.fail("has \"outcome\" \"" + outcome + "\"; it is one of stored, refused");
+        }
+        return result<ServerMessage>(std::move(m), f);
+    }
     return result<ServerMessage>(Unknown{p.kind}, f);
 }
 
@@ -554,6 +614,17 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
                  ErrorCode::Harness, ErrorCode::UsageLimit})
             if (code == errorCodeName(c))
                 m.code = c;
+        return result<DriverMessage>(std::move(m), f);
+    }
+    if (kind == "ask-secret") {
+        AskSecret m;
+        m.ask = f.integer("ask", true, 1, kMaxInteger).value_or(0);
+        m.account = f.str("account", true, true);
+        m.what = f.str("what", true, true);
+        m.why = f.str("why", true);
+        if (breaksTheLine(m.why)) {
+            f.fail("has a \"why\" with a control character or a line break; a reason is one line");
+        }
         return result<DriverMessage>(std::move(m), f);
     }
     return result<DriverMessage>(Unknown{kind}, f);

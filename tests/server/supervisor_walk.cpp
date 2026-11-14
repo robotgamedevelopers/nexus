@@ -192,7 +192,10 @@ public:
             return restart();
         }
         if (r < 215 && switches_ < kMaxSwitches) {
-            const std::size_t which = rng.below(4);
+            const std::size_t which = rng.below(s.held() ? 5 : 4);
+            if (which == 4) {
+                return signin();
+            }
             return which == 0 ? setting(rng) : which == 1 ? account(rng) : which == 2 ? place(rng) : configure();
         }
         if (alive) {
@@ -242,6 +245,12 @@ private:
         Config c = configured();
         return take("configure", "", 0, unconfigured_ ? "none" : "driver", sup_->configure(c.command, c.cwd,
             c.configured, now_));
+    }
+
+    // The session's account signed in while starting is held back (its login arrived through the secret dialog).
+    bool signin() {
+        ++switches_;
+        return take("signin", "", 0, "", sup_->signedIn(now_));
     }
 
     bool place(Rng& rng) {
