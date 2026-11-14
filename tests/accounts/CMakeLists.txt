@@ -65,14 +65,15 @@ tlc_test(tlc_accounts_witness_reload_unchecked   WAccReloadUnchecked   WAccReloa
 tlc_test(tlc_accounts_witness_provider_keeps_harness WAccProviderKeepsHarness WAccProviderKeepsHarness.cfg invariant
          PROPERTY HarnessMatches)
 
-# Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla.
+# Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla. Each walk of 400
+# steps has the server move 11 to 19 sessions (settles and rotations) and takes TLC about two seconds.
 foreach(seed 1 2 3 4)
     tlc_test(tlc_accounts_trace_seed_${seed} AccountsTrace AccountsTrace.cfg pass ACCWALK SEED ${seed} STEPS 400)
 endforeach()
 
 # The binding can fail: a hub that leaves a session on an account no longer linked to its friend, or on its old
 # harness when its account's provider changed, must be rejected.
-foreach(fault stay harness)
-    tlc_test(tlc_accounts_trace_faulty_${fault}_rejected AccountsTrace AccountsTrace.cfg invariant
-             PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY ${fault})
-endforeach()
+tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg invariant
+         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
+tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
+         PROPERTY TraceMatches ACCWALK SEED 5 STEPS 400 FAULTY harness)
