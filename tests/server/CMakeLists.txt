@@ -54,7 +54,7 @@ set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window)
+                 stop_hammered account window unconfigured)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -104,6 +104,9 @@ tlc_test(tlc_supervisor_witness_idle_while_waiting WSupIdleWhileWaiting WSupIdle
 tlc_test(tlc_supervisor_witness_crash_idle WSupCrashIdle WSupCrashIdle.cfg action PROPERTY BrokenCrashShowsDown)
 tlc_test(tlc_supervisor_witness_down_forgotten WSupDownForgotten WSupDownForgotten.cfg action
          PROPERTY BrokenDownLeavesByWork)
+# A friend with no driver configured shown idle.
+tlc_test(tlc_supervisor_witness_no_driver_idle WSupNoDriverIdle WSupNoDriverIdle.cfg invariant
+         PROPERTY BrokenNoDriverShowsDown)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)

@@ -4,11 +4,13 @@
 //
 //   store_test            runs every group
 //   store_test <group>    runs one: codec memfs journal journal_crash store ids store_crash driver migrate dequeue
+//                         formats
 
 #include "store/codec.h"
 #include "store/fs.h"
 #include "store/journal.h"
 #include "store/store.h"
+#include "fixtures/main_store.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -618,7 +620,8 @@ void test_store() {
     CHECK(digest(*c2.s, {"w"}) == compacted);
     CHECK(c2.s->applied("w") == 40 && c2.s->session(1)->transcript.size() == 27 && c2.s->next_session() == 3);
 
-    // a record the store cannot read: refused at open, saying what to do
+    // a record of a later format that declares it needs a reader of a later format (byte 2, ' ', 32): refused at
+    // open, saying what to do
     MemFs fs3;
     {
         Journal j(fs3, "store");
@@ -629,7 +632,8 @@ void test_store() {
     }
     Opened bad = open_store(fs3);
     CHECK(bad.st.code() == Status::Code::Failed);
-    CHECK(bad.st.message().find("record 1 is not one this store writes") != std::string::npos);
+    CHECK(bad.st.message().find("record 1 of its journal is in format 9") != std::string::npos);
+    CHECK(bad.st.message().find("run the newer nexus-server") != std::string::npos);
 
     // a failed write: the step is not taken, and every later one is refused until the store is opened again
     MemFs fs4;
@@ -942,7 +946,7 @@ void test_migrate() {
         Journal j(fs, "store");
         Journal::Recovery rec;
         CHECK_OK(j.open(rec));
-        CHECK(!rec.snapshot.empty() && rec.snapshot[0] == 3 && rec.records.empty());
+        CHECK(!rec.snapshot.empty() && rec.snapshot[0] == 4 && rec.records.empty());
     }
     fs.crash(fs.plan_all(false));
     {
@@ -1089,6 +1093,184 @@ void test_dequeue() {
     }
 }
 
+// A store of `records` alone, journaled as they are (no snapshot).
+MemFs journaled(const std::vector<Bytes>& records, const Bytes& snapshot = Bytes{}) {
+    MemFs fs;
+    Journal j(fs, "store");
+    Journal::Recovery rec;
+    CHECK_OK(j.open(rec));
+    if (!snapshot.empty()) {
+        CHECK_OK(j.append(Bytes{0}));       // a record for the snapshot to stand for
+        CHECK_OK(j.compact(snapshot));
+    }
+    for (const Bytes& r : records) {
+        CHECK_OK(j.append(r));
+    }
+    CHECK_OK(j.sync());
+    return fs;
+}
+
+template <std::size_t N>
+Bytes fixture(const std::uint8_t (&bytes)[N]) {
+    return Bytes(bytes, bytes + N);
+}
+
+// What main's steps leave (fixtures/main_store_fixture.cpp).
+void check_main_steps(const Store& s) {
+    CHECK(s.session(1) != nullptr && about(s.session(1)->info) == "ada/claude/work/opus/high");
+    CHECK(texts(s.session(1)) ==
+          "[0:Why did the nightly go red?][1:Looking at the log.][2:Stopped.]||turn 2 open 0 session s-1");
+    CHECK(s.applied("w1") == 2 && s.next_session() == 2);
+}
+
+// A record of a later format than this build's (5), written the way a framed format is: `reader` the oldest format its
+// reader must know; a change of a kind this build does not know (9), an entry of a kind it does not know (7) with a
+// field after its text, and a field after the record's counter.
+Bytes later_record(std::uint8_t reader) {
+    Writer w;
+    w.u8(5);
+    w.u8(reader);
+    w.u64(1);
+    w.u32(3);
+    w.u8(9);
+    {
+        Writer frame;
+        frame.str("a change a later format adds");
+        w.bytes(frame.out());
+    }
+    w.u8(std::uint8_t(Change::Kind::Append));
+    {
+        Writer entry;
+        entry.u8(7);
+        entry.u8(1);
+        entry.str("from a later server");
+        entry.u64(42);              // a later field of an entry
+        Writer frame;
+        frame.bytes(entry.out());
+        w.bytes(frame.out());
+    }
+    w.u8(std::uint8_t(Change::Kind::Enqueue));
+    {
+        Writer frame;
+        frame.str("later");
+        frame.u32(7);               // a later field of a change
+        w.bytes(frame.out());
+    }
+    w.str("w1");
+    w.u64(3);
+    w.str("a later field of the record");
+    return w.out();
+}
+
+// Across versions (store.h, docs/formats.md): main's stores (records of format 2, a snapshot of format 3) are read and
+// go on in this format; an unframed record holding a kind its format does not have is refused, saying so; a record or
+// snapshot of a later format is read, past what it adds, unless it declares a reader this build is not.
+void test_formats() {
+    // main's two records, then a step of this build's, then reopened
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            check_main_steps(*o.s);
+            CHECK_OK(o.s->commit(1, std::vector<Change>{append("ls -la", 3)}, "w1", 3));
+            o.s.reset();
+            Opened o2 = open_store(fs);
+            CHECK_OK(o2.st);
+            CHECK(o2.s != nullptr && texts(o2.s->session(1)).find("[3:ls -la]|") != std::string::npos);
+        }
+    }
+    // main's snapshot
+    {
+        MemFs fs = journaled({}, fixture(kMainSnapshot3));
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            check_main_steps(*o.s);
+        }
+    }
+    // a format 2 record with an entry of kind 3, which format 2 never had: refused, naming the record and the kind
+    {
+        Writer w;
+        w.u8(2);
+        w.u64(1);
+        w.u32(1);
+        w.u8(std::uint8_t(Change::Kind::Append));
+        w.u8(3);
+        w.u8(1);
+        w.str("tool");
+        w.str("w1");
+        w.u64(3);
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), w.out()});
+        Opened o = open_store(fs);
+        CHECK(o.st.code() == Status::Code::Failed);
+        CHECK(o.st.message().find("record 3 of its journal (an entry of kind 3, which format 2 does not have") !=
+              std::string::npos);
+    }
+    // a later format this build can read: what it adds is skipped, the unknown entry kind kept as it is
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(3)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s != nullptr) {
+            CHECK(texts(o.s->session(1)) == "[0:Why did the nightly go red?][1:Looking at the log.][2:Stopped.]"
+                                            "[7:from a later server]|[later]|turn 2 open 0 session s-1");
+            CHECK(o.s->applied("w1") == 3);
+        }
+    }
+    // a later format that declares this build cannot read it: refused, saying which nexus-server can
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(5)});
+        Opened o = open_store(fs);
+        CHECK(o.st.code() == Status::Code::Failed);
+        CHECK(o.st.message().find("record 3 of its journal is in format 5") != std::string::npos);
+        CHECK(o.st.message().find("run the newer nexus-server") != std::string::npos);
+    }
+    // a later snapshot format this build can read: a later field of a session, of an entry and of the snapshot
+    // skipped; one that declares a later reader refused
+    for (std::uint8_t reader : {std::uint8_t(4), std::uint8_t(6)}) {
+        Writer w;
+        w.u8(6);
+        w.u8(reader);
+        w.u64(2);
+        w.u32(1);
+        Writer session;
+        session.u64(1);
+        for (const char* s : {"ada", "claude", "", "", ""}) {
+            session.str(s);
+        }
+        session.u32(1);
+        {
+            Writer entry;
+            entry.u8(3);
+            entry.u8(1);
+            entry.str("ls");
+            entry.str("a later field of an entry");
+            session.bytes(entry.out());
+        }
+        session.u32(0);
+        session.u64(1);
+        session.u64(0);
+        session.str("");
+        session.u32(0);
+        session.str("a later field of a session");
+        w.bytes(session.out());
+        w.u32(1);
+        w.str("w1");
+        w.u64(4);
+        w.str("a later field of the snapshot");
+        MemFs fs = journaled({}, w.out());
+        Opened o = open_store(fs);
+        if (reader == 4) {
+            CHECK_OK(o.st);
+            CHECK(o.s != nullptr && texts(o.s->session(1)) == "[3:ls]|" && o.s->applied("w1") == 4);
+        } else {
+            CHECK(o.st.code() == Status::Code::Failed);
+            CHECK(o.st.message().find("its snapshot is in format 6") != std::string::npos);
+        }
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -1105,6 +1287,7 @@ const Group kGroups[] = {
     {"driver", test_driver},
     {"migrate", test_migrate},
     {"dequeue", test_dequeue},
+    {"formats", test_formats},
 };
 
 } // namespace

@@ -258,7 +258,8 @@ void stop(Server& s, const std::string& dir, const std::string& fake) {
     setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Work\"}\nawait-stop\n"
         "emit {\"kind\":\"text\",\"delta\":\"ing\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\nsend\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
-    CHECK(s.activity() == sync::Activity::Idle);
+    // ada's session was made before her driver was configured: down until the drivers file is read again.
+    CHECK(s.serveUntil([&] { return s.activity() == sync::Activity::Idle; }, 10));
     s.send("go");
     CHECK(s.activity() == sync::Activity::Busy);     // the driver starts for the prompt
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
@@ -355,12 +356,34 @@ void queueUnconfigured(Server& s, const std::string& dir, const std::string& fak
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped."}));
     CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"next"});
     CHECK(s.driver().waiting.empty());
+    CHECK(s.activity() == sync::Activity::Down);    // a driver idle, but none configured: nothing queued is taken
     std::filesystem::rename(table + ".away", table);
     CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "later")));
     CHECK(s.serveUntil([&] { return s.driver().nextTurn == 4 && idle(s); }, 10));
     CHECK((s.transcript() == std::vector<std::string>{"P go", "F Work", "N Stopped.", "P next", "F Second",
         "P later"}));
     CHECK(s.store.find(kAda)->queue.empty());
+}
+
+// A friend with no driver configured shows down (steady red), not idle: from the session's making, through a prompt
+// refused for want of a driver and one queued, which stays queued. Once the drivers file gives one, the server reads
+// it again within kResolveMs: the friend shows idle, and the queued prompt goes to the new driver without another
+// action of the person's.
+void unconfigured(Server& s, const std::string& dir, const std::string& fake) {
+    CHECK(s.activity() == sync::Activity::Down);
+    s.send("anyone?");
+    CHECK(s.transcript().size() == 2 && has(s.transcript().back(), "ada"));
+    CHECK(s.activity() == sync::Activity::Down);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "later")));
+    CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"later"});
+    s.serveUntil([] { return false; }, 1.5);    // read again past kResolveMs: still none
+    CHECK(s.activity() == sync::Activity::Down && s.drivers->pid(kAda) < 0);
+    setUp(dir, fake, std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"Here.\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 2 && idle(s); }, 10));
+    CHECK(s.store.find(kAda)->queue.empty());
+    CHECK(s.transcript().size() == 4 && s.transcript()[2] == "P later" && s.transcript()[3] == "F Here.");
+    CHECK(s.activity() == sync::Activity::Idle);
 }
 
 // No hello: ended after the hello deadline, counted as a failed start, and started again for the prompt still waiting.
@@ -383,7 +406,7 @@ std::string stateDir;
 // The hub's state now, as a window's first diff, into stateDir/<name>.state for `nexus --state` to draw.
 void writeState(Server& s, const std::string& name) {
     if (!stateDir.empty()) {
-        writeFile(stateDir + "/" + name + ".state", s.hub->state().init_diff());
+        writeFile(stateDir + "/" + name + ".state", sync::stateFile(s.hub->state()));
     }
 }
 
@@ -705,6 +728,7 @@ int main(int argc, char** argv) {
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
+                {"unconfigured", unconfigured},
                 {"stop_hammered", stopHammered}, {"account", account}, {"window", window}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {

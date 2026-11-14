@@ -37,14 +37,26 @@ struct Paths {
     std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
 };
 
-// Who asks for a session: a client id (empty: none) and the number of its first action in the session.
+// Who asks for a session: a client id (empty: none), the number of its first action in the session, and the state
+// format the window reads (sync/formats.h; 0: it stated none, as a window before formats, which reads format 1).
 struct Client {
     std::string id;
     std::uint64_t next = 1;
+    std::uint32_t format = 0;
 };
 
 // An id of 1 to 64 bytes, each a letter, digit, '-' or '_'.
 bool validClientId(const std::string& id);
+
+// The control socket's request for a session: "new", or "new <client> <next>", then " format <n>" when the window
+// stated one. A server from before formats refuses a request with a format; `new` then asks again without it, and
+// prints that server's line, which states no format, so the window reads format 1 from it.
+std::string newRequest(const Client& client);
+// Reads a request newRequest makes; false for any other line.
+bool parseNewRequest(const std::string& request, Client* out);
+// The reply to a request for a session, before the link is made: empty when the window can be served, else the ERROR
+// line that says, in one plain sentence, that its format is too old (the server also logs it).
+std::string formatRefusalReply(const Client& client);
 
 // The paths under `dir` (empty: $HOME/.nexus/server). False, with why, when there is no HOME (needed with --dir too) or
 // the socket's path is longer than a Unix socket's address holds.

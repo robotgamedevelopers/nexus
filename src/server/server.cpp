@@ -25,6 +25,7 @@
 #include "server/durable.h"
 #include "server/home.h"
 #include "store/fs.h"
+#include "sync/formats.h"
 #include "sync/hub.h"
 
 extern char** environ;
@@ -197,26 +198,13 @@ bool readConfig(const std::string& path, std::string* why) {
     return ok;
 }
 
-// "new", or "new <client> <next>" with a valid id and a number from 1.
-bool parseNew(const std::string& request, Client* out) {
-    if (request == "new")
-        return true;
-    if (request.compare(0, 4, "new ") != 0)
+// A number of 1 to `digits` decimal digits, from 1.
+bool positive(const std::string& num, std::size_t digits, std::uint64_t* out) {
+    if (num.empty() || num.size() > digits || num.find_first_not_of("0123456789") != std::string::npos) {
         return false;
-    const std::size_t space = request.find(' ', 4);
-    if (space == std::string::npos)
-        return false;
-    const std::string id = request.substr(4, space - 4);
-    const std::string num = request.substr(space + 1);
-    if (!validClientId(id) || num.empty() || num.size() > 19 ||
-            num.find_first_not_of("0123456789") != std::string::npos)
-        return false;
-    const std::uint64_t next = std::strtoull(num.c_str(), nullptr, 10);
-    if (next == 0)
-        return false;
-    out->id = id;
-    out->next = next;
-    return true;
+    }
+    *out = std::strtoull(num.c_str(), nullptr, 10);
+    return *out != 0;
 }
 
 // One window's link: a mosh session, with the client it named. (The sessions with friends are the hub's.)
@@ -319,8 +307,18 @@ void Server::control(int fd) {
         return;
     }
     Client client;
-    if (!parseNew(request, &client)) {
-        writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>` and `stop`\n");
+    if (!parseNewRequest(request, &client)) {
+        // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
+        writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
+            "` format <n>`, and `stop`\n");
+        return;
+    }
+    // A window whose state format this server no longer sends: refused in one plain line, which the window shows and
+    // the log keeps.
+    const std::string refused = formatRefusalReply(client);
+    if (!refused.empty()) {
+        writeAll(fd, refused + "\n");
+        std::fprintf(stderr, "nexus-server: refused a window: %s\n", refused.c_str() + 6);
         return;
     }
     // A client's new session ends its earlier one: the window has left it.
@@ -341,10 +339,13 @@ void Server::control(int fd) {
         return;
     }
     try {
+        // The link's format: the newer one both ends read. A window that stated none reads format 1, and its CONNECT
+        // line states none, as it expects.
+        const std::uint32_t format = sync::linkFormat(client.format == 0 ? 1 : client.format, sync::kStateFormat);
         Link s{nextId_++, client.id,
-            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next)};
+            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format)};
         // The key goes on this one line to `nexus-server new`, and nowhere else.
-        if (!writeAll(fd, link::connectLine(s.link->port(), s.link->key()) + "\n")) {
+        if (!writeAll(fd, link::connectLine(s.link->port(), s.link->key(), client.format == 0 ? 0 : format) + "\n")) {
             std::fprintf(stderr, "nexus-server: link %llu: the CONNECT line could not be written; dropped\n",
                 static_cast<unsigned long long>(s.id));
             return;
@@ -609,16 +610,70 @@ bool validClientId(const std::string& id) {
     return true;
 }
 
+std::string newRequest(const Client& client) {
+    std::string request = client.id.empty() ? std::string("new") :
+        "new " + client.id + " " + std::to_string(client.next);
+    if (client.format != 0) {
+        request += " format " + std::to_string(client.format);
+    }
+    return request;
+}
+
+bool parseNewRequest(const std::string& request, Client* out) {
+    std::vector<std::string> words;
+    std::size_t at = 0;
+    while (at <= request.size()) {
+        const std::size_t space = request.find(' ', at);
+        const std::size_t end = space == std::string::npos ? request.size() : space;
+        words.push_back(request.substr(at, end - at));
+        at = end + 1;
+    }
+    Client c;
+    std::uint64_t number = 0;
+    if (words.size() >= 2 && words[words.size() - 2] == "format") {
+        if (!positive(words.back(), 9, &number)) {
+            return false;
+        }
+        c.format = static_cast<std::uint32_t>(number);
+        words.resize(words.size() - 2);
+    }
+    if (words.empty() || words[0] != "new" || (words.size() != 1 && words.size() != 3)) {
+        return false;
+    }
+    if (words.size() == 3) {
+        if (!validClientId(words[1]) || !positive(words[2], 19, &number)) {
+            return false;
+        }
+        c.id = words[1];
+        c.next = number;
+    }
+    *out = c;
+    return true;
+}
+
+std::string formatRefusalReply(const Client& client) {
+    const std::string why = sync::windowRefusal(client.format == 0 ? 1 : client.format);
+    return why.empty() ? std::string() : "ERROR " + why;
+}
+
 int newSession(const Paths& p, const std::string& self, const Client& client) {
     umask(077);
     signal(SIGPIPE, SIG_IGN);
     std::string reply;
     std::string why;
-    const std::string request = client.id.empty() ? std::string("new") :
-        "new " + client.id + " " + std::to_string(client.next);
-    if (!ask(p, request, self, &reply, &why)) {
+    if (!ask(p, newRequest(client), self, &reply, &why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
+    }
+    // A running server from before formats refuses a request that states one: ask it again without, and its line,
+    // which states no format, tells the window to read format 1.
+    if (client.format != 0 && reply.compare(0, 22, "ERROR unknown request;") == 0) {
+        Client unstated = client;
+        unstated.format = 0;
+        if (!ask(p, newRequest(unstated), self, &reply, &why)) {
+            std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+            return 1;
+        }
     }
     if (!link::parseConnect(reply, nullptr)) {
         // Not a CONNECT line, so it holds no key: say what the server said.

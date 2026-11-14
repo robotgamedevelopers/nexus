@@ -216,12 +216,12 @@ bool Drivers::start(Millis now) {
     for (sync::SessionId id : store_.ids()) {
         const sync::StoredSession* stored = store_.find(id);
         sync::DriverState state = stored->driver;
-        if (state.openTurn == 0 && state.waiting.empty() && stored->queue.empty()) {
-            continue;
-        }
         const ResolvedDriver r = resolve(id);
-        if (!r.problem.empty() && state.openTurn == 0 && state.waiting.empty()) {
-            continue;   // only queued prompts, and no driver to give them: they stay queued, as they are
+        if (state.openTurn == 0 && state.waiting.empty() && (stored->queue.empty() || !r.problem.empty())) {
+            // Nothing to run, or only queued prompts and no driver to give them (they stay queued, as they are): the
+            // session shows idle, or down when its friend has no driver configured.
+            showResolved(id, r);
+            continue;
         }
         std::string dropped;
         if (!r.problem.empty() && !state.waiting.empty()) {
@@ -250,8 +250,8 @@ Supervisor& Drivers::pending(sync::SessionId id, const ResolvedDriver& driver, M
     if (it != slots_.end()) {
         pendingSup_ = it->second.sup;
         // A friend whose driver no longer resolves has none: what is queued stays queued until it has one again.
-        pendingSup_->configure(driver.problem.empty() ? driver.command : std::vector<std::string>{}, driver.cwd,
-            options_.table);
+        append(pendingOut_, pendingSup_->configure(driver.problem.empty() ? driver.command :
+            std::vector<std::string>{}, driver.cwd, options_.table, now));
     } else {
         const sync::StoredSession* stored = store_.find(id);
         pendingSup_.emplace(config(id, driver), stored != nullptr ? stored->driver : sync::DriverState{}, now,
@@ -307,8 +307,12 @@ std::vector<sync::SessionChange> Drivers::stop(sync::SessionId id) {
 }
 
 void Drivers::sent(sync::SessionId id, bool committed) {
-    if (!committed || !pendingSup_) {
+    if (!committed) {
         pendingSup_.reset();
+        return;
+    }
+    if (!pendingSup_) {
+        showResolved(id, resolve(id));  // refused for want of a driver, or a stop with none running
         return;
     }
     auto it = slots_.find(id);
@@ -333,6 +337,37 @@ void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     Output out = it->second.sup.setOptions(info.model, info.effort, now);
     append(out, it->second.sup.setAccount(info.account, now));
     run(id, std::move(out), now, false);
+}
+
+void Drivers::made(sync::SessionId id) {
+    showResolved(id, resolve(id));
+}
+
+// A session's driver as the drivers file now says, for what the window shows of it: a session with no supervisor
+// shows down when its friend has none configured, idle otherwise (nothing runs in it); one with a supervisor is told,
+// and shows what that makes of it (Supervisor::activity).
+// It is read again each kResolveMs while the friend has none (serve()). False when the store did not take a step.
+bool Drivers::showResolved(sync::SessionId id, const ResolvedDriver& driver) {
+    if (driver.problem.empty()) {
+        unresolved_.erase(id);
+    } else {
+        unresolved_.insert(id);
+    }
+    auto it = slots_.find(id);
+    const Millis now = options_.clock();
+    if (it == slots_.end()) {
+        const sync::StoredSession* stored = store_.find(id);
+        if (!driver.problem.empty() || stored == nullptr || stored->queue.empty()) {
+            hub_->setActivity(id, driver.problem.empty() ? sync::Activity::Idle : sync::Activity::Down);
+            return true;
+        }
+        // A driver at last for the prompts queued without one: a supervisor for the session, which takes the oldest.
+        Output out;
+        slots_.emplace(id, Slot(Supervisor(config(id, driver), stored->driver, now, &out, stored->queue)));
+        return run(id, std::move(out), now, false);
+    }
+    return run(id, it->second.sup.configure(driver.problem.empty() ? driver.command : std::vector<std::string>{},
+        driver.cwd, options_.table, now), now, false);
 }
 
 bool Drivers::shutdown(Millis now) {
@@ -582,6 +617,9 @@ std::vector<pollfd> Drivers::fds() const {
 
 int Drivers::waitMs(Millis now) const {
     Millis wait = INT_MAX;
+    if (!unresolved_.empty()) {
+        wait = resolveAt_ > now ? resolveAt_ - now : 0;
+    }
     for (const auto& [id, t] : slots_) {
         if (const std::optional<Millis> d = t.sup.deadline()) {
             wait = std::min(wait, *d > now ? *d - now : 0);
@@ -598,6 +636,22 @@ int Drivers::waitMs(Millis now) const {
 }
 
 bool Drivers::serve(Millis now, bool* changed) {
+    if (!unresolved_.empty() && now >= resolveAt_) {
+        resolveAt_ = now + kResolveMs;
+        const std::set<sync::SessionId> ids = unresolved_;
+        for (sync::SessionId id : ids) {
+            const ResolvedDriver r = resolve(id);
+            if (!r.problem.empty()) {
+                continue;
+            }
+            if (!showResolved(id, r)) {
+                return false;
+            }
+            if (changed != nullptr) {
+                *changed = true;
+            }
+        }
+    }
     for (auto& [id, t] : slots_) {
         Output out;
         if (t.proc) {

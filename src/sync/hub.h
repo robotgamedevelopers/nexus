@@ -153,6 +153,8 @@ public:
     virtual void sent(SessionId id, bool committed) = 0;
     // Session `id` is now `info` (its account, model or effort changed), durable: from its next turn on.
     virtual void configured(SessionId id, const SessionInfo& info) = 0;
+    // Session `id` was just made, durable: what the responder shows of it from the start (its activity).
+    virtual void made(SessionId id) { (void)id; }
 };
 
 class Hub {

@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -1032,7 +1034,7 @@ void hub_open_entry() {
 std::vector<FriendInfo> friends2();
 
 // A session's activity and a tool line cross the wire; a change of activity alone is a change of the state; an
-// activity the wire does not define is refused, changing nothing.
+// activity this build does not know reads busy.
 void sessions_activity_and_tool_lines() {
     std::vector<EntryRef> t = {entry(EntryKind::Person, "q"), entry(EntryKind::Tool, "Bash: ls src")};
     SessionView busy = tailFor("ada", t, {}, Tail{});
@@ -1050,28 +1052,152 @@ void sessions_activity_and_tool_lines() {
     CHECK(!d.empty());
     c.apply_string(d);
     CHECK(c == b && c.find(sid("ada"))->activity == Activity::Down);
-    // The two whole diffs differ in one byte, the activity's: Down is 2; 3 is no activity.
-    std::string bad = b.init_diff();
+    // The two whole diffs differ in one byte, the activity's: Down is 2. 3 is an activity this build does not know (a
+    // later server's): it reads busy, the friend neither idle nor down, and the diff is not refused.
+    std::string later = b.init_diff();
     const std::string good = a.init_diff();
-    std::size_t at = bad.size();
-    for (std::size_t i = 0; i < bad.size() && i < good.size(); ++i) {
-        if (bad[i] != good[i]) {
+    std::size_t at = later.size();
+    for (std::size_t i = 0; i < later.size() && i < good.size(); ++i) {
+        if (later[i] != good[i]) {
             at = i;
             break;
         }
     }
-    CHECK(at < bad.size() && bad[at] == 2);
-    if (at < bad.size()) {
-        bad[at] = 3;
-        Sessions e = a;
-        bool threw = false;
-        try {
-            e.apply_string(bad);
-        } catch (const BadDiff&) {
-            threw = true;
-        }
-        CHECK(threw && e == a);
+    CHECK(at < later.size() && later[at] == 2);
+    if (at < later.size()) {
+        later[at] = 3;
+        Sessions e;
+        e.apply_string(later);
+        CHECK(e.find(sid("ada")) != nullptr && e.find(sid("ada"))->activity == Activity::Busy);
     }
+}
+
+// The two states of the format 1 fixtures (fixtures/main_state_fixture.cpp builds the same).
+Sessions mainState(const std::string& open) {
+    const std::vector<EntryRef> ada = {entry(EntryKind::Person, "Why did the nightly go red?"),
+        entry(EntryKind::Friend, "Looking at the log."), entry(EntryKind::Notice, "Stopped.")};
+    const std::vector<EntryRef> bo = {entry(EntryKind::Person, "hi")};
+    SessionView a = tailOf(1, SessionInfo{"ada", "claude", "work", "opus", "high"}, ada, {"after that, the PR"}, Tail{},
+        entry(EntryKind::Friend, open, false));
+    SessionView b = tailOf(2, SessionInfo{"bo", "claude", "", "", ""}, bo, {}, Tail{});
+    return Sessions({std::make_shared<const SessionView>(a), std::make_shared<const SessionView>(b)});
+}
+
+std::string fixture(const std::string& name) {
+    std::ifstream in(std::string(NEXUS_SYNC_FIXTURES) + "/" + name, std::ios::binary);
+    CHECK(static_cast<bool>(in));
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+// Format 1 is what a nexus from before formats sends and reads, byte for byte: this build reads the bytes main wrote
+// (an older server's state, in a newer window), and writes, for a link of format 1, the very bytes main writes (a
+// newer server's state, in an older window). A session of format 1 reads idle; a tool line goes to it as the friend's
+// text and its activity not at all.
+void state_format_1_from_main() {
+    const std::string init = fixture("main-state-1.init");
+    const std::string grow = fixture("main-state-1.grow");
+    Sessions before = mainState("The nightly");
+    Sessions after = mainState("The nightly went red in the link walk");
+    Sessions read;
+    read.setFormat(1);
+    read.apply_string(init);
+    CHECK(read == before);
+    read.apply_string(grow);
+    CHECK(read == after);
+    CHECK(read.find(1)->activity == Activity::Idle);
+    before.setFormat(1);
+    after.setFormat(1);
+    CHECK(before.init_diff() == init);
+    CHECK(after.diff_from(before) == grow);
+    // What format 1 cannot carry.
+    SessionView v = tailFor("ada", {entry(EntryKind::Tool, "Read: a file")}, {}, Tail{});
+    v.activity = Activity::Busy;
+    Sessions tool({std::make_shared<const SessionView>(v)});
+    tool.setFormat(1);
+    Sessions old;
+    old.setFormat(1);
+    old.apply_string(tool.init_diff());
+    CHECK(old.find(sid("ada"))->entries[0]->kind == EntryKind::Friend);
+    CHECK(old.find(sid("ada"))->entries[0]->text == "Read: a file");
+    CHECK(old.find(sid("ada"))->activity == Activity::Idle);
+}
+
+// A reader of format 2 reads a later format: what that format adds after the fields it knows, in an entry's frame, a
+// session's frame or after the sessions, is skipped; an entry kind it does not know reads as a notice (a plain dim
+// line), and an activity it does not know as busy.
+void state_format_2_reads_later_formats() {
+    Writer entry1;
+    entry1.byte(9);             // a kind of a later format
+    entry1.byte(1);             // closed
+    entry1.u64(0);
+    entry1.str("a line of a kind this build does not know");
+    entry1.str("a field a later format adds to an entry");
+    Writer session;
+    for (const char* s : {"ada", "claude", "", "", ""}) {
+        session.str(s);
+    }
+    session.byte(7);            // an activity of a later format
+    session.u64(0);             // first
+    session.u64(0);             // from entry 0
+    session.u64(1);             // one entry
+    session.str(entry1.take());
+    session.byte(1);            // the queue
+    session.u64(1);
+    session.str("queued");
+    session.u64(42);            // a field a later format adds to a session
+    session.str("more of it");
+    Writer diff;
+    diff.u64(1);
+    diff.u64(1);                // session 1
+    diff.byte(1);
+    diff.str(session.take());
+    diff.str("a field a later format adds after the sessions");
+    Sessions s;
+    CHECK(s.format() == kStateFormat);
+    s.apply_string(diff.take());
+    const SessionView* v = s.find(1);
+    CHECK(v != nullptr);
+    if (v != nullptr) {
+        CHECK(v->info.friendName == "ada" && v->activity == Activity::Busy);
+        CHECK(v->entries.size() == 1 && v->entries[0]->kind == EntryKind::Notice && v->entries[0]->closed);
+        CHECK(v->entries[0]->text == "a line of a kind this build does not know");
+        CHECK(v->queue == std::vector<std::string>{"queued"});
+    }
+}
+
+// The link's format is the older of the two stated, and a floor refuses an older end in one plain line; no format is
+// refused today.
+void link_formats_agree() {
+    CHECK(linkFormat(1, kStateFormat) == 1);
+    CHECK(linkFormat(kStateFormat, 1) == 1);
+    CHECK(linkFormat(kStateFormat + 5, kStateFormat) == kStateFormat);
+    CHECK(windowRefusal(1).empty() && serverRefusal(1).empty());
+    CHECK(windowRefusal(kStateFormat).empty() && serverRefusal(kStateFormat).empty());
+    const std::string window = windowRefusal(1, 2);
+    CHECK(window.find("too old") != std::string::npos && window.find('\n') == std::string::npos);
+    const std::string server = serverRefusal(1, 2);
+    CHECK(server.find("nexus-server is too old") != std::string::npos && server.find("nexus-server stop") !=
+        std::string::npos && server.find('\n') == std::string::npos);
+}
+
+// A state file says its format and is read in it: this build's round trip; one of format 1 (main's bytes); one of a
+// later format read as this build reads a later server's; and refused, in one line, what is not a state file.
+void state_files() {
+    Sessions busy = mainState("The nightly");
+    std::string why;
+    Sessions read;
+    CHECK(stateFile(busy).rfind("nexus-state 2\n", 0) == 0);
+    CHECK(readStateFile(stateFile(busy), &read, &why) && read == busy);
+    CHECK(readStateFile("nexus-state 1\n" + fixture("main-state-1.init"), &read, &why) && read == busy);
+    CHECK(readStateFile("nexus-state 9\n" + busy.init_diff(), &read, &why) && read == busy);
+    for (const std::string& bad : {std::string(), std::string("nexus-state\n"), std::string("nexus-state 0\n"),
+                                   std::string("nexus-state 2x\n"), busy.init_diff()}) {
+        why.clear();
+        CHECK(!readStateFile(bad, &read, &why) && why.find("not a state file") == 0 && why.find('\n') ==
+              std::string::npos);
+    }
+    why.clear();
+    CHECK(!readStateFile("nexus-state 2\nnot a diff", &read, &why) && why.find("not a state of format 2") == 0);
 }
 
 // The hub's activity of a session: in memory only, Idle until set, refused for a session the store does not hold.
@@ -1118,6 +1244,22 @@ void mirror_activity() {
     CHECK(mirror.activity(m.tab(1).id) == nullptr);          // bo's: no state has held one
     CHECK(mirror.apply(m, Sessions()));                       // a state without the session
     CHECK(mirror.activity(id) == nullptr);
+}
+
+// A state without the tab's session takes its open entry with it: no growing text is left to draw beside the grey
+// cursor.
+void mirror_drops_open_with_the_session() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t id = m.tab(0).id;
+    SessionView v = tailFor("ada", {entry(EntryKind::Person, "q")}, {}, Tail{}, entry(EntryKind::Friend, "gro", false));
+    v.activity = Activity::Busy;
+    CHECK(mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})));
+    CHECK(mirror.open(id) != nullptr && mirror.open(id)->text == "gro");
+    CHECK(mirror.apply(m, Sessions()));
+    CHECK(mirror.open(id) == nullptr);
+    CHECK(mirror.activity(id) == nullptr);
+    CHECK(!mirror.apply(m, Sessions()));      // nothing left to drop
 }
 
 // The state cursor from the server's state only: grey whenever the link is lost or no state has held the session, so
@@ -1449,6 +1591,11 @@ const Case kCases[] = {
     {"sessions_activity_and_tool_lines", sessions_activity_and_tool_lines},
     {"hub_activity", hub_activity},
     {"mirror_activity", mirror_activity},
+    {"mirror_drops_open_with_the_session", mirror_drops_open_with_the_session},
+    {"state_format_1_from_main", state_format_1_from_main},
+    {"state_format_2_reads_later_formats", state_format_2_reads_later_formats},
+    {"link_formats_agree", link_formats_agree},
+    {"state_files", state_files},
     {"cursor_from_the_servers_state", cursor_from_the_servers_state},
 };
 

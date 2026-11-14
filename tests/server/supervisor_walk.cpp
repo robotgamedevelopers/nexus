@@ -149,7 +149,7 @@ public:
         if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
         }
-        if (r < 100 && sent_ < kPrompts && !s.shuttingDown()) {
+        if (r < 100 && sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
             return prompt();
         }
         if (r < 130 && sent_ < kPrompts && !s.shuttingDown() && s.queue().size() < kMaxWaiting) {
@@ -174,13 +174,17 @@ public:
             return restart();
         }
         if (r < 215 && switches_ < kMaxSwitches) {
-            return rng.chance(2) ? setting(rng) : account(rng);
+            const std::size_t which = rng.below(3);
+            return which == 0 ? setting(rng) : which == 1 ? account(rng) : configure();
         }
         if (alive) {
             return message(rng);
         }
-        if (sent_ < kPrompts && !s.shuttingDown()) {
+        if (sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
             return prompt();
+        }
+        if (unconfigured_ && switches_ < kMaxSwitches) {
+            return configure();
         }
         if (s.deadline()) {
             return timeout();
@@ -204,7 +208,20 @@ private:
         c.model = model_;
         c.effort = effort_;
         c.account = account_;
+        if (unconfigured_) {
+            c.command.clear();
+        }
         return c;
+    }
+
+    // The drivers file loses the friend's driver, or gives it back (the server's Drivers::showResolved): no prompt
+    // is sent to the supervisor while it has none, as the server refuses it for want of a driver.
+    bool configure() {
+        ++switches_;
+        unconfigured_ = !unconfigured_;
+        Config c = configured();
+        return take("configure", "", 0, unconfigured_ ? "none" : "driver", sup_->configure(c.command, c.cwd,
+            c.configured, now_));
     }
 
     bool setting(Rng& rng) {
@@ -490,6 +507,7 @@ private:
           << ", told |-> " << settingName(toldModel_, toldEffort_)
           << ", account |-> " << str(s.account()) << ", drv |-> " << str(s.driverAccount()) << ", retiring |-> "
           << (s.retiring() ? "TRUE" : "FALSE") << ", crashed |-> " << (s.crashed() ? "TRUE" : "FALSE")
+          << ", unconf |-> " << (s.unconfigured() ? "TRUE" : "FALSE")
           << ", activity |-> " << str(activityName(activity())) << ", switches |-> " << switches_ << "]";
         return o.str();
     }
@@ -518,6 +536,7 @@ private:
     };
     std::vector<Written> written_;
     std::size_t switches_ = 0;
+    bool unconfigured_ = false;         // the friend has no driver configured
     std::string model_;
     std::string effort_;
     std::string account_;

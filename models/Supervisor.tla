@@ -101,7 +101,8 @@ Init ==
             queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
             nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE,
-            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE]
+            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
+            unconf |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -160,10 +161,11 @@ RetireWith(C(_), x) ==
     IF x.phase = "idle" /\ (x.drv # x.account \/ C(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
 Retire(x) == RetireWith(Cleared, x)
 
-\* When no turn is open, no prompt waits and starting is not held back: the oldest queued prompt joins the waiting
-\* prompts, shown as the person's entry. One per turn: it waits, or is written as the turn that opens.
+\* When a driver is configured, no turn is open, no prompt waits and starting is not held back: the oldest queued
+\* prompt joins the waiting prompts, shown as the person's entry. One per turn: it waits, or is written as the turn
+\* that opens.
 Take(x) ==
-    IF x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
+    IF ~x.unconf /\ x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
     THEN LET p == Head(x.queue) IN
          [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
     ELSE x
@@ -228,9 +230,11 @@ Messages(x) ==
 Keep == UNCHANGED <<sent, restarts, switches>>
 
 \* The person sends prompt p: refused with a notice past the bound; otherwise it shows, waits, and goes out when it can.
-\* A prompt also lifts the hold that failed starts put on starting drivers.
+\* A prompt also lifts the hold that failed starts put on starting drivers. With no driver configured the server
+\* refuses it before it reaches the supervisor (Drivers::send): no step here.
 PromptWith(Adv(_)) ==
     /\ ~s.down
+    /\ ~s.unconf
     /\ sent < Prompts
     /\ sent' = sent + 1
     /\ UNCHANGED <<restarts, switches>>
@@ -349,8 +353,18 @@ SetAccountWith(Ac(_, _), a) ==
 AccountSet(x, a) == Advance([x EXCEPT !.account = a])
 SetAccount(a) == SetAccountWith(AccountSet, a)
 
+\* The drivers file loses the friend's driver (c), or gives it back: the next start runs what it names, and with
+\* one again, what waits for it goes on (Supervisor::configure). It counts as a change of the person's.
+Reconfigure(c) ==
+    /\ switches < MaxSwitches
+    /\ c # s.unconf
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Advance([Fresh EXCEPT !.unconf = c])
+
 NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) ==
     \/ P
+    \/ \E c \in BOOLEAN : Reconfigure(c)
     \/ Q
     \/ St
     \/ \E m \in Messages(s) : M(m)
@@ -404,6 +418,7 @@ TypeOK ==
     /\ s.account \in Accounts \cup {""}
     /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
     /\ s.crashed \in BOOLEAN
+    /\ s.unconf \in BOOLEAN
     /\ s.retiring => s.phase = "ending"
 
 \* At most one driver process alive.
@@ -527,12 +542,13 @@ AccountKeepsTurn == [][s'.account # s.account => s'.open = s.open /\ s'.written 
 ----------------------------------------------------------------------------
 \* What the friend is doing, as the window's state cursor shows it (Supervisor::activity; sync/sessions.h Activity):
 \* "down" while starting is held back; else "busy" while a turn is open or about to begin (a prompt waits, or a driver
-\* starts); else "down" when the last driver failed and none has said hello since, unless the server is stopping; else
-\* "idle". The trace binds the code's to this one at every step (SupervisorTrace.tla).
+\* starts); else "down" when no driver is configured, or when the last driver failed and none has said hello since,
+\* unless the server is stopping; else "idle". The trace binds the code's to this one at every step
+\* (SupervisorTrace.tla).
 ActivityOf(x) ==
     IF x.blocked THEN "down"
     ELSE IF x.open # 0 \/ x.waiting # <<>> \/ x.phase = "starting" THEN "busy"
-    ELSE IF x.crashed /\ ~x.down THEN "down"
+    ELSE IF x.unconf \/ (x.crashed /\ ~x.down) THEN "down"
     ELSE "idle"
 
 \* Idle (steady dark blue) is "waiting for the person": nothing runs, nothing waits, and nothing queued will be taken
@@ -544,6 +560,12 @@ IdleWaitsForPersonWith(A(_)) ==
                      /\ s.queue = <<>> \/ s.down
 IdleWaitsForPerson == IdleWaitsForPersonWith(ActivityOf)
 
+\* A friend with no driver configured shows down (steady red), never idle: a prompt to it reaches no driver, and
+\* nothing queued is taken. Only work still running (a turn open, a prompt waiting, a driver starting) shows busy.
+NoDriverShowsDownWith(A(_)) ==
+    s.unconf /\ s.open = 0 /\ s.waiting = <<>> /\ s.phase # "starting" => A(s) = "down"
+NoDriverShowsDown == NoDriverShowsDownWith(ActivityOf)
+
 \* A driver that ends without being asked to (not ended for an account change, a setting, a missing credential or the
 \* server stopping) never leaves the friend showing idle: it shows down, or busy when the work goes on (a prompt
 \* waits, so another starts). Each step's half takes the activity as an argument, for the witnesses; the property
@@ -553,18 +575,21 @@ CrashShowsDownStep(A(_)) ==
 CrashShowsDown == [][CrashShowsDownStep(ActivityOf)]_vars
 
 \* Down (red) never quietly turns into idle: it leaves only for busy (the person's prompt, a queued one, a start), when
-\* a driver says hello, or by a restart or the server stopping.
+\* a driver says hello, when the friend's driver is configured again, or by a restart or the server stopping.
 DownLeavesByWorkStep(A(_)) ==
     A(s) = "down" /\ A(s') = "idle" =>
         \/ s.phase = "starting" /\ s'.phase = "idle"
+        \/ s.unconf /\ ~s'.unconf
         \/ restarts' > restarts
         \/ s'.down
 DownLeavesByWork == [][DownLeavesByWorkStep(ActivityOf)]_vars
 
 \* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
-\* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).
+\* the person's next prompt), while the friend has no driver configured (until it has one again), or while the server
+\* is stopping (the prompt is durable, for the next server).
 Settles ==
     \A p \in 1 .. Prompts :
-        s.fate[p] \in {"queued", "waiting", "open"} ~> (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.down)
+        s.fate[p] \in {"queued", "waiting", "open"} ~>
+            (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ s.down)
 
 =============================================================================

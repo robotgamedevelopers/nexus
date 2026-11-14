@@ -117,10 +117,12 @@ Supervisor::Supervisor(Config config, sync::DriverState state, Millis now, Outpu
     *out = finish();
 }
 
-void Supervisor::configure(std::vector<std::string> command, std::string cwd, std::string configured) {
+Output Supervisor::configure(std::vector<std::string> command, std::string cwd, std::string configured, Millis now) {
     config_.command = std::move(command);
     config_.cwd = std::move(cwd);
     config_.configured = std::move(configured);
+    advance(now);
+    return finish();
 }
 
 Output Supervisor::setOptions(std::string model, std::string effort, Millis now) {
@@ -143,7 +145,7 @@ sync::Activity Supervisor::activity() const {
     if (state_.openTurn != 0 || !state_.waiting.empty() || phase_ == Phase::Starting) {
         return sync::Activity::Busy;
     }
-    if (crashed_ && !down_) {
+    if (config_.command.empty() || (crashed_ && !down_)) {
         return sync::Activity::Down;
     }
     return sync::Activity::Idle;

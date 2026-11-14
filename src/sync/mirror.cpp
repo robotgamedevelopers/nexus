@@ -62,9 +62,12 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             session_[tab.id] = view->id;     // the friend's first session, from now on
         }
         if (view == nullptr) {
+            // The session is gone from the state: nothing of it is held, its open entry included, so no text of it
+            // grows beside a cursor that says the window holds nothing.
             auto had = seen_.find(tab.id);
-            if (had != seen_.end() && had->second.held) {
+            if (had != seen_.end() && (had->second.held || had->second.open)) {
                 had->second.held = false;
+                had->second.open = nullptr;
                 changed = true;
             }
             continue;

@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,11 @@ constexpr Millis kPipeGraceMs = 1000;
 // driver started outside its group holds its output open (no end of output wakes the poll). A judgement, not measured:
 // nexus-server's own loop wakes at least this often.
 constexpr Millis kCollectMs = 1000;
+
+// How often the drivers file is read again for the sessions that show down for want of a driver, so that one given a
+// driver shows idle (and its queued prompts go on) without waiting for the person's next prompt. A judgement, not
+// measured: the file is small, and a person who has just fixed it looks back within seconds.
+constexpr Millis kResolveMs = 1000;
 
 // The most of one driver's output read in one round of the loop. A judgement, not measured: a round's commits stay
 // short, while a driver streaming text is read far faster than a person reads it.
@@ -90,6 +96,8 @@ public:
     // a session's settings, changed: from its next turn on.
     sync::SessionInfo defaults(const std::string& friendName) const override;
     void configured(sync::SessionId id, const sync::SessionInfo& info) override;
+    // sync::Responder: a session just made shows down when its friend has no driver configured.
+    void made(sync::SessionId id) override;
     // The server is stopping: every driver is ended. Serve on until alive() is false.
     bool shutdown(Millis now);
     bool alive() const;     // any driver process not yet collected
@@ -129,6 +137,7 @@ private:
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);
     std::vector<sync::SessionChange> changes(const Output& out, const Supervisor& sup) const;
     bool showOpen(sync::SessionId id, const Slot& t);
+    bool showResolved(sync::SessionId id, const ResolvedDriver& driver);
     bool commit(sync::SessionId id, const Output& out, bool* changed = nullptr);
     void carryOut(sync::SessionId id, Slot& t, const Command& c, std::vector<Output>& more, Millis now);
     void flushInput(Process& p, Millis now);
@@ -142,6 +151,8 @@ private:
     // A send between send() and sent().
     std::optional<Supervisor> pendingSup_;
     Output pendingOut_;
+    std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
+    Millis resolveAt_ = 0;
 };
 
 } // namespace nexus::server

@@ -150,8 +150,10 @@ public:
     // The server is stopping: the driver is ended, and none is started again.
     Output shutdown(Millis now);
 
-    // The driver's command, for the next start: empty when none is configured, and then no queued prompt is taken.
-    void configure(std::vector<std::string> command, std::string cwd, std::string configured);
+    // The driver's command, for the next start: empty when none is configured, and then no queued prompt is taken
+    // and the friend shows down (activity()). With one configured again, what waits for it goes on (the
+    // oldest queued prompt is taken), as at every step.
+    Output configure(std::vector<std::string> command, std::string cwd, std::string configured, Millis now);
     // The person set the session's model and effort: the next send is written after a settings line that gives them
     // to the driver, so they apply from the next turn; a turn already open keeps the ones it began with, and nothing
     // is written now. A field put back to the harness's default, which a settings line cannot say, ends the driver
@@ -174,6 +176,7 @@ public:
     bool held() const { return held_; }                     // no driver is started until the next prompt
     bool noCredential() const { return noCredential_; }     // the driver alive said it has no credential
     bool crashed() const { return crashed_; }   // the last driver failed, and none has said hello since
+    bool unconfigured() const { return config_.command.empty(); }  // no driver configured
     bool shuttingDown() const { return down_; }
     const std::string& model() const { return config_.model; }
     const std::string& effort() const { return config_.effort; }
@@ -183,8 +186,9 @@ public:
     const std::string& openPrompt() const { return openPrompt_; }
     // What the friend is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
     // held back (failed starts, or no credential); otherwise Busy while a turn is open or about to begin (a prompt
-    // waits, or a driver starts); otherwise Down when the last driver failed (crashed, broke the protocol, missed a
-    // deadline) and none has said hello since, unless the server is stopping; otherwise Idle, which is only ever with
+    // waits, or a driver starts); otherwise Down when no driver is configured (nothing queued is taken, and a prompt
+    // reaches no driver), or when the last driver failed (crashed, broke the protocol, missed a deadline) and none has
+    // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
     sync::Activity activity() const;
 

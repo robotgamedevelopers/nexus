@@ -4,7 +4,7 @@
 // actions are skipped and the rest applied once, in order, and no id is ever minted twice.
 //
 //   durable_test            runs every group
-//   durable_test <group>    runs one: restart resend crash take migrate
+//   durable_test <group>    runs one: restart resend crash take migrate kinds
 
 #include "server/durable.h"
 #include "store/codec.h"
@@ -338,13 +338,42 @@ void test_migrate() {
     CHECK(ds.size() == 2 && ds.nextId() == 3 && ds.applied("w1") == 6);
 }
 
+// An entry of a kind a later server wrote, which this build does not know, is shown as a notice (a plain dim line);
+// the kinds it knows, Tool among them, as they are.
+void test_kinds() {
+    store::MemFs fs;
+    {
+        std::unique_ptr<store::Store> s;
+        CHECK(store::Store::open(fs, "store", store::StoreOptions{}, s).is_ok());
+        store::Change made;
+        made.kind = store::Change::Kind::SetInfo;
+        made.info = store::Info{"ada", "claude", "", "", ""};
+        std::vector<store::Change> step = {made};
+        for (std::uint8_t kind : {std::uint8_t(3), std::uint8_t(7)}) {
+            store::Change c;
+            c.kind = store::Change::Kind::Append;
+            c.entry = store::Entry{kind, "kind " + std::to_string(kind), true};
+            step.push_back(c);
+        }
+        CHECK(s != nullptr && s->commit(1, step).is_ok());
+    }
+    server::DurableStore ds;
+    CHECK(openOn(fs, ds));
+    const StoredSession* t = ds.find(1);
+    CHECK(t != nullptr && t->transcript.size() == 2);
+    if (t != nullptr && t->transcript.size() == 2) {
+        CHECK(t->transcript[0]->kind == EntryKind::Tool && t->transcript[0]->text == "kind 3");
+        CHECK(t->transcript[1]->kind == EntryKind::Notice && t->transcript[1]->text == "kind 7");
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
 };
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
-                         {"take", test_take}, {"migrate", test_migrate}};
+                         {"take", test_take}, {"migrate", test_migrate}, {"kinds", test_kinds}};
 
 } // namespace
 

@@ -8,6 +8,7 @@
 //   link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver>
 //       the window's own link thread (link/client.h) through ssh <host>: a prompt sent to one friend comes back with
 //       its reply from the friend's driver (the fake, named in <dir>/drivers), one queued to another shows queued;
+//       then the same from a window that states no state format (one from before formats), read in format 1;
 //       then the link shuts down and the server ends the session
 //   link_e2e <nexus-server> <dir> outage
 //       through a relay on loopback that the test can cut: prompts sent while the network is down for 8 s arrive once
@@ -200,19 +201,26 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
     Server server(binary, dir);
     // ada's driver is the fake, answering one prompt; the server reads the drivers file at the prompt.
     CHECK(::mkdir(dir.c_str(), 0700) == 0);
-    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
-        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
-        "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\nemit {\"kind\":\"text\",\"delta\":\"hello \"}\n"
+    const std::string reply = "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"hello \"}\n"
         "emit {\"kind\":\"text\",\"delta\":\"back\"}\nemit {\"kind\":\"text-end\"}\n"
-        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"));
+        "emit {\"kind\":\"tool\",\"name\":\"Read\",\"summary\":\"a file\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
     CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
         "\n"));
-    Model model(kFriends, true);
-    sync::Mirror mirror;
-    const auto start = Clock::now();
-    {
+    // A window of this build, then one that states no state format, as a window from before formats: the server
+    // answers it in format 1, which carries no activity and no tool line, so it reads the tool line as the friend's
+    // text, as such a window always has.
+    for (const std::uint32_t format : {sync::kStateFormat, std::uint32_t(0)}) {
+        const bool older = format == 0;
+        Model model(kFriends, true);
+        sync::Mirror mirror;
+        const auto start = Clock::now();
         link::ClientLink::Options options;
         options.bootstrap = server.bootstrap(host);
+        options.bootstrap.stateFormat = format;
         link::ClientLink link(options);
         link::ClientLink::Snapshot s;
         auto pump = [&] {
@@ -223,30 +231,42 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         if (s.phase == sync::LinkPhase::Failed)
             std::fprintf(stderr, "link_e2e: %s\n", s.problem.c_str());
         CHECK(s.phase == sync::LinkPhase::Connected);
-        std::printf("connected to %s in %.2f s\n", host.c_str(), seconds(start));
+        std::printf("%s window connected to %s in %.2f s\n", older ? "an older" : "this build's", host.c_str(),
+            seconds(start));
         const auto sent = Clock::now();
         for (const sync::Action& a : ensures()) {
             link.send(a);
         }
-        link.send(act(sync::ActionKind::Send, sid("ada"), "hello over mosh"));
-        link.send(act(sync::ActionKind::Queue, sid("bo"), "for later"));
+        link.send(act(sync::ActionKind::Send, sid("ada"), older ? "hello from an older window" : "hello over mosh"));
+        if (!older) {
+            link.send(act(sync::ActionKind::Queue, sid("bo"), "for later"));
+        }
         const std::size_t ada = tabOf(model, "ada");
         const std::size_t bo = tabOf(model, "bo");
-        CHECK(waitFor([&] { pump(); return model.tab(ada).transcript.size() == 2 && model.tab(bo).queue.size() == 1; },
-            10));
+        const std::size_t want = older ? 6 : 3;
+        CHECK(waitFor([&] {
+            pump();
+            return model.tab(ada).transcript.size() == want && model.tab(bo).queue.size() == 1;
+        }, 10));
         std::printf("round trip in %.3f s\n", seconds(sent));
-        CHECK(model.tab(ada).transcript.size() == 2);
-        if (model.tab(ada).transcript.size() == 2) {
-            CHECK(model.tab(ada).transcript[0].kind == EntryKind::Person);
-            CHECK(model.tab(ada).transcript[0].text == "hello over mosh");
-            CHECK(model.tab(ada).transcript[1].kind == EntryKind::Friend);
-            CHECK(model.tab(ada).transcript[1].text == "hello back");
+        const std::vector<Entry>& t = model.tab(ada).transcript;
+        CHECK(t.size() == want);
+        if (t.size() == want) {
+            CHECK(t[want - 3].kind == EntryKind::Person);
+            CHECK(t[want - 3].text == (older ? "hello from an older window" : "hello over mosh"));
+            CHECK(t[want - 2].kind == EntryKind::Friend && t[want - 2].text == "hello back");
+            CHECK(t[want - 1].kind == (older ? EntryKind::Friend : EntryKind::Tool));
+            CHECK(t[want - 1].text == "Read: a file");
         }
+        // The friend is idle once its turn ends; a window of format 1 hears no activity, and reads idle.
+        const std::size_t adaId = model.tab(ada).id;
+        CHECK(waitFor([&] { pump(); const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
+            *a == sync::Activity::Idle; }, 10));
         CHECK(model.tab(bo).queue == std::vector<std::string>{"for later"});
         CHECK(model.tab(bo).transcript.empty());
-        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == 5; }, 10));
+        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == (older ? 4u : 5u); }, 10));
         CHECK(sessionsAsMinted(s.sessions));
-    }   // the link shuts down here
+    }   // each link shuts down at the end of its pass
     std::printf("roundtrip through %s: %s\n", host.c_str(), failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;
 }
@@ -729,6 +749,58 @@ int restart(const std::string& binary, const std::string& dir) {
 
 } // namespace
 
+// ---- older_server: nexus-server new of this build asking a server from before formats ----
+
+// A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
+// does, refusing one that states a format with its "unknown request" line, and answering "new" with a CONNECT line
+// that states none. `nexus-server new`, asked by a window that states format 2, must ask again without it and print
+// that line as it is, which the window reads as format 1.
+int olderServer(const std::string& binary, const std::string& dir) {
+    stopIn(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    const std::string path = dir + "/server.sock";
+    const int listener = socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path.c_str());
+    CHECK(bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+    CHECK(listen(listener, 4) == 0);
+    std::vector<std::string> requests;
+    std::thread older([&] {
+        for (int n = 0; n < 2; ++n) {
+            pollfd p{listener, POLLIN, 0};
+            if (::poll(&p, 1, 10000) <= 0) {
+                return;
+            }
+            const int fd = accept(listener, nullptr, nullptr);
+            std::string line;
+            char c = 0;
+            while (read(fd, &c, 1) == 1 && c != '\n') {
+                line += c;
+            }
+            requests.push_back(line);
+            const std::string reply = line == "new" ? "NEXUS CONNECT 60001 AbCdEfGhIjKlMnOpQrSt+/\n" :
+                "ERROR unknown request; the requests are `new`, `new <client> <next>` and `stop`\n";
+            [[maybe_unused]] ssize_t w = write(fd, reply.data(), reply.size());
+            close(fd);
+        }
+    });
+    const Command c{"/usr/bin/env", {"NEXUS_STATE_FORMAT=2", binary, "new", "--dir", dir},
+        "env NEXUS_STATE_FORMAT=2 nexus-server new"};
+    const CommandResult r = runCommand(c, 20);
+    older.join();
+    close(listener);
+    CHECK(r.end == CommandResult::End::Exited && r.code == 0);
+    CHECK(r.out == "NEXUS CONNECT 60001 AbCdEfGhIjKlMnOpQrSt+/\n");
+    CHECK((requests == std::vector<std::string>{"new format 2", "new"}));
+    link::Connect connect;
+    CHECK(link::parseConnect("NEXUS CONNECT 60001 AbCdEfGhIjKlMnOpQrSt+/", &connect) && connect.format == 1);
+    Command rm{"/bin/rm", {"-rf", dir}, "rm"};
+    runCommand(rm, 5);
+    std::printf("older_server: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 4 && std::strcmp(argv[2], "stop") == 0) {
         int status = 0;
@@ -742,10 +814,12 @@ int main(int argc, char** argv) {
         return outage(argv[1], argv[2]);
     if (argc == 6 && std::strcmp(argv[3], "soak") == 0)
         return soak(argv[1], argv[2], std::atoi(argv[4]), std::atoi(argv[5]));
+    if (argc == 4 && std::strcmp(argv[3], "older_server") == 0)
+        return olderServer(argv[1], argv[2]);
     if (argc == 4 && std::strcmp(argv[3], "restart") == 0)
         return restart(argv[1], argv[2]);
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
-                         "soak <clients> <prompts> | restart\n"
+                         "soak <clients> <prompts> | restart | older_server\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

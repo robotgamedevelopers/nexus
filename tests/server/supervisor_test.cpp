@@ -144,7 +144,7 @@ void testStart() {
 
     // configure() changes the next start's command.
     Supervisor c = make();
-    c.configure({"other"}, "/v", "elsewhere");
+    c.configure({"other"}, "/v", "elsewhere", kStart);
     o = c.prompt("x", kStart);
     CHECK((o.commands[0].argv == std::vector<std::string>{"other", "--cwd", "/v"}));
 }
@@ -867,16 +867,18 @@ void testQueue() {
         CHECK(s.queue() == std::vector<std::string>{"q1"});     // "x" waits ahead of it
     }
     {
-        // With no driver configured nothing is taken, at a turn's end or a restart: the queue stays as it is until a
-        // driver is configured and the next event takes the oldest. A prompt still waiting fails its start, honestly.
+        // With no driver configured nothing is taken, at a turn's end or a restart, and the friend shows down once no
+        // turn runs: the queue stays as it is until a driver is configured again, which takes the oldest. A prompt
+        // still waiting fails its start, honestly.
         Supervisor s = working();
-        s.configure({}, "/w", "the test's table");
+        Output o = s.configure({}, "/w", "the test's table", kStart + 1);
+        CHECK(o.taken == 0 && o.commands.empty() && s.activity() == sync::Activity::Busy);
         s.queued("q1", kStart + 2);
-        Output o = s.message(ok, kStart + 3);
+        o = s.message(ok, kStart + 3);
         CHECK(o.taken == 0 && o.commands.empty() && s.queue() == std::vector<std::string>{"q1"});
-        s.configure({"drv"}, "/w", "the test's table");
-        o = s.queued("q2", kStart + 4);
-        CHECK(o.taken == 1 && sends(o, 2, "q1") && s.queue() == std::vector<std::string>{"q2"});
+        CHECK(s.activity() == sync::Activity::Down);
+        o = s.configure({"drv"}, "/w", "the test's table", kStart + 4);
+        CHECK(o.taken == 1 && sends(o, 2, "q1") && s.queue().empty() && s.activity() == sync::Activity::Busy);
         Config none = config();
         none.command.clear();
         sync::DriverState open;
@@ -888,6 +890,7 @@ void testQueue() {
         CHECK(r.queue() == std::vector<std::string>{"q1"} && r.state().waiting.empty());
         Output started;
         Supervisor w(none, sync::DriverState{}, kStart, &started);
+        CHECK(w.activity() == sync::Activity::Down);     // no driver configured: down, not waiting for the person
         o = w.prompt("x", kStart);
         CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && o.commands[0].argv.empty());
     }

@@ -313,6 +313,9 @@ bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, 
         return false;
     }
     refresh(id);
+    if (responder_ != nullptr) {
+        responder_->made(id);
+    }
     return true;
 }
 
