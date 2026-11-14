@@ -36,7 +36,8 @@
 | The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store) (later) | ❌ |
 | Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt (later) | ❌ |
 | HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white (later) | ❌ |
-| complete | 16% |
+| Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile, and nexus-server in WSL2 needs Prax's lib/process to link on Linux (later) | ❌ |
+| complete | 14% |
 
 [Source data](roadmap.sexp)
 

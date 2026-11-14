@@ -39,6 +39,7 @@
      ("upload-store" "The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store)" :later t)
      ("model-effort-keys" "Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt" :later t)
      ("hdr" "HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white" :later t)
+     ("windows-wsl2" "Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile, and nexus-server in WSL2 needs Prax's lib/process to link on Linux" :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -48,6 +49,7 @@
      ("upload-store" "done" "t-upload-store")
      ("model-effort-keys" "done" "t-model-effort-keys")
      ("hdr" "done" "t-hdr")
+     ("windows-wsl2" "done" "t-windows-wsl2")
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
@@ -103,6 +105,8 @@
   (:id "t-chat-tab" :type :task :title "Chat tab: a Chatto client" :state :todo)
   (:id "t-mail-tab" :type :task :title "Mail tab" :state :todo)
   (:id "t-social-tab" :type :task :title "Social tab" :state :todo)
+  (:id "t-windows-wsl2" :type :task :title "Windows: native overlay window to nexus-server in WSL2 over a local socket, tested across the boundary in CI; terminal tabs are WSL2 shells" :state :todo
+   :note "Missing on 2026-11-14: (1) the native window: NEXUS_WINDOW is off on Windows because Prax's lib/app Win32 backend does not compile at the pin; (2) nexus-server inside WSL2: NEXUS_WINDOW_LOGIC and NEXUS_LINK are off on Linux because Prax's lib/process POSIX backend does not link there (environ declared inside its namespace); (3) the local socket itself: the window reaches nexus-server only through the mosh link with its ssh bootstrap, whose network layer is POSIX and is not built natively on Windows, and nexus-server's own socket is a Unix socket inside WSL2's filesystem, which WSL2 does not share with Windows processes; no transport for the native window to WSL2 exists yet; (4) terminal tabs: src/terminals.cpp leaves the program empty, so on Windows Prax starts COMSPEC or cmd.exe (lib/studio/terminal terminal.cpp) in the Windows home directory, not a WSL2 shell in the WSL2 home.")
   (:id "t-terminal-tabs" :type :task :title "Terminal tabs: a shell per tab after the friends" :state :done
    :evidence ("tests/window/test_terminal.cpp" "tests/model: tlc_witness_add_before_friend, tlc_trace_faulty_close_rejected"))
   (:id "t-sprint-tab" :type :task :title "Sprint tab: nova-sprint's board, first and Cmd-1, pinned" :state :doing)
