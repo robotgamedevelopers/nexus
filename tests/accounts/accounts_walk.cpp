@@ -188,6 +188,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> acctsOrNone = kAccts;
     acctsOrNone.emplace_back(kNone);
     std::size_t faults = 0;
+    std::map<std::string, std::size_t> taken;  // each operation's steps the code took
+    std::size_t moved = 0;                      // sessions the server moved (rotations and settles)
+    std::size_t harnessChanged = 0;             // sessions whose harness changed
 
     for (long step = 0; step < steps; ++step) {
         const auto noticesBefore = w.notices();
@@ -299,6 +302,18 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        if (ok) {
+            ++taken[op];
+        }
+        for (const auto& [id, before] : infosBefore) {
+            const sync::SessionInfo now = w.store.find(id)->info;
+            if (op != "set" && now.account != before.account) {
+                ++moved;
+            }
+            if (now.harness != before.harness) {
+                ++harnessChanged;
+            }
+        }
         const auto noticesAfter = w.notices();
         std::set<sync::SessionId> told;
         for (const auto& [id, n] : noticesAfter) {
@@ -332,7 +347,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "accounts_walk: could not write %s\n", args[2].c_str());
         return 1;
     }
-    std::printf("accounts_walk: %zu records%s\n", records.size(),
+    std::string coverage;
+    for (const auto& [name, n] : taken) {
+        coverage += " " + name + "=" + std::to_string(n);
+    }
+    std::printf("accounts_walk: %zu records; taken:%s; %zu moves by the server, %zu harness changes%s\n",
+                records.size(), coverage.c_str(), moved, harnessChanged,
                 faulty.empty() ? "" : (", " + std::to_string(faults) + " sessions put back").c_str());
     if (!faulty.empty() && faults == 0) {
         std::fprintf(stderr, "accounts_walk: the faulty walk never hit its fault; try more steps\n");
