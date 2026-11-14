@@ -160,6 +160,12 @@ if(NOT WIN32)
     target_link_libraries(nexus_config_repo PUBLIC nexus_sync)
 endif()
 
+# The window's hitch detector (src/hitch.h): each frame's main-thread work against the budget, its phases, a fixed ring
+# of hitches and the log. No OS, no time (the clock is passed in), no Prax.
+add_library(nexus_hitch STATIC src/hitch.cpp)
+target_include_directories(nexus_hitch PUBLIC src)
+target_compile_options(nexus_hitch PRIVATE ${NEXUS_WARNINGS})
+
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
 # Prax, so that the model job builds its trace walk alone.
 add_library(nexus_scroll STATIC src/scroll_glide.cpp)

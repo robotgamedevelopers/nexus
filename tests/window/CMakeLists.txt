@@ -48,6 +48,13 @@ if(NEXUS_WINDOW_LOGIC)
     set_tests_properties(tab_order_file PROPERTIES LABELS functional TIMEOUT 30)
 endif()
 
+# The hitch detector (src/hitch.h): the budget, phases, the ring and the log on a fake clock. Pure logic.
+add_executable(nexus_hitch_tests test_hitch.cpp)
+target_compile_options(nexus_hitch_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_hitch_tests PRIVATE nexus_hitch)
+add_test(NAME hitch_unit COMMAND nexus_hitch_tests)
+set_tests_properties(hitch_unit PROPERTIES LABELS unit)
+
 # The sprint board's scrolling (src/scroll_glide.h): the curves, a tap against a hold, repeats, release, focus loss, the
 # ends. Time is an argument.
 add_executable(nexus_scroll_glide_tests test_scroll_glide.cpp)
