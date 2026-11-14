@@ -33,6 +33,7 @@
 #include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
+#include "server/takeover.h"
 #include "store/fs.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
@@ -243,7 +244,7 @@ struct Link {
 
 class Server {
 public:
-    explicit Server(const Paths& p) : paths_(p) {}
+    Server(const Paths& p, std::string build) : paths_(p), build_(std::move(build)) {}
     int run();
 
 private:
@@ -276,6 +277,11 @@ private:
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
     bool stopping_ = false;
+    // This program's build (server/takeover.h buildOf), answered to `build`; and the drain a takeover asked for.
+    std::string build_;
+    Drain drain_;
+    bool takenOver_ = false;
+    bool alreadyServed_ = false;    // another server answered on the socket, so this one did not start
 };
 
 bool Server::openStore(std::string* why) {
@@ -419,6 +425,7 @@ bool Server::listenControl(std::string* why) {
     const int other = connectControl(paths_.socket);
     if (other >= 0) {
         close(other);
+        alreadyServed_ = true;
         *why = "a server already answers on " + paths_.socket + "; `nexus-server stop` stops it";
         return false;
     }
@@ -457,6 +464,20 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
+    // A newer build's installer (server/takeover.h): which build this is, and a takeover, which drains the server.
+    if (request == "build") {
+        writeAll(fd, buildReply(build_.empty() ? std::string("unknown") : build_, drain_.draining()) + "\n");
+        return;
+    }
+    if (request == "takeover") {
+        if (!drain_.draining()) {
+            std::fprintf(stderr, "nexus-server: a takeover was asked: stopping once no turn is open (at most %llu s), "
+                "for the placed build to start\n", static_cast<unsigned long long>(kDrainMs / 1000));
+        }
+        drain_.request(static_cast<Millis>(nowMs()));
+        writeAll(fd, "OK draining\n");
+        return;
+    }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
         configApply(fd, request);
         return;
@@ -465,7 +486,7 @@ void Server::control(int fd) {
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>`, `stop`, `config reload` and `config restore <commit>`\n");
+            "` format <n>`, `stop`, `build`, `takeover`, `config reload` and `config restore <commit>`\n");
         return;
     }
     // A window whose state format this server no longer sends: refused in one plain line, which the window shows and
@@ -607,9 +628,11 @@ int Server::run() {
     if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why) || !openStore(&why) ||
             !listenControl(&why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
-        return 1;
+        // Another server already serves this directory: the one the person wants runs, so this is no failure (a
+        // service started as `new` started one does not start again and again).
+        return alreadyServed_ ? 0 : 1;
     }
-    std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
+    std::fprintf(stderr, "nexus-server: serving on %s, build %s\n", paths_.socket.c_str(), build_.c_str());
     int status = 0;
     while (!stopping_ && !gStop) {
         link::freezeClock();
@@ -765,6 +788,13 @@ int Server::run() {
                 close(fd);
             }
         }
+        // A takeover asked: stop once no turn is open, or at the drain's deadline (server/takeover.h).
+        if (drain_.stopNow(drivers_->busy(), static_cast<Millis>(nowMs()))) {
+            std::fprintf(stderr, "nexus-server: drained for a takeover%s; stopping for the placed build\n",
+                drivers_->busy() ? ", its deadline passed with a turn open (cut with a notice at the next start)" : "");
+            takenOver_ = true;
+            stopping_ = true;
+        }
     }
     close(listen_);
     unlink(paths_.socket.c_str());
@@ -778,7 +808,8 @@ int Server::run() {
     }
     std::fprintf(stderr, "nexus-server: stopped, %zu link%s open\n", links_.size(),
         links_.size() == 1 ? "" : "s");
-    return status;
+    // A takeover's stop says so to the service, which starts the placed program again.
+    return status == 0 && takenOver_ ? kTakeoverExit : status;
 }
 
 // Starts `self serve --dir <dir>` as a server of its own: a new session (no terminal), standard input from /dev/null,
@@ -880,14 +911,14 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     return true;
 }
 
-int serve(const Paths& p) {
+int serve(const Paths& p, const std::string& build) {
     umask(077);
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa{};
     sa.sa_handler = onSignal;
     sigaction(SIGTERM, &sa, nullptr);
     sigaction(SIGINT, &sa, nullptr);
-    Server server(p);
+    Server server(p, build);
     return server.run();
 }
 

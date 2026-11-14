@@ -96,9 +96,11 @@ else()
     set(NEXUS_SERVER_PARTS ON)
 endif()
 if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
-    message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
-        "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
-        "-DNEXUS_LINK=OFF, or -DNEXUS_WINDOW_LOGIC=ON where Prax's lib/process links.")
+    # nexus-server needs none of the window's logic: only the window's end of the link (src/link/client.cpp, which starts
+    # ssh through Prax's lib/process) does. So on Linux, where lib/process does not link at this pin, -DNEXUS_LINK=ON
+    # builds nexus-server and its tests without the window's end.
+    message(STATUS "nexus: the link is built for nexus-server only: the window's end of it needs the window's logic, "
+        "which is off (NEXUS_WINDOW_LOGIC)")
 endif()
 if(NEXUS_LINK)
     include(cmake/mosh.cmake)
@@ -153,7 +155,8 @@ if(NEXUS_SERVER_PARTS)
     # The driver supervisor (src/server/supervisor.h): what nexus-server does with one session's driver, as a pure
     # state machine; the drivers file (src/server/driver_table.h); and the server's home and config
     # (src/server/home.h). No OS, no time, no processes.
-    add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp)
+    add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp
+        src/server/takeover.cpp)
     target_include_directories(nexus_supervisor PUBLIC src)
     target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver nexus_config)
@@ -244,16 +247,26 @@ if(NEXUS_WINDOW)
 endif()
 
 if(NEXUS_LINK)
-    # The link over mosh's transport: its sessions (both ends), the ssh bootstrap, and the window's link thread.
-    add_library(nexus_link STATIC src/link/mosh_link.cpp src/link/bootstrap.cpp src/link/client.cpp)
-    target_include_directories(nexus_link PUBLIC src)
-    target_compile_options(nexus_link PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
+    # The link over mosh's transport: its sessions (both ends) and the CONNECT line, which nexus-server needs; and the
+    # ssh bootstrap and the window's link thread, which start processes through the window's logic.
+    add_library(nexus_link_core STATIC src/link/mosh_link.cpp src/link/bootstrap.cpp)
+    target_include_directories(nexus_link_core PUBLIC src)
+    target_compile_options(nexus_link_core PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_link_core PUBLIC nexus_sync mosh_transport)
+    if(NEXUS_WINDOW_LOGIC)
+        add_library(nexus_link STATIC src/link/client.cpp)
+        target_include_directories(nexus_link PUBLIC src)
+        target_compile_options(nexus_link PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(nexus_link PUBLIC nexus_link_core nexus_window_logic)
+    endif()
 
     # The server the window talks to with --server: headless, on the machine that keeps going.
-    add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
+    add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp src/server/install.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo)
+    # setup, doctor and rebuild (server/install.h) work on the fork and build directory this program was built from.
+    set_source_files_properties(src/server/install.cpp PROPERTIES COMPILE_DEFINITIONS
+        "NEXUS_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\";NEXUS_BUILD_DIR=\"${CMAKE_BINARY_DIR}\";NEXUS_CMAKE=\"${CMAKE_COMMAND}\";NEXUS_CTEST=\"${CMAKE_CTEST_COMMAND}\"")
+    target_link_libraries(nexus_server PUBLIC nexus_link_core nexus_durable nexus_drivers nexus_config_repo)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)

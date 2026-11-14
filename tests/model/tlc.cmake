@@ -38,6 +38,8 @@
 #               SecretsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of store-late, echo
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance
+#   TAKEOVERWALK optional, in place of WALK: tests/server's takeover_walk; it is run first and writes
+#               TakeoverTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of drain, stop
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -124,6 +126,19 @@ elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "accounts_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED TAKEOVERWALK AND NOT "${TAKEOVERWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "drain" OR FAULTY STREQUAL "stop")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not drain or stop")
+    endif()
+    execute_process(COMMAND "${TAKEOVERWALK}" ${walk_args} "${WORK}/TakeoverTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "takeover_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

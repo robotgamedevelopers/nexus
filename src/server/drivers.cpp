@@ -568,6 +568,11 @@ bool Drivers::alive() const {
     return std::any_of(slots_.begin(), slots_.end(), [](const auto& t) { return t.second.proc != nullptr; });
 }
 
+bool Drivers::busy() const {
+    return std::any_of(slots_.begin(), slots_.end(),
+        [](const auto& t) { return t.second.sup.state().openTurn != 0 || t.second.sup.phase() == Phase::Starting; });
+}
+
 const Supervisor* Drivers::supervisor(sync::SessionId id) const {
     auto it = slots_.find(id);
     return it == slots_.end() ? nullptr : &it->second.sup;

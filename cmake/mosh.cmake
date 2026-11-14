@@ -8,8 +8,9 @@
 # libcrypto, its `--with-crypto-library=openssl`), src/util/timestamp.cc, and the Instruction protobuf it sends. mosh is built with autotools; its config.h is generated here from the same checks its configure.ac
 # makes (cmake/mosh_config.h.in).
 #
-# Needs protobuf (its CMake package and protoc) and zlib; and OpenSSL's libcrypto off macOS. On macOS: `brew install
-# protobuf`; zlib is in the SDK. On Ubuntu: `apt install libprotobuf-dev protobuf-compiler zlib1g-dev libssl-dev`.
+# Needs protobuf (its CMake package and protoc; built here from source when the system has none: NEXUS_PROTOBUF below)
+# and zlib; and OpenSSL's libcrypto off macOS. On macOS zlib is in the SDK. On Ubuntu: `apt install zlib1g-dev
+# libssl-dev` (and `libprotobuf-dev protobuf-compiler` to skip building protobuf).
 
 include(CheckCXXSourceCompiles)
 include(CheckIncludeFileCXX)
@@ -22,20 +23,66 @@ FetchContent_Declare(mosh
 # mosh has no CMakeLists.txt, so this only fetches it; its sources are compiled by the target below.
 FetchContent_MakeAvailable(mosh)
 
-find_package(protobuf CONFIG QUIET)
+# protobuf: the system's (its CMake package, else CMake's FindProtobuf over the headers, library and protoc), else built
+# here from its own sources at a pinned release (NEXUS_PROTOBUF). Building it here needs nothing installed and no root:
+# it is how a machine without protobuf (a Mac without Homebrew's, a Linux box without the -dev packages) still builds
+# nexus-server and the window's link. It adds about a minute to the first build.
+set(NEXUS_PROTOBUF "AUTO" CACHE STRING "protobuf for mosh's transport: AUTO (the system's, else built here), SYSTEM, or FETCH")
+set_property(CACHE NEXUS_PROTOBUF PROPERTY STRINGS AUTO SYSTEM FETCH)
+set(nexus_protoc "")
+if(NOT NEXUS_PROTOBUF STREQUAL "FETCH")
+    find_package(protobuf CONFIG QUIET)
+    if(NOT protobuf_FOUND)
+        find_package(Protobuf QUIET)
+        if(Protobuf_FOUND AND TARGET protobuf::libprotobuf-lite AND Protobuf_PROTOC_EXECUTABLE)
+            set(protobuf_FOUND TRUE)
+        endif()
+    endif()
+    if(NOT protobuf_FOUND AND NEXUS_PROTOBUF STREQUAL "SYSTEM")
+        message(FATAL_ERROR "nexus: protobuf was not found on this system (NEXUS_PROTOBUF=SYSTEM), and mosh's transport "
+            "needs it (with protoc). Configure with -DNEXUS_PROTOBUF=AUTO to build it here, point CMAKE_PREFIX_PATH at "
+            "it, or configure with -DNEXUS_LINK=OFF to build without nexus-server and the client's --server.")
+    endif()
+endif()
 if(NOT protobuf_FOUND)
-    message(FATAL_ERROR "nexus: protobuf's CMake package was not found, and mosh's transport needs it (with protoc). "
-        "Install it (on macOS: brew install protobuf), or point CMAKE_PREFIX_PATH at it; or configure with "
-        "-DNEXUS_LINK=OFF to build without nexus-server and the client's --server.")
+    message(STATUS "nexus: protobuf is not installed here, so it is built from its own sources (v21.12)")
+    set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_LIBPROTOC ON CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+    set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+    set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+    set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(protobuf
+        # The C++ release archive of v21.12 (protobuf 3.21.12): 5 MB, where a clone of the repository is far larger.
+        URL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-cpp-3.21.12.tar.gz
+        URL_HASH SHA256=4eab9b524aa5913c6fffb20b2a8abf5ef7f95a80bc0701f3a6dbb4c607f73460
+        SYSTEM
+        EXCLUDE_FROM_ALL)
+    # protobuf's own sources build without nexus's warnings, and quietly: they are not ours to change.
+    set(nexus_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
+    # Its cmake_minimum_required(3.5) draws a deprecation warning from CMake 3.31 on: not ours to change either.
+    set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(protobuf)
+    unset(CMAKE_WARN_DEPRECATED CACHE)
+    set(CMAKE_CXX_FLAGS "${nexus_saved_cxx_flags}")
+    set(nexus_protoc $<TARGET_FILE:protobuf::protoc>)
 endif()
 find_package(ZLIB REQUIRED)
 
 # A protobuf library built for a newer macOS than CMAKE_OSX_DEPLOYMENT_TARGET (Homebrew builds for the macOS it runs
 # on) makes whatever links it need that newer macOS: nexus's own targets, made after this point, are built for it, so
 # the linker has nothing to warn about and the build says plainly what it runs on. Prax, made before, keeps its own.
-get_target_property(protobuf_lite protobuf::libprotobuf-lite IMPORTED_LOCATION_RELEASE)
-if(NOT protobuf_lite)
-    get_target_property(protobuf_lite protobuf::libprotobuf-lite LOCATION)
+set(protobuf_lite "")
+get_target_property(protobuf_imported protobuf::libprotobuf-lite IMPORTED)
+if(protobuf_imported)
+    get_target_property(protobuf_lite protobuf::libprotobuf-lite IMPORTED_LOCATION_RELEASE)
+    if(NOT protobuf_lite)
+        get_target_property(protobuf_lite protobuf::libprotobuf-lite LOCATION)
+    endif()
 endif()
 find_program(VTOOL vtool)
 if(VTOOL AND protobuf_lite)
@@ -111,9 +158,20 @@ add_library(mosh_transport STATIC
     ${mosh_SOURCE_DIR}/src/crypto/base64.cc
     ${mosh_SOURCE_DIR}/src/crypto/ocb_internal.cc
     ${mosh_SOURCE_DIR}/src/util/timestamp.cc)
-protobuf_generate(TARGET mosh_transport LANGUAGE cpp
-    IMPORT_DIRS ${mosh_SOURCE_DIR}/src/protobufs
-    PROTOC_OUT_DIR "${mosh_proto_dir}")
+if(nexus_protoc STREQUAL "")
+    protobuf_generate(TARGET mosh_transport LANGUAGE cpp
+        IMPORT_DIRS ${mosh_SOURCE_DIR}/src/protobufs
+        PROTOC_OUT_DIR "${mosh_proto_dir}")
+else()
+    # protobuf built here: its protoc, run on the one message directly.
+    add_custom_command(
+        OUTPUT "${mosh_proto_dir}/transportinstruction.pb.cc" "${mosh_proto_dir}/transportinstruction.pb.h"
+        COMMAND ${nexus_protoc} --cpp_out=${mosh_proto_dir} -I ${mosh_SOURCE_DIR}/src/protobufs
+            ${mosh_SOURCE_DIR}/src/protobufs/transportinstruction.proto
+        DEPENDS ${mosh_SOURCE_DIR}/src/protobufs/transportinstruction.proto protobuf::protoc
+        VERBATIM)
+    target_sources(mosh_transport PRIVATE "${mosh_proto_dir}/transportinstruction.pb.cc")
+endif()
 # SYSTEM: the transport's templates (networktransport-impl.h, transportsender-impl.h) are instantiated in nexus's own
 # translation units, which compile with nexus's warnings as errors; mosh's headers are not ours to change.
 target_include_directories(mosh_transport SYSTEM PUBLIC

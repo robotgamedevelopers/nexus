@@ -65,9 +65,10 @@ std::string formatRefusalReply(const Client& client);
 // the socket's path is longer than a Unix socket's address holds.
 bool paths(const std::string& dir, Paths* out, std::string* why);
 
-// The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every friend's driver and waits for them.
-// Returns the exit status.
-int serve(const Paths& p);
+// The server: runs until `nexus-server stop`, SIGTERM or SIGINT, or a takeover drains it (server/takeover.h), then ends
+// every friend's driver and waits for them. `build` is this program's build (takeover.h buildOf), which it answers to
+// `build`. Returns the exit status: kTakeoverExit after a takeover, 0 when another server already serves the directory.
+int serve(const Paths& p, const std::string& build = std::string());
 // Asks the running server for a session, starting one (`self` serve) if none answers; prints its CONNECT line.
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.

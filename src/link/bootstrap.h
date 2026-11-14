@@ -30,9 +30,19 @@ bool parseConnect(const std::string& line, Connect* out);
 // The line ssh runs on the server's machine: `exec "$SHELL" -l -c '<command>'`, each word of the command quoted.
 std::string remoteLine(const std::vector<std::string>& command);
 
+// The host that names this machine without ssh: the window runs `nexus-server new` itself, as the placed program
+// `<home>/.nexus/bin/nexus-server` (`nexus-server setup` puts it there: SETUP.md), and reaches the server on
+// 127.0.0.1. So a person with one machine needs no ssh to it (on macOS, Remote Login is an administrator's setting).
+inline const char* const kLocalHost = "local";
+// Where `nexus-server setup` places the server, under the home directory.
+inline const char* const kPlacedServer = ".nexus/bin/nexus-server";
+// The address the window reaches a kLocalHost server on.
+inline const char* const kLocalAddress = "127.0.0.1";
+
 struct Bootstrap {
     std::string ssh = "/usr/bin/ssh";
-    std::string host;                                           // as ssh takes it
+    std::string host;                                           // as ssh takes it; kLocalHost: this machine, no ssh
+    std::string home;                                           // with kLocalHost: HOME, under which the server is placed
     std::vector<std::string> command = {"nexus-server", "new"}; // run there in the login shell
     int timeoutSeconds = 30;
     // The state format the window reads, stated to nexus-server new in its environment (sync/formats.h); 0 states
@@ -40,8 +50,12 @@ struct Bootstrap {
     std::uint32_t stateFormat = sync::kStateFormat;
 };
 
+// Whether the bootstrap names this machine (kLocalHost): no ssh, and the server on kLocalAddress.
+bool isLocal(const Bootstrap& b);
+
 // The ssh command that runs it: no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
-// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format.
+// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format. With kLocalHost it is the
+// placed server run directly: `/usr/bin/env [NEXUS_STATE_FORMAT=<n>] <home>/.nexus/bin/nexus-server new`.
 Command bootstrapCommand(const Bootstrap& b);
 
 // Runs the command over ssh with `run` and reads its output for the CONNECT line. False, with why (what ssh or the

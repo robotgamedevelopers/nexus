@@ -105,6 +105,35 @@ void bootstrap_command_shape() {
     CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new"}));
 }
 
+// kLocalHost: no ssh; the placed server under HOME, run directly, with the state format in its environment.
+void bootstrap_command_local() {
+    Bootstrap b;
+    b.host = kLocalHost;
+    b.home = "/h";
+    CHECK(isLocal(b));
+    Command c = bootstrapCommand(b);
+    CHECK(c.program == "/usr/bin/env");
+    const std::vector<std::string> want = {"NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat),
+        "/h/.nexus/bin/nexus-server", "new"};
+    CHECK(c.arguments == want);
+    b.stateFormat = 0;
+    c = bootstrapCommand(b);
+    CHECK((c.arguments == std::vector<std::string>{"/h/.nexus/bin/nexus-server", "new"}));
+    // Not placed: the reason says how to place it.
+    Connect out;
+    std::string why;
+    CHECK(!bootstrap(b, [](const Command&, int) {
+        CommandResult r;
+        r.end = CommandResult::End::Exited;
+        r.code = 127;
+        r.err = "env: /h/.nexus/bin/nexus-server: No such file or directory";
+        return r;
+    }, &out, &why));
+    CHECK(why.find("nexus-server setup") != std::string::npos);
+    b.host = "studio";
+    CHECK(!isLocal(b));
+}
+
 CommandResult result(CommandResult::End end, int code, std::string out, std::string err) {
     CommandResult r;
     r.end = end;
@@ -198,6 +227,7 @@ const Case kCases[] = {
     {"connect_line_refusals", connect_line_refusals},
     {"remote_line_quotes_each_word", remote_line_quotes_each_word},
     {"bootstrap_command_shape", bootstrap_command_shape},
+    {"bootstrap_command_local", bootstrap_command_local},
     {"bootstrap_reads_connect_line", bootstrap_reads_connect_line},
     {"bootstrap_failures_say_why_without_key", bootstrap_failures_say_why_without_key},
     {"resolve_host_uses_ssh_hostname", resolve_host_uses_ssh_hostname},

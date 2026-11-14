@@ -68,6 +68,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (turn, resume, queue).
 # With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
 # (stay, harness). Called from tests/accounts.
+# With TAKEOVERWALK, it is tests/server's takeover_walk (a newer build taking over from the running server), and
+# FAULTY one of its faults (drain, stop). Called from tests/server.
 # With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
 # one of its faults (store-late, echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
@@ -80,7 +82,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS"
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS;TAKEOVERWALK"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
@@ -107,6 +109,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
+    elseif(T_TAKEOVERWALK)
+        list(APPEND defs -DTAKEOVERWALK=$<TARGET_FILE:takeover_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_ACCWALK)

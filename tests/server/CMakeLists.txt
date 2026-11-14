@@ -180,3 +180,46 @@ tlc_test(tlc_supervisor_trace_faulty_dir_rejected SupervisorTrace SupervisorTrac
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)
+
+# A newer build taking over from the running server (src/server/takeover.h, models/Takeover.tla): the rules by unit
+# test, the spec with every property, its reversed witnesses, and the code's walks (takeover_walk) checked against it.
+add_executable(takeover_test takeover_test.cpp)
+target_link_libraries(takeover_test PRIVATE nexus_supervisor)
+target_compile_options(takeover_test PRIVATE ${warnings})
+add_test(NAME server_unit_takeover COMMAND takeover_test)
+set_tests_properties(server_unit_takeover PROPERTIES LABELS unit TIMEOUT 30)
+
+add_executable(takeover_walk takeover_walk.cpp)
+target_link_libraries(takeover_walk PRIVATE nexus_supervisor)
+target_compile_options(takeover_walk PRIVATE ${warnings})
+add_dependencies(model_checks takeover_walk takeover_test)
+
+tlc_test(tlc_takeover Takeover MCTakeover.cfg pass)
+tlc_test(tlc_takeover_witness_drain_cuts    WTakeoverDrainCuts  WTakeoverDrainCuts.cfg  action PROPERTY DrainCutsOnlyLate)
+tlc_test(tlc_takeover_witness_stops_new     WTakeoverStopsNew   WTakeoverStopsNew.cfg   action PROPERTY StopOnlyOld)
+tlc_test(tlc_takeover_witness_starts_last   WTakeoverStartsLast WTakeoverStartsLast.cfg action PROPERTY StartsPlaced)
+tlc_test(tlc_takeover_witness_no_deadline   WTakeoverNoDeadline WTakeoverNoDeadline.cfg liveness)
+tlc_test(tlc_takeover_witness_ask_only_old  WTakeoverAskOnlyOld WTakeoverAskOnlyOld.cfg liveness)
+foreach(seed 1 2 3)
+    tlc_test(tlc_takeover_trace_seed_${seed} TakeoverTrace TakeoverTrace.cfg pass TAKEOVERWALK SEED ${seed} STEPS 800)
+endforeach()
+# A drain that does not wait for the open turn, and an installer that stops rather than drains: each step is none the
+# spec takes, so TLC finds no successor.
+tlc_test(tlc_takeover_trace_faulty_drain_rejected TakeoverTrace TakeoverTrace.cfg deadlock
+         TAKEOVERWALK SEED 2 STEPS 800 FAULTY drain)
+tlc_test(tlc_takeover_trace_faulty_stop_rejected TakeoverTrace TakeoverTrace.cfg deadlock
+         TAKEOVERWALK SEED 1 STEPS 800 FAULTY stop)
+
+# Setting nexus up from a fork (src/server/install.h): setup's pure parts by unit test; setup, its takeover of a running
+# server of another build, and doctor, run for real in a HOME of the test's own with no service registered.
+if(TARGET nexus_server)
+    add_executable(install_test install_test.cpp)
+    target_link_libraries(install_test PRIVATE nexus_server)
+    target_compile_options(install_test PRIVATE ${warnings})
+    add_test(NAME server_unit_install COMMAND install_test)
+    set_tests_properties(server_unit_install PROPERTIES LABELS unit TIMEOUT 30)
+
+    add_test(NAME server_functional_setup
+             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
+    set_tests_properties(server_functional_setup PROPERTIES LABELS functional TIMEOUT 120)
+endif()

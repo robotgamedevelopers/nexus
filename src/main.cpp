@@ -687,6 +687,17 @@ int main(int argc, char** argv) {
         // No dialog for it: launch shows nothing but a hotkey that failed (AGENTS.md). With no home, Windows has no
         // log.
         clientConfig();
+        // Launched as a person opens it (no --server, nothing but the live window): the server its config names
+        // (`server <host>`, which `nexus-server setup` writes as `server local`).
+        if (server == nullptr && shot == nullptr && !demo && !demoTerminal && bench == 0 && !printConfig &&
+                !clientConfig().server.empty()) {
+#if NEXUS_LINK
+            server = clientConfig().server.c_str();
+#else
+            std::fprintf(stderr, "nexus: %s names a server, and this build has no link to one (it was configured "
+                "with -DNEXUS_LINK=OFF)\n", clientConfig().path.c_str());
+#endif
+        }
     }
     if (usage) {
         std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
@@ -868,6 +879,9 @@ int main(int argc, char** argv) {
     if (server != nullptr) {
         link::ClientLink::Options options;
         options.bootstrap.host = server;
+        if (const char* home = std::getenv("HOME")) {
+            options.bootstrap.home = home;
+        }
         options.wake = [] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);

@@ -100,6 +100,9 @@ void ClientLink::run() {
     };
     std::string ip = options_.ip;
     std::string why;
+    if (ip.empty() && isLocal(options_.bootstrap)) {
+        ip = kLocalAddress;
+    }
     if (ip.empty() && !resolveHost(options_.bootstrap, runCommand, &ip, &why))
         return fail(why);
     Connect connect;

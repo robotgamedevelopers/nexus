@@ -135,6 +135,10 @@ ClientConfig clientConfigFrom(std::string_view text, const std::string& path) {
     if (at != c.values.end()) {
         out.sprintUrl = at->second;
     }
+    at = c.values.find("server");
+    if (at != c.values.end()) {
+        out.server = at->second;
+    }
     out.problems = c.errors;
     out.problems.insert(out.problems.end(), c.warnings.begin(), c.warnings.end());
     return out;

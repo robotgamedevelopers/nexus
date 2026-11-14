@@ -48,7 +48,12 @@ void config() {
     ClientConfig c = clientConfigFrom("# mine\n\nnova-config /opt/nova/bin/nova-config\nsprint-url http://studio:8000/\n",
         "/h/.nexus/client/config");
     CHECK(c.path == "/h/.nexus/client/config" && c.problems.empty());
-    CHECK(c.novaConfig == "/opt/nova/bin/nova-config" && c.sprintUrl == "http://studio:8000/");
+    CHECK(c.novaConfig == "/opt/nova/bin/nova-config" && c.sprintUrl == "http://studio:8000/" && c.server.empty());
+    // The server the window opens on: `local` (this machine, no ssh) as `nexus-server setup` writes it, or a host.
+    c = clientConfigFrom("server local\n", "/c");
+    CHECK(c.server == "local" && c.problems.empty());
+    c = clientConfigFrom("server studio\n", "/c");
+    CHECK(c.server == "studio" && c.problems.empty());
     // None: the defaults (nova-config from the PATH, the board from the sprint's record).
     c = clientConfigFrom("", "/c");
     CHECK(c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());

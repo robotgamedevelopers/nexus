@@ -296,7 +296,9 @@ jobs:
           else
             echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
+          # nexus-server and its link, as SETUP.md builds them on Linux: no window and no window logic (Prax has no
+          # Linux backend at its pin), protobuf from the system or fetched (cmake/mosh.cmake).
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=ON -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
             -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
       # A configure with no options at all takes the defaults that hold here (no window, no window logic, no link), so
       # a plain `cmake -S . -B build` on Linux works rather than failing late; this proves it.
@@ -523,12 +525,16 @@ jobs:
           - shard: secrets-trace
             run: '^tlc_secrets_trace_'
             build: secrets_walk
+          # A newer build taking over from the running server (models/Takeover.tla): spec, witnesses and the code's walks.
+          - shard: takeover
+            run: '^tlc_takeover'
+            build: takeover_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk overlay_walk glide_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets)'
+            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets|takeover)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

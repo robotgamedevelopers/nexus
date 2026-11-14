@@ -3,7 +3,7 @@
 // while nexus-server inside WSL2 has its own $HOME/.nexus/server there: two directories on purpose, each side with its
 // own config.
 //
-//   config            the window's settings (config.h): `nova-config <path>` and `sprint-url <url>`
+//   config            the window's settings (config.h): `nova-config <path>`, `sprint-url <url>` and `server <host>`
 //   tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
 //                     its saved preferences (tab_order.h)
 //   nexus.log         on Windows only, its error lines (platform.h startErrorLog)
@@ -34,11 +34,14 @@ struct ClientConfig {
     std::string path;               // the file read, for messages; empty when there is no home
     std::string novaConfig;         // `nova-config <path>`: the full path of nova-config; empty: found on the PATH
     std::string sprintUrl;          // `sprint-url <url>`: the sprint board's address; empty: from the sprint's record
+    std::string server;             // `server <host>`: the nexus-server the window opens on when launched without
+                                    // --server, as --server takes it (`local`: this machine, no ssh; link/bootstrap.h);
+                                    // empty: none. `nexus-server setup` writes `server local` when there is none.
     std::vector<std::string> problems;  // one line each: the errors, then the warnings
 };
 
 // The keys the window's config takes.
-inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url"};
+inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url", "server"};
 
 // The settings in `text`, the file at `path`. Pure.
 ClientConfig clientConfigFrom(std::string_view text, const std::string& path);

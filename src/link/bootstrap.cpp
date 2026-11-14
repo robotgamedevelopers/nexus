@@ -110,8 +110,26 @@ std::string remoteLine(const std::vector<std::string>& command) {
     return "exec \"$SHELL\" -l -c " + quoted(inner);
 }
 
+bool isLocal(const Bootstrap& b) {
+    return b.host == kLocalHost;
+}
+
 Command bootstrapCommand(const Bootstrap& b) {
     std::vector<std::string> command;
+    if (isLocal(b)) {
+        Command c;
+        c.program = "/usr/bin/env";
+        if (b.stateFormat != 0) {
+            c.arguments.push_back(std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat));
+        }
+        c.arguments.push_back(b.home + "/" + kPlacedServer);
+        c.arguments.insert(c.arguments.end(), b.command.begin() + (b.command.empty() ? 0 : 1), b.command.end());
+        c.shown = c.program;
+        for (const std::string& a : c.arguments) {
+            c.shown += " " + a;
+        }
+        return c;
+    }
     if (b.stateFormat != 0) {
         command = {"env", std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat)};
     }
@@ -142,7 +160,11 @@ bool bootstrap(const Bootstrap& b, const CommandRunner& run, Connect* out, std::
         err = lastLine(r.out);
     *why = "`" + c.shown + "` " + ended(r) + (malformed ? " with a CONNECT line that does not parse" :
         " without a CONNECT line") + (err.empty() ? "" : ": " + err);
-    if (r.end == CommandResult::End::Exited && r.code == 127)
+    if (isLocal(b) && (r.end == CommandResult::End::NotFound || (r.end == CommandResult::End::Exited &&
+            (r.code == 126 || r.code == 127))))
+        *why += "; nexus-server is not placed on this machine: run `nexus-server setup` from your fork of nexus "
+            "(SETUP.md)";
+    else if (r.end == CommandResult::End::Exited && r.code == 127)
         *why += "; install nexus-server on " + b.host + " where its login shell finds it (~/.local/bin)";
     else if (r.end == CommandResult::End::Exited && r.code == 255)
         *why += "; check that `ssh " + b.host + "` works without a password prompt";

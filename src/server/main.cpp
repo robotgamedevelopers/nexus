@@ -7,6 +7,11 @@
 //                                         (sync/formats.h), which the line then states after the key
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
 //        nexus-server stop [--dir DIR]    stops the running server
+//        nexus-server setup [--no-service] [--wait S] [--dir DIR]
+//                                         places this build and keeps it running (server/install.h, SETUP.md)
+//        nexus-server doctor [--dir DIR]  what is missing, one line each, with the command that fixes it
+//        nexus-server rebuild [--no-tests] [--no-service] [--wait S] [--dir DIR]
+//                                         builds the fork this was built from, runs the fast tests, then setup
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
@@ -35,14 +40,20 @@
 #include <vector>
 
 #include "no_core.h"
+#include "server/install.h"
 #include "server/server.h"
+#include "server/takeover.h"
 #include "sync/formats.h"
 
 namespace {
 
 int usage() {
     std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
-                         "       nexus-server serve|stop [--dir DIR]\n"
+                         "       nexus-server serve|stop|doctor [--dir DIR]\n"
+                         "       nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
+                         "       nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+                         "  setup places this build and keeps it running; rebuild builds your fork, tests it, then sets\n"
+                         "  it up; doctor says what is missing (SETUP.md)\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
                          "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
@@ -113,7 +124,7 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
-        } else if (command == "config") {
+        } else if (command == "config" || command == "setup" || command == "rebuild") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -139,8 +150,26 @@ int main(int argc, char** argv) {
         }
         return nexus::server::newSession(paths, selfPath(), client);
     }
-    if (command == "serve")
-        return nexus::server::serve(paths);
+    if (command == "serve") {
+        // The build this program is: the hash of its own bytes (server/takeover.h), which setup compares.
+        std::string build;
+        if (std::FILE* f = std::fopen(selfPath().c_str(), "rb")) {
+            std::string bytes;
+            char chunk[65536];
+            for (std::size_t n; (n = std::fread(chunk, 1, sizeof chunk, f)) > 0;) {
+                bytes.append(chunk, n);
+            }
+            std::fclose(f);
+            build = nexus::server::buildOf(bytes);
+        }
+        return nexus::server::serve(paths, build);
+    }
+    if (command == "setup")
+        return nexus::server::setup(paths, selfPath(), configArgs);
+    if (command == "doctor")
+        return nexus::server::doctor(paths, selfPath());
+    if (command == "rebuild")
+        return nexus::server::rebuild(paths, selfPath(), configArgs);
     if (command == "stop")
         return nexus::server::stop(paths);
     if (command == "config") {

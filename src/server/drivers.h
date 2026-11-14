@@ -118,6 +118,10 @@ public:
     // The server is stopping: every driver is ended. Serve on until alive() is false.
     bool shutdown(Millis now);
     bool alive() const;     // any driver process not yet collected
+    // Any session at work: a turn open, or a driver starting for one. A server draining for a takeover
+    // (server/takeover.h) stops once this is false; a prompt that only waits is kept in the store, and the next
+    // server sends it.
+    bool busy() const;
 
     // The loop: the descriptors to poll and how long the poll may wait; after it, serve() writes and reads what it can,
     // collects exits and passes deadlines. False when the store did not take a step; *changed when a session changed.
