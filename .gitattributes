@@ -1,0 +1,3 @@
+# Code the schema compiler generates (cmake/schema.cmake): collapsed in diffs, never edited by hand.
+schema/gen/** linguist-generated=true
+tests/wire/next/gen/** linguist-generated=true

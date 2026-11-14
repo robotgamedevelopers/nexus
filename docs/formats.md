@@ -85,3 +85,15 @@ Today's main formats are fixed as bytes that main's own code wrote, not as bytes
 Each generator says how to build it against a worktree of main at 50565c6. `sync_unit` (`state_format_1_from_main`,
 `state_format_2_reads_later_formats`, `state_files`, `link_formats_agree`), `store_unit_formats`,
 `durable_unit_kinds` and `link_e2e_older_server` check the rules above.
+
+## Moving to schema
+
+These formats are moving onto schema's variable tables (github.com/mas-bandwidth/schema), where every field, enum
+value and union arm rides under the hash of its name, so that rules 1 to 3 above hold by construction rather than by
+each codec's care. Step 1, the plumbing, is in: `schema/Nexus.schema` mirrors every field above (with the accounts work's
+instance and account fields), its generated C++ is checked in under `schema/gen` (the library `nexus_wire`), the
+compiler is pinned to one exact commit in `cmake/schema.cmake` (its table wire is pre-release until schema 3.0.0), and
+`schema/tables.baseline` refuses an edit that would change what stored bytes mean. CI regenerates the code at the pin
+and fails on any difference (`schema-generated`). `wire_unit_versions` proves the requirement: a later version that adds
+a field, an enum value and a union arm (`tests/wire/next/NexusNext.schema`) and this one read each other's bytes both
+ways. Nothing reads or writes these tables yet; the codecs above are unchanged until each is swapped onto them.
