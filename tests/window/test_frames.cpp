@@ -201,6 +201,9 @@ struct Window {
     double time = 1000;
     PrVec2 extent{1200, 800};
     std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now();
+    // The frames whose work is a known hitch (Case::known), by number: no other frame of a case may pass the budget.
+    std::vector<std::uint64_t> knownFrames;
+    int pastes = 0;                     // Command-Vs that reached the prompt's View::paste
 
     Window() : model(std::vector<FriendInfo>{FriendInfo{"alex", "m"}, FriendInfo{"emma", "m"}, FriendInfo{"stella", "m"}},
             true) {
@@ -245,6 +248,8 @@ struct Window {
         host.terminalStore = &terminalStore;
         host.selectionStore = &selectionStore;
         view.selected = [this] { host.keepSelection(); };
+        // Command-V in the prompt: the app reads the clipboard here, and its text comes back later (commandV).
+        view.paste = [this] { ++pastes; };
         host.connect(&link, "server.test");
         model.select_tab(1);    // alex
     }
@@ -362,6 +367,39 @@ struct Window {
         }
     }
 
+    // `text` typed all at once, between two frames, as a fast typist's keys arrive in one frame.
+    void typeAtOnce(const std::string& text) {
+        for (const char& c : text) {
+            PrAppEvent e{};
+            e.kind = PrAppEventKind_KeyDown;
+            e.keyboard.key = PrAppKey(c);
+            push(e);
+            PrAppEvent t{};
+            t.kind = PrAppEventKind_Text;
+            t.input.text = PrStringView{&c, 1};
+            push(t);
+            e.kind = PrAppEventKind_KeyUp;
+            push(e);
+        }
+    }
+
+    // The next frame's work is a known hitch.
+    void known() { knownFrames.push_back(hitch.frames() + 1); }
+
+    // The wheel over the transcript, `dy` px (negative scrolls up).
+    void wheel(float dy) {
+        PrAppEvent m{};
+        m.kind = PrAppEventKind_PointerMove;
+        m.pointer.position = PrVec2{extent.x / 2, extent.y / 2};
+        push(m);
+        PrAppEvent s{};
+        s.kind = PrAppEventKind_Scroll;
+        s.scroll.position = m.pointer.position;
+        s.scroll.delta = PrVec2{0, dy};
+        s.scroll.unit = PrAppScrollUnit_Pixel;
+        push(s);
+    }
+
     void command(char c, PrAppKeyCode code) { key(PrAppKey(c), code, style::kCommand); }
 
     void commandDigit(int digit) {
@@ -369,13 +407,48 @@ struct Window {
         key(PrAppKey('0' + digit), code, style::kCommand);
     }
 
-    // The clipboard's text as the app delivers it after Command-V (main.cpp pasted).
-    void paste(const std::string& text) {
+    // Command-V in the prompt, the clipboard holding `text`: the prompt captures the key and asks the app for the
+    // clipboard (View::paste), whose text comes back as a Paste event through the host (main.cpp pasted). `known`: the
+    // frame that sets the text in the prompt is a known hitch.
+    void commandV(const std::string& text, bool isKnown) {
+        const int before = pastes;
+        command('V', PrAppKeyCode_KeyV);
+        CHECK(pastes == before + 1);
         PrAppEvent t{};
         t.kind = PrAppEventKind_Paste;
         t.input.text = PrStringView{text.data(), text.size()};
+        if (isKnown) {
+            known();
+        }
         push(t);
         frame();
+    }
+
+    // The node under `node` whose text at the last layout is `text`, or kPrLayoutNodeNone.
+    PrLayoutNode findText(PrLayoutNode node, const std::string& text) const {
+        PrStringView t = prLayoutNodeText(tree, node);
+        if (t.data != nullptr && std::string(t.data, t.size) == text) {
+            return node;
+        }
+        for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
+                n = prLayoutNodeNextSibling(tree, n)) {
+            const PrLayoutNode found = findText(n, text);
+            if (found != kPrLayoutNodeNone) {
+                return found;
+            }
+        }
+        return kPrLayoutNodeNone;
+    }
+
+    // True if a line of the transcript reads `text` and shows whole in the transcript's view.
+    bool showsLine(const std::string& text) const {
+        const PrLayoutNode n = findText(view.transcript, text);
+        if (n == kPrLayoutNodeNone) {
+            return false;
+        }
+        const PrRect port = prLayoutRectToPx(prLayoutNodeBounds(tree, view.transcript, PrLayoutCoordinates_Viewport));
+        const PrRect b = prLayoutRectToPx(prLayoutNodeBounds(tree, n, PrLayoutCoordinates_Viewport));
+        return b.top >= port.top - 0.5f && b.bottom <= port.bottom + 0.5f;
     }
 };
 
@@ -444,10 +517,10 @@ LinkState connected(sync::Sessions sessions, std::uint64_t heardMsAgo = 0) {
 struct Case {
     const char* name;
     void (*run)(Window& w);
-    // A known hitch whose fix is outside nexus (docs/frame-budget.md, known hitches): the case runs and reports every
-    // hitch, and its hitches do not fail the test while every frame stays under `ceiling` ms, just above what the part
-    // outside nexus costs, so that a regression on nexus's side still fails. Null for every case nexus keeps within the
-    // budget.
+    // A known hitch whose fix is outside nexus (docs/frame-budget.md, known hitches): the frames the case marks known
+    // (Window::known) may pass the budget while under `ceiling` ms, the worst measured on the studio and about 15%,
+    // so that a regression on nexus's side still fails; every other frame of the case keeps the budget. Null for every
+    // case nexus keeps within the budget.
     const char* known = nullptr;
     double ceiling = 0;
 };
@@ -497,25 +570,68 @@ void streamingReply(Window& w) {
     }
 }
 
-// The person pastes 1 MB into the prompt, then types on.
+// The person pastes 1 MB into the prompt with Command-V, edits the full prompt, switches tabs, selects it all and types
+// over it, pastes 40 KB and sends it. The frames that set or edit a full prompt's text are the known hitch; every other
+// frame keeps the budget.
 void bigPaste(Window& w) {
     history(w.model, 1, 50);
     w.link.set(connected(stateOf(w.model, sync::Activity::Idle)));
     w.frames(5);
     std::string big;
-    while (big.size() < 1024 * 1024)
+    while (big.size() < 1024 * 1024) {
         big += "a pasted line of a log, long enough to wrap, with numbers 0123456789 and words in it\n";
-    w.paste(big);
+    }
+    const std::size_t alex = w.model.tab(1).id;
+    w.commandV(big, true);
+    // Emma's tab the next frame: the paste went into alex's prompt whole, in its frame, and none of it follows to emma.
+    w.commandDigit(3);
+    CHECK(w.model.tab(1).draft == big.substr(0, kPromptBytes));
+    CHECK(w.model.tab(2).draft.empty());
+    CHECK(w.view.cut == cutLine(big.size(), kPromptBytes) && w.view.cutTab == alex);
+    w.known();          // alex's full prompt set in the area again
+    w.commandDigit(2);
     w.frames(10);
-    // Edits at the end of a full prompt: four characters taken back and typed again.
+    // The end of alex's transcript says how much was left out, in sight.
+    CHECK(w.showsLine(w.view.cut));
+    // Edits at the end of a full prompt: four characters taken back and typed again, each a known hitch. The line
+    // about the cut goes with the first edit.
     for (int i = 0; i < 4; ++i) {
+        w.known();
         w.key(PrAppKey_Backspace, PrAppKeyCode_Backspace);
     }
-    w.type("more");
-    w.frames(30);
-    // The prompt kept what the server takes, and the transcript says the rest was left out.
+    CHECK(w.view.cut.empty());
+    for (const char c : std::string("more")) {
+        const char s[2] = {c, 0};
+        w.known();
+        w.key(PrAppKey(c), 0, 0, s);
+    }
     CHECK(w.model.tab(1).draft.size() == kPromptBytes);
-    CHECK(w.view.problem == kPromptCut);
+    // Typed at the limit: nothing goes in, and the line says the byte was left out.
+    w.type("z");
+    CHECK(w.model.tab(1).draft.size() == kPromptBytes && w.view.cut == cutLine(1, 0));
+    // The line is alex's: emma's tab shows none, and her prompt took nothing of alex's text; back on alex it shows.
+    w.commandDigit(3);
+    w.frames(3);
+    CHECK(w.model.tab(2).draft.empty());
+    CHECK(w.findText(w.view.transcript, w.view.cut) == kPrLayoutNodeNone);
+    w.known();          // alex's full prompt set in the area again
+    w.commandDigit(2);
+    w.frames(3);
+    CHECK(w.showsLine(w.view.cut));
+    // At the limit, the whole prompt selected and typed over: the selection is room.
+    w.command('A', PrAppKeyCode_KeyA);
+    w.type("x");
+    CHECK(w.model.tab(1).draft == "x");
+    CHECK(w.view.cut.empty());
+    // 40 KB pasted after the "x", then sent: the whole 32 KB goes, the paste in one piece.
+    const std::string forty = big.substr(0, 40 * 1024);
+    w.commandV(forty, true);
+    CHECK(w.model.tab(1).draft == "x" + forty.substr(0, kPromptBytes - 1));
+    const std::size_t sent = w.link.sent.size();
+    w.key(PrAppKey_Enter, PrAppKeyCode_Enter);
+    CHECK(w.link.sent.size() == sent + 1 && w.link.sent.back().text == "x" + forty.substr(0, kPromptBytes - 1));
+    CHECK(w.model.tab(1).draft.empty() && w.view.cut.empty());
+    w.frames(30);
 }
 
 // Switching between friends with long histories, and to the sprint tab and back.
@@ -551,7 +667,22 @@ void sprintTab(Window& w) {
 // preference files take 200 ms each write, and the terminals and selection change as tabs open and close.
 void terminals(Window& w) {
     w.frames(5);
-    for (int i = 0; i < 3; ++i) {
+    // Typed into a new tab before its shell has started: every key is held, and reaches the shell in order.
+    w.command('T', PrAppKeyCode_KeyT);
+    const std::size_t first = w.model.tab(w.model.active()).id;
+    const std::string early = "echo held-keys-arrived\r";
+    w.typeAtOnce(early);
+    CHECK(w.terminals->held(first) == 3 * early.size());
+    const bool arrived = w.until([&] { return w.terminals->text(first).find("\nheld-keys-arrived") !=
+        std::string::npos; }, 600);
+    if (!arrived) {
+        const std::string text = w.terminals->text(first);
+        std::fprintf(stderr, "  screen (%zu bytes): %s\n", text.size(), text.substr(0, 400).c_str());
+    }
+    CHECK(arrived);
+    CHECK(w.terminals->held(first) == 0);
+    w.frames(30, true);
+    for (int i = 0; i < 2; ++i) {
         w.command('T', PrAppKeyCode_KeyT);
         w.frames(30, true);
     }
@@ -613,7 +744,24 @@ void fallbackFonts(Window& w) {
     w.frames(5);
     w.model.append(1, Entry{EntryKind::Friend, "done \xF0\x9F\x8E\x89\xF0\x9F\x9A\x80 \xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96"
         "\xE7\x95\x8C \xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7 \xE3\x81\x93\xE3\x82\x93\xE3\x81\xAB\xE3\x81\xA1\xE3\x81\xAF"});
+    w.known();      // the first frame that sets the text: the kit's fonts match their fallback faces
     w.frames(20);
+}
+
+// A long history scrolled up from its end a screen at a time, then back: each step declares items not laid out
+// before, whose estimated heights the next round replaces with measured ones.
+void scrollingUpALongHistory(Window& w) {
+    history(w.model, 1, 5000);
+    w.frames(5);
+    for (int i = 0; i < 60; ++i) {
+        w.wheel(-600);
+        w.frame();
+    }
+    for (int i = 0; i < 60; ++i) {
+        w.wheel(600);
+        w.frame();
+    }
+    w.frames(10);
 }
 
 // The real link over an ssh that hangs for seconds before it fails: the link's thread waits, never the window.
@@ -640,23 +788,30 @@ const Case kCases[] = {
     {"typing_over_a_long_history", typingOverALongHistory},
     {"stalled_link_then_a_long_transcript", stalledLinkThenALongTranscript},
     {"streaming_reply", streamingReply},
-    {"big_paste", bigPaste, "an edit of a prompt at the 32 KB the server takes shapes the whole prompt again (Prax's text "
-        "area lays its text out whole at each change: 11 ms at 32 KB); nexus cuts a paste to 32 KB and sets it in 8 KB "
-        "a frame", 20},
+    {"big_paste", bigPaste, "the frame that sets 32 KB in the prompt, and each edit of a full prompt, shapes the whole "
+        "prompt (Prax's text area lays its text out whole at each change: 11 ms at 32 KB); nexus cuts a paste to the "
+        "32 KB the server takes", 15},
     {"switching_tabs", switchingTabs},
     {"sprint_tab", sprintTab},
     {"terminals", terminals},
     {"text_scale", textScale},
     {"resizing", resizing},
+    {"scrolling_up_a_long_history", scrollingUpALongHistory},
     {"fallback_fonts", fallbackFonts, "each text font of the kit matches the fallback faces on the frame that first "
         "needs one (Prax text_font.cpp matchFallback); nexus loads the faces ahead (font_prefetch.h), Prax has no way "
-        "to match a kit's text fonts ahead or off the frame thread", 150},
+        "to match a kit's text fonts ahead or off the frame thread", 145},
     {"slow_ssh_link", slowSshLink},
 };
 
-// Runs a case in a window of its own and reports every hitch: its frame, its work and its phases. A known case fails
-// only past its ceiling.
-bool run(const Case& c) {
+// What a case's frames came to.
+struct Outcome {
+    int hitched = 0;        // frames over the budget that are not known: each fails the test
+    int known = 0;          // known frames over the budget, each under the case's ceiling
+};
+
+// Runs a case in a window of its own and reports every hitch: its frame, its work and its phases. A hitch fails unless
+// its frame is one the case marked known (Window::known) and its work is under the case's ceiling.
+Outcome run(const Case& c) {
     Window w;
     const double started = prTimeMonotonicMilliseconds();
     c.run(w);
@@ -664,19 +819,30 @@ bool run(const Case& c) {
     std::printf("%-40s %5llu frames, worst %6.2f ms, %llu hitches (%.1f s)\n", c.name,
         static_cast<unsigned long long>(w.hitch.frames()), w.hitch.worst(),
         static_cast<unsigned long long>(w.hitch.hitches()), took / 1000);
-    if (c.known != nullptr && w.hitch.worst() > c.ceiling) {
-        std::printf("  %s: worst frame %.2f ms is past the known ceiling of %.2f ms\n", c.name, w.hitch.worst(),
-            c.ceiling);
+    Outcome out;
+    if (w.hitch.hitches() > w.hitch.held()) {
+        std::printf("  %s: %llu hitches, more than the detector holds: the ones not held count as hitches\n", c.name,
+            static_cast<unsigned long long>(w.hitch.hitches()));
+        out.hitched += int(w.hitch.hitches() - w.hitch.held());
+    }
+    if (c.known == nullptr && !w.knownFrames.empty()) {
+        std::printf("  %s: marks known frames but has no known reason\n", c.name);
         ++failures;
     }
-    if (w.hitch.hitches() == 0) {
-        return true;
-    }
     for (std::size_t i = 0; i < w.hitch.held(); ++i) {
+        const Hitch& h = w.hitch.hitch(i);
+        const bool marked = std::find(w.knownFrames.begin(), w.knownFrames.end(), h.frame) != w.knownFrames.end();
+        const bool known = c.known != nullptr && marked && h.work <= c.ceiling;
         char line[1024];
-        std::printf("  %s: %s\n", c.name, HitchDetector::format(w.hitch.hitch(i), w.hitch.budget(), line, sizeof line));
+        std::printf("  %s: %s%s\n", c.name, HitchDetector::format(h, w.hitch.budget(), line, sizeof line),
+            known ? " (known)" : marked ? " (known frame, past the ceiling)" : "");
+        if (known) {
+            ++out.known;
+        } else {
+            ++out.hitched;
+        }
     }
-    return false;
+    return out;
 }
 
 // What the detector itself costs a frame: a frame's markers (begin, a dozen scopes, Prax's three phases, end) on the
@@ -725,13 +891,12 @@ int main(int argc, char** argv) {
         if (!chosen)
             continue;
         ++ran;
-        const bool within = run(c);
+        const Outcome o = run(c);
+        hitched += o.hitched != 0 ? 1 : 0;
         if (c.known != nullptr) {
-            known += within ? 0 : 1;
-            std::printf("  %s: %s: %s\n", c.name, within ? "within the budget now; the known mark can go" : "known",
-                c.known);
-        } else if (!within) {
-            ++hitched;
+            known += o.known != 0 ? 1 : 0;
+            std::printf("  %s: %s: %s\n", c.name, o.known != 0 ? "known" :
+                "every frame within the budget now; the known mark can go", c.known);
         }
     }
     if (ran == 0) {

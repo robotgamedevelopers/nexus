@@ -119,16 +119,15 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
         HitchScope scope(hitch, Phase::Terminals);
         terminals->observe(time);
+        if (ui != nullptr) {
+            terminals->deliver(ui);
+        }
     }
     {
         HitchScope scope(hitch, Phase::Keep);
         keepTerminals();
     }
     view->time = time;
-    {
-        HitchScope scope(hitch, Phase::Input);
-        pasteOn();
-    }
     {
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
@@ -148,41 +147,32 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (board != nullptr && board->event(e)) {
         return true;
     }
+    // Typed into a terminal tab before its screen can take it: held for its shell, in order.
+    if (terminals != nullptr && model->tab_count() != 0) {
+        const Tab& tab = model->tab(model->active());
+        if (tab.kind == TabKind::Terminal && terminals->hold(tab.id, e)) {
+            return true;
+        }
+    }
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;
     }
-    // Text typed while a paste is still going in follows it; so does a paste.
-    const std::size_t free = promptRoom(*view);
-    const std::size_t room = free > view->pasting.size() ? free - view->pasting.size() : 0;
-    if (view->pasting.empty() && e.input.text.size <= room && e.input.text.size <= kPastePiece) {
+    // Text that fits the room left (the selection it replaces counted) goes on as it came.
+    const std::size_t room = promptRoom(*view, ui);
+    if (e.input.text.size <= room) {
         return false;
     }
+    // Text past it is cut to fit and goes on in one event, in its place in the order of events; the transcript says
+    // how much was left out.
     const PrStringView kept = cutText(e.input.text, room);
-    if (kept.size != e.input.text.size) {
-        view->problem = kPromptCut;
+    promptCut(*view, e.input.text.size, kept.size, kept.size != 0);
+    if (kept.size != 0) {
+        PrAppEvent cut = e;
+        cut.input.text = kept;
+        prUiPushEvent(ui, kPrUiViewportMain, &cut);
     }
-    view->pasting.append(kept.data, kept.size);
     return true;
-}
-
-// The next piece of the pasted text, as a Paste event for the prompt, on its way to the tree for this frame. If the
-// prompt lost the focus meanwhile (another tab shows), the rest is left out, and the transcript says so.
-void FrameHost::pasteOn() {
-    if (view->pasting.empty() || ui == nullptr) {
-        return;
-    }
-    if (view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
-        view->pasting.clear();
-        view->problem = kPromptCut;
-        return;
-    }
-    const PrStringView piece = cutText(PrStringView{view->pasting.data(), view->pasting.size()}, kPastePiece);
-    PrAppEvent e{};
-    e.kind = PrAppEventKind_Paste;
-    e.input.text = piece;
-    prUiPushEvent(ui, kPrUiViewportMain, &e);
-    view->pasting.erase(0, piece.size);
 }
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {

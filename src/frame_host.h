@@ -85,9 +85,9 @@ struct FrameHost {
     // The frame's start, before its rounds.
     void beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display);
     // An event before the window's tree sees it: true if the host took it. The sprint tab's page takes the events it is
-    // routed. Text pasted into the prompt is cut to its room (view.h kPromptBytes), the transcript saying so, and goes in
-    // a piece a frame (kPastePiece, pushed to `ui` at each frame's start), with text typed meanwhile after it, so the
-    // text area never lays out more in a frame than fits in it.
+    // routed. Text typed or pasted into the prompt past its room (view.h promptRoom: kPromptBytes less the draft, plus
+    // the selection it replaces) is cut to fit and pushed to `ui` in one event in its place, the transcript saying how
+    // much was left out (View::cut).
     bool event(const PrAppEvent& e);
     PrUi* ui = nullptr;                     // the window's tree's context, while the window is open; null cuts nothing
     // One round of the window under `root`.
@@ -98,7 +98,6 @@ struct FrameHost {
     void keepSelection();
 
 private:
-    void pasteOn();
     void pollLink();
     void wire();
 };

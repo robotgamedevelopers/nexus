@@ -209,6 +209,7 @@ void PraxTerminals::take() {
         }
         if (s.terminal == nullptr) {
             failed_.insert(s.id);
+            held_.erase(s.id);
             continue;
         }
         terminals_[s.id] = s.terminal;
@@ -281,6 +282,58 @@ void PraxTerminals::readDirectory(std::size_t id, PrTerminal* terminal) {
     dirs_[id] = result;
 }
 
+namespace {
+
+bool carriesText(const PrAppEvent& e) {
+    return e.kind == PrAppEventKind_Text || e.kind == PrAppEventKind_Paste;
+}
+
+} // namespace
+
+bool PraxTerminals::hold(std::size_t id, const PrAppEvent& e) {
+    if (e.kind != PrAppEventKind_KeyDown && e.kind != PrAppEventKind_KeyUp && !carriesText(e)) {
+        return false;
+    }
+    // nexus's own chords (Command-W, Command-T, the tab keys) act at once, whatever the shell.
+    if ((e.modifiers & style::kCommand) != 0 || failed_.count(id) != 0) {
+        return false;
+    }
+    auto queued = held_.find(id);
+    if (queued == held_.end() || queued->second.empty()) {
+        PrTerminal* terminal = find(id);
+        const bool starting = asked_.count(id) != 0;
+        if (!starting && (terminal == nullptr || prTerminalHasFocus(terminal))) {
+            return false;
+        }
+    }
+    Held h{e, carriesText(e) ? std::string(e.input.text.data, e.input.text.size) : std::string()};
+    held_[id].push_back(std::move(h));
+    return true;
+}
+
+void PraxTerminals::deliver(PrUi* ui) {
+    for (auto it = held_.begin(); it != held_.end();) {
+        PrTerminal* terminal = find(it->first);
+        if (terminal == nullptr || !prTerminalHasFocus(terminal)) {
+            ++it;
+            continue;
+        }
+        for (Held& h : it->second) {
+            PrAppEvent e = h.event;
+            if (carriesText(e)) {
+                e.input.text = PrStringView{h.text.data(), h.text.size()};
+            }
+            prUiPushEvent(ui, kPrUiViewportMain, &e);
+        }
+        it = held_.erase(it);
+    }
+}
+
+std::size_t PraxTerminals::held(std::size_t id) const {
+    auto it = held_.find(id);
+    return it != held_.end() ? it->second.size() : 0;
+}
+
 void PraxTerminals::readDirectories() {
     take();
     for (auto& [id, terminal] : terminals_) {
@@ -326,6 +379,7 @@ void PraxTerminals::close(std::size_t id) {
     pids_.erase(id);
     seen_.erase(id);
     titles_.erase(id);
+    held_.erase(id);
     auto it = terminals_.find(id);
     if (it == terminals_.end()) {
         return;
@@ -358,7 +412,8 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     take();
     PrTerminal* terminal = find(id);
     if (terminal == nullptr) {
-        return;     // starting: the tab shows the window's background until its shell is there
+        return;     // starting: the tab shows the window's background until its shell is there; what is typed meanwhile
+                    // is held (hold) and reaches the shell once its screen has the focus
     }
     if (scales_[id] != scale_) {
         scales_[id] = scale_;

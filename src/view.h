@@ -116,7 +116,16 @@ struct View {
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
     // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
     std::function<void()> paste;
-    std::string pasting;                        // pasted text still to go into the prompt, a piece a frame (frame_host.h)
+    // Text cut to fit the prompt (kPromptBytes): one dim line at the end of the transcript of the friend's tab it was
+    // cut on (`cutTab`, by Tab::id), saying how much was left out (cutLine), until that draft changes. The transcript
+    // goes to its end once to show it (`cutFollow`). While the cut text is on its way into the prompt (`cutComing`, a
+    // Paste event for the next frame), the change it makes is not a change of the draft; once it is in, `cutDraft` is
+    // the draft the line stands for.
+    std::string cut;
+    std::size_t cutTab = ~std::size_t(0);
+    std::string cutDraft;
+    bool cutComing = false;
+    bool cutFollow = false;
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
@@ -150,15 +159,17 @@ struct View {
 // keystroke; within this it stays well inside a frame.
 constexpr std::size_t kPromptBytes = 32 * 1024;
 
-// The most text that goes into the prompt in one frame. The text area lays out what it is given at once: 32 KB took
-// 10.6 ms, so a longer paste goes in a piece a frame, in order, and text typed meanwhile follows it.
-constexpr std::size_t kPastePiece = 8 * 1024;
+// The line the transcript ends with after text of `given` bytes was cut to `kept` to fit the prompt, e.g. "1,015,808 of
+// 1,048,576 bytes were left out: the prompt holds 32 KB."
+std::string cutLine(std::size_t given, std::size_t kept);
 
-// The line the transcript ends with after text was cut to fit the prompt.
-constexpr const char* kPromptCut = "The prompt holds 32 KB at most; the rest of the text was left out.";
+// The bytes the prompt of the friend's tab that shows can still take: kPromptBytes less its draft, plus the bytes
+// selected in it (`ui`'s selection of view.prompt), which what comes in replaces. Zero on any other tab.
+std::size_t promptRoom(const View& view, PrUi* ui);
 
-// The bytes the prompt of the friend's tab that shows can still take: kPromptBytes less its draft. Zero on any other tab.
-std::size_t promptRoom(const View& view);
+// Notes that text of `given` bytes was cut to `kept` on the friend's tab that shows (View::cut): `coming`, the kept text
+// is still on its way into the prompt.
+void promptCut(View& view, std::size_t given, std::size_t kept, bool coming);
 
 // The longest prefix of `text` of at most `room` bytes that ends on a whole UTF-8 character.
 PrStringView cutText(PrStringView text, std::size_t room);
@@ -167,8 +178,8 @@ PrStringView cutText(PrStringView text, std::size_t room);
 // look and the kit's theme (which changes only between rounds). Returns true if it changed the scale.
 bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts);
 
-// True if a text scale is asked for and not yet applied, or a busy cursor breathes: another frame would show something
-// different.
+// True if a text scale is asked for and not yet applied, a busy cursor breathes, or cut text is on its way into the
+// prompt: another frame would show something different.
 bool windowWantsFrame(const View& view);
 
 // Declares the whole window for one round under `parent`, or as the root if `parent` is kPrLayoutNodeNone, and applies

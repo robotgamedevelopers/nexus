@@ -40,9 +40,6 @@ int modeOf(const std::string& path) {
     return lstat(path.c_str(), &st) == 0 ? int(st.st_mode & 0777) : -1;
 }
 
-// The window's home under a HOME inside this test's working directory: the stores' files are in ~/.nexus/client, which
-// the first write makes, mode 0700 (and ~/.nexus above it); the config is read from there, and no config is the
-// defaults.
 // The writer's thread makes a wrapped store's writes: the newest of those waiting, every one made by flush and by the
 // writer's end, and a failure logged rather than reported to the caller, who has moved on.
 void writerWritesTheNewest() {
@@ -71,6 +68,9 @@ void writerWritesTheNewest() {
     writer.flush();
 }
 
+// The window's home under a HOME inside this test's working directory: the stores' files are in ~/.nexus/client, which
+// the first write makes, mode 0700 (and ~/.nexus above it); the config is read from there, and no config is the
+// defaults.
 void clientHomeFiles() {
     char cwd[4096];
     CHECK(getcwd(cwd, sizeof cwd) != nullptr);

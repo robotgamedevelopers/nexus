@@ -759,8 +759,12 @@ struct Builder {
                 }
                 y += h;
             }
-            if (first == n)
+            // No item reaches the top (the offset is past the content, as when it shrank): the last item is declared,
+            // and the spacer above stands for the items before it only.
+            if (first == n) {
                 first = n - 1;
+                above -= heightOf(items, first, tab);
+            }
             for (std::size_t i = end; i < n; ++i)
                 below += heightOf(items, i, tab);
         }
@@ -844,8 +848,15 @@ struct Builder {
         }
         const Tab& tab = model.tab(model.active());
         const bool switched = view.shown != tab.id;
+        // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.
+        const bool toCut = view.cutFollow && view.cutTab == tab.id;
         if (keepScroll(scroller, tab.id))
             prUiFollowEnd(ui, scroller);
+        if (toCut) {
+            // Past the end, which layout clamps to the end of the content this round makes (as keepScroll goes there).
+            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), PrLayoutUnit{INT32_MAX}});
+            view.cutFollow = false;
+        }
         view.transcript = scroller;
         // The kit's labels and text area wrap, breaking inside a word that fits no line (PrKitWrap_Wrap, kit_theme.h
         // 99), so a long URL or token wraps inside its box instead of running past it. A tool line never wraps: it is
@@ -868,6 +879,7 @@ struct Builder {
                 atEnd = info.offset.y.raw >= info.range.bottom.raw;
             }
         }
+        atEnd = atEnd || toCut;
         declareItems(scroller, column, tab, items, atEnd, offset, viewport);
         // The friend's text still growing (the open entry), after the transcript, a label a paragraph: only its last
         // paragraph is set again as it grows. It joins the transcript, closed, when its block ends.
@@ -878,6 +890,11 @@ struct Builder {
         // Why the last prompt was not sent: dim, at the end of the transcript, so that nothing stands by the prompt.
         if (!view.problem.empty()) {
             label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+        }
+        // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
+        // to show it, so it stands just above the prompt.
+        if (!view.cut.empty() && view.cutTab == tab.id) {
+            label(column, view.cut, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
         }
         // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
         const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
@@ -925,7 +942,8 @@ struct Builder {
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
         bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
-        // Command-V reads the clipboard through the host, which cuts the text to the room left before the area sees it.
+        // Command-V reads the clipboard through the host, which cuts the text to the room left before the area sees it,
+        // and hands it on in one event.
         if (view.paste && prUiKeyCaptured(ui, box, PrAppKey('V'), style::kCommand)) {
             view.paste();
         }
@@ -946,13 +964,25 @@ struct Builder {
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
+        const bool coming = view.cutComing;
+        view.cutComing = false;     // the cut text, pushed for this frame, is in the area's events of its first round
         if (prKitTextChanged(kit, edit, &changed)) {
-            // Text that came past the host's cut (typed on at the limit, or pasted with no host) is cut here.
+            // Text that came past the host's cut (pasted with no host, or typed into a selection the host had not yet
+            // seen) is cut here.
             const PrStringView kept = cutText(changed, kPromptBytes);
-            if (kept.size != changed.size) {
-                view.problem = kPromptCut;
-            }
             model.set_draft(active, std::string(kept.data, kept.size));
+            if (kept.size != changed.size) {
+                promptCut(view, changed.size, kept.size, false);
+            }
+        }
+        // The line about cut text stands for the draft as the cut left it, and goes once that draft changes.
+        if (!view.cut.empty() && view.cutTab == model.tab(active).id) {
+            if (coming) {
+                view.cutDraft = model.tab(active).draft;
+            } else if (view.cutDraft != model.tab(active).draft) {
+                view.cut.clear();
+                view.cutTab = ~std::size_t(0);
+            }
         }
         if (!composing && send) {
             if (view.submit)
@@ -1048,6 +1078,11 @@ struct Builder {
             if (view.selected)
                 view.selected();
         }
+        // Cut text on its way to a prompt this round does not build has nowhere to go (the focus left the prompt, and
+        // the area does not see the event): nothing more is coming.
+        if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend || !view.promptOpen) {
+            view.cutComing = false;
+        }
         const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
         if (!onSprint && view.board != nullptr)
             view.board->hidden();
@@ -1125,13 +1160,55 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     return true;
 }
 
-std::size_t promptRoom(const View& view) {
+namespace {
+
+// `n` with a comma between each group of three digits: 1048576 is "1,048,576".
+std::string grouped(std::size_t n) {
+    std::string digits = std::to_string(n);
+    std::string out;
+    for (std::size_t i = 0; i < digits.size(); ++i) {
+        if (i != 0 && (digits.size() - i) % 3 == 0) {
+            out += ',';
+        }
+        out += digits[i];
+    }
+    return out;
+}
+
+} // namespace
+
+std::string cutLine(std::size_t given, std::size_t kept) {
+    return grouped(given - kept) + " of " + grouped(given) + " bytes were left out: the prompt holds 32 KB.";
+}
+
+std::size_t promptRoom(const View& view, PrUi* ui) {
     const Model& model = *view.model;
     if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend) {
         return 0;
     }
     const std::size_t used = model.tab(model.active()).draft.size();
-    return used < kPromptBytes ? kPromptBytes - used : 0;
+    std::size_t selected = 0;
+    if (ui != nullptr && view.prompt != kPrLayoutNodeNone) {
+        const PrUiTextSelection s = prUiTextEditSelection(ui, view.prompt);
+        const std::size_t from = std::min<std::size_t>(std::min(s.anchor, s.caret), used);
+        const std::size_t to = std::min<std::size_t>(std::max(s.anchor, s.caret), used);
+        selected = to - from;
+    }
+    const std::size_t left = used - selected;
+    return left < kPromptBytes ? kPromptBytes - left : 0;
+}
+
+void promptCut(View& view, std::size_t given, std::size_t kept, bool coming) {
+    const Model& model = *view.model;
+    if (model.tab_count() == 0) {
+        return;
+    }
+    const Tab& tab = model.tab(model.active());
+    view.cut = cutLine(given, kept);
+    view.cutTab = tab.id;
+    view.cutDraft = tab.draft;
+    view.cutComing = coming;
+    view.cutFollow = true;
 }
 
 PrStringView cutText(PrStringView text, std::size_t room) {
@@ -1147,7 +1224,7 @@ PrStringView cutText(PrStringView text, std::size_t room) {
 }
 
 bool windowWantsFrame(const View& view) {
-    return view.look->textSteps != view.askedTextSteps || view.breathing || !view.pasting.empty();
+    return view.look->textSteps != view.askedTextSteps || view.breathing || view.cutComing;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {

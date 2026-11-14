@@ -89,7 +89,23 @@ public:
     // Reads every terminal's directory now, as the window closes and its terminals are saved.
     void readDirectories();
 
+    // Input for the terminal tab `id` that shows, before its screen has the focus (its shell is starting, or its screen
+    // takes the focus in the next frame, pr/terminal.h prTerminalFocus): keys, text and pastes but nexus's Command
+    // chords. Holds a copy and returns true while there is no screen to take it, or earlier input is still held, so
+    // that what was typed reaches the shell whole and in order; false otherwise, and for a tab whose shell failed.
+    bool hold(std::size_t id, const PrAppEvent& e);
+    // At the frame's start, after observe: hands each terminal's held input, in order, to `ui` for this frame once its
+    // screen had the focus in the last frame.
+    void deliver(PrUi* ui);
+    // The events held for the terminal `id`, for tests.
+    std::size_t held(std::size_t id) const;
+
 private:
+    // An event held for a terminal, with its own copy of its text.
+    struct Held {
+        PrAppEvent event;
+        std::string text;
+    };
     // A shell to start, as the frame thread asked for it.
     struct Start {
         std::size_t id;
@@ -138,6 +154,7 @@ private:
     std::set<std::size_t> failed_;              // shells that could not start, until their tab closes
     std::map<std::size_t, std::string> dirs_;   // each terminal's directory as last read
     std::map<std::size_t, float> scales_;       // the text scale each terminal's font is at
+    std::map<std::size_t, std::vector<Held>> held_; // input typed before each screen had the focus (hold)
     double dirsAt_ = 0;                         // when the last round of reading directories started, s
     std::size_t dirNext_ = 0;                   // the next terminal (by id) whose directory is read
 
