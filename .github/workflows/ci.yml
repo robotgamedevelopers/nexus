@@ -326,9 +326,11 @@ jobs:
           fi
 
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
+  # On the runners labelled tlc, as the model shards: on hulk's loaded general runners its build ran past the 2 minutes.
+  # It builds the programs it runs and nothing else, through ccache (sanitizer flags key their own entries).
   sanitizers-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: [self-hosted, fleet, Linux, X64, tlc]
     timeout-minutes: 2
     env:
       CC: clang
@@ -338,21 +340,36 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Prax's download cache, one per runner
+      - name: Caches outside the workspace
         shell: bash
         run: |
           set -euo pipefail
-          downloads="$HOME/.cache/nexus-ci/$RUNNER_NAME/prax-downloads"
-          mkdir -p "$downloads"
-          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(nproc)"
+          } >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
+            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}" \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      # Exactly the programs the next step runs (model_checks would add the accounts' and the glide's, which it does not).
+      - name: Build the programs it runs
         run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
-          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
-          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks and wire_test
-        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
+          cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
+          link_walk store_test durable_test journal_walk driver_protocol_test supervisor_test supervisor_walk wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
