@@ -63,9 +63,11 @@ if(NOT WIN32)
 endif()
 
 # TLC (tlc_test is tests/model's): the spec on its small instance, every property.
-tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 4)
-tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4)
-tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 4)
+# Per commit on eight workers each, timed two at a time on a loaded tlc runner host (16 cores): the plain instance 22 s,
+# switch 37-52 s and place 31 s, so those two are capped at 75 s (each has a CI shard of its own).
+tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8)
+tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 8 CAP 75)
+tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)

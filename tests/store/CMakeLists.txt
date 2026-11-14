@@ -81,9 +81,10 @@ function(store_tlc_test name module cfg expect)
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
 
-# The spec, every invariant, no error: four writes (310k states), and records of two lengths. Four TLC workers each
-# (ctest counts them as four of its slots), eight on the nightly instance.
-store_tlc_test(tlc_journal_spec   Journal Journal.cfg     pass)
+# The spec, every invariant, no error: four writes (310k states), and records of two lengths. Eight TLC workers on the
+# spec (16 s on a loaded tlc runner host), four on the lengths (ctest counts each worker as one of its slots), eight on
+# the nightly instance.
+store_tlc_test(tlc_journal_spec   Journal Journal.cfg     pass WORKERS 8)
 store_tlc_test(tlc_journal_lens   Journal JournalLens.cfg pass)
 store_tlc_test(tlc_journal_large  Journal JournalLarge.cfg pass WORKERS 8 NIGHTLY)
 

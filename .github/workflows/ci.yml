@@ -427,11 +427,12 @@ jobs:
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
   # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
   # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`) and builds only
-  # the walks they run (`build`), and the last,
-  # window, takes every test no other shard names, so a new test is never missed. `--no-tests=error` fails a shard
-  # whose regex matches nothing. The largest instances each have a shard of their own. The tab label's traces need the
-  # window's logic, which does not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS
-  # (model-label).
+  # the walks they run (`build`), and the last, window, takes every test no other shard names, so a new test is never
+  # missed. `--no-tests=error` fails a shard whose regex matches nothing. The largest instances each have a shard of
+  # their own, on eight TLC workers, timed two at a time on a loaded tlc runner host (the CMakeLists beside them give
+  # the times); supervisor switch and place and link ensure are capped at 75 s, not 60, which keeps their jobs well
+  # inside the 2 minutes. The tab label's traces need the window's logic, which does not build on Linux at Prax's pin
+  # (build-and-unit-linux says why), so they run on macOS (model-label).
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
@@ -458,19 +459,29 @@ jobs:
           - shard: link-one-window
             run: '^tlc_link_one_window$'
           - shard: link-tabs
-            run: '^tlc_link_(tabs|two_windows)$'
+            run: '^tlc_link_tabs$'
+          - shard: link-two-windows
+            run: '^tlc_link_two_windows$'
           - shard: link-rest
             run: '^tlc_link_'
             build: link_walk
             skip: '^tlc_link_(ensure|one_window|tabs|two_windows)$'
-          - shard: accounts-journal
-            run: '^tlc_(accounts|journal)'
-            build: accounts_walk journal_walk
+          - shard: accounts
+            run: '^tlc_accounts$'
+          - shard: accounts-rest
+            run: '^tlc_accounts_'
+            build: accounts_walk
+          - shard: journal
+            run: '^tlc_journal'
+            build: journal_walk
           - shard: claude
             run: '^tlc_claude'
             node: true
           - shard: witnesses
             run: '^tlc_witness'
+          # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
+          # new family adds its prefix there, as secrets would:
+          # '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets)'.
           - shard: window
             run: ''
             build: trace_walk overlay_walk glide_walk
