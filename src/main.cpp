@@ -55,6 +55,7 @@
 #include <utility>
 #include <vector>
 
+#include "pr/app_data.h"
 #include "pr/compress.h"
 #include "pr/draw_list.h"
 #include "pr/draw_renderer.h"
@@ -69,6 +70,7 @@
 #include "pr/studio_window.h"
 #include "pr/text.h"
 #include "pr/time.h"
+#include "pr/ui.h"
 
 #include "board.h"
 #include "client_home.h"
@@ -192,6 +194,24 @@ bool overlayActive(const App& a) {
     return a.window != nullptr && prAppWindowIsActive(prStudioWindowAppWindow(a.window));
 }
 
+// The clipboard's text for the prompt (View::paste), on the app's thread: a Paste event through the host, which cuts it
+// to the room the prompt has left, and otherwise to the focused control as Prax delivers its own paste.
+void pasted(void* context, PrStatus status, PrStringView text) {
+    App& a = appOf(context);
+    if (status != PrStatus_Ok || text.size == 0 || a.host.ui == nullptr) {
+        return;
+    }
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_Paste;
+    e.input.text = text;
+    if (!a.host.event(e)) {
+        prUiPushEvent(a.host.ui, kPrUiViewportMain, &e);
+    }
+    if (a.window != nullptr) {
+        prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+    }
+}
+
 // The window's kit theme (view.h). Over the overlay's Transparent backdrop the window draws no background of its own,
 // so the see-through fill is the window part's (view.cpp, style::kOverlayOpacity), which the window clears to.
 bool open(void* context, PrStudioWindow* window) {
@@ -228,6 +248,13 @@ bool open(void* context, PrStudioWindow* window) {
     a.view.board = a.board.get();
     a.host.terminals = a.terminals.get();
     a.host.board = a.board.get();
+    a.host.ui = prStudioWindowUi(window);
+    // Command-V in the prompt: the clipboard's text comes back through the host, which cuts it to the prompt's room.
+    a.view.paste = [&a] {
+        if (a.window != nullptr) {
+            prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
+        }
+    };
     setBudget(a, prStudioWindowApp(window));
     a.wakeApp = prStudioWindowApp(window);
     prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
@@ -245,6 +272,8 @@ void closeWindow(void* context, PrStudioWindow*) {
     a.host.keepTerminals();
     a.wakeApp = nullptr;
     a.window = nullptr;
+    a.view.paste = nullptr;
+    a.host.ui = nullptr;
     a.host.board = nullptr;
     a.host.terminals = nullptr;
     a.view.board = nullptr;

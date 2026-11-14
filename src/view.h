@@ -113,6 +113,10 @@ struct View {
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
+    // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
+    std::function<void()> paste;
+    std::string pasting;                        // pasted text still to go into the prompt, a piece a frame (frame_host.h)
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
@@ -140,6 +144,24 @@ struct View {
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
     HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
 };
+
+// The most a prompt holds, in bytes: the server's text limit (sync/hub.h Limits::text), past which the server refuses a
+// prompt anyway. A text area relays out the whole of its text at each edit, so a prompt of a megabyte took 100 ms a
+// keystroke; within this it stays well inside a frame.
+constexpr std::size_t kPromptBytes = 32 * 1024;
+
+// The most text that goes into the prompt in one frame. The text area lays out what it is given at once: 32 KB took
+// 10.6 ms, so a longer paste goes in a piece a frame, in order, and text typed meanwhile follows it.
+constexpr std::size_t kPastePiece = 8 * 1024;
+
+// The line the transcript ends with after text was cut to fit the prompt.
+constexpr const char* kPromptCut = "The prompt holds 32 KB at most; the rest of the text was left out.";
+
+// The bytes the prompt of the friend's tab that shows can still take: kPromptBytes less its draft. Zero on any other tab.
+std::size_t promptRoom(const View& view);
+
+// The longest prefix of `text` of at most `room` bytes that ends on a whole UTF-8 character.
+PrStringView cutText(PrStringView text, std::size_t room);
 
 // Called at the start of each frame, before its rounds: applies a text scale the keys asked for in the last frame to the
 // look and the kit's theme (which changes only between rounds). Returns true if it changed the scale.

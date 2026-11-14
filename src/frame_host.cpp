@@ -7,6 +7,8 @@
 #include "board.h"
 #include "terminals.h"
 
+static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt holds what the server takes");
+
 namespace nexus {
 
 void FrameHost::keepSelection() {
@@ -124,6 +126,10 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     }
     view->time = time;
     {
+        HitchScope scope(hitch, Phase::Input);
+        pasteOn();
+    }
+    {
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
     }
@@ -139,7 +145,44 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
-    return board != nullptr && board->event(e);
+    if (board != nullptr && board->event(e)) {
+        return true;
+    }
+    if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
+            view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
+        return false;
+    }
+    // Text typed while a paste is still going in follows it; so does a paste.
+    const std::size_t free = promptRoom(*view);
+    const std::size_t room = free > view->pasting.size() ? free - view->pasting.size() : 0;
+    if (view->pasting.empty() && e.input.text.size <= room && e.input.text.size <= kPastePiece) {
+        return false;
+    }
+    const PrStringView kept = cutText(e.input.text, room);
+    if (kept.size != e.input.text.size) {
+        view->problem = kPromptCut;
+    }
+    view->pasting.append(kept.data, kept.size);
+    return true;
+}
+
+// The next piece of the pasted text, as a Paste event for the prompt, on its way to the tree for this frame. If the
+// prompt lost the focus meanwhile (another tab shows), the rest is left out, and the transcript says so.
+void FrameHost::pasteOn() {
+    if (view->pasting.empty() || ui == nullptr) {
+        return;
+    }
+    if (view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
+        view->pasting.clear();
+        view->problem = kPromptCut;
+        return;
+    }
+    const PrStringView piece = cutText(PrStringView{view->pasting.data(), view->pasting.size()}, kPastePiece);
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_Paste;
+    e.input.text = piece;
+    prUiPushEvent(ui, kPrUiViewportMain, &e);
+    view->pasting.erase(0, piece.size);
 }
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {

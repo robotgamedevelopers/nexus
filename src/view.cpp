@@ -925,6 +925,10 @@ struct Builder {
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
         bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
+        // Command-V reads the clipboard through the host, which cuts the text to the room left before the area sees it.
+        if (view.paste && prUiKeyCaptured(ui, box, PrAppKey('V'), style::kCommand)) {
+            view.paste();
+        }
         view.promptRows = promptRows();
 
         plus(box);
@@ -942,8 +946,14 @@ struct Builder {
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
-        if (prKitTextChanged(kit, edit, &changed))
-            model.set_draft(active, std::string(changed.data, changed.size));
+        if (prKitTextChanged(kit, edit, &changed)) {
+            // Text that came past the host's cut (typed on at the limit, or pasted with no host) is cut here.
+            const PrStringView kept = cutText(changed, kPromptBytes);
+            if (kept.size != changed.size) {
+                view.problem = kPromptCut;
+            }
+            model.set_draft(active, std::string(kept.data, kept.size));
+        }
         if (!composing && send) {
             if (view.submit)
                 view.submit(active, false);
@@ -1115,8 +1125,29 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     return true;
 }
 
+std::size_t promptRoom(const View& view) {
+    const Model& model = *view.model;
+    if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend) {
+        return 0;
+    }
+    const std::size_t used = model.tab(model.active()).draft.size();
+    return used < kPromptBytes ? kPromptBytes - used : 0;
+}
+
+PrStringView cutText(PrStringView text, std::size_t room) {
+    if (text.size <= room) {
+        return text;
+    }
+    std::size_t end = room;
+    // Back off continuation bytes (10xxxxxx) so the cut falls before a character's first byte.
+    while (end > 0 && (static_cast<unsigned char>(text.data[end]) & 0xC0) == 0x80) {
+        --end;
+    }
+    return PrStringView{text.data, end};
+}
+
 bool windowWantsFrame(const View& view) {
-    return view.look->textSteps != view.askedTextSteps || view.breathing;
+    return view.look->textSteps != view.askedTextSteps || view.breathing || !view.pasting.empty();
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {

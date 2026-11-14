@@ -1184,6 +1184,20 @@ void nothingAroundTheOpenPrompt() {
     CHECK(h.entries().empty());
 }
 
+// Text cut to the prompt's room ends on a whole UTF-8 character, and the room is what a friend's draft leaves.
+void promptCutKeepsWholeCharacters() {
+    const std::string text = "ab\xC3\xA9" "c";      // a, b, e-acute (two bytes), c
+    const PrStringView all{text.data(), text.size()};
+    CHECK(cutText(all, 10).size == 5);
+    CHECK(cutText(all, 4).size == 4);
+    CHECK(cutText(all, 3).size == 2);               // not half of the e-acute
+    CHECK(cutText(all, 0).size == 0);
+    Harness h;
+    CHECK(promptRoom(h.view) == kPromptBytes - h.model.tab(h.model.active()).draft.size());
+    h.model.set_draft(h.model.active(), std::string(kPromptBytes + 10, 'x'));
+    CHECK(promptRoom(h.view) == 0);
+}
+
 // A long transcript declares only the entries in sight and a screen either side (view.h TranscriptItems), with tool
 // runs kept together; scrolled to the top, the oldest entry shows, and back at the bottom the newest.
 void longTranscriptDeclaresWhatIsInSight() {
@@ -1779,6 +1793,7 @@ int main() {
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
     longTranscriptDeclaresWhatIsInSight();
+    promptCutKeepsWholeCharacters();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     toolLinesAreOneCompactLine();

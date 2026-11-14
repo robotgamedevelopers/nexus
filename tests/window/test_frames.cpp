@@ -239,6 +239,7 @@ struct Window {
         host.terminals = terminals.get();
         host.board = board.get();
         host.hitch = &hitch;
+        host.ui = ui;
         host.keep = true;
         host.terminalStore = &terminalStore;
         host.selectionStore = &selectionStore;
@@ -367,9 +368,10 @@ struct Window {
         key(PrAppKey('0' + digit), code, style::kCommand);
     }
 
+    // The clipboard's text as the app delivers it after Command-V (main.cpp pasted).
     void paste(const std::string& text) {
         PrAppEvent t{};
-        t.kind = PrAppEventKind_Text;
+        t.kind = PrAppEventKind_Paste;
         t.input.text = PrStringView{text.data(), text.size()};
         push(t);
         frame();
@@ -442,8 +444,11 @@ struct Case {
     const char* name;
     void (*run)(Window& w);
     // A known hitch whose fix is outside nexus (docs/frame-budget.md, known hitches): the case runs and reports every
-    // hitch, and its hitches do not fail the test. Null for every case nexus can keep within the budget.
+    // hitch, and its hitches do not fail the test while every frame stays under `ceiling` ms, just above what the part
+    // outside nexus costs, so that a regression on nexus's side still fails. Null for every case nexus keeps within the
+    // budget.
     const char* known = nullptr;
+    double ceiling = 0;
 };
 
 // The window comes up connected on a friend's tab, and its first frames are drawn.
@@ -500,8 +505,16 @@ void bigPaste(Window& w) {
     while (big.size() < 1024 * 1024)
         big += "a pasted line of a log, long enough to wrap, with numbers 0123456789 and words in it\n";
     w.paste(big);
+    w.frames(10);
+    // Edits at the end of a full prompt: four characters taken back and typed again.
+    for (int i = 0; i < 4; ++i) {
+        w.key(PrAppKey_Backspace, PrAppKeyCode_Backspace);
+    }
     w.type("more");
     w.frames(30);
+    // The prompt kept what the server takes, and the transcript says the rest was left out.
+    CHECK(w.model.tab(1).draft.size() == kPromptBytes);
+    CHECK(w.view.problem == kPromptCut);
 }
 
 // Switching between friends with long histories, and to the sprint tab and back.
@@ -614,7 +627,9 @@ const Case kCases[] = {
     {"typing_over_a_long_history", typingOverALongHistory},
     {"stalled_link_then_a_long_transcript", stalledLinkThenALongTranscript},
     {"streaming_reply", streamingReply},
-    {"big_paste", bigPaste},
+    {"big_paste", bigPaste, "an edit of a prompt at the 32 KB the server takes shapes the whole prompt again (Prax's text "
+        "area lays its text out whole at each change: 11 ms at 32 KB); nexus cuts a paste to 32 KB and sets it in 8 KB "
+        "a frame", 20},
     {"switching_tabs", switchingTabs},
     {"sprint_tab", sprintTab},
     {"terminals", terminals},
@@ -622,11 +637,12 @@ const Case kCases[] = {
     {"resizing", resizing},
     {"fallback_fonts", fallbackFonts, "each text font of the kit matches the fallback faces on the frame that first "
         "needs one (Prax text_font.cpp matchFallback); nexus loads the faces ahead (font_prefetch.h), Prax has no way "
-        "to match a kit's text fonts ahead or off the frame thread"},
+        "to match a kit's text fonts ahead or off the frame thread", 150},
     {"slow_ssh_link", slowSshLink},
 };
 
-// Runs a case in a window of its own and reports every hitch: its frame, its work and its phases.
+// Runs a case in a window of its own and reports every hitch: its frame, its work and its phases. A known case fails
+// only past its ceiling.
 bool run(const Case& c) {
     Window w;
     const double started = prTimeMonotonicMilliseconds();
@@ -635,8 +651,14 @@ bool run(const Case& c) {
     std::printf("%-40s %5llu frames, worst %6.2f ms, %llu hitches (%.1f s)\n", c.name,
         static_cast<unsigned long long>(w.hitch.frames()), w.hitch.worst(),
         static_cast<unsigned long long>(w.hitch.hitches()), took / 1000);
-    if (w.hitch.hitches() == 0)
+    if (c.known != nullptr && w.hitch.worst() > c.ceiling) {
+        std::printf("  %s: worst frame %.2f ms is past the known ceiling of %.2f ms\n", c.name, w.hitch.worst(),
+            c.ceiling);
+        ++failures;
+    }
+    if (w.hitch.hitches() == 0) {
         return true;
+    }
     for (std::size_t i = 0; i < w.hitch.held(); ++i) {
         char line[1024];
         std::printf("  %s: %s\n", c.name, HitchDetector::format(w.hitch.hitch(i), w.hitch.budget(), line, sizeof line));
@@ -681,6 +703,7 @@ int main(int argc, char** argv) {
     slowSsh = argv[1];
     detectorCost();
     int hitched = 0;
+    int known = 0;
     int ran = 0;
     for (const Case& c : kCases) {
         bool chosen = argc == 2;
@@ -691,6 +714,7 @@ int main(int argc, char** argv) {
         ++ran;
         const bool within = run(c);
         if (c.known != nullptr) {
+            known += within ? 0 : 1;
             std::printf("  %s: %s: %s\n", c.name, within ? "within the budget now; the known mark can go" : "known",
                 c.known);
         } else if (!within) {
@@ -706,6 +730,7 @@ int main(int argc, char** argv) {
             1000.0 / 120, failures);
         return 1;
     }
-    std::printf("every frame of %d cases within the %.2f ms budget\n", ran, 1000.0 / 120);
+    std::printf("every frame of %d cases within the %.2f ms budget, but for %d known cases\n", ran - known, 1000.0 / 120,
+        known);
     return 0;
 }
