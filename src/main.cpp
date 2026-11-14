@@ -317,6 +317,12 @@ bool start(void* context, PrStudioApp* studio) {
         std::fprintf(stderr, "nexus: the overlay window could not be created (status %d)\n", int(created));
         return false;
     }
+    // Sized to the screen now, while hidden, so that the first show (carryOut) finds the window at the size it shows at
+    // and its first frame makes the swap chain once, at that size, rather than once and again after a resize.
+    PrAppSurface surface{};
+    if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok) {
+        coverScreen(surface);
+    }
     PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
     if (status != PrStatus_Ok) {
         char line[512];
