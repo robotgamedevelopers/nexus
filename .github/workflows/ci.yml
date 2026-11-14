@@ -417,7 +417,9 @@ jobs:
   # (model-label).
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    # The largest instances (tlc: true) on the fleet's runners labelled tlc, away from hulk, where most of the general
+    # Linux runners share one machine with other repositories' CI and run these past their 60 s.
+    runs-on: ${{ matrix.tlc && fromJSON('["self-hosted", "fleet", "Linux", "X64", "tlc"]') || fromJSON('["self-hosted", "fleet", "Linux", "X64"]') }}
     timeout-minutes: 2
     strategy:
       fail-fast: false
@@ -425,20 +427,26 @@ jobs:
         include:
           - shard: supervisor
             run: '^tlc_supervisor$'
+            tlc: true
           - shard: supervisor-switch
             run: '^tlc_supervisor_switch$'
+            tlc: true
           - shard: supervisor-place
             run: '^tlc_supervisor_place$'
+            tlc: true
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
             skip: '^tlc_supervisor_(switch|place)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
+            tlc: true
           - shard: link-one-window
             run: '^tlc_link_one_window$'
+            tlc: true
           - shard: link-tabs
             run: '^tlc_link_(tabs|two_windows)$'
+            tlc: true
           - shard: link-rest
             run: '^tlc_link_'
             build: link_walk
