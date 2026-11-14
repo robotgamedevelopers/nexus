@@ -409,7 +409,8 @@ jobs:
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
   # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
-  # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`), and the last,
+  # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`) and builds only
+  # the walks they run (`build`), and the last,
   # window, takes every test no other shard names, so a new test is never missed. `--no-tests=error` fails a shard
   # whose regex matches nothing. The largest instances each have a shard of their own. The tab label's traces need the
   # window's logic, which does not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS
@@ -430,6 +431,7 @@ jobs:
             run: '^tlc_supervisor_place$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
+            build: supervisor_walk
             skip: '^tlc_supervisor_(switch|place)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
@@ -439,9 +441,11 @@ jobs:
             run: '^tlc_link_(tabs|two_windows)$'
           - shard: link-rest
             run: '^tlc_link_'
+            build: link_walk
             skip: '^tlc_link_(ensure|one_window|tabs|two_windows)$'
           - shard: accounts-journal
             run: '^tlc_(accounts|journal)'
+            build: accounts_walk journal_walk
           - shard: claude
             run: '^tlc_claude'
             node: true
@@ -449,6 +453,7 @@ jobs:
             run: '^tlc_witness'
           - shard: window
             run: ''
+            build: trace_walk overlay_walk glide_walk
             skip: '^tlc_(supervisor|link|accounts|journal|claude|witness)'
     name: model (${{ matrix.shard }})
     env:
@@ -526,8 +531,16 @@ jobs:
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
             -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}"
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
+      # Only the walks this shard's trace checks run (`build`); a shard of specs and witnesses alone builds nothing.
+      - name: Build the shard's walks
+        if: matrix.build
+        shell: bash
+        env:
+          TARGETS: ${{ matrix.build }}
+        run: |
+          set -euo pipefail
+          read -r -a targets <<< "$TARGETS"
+          cmake --build build --parallel "$JOBS" --target "${targets[@]}"
       # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
       # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
       # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
