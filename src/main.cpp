@@ -72,7 +72,10 @@
 
 #include "board.h"
 #include "client_home.h"
+#include "font_prefetch.h"
+#include "frame_host.h"
 #include "friends.h"
+#include "hitch.h"
 #include "model.h"
 #include "overlay.h"
 #include "platform.h"
@@ -80,8 +83,6 @@
 #include "tab_order.h"
 #include "terminals.h"
 #include "view.h"
-#include "frame_host.h"
-#include "hitch.h"
 
 #if NEXUS_LINK
 #include "link/client_port.h"
@@ -840,6 +841,11 @@ int main(int argc, char** argv) {
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
     prFontSetSetDefaultFamily(a.fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
+    // The fallback fonts (emoji, CJK, ...) loaded on a thread of their own while nothing shows, before a frame needs
+    // them; a screenshot loads them as it sets its text.
+    std::unique_ptr<FontPrefetch> prefetch;
+    if (shot == nullptr)
+        prefetch = std::make_unique<FontPrefetch>(a.fonts);
 
     int code = 0;
     if (shot != nullptr) {
@@ -897,6 +903,7 @@ int main(int argc, char** argv) {
 #endif
         printStats(a.stats);
     }
+    prefetch.reset();
     prFontSetDestroy(a.fonts);
     prFontSystemDestroy(system);
     return code;

@@ -195,7 +195,7 @@ endif()
 
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
-    add_library(nexus_view STATIC src/view.cpp)
+    add_library(nexus_view STATIC src/view.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_view PUBLIC src)
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_view PUBLIC nexus_window_logic nexus_hitch
