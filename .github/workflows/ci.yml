@@ -2,7 +2,8 @@
 # with their trace checks, and the Claude driver (drivers/claude), as four jobs in parallel on the fleet's macOS runners
 # (never GitHub-hosted); and the build
 # without the window, its unit and functional tests and the sanitizers' programs, and the code generated from
-# schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners. Every pull request runs it, whatever its base,
+# schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
+# captain (wsl2-functional), where nexus runs everything but the overlay on Windows. Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -474,6 +475,65 @@ jobs:
       # model_nightly (the window model's three largest, the link's, the store's, and the Claude driver's with both settings), run in nightly.yml; every property is still checked here, on the smaller instances.
       - name: Models and trace checks
         run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
+
+  # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
+  # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
+  # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
+  # the same configure as build-and-unit-linux, and so with what Prax lets Linux build at its pin (no window logic, so
+  # no link and no nexus-server yet: build-and-unit-linux says why). The first step refuses to run anywhere but WSL2.
+  # Caches as build-and-unit-linux's, under ~/.cache/nexus-ci inside the distro.
+  wsl2-functional:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, Linux, X64, wsl2]
+    timeout-minutes: 2
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Inside WSL2, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in
+            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
+            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
+          esac
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "NEXUS_CACHES=$caches"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
+            echo "JOBS=$(nproc)"
+          } >> "$GITHUB_ENV"
+      - name: Configure (Release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          else
+            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
+            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+      - name: Build
+        run: cmake --build build --parallel "$JOBS"
+      - name: Functional tests
+        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure --no-tests=error
+      - name: ccache hits in this job
+        if: always()
+        shell: bash
+        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags), on captain's Windows runners: everything that builds there today, and its unit tests. Not the window
