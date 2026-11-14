@@ -14,8 +14,14 @@
 // filled with 10,000 lines and closed; the sprint tab's page shown for the first time and polled; tabs switched; the
 // window resized; the text scale changed; text that needs fallback fonts.
 //
+// A case with a frame over the budget runs again, up to three times in all, in a fresh window. A real hitch is work on
+// the frame thread and is over the budget on the same frame every run; a frame the scheduler held up on a loaded host
+// is not. A frame fails only if it is over the budget in every run, and the report gives its phase and each run's
+// wall-clock time beside the frame thread's CPU time, so a reader sees whether the time was work or waiting.
+//
 // Text is set in the system's fonts, shells run and real time passes: a functional test. Its working directory is its
-// own, under the build tree. Usage: nexus_frame_tests SLOW_SSH [CASE...]
+// own, under the build tree. Usage: nexus_frame_tests SLOW_SSH [--inject CASE FRAME] [CASE...]; --inject gives that
+// case's frame 10 ms of busy work in the Keep phase, the proof that a real hitch fails every time.
 
 #include <algorithm>
 #include <atomic>
@@ -23,7 +29,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -31,6 +39,9 @@
 #include <vector>
 
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 
 #include "pr/draw_list.h"
 #include "pr/font_set.h"
@@ -72,6 +83,32 @@ void check(bool ok, const char* what, int line) {
 double realMs(void*) {
     return prTimeMonotonicMilliseconds();
 }
+
+// The CPU time the calling thread has used, ms: what the frame thread spent working, whatever the scheduler did.
+double threadCpuMs() {
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return double(t.tv_sec) * 1000 + double(t.tv_nsec) / 1e6;
+}
+
+// Spins for `ms` of real time: a stand-in for work on the frame thread.
+void busyWait(double ms) {
+    const double until = prTimeMonotonicMilliseconds() + ms;
+    while (prTimeMonotonicMilliseconds() < until) {
+    }
+}
+
+// A frame over the budget in one run of a case: its number, the input events pushed before it (which place it among
+// the case's steps when frames are counted differently from run to run), its wall-clock work, the frame thread's CPU
+// time over the frame, and the phase with the most of its time.
+struct Over {
+    std::uint64_t frame = 0;
+    std::uint64_t events = 0;
+    double wall = 0;
+    double cpu = 0;
+    std::string phase;
+    std::string line;           // the hitch's log line
+};
 
 // The hitch lines as the app logs them, kept for the case's report.
 struct Lines {
@@ -204,6 +241,9 @@ struct Window {
     // The frames whose work is a known hitch (Case::known), by number: no other frame of a case may pass the budget.
     std::vector<std::uint64_t> knownFrames;
     int pastes = 0;                     // Command-Vs that reached the prompt's View::paste
+    std::uint64_t events = 0;           // input events pushed so far
+    std::map<std::uint64_t, std::pair<std::uint64_t, double>> frameInfo; // over-budget frames: events before, CPU ms
+    std::uint64_t injectFrame = 0;      // a frame given 10 ms of work in Keep (--inject); 0 for none
 
     Window() : model(std::vector<FriendInfo>{FriendInfo{"alex", "m"}, FriendInfo{"emma", "m"}, FriendInfo{"stella", "m"}},
             true) {
@@ -281,8 +321,14 @@ struct Window {
         }
         time += 1.0 / 120;
         boardMs = boardMs.load() + 1000.0 / 120;
+        const std::uint64_t hitchesBefore = hitch.hitches();
+        const double cpuBefore = threadCpuMs();
         hitch.begin();
         view.extent = extent;
+        if (hitch.frames() + 1 == injectFrame) {
+            HitchScope scope(&hitch, Phase::Keep);
+            busyWait(10);
+        }
         host.beginFrame(kit, fonts, time, prAppDisplayDefault());
         {
             HitchScope scope(&hitch, Phase::Layout);
@@ -315,6 +361,9 @@ struct Window {
             prDrawListPopTransform(list);
         }
         hitch.end();
+        if (hitch.hitches() != hitchesBefore) {
+            frameInfo[hitch.frames()] = {events, threadCpuMs() - cpuBefore};
+        }
     }
 
     void frames(int n, bool paced = false) {
@@ -334,6 +383,7 @@ struct Window {
 
     // An event as the window gets it, measured as input the way the app's event callback is (main.cpp event).
     void push(PrAppEvent e) {
+        ++events;
         e.time = time;
         if (!host.event(e)) {
             HitchScope scope(&hitch, Phase::Input);
@@ -805,27 +855,63 @@ const Case kCases[] = {
 
 // What a case's frames came to.
 struct Outcome {
-    int hitched = 0;        // frames over the budget that are not known: each fails the test
+    int hitched = 0;        // frames over the budget in every run that are not known: each fails the test
     int known = 0;          // known frames over the budget, each under the case's ceiling
 };
 
-// Runs a case in a window of its own and reports every hitch: its frame, its work and its phases. A hitch fails unless
-// its frame is one the case marked known (Window::known) and its work is under the case's ceiling.
-Outcome run(const Case& c) {
+// The case and frame given 10 ms of work (--inject CASE FRAME): the proof that a real hitch fails every time.
+const char* injectCase = nullptr;
+std::uint64_t injectAt = 0;
+
+// The runs a case gets at most. A real hitch is work on the frame thread and comes back on the same frame every run;
+// a frame the scheduler held up (the host loaded with other jobs) does not. A frame fails only if it is over the
+// budget in every run.
+constexpr int kRuns = 3;
+
+// One run of a case: its frame count, the frames that fail in it alone, and its known frames under the ceiling.
+struct Pass {
+    std::uint64_t frames = 0;
+    std::vector<Over> over;
+    int known = 0;
+};
+
+// The phase with the most of the hitch's time.
+const char* mostPhase(const Hitch& h) {
+    std::size_t most = 0;
+    for (std::size_t i = 1; i < h.phaseCount; ++i) {
+        if (h.phases[i].ms > h.phases[most].ms) {
+            most = i;
+        }
+    }
+    return h.phaseCount == 0 ? "none" : phaseName(h.phases[most].phase);
+}
+
+// Runs the case once in a window of its own and prints every hitch: its frame, its work, its CPU time and its phases.
+// A hitch fails the run unless its frame is one the case marked known (Window::known) and its work is under the case's
+// ceiling.
+Pass once(const Case& c, int run) {
     Window w;
+    if (injectCase != nullptr && std::strcmp(injectCase, c.name) == 0) {
+        w.injectFrame = injectAt;
+    }
     const double started = prTimeMonotonicMilliseconds();
     c.run(w);
     const double took = prTimeMonotonicMilliseconds() - started;
-    std::printf("%-40s %5llu frames, worst %6.2f ms, %llu hitches (%.1f s)\n", c.name,
+    std::printf("%-40s %5llu frames, worst %6.2f ms, %llu hitches (%.1f s)%s\n", c.name,
         static_cast<unsigned long long>(w.hitch.frames()), w.hitch.worst(),
-        static_cast<unsigned long long>(w.hitch.hitches()), took / 1000);
-    Outcome out;
+        static_cast<unsigned long long>(w.hitch.hitches()), took / 1000,
+        run == 1 ? "" : run == 2 ? " [run 2]" : " [run 3]");
+    Pass pass;
+    pass.frames = w.hitch.frames();
     if (w.hitch.hitches() > w.hitch.held()) {
         std::printf("  %s: %llu hitches, more than the detector holds: the ones not held count as hitches\n", c.name,
             static_cast<unsigned long long>(w.hitch.hitches()));
-        out.hitched += int(w.hitch.hitches() - w.hitch.held());
+        Over o;
+        o.phase = "unheld";
+        o.line = "more hitches than the detector holds";
+        pass.over.push_back(o);
     }
-    if (c.known == nullptr && !w.knownFrames.empty()) {
+    if (c.known == nullptr && !w.knownFrames.empty() && run == 1) {
         std::printf("  %s: marks known frames but has no known reason\n", c.name);
         ++failures;
     }
@@ -833,14 +919,76 @@ Outcome run(const Case& c) {
         const Hitch& h = w.hitch.hitch(i);
         const bool marked = std::find(w.knownFrames.begin(), w.knownFrames.end(), h.frame) != w.knownFrames.end();
         const bool known = c.known != nullptr && marked && h.work <= c.ceiling;
+        const auto info = w.frameInfo.find(h.frame);
+        const double cpu = info != w.frameInfo.end() ? info->second.second : 0;
         char line[1024];
-        std::printf("  %s: %s%s\n", c.name, HitchDetector::format(h, w.hitch.budget(), line, sizeof line),
+        HitchDetector::format(h, w.hitch.budget(), line, sizeof line);
+        std::printf("  %s: %s thread cpu %.2f ms%s\n", c.name, line, cpu,
             known ? " (known)" : marked ? " (known frame, past the ceiling)" : "");
         if (known) {
-            ++out.known;
-        } else {
-            ++out.hitched;
+            ++pass.known;
+            continue;
         }
+        Over o;
+        o.frame = h.frame;
+        o.events = info != w.frameInfo.end() ? info->second.first : 0;
+        o.wall = h.work;
+        o.cpu = cpu;
+        o.phase = mostPhase(h);
+        o.line = line;
+        pass.over.push_back(o);
+    }
+    return pass;
+}
+
+// The same frame in another run: the same number when both runs had as many frames, else the same place among the
+// case's input events with the same phase the most (cases that wait on real time have a frame count of their own each
+// run).
+const Over* again(const Over& o, std::uint64_t frames, const Pass& other) {
+    for (const Over& p : other.over) {
+        const bool same = frames == other.frames ? p.frame == o.frame : p.events == o.events && p.phase == o.phase;
+        if (same) {
+            return &p;
+        }
+    }
+    return nullptr;
+}
+
+// Runs a case up to kRuns times and reports each frame over the budget: a frame over it in every run fails, named with
+// its phase and every run's wall-clock and CPU time; one that is not over again was the host, and is said so.
+Outcome run(const Case& c) {
+    Outcome out;
+    std::vector<Pass> passes;
+    passes.reserve(kRuns);      // `still` points into passes[0]
+    passes.push_back(once(c, 1));
+    out.known = passes[0].known;
+    std::vector<const Over*> still;
+    for (const Over& o : passes[0].over) {
+        still.push_back(&o);
+    }
+    for (int r = 2; r <= kRuns && !still.empty(); ++r) {
+        passes.push_back(once(c, r));
+        std::vector<const Over*> next;
+        for (const Over* o : still) {
+            if (again(*o, passes[0].frames, passes.back()) != nullptr) {
+                next.push_back(o);
+            } else {
+                std::printf("  %s: frame %llu (%s) at %.2f ms, cpu %.2f ms: not over the budget again in run %d, the "
+                    "host held it up\n", c.name, static_cast<unsigned long long>(o->frame), o->phase.c_str(), o->wall,
+                    o->cpu, r);
+            }
+        }
+        still = next;
+    }
+    for (const Over* o : still) {
+        std::printf("  %s: HITCH in every run: frame %llu, phase %s:", c.name, static_cast<unsigned long long>(o->frame),
+            o->phase.c_str());
+        for (std::size_t r = 0; r < passes.size(); ++r) {
+            const Over* p = r == 0 ? o : again(*o, passes[0].frames, passes[r]);
+            std::printf(" %.2f ms (cpu %.2f)", p->wall, p->cpu);
+        }
+        std::printf("\n");
+        ++out.hitched;
     }
     return out;
 }
@@ -876,20 +1024,34 @@ void detectorCost() {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: nexus_frame_tests SLOW_SSH [CASE...]\n");
+        std::fprintf(stderr, "usage: nexus_frame_tests SLOW_SSH [--inject CASE FRAME] [CASE...]\n");
         return 2;
     }
     slowSsh = argv[1];
+#if defined(__APPLE__)
+    // The frames run at the QoS of an app's main thread, user-interactive, as the window's own frames do: on a loaded
+    // host the scheduler keeps it on the performance cores, where a default-QoS thread may be moved to the efficiency
+    // cores and do the same work in twice the time.
+    CHECK(pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0);
+#endif
+    int first = 2;
+    if (argc >= 5 && std::strcmp(argv[2], "--inject") == 0) {
+        injectCase = argv[3];
+        injectAt = std::strtoull(argv[4], nullptr, 10);
+        first = 5;
+    }
     detectorCost();
     int hitched = 0;
     int known = 0;
     int ran = 0;
     for (const Case& c : kCases) {
-        bool chosen = argc == 2;
-        for (int i = 2; i < argc && !chosen; ++i)
+        bool chosen = argc == first;
+        for (int i = first; i < argc && !chosen; ++i) {
             chosen = std::strcmp(argv[i], c.name) == 0;
-        if (!chosen)
+        }
+        if (!chosen) {
             continue;
+        }
         ++ran;
         const Outcome o = run(c);
         hitched += o.hitched != 0 ? 1 : 0;

@@ -56,7 +56,24 @@ reports every hitch with its frame and phases.
 | `slow_ssh_link` | the real link over an ssh that hangs for 3 s and fails |
 
 The preference files sit on a stand-in disk that takes 200 ms a write. Usage:
-`nexus_frame_tests SLOW_SSH [CASE...]` (no case: all of them).
+`nexus_frame_tests SLOW_SSH [--inject CASE FRAME] [CASE...]` (no case: all of them).
+
+**A frame fails only if it is over the budget in every run.** A case with a frame over the budget runs again in a
+fresh window, up to three runs in all. A real hitch is work on the frame thread, and it comes back on the same frame
+each run; a frame the scheduler held up on a loaded host does not. The same frame is the same frame number when the
+runs have as many frames, and otherwise (a case that waits on real time) the same place among the case's input events
+with the same phase taking the most time. A failure names the frame, that phase, and each run's wall-clock time beside
+the frame thread's CPU time (`CLOCK_THREAD_CPUTIME_ID`): CPU time near the wall time is work, far below it is waiting.
+A frame that is not over again is reported as held up by the host. The budget stays 8.3 ms in every run. On macOS the
+test's frames run at the QoS of an app's main thread (user-interactive), as the window's do; at the default QoS a loaded
+host moves the thread to the efficiency cores, where the same work takes about twice the CPU time.
+
+The proof that a real hitch still fails: `--inject` gives one frame 10 ms of busy work in the Keep phase.
+`window_frame_budget_injected` (a case with a fixed frame count) and `window_frame_budget_injected_paced` (one that waits
+on real time) pass only when the test reports that frame as a hitch in every run.
+
+In CI the frame budget runs after the other functional tests, alone, under `nova-reserve run --exclusive` when every
+slot on the host is free within 20 s, and shared otherwise.
 
 ## What it found, and the fixes
 
@@ -80,7 +97,7 @@ Every hitch below failed the test before its fix.
 Each is a case marked known in the test. Only the frames the case marks known (`Window::known`) may pass the budget,
 each under the case's ceiling, the worst measured on the studio and about 15%; every other frame of the case keeps
 8.3 ms. Both are Prax requests. On a heavily loaded machine (load average over 50) the measured frames run up to
-several times longer, and the test may fail there.
+several times longer; a known frame past its ceiling fails only if it is past it in every run, as above.
 
 - **`fallback_fonts`, 60 to 124 ms on the first frame that sets such text, ceiling 145 ms.** Each text font of the window's kit matches the font set's
   fallback faces itself the first time a cluster needs one (Prax `text_font.cpp` `matchFallback`), on the thread that

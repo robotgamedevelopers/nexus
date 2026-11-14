@@ -96,8 +96,28 @@ jobs:
         run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
+      # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
+      # alone, and with every nova-reserve slot on this host when it can have them within 20 s; else shared.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L functional -E '^window_frame_budget$' -j "$JOBS" --output-on-failure
+      - name: Frame budget, alone
+        shell: bash
+        run: |
+          set -uo pipefail
+          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
+          if command -v nova-reserve >/dev/null; then
+            held="$RUNNER_TEMP/frame-budget-held"
+            rm -f "$held"
+            if nova-reserve run --exclusive --wait 20s --why "nexus CI frame budget" -- \
+                sh -c 'touch "$0" && exec "$@"' "$held" "${frames[@]}"; then
+              exit 0
+            fi
+            if [ -f "$held" ]; then
+              exit 1
+            fi
+            echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
+          fi
+          "${frames[@]}"
       - name: ccache hits in this job
         if: always()
         shell: bash
