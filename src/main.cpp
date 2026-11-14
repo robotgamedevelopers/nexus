@@ -269,6 +269,10 @@ void closeWindow(void* context, PrStudioWindow*) {
         std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
         a.failed = true;
     }
+    // The directories as they are now, not as last read (terminals.h reads one a frame, each once a second).
+    if (a.terminals != nullptr) {
+        a.terminals->readDirectories();
+    }
     a.host.keepTerminals();
     a.wakeApp = nullptr;
     a.window = nullptr;

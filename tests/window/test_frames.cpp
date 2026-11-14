@@ -556,12 +556,24 @@ void terminals(Window& w) {
     }
     w.type("seq 1 10000\r");
     const std::size_t id = w.model.tab(w.model.active()).id;
-    w.until([&] { return w.terminals->text(id).find("10000\n") != std::string::npos; }, 1200);
+    const bool filled = w.until([&] { return w.terminals->text(id).find("\n10000 ") != std::string::npos; }, 1200);
+    if (!filled) {
+        const std::string text = w.terminals->text(id);
+        std::fprintf(stderr, "  screen (%zu bytes): %s\n", text.size(), text.substr(0, 400).c_str());
+    }
+    CHECK(filled);
     w.frames(30, true);
     for (int i = 0; i < 3; ++i) {
         w.command('W', PrAppKeyCode_KeyW);
         w.frames(30, true);
     }
+    // A shell that cannot start: its tab shows at once and closes once the start thread has failed.
+    w.terminals->program = "/no/such/shell";
+    const std::size_t tabs = w.model.tab_count();
+    w.command('T', PrAppKeyCode_KeyT);
+    CHECK(w.model.tab_count() == tabs + 1);
+    CHECK(w.until([&] { return w.model.tab_count() == tabs; }, 600));
+    w.terminals->program = "/bin/sh";
 }
 
 // Command-plus and Command-minus with a long history and a terminal holding 10,000 lines of scrollback.
@@ -571,7 +583,7 @@ void textScale(Window& w) {
     w.frames(20, true);
     w.type("seq 1 10000\r");
     const std::size_t id = w.model.tab(w.model.active()).id;
-    w.until([&] { return w.terminals->text(id).find("10000\n") != std::string::npos; }, 1200);
+    CHECK(w.until([&] { return w.terminals->text(id).find("\n10000 ") != std::string::npos; }, 1200));
     w.commandDigit(2);
     w.frames(5);
     for (int i = 0; i < 3; ++i) {
