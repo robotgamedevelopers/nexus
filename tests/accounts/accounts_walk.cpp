@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
         std::string p = kNone;
         sync::SessionId s = 0;
         bool ok = false;
-        const std::size_t choice = pick(30);
+        const std::size_t choice = pick(50);   // weighted toward the steps that move sessions
         if (choice < 3) {
             op = "add";
             a = pickOf(kAccts);
@@ -210,37 +210,37 @@ int main(int argc, char** argv) {
             op = "remove";
             a = pickOf(kAccts);
             ok = w.act(sync::ActionKind::RemoveAccount, 0, "", "", a);
-        } else if (choice < 7) {
+        } else if (choice < 10) {
             op = pick(3) == 0 ? "out" : "in";
             a = pickOf(kAccts);
             ok = w.reg().account(a) != nullptr;
             w.hub.reportSignedIn(a, op == "in");
-        } else if (choice < 9) {
+        } else if (choice < 12) {
             op = "friend";
             f = pickOf(kFriends);
             ok = w.act(sync::ActionKind::AddFriend, 0, f, "", "");
-        } else if (choice < 12) {
+        } else if (choice < 19) {
             op = "link";
             f = pickOf(kFriends);
             a = pickOf(kAccts);
             ok = w.act(sync::ActionKind::LinkAccount, 0, f, "", a);
-        } else if (choice < 13) {
+        } else if (choice < 21) {
             op = "unlink";
             f = pickOf(kFriends);
             a = pickOf(kAccts);
             ok = w.act(sync::ActionKind::UnlinkAccount, 0, f, "", a);
-        } else if (choice < 15) {
+        } else if (choice < 24) {
             op = "default";
             f = pickOf(kFriends);
             a = pickOf(acctsOrNone);
             ok = w.act(sync::ActionKind::SetDefault, 0, f, "", a == kNone ? "" : a);
-        } else if (choice < 16) {
+        } else if (choice < 25) {
             op = "dropfriend";
             f = pickOf(kFriends);
             accounts::Registry next = w.reg();
             std::erase_if(next.friends, [&](const accounts::Friend& x) { return x.name == f; });
             ok = w.edit(next);
-        } else if (choice < 17) {
+        } else if (choice < 26) {
             op = "droplink";
             f = pickOf(kFriends);
             a = pickOf(kAccts);
@@ -249,13 +249,13 @@ int main(int argc, char** argv) {
                 std::erase(x->accounts, a);
             }
             ok = w.edit(next);
-        } else if (choice < 18) {
+        } else if (choice < 27) {
             op = "dropaccount";
             a = pickOf(kAccts);
             accounts::Registry next = w.reg();
             std::erase_if(next.accounts, [&](const accounts::Account& x) { return x.name == a; });
             ok = w.edit(next);
-        } else if (choice < 20) {
+        } else if (choice < 29) {
             op = "provider";
             a = pickOf(kAccts);
             p = pickOf(kProviders);
@@ -269,12 +269,17 @@ int main(int argc, char** argv) {
             if (ok) {
                 w.provider[a] = p;
             }
-        } else if (choice < 25) {
+        } else if (choice < 38) {
             op = "set";
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             a = pickOf(acctsOrNone);
+            const sync::StoredSession* on = w.store.find(s);
+            const accounts::Friend* fr = on == nullptr ? nullptr : w.reg().friendNamed(on->info.friendName);
+            if (fr != nullptr && !fr->accounts.empty() && pick(4) != 0) {
+                a = pickOf(fr->accounts);   // mostly one of its friend's accounts, so that sessions run on some
+            }
             ok = w.act(sync::ActionKind::SetAccount, s, "", a == kNone ? "" : a, "");
-        } else if (choice < 27) {
+        } else if (choice < 44) {
             op = "rotate";
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             ok = w.hub.rotate(s);
