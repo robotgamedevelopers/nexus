@@ -34,6 +34,7 @@ using namespace style;
 enum class Part : unsigned char {
     Window,
     Transcript,
+    TranscriptAtEnd,
     Column,
     Centered,
     Entry,
@@ -45,6 +46,8 @@ enum class Part : unsigned char {
     BoardBox,
     Tools,
     Cursor,
+    Spacer,
+    Paragraphs,
 };
 
 // The height of the kit text area with one line at text scale `k`, which the plus beside it centres on: the line, the
@@ -97,10 +100,15 @@ struct BoxRecipe {
                 box.height = prLayoutLengthPercent(100);
                 break;
             case Part::Transcript:
+            case Part::TranscriptAtEnd:
                 box.display = PrLayoutDisplay_Flex;
                 box.minHeight = px(0);
                 box.overflowX = PrLayoutOverflow_Hidden;
                 box.overflowY = PrLayoutOverflow_Scroll;
+                // At the end, the transcript follows it (prUiFollowEnd), and the items in sight slide as entries arrive:
+                // anchoring would hold the view on what showed instead, so it is off there.
+                box.overflowAnchor =
+                    part == Part::TranscriptAtEnd ? PrLayoutOverflowAnchor_None : PrLayoutOverflowAnchor_Auto;
                 break;
             case Part::Column:
                 box.display = PrLayoutDisplay_Flex;
@@ -157,6 +165,15 @@ struct BoxRecipe {
                 box.height = px(kCursorHeight * k);
                 box.margin[PrRectSide_Top] = px(-(kGap - kCursorGap) * k);
                 break;
+            case Part::Spacer:
+                // In place of the transcript's items out of sight: its height is placed each round (prKitPlace).
+                box.display = PrLayoutDisplay_Block;
+                break;
+            case Part::Paragraphs:
+                // The open entry, a label a paragraph, so that only its last paragraph is set again as it grows.
+                box.display = PrLayoutDisplay_Flex;
+                box.minWidth = px(0);
+                break;
         }
     }
 };
@@ -206,6 +223,7 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Column;
                 break;
             case Part::Transcript:
+            case Part::TranscriptAtEnd:
                 // It starts at the newest entry and stays there as entries arrive (prUiFollowEnd, in transcript()), and
                 // scroll anchoring holds a view scrolled up in place.
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -249,6 +267,15 @@ struct FlexRecipe {
                 break;
             case Part::Cursor:
                 flex.alignSelf = PrLayoutAlignment_FlexStart;
+                flex.shrink = 0;
+                break;
+            case Part::Spacer:
+                flex.shrink = 0;
+                break;
+            case Part::Paragraphs:
+                // The blank line between two paragraphs, as the one label drew it.
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.rowGap = px(kLinePitch * k);
                 flex.shrink = 0;
                 break;
             default:
@@ -557,6 +584,7 @@ struct Builder {
         view.transcript = kPrLayoutNodeNone;
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
+        HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
         view.terminals->show(tab.id, window);
     }
 
@@ -606,12 +634,206 @@ struct Builder {
             if (tab.kind != TabKind::Terminal)
                 continue;
             const std::size_t id = tab.id;
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             if (view.terminals->ended(id)) {
                 model.close_tab(i);
                 view.terminals->close(id);
             } else if (i != model.active()) {
                 view.terminals->update(id);
             }
+        }
+    }
+
+    // The friend's transcript as laid out (TranscriptItems), with the entries that arrived since grouped into items:
+    // an entry each, and a run of tool lines one item.
+    TranscriptItems& itemsOf(const Tab& tab) {
+        if (view.items.size() <= tab.id)
+            view.items.resize(tab.id + 1);
+        TranscriptItems& items = view.items[tab.id];
+        const std::vector<Entry>& entries = tab.transcript;
+        for (std::size_t i = items.entries; i < entries.size(); ++i) {
+            const Entry& e = entries[i];
+            uint32_t lines = 1;
+            for (char c : e.text)
+                lines += c == '\n' ? 1 : 0;
+            const bool joins = e.kind == EntryKind::Tool && i != 0 && entries[i - 1].kind == EntryKind::Tool &&
+                !items.first.empty();
+            if (joins) {
+                items.lines.back() += 1;
+                items.chars.back() += uint32_t(e.text.size());
+                items.count.back() += 1;
+                items.height.back() = 0;    // it grew: laid out again before its height is known
+                continue;
+            }
+            items.first.push_back(uint32_t(i));
+            items.lines.push_back(lines);
+            items.chars.push_back(uint32_t(e.text.size()));
+            items.count.push_back(1);
+            items.height.push_back(0);
+        }
+        items.entries = entries.size();
+        return items;
+    }
+
+    // The heights of the items the last round declared, from the last layout, with the gap after each; and the
+    // column's width. After a change of the text scale every height is laid out again.
+    void measure(TranscriptItems& items, bool switched) {
+        if (items.steps != look.textSteps) {
+            std::fill(items.height.begin(), items.height.end(), 0.0f);
+            items.steps = look.textSteps;
+        }
+        if (!switched && items.column != kPrLayoutNodeNone) {
+            PrRect c = prLayoutRectToPx(prLayoutNodeBounds(tree, items.column, PrLayoutCoordinates_Layout));
+            if (c.right - c.left >= 1)
+                items.width = c.right - c.left;
+            for (const auto& [item, node] : items.declared) {
+                PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Layout));
+                if (item < items.height.size() && r.bottom - r.top > 0)
+                    items.height[item] = r.bottom - r.top + kGap * k();
+            }
+        }
+        items.declared.clear();
+        if (items.width < 1)
+            items.width = view.extent.x * kColumnPercent / 100;
+    }
+
+    // An item's height with the gap after it: as last laid out, or an estimate from its text until it is.
+    float heightOf(const TranscriptItems& items, std::size_t i, const Tab& tab) const {
+        if (items.height[i] > 0)
+            return items.height[i];
+        const float s = k();
+        const float gap = kGap * s;
+        const EntryKind kind = tab.transcript[items.first[i]].kind;
+        if (kind == EntryKind::Tool)
+            return float(items.count[i]) * kToolPitch * s + float(items.count[i] - 1) * kToolGap * s + gap;
+        // Characters of the body face are about half its size wide.
+        const float perChar = 0.5f * kBodySize * s;
+        float width = std::max(items.width, 1.0f);
+        float pad = 0;
+        if (kind == EntryKind::Person) {
+            width = std::max(width * kBubbleMaxPercent / 100 - 2 * kBubblePadX * s, 1.0f);
+            pad = 2 * kBubblePadY * s;
+        }
+        const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
+        return rows * kLinePitch * s + pad + gap;
+    }
+
+    // Declares the items from the scroll's `offset` (or the end) a screen either side of the `viewport`, the spacers
+    // for the items before and after them, and keeps which items it declared for the next round to measure.
+    void declareItems(PrLayoutNode scroller, PrLayoutNode column, const Tab& tab, TranscriptItems& items, bool atEnd,
+            float offset, float viewport) {
+        const std::size_t n = items.first.size();
+        if (n == 0)
+            return;
+        std::size_t first = 0;
+        std::size_t end = n;
+        float above = 0;        // the items before `first`, px
+        float below = 0;        // the items from `end` on, px
+        if (atEnd) {
+            // From the newest back, two screens' worth.
+            float acc = 0;
+            first = n;
+            while (first > 0 && acc < 2 * viewport) {
+                --first;
+                acc += heightOf(items, first, tab);
+            }
+            for (std::size_t i = 0; i < first; ++i)
+                above += heightOf(items, i, tab);
+        } else {
+            const float top = offset - viewport;
+            const float bottom = offset + 2 * viewport;
+            float y = kColumnInset * k();
+            first = n;
+            end = n;
+            for (std::size_t i = 0; i < n; ++i) {
+                const float h = heightOf(items, i, tab);
+                if (first == n && y + h > top) {
+                    first = i;
+                }
+                if (first != n && y > bottom) {
+                    end = i;
+                    break;
+                }
+                if (first == n) {
+                    above += h;
+                }
+                y += h;
+            }
+            // No item reaches the top (the offset is past the content, as when it shrank): the last item is declared,
+            // and the spacer above stands for the items before it only.
+            if (first == n) {
+                first = n - 1;
+                above -= heightOf(items, first, tab);
+            }
+            for (std::size_t i = end; i < n; ++i)
+                below += heightOf(items, i, tab);
+        }
+        // At the end, the items in sight slide as entries arrive, and the spacer above grows by what left them: the
+        // transcript follows its end there with scroll anchoring off (Part::TranscriptAtEnd), which would hold the view
+        // on what showed instead.
+        if (atEnd)
+            prLayoutTreeFrameSetStyle(tree, scroller, style(ui, look, Part::TranscriptAtEnd));
+        const uint64_t base = uint64_t(tab.id) << 8;
+        // A spacer is followed by the column's gap, as an item is: its own height leaves that out.
+        if (first != 0)
+            spacer(column, prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 1, 0), above - kGap * k());
+        for (std::size_t i = first; i < end; ++i)
+            items.declared.emplace_back(uint32_t(i), declareItem(column, tab, items, i, base));
+        if (end != n)
+            spacer(column, prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 1, 1), below - kGap * k());
+    }
+
+    void spacer(PrLayoutNode column, PrUiKey key, float height) {
+        PrLayoutNode node = element(column, Part::Spacer, 0, key);
+        PrKitPlace place{};
+        place.height = prKitPx(std::max(height, 0.0f));
+        prKitPlace(kit, node, &place);
+    }
+
+    // One item, keyed by its tab and place, so that it keeps its node and its set text as the items in sight change.
+    PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, const TranscriptItems& items, std::size_t i,
+            uint64_t base) {
+        const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 2, i);
+        const Entry& e = tab.transcript[items.first[i]];
+        switch (e.kind) {
+            case EntryKind::Person: {
+                PrLayoutNode entry = element(column, Part::Entry, 0, key);
+                PrLayoutNode bubble = element(entry, Part::Bubble);
+                label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                return entry;
+            }
+            case EntryKind::Friend:
+                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
+                    textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+            case EntryKind::Notice:
+                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
+                    textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            case EntryKind::Tool:
+                break;
+        }
+        PrLayoutNode tools = element(column, Part::Tools, 0, key);
+        PrKitTextStyle line = textStyle(PrKitTextRole_Mono, PrKitTone_Muted);
+        line.wrap = PrKitWrap_Clip;
+        for (std::uint32_t t = 0; t < items.count[i]; ++t)
+            label(tools, tab.transcript[items.first[i] + t].text, line);
+        return tools;
+    }
+
+    // The open entry as it grows, a label a paragraph (paragraphs end at a blank line): each paragraph but the last
+    // keeps its text, so only the last is set again as text arrives.
+    void paragraphs(PrLayoutNode column, const Tab& tab, const std::string& text) {
+        const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, (uint64_t(tab.id) << 8) | 3, 0);
+        PrLayoutNode box = element(column, Part::Paragraphs, 0, key);
+        const PrKitTextStyle body = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        std::size_t at = 0;
+        while (at <= text.size()) {
+            std::size_t blank = text.find("\n\n", at);
+            if (blank == std::string::npos) {
+                label(box, std::string_view(text).substr(at), body);
+                break;
+            }
+            label(box, std::string_view(text).substr(at, blank - at), body);
+            at = blank + 2;
         }
     }
 
@@ -625,50 +847,54 @@ struct Builder {
             return;
         }
         const Tab& tab = model.tab(model.active());
+        const bool switched = view.shown != tab.id;
+        // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.
+        const bool toCut = view.cutFollow && view.cutTab == tab.id;
         if (keepScroll(scroller, tab.id))
             prUiFollowEnd(ui, scroller);
+        if (toCut) {
+            // Past the end, which layout clamps to the end of the content this round makes (as keepScroll goes there).
+            prLayoutNodeSetScroll(tree, scroller, PrLayoutVec{prLayoutUnitFromPx(0), PrLayoutUnit{INT32_MAX}});
+            view.cutFollow = false;
+        }
         view.transcript = scroller;
         // The kit's labels and text area wrap, breaking inside a word that fits no line (PrKitWrap_Wrap, kit_theme.h
         // 99), so a long URL or token wraps inside its box instead of running past it. A tool line never wraps: it is
         // one compact line, cut at the column's edge, and tool lines in a row stand together, close.
-        PrLayoutNode tools = kPrLayoutNodeNone;
-        for (const Entry& e : tab.transcript) {
-            if (e.kind != EntryKind::Tool) {
-                tools = kPrLayoutNodeNone;
-            }
-            switch (e.kind) {
-                case EntryKind::Person: {
-                    PrLayoutNode entry = element(column, Part::Entry);
-                    PrLayoutNode bubble = element(entry, Part::Bubble);
-                    label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
-                    break;
-                }
-                case EntryKind::Friend:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
-                    break;
-                case EntryKind::Notice:
-                    label(column, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
-                    break;
-                case EntryKind::Tool: {
-                    if (tools == kPrLayoutNodeNone) {
-                        tools = element(column, Part::Tools);
-                    }
-                    PrKitTextStyle line = textStyle(PrKitTextRole_Mono, PrKitTone_Muted);
-                    line.wrap = PrKitWrap_Clip;
-                    label(tools, e.text, line);
-                    break;
-                }
+        // Only the items in sight are declared, with a screen's height either side, and spacers for the rest
+        // (TranscriptItems): a round's cost does not grow with the transcript.
+        TranscriptItems& items = itemsOf(tab);
+        measure(items, switched);
+        items.column = column;
+        const float viewport = std::max(view.extent.y, 1.0f);
+        float offset = 0;
+        bool atEnd = true;
+        if (switched) {
+            atEnd = tab.id >= view.scrolls.size() || view.scrolls[tab.id] == View::kAtEnd;
+            offset = atEnd ? 0 : view.scrolls[tab.id];
+        } else {
+            PrLayoutScrollInfo info{};
+            if (prLayoutNodeScrollInfo(tree, scroller, &info) && info.scrollContainer) {
+                offset = prLayoutUnitToPx(info.offset.y);
+                atEnd = info.offset.y.raw >= info.range.bottom.raw;
             }
         }
-        // The friend's text still growing (the open entry), after the transcript; it joins the transcript, closed,
-        // when its block ends.
+        atEnd = atEnd || toCut;
+        declareItems(scroller, column, tab, items, atEnd, offset, viewport);
+        // The friend's text still growing (the open entry), after the transcript, a label a paragraph: only its last
+        // paragraph is set again as it grows. It joins the transcript, closed, when its block ends.
         const std::string* growing = view.growing ? view.growing(tab.id) : nullptr;
         if (growing != nullptr && !growing->empty()) {
-            label(column, *growing, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+            paragraphs(column, tab, *growing);
         }
         // Why the last prompt was not sent: dim, at the end of the transcript, so that nothing stands by the prompt.
         if (!view.problem.empty()) {
             label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+        }
+        // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
+        // to show it, so it stands just above the prompt.
+        if (!view.cut.empty() && view.cutTab == tab.id) {
+            label(column, view.cut, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
         }
         // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
         const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
@@ -716,6 +942,11 @@ struct Builder {
         view.promptBox = box;
         bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
         bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
+        // Command-V reads the clipboard through the host, which cuts the text to the room left before the area sees it,
+        // and hands it on in one event.
+        if (view.paste && prUiKeyCaptured(ui, box, PrAppKey('V'), style::kCommand)) {
+            view.paste();
+        }
         view.promptRows = promptRows();
 
         plus(box);
@@ -733,8 +964,26 @@ struct Builder {
         if (prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
-        if (prKitTextChanged(kit, edit, &changed))
-            model.set_draft(active, std::string(changed.data, changed.size));
+        const bool coming = view.cutComing;
+        view.cutComing = false;     // the cut text, pushed for this frame, is in the area's events of its first round
+        if (prKitTextChanged(kit, edit, &changed)) {
+            // Text that came past the host's cut (pasted with no host, or typed into a selection the host had not yet
+            // seen) is cut here.
+            const PrStringView kept = cutText(changed, kPromptBytes);
+            model.set_draft(active, std::string(kept.data, kept.size));
+            if (kept.size != changed.size) {
+                promptCut(view, changed.size, kept.size, false);
+            }
+        }
+        // The line about cut text stands for the draft as the cut left it, and goes once that draft changes.
+        if (!view.cut.empty() && view.cutTab == model.tab(active).id) {
+            if (coming) {
+                view.cutDraft = model.tab(active).draft;
+            } else if (view.cutDraft != model.tab(active).draft) {
+                view.cut.clear();
+                view.cutTab = ~std::size_t(0);
+            }
+        }
         if (!composing && send) {
             if (view.submit)
                 view.submit(active, false);
@@ -787,12 +1036,14 @@ struct Builder {
         // neither a terminal nor the prompt sees them.
         if (prUiKeyCaptured(ui, keys, PrAppKey('T'), style::kCommand) && view.terminals != nullptr) {
             const std::size_t id = model.add_terminal();
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             if (!view.terminals->open(id))
                 model.close_tab(model.active());
         }
         if (prUiKeyCaptured(ui, keys, PrAppKey('W'), style::kCommand) && model.tab_count() != 0 &&
                 model.tab(model.active()).kind == TabKind::Terminal) {
             const std::size_t id = model.tab(model.active()).id;
+            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
             model.close_tab(model.active());
             view.terminals->close(id);
         }
@@ -826,6 +1077,11 @@ struct Builder {
             view.selectedId = model.tab(model.active()).id;
             if (view.selected)
                 view.selected();
+        }
+        // Cut text on its way to a prompt this round does not build has nowhere to go (the focus left the prompt, and
+        // the area does not see the event): nothing more is coming.
+        if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend || !view.promptOpen) {
+            view.cutComing = false;
         }
         const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
         if (!onSprint && view.board != nullptr)
@@ -904,8 +1160,71 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     return true;
 }
 
+namespace {
+
+// `n` with a comma between each group of three digits: 1048576 is "1,048,576".
+std::string grouped(std::size_t n) {
+    std::string digits = std::to_string(n);
+    std::string out;
+    for (std::size_t i = 0; i < digits.size(); ++i) {
+        if (i != 0 && (digits.size() - i) % 3 == 0) {
+            out += ',';
+        }
+        out += digits[i];
+    }
+    return out;
+}
+
+} // namespace
+
+std::string cutLine(std::size_t given, std::size_t kept) {
+    return grouped(given - kept) + " of " + grouped(given) + " bytes were left out: the prompt holds 32 KB.";
+}
+
+std::size_t promptRoom(const View& view, PrUi* ui) {
+    const Model& model = *view.model;
+    if (model.tab_count() == 0 || model.tab(model.active()).kind != TabKind::Friend) {
+        return 0;
+    }
+    const std::size_t used = model.tab(model.active()).draft.size();
+    std::size_t selected = 0;
+    if (ui != nullptr && view.prompt != kPrLayoutNodeNone) {
+        const PrUiTextSelection s = prUiTextEditSelection(ui, view.prompt);
+        const std::size_t from = std::min<std::size_t>(std::min(s.anchor, s.caret), used);
+        const std::size_t to = std::min<std::size_t>(std::max(s.anchor, s.caret), used);
+        selected = to - from;
+    }
+    const std::size_t left = used - selected;
+    return left < kPromptBytes ? kPromptBytes - left : 0;
+}
+
+void promptCut(View& view, std::size_t given, std::size_t kept, bool coming) {
+    const Model& model = *view.model;
+    if (model.tab_count() == 0) {
+        return;
+    }
+    const Tab& tab = model.tab(model.active());
+    view.cut = cutLine(given, kept);
+    view.cutTab = tab.id;
+    view.cutDraft = tab.draft;
+    view.cutComing = coming;
+    view.cutFollow = true;
+}
+
+PrStringView cutText(PrStringView text, std::size_t room) {
+    if (text.size <= room) {
+        return text;
+    }
+    std::size_t end = room;
+    // Back off continuation bytes (10xxxxxx) so the cut falls before a character's first byte.
+    while (end > 0 && (static_cast<unsigned char>(text.data[end]) & 0xC0) == 0x80) {
+        --end;
+    }
+    return PrStringView{text.data, end};
+}
+
 bool windowWantsFrame(const View& view) {
-    return view.look->textSteps != view.askedTextSteps || view.breathing;
+    return view.look->textSteps != view.askedTextSteps || view.breathing || view.cutComing;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {

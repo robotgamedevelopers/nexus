@@ -55,6 +55,7 @@
 #include <utility>
 #include <vector>
 
+#include "pr/app_data.h"
 #include "pr/compress.h"
 #include "pr/draw_list.h"
 #include "pr/draw_renderer.h"
@@ -68,10 +69,15 @@
 #include "pr/studio_app.h"
 #include "pr/studio_window.h"
 #include "pr/text.h"
+#include "pr/time.h"
+#include "pr/ui.h"
 
 #include "board.h"
 #include "client_home.h"
+#include "font_prefetch.h"
+#include "frame_host.h"
 #include "friends.h"
+#include "hitch.h"
 #include "model.h"
 #include "overlay.h"
 #include "platform.h"
@@ -81,7 +87,7 @@
 #include "view.h"
 
 #if NEXUS_LINK
-#include "link/client.h"
+#include "link/client_port.h"
 #include "sync/client.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
@@ -127,69 +133,22 @@ struct App {
     const TabOrderStore* terminalStore = nullptr;
     const TabOrderStore* selectionStore = nullptr;
     std::vector<std::pair<std::size_t, std::string>> reopen;
-    std::string savedTerminals;     // the text last written to each file, so that only a change is written
-    std::string savedSelection;
     std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
+    // What the window does around the view each frame (frame_host.h): the kept preferences, the link, the terminals
+    // and the board; and the hitch detector, always on, measuring each frame against the display's budget.
+    FrameHost host;
+    HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
+        HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 #if NEXUS_LINK
-    std::string host;                       // --server
-    std::unique_ptr<link::ClientLink> link;
-    sync::Mirror mirror;
-    sync::LinkPhase phase = sync::LinkPhase::Connecting;   // the link's state, as last polled, for the state cursor
-    std::uint64_t heardMsAgo = 0;
+    std::unique_ptr<link::ClientPort> link;
 #endif
 };
 
-// Saves the selected tab if its text changed: a new selection, or a selected terminal whose place among the terminals
-// changed.
-void keepSelection(App& a) {
-    if (!a.keep)
-        return;
-    std::string text = formatSelectedTab(*a.model);
-    if (text == a.savedSelection)
-        return;
-    a.savedSelection = text;
-    std::string error;
-    if (!saveSelectedTab(*a.selectionStore, *a.model, &error))
-        std::fprintf(stderr, "nexus: %s\n", error.c_str());
+// The hitch budget from the main display's refresh rate (120 Hz on ProMotion), or 120 Hz when Prax gives none.
+void setBudget(App& a, PrApp* app) {
+    PrAppDisplayInfo info{};
+    a.hitch.setRefreshRate(app != nullptr && prAppDisplays(app, &info, 1) != 0 ? double(info.refreshRate) : 0);
 }
-
-// Saves the terminal tabs, each with the directory its shell works in now, if that changed (a terminal opened, closed
-// or moved, or a shell changed directory), and the selection with them. Called at each frame's start and as the window
-// closes, so a quit of any kind leaves them saved.
-void keepTerminals(App& a) {
-    if (!a.keep || a.terminals == nullptr)
-        return;
-    PraxTerminals* terminals = a.terminals.get();
-    std::vector<std::string> directories = terminalDirectories(*a.model,
-        [terminals](std::size_t id) { return terminals->workingDirectory(id); });
-    std::string text = formatTerminals(directories);
-    if (text != a.savedTerminals) {
-        a.savedTerminals = text;
-        std::string error;
-        if (!saveTerminals(*a.terminalStore, directories, &error))
-            std::fprintf(stderr, "nexus: %s\n", error.c_str());
-    }
-    keepSelection(a);
-}
-
-#if NEXUS_LINK
-// Each frame: the server's latest sessions into the model, and the link's state into the line in the prompt's place
-// (which shows only until the prompt opens) and the state cursor. The prompt opens once the server is first heard,
-// and stays.
-void pollLink(App& a) {
-    link::ClientLink::Snapshot s;
-    if (a.link == nullptr || !a.link->poll(&s)) {
-        return;
-    }
-    a.mirror.apply(*a.model, s.sessions);
-    if (s.phase == sync::LinkPhase::Connected) {
-        a.view.promptOpen = true;
-    }
-    a.phase = s.phase;
-    a.heardMsAgo = s.heardMsAgo;
-    a.view.status = sync::linkStatus(s.phase, a.host, s.heardMsAgo, s.problem);
-}
-#endif
 
 App& appOf(void* context) {
     return *static_cast<App*>(context);
@@ -235,6 +194,24 @@ bool overlayActive(const App& a) {
     return a.window != nullptr && prAppWindowIsActive(prStudioWindowAppWindow(a.window));
 }
 
+// The clipboard's text for the prompt (View::paste), on the app's thread: a Paste event through the host, which cuts it
+// to the room the prompt has left, and otherwise to the focused control as Prax delivers its own paste.
+void pasted(void* context, PrStatus status, PrStringView text) {
+    App& a = appOf(context);
+    if (status != PrStatus_Ok || text.size == 0 || a.host.ui == nullptr) {
+        return;
+    }
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_Paste;
+    e.input.text = text;
+    if (!a.host.event(e)) {
+        prUiPushEvent(a.host.ui, kPrUiViewportMain, &e);
+    }
+    if (a.window != nullptr) {
+        prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+    }
+}
+
 // The window's kit theme (view.h). Over the overlay's Transparent backdrop the window draws no background of its own,
 // so the see-through fill is the window part's (view.cpp, style::kOverlayOpacity), which the window clears to.
 bool open(void* context, PrStudioWindow* window) {
@@ -269,6 +246,16 @@ bool open(void* context, PrStudioWindow* window) {
         board.visible = [&a] { return overlayVisible(a); };
     a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
+    a.host.terminals = a.terminals.get();
+    a.host.board = a.board.get();
+    a.host.ui = prStudioWindowUi(window);
+    // Command-V in the prompt: the clipboard's text comes back through the host, which cuts it to the prompt's room.
+    a.view.paste = [&a] {
+        if (a.window != nullptr) {
+            prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
+        }
+    };
+    setBudget(a, prStudioWindowApp(window));
     a.wakeApp = prStudioWindowApp(window);
     prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
     return true;
@@ -282,9 +269,17 @@ void closeWindow(void* context, PrStudioWindow*) {
         std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
         a.failed = true;
     }
-    keepTerminals(a);
+    // The directories as they are now, not as last read (terminals.h reads one a frame, each once a second).
+    if (a.terminals != nullptr) {
+        a.terminals->readDirectories();
+    }
+    a.host.keepTerminals();
     a.wakeApp = nullptr;
     a.window = nullptr;
+    a.view.paste = nullptr;
+    a.host.ui = nullptr;
+    a.host.board = nullptr;
+    a.host.terminals = nullptr;
     a.view.board = nullptr;
     a.board.reset();
     a.view.terminals = nullptr;
@@ -300,17 +295,9 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
-    // Each terminal's foreground process, for its tab's label, read where its working directory is read.
-    if (a.terminals != nullptr)
-        a.terminals->observe(f->time);
-    keepTerminals(a);
-    a.view.time = f->time;
-#if NEXUS_LINK
-    pollLink(a);
-#endif
-    beginWindowFrame(a.view, prStudioWindowKit(window), a.fonts);
-    if (a.board != nullptr)
-        a.board->frame(f->time, f->display);
+    // The frame's work starts here, after the swap chain's wait; it ends in trace(), once the frame is rendered.
+    a.hitch.begin();
+    a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
     // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.
     if (a.overlay)
         carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
@@ -329,6 +316,12 @@ bool start(void* context, PrStudioApp* studio) {
     if (created != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: the overlay window could not be created (status %d)\n", int(created));
         return false;
+    }
+    // Sized to the screen now, while hidden, so that the first show (carryOut) finds the window at the size it shows at
+    // and its first frame makes the swap chain once, at that size, rather than once and again after a resize.
+    PrAppSurface surface{};
+    if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok) {
+        coverScreen(surface);
     }
     PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
     if (status != PrStatus_Ok) {
@@ -356,6 +349,9 @@ void shutdown(void* context, PrStudioApp*) {
 // The app's events: the hotkey, and the key check after a show.
 void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
     App& a = appOf(context);
+    HitchScope scope(&a.hitch, Phase::Input);
+    if (e->kind == PrAppEventKind_DisplaysChanged && a.window != nullptr)
+        setBudget(a, prStudioWindowApp(a.window));
     if (!a.overlay)
         return;
     if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
@@ -372,14 +368,13 @@ void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
 // While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
-    App& a = appOf(context);
-    return a.board != nullptr && a.board->event(*e);
+    return appOf(context).host.event(*e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
     a.view.extent = extent;
-    buildWindow(a.view, prStudioWindowKit(window), root);
+    a.host.build(prStudioWindowKit(window), root);
 }
 
 bool laidOut(void* context, PrStudioWindow* window) {
@@ -393,7 +388,17 @@ bool laidOut(void* context, PrStudioWindow* window) {
     return true;
 }
 
+// The frame's end: Prax's own phases (studio_window.cpp renderFrame) into the hitch detector, which ends the frame.
+// Prax's wait (the swap chain's) is not work; the rounds are the layout, the scene and its play the draw, and the
+// render the present.
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
+    HitchDetector& hitch = appOf(context).hitch;
+    if (hitch.inFrame()) {
+        hitch.add(Phase::Layout, t->build);
+        hitch.add(Phase::Draw, t->scene + t->play);
+        hitch.add(Phase::Present, t->render);
+        hitch.end();
+    }
     FrameStats& s = appOf(context).stats;
     double work = t->total - t->wait;
     ++s.frames;
@@ -487,9 +492,11 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         const double time = 1000.0 + frames++ / 60.0;
         a.view.time = time;
         board->frame(time, display);
+        board->wait();      // a screenshot waits for the page's thread, so that it shows the page as of this frame
         PrUiFrameDesc desc{.time = time, .delta = 1 / 60.0, .extent = extent, .maxRounds = 4,
             .display = display, .preferences = {}};
         prUiFrame(ui, &desc, buildOffscreen, &off);
+        board->wait();
     };
     if (a.model->tab_count() != 0 && a.model->tab(a.model->active()).kind == TabKind::Sprint) {
         // The board's page, once it has loaded and painted its first answers, within 20 s; or the line that says why
@@ -511,7 +518,8 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
         bool typed = false;
         for (int i = 0; i < 500 && terminals->text(id).find("Darwin") == std::string::npos; ++i) {
             frame();
-            if (!typed && i == 10) {
+            // Once the shell has started (on the terminals' thread) and drawn its prompt.
+            if (!typed && i >= 10 && terminals->text(id).find_first_not_of(" \n") != std::string::npos) {
                 PrAppEvent e{};
                 e.kind = PrAppEventKind_Text;
                 e.input.text = PrStringView{command, std::strlen(command)};
@@ -757,16 +765,19 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "nexus: %s\n", machines.error.c_str());
     }
     // The friend tabs in the order the person last left them (tab_order.h). The stores of what the window keeps across
-    // launches are each a file in its home, which a screenshot of a state file never reads.
+    // launches are each a file in its home, which a screenshot of a state file never reads. They are read here, before
+    // the window shows, and written by the writer's thread, so that no frame waits on the disk; the writer makes every
+    // waiting write before nexus exits.
+    static StoreWriter writer;
     static TabOrderStore order;
     static TabOrderStore terminalStore;
     static TabOrderStore selection;
     static TabOrderStore scale;
     if (!fromState) {
-        order = fileTabOrderStore();
-        terminalStore = fileTerminalsStore();
-        selection = fileSelectedTabStore();
-        scale = fileTextScaleStore();
+        order = writer.wrap(fileTabOrderStore());
+        terminalStore = writer.wrap(fileTerminalsStore());
+        selection = writer.wrap(fileSelectedTabStore());
+        scale = writer.wrap(fileTextScaleStore());
         std::string orderWarning;
         friends.friends = loadTabOrder(order, friends.friends, &orderWarning);
         if (!orderWarning.empty())
@@ -822,11 +833,11 @@ int main(int argc, char** argv) {
     // Each change of the selected tab, and of the terminal tabs, is saved as it happens, so a quit of any kind leaves
     // them saved. A screenshot saves nothing.
     if (live) {
-        a.keep = true;
-        a.terminalStore = &terminalStore;
-        a.selectionStore = &selection;
+        a.host.keep = true;
+        a.host.terminalStore = &terminalStore;
+        a.host.selectionStore = &selection;
         a.reopen = std::move(reopen);
-        a.view.selected = [] { keepSelection(a); };
+        a.view.selected = [] { a.host.keepSelection(); };
     }
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
@@ -841,76 +852,25 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
+    a.host.model = &model;
+    a.host.view = &a.view;
+    a.host.hitch = &a.hitch;
 #if NEXUS_LINK
     if (server != nullptr) {
-        a.host = server;
-        a.view.promptOpen = false;
-        a.view.status = sync::linkStatus(sync::LinkPhase::Connecting, a.host, 0, "");
-        a.view.submit = [](std::size_t i, bool queue) {
-            std::string text;
-            std::string why;
-            // The session the tab shows, the window's own choice; none until the server's state has one of the
-            // friend's (the window ensured one at launch), and then the draft stays.
-            const sync::SessionId session = sync::sessionOf(model, i, a.mirror);
-            if (session == 0 && i < model.tab_count() && model.tab(i).kind == TabKind::Friend) {
-                why = "No session with " + model.tab(i).name + " yet: the prompt is kept.";
-            } else if (sync::takePrompt(model, i, sync::Limits{}.text, &text, &why)) {
-                a.view.problem.clear();
-                sync::Action action;
-                action.kind = queue ? sync::ActionKind::Queue : sync::ActionKind::Send;
-                action.session = session;
-                action.text = std::move(text);
-                a.link->send(std::move(action));
-                return;
-            }
-            if (!why.empty()) {
-                a.view.problem = why;
-            }
-        };
-        // Command-Escape: a stop of the session the tab shows, sent whatever the window shows and whether or not the
-        // link is up (it waits in order with the other actions); the server decides what it stops. Before any state has
-        // held a session of the friend there is no session to name, and nothing is sent.
-        a.view.stop = [] {
-            sync::SessionId session = 0;
-            if (sync::stopTarget(model, model.active(), a.mirror, &session)) {
-                sync::Action action;
-                action.kind = sync::ActionKind::Stop;
-                action.session = session;
-                a.link->send(std::move(action));
-            }
-        };
         link::ClientLink::Options options;
-        options.bootstrap.host = a.host;
+        options.bootstrap.host = server;
         options.wake = [] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
         };
-        a.link = std::make_unique<link::ClientLink>(std::move(options));
-        // A session with each friend the window shows: the server makes one only for a friend that has none.
-        for (const std::string& name : sync::friendsToEnsure(model)) {
-            sync::Action ensure;
-            ensure.kind = sync::ActionKind::Ensure;
-            ensure.friendName = name;
-            a.link->send(std::move(ensure));
-        }
+        a.link = std::make_unique<link::ClientPort>(std::move(options));
+        a.host.connect(a.link.get(), server);
     }
     // --state: the server's state from a file, as the window holds it once the server is heard (or, with --lost, once
     // it has lost the server).
     if (fromState) {
-        a.mirror.apply(model, held);
+        a.host.showState(held, lost);
         a.findBoard = [] { return SprintBoardAddress{"", "a screenshot of a state file shows no sprint board"}; };
-        a.phase = sync::LinkPhase::Connected;
-        a.heardMsAgo = lost ? sync::kQuietMs : 0;
-    }
-    // The open entry as it grows, and the state cursor, from what the window holds of the server's state.
-    if (server != nullptr || state != nullptr) {
-        a.view.growing = [](std::size_t id) -> const std::string* {
-            const sync::SessionEntry* open = a.mirror.open(id);
-            return open != nullptr ? &open->text : nullptr;
-        };
-        a.view.cursor = [](std::size_t id) {
-            return sync::cursorOf(a.phase, a.heardMsAgo, a.mirror, id);
-        };
     }
 #endif
     a.bench = bench;
@@ -923,6 +883,11 @@ int main(int argc, char** argv) {
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(a.fonts, system);
     prFontSetSetDefaultFamily(a.fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
+    // The fallback fonts (emoji, CJK, ...) loaded on a thread of their own while nothing shows, before a frame needs
+    // them; a screenshot loads them as it sets its text.
+    std::unique_ptr<FontPrefetch> prefetch;
+    if (shot == nullptr)
+        prefetch = std::make_unique<FontPrefetch>(a.fonts);
 
     int code = 0;
     if (shot != nullptr) {
@@ -980,6 +945,7 @@ int main(int argc, char** argv) {
 #endif
         printStats(a.stats);
     }
+    prefetch.reset();
     prFontSetDestroy(a.fonts);
     prFontSystemDestroy(system);
     return code;

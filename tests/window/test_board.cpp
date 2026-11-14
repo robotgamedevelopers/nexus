@@ -5,6 +5,7 @@
 // toLocaleTimeString, toLocaleString on Number and BigInt, session storage and a reload on a new build. Text is set in
 // the system's fonts and scripts run in QuickJS: a functional test.
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -187,10 +188,11 @@ struct Server {
 };
 
 // The page's clocks: monotonic from 0 and a wall clock from a fixed instant, both stepped by the test.
+// Read on the page's thread (board.h), stepped on the test's.
 struct Clock {
-    double ms = 0;
-    static double now(void* context) { return static_cast<Clock*>(context)->ms; }
-    static double wall(void* context) { return 1794326567000.0 + static_cast<Clock*>(context)->ms; }
+    std::atomic<double> ms{0};
+    static double now(void* context) { return static_cast<Clock*>(context)->ms.load(); }
+    static double wall(void* context) { return 1794326567000.0 + static_cast<Clock*>(context)->ms.load(); }
 };
 
 // The window with no window, the sprint tab first and one friend, and the board over the fixture.
@@ -251,11 +253,14 @@ struct Harness {
         prFontSystemDestroy(system);
     }
 
-    // One frame, `seconds` (50 ms) after the last on both clocks.
+    // One frame, `seconds` (50 ms) after the last on both clocks. The test waits for the page's thread at the frame's
+    // start and end, so that each frame shows what the frame before handed the page, as a frame of the app does once
+    // the page has caught up: the checks see one order of events.
     void frame(double seconds = 0.05) {
         time += seconds;
-        clock.ms += seconds * 1000;
+        clock.ms = clock.ms.load() + seconds * 1000;
         board->frame(time, prAppDisplayDefault());
+        board->wait();
         view.extent = extent;
         PrUiFrameDesc desc{.time = time, .delta = seconds, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
@@ -263,6 +268,7 @@ struct Harness {
             Harness& h = *static_cast<Harness*>(context);
             buildWindow(h.view, h.kit, kPrLayoutNodeNone);
         }, this);
+        board->wait();
     }
 
     void frames(int n) {
@@ -272,26 +278,62 @@ struct Harness {
 
     std::string text() { return board->bodyText(); }
 
-    bool hasStyle() {
-        PrHtmlPage* page = board->page();
-        if (page == nullptr)
-            return false;
-        PrDomDocument* d = prHtmlWindowDocument(prHtmlPageWindow(page));
-        return prDomNodeGetElementById(prDomDocumentAsNode(d), PrStringView{kSprintStyleId.data(),
-            kSprintStyleId.size()}) != nullptr;
+    // Runs `fn` with the page's document on the page's thread (board.h onPage), if there is one.
+    void dom(const std::function<void(PrDomDocument* document)>& fn) {
+        board->onPage([&](PrHtmlPage* page) {
+            PrDomDocument* d = page != nullptr ? prHtmlWindowDocument(prHtmlPageWindow(page)) : nullptr;
+            if (d != nullptr) {
+                fn(d);
+            }
+        });
     }
 
-    PrDomDocument* document() { return prHtmlWindowDocument(prHtmlPageWindow(board->page())); }
+    static PrDomElement* byId(PrDomDocument* d, const char* id) {
+        return prDomNodeGetElementById(prDomDocumentAsNode(d), PrStringView{id, std::strlen(id)});
+    }
 
-    PrDomElement* byId(const char* id) {
-        return prDomNodeGetElementById(prDomDocumentAsNode(document()), PrStringView{id, std::strlen(id)});
+    bool hasStyle() {
+        bool has = false;
+        dom([&](PrDomDocument* d) {
+            has = prDomNodeGetElementById(prDomDocumentAsNode(d), PrStringView{kSprintStyleId.data(),
+                kSprintStyleId.size()}) != nullptr;
+        });
+        return has;
     }
 
     // An element's border box in the viewport, CSS px, as laid out now.
-    PrDomRect rect(const char* id) { return prCssElementGetBoundingClientRect(byId(id)); }
+    PrDomRect rect(const char* id) {
+        PrDomRect r{};
+        dom([&](PrDomDocument* d) { r = prCssElementGetBoundingClientRect(byId(d, id)); });
+        return r;
+    }
 
     // The viewport's height, CSS px: the page's pane below the tab strip.
-    double viewportHeight() { return prCssElementClientHeight(prCssDocumentScrollingElement(document())); }
+    double viewportHeight() {
+        double height = 0;
+        dom([&](PrDomDocument* d) { height = prCssElementClientHeight(prCssDocumentScrollingElement(d)); });
+        return height;
+    }
+
+    // The page's own scroll: where it is, where it is set, and how far it goes.
+    double scrollTop() {
+        double top = 0;
+        dom([&](PrDomDocument* d) { top = prCssElementScrollTop(prCssDocumentScrollingElement(d)); });
+        return top;
+    }
+
+    void setScrollTop(double top) {
+        dom([&](PrDomDocument* d) { prCssElementSetScrollTop(prCssDocumentScrollingElement(d), top); });
+    }
+
+    double scrollMax() {
+        double max = 0;
+        dom([&](PrDomDocument* d) {
+            PrDomElement* s = prCssDocumentScrollingElement(d);
+            max = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
+        });
+        return max;
+    }
 
     // A click of the primary button at the centre of the element, as the window passes it to the board, and a frame.
     void click(const char* id) {
@@ -443,15 +485,18 @@ void theCostBreakdownFillsTheFirstScreen() {
                 viewport, spend.y, spend.height, pie.width, pie.height);
 
         // Scrolled down and back: the panel's height stays.
-        prCssElementSetScrollTop(prCssDocumentScrollingElement(h.document()), 400);
+        h.setScrollTop(400);
         h.frames(3);
         CHECK(std::fabs(h.rect("spend").height - spend.height) < 1);
-        prCssElementSetScrollTop(prCssDocumentScrollingElement(h.document()), 0);
+        h.setScrollTop(0);
         h.frames(3);
         CHECK(std::fabs(h.rect("spend").y + h.rect("spend").height - (viewport - gap)) < 1);
 
         // Folded: the head alone.
-        prDomElementSetAttribute(h.byId("spend"), PrStringView{"class", 5}, PrStringView{"panel spend folded", 18});
+        h.dom([](PrDomDocument* d) {
+            prDomElementSetAttribute(Harness::byId(d, "spend"), PrStringView{"class", 5},
+                PrStringView{"panel spend folded", 18});
+        });
         h.frames(3);
         CHECK(h.rect("spend").height < 200);
     }
@@ -466,8 +511,7 @@ void keysAndTheWheelScrollSmoothly() {
     h.extent = PrVec2{1200, 900};
     h.frames(10);
     CHECK(h.board->settled());
-    PrDomElement* s = prCssDocumentScrollingElement(h.document());
-    auto top = [&] { return prCssElementScrollTop(s); };
+    auto top = [&] { return h.scrollTop(); };
     auto send = [&](PrAppEvent e) { CHECK(h.board->event(e)); };
     auto key = [](PrAppEventKind kind, PrAppKey k, PrAppModifierFlags modifiers, bool repeat) {
         PrAppEvent e{};
@@ -483,7 +527,7 @@ void keysAndTheWheelScrollSmoothly() {
     auto up = [&](PrAppKey k) { send(key(PrAppEventKind_KeyUp, k, 0, false)); };
     const double frame = 1.0 / 120;
     auto run = [&](double seconds) { for (double t = 0; t < seconds; t += frame) h.frame(frame); };
-    const double bottom = prCssElementScrollHeight(s) - prCssElementClientHeight(s);
+    const double bottom = h.scrollMax();
 
     // A tap of Down: no jump at the press, moving at the next frames, at rest exactly a line on.
     CHECK(top() == 0);
@@ -588,7 +632,6 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     h.frames(10);
     CHECK(h.board->settled());
     CHECK(h.board->documentUrl() == kUrl);
-    PrDomElement* s = prCssDocumentScrollingElement(h.document());
 
     h.click("repo");
     CHECK((h.opened == std::vector<std::string>{"https://github.test/nova-sprint"}));
@@ -600,7 +643,7 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
 
     h.click("blank");
     CHECK(h.opened.size() == 3 && h.opened.back() == "http://board.test:8080/#later");
-    CHECK(h.board->documentUrl() == kUrl && prCssElementScrollTop(s) == 0);
+    CHECK(h.board->documentUrl() == kUrl && h.scrollTop() == 0);
 
     h.click("script");
     CHECK(h.opened.size() == 3 && h.board->documentUrl() == kUrl);
@@ -609,7 +652,7 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
 
     h.click("inner");
     CHECK(h.opened.size() == 3);
-    CHECK(h.board->documentUrl() == std::string(kUrl) + "#later" && prCssElementScrollTop(s) > 0);
+    CHECK(h.board->documentUrl() == std::string(kUrl) + "#later" && h.scrollTop() > 0);
     CHECK(h.server.pages == 1);
 
     // On the board, at one of its places: home loads nothing.
@@ -619,7 +662,11 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
 
     // Off the board by another way (here the page navigated from outside, as a script setting location would): home
     // brings it back.
-    CHECK(prHtmlPageNavigate(h.board->page(), PrStringView{"http://board.test:8080/cards/7", 30}) == PrStatus_Ok);
+    PrStatus navigated = PrStatus_Io;
+    h.board->onPage([&](PrHtmlPage* page) {
+        navigated = prHtmlPageNavigate(page, PrStringView{"http://board.test:8080/cards/7", 30});
+    });
+    CHECK(navigated == PrStatus_Ok);
     h.frames(10);
     CHECK(h.server.cards == 1 && h.board->documentUrl() == "http://board.test:8080/cards/7");
     h.board->home();
@@ -636,12 +683,12 @@ void theRepositoryLinkIsHidden() {
     h.frames(10);
     CHECK(h.board->settled());
     std::string word;
-    {
-        PrRawString t = prDomNodeTextContent(prDomElementAsNode(h.byId("wordmark")));
+    h.dom([&](PrDomDocument* d) {
+        PrRawString t = prDomNodeTextContent(prDomElementAsNode(Harness::byId(d, "wordmark")));
         PrStringView v = prRawStringView(&t);
         word.assign(v.data != nullptr ? v.data : "", v.size);
         prRawStringReset(&t);
-    }
+    });
     CHECK(word == "nova-sprint");
     const PrDomRect mark = h.rect("wordmark");
     const PrDomRect logo = h.rect("logo");

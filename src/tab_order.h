@@ -7,6 +7,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -139,5 +140,27 @@ std::vector<std::string> loadTerminals(const TabOrderStore& store, std::string* 
 
 // Saves the terminal tabs' directories. Returns false, with one line in `error` naming the file and the cause.
 bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& directories, std::string* error);
+
+// The writer of the window's kept files: a thread of its own, so that a write to a slow or stalled disk never holds
+// up a frame. A store it wraps hands each write to the thread and returns at once; of the writes to one store waiting
+// at a time only the newest is made, since each replaces the whole file. A write that fails is logged on stderr with
+// its cause (the store's own message, naming the file). The writer makes every waiting write before it ends.
+class StoreWriter {
+public:
+    StoreWriter();
+    ~StoreWriter();
+    StoreWriter(const StoreWriter&) = delete;
+    StoreWriter& operator=(const StoreWriter&) = delete;
+
+    // `store` with its write handed to this thread. Reads stay where they are: they happen once, at launch, before
+    // the window shows. The writer must outlive the store it returns.
+    TabOrderStore wrap(TabOrderStore store);
+    // Waits until every write handed over so far is made.
+    void flush();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 } // namespace nexus

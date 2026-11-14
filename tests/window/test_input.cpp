@@ -16,6 +16,7 @@
 #include "pr/layout_tree.h"
 #include "pr/text.h"
 #include "pr/ui.h"
+#include "pr/ui_text_edit.h"
 
 #include "model.h"
 #include "style.h"
@@ -158,6 +159,7 @@ struct Harness {
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
     int stops = 0;      // stop requests (View::stop)
     int saves = 0;      // tab order saves asked for after a move (View::moved)
+    uint32_t rounds = 8; // the most rounds a frame runs
 
     Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
 
@@ -201,7 +203,7 @@ struct Harness {
             .time = time,
             .delta = 1.0 / 60,
             .extent = PrVec2{1000, 780},
-            .maxRounds = 8,
+            .maxRounds = rounds,
             .display = prAppDisplayDefault(),
             .preferences = {},
         };
@@ -1184,11 +1186,228 @@ void nothingAroundTheOpenPrompt() {
     CHECK(h.entries().empty());
 }
 
+// Text cut to the prompt's room ends on a whole UTF-8 character, and the room is what a friend's draft leaves.
+void promptCutKeepsWholeCharacters() {
+    const std::string text = "ab\xC3\xA9" "c";      // a, b, e-acute (two bytes), c
+    const PrStringView all{text.data(), text.size()};
+    CHECK(cutText(all, 10).size == 5);
+    CHECK(cutText(all, 4).size == 4);
+    CHECK(cutText(all, 3).size == 2);               // not half of the e-acute
+    CHECK(cutText(all, 0).size == 0);
+    Harness h;
+    CHECK(promptRoom(h.view, h.ui) == kPromptBytes - h.model.tab(h.model.active()).draft.size());
+    h.model.set_draft(h.model.active(), std::string(kPromptBytes + 10, 'x'));
+    CHECK(promptRoom(h.view, h.ui) == 0);
+    CHECK(cutLine(1048576, 32768) == "1,015,808 of 1,048,576 bytes were left out: the prompt holds 32 KB.");
+    CHECK(cutLine(1, 0) == "1 of 1 bytes were left out: the prompt holds 32 KB.");
+}
+
+// The room the prompt has counts its selection, which what comes in replaces: a full prompt all selected has room for
+// a whole prompt, and typing over it replaces it.
+void promptRoomCountsTheSelection() {
+    Harness h;
+    h.model.set_draft(h.model.active(), std::string(kPromptBytes, 'x'));
+    h.frame();
+    CHECK(promptRoom(h.view, h.ui) == 0);
+    prUiTextEditSetSelection(h.ui, h.view.prompt, PrUiTextSelection{0, uint32_t(kPromptBytes)});
+    h.frame();
+    CHECK(promptRoom(h.view, h.ui) == kPromptBytes);
+    prUiTextEditSetSelection(h.ui, h.view.prompt, PrUiTextSelection{uint32_t(kPromptBytes), 100});
+    h.frame();
+    CHECK(promptRoom(h.view, h.ui) == kPromptBytes - 100);
+    h.type("y");
+    CHECK(h.active().draft == std::string(100, 'x') + "y");
+}
+
+// The line about text cut to fit the prompt: at the end of the transcript of the tab it was cut on, with nothing
+// around the prompt, on that tab only, until its draft changes. Text still on its way into the prompt when the line was
+// made is not a change.
+void cutLineStaysWithItsTabAndDraft() {
+    Harness h;
+    for (int i = 0; i < 400; ++i) {
+        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+    }
+    h.model.set_draft(0, "abc");
+    h.frame();
+    h.frame();
+    // Scrolled up: the line brings the transcript to its end, where it shows.
+    PrRect port = h.bounds(h.view.transcript);
+    PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    h.push(scrollEvent(middle, PrVec2{0, -3000}));
+    h.frame();
+    promptCut(h.view, 10, 3, false);
+    h.frame();
+    h.frame();
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(!e.empty() && h.hasText(e.back(), cutLine(10, 3)));
+    if (!e.empty() && h.bounds(e.back()).bottom > port.bottom + 0.5f) {
+        std::fprintf(stderr, "  cut line at %.1f..%.1f, out of the view %.1f..%.1f\n", double(h.bounds(e.back()).top),
+            double(h.bounds(e.back()).bottom), double(port.top), double(port.bottom));
+    }
+    CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f && h.bounds(e.back()).top >= port.top);
+    PrLayoutNode footer = prLayoutNodeParent(h.tree, h.view.promptBox);
+    CHECK(prLayoutNodeFirstChild(h.tree, footer) == h.view.promptBox);
+    CHECK(prLayoutNodeNextSibling(h.tree, h.view.promptBox) == kPrLayoutNodeNone);
+    // emma's tab shows none; back on alex's it shows.
+    h.commandDigit(2);
+    h.frame();
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), cutLine(10, 3)));
+    h.commandDigit(1);
+    h.frame();
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), cutLine(10, 3)));
+    // The draft changes: the line goes.
+    h.type("d");
+    CHECK(h.view.cut.empty() && !h.hasText(prLayoutTreeRoot(h.tree), cutLine(10, 3)));
+    // Cut text on its way in: its arrival keeps the line, the next edit ends it.
+    promptCut(h.view, 20, 3, true);
+    const std::string kept = "xyz";
+    h.push(textEvent(PrAppEventKind_Paste, PrStringView{kept.data(), kept.size()}));
+    h.frame();
+    CHECK(h.active().draft == "abcdxyz");
+    CHECK(h.view.cut == cutLine(20, 3) && !h.view.cutComing);
+    h.frame();
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), cutLine(20, 3)));
+    h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace);
+    CHECK(h.view.cut.empty());
+    // A send changes the draft too.
+    promptCut(h.view, 20, 3, false);
+    h.enter();
+    h.frame();
+    CHECK(h.view.cut.empty());
+}
+
+// A long transcript declares only the entries in sight and a screen either side (view.h TranscriptItems), with tool
+// runs kept together; scrolled to the top, the oldest entry shows, and back at the bottom the newest.
+void longTranscriptDeclaresWhatIsInSight() {
+    Harness h;
+    for (int i = 0; i < 2000; ++i) {
+        const EntryKind kind = i % 3 == 0 ? EntryKind::Person : i % 3 == 1 ? EntryKind::Friend : EntryKind::Tool;
+        h.model.append(0, Entry{kind, "entry " + std::to_string(i)});
+    }
+    h.frame();
+    h.frame();
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() < 80);
+    CHECK(!e.empty() && h.hasText(e.back(), "entry 1999"));
+    PrRect port = h.bounds(h.view.transcript);
+    PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    for (int i = 0; i < 40; ++i) {
+        h.push(scrollEvent(middle, PrVec2{0, -1000000}));
+        h.frame();
+    }
+    e = h.entries();
+    CHECK(e.size() < 80);
+    bool oldest = false;
+    for (PrLayoutNode n : e)
+        oldest = oldest || h.hasText(n, "entry 0");
+    CHECK(oldest);
+    for (int i = 0; i < 40; ++i) {
+        h.push(scrollEvent(middle, PrVec2{0, 1000000}));
+        h.frame();
+    }
+    e = h.entries();
+    CHECK(!e.empty() && h.hasText(e.back(), "entry 1999"));
+    CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
+}
+
+// A tab shown again with a scroll past the end of its content (kept from a taller layout) declares its last item, and
+// the spacer above it stands for the items before it only: the column is as tall as with every item declared.
+void scrollPastTheEndCountsTheLastItemOnce() {
+    Harness h;
+    for (int i = 0; i < 12; ++i) {
+        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+    }
+    h.frame();
+    h.frame();
+    PrLayoutNode column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
+    const float whole = h.height(column);
+    CHECK(h.entries().size() == 12);        // every item declared, and measured
+    h.commandDigit(2);
+    h.frame();
+    h.view.scrolls[0] = 1.0e6f;             // a scroll from a layout taller than this one
+    h.rounds = 1;                           // the one round that declares from that scroll
+    h.commandDigit(1);
+    h.rounds = 8;
+    column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
+    std::vector<PrLayoutNode> e = h.entries();
+    CHECK(e.size() == 2 && h.hasText(e.back(), "line 11"));     // the spacer, and the last item
+    const float shown = h.height(column);
+    if (shown < whole - 0.5f || shown > whole + 0.5f) {
+        std::fprintf(stderr, "  column %.1f px with every item, %.1f px from past the end\n", double(whole),
+            double(shown));
+    }
+    CHECK(shown > whole - 0.5f && shown < whole + 0.5f);
+}
+
+// A long history scrolled up from its end: each step declares items laid out for the first time, whose estimated
+// heights the next round replaces with measured ones, in the spacer above as in the items. An entry in view stays where
+// it is on screen as that happens.
+void scrolledUpKeepsItsPlaceAsHeightsAreMeasured() {
+    Harness h;
+    const std::string paragraph = "a reply long enough to wrap over a few lines of the column, so that the estimate of "
+        "its height from its length is not what the layout makes of it; ";
+    for (int i = 0; i < 1500; ++i) {
+        std::string text = "entry " + std::to_string(i) + ": ";
+        for (int p = 0; p < 1 + i % 4; ++p) {
+            text += paragraph;
+        }
+        h.model.append(0, Entry{i % 3 == 0 ? EntryKind::Person : EntryKind::Friend, text});
+    }
+    h.frame();
+    h.frame();
+    PrRect port = h.bounds(h.view.transcript);
+    PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
+    h.push(pointerEvent(PrAppEventKind_PointerMove, middle));
+    const auto measured = [&] {
+        std::size_t n = 0;
+        for (float height : h.view.items[0].height) {
+            n += height > 0 ? 1 : 0;
+        }
+        return n;
+    };
+    const std::size_t atFirst = measured();
+    int moved = 0;
+    for (int step = 0; step < 20; ++step) {
+        h.push(scrollEvent(middle, PrVec2{0, -700}));
+        h.frame();
+        // The spacer above stands for items not yet laid out.
+        std::vector<PrLayoutNode> e = h.entries();
+        CHECK(e.size() < 200);
+        // An entry whose top is in view (entries here can be taller than the view).
+        PrLayoutNode seen = kPrLayoutNodeNone;
+        for (PrLayoutNode n : e) {
+            PrRect b = h.bounds(n);
+            if (b.top >= port.top && b.top < port.bottom) {
+                seen = n;
+                break;
+            }
+        }
+        CHECK(seen != kPrLayoutNodeNone);
+        if (seen == kPrLayoutNodeNone) {
+            continue;
+        }
+        const float before = h.bounds(seen).top;
+        h.frame();      // what the last round declared is measured, and the estimates it stood on replaced
+        const float after = h.bounds(seen).top;
+        if (after < before - 0.5f || after > before + 0.5f) {
+            ++moved;
+            std::fprintf(stderr, "  step %d: an entry in view moved from %.1f to %.1f\n", step, double(before),
+                double(after));
+        }
+    }
+    CHECK(moved == 0);
+    CHECK(measured() > atFirst + 20);
+}
+
 // With `queued` prompts in the tab's queue, drawn after the transcript: the column's last item is the newest queued
 // prompt if there is one, else the newest entry.
 void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     Harness h;
-    for (int i = 0; i < 30; ++i)
+    // Enough entries that only those in sight and a screen either side are declared, with a spacer above them.
+    constexpr int kLines = 600;
+    for (int i = 0; i < kLines; ++i)
         h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
     for (std::size_t q = 0; q < queued; ++q) {
         h.model.set_draft(0, "held " + std::to_string(q));
@@ -1198,17 +1417,21 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     h.frame();
     PrRect port = h.bounds(h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
-    CHECK(e.size() == 30 + queued);
+    // Only the entries in sight and a screen either side are declared (view.h TranscriptItems): the newest is last
+    // before the queue.
+    CHECK(e.size() > queued && h.hasText(e[e.size() - 1 - queued], "line " + std::to_string(kLines - 1)));
+    CHECK(e.size() < std::size_t(kLines) / 2);     // the spacers are in play
     // At the bottom: the last item shows, at the foot of the transcript.
     CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
     CHECK(!e.empty() && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
     h.model.append(0, Entry{EntryKind::Friend, "newest"});
     h.frame();
     e = h.entries();
-    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
-    CHECK(e.size() == 31 + queued && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
+    CHECK(e.size() > queued && h.hasText(e[e.size() - 1 - queued], "newest"));
+    CHECK(h.bounds(e.back()).bottom <= port.bottom + 0.5f);
+    CHECK(h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
     // A new entry goes above the queued prompts; still at the bottom.
-    CHECK(e.size() == 31 + queued && h.bounds(e[30]).bottom < h.bounds(e.back()).bottom + 0.5f);
+    CHECK(h.bounds(e[e.size() - 1 - queued]).bottom < h.bounds(e.back()).bottom + 0.5f);
 
     // Scrolled up: an entry in view stays where it is on screen while entries arrive below.
     PrVec2 middle{(port.left + port.right) / 2, (port.top + port.bottom) / 2};
@@ -1740,6 +1963,12 @@ int main() {
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
+    longTranscriptDeclaresWhatIsInSight();
+    promptCutKeepsWholeCharacters();
+    promptRoomCountsTheSelection();
+    cutLineStaysWithItsTabAndDraft();
+    scrollPastTheEndCountsTheLastItemOnce();
+    scrolledUpKeepsItsPlaceAsHeightsAreMeasured();
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(0);
     appendsFollowAtTheBottomAndHoldAViewScrolledUp(3);
     toolLinesAreOneCompactLine();

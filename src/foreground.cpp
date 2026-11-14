@@ -53,11 +53,22 @@ int startedShell(const std::vector<int>& before, const std::vector<int>& after) 
     return found;
 }
 
-std::vector<std::string> foregroundArguments(int shell) {
+int foregroundGroup(int shell) {
     kinfo_proc info{};
-    if (shell <= 0 || !processInfo(shell, &info) || info.kp_eproc.e_tpgid <= 0)
+    if (shell <= 0 || !processInfo(shell, &info) || info.kp_eproc.e_tpgid <= 0) {
+        return -1;
+    }
+    return info.kp_eproc.e_tpgid;
+}
+
+std::vector<std::string> foregroundArguments(int shell) {
+    return processArguments(foregroundGroup(shell));
+}
+
+std::vector<std::string> processArguments(int leader) {
+    if (leader <= 0) {
         return {};
-    const int leader = info.kp_eproc.e_tpgid;
+    }
     int argmax = 0;
     size_t size = sizeof(argmax);
     int mibMax[2] = {CTL_KERN, KERN_ARGMAX};
@@ -65,7 +76,7 @@ std::vector<std::string> foregroundArguments(int shell) {
         return {};
     // KERN_PROCARGS2: argc, the executable's path, padding, then argc arguments, each ended by a NUL, then the
     // environment.
-    // Kept between calls: it is read once a frame for each terminal, and is as large as the system's argument limit.
+    // Kept between calls, one a thread: it is as large as the system's argument limit.
     static thread_local std::vector<char> buffer;
     if (buffer.size() < static_cast<std::size_t>(argmax))
         buffer.resize(static_cast<std::size_t>(argmax));
@@ -103,6 +114,14 @@ int startedShell(const std::vector<int>&, const std::vector<int>&) {
 }
 
 std::vector<std::string> foregroundArguments(int) {
+    return {};
+}
+
+int foregroundGroup(int) {
+    return -1;
+}
+
+std::vector<std::string> processArguments(int) {
     return {};
 }
 
