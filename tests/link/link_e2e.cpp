@@ -162,12 +162,12 @@ struct Server {
 
 // These tests check what the link does, never how fast this machine is. A wait for the link to get somewhere ends when
 // its condition holds, and fails only when nothing has moved for kStallSeconds. Every action the server applies is
-// durable before it is acknowledged, one F_FULLFSYNC (fsync off macOS) each (store/store.cpp, store/posix_fs.cpp), and
-// that sync waits on every other writer to the drive: on a loaded machine (the whole suite, model checks and builds at
-// once) the soak's 300 prompts took 38 s instead of 1.4 s, and a fixed deadline on a whole wait failed runs that were
-// still making progress. A link that hangs, or loses an action, makes no progress and still fails, kStallSeconds after
-// its last step. kStallSeconds is the bound the link gives one step of its own: the bootstrap's ssh
-// (link::Bootstrap::timeoutSeconds).
+// durable before it is acknowledged: each pass of its loop writes the pass's actions in one write and makes them
+// durable in one F_FULLFSYNC (fsync off macOS; server/server.cpp, store/journal.cpp), and that flush waits on every
+// other writer to the drive, so on a loaded machine one pass can take seconds where it takes milliseconds alone. A
+// fixed deadline on a whole wait measures the machine; a run that is still making progress is not cut. A link that
+// hangs, or loses an action, makes no progress and still fails, kStallSeconds after its last step. kStallSeconds is
+// the bound the link gives one step of its own: the bootstrap's ssh (link::Bootstrap::timeoutSeconds).
 constexpr int kStallSeconds = 30;
 
 // Calls step() until done() holds, or until progress() has not changed for kStallSeconds.

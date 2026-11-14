@@ -54,8 +54,45 @@ Status full_sync(int fd, const std::string& path) {
     return Status::ok();
 }
 
+Status write_all(int fd, std::span<const std::uint8_t> data, const std::string& path) {
+    std::size_t done = 0;
+    while (done < data.size()) {
+        ssize_t w = ::write(fd, data.data() + done, data.size() - done);
+        if (w < 0 && errno == EINTR) {
+            continue;
+        }
+        if (w < 0) {
+            return os_error("write", path);
+        }
+        done += std::size_t(w);
+    }
+    return Status::ok();
+}
+
+// The log, open for the journal's life: one open, then a write and a flush per batch on the same descriptor.
+class PosixAppendFile : public AppendFile {
+public:
+    PosixAppendFile(int fd, std::string path) : fd_(fd), path_(std::move(path)) {}
+    Status append(std::span<const std::uint8_t> data) override { return write_all(fd_.get(), data, path_); }
+    Status sync() override { return full_sync(fd_.get(), path_); }
+
+private:
+    Fd fd_;
+    std::string path_;
+};
+
 class PosixFs : public Fs {
 public:
+    Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override {
+        out.reset();
+        int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+        if (fd < 0) {
+            return os_error("open", path);
+        }
+        out = std::make_unique<PosixAppendFile>(fd, path);
+        return Status::ok();
+    }
+
     Status make_dir(const std::string& dir) override {
         std::size_t start = 0;
         while (true) {
@@ -136,16 +173,7 @@ public:
         Fd fd(::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC));
         if (fd.get() < 0)
             return os_error("open", path);
-        std::size_t done = 0;
-        while (done < data.size()) {
-            ssize_t w = ::write(fd.get(), data.data() + done, data.size() - done);
-            if (w < 0 && errno == EINTR)
-                continue;
-            if (w < 0)
-                return os_error("write", path);
-            done += std::size_t(w);
-        }
-        return Status::ok();
+        return write_all(fd.get(), data, path);
     }
 
     Status truncate(const std::string& path, std::uint64_t size) override {

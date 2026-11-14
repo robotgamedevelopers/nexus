@@ -44,9 +44,9 @@ if(NEXUS_E2E_TAILNET)
     list(APPEND e2e_dirs ${e2e_dir}-tailnet)
 endif()
 # The runs fail a link that stops making progress themselves, 30 s after its last step (kStallSeconds in link_e2e.cpp),
-# whatever the clock says, so a slow run that is still progressing is not cut: one F_FULLFSYNC per applied action
-# waits on every other writer to the drive, and under a loaded machine's flushes the soak alone took longer than the
-# 90 s this was. TIMEOUT is only the backstop for a process blocked outside any wait (ssh, a socket call).
+# whatever the clock says, so a slow run that is still progressing is not cut: the server's flush per pass waits on
+# every other writer to the drive. TIMEOUT is only the backstop for a process blocked outside any wait (ssh, a socket
+# call).
 set_tests_properties(${e2e_tests} PROPERTIES LABELS functional TIMEOUT 600 FIXTURES_REQUIRED link_e2e_servers)
 add_test(NAME link_e2e_stop_servers COMMAND link_e2e ${server} stop ${e2e_dirs})
 set_tests_properties(link_e2e_stop_servers PROPERTIES LABELS functional TIMEOUT 60
