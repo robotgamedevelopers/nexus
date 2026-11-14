@@ -56,7 +56,8 @@ std::vector<ServerMessage> serverMessages() {
     std::vector<ServerMessage> all = {Stop{3}, Stop{kMaxTurn}, Send{kMaxTurn, "last"},
         Settings{"claude-opus-5-5", "high"}, Settings{"opus", ""}, Settings{"", "low"},
         ServerInfo{{"secrets"}}, ServerInfo{{}}, ServerInfo{{"secrets", "a feature from the future"}},
-        SecretAnswer{1, true, ""}, SecretAnswer{kMaxInteger, false, "busy"}, SecretAnswer{3, false, "no-client"}};
+        SecretAnswer{1, true, ""}, SecretAnswer{kMaxInteger, false, "busy"}, SecretAnswer{3, false, "no-client"},
+        SecretAnswer{5, true, "unconfirmed"}};
     std::uint64_t turn = 1;
     for (const std::string& t : kTexts)
         all.push_back(Send{turn++, t});
@@ -563,6 +564,10 @@ void secrets() {
     // The answer: stored, or refused with a reason; any other outcome, or a refusal without its reason, is refused.
     const Decoded<ServerMessage> stored = decodeServerMessage("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"stored\"}");
     CHECK(stored.message && *stored.message == ServerMessage(SecretAnswer{4, true, ""}));
+    // Stored with a reason: the value is in its file, its durability unconfirmed.
+    const Decoded<ServerMessage> unconfirmed =
+        decodeServerMessage("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"stored\",\"reason\":\"unconfirmed\"}");
+    CHECK(unconfirmed.message && *unconfirmed.message == ServerMessage(SecretAnswer{4, true, "unconfirmed"}));
     const Decoded<ServerMessage> refused =
         decodeServerMessage("{\"kind\":\"secret\",\"ask\":4,\"outcome\":\"refused\",\"reason\":\"timeout\"}");
     CHECK(refused.message && *refused.message == ServerMessage(SecretAnswer{4, false, "timeout"}));

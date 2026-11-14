@@ -193,7 +193,7 @@ struct ServerEncoder {
     void operator()(const ServerInfo& m) { w.str("kind", "server").strings("features", m.features); }
     void operator()(const SecretAnswer& m) {
         w.str("kind", "secret").num("ask", double(m.ask)).str("outcome", m.stored ? "stored" : "refused");
-        if (!m.stored) {
+        if (!m.stored || !m.reason.empty()) {
             w.str("reason", m.reason);
         }
     }
@@ -521,6 +521,7 @@ Decoded<ServerMessage> decodeServerMessage(std::string_view line) {
         const std::string outcome = f.str("outcome", true);
         if (outcome == "stored") {
             m.stored = true;
+            m.reason = f.str("reason", false, true);
         } else if (outcome == "refused") {
             m.reason = f.str("reason", true, true);
         } else if (f.error().empty()) {

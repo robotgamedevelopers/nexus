@@ -127,6 +127,9 @@ public:
     Status sync_dir(const std::string& d) override { return note(w_.mem.sync_dir(d), "syncdir", d + "/.", 0); }
     Status rename(const std::string& f, const std::string& t) override { return note(w_.mem.rename(f, t), "rename", f, 0); }
     Status remove(const std::string& p) override { return note(w_.mem.remove(p), "remove", p, 0); }
+    // Not the journal's: the store never writes a file this way.
+    Status write_new(const std::string& p, std::span<const std::uint8_t> d) override { return w_.mem.write_new(p, d); }
+    Status private_dir(const std::string& d) override { return w_.mem.private_dir(d); }
 
 private:
     // The log, open: one write of a batch is one step with each record's length (the spec's AppendRec, once per

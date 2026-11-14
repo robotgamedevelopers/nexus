@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -280,11 +281,13 @@ public:
     void secretsWith(SecretKeeper* keeper, SecretEvents* events, std::function<bool()> takers,
                      std::function<std::uint64_t()> clock);
     // An ask for `what` of `account`, from `asker` with its one-line reason `why`. Malformed, with no request made and
-    // no id minted (false, with `refused` saying why): the hub holds no accounts or none named `account`, its provider
-    // documents no file `what`, or `why` is not one line of at most kSecretWhyBytes. Otherwise an id is minted (durable:
-    // the store's counter under kSecretIdsClient, so never reused across restarts), and the request opens, or is
-    // refused at once (busy, no-client) with its answer to the asker. False, with why, when the store did not take the
-    // id.
+    // no id minted (false, with `refused` saying why): `account` or `what` is not a name, the hub holds no accounts or
+    // none named `account`, the asker's friend is not linked to it (nexus itself, session 0, asks for any), its
+    // provider documents no file `what`, or `why` is not a safe line (isSecretWhy). An asker with an ask open already,
+    // or kSecretAsksPerWindow asks in the last kSecretAskWindowMs, is answered busy at once, with no request made and
+    // no id minted (the answer's id is 0). Otherwise an id is minted (durable: the store's counter under
+    // kSecretIdsClient, so never reused across restarts), and the request opens, or is refused at once (busy,
+    // no-client) with its answer to the asker. False, with why, when the store did not take the id.
     bool askSecret(const SecretAsker& asker, const std::string& account, const std::string& what,
                    const std::string& why, std::string* refused = nullptr);
     // Every open request past its deadline is refused (timeout).
@@ -294,6 +297,8 @@ public:
     // The server is ending: every open request is dropped unanswered, each with its log line.
     void dropSecrets();
     const SecretDesk& secrets() const { return desk_; }
+    // The walk's faulty run alone: SecretDesk::injectEchoFault.
+    void injectSecretEchoFault() { desk_.injectEchoFault(); }
 
 private:
     void secretEffects(const SecretEffects& effects);
@@ -325,6 +330,7 @@ private:
     SecretEvents* secretEvents_ = nullptr;
     std::function<bool()> takers_;
     std::function<std::uint64_t()> clock_;
+    std::map<SessionId, std::deque<std::uint64_t>> askTimes_;   // each asker's asks in the last kSecretAskWindowMs
 };
 
 } // namespace nexus::sync

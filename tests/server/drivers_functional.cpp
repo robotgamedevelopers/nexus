@@ -40,9 +40,11 @@
 #include <string>
 #include <vector>
 
+#include "leak_scan.h"
 #include "server/drivers.h"
 #include "server/durable.h"
 #include "server/secret_files.h"
+#include "server/secret_lines.h"
 #include "store/fs.h"
 
 namespace {
@@ -135,16 +137,6 @@ const char* const kHost = "testhost";
 // ada's session: the first the server makes.
 constexpr sync::SessionId kAda = 1;
 
-// The secret dialog's effects, as the server's are (server.cpp SecretLines): each answer to its asker's driver, and
-// each log line kept for the case to read.
-struct SecretLines : sync::SecretEvents {
-    Drivers* drivers = nullptr;
-    std::vector<std::string> log;
-
-    void answered(const sync::SecretReply& reply) override { drivers->answered(reply); }
-    void logged(const sync::SecretLog& line) override { log.push_back(line.line()); }
-};
-
 // nexus-server's friends over a store in `dir`: the store, the hub and the drivers, as the server makes them; with
 // `secrets`, the secret dialog too, its files under `dir`/accounts, offered to a window while `takers` holds.
 struct Server {
@@ -153,7 +145,10 @@ struct Server {
     std::unique_ptr<Drivers> drivers;
     std::unique_ptr<sync::Hub> hub;
     std::unique_ptr<AccountFiles> files;
-    SecretLines lines;
+    // The secret dialog's effects through the server's own SecretLines: each answer to its asker's driver (and kept,
+    // with each log line, for the case to read).
+    std::vector<std::string> log;
+    std::unique_ptr<SecretLines> lines;
     bool takers = false;
     std::set<pid_t> pids;               // every driver seen running
     std::uint64_t num = 1;
@@ -170,8 +165,13 @@ struct Server {
         drivers->attach(*hub);
         if (secrets) {
             files = std::make_unique<AccountFiles>(*fs, dir + "/accounts");
-            lines.drivers = drivers.get();
-            hub->secretsWith(files.get(), &lines, [this] { return takers; },
+            lines = std::make_unique<SecretLines>(
+                [this](sync::SessionId id, const std::string& line) {
+                    log.push_back(line);
+                    drivers->tellSecret(id, line);
+                },
+                [this](const std::string& line) { log.push_back(line); });
+            hub->secretsWith(files.get(), lines.get(), [this] { return takers; },
                              [] { return static_cast<std::uint64_t>(now()); });
         }
         CHECK(drivers->start(now()));
@@ -974,7 +974,7 @@ void escapedOutput(Server& s, const std::string& dir, const std::string&) {
 }
 
 // The value the secret cases paste: made up here, never a real one.
-const std::string kFakeToken = "fake-secret-test-Df7r-" + std::string(64, 'q');
+const std::string kFakeToken = "fakeDf7rKsVm" + std::string(64, 'q');
 
 // ada's drivers file and script for a driver of the claude harness (the fake stands in), and the accounts: a1, a claude
 // account (its login the file oauth-token) and ada's default, which her session runs on.
@@ -1014,9 +1014,11 @@ void kept(const std::string& dir) {
     CHECK(fs::status(dir + "/accounts/a1", ec).permissions() == fs::perms::owner_all);
 }
 
-// The value is nowhere but its file: not in any other file under `dir` (the store's files, what the driver read, the
-// script, the drivers file), the transcript or the secret log.
+// The value is nowhere but its file: no run, hex, base64 or length of it (tests/leak_scan.h) in any other file under
+// `dir` (the store's files, what the driver read, its environment, the script, the drivers file), the transcript, or
+// the bytes the server's SecretLines gave the driver and the log.
 void nowhereElse(Server& s, const std::string& dir) {
+    const test::LeakScan scan(kFakeToken, "a1");
     namespace fs = std::filesystem;
     const fs::path file = fs::path(dir) / "accounts" / "a1" / "oauth-token";
     int read = 0;
@@ -1026,14 +1028,19 @@ void nowhereElse(Server& s, const std::string& dir) {
             continue;
         }
         ++read;
-        if (has(readFile(entry.path().string()), kFakeToken)) {
-            std::fprintf(stderr, "  the value reached %s\n", entry.path().string().c_str());
+        const std::string found = scan.find(readFile(entry.path().string()));
+        if (!found.empty()) {
+            std::fprintf(stderr, "  the value reached %s: %s\n", entry.path().string().c_str(), found.c_str());
             CHECK(false);
         }
     }
     CHECK(read > 3);
-    CHECK(!has(s.transcript(), kFakeToken));
-    CHECK(!has(s.lines.log, kFakeToken));
+    for (const std::string& line : s.transcript()) {
+        CHECK(!scan.in(line));
+    }
+    for (const std::string& line : s.log) {
+        CHECK(!scan.in(line));
+    }
 }
 
 // A driver's ask for a secret, as docs/secrets.md defines it: with no window that can take one it is refused at once
@@ -1045,7 +1052,9 @@ void secretAsk(Server& s, const std::string& dir, const std::string& fake) {
         return "raw {\"kind\":\"ask-secret\",\"ask\":" + std::to_string(n) +
             ",\"account\":\"a1\",\"what\":\"oauth-token\",\"why\":\"the login expired\"}\n";
     };
-    setUpClaude(s, dir, fake, std::string(kHello) + "send\n" + ask(1) + "await-secret " + heard + "\n"
+    // The driver's whole environment goes to a file under `dir`, which nowhereElse() searches with the rest.
+    setUpClaude(s, dir, fake, "option echo-input\nrecord-env " + dir + "/env\n" + std::string(kHello) + "send\n" +
+        ask(1) + "await-secret " + heard + "\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nsend\n" + ask(2) + "await-secret " + heard + "\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
     s.send("first");
@@ -1068,6 +1077,7 @@ void secretAsk(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(has(readFile(heard), "\"stored\""));
     CHECK(s.hub->state().requests().empty());
+    CHECK(has(readFile(dir + "/env"), "="));
     CHECK(signedIn(s, "a1"));
     kept(dir);
     nowhereElse(s, dir);
@@ -1078,7 +1088,7 @@ void secretAsk(Server& s, const std::string& dir, const std::string& fake) {
 // while starting is held, is answered by a driver started for it, without a restart of nexus-server and without
 // another prompt (Supervisor.tla SignIn).
 void secretSignIn(Server& s, const std::string& dir, const std::string& fake) {
-    setUpClaude(s, dir, fake, "count-starts " + dir + "/starts\n"
+    setUpClaude(s, dir, fake, "option echo-input\nrecord-env " + dir + "/env\ncount-starts " + dir + "/starts\n"
         "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"a1 has no token\",\"fix\":\"paste one\",\"code\":\"no-credential\"}\n"
         "on-start 1 exit 0\n"
@@ -1178,7 +1188,7 @@ int main(int argc, char** argv) {
             s.end();
             if (failures != 0) {
                 dump(s);
-                for (const std::string& line : s.lines.log) {
+                for (const std::string& line : s.log) {
                     std::fprintf(stderr, "  log: %s\n", line.c_str());
                 }
             }

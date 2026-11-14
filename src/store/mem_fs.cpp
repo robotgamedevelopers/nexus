@@ -197,6 +197,23 @@ Status MemFs::make_dir(const std::string& dir) {
     return Status::ok();
 }
 
+// MemFs has no modes and no links: a private directory is any directory, and a new file is a create, an append and a
+// sync, each a call a crash can fall before.
+Status MemFs::private_dir(const std::string& dir) {
+    return make_dir(dir);
+}
+
+Status MemFs::write_new(const std::string& path, std::span<const std::uint8_t> data) {
+    Status s = create(path);
+    if (s.is_ok()) {
+        s = append(path, data);
+    }
+    if (s.is_ok()) {
+        s = sync(path);
+    }
+    return s;
+}
+
 Status MemFs::list(const std::string& dir, std::vector<std::string>& names) {
     names.clear();
     auto d = dirs_.find(dir);
@@ -204,6 +221,14 @@ Status MemFs::list(const std::string& dir, std::vector<std::string>& names) {
         return Status::not_found("memfs: no directory " + dir);
     for (const auto& [n, ino] : d->second.now)
         names.push_back(n);
+    // Its directories too, as a real directory's listing names them (AccountFiles::sweep walks them).
+    const std::string prefix = dir + "/";
+    for (auto c = dirs_.upper_bound(prefix); c != dirs_.end() && c->first.compare(0, prefix.size(), prefix) == 0; ++c) {
+        if (c->first.find('/', prefix.size()) == std::string::npos) {
+            names.push_back(c->first.substr(prefix.size()));
+        }
+    }
+    std::sort(names.begin(), names.end());
     return Status::ok();
 }
 

@@ -110,11 +110,11 @@ public:
     void signedIn(const std::string& account) override;
 
     // The secret dialog (docs/secrets.md): a driver's ask-secret goes to the hub once every slot is served (serve());
-    // a malformed one (an account not set up, a file its provider does not document, a reason that is not one line)
-    // ends the driver as a line refused. The one answer to an ask goes back to the asker's driver as a secret line, if
-    // that driver is still alive past its hello (else it has nowhere to go, and is dropped). It never holds the value:
-    // a SecretReply has none.
-    void answered(const sync::SecretReply& reply);
+    // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its friend, a file its
+    // provider does not document, a reason that is not a safe line) ends the driver as a line refused. The one answer
+    // to an ask comes back as its `secret` line (server/secret_lines.h), written to session `id`'s driver if that is
+    // still alive past its hello (else it has nowhere to go, and is dropped). It never holds the value.
+    void tellSecret(sync::SessionId id, const std::string& line);
     // The server is stopping: every driver is ended. Serve on until alive() is false.
     bool shutdown(Millis now);
     bool alive() const;     // any driver process not yet collected

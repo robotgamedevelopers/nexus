@@ -68,6 +68,57 @@ std::string loginFile(const std::string& provider) {
     return provider == "claude" ? std::string("oauth-token") : std::string();
 }
 
+bool isSecretWhy(std::string_view why) {
+    if (why.size() > kSecretWhyBytes) {
+        return false;
+    }
+    std::size_t i = 0;
+    while (i < why.size()) {
+        const unsigned char b = static_cast<unsigned char>(why[i]);
+        std::size_t n = 0;
+        std::uint32_t cp = 0;
+        if (b < 0x80) {
+            n = 1;
+            cp = b;
+        } else if (b >= 0xC2 && b <= 0xDF) {
+            n = 2;
+            cp = b & 0x1Fu;
+        } else if (b >= 0xE0 && b <= 0xEF) {
+            n = 3;
+            cp = b & 0x0Fu;
+        } else if (b >= 0xF0 && b <= 0xF4) {
+            n = 4;
+            cp = b & 0x07u;
+        } else {
+            return false;
+        }
+        if (i + n > why.size()) {
+            return false;
+        }
+        for (std::size_t k = 1; k < n; ++k) {
+            const unsigned char c = static_cast<unsigned char>(why[i + k]);
+            if ((c & 0xC0u) != 0x80u) {
+                return false;
+            }
+            cp = (cp << 6) | (c & 0x3Fu);
+        }
+        // Overlong forms, surrogates and code points past U+10FFFF are not UTF-8.
+        if ((n == 3 && cp < 0x800) || (n == 4 && (cp < 0x10000 || cp > 0x10FFFF)) || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            return false;
+        }
+        const bool control = cp < 0x20 || (cp >= 0x7F && cp <= 0x9F);
+        const bool bidi = cp == 0x061C || cp == 0x200E || cp == 0x200F || (cp >= 0x202A && cp <= 0x202E) ||
+            (cp >= 0x2066 && cp <= 0x2069);
+        const bool zeroWidth = (cp >= 0x200B && cp <= 0x200D) || cp == 0x2060 || cp == 0xFEFF;
+        const bool separator = cp == 0x2028 || cp == 0x2029;
+        if (control || bidi || zeroWidth || separator) {
+            return false;
+        }
+        i += n;
+    }
+    return true;
+}
+
 std::string SecretLog::line() const {
     return "secret request " + std::to_string(id) + " for " + account + ": " + event;
 }
@@ -94,6 +145,17 @@ SecretEffects SecretDesk::ask(std::uint64_t id, const SecretAsker& asker, const 
     out.notes.push_back(SecretNote{id, asker.session, "asked", account, note(r, "was asked for in nexus's window")});
     out.log.push_back(SecretLog{id, account, "asked"});
     out.changed = true;
+    return out;
+}
+
+SecretEffects SecretDesk::refuseAtOnce(const SecretAsker& asker, const std::string& account, const std::string& what,
+                                       const std::string& why) const {
+    SecretEffects out;
+    out.replies.push_back(SecretReply{0, asker, false, reason::kBusy});
+    out.notes.push_back(SecretNote{0, asker.session, "refused", account,
+        "secret ask: " + account + "'s " + what + " was not asked for: " + why});
+    out.log.push_back(SecretLog{0, account, std::string(reason::kBusy) + " (not asked: session " +
+                                std::to_string(asker.session) + ": " + why + ")"});
     return out;
 }
 
@@ -124,10 +186,18 @@ SecretEffects SecretDesk::answer(std::uint64_t id, const SecretValue& value, Sec
     const SecretRequest r = *it;
     const SecretAsker asker = askers_[id];
     std::string why;
-    if (keeper.keep(r.account, r.what, value, &why)) {
+    const Kept kept = keeper.keep(r.account, r.what, value, &why);
+    if (kept == Kept::Durable) {
         out.replies.push_back(SecretReply{id, asker, true, std::string()});
         out.notes.push_back(SecretNote{id, r.asker, "stored", r.account, note(r, "was stored")});
-        out.log.push_back(SecretLog{id, r.account, "stored"});
+        out.log.push_back(SecretLog{id, r.account, echoFault_ ? "stored " + value.bytes() : std::string("stored")});
+        end(static_cast<std::size_t>(it - open_.begin()), SecretState::Stored, out);
+    } else if (kept == Kept::Unconfirmed) {
+        // The value is in its file: stored, and said so with what is true of it.
+        out.replies.push_back(SecretReply{id, asker, true, reason::kUnconfirmed});
+        out.notes.push_back(SecretNote{id, r.asker, "stored", r.account,
+            note(r, "was stored, but the disk did not confirm it durable; see server.log")});
+        out.log.push_back(SecretLog{id, r.account, std::string("stored, unconfirmed: ") + why});
         end(static_cast<std::size_t>(it - open_.begin()), SecretState::Stored, out);
     } else {
         out.replies.push_back(SecretReply{id, asker, false, reason::kUnwritable});

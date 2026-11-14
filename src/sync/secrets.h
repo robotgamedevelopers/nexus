@@ -62,6 +62,16 @@ void wipeBytes(std::string& s);
 constexpr std::uint64_t kSecretDeadlineMs = 10 * 60 * 1000;
 // The longest reason an asker gives, in bytes: one line, shown in the dialog as quoted text.
 constexpr std::size_t kSecretWhyBytes = 200;
+// How many asks one asker (a session's driver) makes in a window of time before the next is refused busy at once: 5 a
+// minute. A guess, not a measurement: an AI that needs a login asks once and waits for the person; more than a few a
+// minute is a loop, or an AI fishing, and each ask pops a dialog in front of the person.
+constexpr std::size_t kSecretAsksPerWindow = 5;
+constexpr std::uint64_t kSecretAskWindowMs = 60 * 1000;
+// Whether `why` may be an ask's reason, shown in the dialog and the asker's session: valid UTF-8 of at most
+// kSecretWhyBytes, with no control character (C0, DEL, C1), no bidirectional control (U+061C, U+200E, U+200F,
+// U+202A to U+202E, U+2066 to U+2069), no zero-width character (U+200B to U+200D, U+2060, U+FEFF) and no line or
+// paragraph separator (U+2028, U+2029): one line that reads as it is.
+bool isSecretWhy(std::string_view why);
 // The longest value a window sends, in bytes. A judgement, not measured: tokens and API keys are under 1 KiB; 16 KiB
 // holds any a provider issues with room to spare, and keeps an action far within what mosh carries.
 constexpr std::size_t kSecretValueBytes = 16 * 1024;
@@ -95,24 +105,27 @@ struct SecretAsker {
     bool operator==(const SecretAsker&) const = default;
 };
 
-// The reasons an asker is refused (docs/secrets.md): one open already for the account; no window can take one; the
-// person cancelled; nobody answered before the deadline. `unwritable` is the code's alone (the model leaves the write
-// to the code): the value arrived and the file could not be written.
+// The reasons an asker is refused (docs/secrets.md): one open already for the account (or for the asker, or it asked
+// too often); no window can take one; the person cancelled; nobody answered before the deadline. `unwritable` is the
+// code's alone (the model leaves the write to the code): the value arrived and the file could not be written.
+// `unconfirmed` goes with stored, never refused: the value is in its file, but the disk did not confirm the rename
+// durable (the directory's sync failed), so a crash may yet bring the old file back.
 namespace reason {
 constexpr const char* kBusy = "busy";
 constexpr const char* kNoClient = "no-client";
 constexpr const char* kCancelled = "cancelled";
 constexpr const char* kTimeout = "timeout";
 constexpr const char* kUnwritable = "unwritable";
+constexpr const char* kUnconfirmed = "unconfirmed";
 } // namespace reason
 
 // The one answer an asker hears for a request: stored, or refused with a reason. Never the value, its length, or which
-// window answered.
+// window answered. Id 0: an ask refused before a request was made (Hub::askSecret).
 struct SecretReply {
     std::uint64_t id = 0;
     SecretAsker asker;
     bool stored = false;
-    std::string reason;         // with refused; empty with stored
+    std::string reason;         // with refused; with stored, empty or unconfirmed
 };
 
 // A line in the asker's session (what its AI reads back): "asked", "stored" or "refused", with the account and the
@@ -142,13 +155,17 @@ struct SecretEffects {
     bool changed = false;       // the open requests changed: the windows' state must be sent again
 };
 
+// How a keep went: the value is in its file and durable; in its file, but its durability unconfirmed (the rename was
+// made and the directory's sync failed); or not in its file (the old one, if any, is as it was).
+enum class Kept : std::uint8_t { Durable, Unconfirmed, Failed };
+
 // Writes a value to `accounts/<account>/<what>`: the directory made 0700 if missing, the value written to a temporary
-// 0600 file beside it, synced and renamed over the old one. False, with why (never holding the value), when it could
-// not.
+// 0600 file beside it, synced and renamed over the old one, and the directory synced. With why (never holding the
+// value) when it is not Durable.
 class SecretKeeper {
 public:
     virtual ~SecretKeeper() = default;
-    virtual bool keep(const std::string& account, const std::string& what, const SecretValue& value,
+    virtual Kept keep(const std::string& account, const std::string& what, const SecretValue& value,
                       std::string* why) = 0;
 };
 
@@ -167,8 +184,13 @@ public:
     // open until its answer, a cancel, or now + kSecretDeadlineMs.
     SecretEffects ask(std::uint64_t id, const SecretAsker& asker, const std::string& account, const std::string& what,
                       const std::string& why, bool takers, std::uint64_t now);
-    // A window's answer: for an open request the value is kept (stored, or refused unwritable when the keeper fails);
-    // for any other the answer is dropped and logged "late". The value is never put in any effect.
+    // An ask refused before any request is made (Hub::askSecret: the asker has one open, or asked too often): busy,
+    // with `why` in its session line and log line, and id 0.
+    SecretEffects refuseAtOnce(const SecretAsker& asker, const std::string& account, const std::string& what,
+                               const std::string& why) const;
+    // A window's answer: for an open request the value is kept (stored; stored unconfirmed when the keeper could not
+    // confirm it durable; refused unwritable when it failed); for any other the answer is dropped and logged "late".
+    // The value is never put in any effect.
     SecretEffects answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper);
     // A window's cancel (Escape): an open request is refused, cancelled; any other is dropped and logged "late".
     SecretEffects cancel(std::uint64_t id);
@@ -185,6 +207,11 @@ public:
 
     static constexpr std::size_t kKeptEnded = 256;
 
+    // A test seam for the trace walk's faulty run alone (tests/sync/secrets_walk --faulty-echo): from now on a stored
+    // answer's log line carries the value, a leak in the code's own path, so the walk shows that its binding sees one.
+    // nexus-server never calls it.
+    void injectEchoFault() { echoFault_ = true; }
+
 private:
     void end(std::size_t index, SecretState state, SecretEffects& out);
     void remember(std::uint64_t id, SecretState state);
@@ -192,6 +219,7 @@ private:
     std::map<std::uint64_t, SecretAsker> askers_;   // each open request's asker (the ask number is not on the wire)
     std::map<std::uint64_t, std::uint64_t> due_;    // each open request's deadline
     std::map<std::uint64_t, SecretState> ended_;    // the most recent requests ended, by id
+    bool echoFault_ = false;
 };
 
 // The window's side: the dialog. It shows the oldest open request the window received and has not answered, one at a

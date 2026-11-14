@@ -31,6 +31,7 @@
 #include "server/home.h"
 #include "server/pass.h"
 #include "server/secret_files.h"
+#include "server/secret_lines.h"
 #include "store/fs.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
@@ -230,24 +231,6 @@ struct Link {
     std::unique_ptr<link::ServerSession> link;
 };
 
-// Where the secret dialog's effects go (docs/secrets.md): each asker's one answer to its driver, and each log line to
-// server.log. Neither ever holds a value (sync/secrets.h).
-class SecretLines : public sync::SecretEvents {
-public:
-    void attach(Drivers* drivers) { drivers_ = drivers; }
-    void answered(const sync::SecretReply& reply) override {
-        if (drivers_ != nullptr) {
-            drivers_->answered(reply);
-        }
-    }
-    void logged(const sync::SecretLog& line) override {
-        std::fprintf(stderr, "nexus-server: %s\n", line.line().c_str());
-    }
-
-private:
-    Drivers* drivers_ = nullptr;
-};
-
 class Server {
 public:
     explicit Server(const Paths& p) : paths_(p) {}
@@ -263,7 +246,13 @@ private:
     std::unique_ptr<store::Fs> fs_;
     std::unique_ptr<store::Fs> secretFs_;
     std::unique_ptr<AccountFiles> secretFiles_;
-    SecretLines secretLines_;
+    // The secret dialog's effects (docs/secrets.md): each answer to its asker's driver, each log line to server.log.
+    SecretLines secretLines_{[this](sync::SessionId id, const std::string& line) {
+                                 if (drivers_) {
+                                     drivers_->tellSecret(id, line);
+                                 }
+                             },
+                             [](const std::string& line) { std::fprintf(stderr, "%s\n", line.c_str()); }};
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
@@ -298,7 +287,10 @@ bool Server::openStore(std::string* why) {
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
     secretFs_ = store::make_posix_fs();
     secretFiles_ = std::make_unique<AccountFiles>(*secretFs_, paths_.accounts);
-    secretLines_.attach(drivers_.get());
+    // A temporary file a write left (a crash, a failure) holds a value no one reads: it goes before anything is asked.
+    for (const std::string& line : secretFiles_->sweep()) {
+        std::fprintf(stderr, "nexus-server: accounts: %s\n", line.c_str());
+    }
     hub_->secretsWith(secretFiles_.get(), &secretLines_, [this] {
         return std::any_of(links_.begin(), links_.end(),
                            [](const Link& l) { return l.link->format() >= sync::kSecretsFormat; });

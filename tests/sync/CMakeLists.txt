@@ -20,7 +20,8 @@ target_compile_options(link_walk PRIVATE ${warnings})
 
 # The secret dialog's walk (src/sync/secrets.h through the hub, and the windows' prompts), for SecretsTrace.tla.
 add_executable(secrets_walk secrets_walk.cpp)
-target_link_libraries(secrets_walk PRIVATE nexus_sync)
+target_link_libraries(secrets_walk PRIVATE nexus_durable)
+target_include_directories(secrets_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_compile_options(secrets_walk PRIVATE ${warnings})
 
 add_dependencies(model_checks sync_test link_walk secrets_walk)
@@ -90,7 +91,9 @@ endforeach()
 foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000)
 endforeach()
-foreach(fault store-late echo)
-    tlc_test(tlc_secrets_trace_faulty_${fault}_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
-             SECWALK SEED 1 STEPS 2000 FAULTY ${fault})
-endforeach()
+tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
+         SECWALK SEED 1 STEPS 2000 FAULTY store-late)
+# The echo is injected into the code (SecretDesk::injectEchoFault): the value reaches server.log's bytes, and the
+# code-side invariant names it.
+tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
+         SECWALK SEED 1 STEPS 2000 FAULTY echo)

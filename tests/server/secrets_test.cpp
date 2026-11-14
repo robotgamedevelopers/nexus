@@ -6,8 +6,9 @@
 //
 // Unit groups: logic only, no time (the clock is an argument), no sockets, no files (the store and the accounts are
 // MemFs). `files_disk` is functional: it writes through the real filesystem under ./secrets_disk in its working
-// directory to check the modes (0600 for the file, 0700 for its directory). Every value is made up here: never a real
-// token.
+// directory to check the modes (0600 for the file, 0700 for its directory), the refusal of a wide or linked account
+// directory, a temporary file never written through a link, and the start's sweep. Every value is made up here: never
+// a real token.
 //
 //   secrets_test            runs every unit group
 //   secrets_test <group>    runs one
@@ -16,6 +17,7 @@
 #include <sys/stat.h>
 #endif
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -24,13 +26,16 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "accounts/registry.h"
 #include "driver/protocol.h"
 #include "server/durable.h"
+#include "leak_scan.h"
 #include "server/secret_files.h"
+#include "server/secret_lines.h"
 #include "store/fs.h"
 #include "sync/actions.h"
 #include "sync/formats.h"
@@ -54,17 +59,20 @@ int failures = 0;
     } while (0)
 
 // The fake values: made up here, long enough that no other text holds them by chance.
-const std::string kValue = "fake-secret-test-Qm8v-" + std::string(64, 'z');
-const std::string kOther = "fake-secret-test-Pw3k-" + std::string(64, 'y');
+const std::string kValue = "fakeQm8vTrXw" + std::string(64, 'z');
+const std::string kOther = "fakePw3kGdHb" + std::string(64, 'y');
 const char* const kToken = "oauth-token";
 
 bool holds(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
 }
 
-// Whether `text` holds either fake value.
+// Whether `text` gives either fake value away: the value, a run of 8 of its bytes, its hex or base64, or its length
+// beside an account's name (leak_scan.h).
 bool leaks(const std::string& text) {
-    return holds(text, kValue) || holds(text, kOther);
+    static const std::vector<test::LeakScan> scans{test::LeakScan(kValue, "a1"), test::LeakScan(kValue, "a2"),
+                                                   test::LeakScan(kOther, "a1"), test::LeakScan(kOther, "a2")};
+    return std::any_of(scans.begin(), scans.end(), [&](const test::LeakScan& s) { return s.in(text); });
 }
 
 sync::SecretAsker asker(sync::SessionId session, std::uint64_t ask) {
@@ -76,15 +84,20 @@ struct Keeper : sync::SecretKeeper {
     std::map<std::string, std::string> files;
     std::size_t writes = 0;
     bool fail = false;
-    bool keep(const std::string& account, const std::string& what, const sync::SecretValue& value,
-              std::string* why) override {
+    bool unconfirmed = false;
+    sync::Kept keep(const std::string& account, const std::string& what, const sync::SecretValue& value,
+                    std::string* why) override {
         if (fail) {
             *why = "the disk is full";
-            return false;
+            return sync::Kept::Failed;
         }
         files[account + "/" + what] = value.bytes();
         ++writes;
-        return true;
+        if (unconfirmed) {
+            *why = "the directory's sync failed";
+            return sync::Kept::Unconfirmed;
+        }
+        return sync::Kept::Durable;
     }
 };
 
@@ -125,7 +138,8 @@ std::vector<std::string> names(store::Fs& fs, const std::string& dir) {
 }
 
 // nexus-server as the tests need it: its store on a MemFs, a hub with friend f's session (1) and the accounts a1 and a2
-// (claude) and a3 (a provider that documents no secret), and the secret dialog wired to `keeper`.
+// (claude) and a3 (a provider that documents no secret), all three linked to f, and a4 (claude) linked to no one; and
+// the secret dialog wired to `keeper`.
 struct Server {
     server::DurableStore store;
     std::unique_ptr<sync::Hub> hub;
@@ -145,8 +159,9 @@ struct Server {
         CHECK(store.find(1) != nullptr);
         accounts::Registry r;
         r.accounts = {accounts::Account{"a1", "claude"}, accounts::Account{"a2", "claude"},
-                      accounts::Account{"a3", "other"}};
-        hub->useAccounts(r, nullptr);
+                      accounts::Account{"a3", "other"}, accounts::Account{"a4", "claude"}};
+        r.friends = {accounts::Friend{"f", {"a1", "a2", "a3"}, "a1"}};
+        CHECK(hub->useAccounts(r, nullptr).empty());
         hub->secretsWith(&keeper, &events, [this] { return takers; }, [this] { return now; });
     }
 
@@ -220,6 +235,21 @@ void desk() {
     k.fail = false;
     CHECK(e.replies.size() == 1 && e.replies[0].reason == sync::reason::kUnwritable);
     CHECK(e.log.size() == 1 && e.log[0].event == "unwritable: the disk is full" && !d.isOpen(5));
+    // The value in its file, its durability unconfirmed: stored, and said so, never refused.
+    d.ask(50, asker(1, 40), "a1", kToken, "", true, 3000);
+    k.unconfirmed = true;
+    e = d.answer(50, sync::SecretValue(kValue), k);
+    k.unconfirmed = false;
+    CHECK(e.replies.size() == 1 && e.replies[0].stored && e.replies[0].reason == sync::reason::kUnconfirmed);
+    CHECK(d.stateOf(50) == sync::SecretState::Stored && e.notes.size() == 1 &&
+          holds(e.notes[0].text, "was stored, but the disk did not confirm it durable"));
+    CHECK(e.log.size() == 1 && e.log[0].event == "stored, unconfirmed: the directory's sync failed");
+    // Refused before any request: busy, id 0, the reason in its lines, nothing opened.
+    e = d.refuseAtOnce(asker(1, 41), "a1", kToken, "one of its asks is open already");
+    CHECK(e.replies.size() == 1 && e.replies[0].id == 0 && !e.replies[0].stored &&
+          e.replies[0].reason == sync::reason::kBusy && e.replies[0].asker == asker(1, 41) && !e.changed);
+    CHECK(e.notes.size() == 1 && holds(e.notes[0].text, "not asked for: one of its asks is open already"));
+    CHECK(e.log.size() == 1 && holds(e.log[0].line(), "busy (not asked: session 1"));
     // The deadline: not a millisecond before it, then timeout; the other request stays open.
     d.ask(6, asker(1, 5), "a1", kToken, "", true, 4000);
     d.ask(7, asker(0, 0), "a2", kToken, "", true, 4001);
@@ -345,6 +375,31 @@ void hub() {
         CHECK(!s.hub->askSecret(asker(1, 1), "a1", "api-key", "", &why) && holds(why, "it has oauth-token"));
         CHECK(!s.hub->askSecret(asker(1, 1), "a1", kToken, "two\nlines", &why) && holds(why, "one line"));
         CHECK(!s.hub->askSecret(asker(1, 1), "a1", kToken, std::string(sync::kSecretWhyBytes + 1, 'w'), &why));
+        // Names before any text: an account or a file that is not a name is refused without being repeated.
+        for (const std::string& bad : {std::string("../a1"), std::string("a1\nnexus-server: forged"),
+                                       std::string("a1 b"), std::string()}) {
+            why.clear();
+            CHECK(!s.hub->askSecret(asker(1, 1), bad, kToken, "", &why) && holds(why, "each a name"));
+            CHECK(bad.empty() || !holds(why, bad));
+            why.clear();
+            CHECK(!s.hub->askSecret(asker(1, 1), "a1", bad, "", &why) && holds(why, "each a name"));
+            CHECK(bad.empty() || !holds(why, bad));
+        }
+        // A reason that does not read as it is: bidirectional controls, zero-width characters, C1 controls, broken
+        // UTF-8.
+        for (const std::string& bad : {std::string("ok \xe2\x80\xae" "desrever"), std::string("a\xe2\x80\x8b" "b"),
+                                       std::string("a\xe2\x81\xa6" "b"), std::string("a\xef\xbb\xbf" "b"),
+                                       std::string("a\xc2\x85" "b"), std::string("a\x7f" "b"),
+                                       std::string("a\xe2\x80\xa8" "b"), std::string("a\xff" "b"),
+                                       std::string("a\xc0\xaf" "b"), std::string("a\xed\xa0\x80" "b")}) {
+            why.clear();
+            CHECK(!s.hub->askSecret(asker(1, 1), "a1", kToken, bad, &why) && holds(why, "bidirectional"));
+        }
+        CHECK(sync::isSecretWhy("the login expired \xe2\x80\x94 caf\xc3\xa9 \xf0\x9f\x94\x91"));
+        CHECK(sync::isSecretWhy(std::string(sync::kSecretWhyBytes, 'w')) && sync::isSecretWhy(""));
+        // A friend's AI asks only for an account its friend is linked to; nexus itself for any.
+        why.clear();
+        CHECK(!s.hub->askSecret(asker(1, 1), "a4", kToken, "", &why) && holds(why, "is not linked"));
         CHECK(s.store.applied(sync::kSecretIdsClient) == 0 && s.events.replies.empty());
         // An ask: id 1, durable; in the state every window receives; a line in the asker's session.
         CHECK(s.hub->askSecret(asker(1, 1), "a1", kToken, "the login expired", &why));
@@ -374,10 +429,11 @@ void hub() {
         CHECK(s.hub->apply(numbered(2, answer(2, kOther)), &why, "c1"));
         CHECK(k.writes == writes && k.files.count("a2/oauth-token") == 0);
         CHECK(!s.events.log.empty() && s.events.log.back().event == "late" && !leaks(why));
-        // No window that can take one: no-client at once.
+        // No window that can take one: no-client at once. (nexus itself asks, for an account linked to no friend.)
         s.takers = false;
-        CHECK(s.hub->askSecret(asker(1, 3), "a1", kToken, "", &why));
+        CHECK(s.hub->askSecret(asker(0, 0), "a4", kToken, "", &why));
         CHECK(s.events.replies.back().id == 4 && s.events.replies.back().reason == sync::reason::kNoClient);
+        s.takers = true;
         // The deadline by the hub's clock.
         CHECK(s.hub->secretDeadline() == s.now + sync::kSecretDeadlineMs);
         s.now += sync::kSecretDeadlineMs;
@@ -386,6 +442,43 @@ void hub() {
         CHECK(s.hub->state().requests().empty() && !s.hub->secretDeadline());
         // A stored file other than the login signs nothing in (none is documented yet; the login is the one).
         CHECK(s.responder.logins.empty());
+    }
+    {
+        // One open ask per asker, and kSecretAsksPerWindow a minute: the rest are answered busy at once, with id 0, no
+        // id minted and nothing opened.
+        store::MemFs other;
+        Keeper k2;
+        Server s(other, k2);
+        std::string why;
+        CHECK(s.hub->askSecret(asker(1, 1), "a1", kToken, "", &why));
+        CHECK(s.store.applied(sync::kSecretIdsClient) == 1 && s.hub->state().requests().size() == 1);
+        CHECK(s.hub->askSecret(asker(1, 2), "a2", kToken, "", &why));
+        CHECK(s.store.applied(sync::kSecretIdsClient) == 1 && s.hub->state().requests().size() == 1);
+        CHECK(s.events.replies.size() == 1 && s.events.replies[0].id == 0 && s.events.replies[0].asker == asker(1, 2) &&
+              s.events.replies[0].reason == sync::reason::kBusy);
+        CHECK(holds(s.transcript(1), "a2's oauth-token was not asked for: one of its asks is open already"));
+        // nexus itself is not held to it.
+        CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why) && s.hub->state().requests().size() == 2);
+        CHECK(s.hub->apply(numbered(1, cancel(1)), &why, "c1"));
+        CHECK(s.hub->apply(numbered(2, cancel(2)), &why, "c1"));
+        // Five a minute: four more, each cancelled, then the sixth is refused, and one a minute after the first goes.
+        for (std::uint64_t n = 0; n < sync::kSecretAsksPerWindow - 1; ++n) {
+            CHECK(s.hub->askSecret(asker(1, 3 + n), "a1", kToken, "", &why));
+            const std::uint64_t id = s.store.applied(sync::kSecretIdsClient);
+            CHECK(s.hub->secrets().isOpen(id));
+            CHECK(s.hub->apply(numbered(3 + n, cancel(id)), &why, "c1"));
+        }
+        const std::uint64_t minted = s.store.applied(sync::kSecretIdsClient);
+        s.events.replies.clear();
+        CHECK(s.hub->askSecret(asker(1, 9), "a1", kToken, "", &why));
+        CHECK(s.store.applied(sync::kSecretIdsClient) == minted && s.events.replies.size() == 1 &&
+              s.events.replies[0].id == 0 && s.events.replies[0].reason == sync::reason::kBusy);
+        CHECK(holds(s.transcript(1), "it asked 5 times in the last minute"));
+        s.now += sync::kSecretAskWindowMs - 1;
+        CHECK(s.hub->askSecret(asker(1, 10), "a1", kToken, "", &why) && s.store.applied(sync::kSecretIdsClient) == minted);
+        s.now += 1;
+        CHECK(s.hub->askSecret(asker(1, 11), "a1", kToken, "", &why));
+        CHECK(s.store.applied(sync::kSecretIdsClient) == minted + 1 && s.hub->secrets().isOpen(minted + 1));
     }
     {
         // A hub with no secret dialog wired: no asks; an answer is counted and dropped, its value nowhere.
@@ -407,11 +500,11 @@ void files() {
     server::AccountFiles f(fs, "home/accounts");
     std::string why;
     CHECK(f.path("a1", kToken) == "home/accounts/a1/oauth-token");
-    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why));
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
     CHECK(readFile(fs, "home/accounts/a1/oauth-token") == kValue);
     CHECK(names(fs, "home/accounts/a1") == std::vector<std::string>{"oauth-token"});
     // Replaced whole.
-    CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why));
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
     CHECK(readFile(fs, "home/accounts/a1/oauth-token") == kOther);
     // A temporary file a crash left goes first.
     CHECK(fs.create("home/accounts/a1/oauth-token.new").is_ok());
@@ -419,7 +512,7 @@ void files() {
     CHECK(fs.append("home/accounts/a1/oauth-token.new",
                     std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(torn.data()), torn.size()))
               .is_ok());
-    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why));
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
     CHECK(readFile(fs, "home/accounts/a1/oauth-token") == kValue);
     CHECK(names(fs, "home/accounts/a1") == std::vector<std::string>{"oauth-token"});
     // Names a path cannot hold: refused, the reason without the value.
@@ -427,11 +520,26 @@ void files() {
                                    std::string("a\nb"), std::string("a\x01")}) {
         CHECK(!server::isPathPart(bad));
         why.clear();
-        CHECK(!f.keep(bad, kToken, sync::SecretValue(kValue), &why) && !why.empty() && !leaks(why));
+        CHECK(f.keep(bad, kToken, sync::SecretValue(kValue), &why) == sync::Kept::Failed && !why.empty() && !leaks(why));
         why.clear();
-        CHECK(!f.keep("a1", bad, sync::SecretValue(kValue), &why) && !why.empty() && !leaks(why));
+        CHECK(f.keep("a1", bad, sync::SecretValue(kValue), &why) == sync::Kept::Failed && !why.empty() && !leaks(why));
     }
     CHECK(server::isPathPart("a1") && server::isPathPart("oauth-token") && server::isPathPart("caf\xc3\xa9"));
+    // The start's sweep: every temporary file in every account's directory goes, and nothing else.
+    CHECK(fs.make_dir("home/accounts/a2").is_ok());
+    CHECK(fs.create("home/accounts/a1/oauth-token.new").is_ok());
+    CHECK(fs.create("home/accounts/a2/api-key.new").is_ok());
+    const std::vector<std::string> report = f.sweep();
+    CHECK(report.size() == 2 && holds(report[0], "removed home/accounts/a1/oauth-token.new") &&
+          holds(report[1], "removed home/accounts/a2/api-key.new"));
+    CHECK(names(fs, "home/accounts/a1") == std::vector<std::string>{"oauth-token"});
+    CHECK(names(fs, "home/accounts/a2").empty());
+    CHECK(readFile(fs, "home/accounts/a1/oauth-token") == kValue);
+    CHECK(f.sweep().empty());
+    // No accounts directory yet: nothing to sweep, nothing said.
+    store::MemFs empty;
+    server::AccountFiles none(empty, "home/accounts");
+    CHECK(none.sweep().empty());
 }
 
 // A crash at every call of a write: the file is the old value or the new one, never anything else, and the new one
@@ -441,7 +549,7 @@ void files_crash() {
     store::MemFs base;
     {
         server::AccountFiles b(base, "accounts");
-        CHECK(b.keep("a1", kToken, sync::SecretValue(kOther), nullptr));
+        CHECK(b.keep("a1", kToken, sync::SecretValue(kOther), nullptr) == sync::Kept::Durable);
     }
     const std::string path = "accounts/a1/oauth-token";
     std::uint64_t calls = 0;
@@ -449,7 +557,7 @@ void files_crash() {
         store::MemFs probe(base);
         server::AccountFiles p(probe, "accounts");
         const std::uint64_t before = probe.calls();
-        CHECK(p.keep("a1", kToken, sync::SecretValue(kValue), nullptr));
+        CHECK(p.keep("a1", kToken, sync::SecretValue(kValue), nullptr) == sync::Kept::Durable);
         calls = probe.calls() - before;
     }
     CHECK(calls >= 5);
@@ -458,8 +566,14 @@ void files_crash() {
         server::AccountFiles f(fs, "accounts");
         fs.fail_at(k);
         std::string why;
-        const bool ok = f.keep("a1", kToken, sync::SecretValue(kValue), &why);
+        const sync::Kept result = f.keep("a1", kToken, sync::SecretValue(kValue), &why);
+        const bool ok = result == sync::Kept::Durable;
         CHECK(ok == (k > calls));
+        // Unconfirmed only when the one call that failed was the directory's sync after the rename: the value was in
+        // place, and the answer says no more than that.
+        if (result == sync::Kept::Unconfirmed) {
+            CHECK(readFile(fs, path) == kValue && holds(why, "sync of its directory failed"));
+        }
         CHECK(!leaks(why));
         std::vector<store::MemFs::CrashPlan> plans{fs.plan_all(true), fs.plan_all(false)};
         for (std::uint64_t seed = 1; seed <= 16; ++seed) {
@@ -475,7 +589,11 @@ void files_crash() {
                 CHECK(kept == kValue);
             }
             server::AccountFiles g(after, "accounts");
-            CHECK(g.keep("a1", kToken, sync::SecretValue(kValue), nullptr));
+            g.sweep();
+            for (const std::string& name : names(after, "accounts/a1")) {
+                CHECK(name.size() < 4 || name.compare(name.size() - 4, 4, ".new") != 0);
+            }
+            CHECK(g.keep("a1", kToken, sync::SecretValue(kValue), nullptr) == sync::Kept::Durable);
             CHECK(readFile(after, path) == kValue);
             CHECK(names(after, "accounts/a1") == std::vector<std::string>{"oauth-token"});
         }
@@ -501,15 +619,15 @@ struct Outputs {
 // The server's step after anything: what the desk did goes out as the server sends it (each asker's driver line, the
 // log's lines, the session lines), every window is sent the state in its format.
 void flush(Server& s, std::vector<Window>& windows, Outputs& out) {
+    // The bytes nexus-server's own SecretLines gives each asker's driver and server.log.
+    server::SecretLines lines([&out](sync::SessionId, const std::string& line) { out.add("a driver's line", line); },
+                              [&out](const std::string& line) { out.add("server.log", line); });
     for (const sync::SecretReply& r : s.events.replies) {
-        // The asker's driver reads its answer as server/drivers.cpp writes it.
-        const driver::Encoded line = driver::encode(driver::ServerMessage(driver::SecretAnswer{r.asker.ask, r.stored,
-                                                                                               r.reason}));
-        out.add("a driver's line", line.line);
+        lines.answered(r);
         out.add("an answer's reason", r.reason);
     }
     for (const sync::SecretLog& l : s.events.log) {
-        out.add("server.log", l.line());
+        lines.logged(l);
     }
     for (const sync::SecretNote& n : s.events.notes) {
         out.add("a session line", n.text);
@@ -631,6 +749,33 @@ void leak() {
     CHECK(out.texts.size() > 40);
 }
 
+// The search itself (tests/leak_scan.h): each way a value can be given away is found, inside other text, and text that
+// holds none of them is clean.
+void leak_scan() {
+    const std::string v = kValue;
+    const test::LeakScan scan(v, "a1");
+    CHECK(scan.in("before " + v + " after"));
+    CHECK(scan.in("x" + v.substr(13, 8) + "x"));                                    // a run of 8 of its bytes
+    CHECK(!scan.in("x" + v.substr(13, 7) + "x"));                                   // 7 is not a run
+    for (const bool upper : {false, true}) {
+        CHECK(scan.in("hex: " + test::LeakScan::hex(v.substr(3, 9), upper) + "."));   // its hex, from any byte
+    }
+    for (std::size_t shift = 0; shift < 4; ++shift) {
+        for (const bool url : {false, true}) {
+            CHECK(scan.in("b64=" + test::LeakScan::base64(v.substr(shift), url)));  // its base64, at any alignment
+            CHECK(scan.in("b64=" + test::LeakScan::base64(v.substr(shift, 30), url)));
+        }
+    }
+    const std::string length = std::to_string(v.size());
+    CHECK(scan.in("the account a1 was given a value of " + length + " bytes"));
+    CHECK(scan.in(length + " bytes went to a1"));
+    CHECK(!scan.in("the account a1 was given a value of 1" + length + " bytes"));   // another number
+    CHECK(!scan.in("a value of " + length + " bytes, and " + std::string(80, '.') + " a1"));    // too far away
+    CHECK(!test::LeakScan(v).in("a1 " + length));                                  // no account: no length check
+    CHECK(!scan.in("secret request 1: a1's oauth-token was stored"));
+    CHECK(!scan.in(test::LeakScan::hex(kOther, false) + test::LeakScan::base64(kOther, false)));
+}
+
 // ---- functional: the modes on the real filesystem (POSIX: nexus-server runs inside WSL2 on Windows) ----
 
 #ifndef _WIN32
@@ -640,13 +785,65 @@ void files_disk() {
     std::unique_ptr<store::Fs> fs = store::make_posix_fs();
     server::AccountFiles f(*fs, (dir / "accounts").string());
     std::string why;
-    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why));
-    CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why));
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
     struct stat file{};
     struct stat parent{};
     CHECK(::stat(f.path("a1", kToken).c_str(), &file) == 0 && (file.st_mode & 0777) == 0600);
     CHECK(::stat((dir / "accounts" / "a1").c_str(), &parent) == 0 && (parent.st_mode & 0777) == 0700);
     CHECK(readFile(*fs, f.path("a1", kToken)) == kOther);
+    CHECK(names(*fs, (dir / "accounts" / "a1").string()) == std::vector<std::string>{"oauth-token"});
+
+    // An account directory that is wider than 0700 is refused, and nothing is written into it.
+    std::filesystem::create_directories(dir / "accounts" / "wide");
+    CHECK(::chmod((dir / "accounts" / "wide").c_str(), 0755) == 0);
+    const sync::Kept wideKept = f.keep("wide", kToken, sync::SecretValue(kValue), &why);
+    CHECK(wideKept == sync::Kept::Failed && !leaks(why));
+    CHECK(names(*fs, (dir / "accounts" / "wide").string()).empty());
+
+    // An account directory that is a symlink is refused, even to a private directory: nothing lands at its target.
+    std::filesystem::create_directories(dir / "elsewhere");
+    CHECK(::chmod((dir / "elsewhere").c_str(), 0700) == 0);
+    std::filesystem::create_directory_symlink(dir / "elsewhere", dir / "accounts" / "linked");
+    CHECK(f.keep("linked", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Failed && !leaks(why));
+    CHECK(names(*fs, (dir / "elsewhere").string()).empty());
+
+    // The temporary file is created new and never followed: write_new() on a symlink fails, and the file it points at
+    // is untouched.
+    const std::filesystem::path target = dir / "elsewhere" / "target";
+    {
+        std::FILE* t = std::fopen(target.c_str(), "w");
+        CHECK(t != nullptr);
+        if (t != nullptr) {
+            std::fputs("untouched", t);
+            std::fclose(t);
+        }
+    }
+    const std::filesystem::path planted = dir / "accounts" / "a1" / "oauth-token.new";
+    std::filesystem::create_symlink(target, planted);
+    const std::string& bytes = kValue;
+    const std::span<const std::uint8_t> data(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    CHECK(!fs->write_new(planted.string(), data).is_ok());
+    CHECK(readFile(*fs, target.string()) == "untouched");
+
+    // The start's sweep takes the planted name away (the link, not what it points at) and says why the two refused
+    // directories were left alone.
+    const std::vector<std::string> report = f.sweep();
+    bool removed = false;
+    std::size_t refused = 0;
+    for (const std::string& line : report) {
+        removed = removed || holds(line, "oauth-token.new");
+        refused += holds(line, "not swept") ? 1 : 0;
+    }
+    CHECK(removed && refused == 2);
+    CHECK(!std::filesystem::is_symlink(planted));
+    CHECK(readFile(*fs, target.string()) == "untouched");
+
+    // A link planted again is removed by keep() itself before its write, never written through.
+    std::filesystem::create_symlink(target, planted);
+    CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
+    CHECK(readFile(*fs, target.string()) == "untouched");
+    CHECK(readFile(*fs, f.path("a1", kToken)) == kValue);
     CHECK(names(*fs, (dir / "accounts" / "a1").string()) == std::vector<std::string>{"oauth-token"});
     std::filesystem::remove_all(dir);
 }
@@ -666,6 +863,7 @@ const Group kGroups[] = {
     {"files", files, true},
     {"files_crash", files_crash, true},
     {"leak", leak, true},
+    {"leak_scan", leak_scan, true},
 #ifndef _WIN32
     {"files_disk", files_disk, false},
 #endif

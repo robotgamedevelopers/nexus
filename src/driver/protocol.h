@@ -67,7 +67,8 @@ struct ServerInfo {
 struct SecretAnswer {
     std::uint64_t ask = 0;
     bool stored = false;
-    std::string reason;         // with refused: busy, no-client, cancelled, timeout or unwritable; empty with stored
+    std::string reason;         // with refused: busy, no-client, cancelled, timeout or unwritable; with stored, empty
+                                // or unconfirmed (in its file, its durability not confirmed)
     bool operator==(const SecretAnswer&) const = default;
 };
 

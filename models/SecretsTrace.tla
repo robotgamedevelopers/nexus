@@ -72,6 +72,21 @@ Done == l = Len(Trace) /\ UNCHANGED traceVars
 
 TraceSpec == TraceInit /\ [][TraceNext \/ Done]_traceVars
 
+\* The no-value properties again, on the code's own state: each record's replies, transcript, log and windows' views
+\* are built from the bytes each sink received (the driver line and the reason, the session lines and the store's
+\* entries, the server.log line, each diff sent to a window), with any value found in them written as the value's
+\* model value (tests/leak_scan.h finds it). So a value that reaches a sink in code violates these, whatever the spec
+\* allows; they come before TraceMatches in SecretsTrace.cfg, so TLC names the leak rather than the mismatch.
+C == INSTANCE Secrets WITH Clients <- TraceClients, OldClients <- TraceOldClients, Accounts <- TraceAccounts,
+                           Askers <- TraceAskers, Values <- TraceValues, MaxRequests <- TraceMaxRequests,
+                           MaxRestarts <- TraceMaxRestarts, replies <- Trace[l].replies,
+                           transcript <- Trace[l].transcript, log <- Trace[l].log, view <- Trace[l].view
+
+CodeNoSecretToAsker == C!NoSecretToAsker
+CodeNoSecretInTranscript == C!NoSecretInTranscript
+CodeNoSecretInLog == C!NoSecretInLog
+CodeNoSecretToWindows == C!NoSecretToWindows
+
 \* Secrets' properties, checked on the trace.
 TypeOK == S!TypeOK
 NoSecretToAsker == S!NoSecretToAsker

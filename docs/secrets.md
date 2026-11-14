@@ -8,23 +8,21 @@ secret, it goes to the server, and it is handled there. With AGENTS.md: a secret
 `~/.nexus/server/accounts/<name>/` (0700 directories, 0600 files) and is never shown, logged, or seen by an AI.
 
 The state machine is `models/Secrets.tla` (`models/README.md` has its properties, instances and witnesses). This page
-is the design the code is built to. The code is bound to the model by a trace check in CI: `tests/sync/secrets_walk`
-drives the hub, the state's codec, the actions and each window's prompt at random and TLC checks each trace against
-`models/SecretsTrace.tla`, with every safety property; two faulty walks must be rejected. The walk, and the leak test
-(`tests/server/secrets_test leak`: a fake value pasted, answered late, cancelled and dropped across three windows, a
-driver and a restart), fail if the value's bytes reach a session line, the store's files, a log line, a driver's line,
-an answer, a state sent to any window or an action's description. Two functional cases run the whole path with real
-driver processes (`tests/server/drivers_functional`): `secret_ask` (a driver's ask refused `no-client`, then opened,
-pasted, stored and answered `stored`) and `secret_sign_in` (a driver's no-credential, nexus's own ask, and the prompt
-waiting answered once the value is pasted); each checks the file is 0600 in a 0700 directory and that the value is in
-no other file of the test's directory, the transcript or the log.
+is the design the code is built to. The code is bound to the model by a trace check in CI; "Binding and leak tests"
+below says what the binding covers, and what it does not yet.
 
 ## The flow
 
 1. An **asker** asks `nexus-server` for a secret for an account: a friend's AI, through its driver (below), or the
    server itself (the sign-in flow, roadmap 5c).
-2. The server refuses at once, answering the asker `refused`, when a request is already open for that account
-   (`busy`), or when no connected window can take a request (`no-client`: none connected, or only windows from before
+2. The server refuses the ask outright (below: no request, no id) unless the account and what is asked are each a name
+   (letters, digits, `-`, `_` and `.`, at most 64), the account exists, the asker's friend is linked to it in
+   `friends.json` (an AI asks only for the accounts its friend may use; nexus itself may ask for any), the account's
+   provider documents the file, and the reason is one line of plain text. It refuses at once, answering the asker
+   `refused` (`busy`), when a request is already open for that account, when the same asker has one of its own open
+   already, or when it has asked 5 times in the last minute (a guess, not a measurement: enough for a person to fix
+   a few logins in a row, few enough that an AI cannot fill the dialog); nexus's own asks are never rate-limited. It
+   refuses `no-client` when no connected window can take a request (none connected, or only windows from before
    secret requests). Otherwise it opens a **request**: an id it mints, the account, what is asked (the file's name,
    such as `api-key`), and who asks.
 3. Every connected window that can take requests receives it in its state. The server knows no tabs (AGENTS.md), so
@@ -51,10 +49,21 @@ The asker hears exactly one answer per request: `stored`, or `refused` with one 
 `cancelled`, `timeout` or `unwritable` (the value arrived and its file could not be written; the log says why, from the
 filesystem's error, never the value). Never the value, never its length, never which window answered.
 
-`stored` goes out only once the file is durable: the value is written to a temporary 0600 file, synced, renamed over
+`stored` goes out only once the file is in place: the value is written to a temporary 0600 file, synced, renamed over
 the old one and the directory synced before the hub hears it was kept, and the asker's driver line is held, with
 everything else the server's pass made, until the pass's flush (`server/pass.h`). A crash at any point leaves the old
-value or the new one, never part of one (`secrets_test files_crash`). When the stored file is the account's login
+value or the new one, never part of one (`secrets_test files_crash`). If the rename succeeded and only the directory's
+sync failed, the answer says what is true: `stored` with the reason `unconfirmed` (the value is in its file; a crash
+before the disk settles may bring the old file back), the session line says so, and `server.log` gives the
+filesystem's error. A temporary file a crash or a failure left behind holds a value no one reads: the server removes
+every `*.new` in every account's directory when it starts, before anything is asked, and logs each one it removed.
+
+The account's directory is the server's alone. Before a write the server checks it with `lstat`: a directory that is a
+symbolic link, is not a directory, belongs to another user, or is open to group or others (anything wider than 0700)
+is refused, `unwritable`, with the fix in the log; the server never follows a link there and never widens or narrows
+a directory it did not make. The temporary file is created new (`O_CREAT|O_EXCL|O_NOFOLLOW`, 0600), and the value is
+written and synced through that one descriptor, never reopened by its path, so a link planted at its name stops the
+write rather than redirecting it. When the stored file is the account's login
 (`oauth-token` for a claude account), the account counts as signed in at once, and each session held for want of a
 credential starts its driver for the prompt waiting, without a restart (`Supervisor.tla` `SignIn`).
 
@@ -76,7 +85,15 @@ credential starts its driver for the prompt waiting, without a restart (`Supervi
 - Nothing echoes the value: Prax keeps a password out of the clipboard (copy and cut do nothing), and the window's
   layout holds only the mask (the frame test checks that no node's text holds the value). It never enters the window's
   draft state, its saved preferences or a state file; a window drawn from a state file (`--state`, `--screenshot`)
-  has no link and shows no dialog. After Enter or Escape the field is cleared and its memory overwritten.
+  has no link and shows no dialog. After Enter or Escape the field is cleared, and nexus's own copies of the value (the
+  prompt's, the action's) are overwritten. Two copies are not nexus's to overwrite: Prax's text field keeps the value
+  in its own edit buffers until their memory is reused, and a value the person copied stays on
+  the system clipboard, where nexus put nothing and can clear nothing. A request to Prax for a password field that
+  wipes its buffers is filed (`prax-wipe-password-buffers` on the roadmap).
+- No core file of nexus holds a value: the window and `nexus-server` set `RLIMIT_CORE` to 0 (soft and hard) as they
+  start, and on Linux mark themselves not dumpable (`PR_SET_DUMPABLE` 0), which also keeps other processes of the same
+  user from reading their memory through `ptrace` or `/proc` (`src/no_core.h`). A refusal is logged and the process
+  goes on.
 - Nothing in it waits: the requests come with the state the link's thread already holds, and Enter hands one action to
   that thread. The frame test (`docs/frame-budget.md`, `secret_dialog`) opens it, types, pastes, sends and cancels,
   every frame within 8.3 ms.
@@ -118,17 +135,24 @@ version change. They land with the code, in the same pull request as `src/driver
 |---|---|---|---|
 | server to driver | `server` | `features` (array of strings, required) | what this server takes beyond version 1; `"secrets"` means it takes `ask-secret`. Written right after the driver's `hello`, so before any `send`. |
 | driver to server | `ask-secret` | `ask` (whole number from 1, required: the driver's own id, unique within its process), `account` (non-empty string, required), `what` (non-empty, required: a file name the account's provider documents, such as `"oauth-token"`), `why` (string, required, may be empty: one line, at most 200 bytes, shown in the dialog) | ask for a secret; written while a turn is open, from the AI's tool call |
-| server to driver | `secret` | `ask` (required), `outcome` (required: `"stored"` or `"refused"`), `reason` (required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"unwritable"`) | the one answer to an `ask-secret`; never carries the value |
+| server to driver | `secret` | `ask` (required), `outcome` (required: `"stored"` or `"refused"`), `reason` (required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"unwritable"`; optional with `stored`: `"unconfirmed"`, the value is in its file but its durability is not confirmed) | the one answer to an `ask-secret`; never carries the value |
 
 The driver gives its AI one tool, such as `nexus_ask_secret(account, what, why)`, which writes `ask-secret` and returns
 `stored` or `refused: <reason>` from the `secret` line. The server's side (the `server` line and both kinds) is in; the
 Claude driver's tool is on the roadmap (`claude-ask-secret-tool`). The AI then uses what the account can now do (its
-driver starts with the credential, or the server's sign-in goes on); it never reads the value, and each driver keeps
-the harness's own file tools out of `~/.nexus/server/accounts/` (roadmap 5d, with the drivers taking the account).
+driver starts with the credential, or the server's sign-in goes on). The design is that the AI never reads the value,
+and that each driver keeps the harness's own file tools out of `~/.nexus/server/accounts/` (roadmap 5d, with the
+drivers taking the account). That is not true yet: the Claude driver passes the account's token to the harness in the
+harness's environment, where the AI's own tools can read it. The fix, keeping the token out of anything the AI's tools
+can reach, is its own pull request, in `drivers/claude`.
 
-An `ask-secret` with a `what` the account's provider does not document, an account not set up, or a `why` that is not
-one line of at most 200 bytes is refused as a malformed line: no request is made, no id is minted, and the driver is
-ended, as for any line the server refuses. The documented files are in `src/sync/secrets.cpp` `secretFiles`:
+An `ask-secret` with an account or a `what` that is not a name, an account not set up, an account the asker's friend
+is not linked to, a `what` the account's provider does not document, or a `why` that is not one line of at most 200
+bytes of UTF-8 text is refused as a malformed line: no request is made, no id is minted, and the driver is ended, as
+for any line the server refuses. A `why` may hold no control character (C0, DEL or C1), no bidirectional control (such
+as U+202E, which would reverse the dialog's text) and no zero-width or line-separator character; the refusal names
+neither the account nor the file when they are not names, so a forged line never reaches the log. The documented files
+are in `src/sync/secrets.cpp` `secretFiles`:
 `oauth-token` for a claude account, none yet for any other provider. An answer for an `ask` the driver no longer waits
 for (its turn stopped) is skipped. A request outlives its asker: when the asker's turn is stopped or its driver exits,
 the request stays open until it is answered or its deadline passes, and its `secret` line, with nowhere to go, is
@@ -152,6 +176,47 @@ when the secret cannot be asked for.
 ## Not in the model
 
 `Secrets.tla` leaves to the code and its tests: mosh's transport and its retransmission (each action is applied once,
-by number: `Link.tla`); the atomic file write; a check on the value's shape (if one is added, it joins the model as a
-refusal reason with the code); and the asker's driver leaving while its request is open (above: the request ends by
-its answer or its deadline, as the model's do).
+by number: `Link.tla`); the atomic file write and the directory's checks; a check on the value's shape (if one is
+added, it joins the model as a refusal reason with the code); the refusals before a request (names, link, provider,
+reason) and the per-asker `busy` (one open, 5 a minute), which mint no id and change no state the model holds; and the
+asker's driver leaving while its request is open (above: the request ends by its answer or its deadline, as the
+model's do).
+
+## Binding and leak tests
+
+**The trace binding.** `tests/sync/secrets_walk` drives the hub, the state's codec, the actions, each window's prompt,
+the real `AccountFiles` (over the in-memory filesystem, at every write) and the real `SecretLines` (the server's
+encoder of each driver line and each `server.log` line) at random, and TLC checks each trace against
+`models/SecretsTrace.tla` with every safety property. Each record of the code's state is built from the bytes each
+sink received: the driver line and the answer's reason, the session lines and every entry of the store, the log line,
+and every diff sent to each window. Wherever any run of 8 bytes, hex, base64 or length of a value is found in them
+(`tests/leak_scan.h`), the record holds that value's model value. `SecretsTrace.tla` checks the four no-value
+properties on those code records too (`CodeNoSecretToAsker`, `CodeNoSecretInTranscript`, `CodeNoSecretInLog`,
+`CodeNoSecretToWindows`), so a value that reaches a sink in the code fails TLC whatever the spec allows. The faulty
+walks must be rejected: `--faulty-store-late` (a late answer stored anyway) by `TraceMatches`, and `--faulty-echo` by
+`CodeNoSecretInLog`. The echo is injected into the code (`SecretDesk::injectEchoFault`, a test seam that puts the
+value into the log event of a stored answer), not into the walk's record.
+
+Not in the walk yet: `Drivers`, the process table that writes each `secret` line to its driver's standard input. Driving
+it needs real driver processes, a poll loop and real time per asker, which the walk (logic only, no time) cannot hold;
+a fake harness that stands in for the processes inside the walk is about 400 to 600 lines (roadmap
+`secrets-walk-drivers`). Until then the real-process tests below are its guard.
+
+**The leak tests.** Each searches with `tests/leak_scan.h` (any run of 8 or more of the value's bytes, its hex in
+either case, its base64 standard and URL-safe at each alignment, and its length printed as a number within 64 bytes of
+the account's name), and each fake value is made up by the test:
+
+- `tests/server/secrets_test leak` (unit): a value pasted, answered late, cancelled and dropped across three windows,
+  an asker and a restart; every output (the bytes the server's own `SecretLines` writes for the driver and the log,
+  the session lines, the store's files, each state sent to each window, each action's description) is searched.
+- `tests/server/drivers_functional` `secret_ask` and `secret_sign_in` (functional): real driver processes, the file
+  0600 in a 0700 directory, and every other file in the test's directory (the store, what the driver read, the
+  driver's whole environment), the transcript and the bytes written to the driver and the log searched.
+- `tests/link/link_e2e secret` (functional): the real `nexus-server`, started by the test with a HOME of the test's own
+  (every e2e server is), and a window over the real link (ssh, mosh's transport, `ServerSession::take`). ada's driver
+  (the fake, standing in for the claude harness) asks for a1's login; the window answers with a 7919-byte value. With
+  the server stopped, every file the run left but the account's file is searched: `server.log` (the server's standard
+  error and the driver's, which echoes every line it reads), the driver's environment, what it read, the store and the
+  config; and every state the window held.
+- `tests/server/secrets_test files_disk` (functional): a wide or linked account directory refused, a link planted at
+  the temporary file's name never written through, and the start's sweep.

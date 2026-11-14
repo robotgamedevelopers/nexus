@@ -1,25 +1,34 @@
 // Trace walk: drives the secret dialog's code (src/sync/secrets.h, through src/sync/hub.h over a MemoryStore) with a
 // seeded random walk and writes the trace as SecretsTraceData.tla, for TLC to check against models/Secrets.tla
-// (models/SecretsTrace.tla). No files, no clock, no sockets: the time is the walk's counter, a value's file is the
-// walk's keeper in memory, and the values are fake ones the walk makes up.
+// (models/SecretsTrace.tla). No real files, no clock, no sockets: the time is the walk's counter, the values' files are
+// the server's AccountFiles over MemFs, and the values are fake ones the walk makes up.
 //
 //   secrets_walk <seed> <steps> [--faulty-store-late | --faulty-echo] <out.tla>
 //
 // The pieces are the real ones, wired as the server and the windows wire them: the hub's askSecret, apply,
-// expireSecrets and dropSecrets (a restart is a new Hub over the same store); each window's state is the hub's
-// Sessions sent as a diff in the window's format (3, or 2 for the old window, which never receives a request) and
-// applied to the window's copy, then given to its SecretPrompt; each answer or cancel is an Action encoded by Actions in
-// format 3 and parsed back by Actions::parse before the hub applies it. After each step the walk records the code's
-// state as the model's variables: the next id (the store's counter), each request's state as the hub reports it, each
-// window's link, view, dialog and answered ids, the answers in flight, each account's file, the writes of each
-// request's value, the askers' answers, and the step's session lines and log lines.
+// expireSecrets and dropSecrets (a restart is a new Hub over the same store); the server's AccountFiles writing each
+// value (server/secret_files.h) and its SecretLines making each answer's driver line and each log line
+// (server/secret_lines.h); each window's state is the hub's Sessions sent as a diff in the window's format (3, or 2 for
+// the old window, which never receives a request) and applied to the window's copy, then given to its SecretPrompt;
+// each answer or cancel is an Action encoded by Actions in format 3 and parsed back by Actions::parse before the hub
+// applies it. After each step the walk records the code's state as the model's variables: the next id (the store's
+// counter), each request's state as the hub reports it, each window's link, view, dialog and answered ids, the
+// answers in flight, each account's file as MemFs holds it, the writes of each request's value, the askers' answers,
+// and the step's session lines and log lines.
 //
-// It also checks, at every step, that no value's bytes are anywhere they must never be: a session line or any entry of
-// the store, a log line, an answer to an asker, a diff of the state sent to any window, or an action's description.
+// The bytes each place received are what the trace says of a value there: a log line, an answer's driver line, a
+// session line (and any entry of the store) or a diff sent to a window that holds a value (tests/leak_scan.h: the
+// value, a run of 8 of its bytes, its hex or its base64) is written with that value's token in its record, so TLC sees
+// the leak in the code (Secrets.tla NoSecretInLog, NoSecretToAsker, NoSecretInTranscript, NoSecretToWindows). An
+// action's description and the hub's refusals, which the model has no place for, fail the walk at once. The drivers
+// themselves are not in the walk (a process per asker); tests/server/drivers_functional and tests/link/link_e2e
+// `secret` run them, with the real server, and scan every output.
 //
-// The faults show the binding can fail, each played by the walk after the step:
-//   --faulty-store-late  an answer for a request no longer open is written to the account's file anyway
-//   --faulty-echo        a stored answer's log line carries the value
+// The faults show the binding can fail:
+//   --faulty-store-late  an answer for a request no longer open is written to the account's file anyway (played by
+//                        the walk after the step)
+//   --faulty-echo        a stored answer's log line carries the value: the hub's desk is told to leak it
+//                        (SecretDesk::injectEchoFault), in the code's own path
 
 #include <algorithm>
 #include <cstdint>
@@ -36,6 +45,10 @@
 #include <vector>
 
 #include "accounts/registry.h"
+#include "leak_scan.h"
+#include "server/secret_files.h"
+#include "server/secret_lines.h"
+#include "store/fs.h"
 #include "sync/actions.h"
 #include "sync/hub.h"
 #include "sync/secrets.h"
@@ -54,7 +67,7 @@ const char* const kNone = "none";
 const char* const kWhat = "oauth-token";
 
 // The fake values, made up here: never a real token. Each is a token of the model (v1, v2).
-const std::vector<std::string> kValues{"fake-secret-walk-7Hq2-one", "fake-secret-walk-9Zx4-two"};
+const std::vector<std::string> kValues{"fakeWk7Hq2Lone", "fakeWk9Zx4Ptwo"};
 const std::vector<std::string> kTokens{"v1", "v2"};
 
 std::uint64_t rngState = 0;
@@ -78,13 +91,28 @@ std::string val(const std::string& token) { return token == kNone ? q(token) : t
     std::exit(1);
 }
 
-// Fails if any fake value's bytes are in `text`, which `where` names.
-void clean(const std::string& text, const std::string& where) {
-    for (const std::string& v : kValues) {
-        if (text.find(v) != std::string::npos) {
-            fail("a value reached " + where);
+// The token of the value `text` gives away (leak_scan.h), or empty.
+std::string leaked(const std::string& text) {
+    static const std::vector<test::LeakScan> scans{test::LeakScan(kValues[0]), test::LeakScan(kValues[1])};
+    for (std::size_t i = 0; i < scans.size(); ++i) {
+        if (scans[i].in(text)) {
+            return kTokens[i];
         }
     }
+    return std::string();
+}
+
+// Fails if `text`, which `where` names, gives a value away: for the places the model has no variable for.
+void clean(const std::string& text, const std::string& where) {
+    if (!leaked(text).empty()) {
+        fail("a value reached " + where);
+    }
+}
+
+// The field of a record for text that may hold a value: the token of the value it gives away, else `field` quoted.
+std::string orToken(const std::string& bytes, const std::string& field) {
+    const std::string t = leaked(bytes);
+    return t.empty() ? "\"" + field + "\"" : t;
 }
 
 // The token of a value, or of what was pasted for it (with a line break or spaces at its ends).
@@ -100,30 +128,55 @@ std::string tokenOf(const std::string& pasted) {
     fail("a value the walk never typed: " + std::to_string(pasted.size()) + " bytes");
 }
 
-// The account's file, in memory: what the server's AccountFiles writes to disk.
+// The accounts' files: the server's AccountFiles, over MemFs. Each value it writes is counted.
 struct Keeper : sync::SecretKeeper {
-    std::map<std::string, std::string> files;   // account: the value's bytes
+    store::MemFs fs;
+    server::AccountFiles files{fs, "accounts"};
     std::size_t writes = 0;
-    bool keep(const std::string& account, const std::string& what, const sync::SecretValue& value,
-              std::string* why) override {
-        if (what != kWhat) {
-            if (why != nullptr) {
-                *why = "not a file of the account";
-            }
-            return false;
+    sync::Kept keep(const std::string& account, const std::string& what, const sync::SecretValue& value,
+                    std::string* why) override {
+        const sync::Kept kept = files.keep(account, what, value, why);
+        if (kept != sync::Kept::Failed) {
+            ++writes;
         }
-        files[account] = value.bytes();
-        ++writes;
-        return true;
+        return kept;
+    }
+    // The bytes of `account`'s file, or none.
+    std::optional<std::string> file(const std::string& account) {
+        store::Bytes b;
+        if (!fs.read_all(files.path(account, kWhat), b).is_ok()) {
+            return std::nullopt;
+        }
+        return std::string(b.begin(), b.end());
     }
 };
 
-struct Events : sync::SecretEvents {
+// The server's SecretLines, with the bytes of each driver line and log line it makes kept beside the effect it made
+// them from.
+struct Events : server::SecretLines {
     std::vector<sync::SecretReply> replies;     // this step's
+    std::vector<std::string> replyLines;        // the driver line of each (empty for nexus, which has no driver)
     std::vector<sync::SecretNote> notes;
     std::vector<sync::SecretLog> log;
-    void answered(const sync::SecretReply& reply) override { replies.push_back(reply); }
-    void logged(const sync::SecretLog& line) override { log.push_back(line); }
+    std::vector<std::string> logLines;          // the server.log line of each
+    std::string driverLine;
+    std::string logLine;
+
+    Events()
+        : server::SecretLines([this](sync::SessionId, const std::string& line) { driverLine = line; },
+                              [this](const std::string& line) { logLine = line; }) {}
+    void answered(const sync::SecretReply& reply) override {
+        driverLine.clear();
+        server::SecretLines::answered(reply);
+        replies.push_back(reply);
+        replyLines.push_back(driverLine);
+    }
+    void logged(const sync::SecretLog& line) override {
+        logLine.clear();
+        server::SecretLines::logged(line);
+        log.push_back(line);
+        logLines.push_back(logLine);
+    }
     void noted(const sync::SecretNote& note) override { notes.push_back(note); }
 };
 
@@ -133,6 +186,7 @@ struct Window {
     bool conn = true;
     sync::Sessions got;             // the state as the window last received it
     sync::SecretPrompt prompt;
+    std::string leak;               // the token of a value a diff sent to it gave away, if one did
 };
 
 struct Flight {
@@ -165,6 +219,7 @@ struct Walk {
     std::uint64_t restarts = 0;
     std::uint64_t num = 0;
     std::map<sync::SessionId, std::string> askerNames{{0, "nexus"}};
+    bool echoFault = false;
 
     Walk() {
         for (const std::string& c : kClients) {
@@ -204,7 +259,14 @@ struct Walk {
         for (const std::string& a : kAccts) {
             r.accounts.push_back(accounts::Account{a, "claude"});
         }
+        // Both friends linked to both accounts: their AIs may ask for either.
+        for (const char* f : {"f", "g"}) {
+            r.friends.push_back(accounts::Friend{f, kAccts, kAccts[0]});
+        }
         hub->useAccounts(r, nullptr);
+        if (echoFault) {
+            hub->injectSecretEchoFault();
+        }
         hub->secretsWith(&keeper, &events, [this] {
             return std::any_of(windows.begin(), windows.end(), [](const Window& w) { return w.conn && !w.old; });
         }, [this] { return now; });
@@ -212,42 +274,44 @@ struct Walk {
 
     std::uint64_t nextId() const { return store.applied(sync::kSecretIdsClient) + 1; }
 
-    // The step's effects, as the model's records; every one of them checked for a value.
-    void take(bool echo) {
+    // The step's effects, as the model's records, each from the bytes its place received: a record whose bytes give a
+    // value away carries that value's token, which the model's NoSecretIn* properties refuse.
+    void take() {
         transcript.clear();
         log.clear();
         for (const sync::SecretNote& n : events.notes) {
-            clean(n.text, "a session line");
-            transcript.push_back("[id |-> " + std::to_string(n.id) + ", what |-> " + q(n.what) + ", acct |-> " +
-                                 q(n.account) + "]");
+            transcript.push_back("[id |-> " + std::to_string(n.id) + ", what |-> " + orToken(n.text, n.what) +
+                                 ", acct |-> " + q(n.account) + "]");
         }
-        for (const sync::SecretLog& l : events.log) {
-            clean(l.line(), "a log line");
-            std::string event = l.event;
-            if (echo && event == "stored") {
-                event = tokenOf(keeper.files[l.account]);
+        // Every entry the store holds, every session line included: one that gives a value away is a session line
+        // with it.
+        for (sync::SessionId id : store.ids()) {
+            for (const sync::EntryRef& e : store.find(id)->transcript) {
+                const std::string t = leaked(e->text);
+                if (!t.empty()) {
+                    transcript.push_back("[id |-> 0, what |-> " + t + ", acct |-> " + q(kNone) + "]");
+                }
             }
-            log.push_back("[id |-> " + std::to_string(l.id) + ", event |-> " + (event == l.event ? q(event) : val(event)) +
-                          "]");
         }
-        for (const sync::SecretReply& r : events.replies) {
-            clean(r.reason, "an answer to an asker");
+        for (std::size_t i = 0; i < events.log.size(); ++i) {
+            const sync::SecretLog& l = events.log[i];
+            log.push_back("[id |-> " + std::to_string(l.id) + ", event |-> " +
+                          orToken(events.logLines[i] + "\n" + l.line(), l.event) + "]");
+        }
+        for (std::size_t i = 0; i < events.replies.size(); ++i) {
+            const sync::SecretReply& r = events.replies[i];
             if (!answeredIds.insert(r.id).second) {
                 fail("request " + std::to_string(r.id) + " was answered twice");
             }
             replies.insert("[id |-> " + std::to_string(r.id) + ", asker |-> " + q(askerNames.at(r.asker.session)) +
                            ", outcome |-> " + q(r.stored ? "stored" : "refused") + ", reason |-> " +
-                           q(r.stored ? kNone : r.reason) + "]");
+                           orToken(events.replyLines[i] + "\n" + r.reason, r.stored ? kNone : r.reason) + "]");
         }
         events.replies.clear();
+        events.replyLines.clear();
         events.notes.clear();
         events.log.clear();
-        // Every entry the store holds, every session line included.
-        for (sync::SessionId id : store.ids()) {
-            for (const sync::EntryRef& e : store.find(id)->transcript) {
-                clean(e->text, "the store (session " + std::to_string(id) + ")");
-            }
-        }
+        events.logLines.clear();
         // Each request's state, as the hub reports it; one it no longer knows (from before a restart) keeps the last.
         for (auto& [id, r] : req) {
             if (const std::optional<sync::SecretState> s = hub->secrets().stateOf(id)) {
@@ -257,6 +321,7 @@ struct Walk {
         }
     }
 
+    // A diff sent to the window that gave a value away is a request in its view holding that value.
     std::string viewOf(const Window& w) const {
         std::string out = "{";
         bool first = true;
@@ -264,6 +329,9 @@ struct Walk {
             out += std::string(first ? "" : ", ") + "[id |-> " + std::to_string(r.id) + ", acct |-> " + q(r.account) +
                 ", asker |-> " + q(askerNames.at(r.asker)) + "]";
             first = false;
+        }
+        if (!w.leak.empty()) {
+            out += std::string(first ? "" : ", ") + "[id |-> 0, acct |-> " + w.leak + ", asker |-> " + q(kNone) + "]";
         }
         return out + "}";
     }
@@ -310,7 +378,7 @@ struct Walk {
             val(m.secret ? m.token : kNone) + "]";
     }
 
-    std::string record() const {
+    std::string record() {
         std::ostringstream o;
         o << "next |-> " << nextId() << ", req |-> (";
         for (std::uint64_t id = 1; id <= kMaxRequests; ++id) {
@@ -329,9 +397,8 @@ struct Walk {
         }
         o << ", up |-> " << set(flights) << ", file |-> (";
         for (std::size_t i = 0; i < kAccts.size(); ++i) {
-            auto it = keeper.files.find(kAccts[i]);
-            o << (i == 0 ? "" : " @@ ") << q(kAccts[i]) << " :> "
-              << val(it == keeper.files.end() ? std::string(kNone) : tokenOf(it->second));
+            const std::optional<std::string> file = keeper.file(kAccts[i]);
+            o << (i == 0 ? "" : " @@ ") << q(kAccts[i]) << " :> " << val(file ? tokenOf(*file) : std::string(kNone));
         }
         o << "), stores |-> (";
         for (std::uint64_t id = 1; id <= kMaxRequests; ++id) {
@@ -345,18 +412,20 @@ struct Walk {
 
     // The window receives the server's state in its format: false when its view and dialog are as they were.
     bool sync(Window& w) {
+        const std::string before = viewOf(w) + dialogOf(w);
         sync::Sessions state = hub->state();
         state.setFormat(w.got.format());
         const std::string diff = state.diff_from(w.got);
-        clean(diff, "the state sent to window " + w.name);
+        if (const std::string t = leaked(diff); !t.empty()) {
+            w.leak = t;
+        }
         w.got.apply_string(diff);
         if (w.old) {
             if (!w.got.requests().empty()) {
                 fail("the old window received a request");
             }
-            return false;
+            return viewOf(w) + dialogOf(w) != before;
         }
-        const std::string before = viewOf(w) + dialogOf(w);
         w.prompt.received(w.got.requests());
         return viewOf(w) + dialogOf(w) != before;
     }
@@ -403,7 +472,11 @@ int main(int argc, char** argv) {
     const long steps = std::strtol(args[1].c_str(), nullptr, 10);
 
     Walk w;
-    w.take(false);
+    if (faulty == "echo") {
+        w.echoFault = true;
+        w.hub->injectSecretEchoFault();
+    }
+    w.take();
     std::vector<std::string> records;
     records.push_back("[op |-> \"init\", " + w.record() + "]");
     std::map<std::string, std::size_t> taken;
@@ -419,14 +492,24 @@ int main(int argc, char** argv) {
             if (w.nextId() > kMaxRequests) {
                 continue;
             }
-            op = "ask";
             const std::vector<sync::SessionId> askers{0, 1, 2};
             const sync::SessionId asker = askers[pick(askers.size())];
+            // A friend's AI with an ask open is refused before any request is made (Hub::askSecret), which the model
+            // leaves out: the walk asks only from an asker with none open.
+            const std::vector<sync::SecretRequest>& open = w.hub->secrets().open();
+            if (asker != 0 && std::any_of(open.begin(), open.end(),
+                                          [&](const sync::SecretRequest& r) { return r.asker == asker; })) {
+                continue;
+            }
+            op = "ask";
+            // Each ask past the hub's limit for an asker (kSecretAsksPerWindow a minute) apart, so the walk never
+            // meets it.
+            w.now += sync::kSecretAskWindowMs / sync::kSecretAsksPerWindow + 1;
             const std::string acct = kAccts[pick(kAccts.size())];
             const std::uint64_t id = w.nextId();
             std::string refused;
-            if (!w.hub->askSecret(sync::SecretAsker{asker, id, asker == 0 ? "" : "f"}, acct, kWhat, "the walk asks",
-                                  &refused)) {
+            const std::string friendName = asker == 0 ? std::string() : w.store.find(asker)->info.friendName;
+            if (!w.hub->askSecret(sync::SecretAsker{asker, id, friendName}, acct, kWhat, "the walk asks", &refused)) {
                 fail("an ask was refused: " + refused);
             }
             w.req[id] = Req{"open", acct, w.askerNames.at(asker)};
@@ -541,7 +624,7 @@ int main(int argc, char** argv) {
             }
             op = "restart";
             w.hub->dropSecrets();
-            w.take(false);  // the dropped requests, while the old hub still reports them
+            w.take();  // the dropped requests, while the old hub still reports them
             const std::vector<std::string> lines = w.log;
             w.hub.reset();
             w.start();
@@ -551,12 +634,13 @@ int main(int argc, char** argv) {
             ++taken[op];
             continue;
         }
-        const bool echo = faulty == "echo" && op == "receive" && !w.events.log.empty() &&
-            w.events.log.front().event == "stored";
+        const bool echo = faulty == "echo" && op == "receive" &&
+            std::any_of(w.events.log.begin(), w.events.log.end(),
+                        [](const sync::SecretLog& l) { return l.event.rfind("stored", 0) == 0; });
         if (echo) {
             ++faults;
         }
-        w.take(echo);
+        w.take();
         records.push_back("[op |-> " + q(op) + (fields.empty() ? "" : ", " + fields) + ", " + w.record() + "]");
         ++taken[op];
     }

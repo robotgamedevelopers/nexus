@@ -514,22 +514,16 @@ void Drivers::signedIn(const std::string& account) {
     }
 }
 
-void Drivers::answered(const sync::SecretReply& reply) {
-    auto it = slots_.find(reply.asker.session);
-    if (reply.asker.session == 0 || it == slots_.end() || !it->second.proc) {
+void Drivers::tellSecret(sync::SessionId id, const std::string& line) {
+    auto it = slots_.find(id);
+    if (id == 0 || it == slots_.end() || !it->second.proc) {
         return;
     }
     const Phase phase = it->second.sup.phase();
     if (phase != Phase::Idle && phase != Phase::Working && phase != Phase::Stopping) {
         return;
     }
-    const driver::Encoded line = driver::encode(driver::SecretAnswer{reply.asker.ask, reply.stored, reply.reason});
-    if (!line.error.empty()) {
-        log(reply.asker.session, "the answer to secret request " + std::to_string(reply.id) + " was not written: " +
-            line.error);
-        return;
-    }
-    tell(*it->second.proc, line.line, options_.clock());
+    tell(*it->second.proc, line, options_.clock());
 }
 
 // A session's driver as the drivers file now says, for what the window shows of it: a session with no supervisor
@@ -979,7 +973,7 @@ bool Drivers::serve(Millis now, bool* changed) {
         }
     }
     // The drivers' asks for secrets: each opens a request, or is answered at once (busy, no-client); a malformed one
-    // ends its driver as a line refused (docs/secrets.md). The answer goes back through answered().
+    // ends its driver as a line refused (docs/secrets.md). The answer goes back through tellSecret().
     const std::vector<Ask> asks = std::move(asks_);
     asks_.clear();
     for (const Ask& a : asks) {

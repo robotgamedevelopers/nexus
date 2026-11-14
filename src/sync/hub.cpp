@@ -1,6 +1,7 @@
 #include "sync/hub.h"
 
 #include <algorithm>
+#include <deque>
 #include <memory>
 #include <numeric>
 
@@ -631,9 +632,20 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
     if (secretKeeper_ == nullptr) {
         return refuse("this server takes no secrets");
     }
+    // The account and the file are names before they reach any text (a refusal, a log line, the dialog): what an AI
+    // writes in them cannot forge a line.
+    if (!accounts::isName(account) || !accounts::isName(what)) {
+        return refuse("the account and the file asked for are each a name (letters, digits, '-', '_' and '.', at most "
+                      "64)");
+    }
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
     if (a == nullptr) {
         return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
+    }
+    // A friend's AI asks only for an account its friend is linked to; nexus itself asks for any.
+    if (asker.session != 0 && !accounts_->linked(asker.name, account)) {
+        return refuse("the account " + account + " is not linked to the friend of session " +
+                      std::to_string(asker.session) + " in friends.json, so its AI may not ask for its secrets");
     }
     const std::vector<std::string> files = secretFiles(a->provider);
     if (std::find(files.begin(), files.end(), what) == files.end()) {
@@ -644,9 +656,26 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
         return refuse("a " + a->provider + " account has no secret \"" + what + "\"" +
             (files.empty() ? std::string(": its provider documents none") : "; it has " + named));
     }
-    if (why.size() > kSecretWhyBytes ||
-            std::any_of(why.begin(), why.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20; })) {
-        return refuse("an ask's reason is one line of at most " + std::to_string(kSecretWhyBytes) + " bytes");
+    if (!isSecretWhy(why)) {
+        return refuse("an ask's reason is one line of at most " + std::to_string(kSecretWhyBytes) + " bytes of UTF-8 "
+                      "text, with no control, bidirectional or zero-width characters");
+    }
+    // One open ask per asker, and a few a minute: refused busy at once, before a request is made or an id minted.
+    if (asker.session != 0) {
+        const std::uint64_t now = clock_ ? clock_() : 0;
+        std::deque<std::uint64_t>& times = askTimes_[asker.session];
+        while (!times.empty() && times.front() + kSecretAskWindowMs <= now) {
+            times.pop_front();
+        }
+        const bool pending = std::any_of(desk_.open().begin(), desk_.open().end(),
+                                         [&](const SecretRequest& r) { return r.asker == asker.session; });
+        if (pending || times.size() >= kSecretAsksPerWindow) {
+            secretEffects(desk_.refuseAtOnce(asker, account, what, pending ?
+                "one of its asks is open already" :
+                "it asked " + std::to_string(times.size()) + " times in the last minute"));
+            return true;
+        }
+        times.push_back(now);
     }
     // The id first, durable, so that it is never minted again, across restarts.
     const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
