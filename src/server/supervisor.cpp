@@ -125,6 +125,13 @@ Output Supervisor::configure(std::vector<std::string> command, std::string cwd, 
     return finish();
 }
 
+Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
+    config_.cwd = std::move(cwd);
+    config_.here = here;
+    advance(now);
+    return finish();
+}
+
 Output Supervisor::setOptions(std::string model, std::string effort, Millis now) {
     config_.model = std::move(model);
     config_.effort = std::move(effort);
@@ -142,10 +149,10 @@ sync::Activity Supervisor::activity() const {
     if (held_) {
         return sync::Activity::Down;
     }
-    if (state_.openTurn != 0 || !state_.waiting.empty() || phase_ == Phase::Starting) {
+    if (state_.openTurn != 0 || (!state_.waiting.empty() && config_.here) || phase_ == Phase::Starting) {
         return sync::Activity::Busy;
     }
-    if (config_.command.empty() || (crashed_ && !down_)) {
+    if (config_.command.empty() || !config_.here || (crashed_ && !down_)) {
         return sync::Activity::Down;
     }
     return sync::Activity::Idle;
@@ -241,6 +248,8 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
     if (std::holds_alternative<Hello>(message)) {
         end(brokeProtocol("wrote a second hello"), now);
     } else if (const Credential* c = std::get_if<Credential>(&message)) {
+        out_.account = driverAccount_;
+        out_.signedIn = c->billing == Billing::Subscription;
         if (c->billing == Billing::Subscription) {
             out_.credential = *c;
         } else {
@@ -251,8 +260,9 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             held_ = true;
         }
     } else if (const Session* s = std::get_if<Session>(&message)) {
-        if (state_.session != s->id) {
+        if (state_.session != s->id || state_.sessionDir != driverCwd_) {
             state_.session = s->id;
+            state_.sessionDir = driverCwd_;     // the harness keeps it by directory: resumed only there
             out_.durable = true;
         }
     } else if (const Error* e = std::get_if<Error>(&message)) {
@@ -268,7 +278,13 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             effect(Effect::What::Error, std::move(text), open);
         }
         // an error of a turn not open (the one a driver writes as it refuses a line) is dropped: it exits next
+        if (e->code == ErrorCode::UsageLimit) {
+            out_.account = driverAccount_;
+            out_.usageLimit = true;
+        }
         if (e->code == ErrorCode::NoCredential) {
+            out_.account = driverAccount_;
+            out_.signedIn = false;
             // It ends the open turn, if any, and exits (protocol rule 11): nothing more is written to it, and no
             // driver is started again until the person's next prompt.
             held_ = true;
@@ -345,6 +361,7 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     noCredential_ = false;
     gathered_.clear();
     driverAccount_.clear();
+    driverCwd_.clear();
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;
@@ -472,8 +489,23 @@ void Supervisor::close(Millis now) {
 }
 
 void Supervisor::startDriver(Millis now) {
-    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_) {
+    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_ || !config_.here) {
         return;
+    }
+    // The harness keeps its sessions by directory: one made in another directory (the session's instance moved) is
+    // dropped, and the driver starts afresh; when the conversation has turns, its first send carries a summary of them.
+    // A session from before its directory was kept (none recorded) is resumed.
+    if (!state_.session.empty() && !state_.sessionDir.empty() && state_.sessionDir != config_.cwd) {
+        const bool turns = state_.nextTurn > 1;
+        if (turns) {
+            effect(Effect::What::Notice, config_.name + " now works in " + config_.cwd + ", and the conversation "
+                "so far was held in " + state_.sessionDir + ", where it cannot be resumed from here: " + config_.name +
+                " starts afresh, given a summary of it with the next prompt.");
+        }
+        state_.session.clear();
+        state_.sessionDir.clear();
+        state_.summary = state_.summary || turns;
+        out_.durable = true;
     }
     std::vector<std::string> argv = config_.command;
     if (!argv.empty()) {        // none configured: the start fails, as no program is configured
@@ -491,6 +523,7 @@ void Supervisor::startDriver(Millis now) {
     lastCause_.clear();
     lastFix_.clear();
     driverAccount_ = config_.account;
+    driverCwd_ = config_.cwd;
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;
@@ -514,7 +547,13 @@ void Supervisor::writeNext() {
     }
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
-    command(Command::Kind::Write, {}, encode(sendOf(turn, state_.waiting.front())).line);
+    // After a move to another directory, the first send carries the summary before the prompt.
+    const std::string summary = state_.summary && config_.summarize ? config_.summarize(state_.waiting.front()) :
+        std::string();
+    if (state_.summary) {
+        state_.summary = false;     // durable with the turn, below
+    }
+    command(Command::Kind::Write, {}, encode(sendOf(turn, summary + state_.waiting.front())).line);
     openPrompt_ = std::move(state_.waiting.front());
     state_.waiting.erase(state_.waiting.begin());
     state_.nextTurn = turn + 1;
@@ -529,7 +568,7 @@ void Supervisor::writeNext() {
 // a notice, and the next is taken in its place.
 void Supervisor::take() {
     while (!config_.command.empty() && state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ &&
-           !queue_.empty()) {
+           config_.here && !queue_.empty()) {
         std::string text = std::move(queue_.front());
         queue_.erase(queue_.begin());
         ++out_.taken;
@@ -546,13 +585,15 @@ void Supervisor::take() {
 }
 
 // With no turn open, a driver started under an account that is no longer the session's is ended quietly: the next one
-// starts under the session's account. So is one told a model or effort the session has since put back to the
+// starts under the session's account. So is one started in a directory that is no longer the session's, or any while
+// the session's instance is on another machine. So is one told a model or effort the session has since put back to the
 // harness's default, which a settings line cannot say: the next one starts on the defaults. A turn open runs to its
 // end first.
 void Supervisor::retire(Millis now) {
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
-    if (phase_ == Phase::Idle && (driverAccount_ != config_.account || cleared)) {
+    if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
+                                  cleared)) {
         retiring_ = true;
         endQuietly(now);
     }

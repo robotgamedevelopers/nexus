@@ -35,14 +35,17 @@ using SessionId = std::uint64_t;
 
 // What a session is, apart from its transcript and queue: the friend it is with (an attribute, so that a window can
 // group sessions by friend; it names no tab), the harness its driver runs (Claude, for now), the account the driver
-// runs under, and the model and effort each turn is sent with. An empty account, model or effort is the harness's
-// default.
+// runs under, the model and effort each turn is sent with, and the friend's instance it belongs to (the machine and
+// directory it runs in), so that a window can also group sessions by instance. An empty account, model or effort is
+// the harness's default.
 struct SessionInfo {
     std::string friendName;
     std::string harness;
     std::string account;
     std::string model;
     std::string effort;
+    std::string instance{};     // which of its friend's instances (accounts/registry.h): a machine and a directory; empty
+                                // before the server holds the friend's instances, or when the friend has none
     bool operator==(const SessionInfo&) const = default;
 };
 

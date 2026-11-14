@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nexus::server {
 
@@ -35,6 +36,8 @@ struct Paths {
     std::string log;        // <dir>/server.log: a server `new` started writes here
     std::string store;      // <dir>/store: the sessions and the applied counters (src/store)
     std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
+    std::string accounts;   // $HOME/.nexus/server/accounts whatever --dir says: the logins, where the drivers read them
+                            // (server/home.h accountsDir)
 };
 
 // Who asks for a session: a client id (empty: none), the number of its first action in the session, and the state
@@ -69,5 +72,9 @@ int serve(const Paths& p);
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.
 int stop(const Paths& p);
+// `nexus-server config <verb> ...`: the accounts and friends (server/config_repo.h, docs/accounts.md). path, check,
+// history and remote work on the files and the repository directly; reload and restore ask the running server, which
+// decides.
+int config(const Paths& p, const std::vector<std::string>& args);
 
 } // namespace nexus::server

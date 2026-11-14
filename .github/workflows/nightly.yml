@@ -1,5 +1,6 @@
-# Nightly for nexus: the TLA+ instances too large for the per-commit model job (ctest label model_nightly), on the same
-# runners as ci.yml's model job. ci.yml checks every property on every pull request, on the smaller instances, with
+# Nightly for nexus: the TLA+ instances too large for the per-commit model job (ctest label model_nightly), on the
+# fleet's macOS runners (the per-commit shards run on Linux). ci.yml checks every property on every pull request,
+# on the smaller instances, with
 # every witness and trace check; this workflow adds the largest instances (tests/model/CMakeLists.txt,
 # tests/sync/CMakeLists.txt and tests/store/CMakeLists.txt say which and why). Nightlies have no 2-minute limit.
 #
