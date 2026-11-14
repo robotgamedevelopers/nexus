@@ -298,3 +298,27 @@ tlc_test(tlc_overlay_trace_faulty_hide_unkeyed_rejected OverlayTrace OverlayTrac
          OVERLAY SEED 1 STEPS 1000 FAULTY hide-unkeyed)
 tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
          OVERLAY SEED 1 STEPS 1000 FAULTY hotkey-hides)
+
+# The secret dialog (docs/secrets.md): Secrets.tla on four small instances, every property; its two larger instances
+# nightly; a witness per property. Bound to the code by trace checks when the code lands (roadmap: 5b).
+tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
+tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
+tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)
+tlc_test(tlc_secrets_spec_two  MCSecrets MCSecretsTwo.cfg   pass WORKERS 4)
+tlc_test(tlc_secrets_spec_wide  MCSecrets MCSecretsWide.cfg  pass WORKERS 8 NIGHTLY CAP 600)
+tlc_test(tlc_secrets_spec_mixed MCSecrets MCSecretsMixed.cfg pass WORKERS 8 NIGHTLY CAP 600)
+tlc_test(tlc_secrets_witness_reply_carries_value WSecReplyCarriesValue WSecReplyCarriesValue.cfg invariant
+         PROPERTY NoSecretToAsker)
+tlc_test(tlc_secrets_witness_transcript_value WSecTranscriptValue WSecTranscriptValue.cfg invariant
+         PROPERTY NoSecretInTranscript)
+tlc_test(tlc_secrets_witness_log_value      WSecLogValue      WSecLogValue.cfg      invariant PROPERTY NoSecretInLog)
+tlc_test(tlc_secrets_witness_relay_to_windows WSecRelayToWindows WSecRelayToWindows.cfg invariant
+         PROPERTY NoSecretToWindows)
+tlc_test(tlc_secrets_witness_store_twice    WSecStoreTwice    WSecStoreTwice.cfg    invariant PROPERTY AtMostOneStored)
+tlc_test(tlc_secrets_witness_late_stored    WSecLateStored    WSecLateStored.cfg    action    PROPERTY ClosedStaysClosed)
+tlc_test(tlc_secrets_witness_ids_reused     WSecIdsReused     WSecIdsReused.cfg     action    PROPERTY ClosedStaysClosed)
+tlc_test(tlc_secrets_witness_two_open       WSecTwoOpen       WSecTwoOpen.cfg       invariant PROPERTY OneOpenPerAccount)
+tlc_test(tlc_secrets_witness_reply_twice    WSecReplyTwice    WSecReplyTwice.cfg    invariant PROPERTY AnsweredOnce)
+tlc_test(tlc_secrets_witness_no_client_opens WSecNoClientOpens WSecNoClientOpens.cfg action   PROPERTY AskNeedsTaker)
+tlc_test(tlc_secrets_witness_no_timeout     WSecNoTimeout     WSecNoTimeout.cfg     liveness)
+tlc_test(tlc_secrets_witness_dialog_stays   WSecDialogStays   WSecDialogStays.cfg   liveness)
