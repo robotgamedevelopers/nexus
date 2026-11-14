@@ -14,7 +14,7 @@
 
 #include "versions.h"
 
-#include "NexusTable.h"
+#include "wire/tables.h"
 
 #include <cstdio>
 #include <cstring>

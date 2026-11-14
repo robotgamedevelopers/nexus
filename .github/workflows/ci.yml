@@ -129,8 +129,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: Build the model checks and wire_test
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -350,8 +350,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
+      - name: Build the model checks and wire_test
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |

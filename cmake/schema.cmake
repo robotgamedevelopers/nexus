@@ -22,11 +22,17 @@ set(NEXUS_SCHEMA_COMMIT c3ad228767db2073411099d7ee635a0fd38b4190)
 get_filename_component(nexus_schema_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
 if(NOT CMAKE_SCRIPT_MODE_FILE)
-    # The formats as schema's variable tables (schema/Nexus.schema). No OS, no time, no Prax.
-    add_library(nexus_wire STATIC ${nexus_schema_root}/schema/gen/NexusTable.cpp
+    # The formats as schema's variable tables (schema/Nexus.schema). No OS, no time, no Prax. nexus includes them
+    # through src/wire/tables.h, which says why MSVC's C4305 is off across the generated code; the generated sources
+    # here are compiled with it off for the same reason, and nothing else is.
+    set(nexus_wire_sources ${nexus_schema_root}/schema/gen/NexusTable.cpp
         ${nexus_schema_root}/schema/gen/NexuswireView.cpp)
-    target_include_directories(nexus_wire PUBLIC ${nexus_schema_root}/schema/gen)
+    add_library(nexus_wire STATIC ${nexus_wire_sources})
+    target_include_directories(nexus_wire PUBLIC ${nexus_schema_root}/schema/gen ${nexus_schema_root}/src)
     target_compile_options(nexus_wire PRIVATE ${NEXUS_WARNINGS})
+    if(MSVC)
+        set_source_files_properties(${nexus_wire_sources} PROPERTIES COMPILE_OPTIONS /wd4305)
+    endif()
 
     add_custom_target(schema_generate
         COMMAND ${CMAKE_COMMAND} -DSCHEMA_CACHE=${CMAKE_BINARY_DIR}/schema -P ${CMAKE_CURRENT_LIST_FILE}

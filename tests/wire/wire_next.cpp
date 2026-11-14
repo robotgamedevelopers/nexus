@@ -3,7 +3,15 @@
 
 #include "versions.h"
 
+// MSVC's C4305 off across the generated header only, as src/wire/tables.h does for this version's (it says why).
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4305)
+#endif
 #include "NexusNextTable.h"
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #include <cstring>
 
