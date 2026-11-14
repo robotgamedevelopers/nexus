@@ -48,11 +48,13 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
-#          [WORKERS w] [NIGHTLY [CAP s]] [LABEL] [OVERLAY])
+#          [WORKERS w] [NIGHTLY] [CAP s] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core.
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
-# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60 (or CAP s): see the instances below.
+# not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at
+# s instead, nightly or not; a per-commit cap stays well inside the CI job's 2 minutes (.github/workflows/ci.yml, the
+# model shards, says how the per-commit caps and worker counts were measured).
 # With SEED, the walk is trace_walk (the window's model, FRIENDS friends); with LINKWALK, it is tests/sync's link_walk
 # (the link, WINDOWS windows), and FAULTY names one of its faults (applier, mirror, tail). Called from tests/sync too.
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
@@ -80,9 +82,9 @@ function(tlc_test name module cfg expect)
     if(T_NIGHTLY)
         set(label model_nightly)
         set(cap 300)
-        if(T_CAP)
-            set(cap ${T_CAP})
-        endif()
+    endif()
+    if(T_CAP)
+        set(cap ${T_CAP})
     endif()
     math(EXPR ctest_timeout "${cap} + 30")
     set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${models_dir}

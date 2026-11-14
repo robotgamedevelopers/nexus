@@ -34,14 +34,16 @@ set_tests_properties(sync_unit PROPERTIES LABELS unit TIMEOUT 30)
 # Nightly: MCLinkStops.cfg, two windows sharing a session, two actions each (736,080 states, 2 min 27 s on eight
 # workers); MCLinkWide.cfg, two windows over two sessions, one action each, an open entry grown once and a restart
 # (171,304 states, 1 min 15 s); MCLinkSessionsWide.cfg, MCLinkSessions.cfg with three actions (240,308 states, 1 min).
-tlc_test(tlc_link_two_windows MCLink MCLink.cfg      pass WORKERS 4)
-tlc_test(tlc_link_one_window  MCLink MCLinkOne.cfg   pass)
+# Per commit on eight workers each, timed two at a time on a loaded tlc runner host (16 cores): two windows 21 s, one
+# window 12 s, tabs 20 s, ensure 32 s (62 s on four workers there, so it is capped at 75 s).
+tlc_test(tlc_link_two_windows MCLink MCLink.cfg      pass WORKERS 8)
+tlc_test(tlc_link_one_window  MCLink MCLinkOne.cfg   pass WORKERS 8)
 tlc_test(tlc_link_grow        MCLink MCLinkGrow.cfg  pass WORKERS 4)
-tlc_test(tlc_link_tabs        MCLink MCLinkTabs.cfg  pass WORKERS 4)
+tlc_test(tlc_link_tabs        MCLink MCLinkTabs.cfg  pass WORKERS 8)
 tlc_test(tlc_link_stops       MCLink MCLinkStops.cfg pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_link_wide        MCLink MCLinkWide.cfg  pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_link_sessions    MCLink MCLinkSessions.cfg pass WORKERS 4)
-tlc_test(tlc_link_ensure      MCLink MCLinkEnsure.cfg pass WORKERS 4)
+tlc_test(tlc_link_ensure      MCLink MCLinkEnsure.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_link_sessions_wide MCLink MCLinkSessionsWide.cfg pass WORKERS 8 NIGHTLY)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
