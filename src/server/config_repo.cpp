@@ -224,6 +224,7 @@ bool ConfigRepo::open(std::string* why) {
 
 bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::vector<std::string>* errors,
                         bool* upgraded) {
+    const std::size_t had = errors->size();   // the caller's, not this read's
     std::string texts[2];
     const char* names[2] = {"accounts.json", "friends.json"};
     for (int i = 0; i < 2; ++i) {
@@ -258,7 +259,7 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
     if (upgraded != nullptr) {
         *upgraded = ra.upgraded || rf.upgraded;
     }
-    return errors->empty();
+    return errors->size() == had;
 }
 
 bool ConfigRepo::committed(accounts::Registry* out, std::vector<std::string>* report) {
