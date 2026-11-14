@@ -445,6 +445,110 @@ void testFailedStarts() {
     CHECK(t.held() && contains(o.effects.back().text, "The last: no login. run login."));
 }
 
+// ---- the session's model, effort and account ----
+
+// The model and effort go to the driver as a settings line written just before the send that first runs with them
+// (the driver applies it from its next send): a change applies from the next turn written, never to a turn already
+// open, and writes and starts nothing when it is made. A new driver starts on the harness's defaults, so it is
+// told the session's again before its first send. A change that puts a field back to the harness's default, which a
+// settings line cannot say, ends the driver once no turn is open, quietly, and the next starts on the defaults.
+void testSettings() {
+    Supervisor s = make();
+    CHECK(s.setOptions("opus", "high", kStart).commands.empty());
+    s.prompt("one", kStart);
+    Output o = s.message(Hello{1, "h"}, kStart + 1);
+    CHECK((written(o) == std::vector<ServerMessage>{Settings{"opus", "high"}, Send{1, "one"}}));
+
+    // Mid-turn: nothing happens, and the open turn keeps what it was written with.
+    o = s.setOptions("sonnet", "high", kStart + 2);
+    CHECK(o.commands.empty() && o.effects.empty() && !o.durable);
+    CHECK(s.phase() == Phase::Working && s.state().openTurn == 1);
+    CHECK(s.model() == "sonnet" && s.effort() == "high");
+    s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    o = s.prompt("two", kStart + 4);
+    CHECK((written(o) == std::vector<ServerMessage>{Settings{"sonnet", ""}, Send{2, "two"}}));
+
+    // Unchanged: no settings line.
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 5);
+    o = s.prompt("three", kStart + 6);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "three"}}));
+
+    // Back to the harness's own effort: the idle driver is ended quietly, never a failed start, and the next one is
+    // told the model alone.
+    s.message(Done{3, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 7);
+    o = s.setOptions("sonnet", "", kStart + 8);
+    CHECK(ended(s, o) && o.effects.empty() && s.retiring());
+    o = s.exited("exited with status 0", kStart + 9);
+    CHECK(s.phase() == Phase::None && s.failedStarts() == 0 && o.effects.empty());
+    s.prompt("four", kStart + 10);
+    o = s.message(Hello{1, "h"}, kStart + 11);
+    CHECK((written(o) == std::vector<ServerMessage>{Settings{"sonnet", ""}, Send{4, "four"}}));
+
+    // Back to the defaults with a turn open: the turn runs to its end first.
+    o = s.setOptions("", "", kStart + 12);
+    CHECK(o.commands.empty() && s.phase() == Phase::Working);
+    o = s.message(Done{4, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 13);
+    CHECK(ended(s, o) && s.retiring());
+    s.exited("exited with status 0", kStart + 14);
+    s.prompt("five", kStart + 15);
+    o = s.message(Hello{1, "h"}, kStart + 16);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{5, "five"}}));
+
+    // A prompt that waits while the driver starts goes with the setting as it is when it is written, not when it was
+    // sent.
+    Supervisor t = make();
+    t.prompt("w", kStart);
+    t.setOptions("haiku", "low", kStart + 1);
+    o = t.message(Hello{1, "h"}, kStart + 2);
+    CHECK((written(o) == std::vector<ServerMessage>{Settings{"haiku", "low"}, Send{1, "w"}}));
+}
+
+// A driver runs under the account it was started with. A change ends an idle driver quietly at once, and a busy one
+// once its turn ends; the next starts under the new account. Ending it so is never a failed start.
+void testAccount() {
+    // Idle: ended at once, quietly.
+    Supervisor s = make();
+    s.prompt("one", kStart);
+    s.message(Hello{1, "h"}, kStart + 1);
+    s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 2);
+    CHECK(s.phase() == Phase::Idle && s.driverAccount().empty());
+    Output o = s.setAccount("work", kStart + 3);
+    CHECK(ended(s, o) && o.effects.empty() && s.retiring());
+    CHECK(s.account() == "work");
+    o = s.exited("exited with status 0", kStart + 4);
+    CHECK(s.phase() == Phase::None && s.failedStarts() == 0 && !s.retiring() && o.effects.empty());
+    o = s.prompt("two", kStart + 5);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && s.driverAccount() == "work");
+
+    // The same account again changes nothing.
+    s.message(Hello{1, "h"}, kStart + 6);
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 7);
+    o = s.setAccount("work", kStart + 8);
+    CHECK(o.commands.empty() && s.phase() == Phase::Idle);
+
+    // Working: the turn runs to its end; then the driver is ended, and a prompt queued meanwhile goes to the next.
+    Supervisor t = working("first");
+    o = t.setAccount("home", kStart + 2);
+    CHECK(o.commands.empty() && o.effects.empty() && t.phase() == Phase::Working);
+    t.queued("later", kStart + 3);
+    o = t.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 4);
+    CHECK(o.taken == 1 && ended(t, o) && t.state().waiting == std::vector<std::string>{"later"});
+    CHECK(written(o).empty());     // never written to the driver under the old account
+    o = t.exited("exited with status 0", kStart + 5);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && t.driverAccount() == "home" && t.failedStarts() == 0);
+    o = t.message(Hello{1, "h"}, kStart + 6);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{2, "later"}}));
+
+    // Starting: the driver says hello under the old account, so it is ended before it is given the prompt.
+    Supervisor u = make();
+    u.prompt("p", kStart);
+    u.setAccount("other", kStart + 1);
+    o = u.message(Hello{1, "h"}, kStart + 2);
+    CHECK(ended(u, o) && written(o).empty() && u.state().waiting.size() == 1);
+    o = u.exited("exited with status 0", kStart + 3);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
+}
+
 // ---- the credential, errors, the session ----
 
 void testCredentialAndErrors() {
@@ -839,6 +943,8 @@ const Group kGroups[] = {
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},
+    {"settings", testSettings},
+    {"account", testAccount},
 };
 
 } // namespace

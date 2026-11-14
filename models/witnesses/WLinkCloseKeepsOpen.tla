@@ -3,11 +3,11 @@
 \* same text is in the transcript and still growing. EachClosedOnce must reject it.
 EXTENDS MCLink
 
-BrokenClose(t) ==
-    /\ op[t] # NoOpen
-    /\ tr' = [tr EXCEPT ![t] = Append(@, Grown(op[t]))]
-    /\ snaps' = Push(tr', q, op)
-    /\ UNCHANGED <<acts, applied, done, q, op, stops, made, last, view, vq, seen, live>>
+BrokenClose(i) ==
+    /\ op[i] # NoOpen
+    /\ tr' = [tr EXCEPT ![i] = Append(@, Grown(op[i]))]
+    /\ snaps' = Push(ses, tr', q, op)
+    /\ UNCHANGED <<acts, applied, done, ses, nextSid, minted, skipped, q, op, stops, made, window>>
 
 BrokenSpec == Init /\ [][NextWithAll(Deliver, Receive, BrokenClose, Take, Restart)]_vars
 =============================================================================

@@ -5,8 +5,8 @@ namespace nexus::server {
 namespace {
 
 sync::EntryRef toRef(const store::Entry& e) {
-    return std::make_shared<const sync::TabEntry>(
-        sync::TabEntry{static_cast<EntryKind>(e.kind), e.text, e.closed});
+    return std::make_shared<const sync::SessionEntry>(
+        sync::SessionEntry{static_cast<EntryKind>(e.kind), e.text, e.closed});
 }
 
 sync::DriverState toState(const store::Driver& d) {
@@ -17,52 +17,68 @@ store::Driver toDriver(const sync::DriverState& d) {
     return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting};
 }
 
+sync::SessionInfo toInfo(const store::Info& i) {
+    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort};
+}
+
+store::Info toStored(const sync::SessionInfo& i) {
+    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort};
+}
+
 } // namespace
 
 bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why, const store::StoreOptions& options) {
-    tabs_.clear();
+    sessions_.clear();
     store::Status s = store::Store::open(fs, dir, options, store_, &report_);
     if (!s.is_ok()) {
         store_.reset();
-        if (why != nullptr)
+        if (why != nullptr) {
             *why = s.message();
+        }
         return false;
     }
-    for (const auto& [name, tab] : store_->tabs()) {
-        sync::StoredTab& t = tabs_[name];
-        for (const store::Entry& e : tab.transcript)
+    for (const auto& [id, session] : store_->sessions()) {
+        sync::StoredSession& t = sessions_[id];
+        t.info = toInfo(session.info);
+        for (const store::Entry& e : session.transcript) {
             t.transcript.push_back(toRef(e));
-        t.queue = tab.queue;
-        t.driver = toState(tab.driver);
+        }
+        t.queue = session.queue;
+        t.driver = toState(session.driver);
     }
     return true;
 }
 
-const sync::StoredTab* DurableStore::find(const std::string& name) const {
-    auto it = tabs_.find(name);
-    return it == tabs_.end() ? nullptr : &it->second;
+const sync::StoredSession* DurableStore::find(sync::SessionId id) const {
+    auto it = sessions_.find(id);
+    return it == sessions_.end() ? nullptr : &it->second;
 }
 
-std::vector<std::string> DurableStore::names() const {
-    std::vector<std::string> out;
-    for (const auto& [name, tab] : tabs_)
-        out.push_back(name);
+std::vector<sync::SessionId> DurableStore::ids() const {
+    std::vector<sync::SessionId> out;
+    for (const auto& [id, session] : sessions_) {
+        out.push_back(id);
+    }
     return out;
 }
 
-bool DurableStore::commit(const std::string& name, const std::vector<sync::TabChange>& changes,
+bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionChange>& changes,
                           const std::string& client, std::uint64_t num, std::string* why) {
     if (store_ == nullptr) {
-        if (why != nullptr)
+        if (why != nullptr) {
             *why = "the store is not open";
+        }
         return false;
     }
     std::vector<store::Change> out;
     out.reserve(changes.size());
-    for (const sync::TabChange& c : changes) {
+    for (const sync::SessionChange& c : changes) {
         store::Change sc;
         if (c.take) {
             sc.kind = store::Change::Kind::Dequeue;
+        } else if (c.info) {
+            sc.kind = store::Change::Kind::SetInfo;
+            sc.info = toStored(*c.info);
         } else if (c.driver) {
             sc.kind = store::Change::Kind::SetDriver;
             sc.driver = toDriver(*c.driver);
@@ -75,17 +91,20 @@ bool DurableStore::commit(const std::string& name, const std::vector<sync::TabCh
         }
         out.push_back(std::move(sc));
     }
-    store::Status s = store_->commit(name, out, client, num);
+    store::Status s = store_->commit(id, out, client, num);
     if (!s.is_ok()) {
-        if (why != nullptr)
+        if (why != nullptr) {
             *why = s.message();
+        }
         return false;
     }
     if (!changes.empty()) {
-        sync::StoredTab& t = tabs_[name];
-        for (const sync::TabChange& c : changes) {
+        sync::StoredSession& t = sessions_[id];     // the store refused the step had it not held or made the session
+        for (const sync::SessionChange& c : changes) {
             if (c.take) {
                 t.queue.erase(t.queue.begin());     // the store refused the step had the queue nothing left
+            } else if (c.info) {
+                t.info = *c.info;
             } else if (c.driver) {
                 t.driver = *c.driver;
             } else if (c.entry) {

@@ -17,8 +17,8 @@
 //       each prompt applied once, each window's prompts in its order, and every window's transcripts agree
 //   link_e2e <nexus-server> <dir> restart
 //       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
-//       session of the same window (its client id) finds every tab and queue there, sends all its actions again under
-//       the same numbers, and only the new one is applied; a session that would skip actions is refused
+//       session of the same window (its client id) finds every session and queue there, sends all its actions again
+//       under the same numbers, and only the new one is applied; a session that would skip actions is refused
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -75,6 +75,49 @@ int failures = 0;
     } while (0)
 
 const std::vector<FriendInfo> kFriends = {{"ada", "m1"}, {"bo", "m2"}, {"cy", "m3"}};
+
+// Each window first sends an ensure for every friend, in the friends' order, as the app does: the server makes a
+// session for each friend that has none, minting ids from 1, so on a fresh server ada's is 1, bo's 2 and cy's 3,
+// whichever window's ensure arrives first (each window's arrive in order). The runs check it against the state.
+sync::SessionId sid(const std::string& name) {
+    for (std::size_t i = 0; i < kFriends.size(); ++i) {
+        if (kFriends[i].name == name) {
+            return i + 1;
+        }
+    }
+    std::fprintf(stderr, "link_e2e: no friend %s\n", name.c_str());
+    std::exit(1);
+}
+
+sync::Action act(sync::ActionKind kind, sync::SessionId session, std::string text) {
+    sync::Action a;
+    a.kind = kind;
+    a.session = session;
+    a.text = std::move(text);
+    return a;
+}
+
+std::vector<sync::Action> ensures() {
+    std::vector<sync::Action> out;
+    for (const FriendInfo& f : kFriends) {
+        sync::Action a;
+        a.kind = sync::ActionKind::Ensure;
+        a.friendName = f.name;
+        out.push_back(a);
+    }
+    return out;
+}
+
+// Whether the state holds each friend's session at the id sid() gives it, and no other.
+bool sessionsAsMinted(const sync::Sessions& state) {
+    for (const FriendInfo& f : kFriends) {
+        const sync::SessionView* v = state.first(f.name);
+        if (v == nullptr || v->id != sid(f.name)) {
+            return false;
+        }
+    }
+    return state.sessions().size() == kFriends.size();
+}
 
 // Stops the server in `dir`, if one runs there, and removes `dir`, with the server's log printed first when there is
 // one. No socket, or a socket no server answers on (left by a server that was killed), is nothing to stop. False only
@@ -139,7 +182,7 @@ double seconds(Clock::time_point since) {
     return std::chrono::duration<double>(Clock::now() - since).count();
 }
 
-// A tab with no driver: the server's notice for a prompt it could not send (server/driver_table.h), which the runs
+// A session with no driver: the server's notice for a prompt it could not send (server/driver_table.h), which the runs
 // other than roundtrip get, having no drivers file.
 bool noDriver(const std::string& text) {
     return text.find(" has no driver, so the prompt was not sent") != std::string::npos;
@@ -174,7 +217,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         link::ClientLink::Snapshot s;
         auto pump = [&] {
             if (link.poll(&s))
-                mirror.apply(model, s.tabs);
+                mirror.apply(model, s.sessions);
         };
         CHECK(waitFor([&] { pump(); return s.phase != sync::LinkPhase::Connecting; }, 30));
         if (s.phase == sync::LinkPhase::Failed)
@@ -182,8 +225,11 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         CHECK(s.phase == sync::LinkPhase::Connected);
         std::printf("connected to %s in %.2f s\n", host.c_str(), seconds(start));
         const auto sent = Clock::now();
-        link.send(sync::ActionKind::Send, "ada", "hello over mosh");
-        link.send(sync::ActionKind::Queue, "bo", "for later");
+        for (const sync::Action& a : ensures()) {
+            link.send(a);
+        }
+        link.send(act(sync::ActionKind::Send, sid("ada"), "hello over mosh"));
+        link.send(act(sync::ActionKind::Queue, sid("bo"), "for later"));
         const std::size_t ada = tabOf(model, "ada");
         const std::size_t bo = tabOf(model, "bo");
         CHECK(waitFor([&] { pump(); return model.tab(ada).transcript.size() == 2 && model.tab(bo).queue.size() == 1; },
@@ -198,7 +244,8 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         }
         CHECK(model.tab(bo).queue == std::vector<std::string>{"for later"});
         CHECK(model.tab(bo).transcript.empty());
-        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == 2; }, 10));
+        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == 5; }, 10));
+        CHECK(sessionsAsMinted(s.sessions));
     }   // the link shuts down here
     std::printf("roundtrip through %s: %s\n", host.c_str(), failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;
@@ -350,7 +397,10 @@ int outage(const std::string& binary, const std::string& dir) {
         return done();
     };
     CHECK(settle(10, [&] { return w.session->stateNum() > 0; }));
-    w.session->add(sync::ActionKind::Send, "ada", "before");
+    for (const sync::Action& a : ensures()) {
+        w.session->add(a);
+    }
+    w.session->add(act(sync::ActionKind::Send, sid("ada"), "before"));
     CHECK(settle(10, [&] { return w.model.tab(ada).transcript.size() == 2 && w.session->allAcknowledged(); }));
 
     // The network goes down for 8 s; three prompts are sent during it.
@@ -362,7 +412,7 @@ int outage(const std::string& binary, const std::string& dir) {
         step(windows, &relay, 50);
         longestQuiet = std::max(longestQuiet, w.session->heardMsAgo());
         if (sentDuring < 3 && seconds(cut) > 1 + sentDuring) {
-            w.session->add(sync::ActionKind::Send, "ada", "during " + std::to_string(sentDuring));
+            w.session->add(act(sync::ActionKind::Send, sid("ada"), "during " + std::to_string(sentDuring)));
             ++sentDuring;
         }
     }
@@ -383,13 +433,14 @@ int outage(const std::string& binary, const std::string& dir) {
     CHECK(t.size() == 2 * want.size());
     for (std::size_t i = 0; i < t.size() && i < 2 * want.size(); ++i)
         CHECK(i % 2 == 0 ? t[i].text == want[i / 2] : t[i].kind == EntryKind::Notice && noDriver(t[i].text));
-    const sync::TabView* v = w.session->state().find("ada");
+    const sync::SessionView* v = w.session->state().find(sid("ada"));
+    CHECK(sessionsAsMinted(w.session->state()));
     CHECK(v != nullptr && v->total() == 8);
 
     // A second, shorter cut, with a prompt queued in it.
     relay.down = true;
     const auto cut2 = Clock::now();
-    w.session->add(sync::ActionKind::Queue, "ada", "queued while down");
+    w.session->add(act(sync::ActionKind::Queue, sid("ada"), "queued while down"));
     while (seconds(cut2) < 2)
         step(windows, &relay, 50);
     relay.down = false;
@@ -431,6 +482,11 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         windows.push_back(owned.back().get());
     }
     std::printf("%d windows connected in %.2f s\n", clients, seconds(start));
+    for (Window* w : windows) {
+        for (const sync::Action& a : ensures()) {
+            w->session->add(a);
+        }
+    }
     test::Rng rng{42};
     std::map<std::string, int> sends;
     std::map<std::string, int> queues;
@@ -442,10 +498,10 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         const std::string text = "c" + std::to_string(c) + "-" + std::to_string(next[c]++);
         // A few queued prompts, within the queue's limit of eight per tab.
         if (rng.chance(20) && queues[tab] < 8) {
-            windows[c]->session->add(sync::ActionKind::Queue, tab, text);
+            windows[c]->session->add(act(sync::ActionKind::Queue, sid(tab), text));
             ++queues[tab];
         } else {
-            windows[c]->session->add(sync::ActionKind::Send, tab, text);
+            windows[c]->session->add(act(sync::ActionKind::Send, sid(tab), text));
             ++sends[tab];
         }
         if (rng.chance(4))
@@ -456,7 +512,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
             if (!w->session->allAcknowledged())
                 return false;
             for (const FriendInfo& f : kFriends) {
-                const sync::TabView* v = w->session->state().find(f.name);
+                const sync::SessionView* v = w->session->state().find(sid(f.name));
                 const std::size_t want = 2 * static_cast<std::size_t>(sends[f.name]);
                 if ((v == nullptr ? 0 : v->total()) != want ||
                         (v == nullptr ? 0 : v->queue.size()) != static_cast<std::size_t>(queues[f.name]))
@@ -474,6 +530,7 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     // Every window holds the same state (the server's), and its view agrees with every other's.
     for (Window* w : windows)
         CHECK(w->session->state() == windows[0]->session->state());
+    CHECK(sessionsAsMinted(windows[0]->session->state()));
     for (const FriendInfo& f : kFriends) {
         std::vector<std::vector<const Entry*>> views;
         for (Window* w : windows)
@@ -565,8 +622,8 @@ bool answering(const std::string& dir) {
 }
 
 // The server is killed with SIGKILL while a window is connected, and started again; a new session of the same window
-// (its client id) sends every one of its actions again, under the same numbers, with one new one after them. Every tab,
-// queue and applied counter came through the kill: the state is all there, and only the new action is applied.
+// (its client id) sends every one of its actions again, under the same numbers, with one new one after them. Every
+// session, queue and applied counter came through the kill: the state is all there, and only the new action is applied.
 int restart(const std::string& binary, const std::string& dir) {
     Server server(binary, dir);
     mkdir(dir.c_str(), 0700);
@@ -588,7 +645,7 @@ int restart(const std::string& binary, const std::string& dir) {
         return true;
     };
     auto add = [](Window& w, const std::pair<std::string, std::string>& a) {
-        w.session->add(a.first == "bo" ? sync::ActionKind::Queue : sync::ActionKind::Send, a.first, a.second);
+        w.session->add(act(a.first == "bo" ? sync::ActionKind::Queue : sync::ActionKind::Send, sid(a.first), a.second));
     };
     auto settle = [](Window& w, int seconds, const std::function<bool()>& done) {
         std::vector<Window*> ws{&w};
@@ -598,17 +655,21 @@ int restart(const std::string& binary, const std::string& dir) {
         return done();
     };
     // ada's texts, with the notice that ada has no driver as "no driver".
-    auto adaTexts = [](const sync::Tabs& tabs) {
+    auto adaTexts = [](const sync::Sessions& sessions) {
         std::vector<std::string> out;
-        if (const sync::TabView* v = tabs.find("ada"))
+        if (const sync::SessionView* v = sessions.find(sid("ada"))) {
             for (const sync::EntryRef& e : v->entries)
                 out.push_back(e->kind == EntryKind::Notice && noDriver(e->text) ? "no driver" : e->text);
+        }
         return out;
     };
     {
         Window w;
         if (!session(1, &w))
             return 1;
+        for (const sync::Action& a : ensures()) {
+            w.session->add(a);
+        }
         for (std::size_t i = 0; i < 3; ++i)
             add(w, before[i]);
         CHECK(settle(w, 10, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
@@ -633,9 +694,13 @@ int restart(const std::string& binary, const std::string& dir) {
     const std::vector<std::string> first = adaTexts(w.session->state());
     std::printf("after the restart the server holds %zu entries in ada\n", first.size());
     CHECK(first.size() == 4 || first.size() == 6);
-    const sync::TabView* bo = w.session->state().find("bo");
+    CHECK(sessionsAsMinted(w.session->state()));
+    const sync::SessionView* bo = w.session->state().find(sid("bo"));
     CHECK(bo != nullptr && bo->queue == std::vector<std::string>{"later"});
-    // Every action again, under its own number, and a fifth.
+    // Every action again, under its own number (the ensures first: they make nothing now), and an eighth.
+    for (const sync::Action& a : ensures()) {
+        w.session->add(a);
+    }
     for (const auto& a : before)
         add(w, a);
     add(w, {"ada", "four"});
@@ -643,17 +708,18 @@ int restart(const std::string& binary, const std::string& dir) {
                                            "four", "no driver"};
     CHECK(settle(w, 15, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
     CHECK(adaTexts(w.session->state()) == want);
-    bo = w.session->state().find("bo");
+    bo = w.session->state().find(sid("bo"));
+    CHECK(sessionsAsMinted(w.session->state()));
     CHECK(bo != nullptr && bo->queue == std::vector<std::string>{"later"});
     CHECK(w.model.tab(tabOf(w.model, "ada")).transcript.size() == want.size());
     // A session that starts past what the server applied would skip actions: refused.
     {
         link::Bootstrap b = server.bootstrap("localhost");
-        b.command.insert(b.command.end(), {"--client", "window-1", "--next", "9"});
+        b.command.insert(b.command.end(), {"--client", "window-1", "--next", "12"});
         link::Connect connect;
         std::string why;
         CHECK(!link::bootstrap(b, runCommand, &connect, &why));
-        CHECK(why.find("applied its actions up to 5") != std::string::npos);
+        CHECK(why.find("applied its actions up to 8") != std::string::npos);
     }
     w.session->shutdown();
     settle(w, 3, [&] { return w.session->shutdownDone(); });

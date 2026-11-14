@@ -27,24 +27,35 @@ std::string notShownNotice(std::uint64_t count) {
     return std::to_string(count) + (count == 1 ? " earlier entry not shown" : " earlier entries not shown");
 }
 
+SessionId Mirror::session(std::size_t id) const {
+    auto it = session_.find(id);
+    return it == session_.end() ? 0 : it->second;
+}
+
 Mirror::Seen Mirror::seen(std::size_t id) const {
     auto it = seen_.find(id);
     return it == seen_.end() ? Seen{} : Seen{it->second.next};
 }
 
-const TabEntry* Mirror::open(std::size_t id) const {
+const SessionEntry* Mirror::open(std::size_t id) const {
     auto it = seen_.find(id);
     return it == seen_.end() ? nullptr : it->second.open.get();
 }
 
-bool Mirror::apply(Model& model, const Tabs& state) {
+bool Mirror::apply(Model& model, const Sessions& state) {
     bool changed = false;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
         if (tab.kind != TabKind::Friend) {
             continue;
         }
-        const TabView* view = state.find(tab.name);
+        const SessionView* view = nullptr;
+        auto shows = session_.find(tab.id);
+        if (shows != session_.end()) {
+            view = state.find(shows->second);
+        } else if ((view = state.first(tab.name)) != nullptr) {
+            session_[tab.id] = view->id;     // the friend's first session, from now on
+        }
         if (view == nullptr) {
             continue;
         }
@@ -55,7 +66,7 @@ bool Mirror::apply(Model& model, const Tabs& state) {
             changed = true;
         }
         while (seen.next < view->total()) {
-            const TabEntry& e = *view->entries[static_cast<std::size_t>(seen.next - view->first)];
+            const SessionEntry& e = *view->entries[static_cast<std::size_t>(seen.next - view->first)];
             if (!e.closed) {
                 break;
             }

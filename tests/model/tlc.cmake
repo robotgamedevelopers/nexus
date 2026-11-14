@@ -21,11 +21,12 @@
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
-#               mirror, tail, close
+#               mirror, tail, close or ensure
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
-#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue,
+#               setting, account
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
 #               one of settings, refusal, latch
@@ -109,10 +110,11 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue")
+    if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue" OR FAULTY STREQUAL "setting" OR
+            FAULTY STREQUAL "account")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume or queue")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting or account")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
@@ -135,10 +137,11 @@ elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     endif()
 elseif(DEFINED LINKWALK AND NOT "${LINKWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}" "${WINDOWS}")
-    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail" OR FAULTY STREQUAL "close")
+    if(FAULTY STREQUAL "applier" OR FAULTY STREQUAL "mirror" OR FAULTY STREQUAL "tail" OR FAULTY STREQUAL "close" OR
+            FAULTY STREQUAL "ensure")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror, tail or close")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not applier, mirror, tail, close or ensure")
     endif()
     execute_process(COMMAND "${LINKWALK}" ${walk_args} "${WORK}/LinkTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

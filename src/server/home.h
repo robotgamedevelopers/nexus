@@ -3,7 +3,7 @@
 //
 //   config            the server's settings (config.h); it takes none yet
 //   drivers           which program is each friend's driver (server/driver_table.h)
-//   store/            the tabs and the applied counters (src/store)
+//   store/            the sessions and the applied counters (src/store)
 //   server.sock       the control socket, mode 0600
 //   server.log        the log of a server `new` started
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always

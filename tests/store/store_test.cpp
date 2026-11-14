@@ -3,7 +3,7 @@
 // through several plans (MemFs::plan), so that every write and sync point is a crash point.
 //
 //   store_test            runs every group
-//   store_test <group>    runs one: codec memfs journal journal_crash store store_crash driver
+//   store_test <group>    runs one: codec memfs journal journal_crash store ids store_crash driver migrate dequeue
 
 #include "store/codec.h"
 #include "store/fs.h"
@@ -467,6 +467,7 @@ void test_journal_crash() {
 }
 
 
+
 // ---- store ----
 
 struct Opened {
@@ -495,7 +496,21 @@ Change enqueue(const std::string& prompt) {
     return c;
 }
 
-std::string texts(const Tab* t) {
+// What a session is: with `friend_name`, the harness "claude" and the given settings.
+Change info(const std::string& friend_name, const std::string& model = std::string()) {
+    Change c;
+    c.kind = Change::Kind::SetInfo;
+    c.info = Info{friend_name, "claude", "", model, ""};
+    return c;
+}
+
+// The changes of a step, with the session's info first: the step that makes it.
+std::vector<Change> made(const std::string& friend_name, std::vector<Change> rest = {}) {
+    rest.insert(rest.begin(), info(friend_name));
+    return rest;
+}
+
+std::string texts(const Session* t) {
     if (t == nullptr)
         return "-";
     std::string out;
@@ -513,11 +528,16 @@ std::string texts(const Tab* t) {
     return out;
 }
 
+std::string about(const Info& i) {
+    return i.friend_name + "/" + i.harness + "/" + i.account + "/" + i.model + "/" + i.effort;
+}
+
 // A whole-state digest, to compare a recovered store with the states a scenario passed through.
 std::string digest(const Store& s, const std::vector<std::string>& clients) {
-    std::string d;
-    for (const auto& [name, t] : s.tabs())
-        d += name + "=" + texts(&t) + " ";
+    std::string d = "next " + std::to_string(s.next_session()) + " ";
+    for (const auto& [id, t] : s.sessions()) {
+        d += std::to_string(id) + "(" + about(t.info) + ")=" + texts(&t) + " ";
+    }
     for (const std::string& c : clients)
         d += c + ":" + std::to_string(s.applied(c)) + " ";
     return d;
@@ -529,60 +549,74 @@ void test_store() {
     CHECK_OK(o.st);
     CHECK(o.report.fresh);
     Store& s = *o.s;
-    CHECK(s.tab("ada") == nullptr && s.applied("w1") == 0);
+    CHECK(s.session(1) == nullptr && s.applied("w1") == 0 && s.next_session() == 1);
 
-    // a send: the prompt and the reply, with the window's counter, in one step
+    // a session made by its first step, here with a send: the prompt and the reply, with the window's counter
     std::vector<Change> send = {append("hello", 0), append("(received)", 1)};
-    CHECK_OK(s.commit("ada", send, "w1", 1));
-    CHECK(texts(s.tab("ada")) == "[0:hello][1:(received)]|");
-    CHECK(s.applied("w1") == 1);
+    CHECK_OK(s.commit(1, made("ada", send), "w1", 1));
+    CHECK(texts(s.session(1)) == "[0:hello][1:(received)]|");
+    CHECK(about(s.session(1)->info) == "ada/claude///");
+    CHECK(s.applied("w1") == 1 && s.next_session() == 2);
     std::vector<Change> queue = {enqueue("later")};
-    CHECK_OK(s.commit("ada", queue, "w1", 2));
-    CHECK_OK(s.commit("bo", std::vector<Change>{append("open", 1, false)}));  // no client: the server's own change
-    CHECK(texts(s.tab("bo")) == "[1:open+]|");
+    CHECK_OK(s.commit(1, queue, "w1", 2));
+    CHECK_OK(s.commit(2, made("bo", {append("open", 1, false)})));  // no client: the server's own change
+    CHECK(texts(s.session(2)) == "[1:open+]|");
+
+    // a session is made only at the next id, and only by a step whose first change is its info
+    CHECK(s.commit(4, made("cy")).code() == Status::Code::Refused);
+    CHECK(s.commit(3, std::vector<Change>{append("x")}).code() == Status::Code::Refused);
+    CHECK(s.commit(3, std::vector<Change>{append("x"), info("cy")}).code() == Status::Code::Refused);
+    CHECK(s.session(3) == nullptr && s.next_session() == 3);
+    // a held session's info is replaced whole, and is not a new session
+    CHECK_OK(s.commit(2, std::vector<Change>{info("bo", "fast")}));
+    CHECK(about(s.session(2)->info) == "bo/claude//fast/" && s.next_session() == 3);
+    CHECK(texts(s.session(2)) == "[1:open+]|");
 
     // exactly once: an action applied before, or one past a gap, is refused and changes nothing
-    Status again = s.commit("ada", send, "w1", 2);
+    Status again = s.commit(1, send, "w1", 2);
     CHECK(again.code() == Status::Code::Refused);
     CHECK(again.message().find("next action is 3, not 2") != std::string::npos);
-    CHECK(s.commit("ada", send, "w1", 4).code() == Status::Code::Refused);
-    CHECK(texts(s.tab("ada")) == "[0:hello][1:(received)]|[later]");
-    // a refused action (a limit the server keeps) still counts: the counter moves, no tab changes
-    CHECK_OK(s.commit("", std::vector<Change>{}, "w1", 3));
-    CHECK(s.applied("w1") == 3 && s.tabs().size() == 2);
-    CHECK_OK(s.commit("ada", std::vector<Change>{append("A notice.", 2)}, "w2", 1));
+    CHECK(s.commit(1, send, "w1", 4).code() == Status::Code::Refused);
+    CHECK(texts(s.session(1)) == "[0:hello][1:(received)]|[later]");
+    // a refused action (a limit the server keeps) still counts: the counter moves, no session changes
+    CHECK_OK(s.commit(0, std::vector<Change>{}, "w1", 3));
+    CHECK(s.applied("w1") == 3 && s.sessions().size() == 2);
+    CHECK_OK(s.commit(1, std::vector<Change>{append("A notice.", 2)}, "w2", 1));
     CHECK(s.applied("w2") == 1 && s.applied("w1") == 3);
-    CHECK(s.commit("", std::vector<Change>{append("x")}).code() == Status::Code::Refused);
-    CHECK(s.commit("ada", std::vector<Change>{}).code() == Status::Code::Refused);
+    CHECK(s.commit(0, std::vector<Change>{append("x")}).code() == Status::Code::Refused);
+    CHECK(s.commit(1, std::vector<Change>{}).code() == Status::Code::Refused);
 
-    // durable: a crash that keeps nothing volatile loses nothing committed
+    // durable: a crash that keeps nothing volatile loses nothing committed, the next id included
     std::string before = digest(s, {"w1", "w2"});
     o.s.reset();
     fs.crash(fs.plan_all(false));
     Opened o2 = open_store(fs);
     CHECK_OK(o2.st);
-    CHECK(!o2.report.fresh && o2.report.records == 5 && o2.report.cut_bytes == 0);
+    CHECK(!o2.report.fresh && o2.report.records == 6 && o2.report.cut_bytes == 0 && o2.report.migrated == 0);
     CHECK(digest(*o2.s, {"w1", "w2"}) == before);
-    CHECK_OK(o2.s->commit("ada", send, "w1", 4));
+    CHECK_OK(o2.s->commit(1, send, "w1", 4));
+    CHECK(o2.s->next_session() == 3);
 
-    // compaction: a small threshold compacts often; the state, counters included, survives
+    // compaction: a small threshold compacts often; the state, counters and next id included, survives
     StoreOptions small;
     small.compact_bytes = 300;
     MemFs fs2;
     Opened c = open_store(fs2, small);
     CHECK_OK(c.st);
+    CHECK_OK(c.s->commit(1, made("ada")));
+    CHECK_OK(c.s->commit(2, made("bo")));
     for (std::uint64_t i = 1; i <= 40; ++i)
-        CHECK_OK(c.s->commit(i % 3 == 0 ? "bo" : "ada",
-                             std::vector<Change>{append("message " + std::to_string(i)), enqueue("q")}, "w", i));
+        CHECK_OK(c.s->commit(i % 3 == 0 ? 2 : 1, std::vector<Change>{append("message " + std::to_string(i)),
+                                                                     enqueue("q")}, "w", i));
     CHECK(c.s->journal().log_bytes() <= 300);
-    CHECK(c.s->journal().last_seq() == 40);
+    CHECK(c.s->journal().last_seq() == 42);
     std::string compacted = digest(*c.s, {"w"});
     c.s.reset();
     fs2.crash(fs2.plan_all(false));
     Opened c2 = open_store(fs2, small);
     CHECK_OK(c2.st);
     CHECK(digest(*c2.s, {"w"}) == compacted);
-    CHECK(c2.s->applied("w") == 40 && c2.s->tab("ada")->transcript.size() == 27);
+    CHECK(c2.s->applied("w") == 40 && c2.s->session(1)->transcript.size() == 27 && c2.s->next_session() == 3);
 
     // a record the store cannot read: refused at open, saying what to do
     MemFs fs3;
@@ -590,7 +624,7 @@ void test_store() {
         Journal j(fs3, "store");
         Journal::Recovery rec;
         CHECK_OK(j.open(rec));
-        CHECK_OK(j.append(span_of("\x02 from a newer server")));
+        CHECK_OK(j.append(span_of("\x09 from a newer server")));
         CHECK_OK(j.sync());
     }
     Opened bad = open_store(fs3);
@@ -602,17 +636,90 @@ void test_store() {
     Opened f = open_store(fs4);
     CHECK_OK(f.st);
     fs4.fail_at(2);  // the sync
-    CHECK(f.s->commit("ada", send, "w1", 1).code() == Status::Code::Failed);
-    CHECK(f.s->failed() && f.s->tab("ada") == nullptr && f.s->applied("w1") == 0);
+    CHECK(f.s->commit(1, made("ada", send), "w1", 1).code() == Status::Code::Failed);
+    CHECK(f.s->failed() && f.s->session(1) == nullptr && f.s->applied("w1") == 0 && f.s->next_session() == 1);
     fs4.crash(fs4.plan_all(true));
-    Status later = f.s->commit("ada", send, "w1", 1);
+    Status later = f.s->commit(1, made("ada", send), "w1", 1);
     CHECK(later.code() == Status::Code::Failed && later.message().find("restart the server") != std::string::npos);
 }
 
+// Ids are never reused: the next id is durable, across a crash, a compaction and a reopen, and a snapshot that names
+// an id at or past its next id, or a next id of 0, is not one this store writes.
+void test_ids() {
+    StoreOptions small;
+    small.compact_bytes = 150;
+    MemFs fs;
+    {
+        Opened o = open_store(fs, small);
+        CHECK_OK(o.st);
+        for (std::uint64_t id = 1; id <= 3; ++id) {
+            CHECK_OK(o.s->commit(id, made(id == 2 ? "bo" : "ada")));   // two sessions with ada
+        }
+        for (int i = 0; i < 10; ++i) {
+            CHECK_OK(o.s->commit(3, std::vector<Change>{append("filler " + std::to_string(i))}));
+        }
+        CHECK(o.s->journal().log_bytes() <= 150);
+        CHECK(o.s->sessions().size() == 3 && o.s->next_session() == 4);
+        CHECK(o.s->session(1)->info.friend_name == "ada" && o.s->session(3)->info.friend_name == "ada");
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs, small);
+        CHECK_OK(o.st);
+        CHECK(o.s->next_session() == 4);
+        // an info to a held session replaces what it is, and makes no new session
+        CHECK_OK(o.s->commit(3, made("cy")));
+        CHECK(o.s->session(3)->info.friend_name == "cy" && o.s->next_session() == 4);
+        CHECK_OK(o.s->commit(4, made("dee")));
+        CHECK(o.s->next_session() == 5);
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs, small);
+        CHECK_OK(o.st);
+        CHECK(o.s->next_session() == 5 && o.s->session(4)->info.friend_name == "dee");
+    }
+    // snapshots this store never writes
+    auto snapshot_with = [](std::uint64_t next, std::uint64_t id) {
+        Writer w;
+        w.u8(3);
+        w.u64(next);
+        w.u32(1);
+        w.u64(id);
+        for (int i = 0; i < 5; ++i) {
+            w.str("x");
+        }
+        w.u32(0);
+        w.u32(0);
+        w.u64(1);
+        w.u64(0);
+        w.str("");
+        w.u32(0);
+        w.u32(0);
+        return w.out();
+    };
+    for (auto [next, id] : std::vector<std::pair<std::uint64_t, std::uint64_t>>{{0, 1}, {2, 2}, {2, 0}, {3, 1}}) {
+        MemFs b;
+        {
+            Opened first = open_store(b);
+            CHECK_OK(first.st);
+            CHECK_OK(first.s->commit(1, made("ada")));
+        }
+        {
+            Journal j(b, "store");
+            Journal::Recovery rec;
+            CHECK_OK(j.open(rec));
+            CHECK_OK(j.compact(snapshot_with(next, id)));
+        }
+        Opened o = open_store(b);
+        CHECK((o.st.is_ok()) == (next == 3 && id == 1));
+    }
+}
+
 void test_store_crash() {
-    // A scenario of sends, queues, refusals as counter-only steps and two windows, long enough to compact. Each
-    // step's digest is recorded on a run without crashes; after a crash at any point the store must show the digest
-    // of some step at or after the last one committed.
+    // A scenario of two sessions made, sends, queues, refusals as counter-only steps and two windows, long enough to
+    // compact. Each step's digest is recorded on a run without crashes; after a crash at any point the store must show
+    // the digest of some step at or after the last one committed.
     StoreOptions options;
     options.compact_bytes = 250;
     std::vector<std::string> clients = {"w1", "w2"};
@@ -627,21 +734,31 @@ void test_store_crash() {
         Store& s = *o.s;
         if (reference)
             digests.push_back(digest(s, clients));
+        for (std::uint64_t id = 1; id <= 2; ++id) {
+            if (!s.commit(id, made(id == 1 ? "ada" : "bo")).is_ok()) {
+                return;
+            }
+            if (reference) {
+                digests.push_back(digest(s, clients));
+            }
+            ++acked;
+        }
         std::uint64_t num[2] = {0, 0};
         for (int i = 0; i < 14; ++i) {
             std::size_t w = std::size_t(i % 3 == 2);
             std::vector<Change> ch;
-            std::string tab = i % 2 == 0 ? "ada" : "bo";
+            std::uint64_t id = i % 2 == 0 ? 1 : 2;
             if (i % 5 == 4) {
-                tab.clear();  // refused by the server's limits: only the counter moves
+                id = 0;  // refused by the server's limits: only the counter moves
             } else if (i % 4 == 3) {
                 ch.push_back(enqueue("q" + std::to_string(i)));
             } else {
                 ch.push_back(append("p" + std::to_string(i), 0));
                 ch.push_back(append("(received)", 1));
             }
-            if (!s.commit(tab, ch, clients[w], ++num[w]).is_ok())
+            if (!s.commit(id, ch, clients[w], ++num[w]).is_ok()) {
                 return;
+            }
             if (reference)
                 digests.push_back(digest(s, clients));
             ++acked;
@@ -651,7 +768,7 @@ void test_store_crash() {
         MemFs ref;
         scenario(ref);
         reference = false;
-        CHECK(acked == 14 && digests.size() == 15);
+        CHECK(acked == 16 && digests.size() == 17);
     }
     std::uint64_t taken = at_every_point(MemFs(), scenario, [&](MemFs& fs, std::uint64_t) {
         Opened o = open_store(fs, options);
@@ -677,17 +794,17 @@ Change setDriver(std::uint64_t next, std::uint64_t open, const std::string& sess
     return c;
 }
 
-// A tab's driver state: replaced whole in the same step as the entries beside it, durable across a crash and across
-// compaction, and absent (the defaults) from a snapshot written before drivers.
+// A session's driver state: replaced whole in the same step as the entries beside it, durable across a crash and
+// across compaction.
 void test_driver() {
     MemFs fs;
     Opened o = open_store(fs);
     CHECK_OK(o.st);
     // a send: the prompt, and the turn it was written as, in one step with the window's counter
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{append("hello", 0), setDriver(2, 1, "", {})}, "w1", 1));
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{append("hi back", 1), setDriver(2, 0, "s-1", {"next"})}));
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{setDriver(3, 2, "s-1", {"a", "b"}), setDriver(3, 2, "s-2", {})}));
-    CHECK(texts(o.s->tab("ada")) == "[0:hello][1:hi back]||turn 3 open 2 session s-2");
+    CHECK_OK(o.s->commit(1, made("ada", {append("hello", 0), setDriver(2, 1, "", {})}), "w1", 1));
+    CHECK_OK(o.s->commit(1, std::vector<Change>{append("hi back", 1), setDriver(2, 0, "s-1", {"next"})}));
+    CHECK_OK(o.s->commit(1, std::vector<Change>{setDriver(3, 2, "s-1", {"a", "b"}), setDriver(3, 2, "s-2", {})}));
+    CHECK(texts(o.s->session(1)) == "[0:hello][1:hi back]||turn 3 open 2 session s-2");
     const std::string before = digest(*o.s, {"w1"});
     o.s.reset();
     fs.crash(fs.plan_all(false));
@@ -701,9 +818,10 @@ void test_driver() {
     MemFs fs2;
     Opened c = open_store(fs2, small);
     CHECK_OK(c.st);
+    CHECK_OK(c.s->commit(1, made("ada")));
     for (std::uint64_t i = 1; i <= 20; ++i)
-        CHECK_OK(c.s->commit("ada", std::vector<Change>{append("m" + std::to_string(i)),
-                                                         setDriver(i + 1, i, "s-" + std::to_string(i), {"w"})}));
+        CHECK_OK(c.s->commit(1, std::vector<Change>{append("m" + std::to_string(i)),
+                                                    setDriver(i + 1, i, "s-" + std::to_string(i), {"w"})}));
     CHECK(c.s->journal().log_bytes() <= 200);
     const std::string compacted = digest(*c.s, {});
     c.s.reset();
@@ -711,41 +829,181 @@ void test_driver() {
     Opened c2 = open_store(fs2, small);
     CHECK_OK(c2.st);
     CHECK(digest(*c2.s, {}) == compacted);
-    CHECK(c2.s->tab("ada")->driver == (Driver{21, 20, "s-20", {"w"}}));
+    CHECK(c2.s->session(1)->driver == (Driver{21, 20, "s-20", {"w"}}));
+}
 
-    // a snapshot of format 1 (before drivers): read, every tab's driver at its start
-    MemFs fs3;
-    {
-        Opened first = open_store(fs3);
-        CHECK_OK(first.st);
-        CHECK_OK(first.s->commit("ada", std::vector<Change>{append("old")}, "w1", 1));
-    }
-    {
-        Writer w;
-        w.u8(1);
-        w.u32(1);
-        w.str("ada");
-        w.u32(1);
+// ---- the older formats, keyed by friend tab ----
+
+void put_legacy_tab(Writer& w, const std::string& name, const std::vector<std::string>& entries,
+                    const std::vector<std::string>& queue, bool driver) {
+    w.str(name);
+    w.u32(std::uint32_t(entries.size()));
+    for (const std::string& e : entries) {
         w.u8(0);
         w.u8(1);
-        w.str("old");
-        w.u32(1);
-        w.str("queued");
-        w.u32(1);
-        w.str("w1");
-        w.u64(1);
-        Journal j(fs3, "store");
+        w.str(e);
+    }
+    w.u32(std::uint32_t(queue.size()));
+    for (const std::string& q : queue) {
+        w.str(q);
+    }
+    if (driver) {
+        w.u64(4);
+        w.u64(0);
+        w.str("s-" + name);
+        w.u32(0);
+    }
+}
+
+// A record of format 1: its tab by name, then the changes (appends of person entries, or enqueues), the client and
+// its counter.
+Bytes legacy_record(const std::string& tab, const std::vector<std::string>& appends,
+                    const std::vector<std::string>& enqueues, const std::string& client, std::uint64_t num) {
+    Writer w;
+    w.u8(1);
+    w.str(tab);
+    w.u32(std::uint32_t(appends.size() + enqueues.size()));
+    for (const std::string& a : appends) {
+        w.u8(1);
+        w.u8(0);
+        w.u8(1);
+        w.str(a);
+    }
+    for (const std::string& e : enqueues) {
+        w.u8(2);
+        w.str(e);
+    }
+    w.str(client);
+    w.u64(num);
+    return w.out();
+}
+
+// A store as an older server left it: a snapshot of `snapshot` (written over a first step, which it stands for) and
+// the records after it.
+MemFs legacy_store(const Bytes& snapshot, const std::vector<Bytes>& records) {
+    MemFs fs;
+    {
+        Opened first = open_store(fs);
+        CHECK_OK(first.st);
+        CHECK_OK(first.s->commit(1, made("old")));
+    }
+    Journal j(fs, "store");
+    Journal::Recovery rec;
+    CHECK_OK(j.open(rec));
+    if (!snapshot.empty()) {
+        CHECK_OK(j.compact(snapshot));
+    }
+    for (const Bytes& r : records) {
+        CHECK_OK(j.append(r));
+    }
+    CHECK_OK(j.sync());
+    return fs;
+}
+
+// A friend-tab store opens as sessions: each tab a session with its friend and the legacy harness, transcript, queue
+// and driver intact; the snapshot's tabs get ids 1, 2, ... in name order, a tab a record names first the next id;
+// clients' counters kept. It is compacted into the sessions format at open, and reads the same from then on, with
+// nothing migrated again; the next id goes on from there.
+void test_migrate() {
+    Writer snap;
+    snap.u8(2);
+    snap.u32(2);
+    put_legacy_tab(snap, "ada", {"one", "two"}, {"queued"}, true);
+    put_legacy_tab(snap, "bo", {"hi"}, {}, true);
+    snap.u32(2);
+    snap.str("w1");
+    snap.u64(7);
+    snap.str("w2");
+    snap.u64(2);
+    MemFs fs = legacy_store(snap.out(), {legacy_record("bo", {"later"}, {}, "w1", 8),
+                                         legacy_record("cy", {"new"}, {"q"}, "w2", 3),
+                                         legacy_record("", {}, {}, "w1", 9),
+                                         legacy_record("ada", {"three"}, {}, "", 0)});
+    StoreOptions options;
+    options.legacy_harness = "claude";
+    std::string after;
+    {
+        Opened o = open_store(fs, options);
+        CHECK_OK(o.st);
+        CHECK(o.report.migrated == 3);
+        const Store& s = *o.s;
+        CHECK(s.sessions().size() == 3 && s.next_session() == 4);
+        CHECK(about(s.session(1)->info) == "ada/claude///" && about(s.session(2)->info) == "bo/claude///" &&
+              about(s.session(3)->info) == "cy/claude///");
+        CHECK(texts(s.session(1)) == "[0:one][0:two][0:three]|[queued]|turn 4 open 0 session s-ada");
+        CHECK(texts(s.session(2)) == "[0:hi][0:later]||turn 4 open 0 session s-bo");
+        CHECK(texts(s.session(3)) == "[0:new]|[q]");
+        CHECK(s.applied("w1") == 9 && s.applied("w2") == 3);
+        // compacted at open: the snapshot is of this format, the log empty
+        CHECK(s.journal().log_bytes() == 0);
+        after = digest(s, {"w1", "w2"});
+    }
+    {
+        Journal j(fs, "store");
         Journal::Recovery rec;
         CHECK_OK(j.open(rec));
-        CHECK_OK(j.compact(w.out()));
+        CHECK(!rec.snapshot.empty() && rec.snapshot[0] == 3 && rec.records.empty());
     }
-    Opened old = open_store(fs3);
-    CHECK_OK(old.st);
-    CHECK(texts(old.s->tab("ada")) == "[0:old]|[queued]");
-    CHECK(old.s->tab("ada")->driver == Driver{});
-    CHECK(old.s->applied("w1") == 1);
-    CHECK_OK(old.s->commit("ada", std::vector<Change>{setDriver(2, 1, "")}, "w1", 2));
-    CHECK(texts(old.s->tab("ada")) == "[0:old]|[queued]|turn 2 open 1 session ");
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs, options);
+        CHECK_OK(o.st);
+        CHECK(o.report.migrated == 0);
+        CHECK(digest(*o.s, {"w1", "w2"}) == after);
+        CHECK_OK(o.s->commit(4, made("ada"), "w1", 10));     // a second session with ada: the next id
+        CHECK(o.s->next_session() == 5);
+    }
+
+    // records alone (no snapshot): each tab the next id in the order the records name them
+    MemFs logs = legacy_store(Bytes{}, {legacy_record("zed", {"z"}, {}, "w1", 1),
+                                        legacy_record("amy", {"a"}, {}, "w1", 2),
+                                        legacy_record("zed", {"z2"}, {}, "w1", 3)});
+    {
+        Opened o = open_store(logs);
+        CHECK_OK(o.st);
+        // the first step of legacy_store made session 1 in this format; the tabs follow it
+        CHECK(o.report.migrated == 2 && o.s->next_session() == 4);
+        CHECK(o.s->session(2)->info.friend_name == "zed" && texts(o.s->session(2)) == "[0:z][0:z2]|");
+        CHECK(o.s->session(3)->info.friend_name == "amy" && o.s->applied("w1") == 3);
+    }
+
+    // a snapshot of format 1 (before drivers): read, every session's driver at its start
+    Writer one;
+    one.u8(1);
+    one.u32(1);
+    put_legacy_tab(one, "ada", {"old"}, {"queued"}, false);
+    one.u32(1);
+    one.str("w1");
+    one.u64(1);
+    MemFs fs1 = legacy_store(one.out(), {});
+    {
+        Opened o = open_store(fs1);
+        CHECK_OK(o.st);
+        CHECK(o.report.migrated == 1);
+        CHECK(texts(o.s->session(1)) == "[0:old]|[queued]");
+        CHECK(o.s->session(1)->driver == Driver{});
+        CHECK(o.s->applied("w1") == 1);
+        CHECK_OK(o.s->commit(1, std::vector<Change>{setDriver(2, 1, "")}, "w1", 2));
+        CHECK(texts(o.s->session(1)) == "[0:old]|[queued]|turn 2 open 1 session ");
+    }
+
+    // a crash at any point of the migration's compaction leaves a store that opens to the same sessions
+    const MemFs unmigrated = legacy_store(one.out(), {});
+    auto opens = [](MemFs& f) { Opened o = open_store(f); };
+    std::uint64_t taken = at_every_point(unmigrated, opens, [&](MemFs& f, std::uint64_t) {
+        Opened o = open_store(f);
+        CHECK_OK(o.st);
+        if (o.st.is_ok()) {
+            CHECK(texts(o.s->session(1)) == "[0:old]|[queued]");
+            CHECK(o.s->next_session() == 2 && o.s->applied("w1") == 1);
+        }
+    });
+    CHECK(taken > 5);
+
+    // a format-1 record with changes but no tab is not one this store writes
+    MemFs nameless = legacy_store(Bytes{}, {legacy_record("", {"x"}, {}, "w1", 1)});
+    Opened bad = open_store(nameless);
+    CHECK(bad.st.code() == Status::Code::Failed);
 }
 
 Change dequeue() {
@@ -758,18 +1016,19 @@ void test_dequeue() {
     MemFs fs;
     Opened o = open_store(fs);
     CHECK_OK(o.st);
+    CHECK_OK(o.s->commit(1, made("ada")));
     // a dequeue from an empty queue, or one more than the step leaves, is refused and changes nothing
-    Status none = o.s->commit("ada", std::vector<Change>{dequeue()});
+    Status none = o.s->commit(1, std::vector<Change>{dequeue()});
     CHECK(none.code() == Status::Code::Refused);
     CHECK(none.message().find("a dequeue from a queue with nothing left in it") != std::string::npos);
-    CHECK(o.s->commit("ada", std::vector<Change>{enqueue("one"), dequeue(), dequeue()}, "w1", 1).code() ==
+    CHECK(o.s->commit(1, std::vector<Change>{enqueue("one"), dequeue(), dequeue()}, "w1", 1).code() ==
           Status::Code::Refused);
-    CHECK(o.s->tab("ada") == nullptr && o.s->applied("w1") == 0);
+    CHECK(texts(o.s->session(1)) == "|" && o.s->applied("w1") == 0);
     // queued, then taken at a turn's end with the person's entry, in one step
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{enqueue("one")}, "w1", 1));
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{enqueue("two")}, "w1", 2));
-    CHECK_OK(o.s->commit("ada", std::vector<Change>{dequeue(), append("one", 0)}));
-    CHECK(texts(o.s->tab("ada")) == "[0:one]|[two]");
+    CHECK_OK(o.s->commit(1, std::vector<Change>{enqueue("one")}, "w1", 1));
+    CHECK_OK(o.s->commit(1, std::vector<Change>{enqueue("two")}, "w1", 2));
+    CHECK_OK(o.s->commit(1, std::vector<Change>{dequeue(), append("one", 0)}));
+    CHECK(texts(o.s->session(1)) == "[0:one]|[two]");
     // replayed after a crash as it was: each taken once
     const std::string before = digest(*o.s, {"w1"});
     o.s.reset();
@@ -777,19 +1036,20 @@ void test_dequeue() {
     Opened o2 = open_store(fs);
     CHECK_OK(o2.st);
     CHECK(digest(*o2.s, {"w1"}) == before);
-    CHECK_OK(o2.s->commit("ada", std::vector<Change>{dequeue(), append("two", 0)}));
-    CHECK(texts(o2.s->tab("ada")) == "[0:one][0:two]|");
+    CHECK_OK(o2.s->commit(1, std::vector<Change>{dequeue(), append("two", 0)}));
+    CHECK(texts(o2.s->session(1)) == "[0:one][0:two]|");
     // and kept by compaction
     StoreOptions small;
     small.compact_bytes = 120;
     MemFs fs2;
     Opened c = open_store(fs2, small);
     CHECK_OK(c.st);
+    CHECK_OK(c.s->commit(1, made("ada")));
     for (int i = 0; i < 10; ++i) {
-        CHECK_OK(c.s->commit("ada", std::vector<Change>{enqueue("q" + std::to_string(i))}));
-        CHECK_OK(c.s->commit("ada", std::vector<Change>{dequeue(), append("q" + std::to_string(i), 0)}));
+        CHECK_OK(c.s->commit(1, std::vector<Change>{enqueue("q" + std::to_string(i))}));
+        CHECK_OK(c.s->commit(1, std::vector<Change>{dequeue(), append("q" + std::to_string(i), 0)}));
     }
-    CHECK(c.s->tab("ada")->queue.empty() && c.s->tab("ada")->transcript.size() == 10);
+    CHECK(c.s->session(1)->queue.empty() && c.s->session(1)->transcript.size() == 10);
     const std::string compacted = digest(*c.s, {});
     c.s.reset();
     fs2.crash(fs2.plan_all(false));
@@ -798,28 +1058,35 @@ void test_dequeue() {
     CHECK(digest(*c2.s, {}) == compacted);
 
     // a journaled dequeue from an empty queue is not one this store writes: the store does not open
-    MemFs fs3;
-    {
-        Opened first = open_store(fs3);
-        CHECK_OK(first.st);
+    for (int format = 1; format <= 2; ++format) {
+        MemFs fs3;
+        {
+            Opened first = open_store(fs3);
+            CHECK_OK(first.st);
+            CHECK_OK(first.s->commit(1, made("ada")));
+        }
+        {
+            Writer w;
+            w.u8(std::uint8_t(format));
+            if (format == 1) {
+                w.str("ada");
+            } else {
+                w.u64(1);
+            }
+            w.u32(1);
+            w.u8(4);
+            w.str("");
+            w.u64(0);
+            Journal j(fs3, "store");
+            Journal::Recovery rec;
+            CHECK_OK(j.open(rec));
+            CHECK_OK(j.append(w.out()));
+            CHECK_OK(j.sync());
+        }
+        Opened bad = open_store(fs3);
+        CHECK(bad.st.code() == Status::Code::Failed);
+        CHECK(bad.st.message().find("record") != std::string::npos);
     }
-    {
-        Writer w;
-        w.u8(1);
-        w.str("ada");
-        w.u32(1);
-        w.u8(4);
-        w.str("");
-        w.u64(0);
-        Journal j(fs3, "store");
-        Journal::Recovery rec;
-        CHECK_OK(j.open(rec));
-        CHECK_OK(j.append(w.out()));
-        CHECK_OK(j.sync());
-    }
-    Opened bad = open_store(fs3);
-    CHECK(bad.st.code() == Status::Code::Failed);
-    CHECK(bad.st.message().find("record") != std::string::npos);
 }
 
 struct Group {
@@ -834,7 +1101,9 @@ const Group kGroups[] = {
     {"journal_crash", test_journal_crash},
     {"store", test_store},
     {"store_crash", test_store_crash},
+    {"ids", test_ids},
     {"driver", test_driver},
+    {"migrate", test_migrate},
     {"dequeue", test_dequeue},
 };
 

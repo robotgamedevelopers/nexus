@@ -44,6 +44,14 @@ std::vector<Change> prompt(const std::string& text) {
     return {c};
 }
 
+// The step that makes session 1, with ada.
+std::vector<Change> made() {
+    Change c;
+    c.kind = Change::Kind::SetInfo;
+    c.info = Info{"ada", "claude", "", "", ""};
+    return {c};
+}
+
 void basic(Fs& fs) {
     std::unique_ptr<Store> s;
     OpenReport rep;
@@ -51,23 +59,24 @@ void basic(Fs& fs) {
     if (!s)
         return;
     CHECK(rep.fresh);
-    CHECK_OK(s->commit("ada", prompt("hello"), "w", 1));
+    CHECK_OK(s->commit(1, made()));
+    CHECK_OK(s->commit(1, prompt("hello"), "w", 1));
     Change q;
     q.kind = Change::Kind::Enqueue;
     q.prompt = "queued";
-    CHECK_OK(s->commit("ada", std::vector<Change>{q}, "w", 2));
+    CHECK_OK(s->commit(1, std::vector<Change>{q}, "w", 2));
     s.reset();
     CHECK_OK(Store::open(fs, "basic", {}, s, &rep));
     if (!s)
         return;
-    CHECK(!rep.fresh && rep.records == 2);
-    CHECK(s->applied("w") == 2);
-    const Tab* t = s->tab("ada");
+    CHECK(!rep.fresh && rep.records == 3);
+    CHECK(s->applied("w") == 2 && s->next_session() == 2);
+    const Session* t = s->session(1);
     CHECK(t != nullptr && t->transcript.size() == 1 && t->transcript[0].text == "hello" && t->queue.size() == 1);
 }
 
-// The child: opens the store and commits "m<i>" to tab ada as window w's action i, for i = 1, 2, ... forever, writing
-// i to the pipe after each commit returns Ok (what the server would then acknowledge).
+// The child: opens the store, makes session 1, and commits "m<i>" to it as window w's action i, for i = 1, 2, ...
+// forever, writing i to the pipe after each commit returns Ok (what the server would then acknowledge).
 [[noreturn]] void child(int fd) {
     std::unique_ptr<Fs> fs = make_posix_fs();
     std::unique_ptr<Store> s;
@@ -75,9 +84,13 @@ void basic(Fs& fs) {
     options.compact_bytes = 2000;  // compactions happen while it runs, so a kill can land in one
     if (!Store::open(*fs, "killed", options, s).is_ok())
         _exit(3);
+    if (!s->commit(1, made()).is_ok()) {
+        _exit(4);
+    }
     for (std::uint64_t i = 1;; ++i) {
-        if (!s->commit("ada", prompt("m" + std::to_string(i)), "w", i).is_ok())
+        if (!s->commit(1, prompt("m" + std::to_string(i)), "w", i).is_ok()) {
             _exit(4);
+        }
         if (write(fd, &i, sizeof i) != sizeof i)
             _exit(5);
     }
@@ -114,7 +127,7 @@ void kill_and_reopen() {
         if (!s)
             return;
         // every committed step is there, in order, from the start, and the counter agrees with the transcript
-        const Tab* t = s->tab("ada");
+        const Session* t = s->session(1);
         std::size_t n = t == nullptr ? 0 : t->transcript.size();
         CHECK(n >= acked);
         CHECK(s->applied("w") == n);

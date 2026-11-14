@@ -9,60 +9,110 @@
 namespace nexus::sync {
 
 const char* const kReceived = "(received)";
+const char* const kDefaultHarness = "claude";
 
-TabChange takeQueued() {
-    return TabChange{nullptr, {}, std::nullopt, true};
+SessionChange takeQueued() {
+    SessionChange c;
+    c.take = true;
+    return c;
 }
 
-const StoredTab* MemoryStore::find(const std::string& name) const {
-    auto it = tabs_.find(name);
-    return it == tabs_.end() ? nullptr : &it->second;
+SessionChange infoChange(SessionInfo info) {
+    SessionChange c;
+    c.info = std::move(info);
+    return c;
 }
 
-std::vector<std::string> MemoryStore::names() const {
-    std::vector<std::string> out;
-    for (const auto& [name, tab] : tabs_) {
-        out.push_back(name);
+bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std::vector<SessionChange>& changes,
+              std::string* why) {
+    auto refuse = [&](const std::string& what) {
+        if (why != nullptr) {
+            *why = what;
+        }
+        return false;
+    };
+    if (changes.empty()) {
+        return id == 0 ? true : refuse("a step with no change names session " + std::to_string(id));
+    }
+    if (id == 0) {
+        return refuse("a change names no session");
+    }
+    if (had == nullptr && id != next) {
+        return refuse("session " + std::to_string(id) + " is not held, and the next made is " + std::to_string(next));
+    }
+    if (had == nullptr && !changes.front().info) {
+        return refuse("session " + std::to_string(id) + " is not held, and the step does not make it");
+    }
+    // Every take must find a prompt in the queue at its point of the step.
+    std::size_t queued = had == nullptr ? 0 : had->queue.size();
+    for (const SessionChange& c : changes) {
+        if (c.take && queued == 0) {
+            return refuse("session " + std::to_string(id) + ": a take from a queue with nothing left in it");
+        }
+        if (c.take) {
+            --queued;
+        } else if (!c.driver && !c.entry && !c.info) {
+            ++queued;
+        }
+    }
+    return true;
+}
+
+namespace {
+
+void applyTo(StoredSession& s, const SessionChange& c) {
+    if (c.take) {
+        s.queue.erase(s.queue.begin());
+    } else if (c.info) {
+        s.info = *c.info;
+    } else if (c.driver) {
+        s.driver = *c.driver;
+    } else if (c.entry) {
+        s.transcript.push_back(c.entry);
+    } else {
+        s.queue.push_back(c.prompt);
+    }
+}
+
+} // namespace
+
+const StoredSession* MemoryStore::find(SessionId id) const {
+    auto it = sessions_.find(id);
+    return it == sessions_.end() ? nullptr : &it->second;
+}
+
+std::vector<SessionId> MemoryStore::ids() const {
+    std::vector<SessionId> out;
+    for (const auto& [id, s] : sessions_) {
+        out.push_back(id);
     }
     return out;
 }
 
-bool MemoryStore::commit(const std::string& name, const std::vector<TabChange>& changes, const std::string& client,
+bool MemoryStore::commit(SessionId id, const std::vector<SessionChange>& changes, const std::string& client,
                          std::uint64_t num, std::string* why) {
+    if (changes.empty() && client.empty()) {
+        if (why != nullptr) {
+            *why = "a step with no change and no client changes nothing";
+        }
+        return false;
+    }
     if (!client.empty() && num != applied(client) + 1) {
         if (why != nullptr) {
             *why = "client " + client + ": action " + std::to_string(num) + " after " + std::to_string(applied(client));
         }
         return false;
     }
-    // Every take must find a prompt in the queue at its point of the step, as the durable store requires.
-    const StoredTab* had = find(name);
-    std::size_t queued = had == nullptr ? 0 : had->queue.size();
-    for (const TabChange& c : changes) {
-        if (c.take && queued == 0) {
-            if (why != nullptr) {
-                *why = "tab " + name + ": a take from a queue with nothing left in it";
-            }
-            return false;
-        }
-        if (c.take) {
-            --queued;
-        } else if (!c.driver && !c.entry) {
-            ++queued;
-        }
+    if (!stepFits(id, find(id), next_, changes, why)) {
+        return false;
     }
     if (!changes.empty()) {
-        StoredTab& t = tabs_[name];
-        for (const TabChange& c : changes) {
-            if (c.take) {
-                t.queue.erase(t.queue.begin());
-            } else if (c.driver) {
-                t.driver = *c.driver;
-            } else if (c.entry) {
-                t.transcript.push_back(c.entry);
-            } else {
-                t.queue.push_back(c.prompt);
-            }
+        if (find(id) == nullptr) {
+            ++next_;
+        }
+        StoredSession& s = sessions_[id];
+        for (const SessionChange& c : changes) {
+            applyTo(s, c);
         }
     }
     if (!client.empty()) {
@@ -76,17 +126,17 @@ std::uint64_t MemoryStore::applied(const std::string& client) const {
     return it == applied_.end() ? 0 : it->second;
 }
 
-Hub::Hub(TabStore& store, Limits limits, Responder* responder)
+Hub::Hub(SessionStore& store, Limits limits, Responder* responder)
     : store_(store), limits_(limits), responder_(responder) {
-    for (const std::string& name : store_.names()) {
-        refresh(name);
+    for (SessionId id : store_.ids()) {
+        refresh(id);
     }
 }
 
 namespace {
 
 EntryRef entry(EntryKind kind, std::string text) {
-    return std::make_shared<const TabEntry>(TabEntry{kind, std::move(text), true});
+    return std::make_shared<const SessionEntry>(SessionEntry{kind, std::move(text), true});
 }
 
 std::string kib(std::size_t bytes) {
@@ -97,63 +147,117 @@ const char* verb(ActionKind kind) {
     switch (kind) {
         case ActionKind::Send: return "sent";
         case ActionKind::Queue: return "queued";
-        case ActionKind::Stop: return "applied";
+        default: return "applied";
     }
-    return "applied";
+}
+
+const char* settingName(ActionKind kind) {
+    switch (kind) {
+        case ActionKind::SetAccount: return "account";
+        case ActionKind::SetModel: return "model";
+        default: return "effort";
+    }
+}
+
+bool printable(const std::string& text) {
+    return std::all_of(text.begin(), text.end(), [](char c) { return c >= 0x20 && c <= 0x7e; });
+}
+
+bool isSet(ActionKind kind) {
+    return kind == ActionKind::SetAccount || kind == ActionKind::SetModel || kind == ActionKind::SetEffort;
 }
 
 } // namespace
 
-bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+// An action that changes no session: the client's counter moves in a step of its own, so it is never taken again.
+bool Hub::count(const Action& action, std::string* why, const std::string& client) {
+    if (client.empty()) {
+        return true;
+    }
     std::string failed;
-    auto commit = [&](const std::string& name, const std::vector<TabChange>& changes) {
+    if (!store_.commit(0, {}, client, action.num, &failed)) {
+        if (why != nullptr) {
+            *why = "action " + std::to_string(action.num) + " was not counted: " + failed;
+        }
+        return false;
+    }
+    return true;
+}
+
+// Refused, changing no session, and counted.
+bool Hub::counted(const Action& action, const std::string& refused, std::string* why, const std::string& client) {
+    if (count(action, why, client) && why != nullptr) {
+        *why = refused;
+    }
+    return false;
+}
+
+bool Hub::apply(const Action& action, std::string* why, const std::string& client) {
+    if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure) {
+        if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
+            return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
+                " bytes", why, client);
+        }
+        if (!action.text.empty()) {
+            return counted(action, "a create or an ensure carries no text", why, client);
+        }
+        if (action.kind == ActionKind::Ensure) {
+            for (SessionId id : store_.ids()) {
+                if (store_.find(id)->info.friendName == action.friendName) {
+                    // The friend has a session: nothing to make, and nothing refused.
+                    return count(action, why, client);
+                }
+            }
+        }
+        SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
+                                                 : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
+        info.friendName = action.friendName;
+        if (action.kind == ActionKind::Create && action.session != 0) {
+            const StoredSession* from = store_.find(action.session);
+            if (from == nullptr) {
+                return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
+            }
+            info.account = from->info.account;
+            info.model = from->info.model;
+            info.effort = from->info.effort;
+        }
+        return make(action, info, why, client);
+    }
+    const StoredSession* session = store_.find(action.session);
+    if (session == nullptr) {
+        // Nothing runs in a session the server does not hold, and no session is made for it: refused, and counted.
+        return counted(action, "no session " + std::to_string(action.session), why, client);
+    }
+    if (isSet(action.kind)) {
+        return set(action, why, client);
+    }
+    std::string failed;
+    auto commit = [&](const std::vector<SessionChange>& changes) {
         if (changes.empty() && client.empty()) {
             return true;    // nothing to change and no counter to move
         }
-        if (store_.commit(name, changes, client, action.num, &failed)) {
+        if (store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {
             return true;
         }
         if (why != nullptr) {
-            *why = "tab " + action.tab + ": the action was not applied: " + failed;
+            *why = "session " + std::to_string(action.session) + ": the action was not applied: " + failed;
         }
         return false;
     };
-    const StoredTab* tab = store_.find(action.tab);
-    if (action.kind == ActionKind::Stop && tab == nullptr) {
-        // Nothing runs in a tab the server does not hold, and a stop makes no tab: refused, and counted.
-        if (!commit(std::string(), {})) {
-            return false;
-        }
-        if (why != nullptr) {
-            *why = "no tab " + action.tab + ": nothing to stop";
-        }
-        return false;
-    }
-    if (tab == nullptr && store_.size() >= limits_.tabs) {
-        // Refused, and counted: the client's counter moves, so the action is never taken again.
-        if (!commit(std::string(), {})) {
-            return false;
-        }
-        if (why != nullptr) {
-            *why = "no tab " + action.tab + " made: the server holds " + std::to_string(limits_.tabs) +
-                " tabs, its limit";
-        }
-        return false;
-    }
     std::string refused;
     if (action.kind == ActionKind::Stop) {
         if (!action.text.empty()) {
-            refused = "A stop that carried text was not applied: a stop carries none.";
+            return counted(action, "a stop that carried text was not applied: a stop carries none", why, client);
         }
     } else if (blankText(action.text)) {
         refused = std::string("An empty prompt was not ") + verb(action.kind) + ".";
     } else if (action.text.size() > limits_.text) {
         refused = "A prompt of " + std::to_string(action.text.size()) + " bytes was not " + verb(action.kind) +
             ": the limit is " + kib(limits_.text) + ".";
-    } else if (action.kind == ActionKind::Queue && tab != nullptr) {
-        const std::size_t bytes = std::accumulate(tab->queue.begin(), tab->queue.end(), std::size_t(0),
+    } else if (action.kind == ActionKind::Queue) {
+        const std::size_t bytes = std::accumulate(session->queue.begin(), session->queue.end(), std::size_t(0),
             [](std::size_t n, const std::string& q) { return n + q.size(); });
-        if (tab->queue.size() >= limits_.queue) {
+        if (session->queue.size() >= limits_.queue) {
             refused = "A prompt was not queued: the queue holds " + std::to_string(limits_.queue) +
                 " prompts, its limit.";
         } else if (bytes + action.text.size() > limits_.queueBytes) {
@@ -161,57 +265,126 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         }
     }
     if (!refused.empty()) {
-        if (!commit(action.tab, {TabChange{entry(EntryKind::Notice, refused), {}}})) {
+        if (!commit({SessionChange{entry(EntryKind::Notice, refused), {}}})) {
             return false;
         }
-        refresh(action.tab);
+        refresh(action.session);
         if (why != nullptr) {
-            *why = "tab " + action.tab + ": " + refused;
+            *why = "session " + std::to_string(action.session) + ": " + refused;
         }
         return false;
     }
-    std::vector<TabChange> changes;
+    std::vector<SessionChange> changes;
     if (action.kind == ActionKind::Send && responder_ != nullptr) {
-        changes = responder_->send(action.tab, action.text);
+        changes = responder_->send(action.session, action.text);
     } else if (action.kind == ActionKind::Send) {
-        changes.push_back(TabChange{entry(EntryKind::Person, action.text), {}});
-        changes.push_back(TabChange{entry(EntryKind::Friend, kReceived), {}});
+        changes.push_back(SessionChange{entry(EntryKind::Person, action.text), {}});
+        changes.push_back(SessionChange{entry(EntryKind::Friend, kReceived), {}});
     } else if (action.kind == ActionKind::Queue && responder_ != nullptr) {
-        changes = responder_->queue(action.tab, action.text);
+        changes = responder_->queue(action.session, action.text);
     } else if (action.kind == ActionKind::Queue) {
-        changes.push_back(TabChange{nullptr, action.text});
+        changes.push_back(SessionChange{nullptr, action.text});
     } else if (responder_ != nullptr) {
-        changes = responder_->stop(action.tab);
+        changes = responder_->stop(action.session);
     }
-    const bool committed = commit(action.tab, changes);
+    const bool committed = commit(changes);
     if (responder_ != nullptr) {
-        responder_->sent(action.tab, committed);
+        responder_->sent(action.session, committed);
     }
     if (!committed) {
         return false;
     }
-    if (store_.find(action.tab) != nullptr) {
-        refresh(action.tab);
+    refresh(action.session);
+    return true;
+}
+
+// A new session, with the next id, in one step with the client's counter.
+bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client) {
+    if (store_.size() >= limits_.sessions) {
+        return counted(action, "no session made for " + action.friendName + ": the server holds " +
+            std::to_string(limits_.sessions) + " sessions, its limit", why, client);
+    }
+    const SessionId id = store_.nextId();
+    std::string failed;
+    if (!store_.commit(id, {infoChange(info)}, client, action.num, &failed)) {
+        if (why != nullptr) {
+            *why = "no session made for " + action.friendName + ": " + failed;
+        }
+        return false;
+    }
+    refresh(id);
+    return true;
+}
+
+// A session's account, model or effort, from its next turn on.
+bool Hub::set(const Action& action, std::string* why, const std::string& client) {
+    const StoredSession* session = store_.find(action.session);
+    std::string refused;
+    if (action.text.size() > limits_.setting || !printable(action.text)) {
+        refused = std::string("The ") + settingName(action.kind) + " was not changed: a setting is at most " +
+            std::to_string(limits_.setting) + " printable characters.";
+    }
+    SessionInfo info = session->info;
+    if (action.kind == ActionKind::SetAccount) {
+        info.account = action.text;
+    } else if (action.kind == ActionKind::SetModel) {
+        info.model = action.text;
+    } else {
+        info.effort = action.text;
+    }
+    std::vector<SessionChange> changes;
+    if (!refused.empty()) {
+        changes.push_back(SessionChange{entry(EntryKind::Notice, refused), {}});
+    } else if (!(info == session->info)) {
+        changes.push_back(infoChange(info));
+    }
+    std::string failed;
+    if ((!changes.empty() || !client.empty()) &&
+            !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {
+        if (why != nullptr) {
+            *why = "session " + std::to_string(action.session) + ": the action was not applied: " + failed;
+        }
+        return false;
+    }
+    if (!refused.empty()) {
+        refresh(action.session);
+        if (why != nullptr) {
+            *why = "session " + std::to_string(action.session) + ": " + refused;
+        }
+        return false;
+    }
+    if (changes.empty()) {
+        return true;    // already so
+    }
+    refresh(action.session);
+    if (responder_ != nullptr) {
+        responder_->configured(action.session, info);
     }
     return true;
 }
 
-bool Hub::commit(const std::string& tab, const std::vector<TabChange>& changes, std::string* why) {
+bool Hub::commit(SessionId id, const std::vector<SessionChange>& changes, std::string* why) {
     if (changes.empty()) {
         return true;
     }
-    if (!store_.commit(tab, changes, std::string(), 0, why)) {
+    if (store_.find(id) == nullptr) {
+        if (why != nullptr) {
+            *why = "no session " + std::to_string(id);
+        }
         return false;
     }
-    refresh(tab);
+    if (!store_.commit(id, changes, std::string(), 0, why)) {
+        return false;
+    }
+    refresh(id);
     return true;
 }
 
-bool Hub::setOpen(const std::string& tab, const std::string& text) {
-    if (store_.find(tab) == nullptr || text.size() > limits_.text) {
+bool Hub::setOpen(SessionId id, const std::string& text) {
+    if (store_.find(id) == nullptr || text.size() > limits_.text) {
         return false;
     }
-    auto it = open_.find(tab);
+    auto it = open_.find(id);
     if (text.empty()) {
         if (it == open_.end()) {
             return false;
@@ -220,27 +393,27 @@ bool Hub::setOpen(const std::string& tab, const std::string& text) {
     } else if (it != open_.end() && it->second->text == text) {
         return false;
     } else {
-        open_[tab] = std::make_shared<const TabEntry>(TabEntry{EntryKind::Friend, text, false});
+        open_[id] = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Friend, text, false});
     }
-    refresh(tab);
+    refresh(id);
     return true;
 }
 
-// The tab's new tail, in place of its old one; every other tab is shared with the state before.
-void Hub::refresh(const std::string& name) {
-    const StoredTab* stored = store_.find(name);
-    auto open = open_.find(name);
-    auto fresh = std::make_shared<const TabView>(tailOf(name, stored->transcript, stored->queue, limits_.tail,
-        open == open_.end() ? nullptr : open->second));
-    std::vector<TabRef> tabs = state_.tabs();
-    auto it = std::lower_bound(tabs.begin(), tabs.end(), name,
-        [](const TabRef& t, const std::string& n) { return t->name < n; });
-    if (it != tabs.end() && (*it)->name == name) {
+// The session's new tail, in place of its old one; every other session is shared with the state before.
+void Hub::refresh(SessionId id) {
+    const StoredSession* stored = store_.find(id);
+    auto open = open_.find(id);
+    auto fresh = std::make_shared<const SessionView>(tailOf(id, stored->info, stored->transcript, stored->queue,
+        limits_.tail, open == open_.end() ? nullptr : open->second));
+    std::vector<SessionRef> sessions = state_.sessions();
+    auto it = std::lower_bound(sessions.begin(), sessions.end(), id,
+        [](const SessionRef& s, SessionId n) { return s->id < n; });
+    if (it != sessions.end() && (*it)->id == id) {
         *it = fresh;
     } else {
-        tabs.insert(it, fresh);
+        sessions.insert(it, fresh);
     }
-    state_ = Tabs(std::move(tabs));
+    state_ = Sessions(std::move(sessions));
 }
 
 } // namespace nexus::sync

@@ -33,7 +33,7 @@ namespace nexus::server {
 
 namespace {
 
-constexpr std::size_t kMaxSessions = 64;
+constexpr std::size_t kMaxLinks = 64;      // windows' links (mosh sessions) at once
 constexpr int kControlTimeoutMs = 2000;     // for one request or reply on the control socket
 constexpr int kStartTimeoutMs = 5000;       // for a server `new` started to answer
 constexpr int kMaxWaitMs = 1000;
@@ -219,7 +219,8 @@ bool parseNew(const std::string& request, Client* out) {
     return true;
 }
 
-struct Session {
+// One window's link: a mosh session, with the client it named. (The sessions with friends are the hub's.)
+struct Link {
     std::uint64_t id;
     std::string client;     // empty: a session that did not name its client
     std::unique_ptr<link::ServerSession> link;
@@ -240,7 +241,7 @@ private:
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
-    std::vector<Session> sessions_;
+    std::vector<Link> links_;
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
     bool stopping_ = false;
@@ -254,10 +255,15 @@ bool Server::openStore(std::string* why) {
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     const store::OpenReport& r = store_.report();
-    std::fprintf(stderr, "nexus-server: store %s: %s, %zu tab%s, %llu record%s replayed, %llu bytes of torn tail cut\n",
-        paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
+    std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
+        "cut\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
         static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
         static_cast<unsigned long long>(r.cut_bytes));
+    if (r.migrated > 0) {
+        std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
+            "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
+            r.migrated == 1 ? "" : "s", r.migrated == 1 ? "" : "s");
+    }
     if (!drivers_->start(nowMs())) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;
@@ -319,11 +325,11 @@ void Server::control(int fd) {
     }
     // A client's new session ends its earlier one: the window has left it.
     if (!client.id.empty()) {
-        sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(),
-            [&](const Session& s) { return s.client == client.id; }), sessions_.end());
+        links_.erase(std::remove_if(links_.begin(), links_.end(),
+            [&](const Link& s) { return s.client == client.id; }), links_.end());
     }
-    if (sessions_.size() >= kMaxSessions) {
-        writeAll(fd, "ERROR the server holds " + std::to_string(kMaxSessions) + " sessions, its limit\n");
+    if (links_.size() >= kMaxLinks) {
+        writeAll(fd, "ERROR the server holds " + std::to_string(kMaxLinks) + " links, its limit\n");
         return;
     }
     const std::uint64_t applied = client.id.empty() ? 0 : store_.applied(client.id);
@@ -335,18 +341,18 @@ void Server::control(int fd) {
         return;
     }
     try {
-        Session s{nextId_++, client.id,
+        Link s{nextId_++, client.id,
             std::make_unique<link::ServerSession>(hub_->state(), applied, client.next)};
         // The key goes on this one line to `nexus-server new`, and nowhere else.
         if (!writeAll(fd, link::connectLine(s.link->port(), s.link->key()) + "\n")) {
-            std::fprintf(stderr, "nexus-server: session %llu: the CONNECT line could not be written; dropped\n",
+            std::fprintf(stderr, "nexus-server: link %llu: the CONNECT line could not be written; dropped\n",
                 static_cast<unsigned long long>(s.id));
             return;
         }
-        std::fprintf(stderr, "nexus-server: session %llu on UDP port %s%s%s, from action %llu (applied %llu)\n",
+        std::fprintf(stderr, "nexus-server: link %llu on UDP port %s%s%s, from action %llu (applied %llu)\n",
             static_cast<unsigned long long>(s.id), s.link->port().c_str(), s.client.empty() ? "" : ", client ",
             s.client.c_str(), static_cast<unsigned long long>(client.next), static_cast<unsigned long long>(applied));
-        sessions_.push_back(std::move(s));
+        links_.push_back(std::move(s));
     } catch (const std::exception& e) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
         std::fprintf(stderr, "nexus-server: %s\n", e.what());
@@ -380,16 +386,16 @@ int Server::run() {
     int status = 0;
     while (!stopping_ && !gStop) {
         link::freezeClock();
-        for (Session& s : sessions_) {
+        for (Link& s : links_) {
             if (!s.link->tick(&why))
-                std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(s.id),
+                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
                     why.c_str());
         }
-        for (auto it = sessions_.begin(); it != sessions_.end();) {
+        for (auto it = links_.begin(); it != links_.end();) {
             if (it->link->ended()) {
-                std::fprintf(stderr, "nexus-server: session %llu ended by its client after %llu actions\n",
+                std::fprintf(stderr, "nexus-server: link %llu ended by its client after %llu actions\n",
                     static_cast<unsigned long long>(it->id), static_cast<unsigned long long>(it->link->applied()));
-                it = sessions_.erase(it);
+                it = links_.erase(it);
             } else {
                 ++it;
             }
@@ -397,9 +403,9 @@ int Server::run() {
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
         int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
-        for (std::size_t i = 0; i < sessions_.size(); ++i) {
-            wait = std::min(wait, std::max(0, sessions_[i].link->waitMs()));
-            for (int fd : sessions_[i].link->fds()) {
+        for (std::size_t i = 0; i < links_.size(); ++i) {
+            wait = std::min(wait, std::max(0, links_[i].link->waitMs()));
+            for (int fd : links_[i].link->fds()) {
                 fds.push_back(pollfd{fd, POLLIN, 0});
                 owner.push_back(i);
             }
@@ -422,9 +428,9 @@ int Server::run() {
         for (std::size_t k = 1; k < linkFds; ++k) {
             if (!(fds[k].revents & POLLIN))
                 continue;
-            Session& s = sessions_[owner[k]];
+            Link& s = links_[owner[k]];
             if (!s.link->receive(&why)) {
-                std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(s.id),
+                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
                     why.c_str());
                 continue;
             }
@@ -435,14 +441,14 @@ int Server::run() {
                 hub_->apply(a, &refused, s.client);
                 changed = true;
                 if (!refused.empty())
-                    std::fprintf(stderr, "nexus-server: session %llu, action %llu: %s\n",
+                    std::fprintf(stderr, "nexus-server: link %llu, action %llu: %s\n",
                         static_cast<unsigned long long>(s.id), static_cast<unsigned long long>(a.num),
                         refused.c_str());
                 if (hub_->failed())
                     break;
             }
             if (!problem.empty())
-                std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(s.id),
+                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
                     problem.c_str());
             if (hub_->failed())
                 break;
@@ -455,10 +461,11 @@ int Server::run() {
             break;
         }
         if (changed) {
-            for (Session& s : sessions_)
+            for (Link& s : links_) {
                 s.link->setState(hub_->state());
+            }
         }
-        // The control socket last: a new session may end an earlier one, and the sessions' fds above are by index.
+        // The control socket last: a new link may end an earlier one, and the links' fds above are by index.
         if (fds[0].revents & POLLIN) {
             const int fd = accept(listen_, nullptr, nullptr);
             if (fd >= 0) {
@@ -476,8 +483,8 @@ int Server::run() {
             "the server next starts\n");
         status = 1;
     }
-    std::fprintf(stderr, "nexus-server: stopped, %zu session%s open\n", sessions_.size(),
-        sessions_.size() == 1 ? "" : "s");
+    std::fprintf(stderr, "nexus-server: stopped, %zu link%s open\n", links_.size(),
+        links_.size() == 1 ? "" : "s");
     return status;
 }
 

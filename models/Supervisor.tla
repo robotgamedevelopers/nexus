@@ -1,7 +1,7 @@
 ----------------------------- MODULE Supervisor -----------------------------
 (***************************************************************************)
 (* The driver supervisor (src/server/supervisor.h): what nexus-server does *)
-(* with one friend tab's driver process. It starts a driver when a prompt  *)
+(* with one session's driver process. It starts a driver when a prompt    *)
 (* waits and none is alive, writes each prompt to it once as the next turn *)
 (* number, gathers its replies into the tab, stops a turn, and ends a      *)
 (* driver that breaks the protocol, goes silent where a deadline applies,  *)
@@ -42,6 +42,21 @@
 (* prompt leaves the waiting prompts, never written). One that finds the   *)
 (* turn already stopping, or nothing running, changes nothing: no stop is  *)
 (* kept for a later turn.                                                  *)
+(*                                                                         *)
+(* The session's model and effort (its setting, a record of the two; ""   *)
+(* is the harness's default) and its account are the person's to change   *)
+(* at any time (SetSetting, SetAccount). A driver starts on the harness's  *)
+(* defaults; told is what it has been told since. Before a send, a         *)
+(* settings line gives it each field where the session's differs, which it *)
+(* applies from that send on (docs/driver-protocol.md): so a change        *)
+(* applies from the next turn and never to a turn in progress. A settings  *)
+(* line cannot put a field back to the default (an empty field stays as it *)
+(* is), so a driver told a field the session has since cleared is ended,   *)
+(* as is one whose account is no longer the session's: once no turn is     *)
+(* open, quietly, never counted as a failed start, and the next prompt     *)
+(* starts one on the defaults under the session's account. The ghost drv   *)
+(* is the account the driver alive was started under; each send written   *)
+(* records the setting the driver runs it with.                            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -50,16 +65,24 @@ CONSTANTS
     MaxWaiting,       \* how many prompts may wait (the hub's queue limit)
     MaxFailedStarts,  \* consecutive failed starts before the supervisor stops starting drivers
     MaxRestarts,      \* how many times the server restarts in a behaviour
-    Sessions          \* the session ids a driver may report
+    Sessions,         \* the harness session ids a driver may report
+    Models,           \* the models the person may choose, besides "" (the harness's default)
+    Efforts,          \* the efforts the person may choose, besides ""
+    Accounts,         \* the accounts the person may choose ("" is the default)
+    MaxSwitches       \* how many times the person changes the setting or the account, in all
 
 ASSUME MaxWaiting >= 1 /\ MaxFailedStarts >= 1
 
 VARIABLES
     s,          \* the supervisor, with its ghosts
     sent,       \* how many prompts the person has sent
-    restarts    \* how many times the server restarted
+    restarts,   \* how many times the server restarted
+    switches    \* how many times the person changed the setting or the account
 
-vars == <<s, sent, restarts>>
+vars == <<s, sent, restarts, switches>>
+
+Settings == [m : Models \cup {""}, e : Efforts \cup {""}]
+Default == [m |-> "", e |-> ""]
 
 Phases == {"none", "starting", "idle", "working", "stopping", "ending"}
 Stages == {"none", "closed", "termed", "killed"}   \* while ending: input closed, then TERM sent, then KILL sent
@@ -73,10 +96,12 @@ E(k, t, p) == [k |-> k, t |-> t, p |-> p]
 Init ==
     /\ sent = 0
     /\ restarts = 0
+    /\ switches = 0
     /\ s = [phase |-> "none", stage |-> "none", open |-> 0, prompt |-> 0, next |-> 1, waiting |-> <<>>,
             queue |-> <<>>, session |-> "", gathered |-> FALSE, finished |-> FALSE, failed |-> 0, blocked |-> FALSE,
             nocred |-> FALSE, down |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
-            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE]
+            fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE,
+            setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -106,20 +131,33 @@ Close(x) ==
                        !.finished = TRUE, !.failed = 0]
     IN IF x.nocred THEN QuietEnd(y) ELSE y
 
-\* Write the oldest waiting prompt to an idle driver as the next turn.
-WriteNext(x) ==
+\* Write the oldest waiting prompt to an idle driver as the next turn. V(x) is what the driver runs it with: what it
+\* was told, with each non-empty field of the settings line written first (none when nothing differs).
+WriteNextWith(V(_), x) ==
     IF x.phase = "idle" /\ x.waiting # <<>>
     THEN LET p == Head(x.waiting) IN
          [x EXCEPT !.open = x.next, !.prompt = p, !.next = x.next + 1, !.waiting = Tail(x.waiting),
-                   !.written = Append(@, [p |-> p, t |-> x.next]), !.fate[p] = "open", !.phase = "working"]
+                   !.written = Append(@, [p |-> p, t |-> x.next, v |-> V(x)]), !.fate[p] = "open",
+                   !.phase = "working", !.told = V(x)]
     ELSE x
+Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
+            e |-> IF x.setting.e # "" THEN x.setting.e ELSE x.told.e]
+WriteNext(x) == WriteNextWith(Told, x)
 
-\* Start a driver when a prompt waits and none is alive, with --resume the last session id.
+\* Start a driver when a prompt waits and none is alive, with --resume the last session id, under the session's
+\* account.
 StartDriver(x) ==
     IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down
     THEN [x EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
-                    !.resumed = x.session]
+                    !.resumed = x.session, !.drv = x.account, !.told = Default, !.retiring = FALSE]
     ELSE x
+
+\* With no turn open, a driver started under an account that is no longer the session's, or told a field the session
+\* has put back to the default, is ended quietly: the next one starts on the defaults under the session's account.
+Cleared(x) == (x.told.m # "" /\ x.setting.m = "") \/ (x.told.e # "" /\ x.setting.e = "")
+RetireWith(C(_), x) ==
+    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
+Retire(x) == RetireWith(Cleared, x)
 
 \* When no turn is open, no prompt waits and starting is not held back: the oldest queued prompt joins the waiting
 \* prompts, shown as the person's entry. One per turn: it waits, or is written as the turn that opens.
@@ -129,20 +167,21 @@ Take(x) ==
          [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
     ELSE x
 
-\* What follows every step.
-AdvanceWith(Tk(_), x) == WriteNext(StartDriver(Tk(x)))
+\* What follows every step. The witnesses break a part through AdvanceAll.
+AdvanceAll(Tk(_), Rt(_), Wn(_), x) == Wn(StartDriver(Rt(Tk(x))))
+AdvanceWith(Tk(_), x) == AdvanceAll(Tk, Retire, WriteNext, x)
 Advance(x) == AdvanceWith(Take, x)
 
 \* Every step starts with no effects, and is not a stop until it says so.
 Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE]
 
-\* The driver is gone: a failed start is one that finished no turn.
+\* The driver is gone: a failed start is one that finished no turn (and was not ended for an account change).
 ExitedWith(x) ==
     LET y == IF x.phase = "ending" THEN x ELSE Abandon(x)
-        count == ~y.finished /\ ~y.blocked /\ ~y.down
+        count == ~y.finished /\ ~y.blocked /\ ~y.down /\ ~y.retiring
         f == IF count THEN y.failed + 1 ELSE y.failed
         z == [y EXCEPT !.phase = "none", !.stage = "none", !.procs = @ - 1, !.failed = f, !.finished = FALSE,
-                       !.nocred = FALSE, !.gathered = FALSE]
+                       !.nocred = FALSE, !.gathered = FALSE, !.drv = "", !.told = Default, !.retiring = FALSE]
     IN IF count /\ f >= MaxFailedStarts THEN [Fx(z, E("N", 0, 0)) EXCEPT !.blocked = TRUE] ELSE z
 
 \* An error of code no-credential (v): the driver ends the open turn, if any, and exits (protocol rule 11). No
@@ -184,7 +223,7 @@ Messages(x) ==
 ----------------------------------------------------------------------------
 \* The steps. Each witness passes a broken part through the With forms.
 
-Keep == UNCHANGED <<sent, restarts>>
+Keep == UNCHANGED <<sent, restarts, switches>>
 
 \* The person sends prompt p: refused with a notice past the bound; otherwise it shows, waits, and goes out when it can.
 \* A prompt also lifts the hold that failed starts put on starting drivers.
@@ -192,7 +231,7 @@ PromptWith(Adv(_)) ==
     /\ ~s.down
     /\ sent < Prompts
     /\ sent' = sent + 1
-    /\ UNCHANGED restarts
+    /\ UNCHANGED <<restarts, switches>>
     /\ LET p == sent + 1
            x == Fresh
        IN s' = IF Len(x.waiting) >= MaxWaiting
@@ -208,7 +247,7 @@ QueuePromptWith(Adv(_)) ==
     /\ sent < Prompts
     /\ Len(s.queue) < MaxWaiting
     /\ sent' = sent + 1
-    /\ UNCHANGED restarts
+    /\ UNCHANGED <<restarts, switches>>
     /\ LET p == sent + 1
            x == Fresh
        IN s' = Adv([x EXCEPT !.queue = Append(@, p), !.fate[p] = "queued", !.blocked = FALSE,
@@ -279,16 +318,36 @@ Shutdown ==
 RestartA(R(_), A(_)) ==
     /\ restarts < MaxRestarts
     /\ restarts' = restarts + 1
-    /\ UNCHANGED sent
+    /\ UNCHANGED <<sent, switches>>
     /\ s' = A(R(Fresh))
 RestartWith(R(_)) == RestartA(R, Advance)
 Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
-              !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0]
+              !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0, !.drv = "", !.told = Default,
+              !.retiring = FALSE]
 Restart == RestartWith(Restarted)
 
-NextWithAll(P, Q, St, M(_), Ex, T, R) ==
+\* The person sets the session's model and effort (v): the next send is written with it, and an idle driver told a
+\* field v clears is ended (Retire; with a turn open, the Advance at its end does it). Nothing else happens.
+SetSettingWith(St(_, _), v) ==
+    /\ switches < MaxSwitches
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = St(Fresh, v)
+SettingSet(x, v) == Retire([x EXCEPT !.setting = v])
+SetSetting(v) == SetSettingWith(SettingSet, v)
+
+\* The person sets the session's account (a). A driver started under another is ended once no turn is open (Advance).
+SetAccountWith(Ac(_, _), a) ==
+    /\ switches < MaxSwitches
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Ac(Fresh, a)
+AccountSet(x, a) == Advance([x EXCEPT !.account = a])
+SetAccount(a) == SetAccountWith(AccountSet, a)
+
+NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) ==
     \/ P
     \/ Q
     \/ St
@@ -298,14 +357,21 @@ NextWithAll(P, Q, St, M(_), Ex, T, R) ==
     \/ T
     \/ Shutdown
     \/ R
+    \/ \E v \in Settings : Se(v)
+    \/ \E a \in Accounts \cup {""} : Ac(a)
+
+NextWithAll(P, Q, St, M(_), Ex, T, R) == NextWithSet(P, Q, St, M, Ex, T, R, SetSetting, SetAccount)
 
 NextWith(P, M(_), Ex, T, R) == NextWithAll(P, QueuePrompt, Stop, M, Ex, T, R)
 
+\* Every step with A in place of Advance: the witnesses of the take, the setting and the account break it through this.
+NextAdvance(A(_)) ==
+    NextWithSet(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
+                TimeoutA(End, End, A), RestartA(Restarted, A), SetSetting,
+                LAMBDA a : SetAccountWith(LAMBDA x, b : A([x EXCEPT !.account = b]), a)) \/ BrokenA(A)
+
 \* Every step with Tk in place of Take: the take's witnesses break it through this.
-NextTake(Tk(_)) ==
-    LET A(x) == AdvanceWith(Tk, x) IN
-    NextWithAll(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
-                TimeoutA(End, End, A), RestartA(Restarted, A)) \/ BrokenA(A)
+NextTake(Tk(_)) == NextAdvance(LAMBDA x : AdvanceWith(Tk, x))
 
 Next == NextWith(Prompt, Message, Exit, Timeout, Restart)
 
@@ -330,6 +396,12 @@ TypeOK ==
     /\ \A i \in 1 .. Len(s.fx) : s.fx[i].k \in Kinds
     /\ \A p \in DOMAIN s.fate : s.fate[p] \in Fates
     /\ sent \in 0 .. Prompts
+    /\ s.setting \in Settings
+    /\ s.told \in Settings
+    /\ (s.procs = 0) => s.told = Default
+    /\ s.account \in Accounts \cup {""}
+    /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
+    /\ s.retiring => s.phase = "ending"
 
 \* At most one driver process alive.
 OneDriver == s.procs <= 1 /\ (s.procs = 1) = (s.phase # "none")
@@ -430,6 +502,24 @@ NoSendWithoutCredential == [][Len(s'.written) > Len(s.written) => ~s.nocred]_var
 
 \* A driver is started only when not held back, and with --resume the last session id.
 StartsSound == [][s'.procs > s.procs => ~s'.blocked /\ s'.resumed = s'.session]_vars
+
+\* A send is written with the setting the session has when it is written: a change applies from the next turn.
+WrittenWithSetting ==
+    [][Len(s'.written) > Len(s.written) => \A i \in (Len(s.written) + 1) .. Len(s'.written) :
+                                               s'.written[i].v = s'.setting]_vars
+
+\* A change of the setting never changes a turn in progress: no line is written, no driver started, no turn opened or
+\* ended, no entry made (an idle driver told a field it clears may be ended, quietly).
+SettingLeavesTurn ==
+    [][s'.setting # s.setting =>
+         /\ s'.written = s.written /\ s'.open = s.open /\ s'.waiting = s.waiting /\ s'.fx = <<>>
+         /\ s'.procs = s.procs /\ (s'.phase # s.phase => s'.phase = "ending" /\ s'.retiring)]_vars
+
+\* A send is written only to a driver started under the session's account as it is then.
+NoSendOnOldAccount == [][Len(s'.written) > Len(s.written) => s'.drv = s'.account]_vars
+
+\* A change of the account never ends a turn: the driver is ended only once no turn is open.
+AccountKeepsTurn == [][s'.account # s.account => s'.open = s.open /\ s'.written = s.written]_vars
 
 \* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is held back (until
 \* the person's next prompt) or the server is stopping (the prompt is durable, for the next server).

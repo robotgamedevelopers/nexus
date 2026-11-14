@@ -123,6 +123,19 @@ void Supervisor::configure(std::vector<std::string> command, std::string cwd, st
     config_.configured = std::move(configured);
 }
 
+Output Supervisor::setOptions(std::string model, std::string effort, Millis now) {
+    config_.model = std::move(model);
+    config_.effort = std::move(effort);
+    retire(now);     // only: the change opens no turn and takes nothing
+    return finish();
+}
+
+Output Supervisor::setAccount(std::string account, Millis now) {
+    config_.account = std::move(account);
+    advance(now);
+    return finish();
+}
+
 std::optional<Millis> Supervisor::deadline() const {
     return deadline_;
 }
@@ -130,7 +143,7 @@ std::optional<Millis> Supervisor::deadline() const {
 Output Supervisor::prompt(const std::string& text, Millis now) {
     const std::size_t bytes = std::accumulate(state_.waiting.begin(), state_.waiting.end(), std::size_t(0),
         [](std::size_t n, const std::string& w) { return n + w.size(); });
-    const Encoded line = encode(Send{state_.nextTurn, text});
+    const Encoded line = encode(sendOf(state_.nextTurn, text));
     const std::string notSent = "A prompt to " + config_.name + " was not sent: ";
     if (state_.waiting.size() >= config_.maxWaiting) {
         effect(Effect::What::Notice, notSent + std::to_string(state_.waiting.size()) + " prompts already wait for " +
@@ -255,7 +268,7 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             ? std::string(" with no turn open") : " while turn " + std::to_string(open) + " is open")), now);
     } else if (const Text* t = std::get_if<Text>(&message)) {
         gathered_ += t->delta;
-        // Gathered text past the entry limit goes into the tab in whole entries now, so that a driver that never
+        // Gathered text past the entry limit goes into the session in whole entries now, so that a driver that never
         // ends its block holds no more than one entry here.
         while (gathered_.size() > config_.maxEntryBytes) {
             const std::size_t cut = cutAt(gathered_, config_.maxEntryBytes);
@@ -306,7 +319,7 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     if (phase_ != Phase::Ending) {
         abandon(config_.name + "'s driver " + how + ".");
     }
-    const bool counted = !finished_ && !held_ && !down_;
+    const bool counted = !finished_ && !held_ && !down_ && !retiring_;
     if (counted) {
         ++failed_;
     }
@@ -315,6 +328,10 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     finished_ = false;
     noCredential_ = false;
     gathered_.clear();
+    driverAccount_.clear();
+    driverModel_.clear();
+    driverEffort_.clear();
+    retiring_ = false;
     deadline_.reset();
     if (counted && failed_ >= config_.maxFailedStarts) {
         const std::string fix = lastFix_.empty()
@@ -365,7 +382,7 @@ Output Supervisor::shutdown(Millis now) {
     if (state_.openTurn != 0) {
         end("nexus-server is stopping, so " + config_.name + "'s driver was ended.", now);
     } else {
-        endQuietly(now);    // no turn open: nothing in the tab
+        endQuietly(now);    // no turn open: nothing in the session
     }
     return finish();
 }
@@ -383,7 +400,7 @@ std::string Supervisor::brokeProtocol(const std::string& what) const {
         "(docs/driver-protocol.md).";
 }
 
-// The open turn's gathered text goes into the tab as one entry: receive() keeps it within the entry limit.
+// The open turn's gathered text goes into the session as one entry: receive() keeps it within the entry limit.
 void Supervisor::flush() {
     if (!gathered_.empty()) {
         effect(Effect::What::Reply, std::move(gathered_), state_.openTurn);
@@ -456,6 +473,10 @@ void Supervisor::startDriver(Millis now) {
     noCredential_ = false;
     lastCause_.clear();
     lastFix_.clear();
+    driverAccount_ = config_.account;
+    driverModel_.clear();
+    driverEffort_.clear();
+    retiring_ = false;
 }
 
 // The oldest waiting prompt, to an idle driver, as the next turn: durable before the line is written.
@@ -464,9 +485,19 @@ void Supervisor::writeNext() {
         return;
     }
     const std::uint64_t turn = state_.nextTurn;
+    // The session's model and effort, where the driver's differ: it applies them from this send on. retire() has
+    // ended a driver whose field the session has put back to the harness's default, which this line cannot say, so
+    // each field written is one the session has. The hub keeps a setting short and printable, so the line encodes.
+    if (driverModel_ != config_.model || driverEffort_ != config_.effort) {
+        const driver::Settings settings{driverModel_ != config_.model ? config_.model : std::string(),
+            driverEffort_ != config_.effort ? config_.effort : std::string()};
+        command(Command::Kind::Write, {}, encode(settings).line);
+        driverModel_ = config_.model;
+        driverEffort_ = config_.effort;
+    }
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
-    command(Command::Kind::Write, {}, encode(Send{turn, state_.waiting.front()}).line);
+    command(Command::Kind::Write, {}, encode(sendOf(turn, state_.waiting.front())).line);
     openPrompt_ = std::move(state_.waiting.front());
     state_.waiting.erase(state_.waiting.begin());
     state_.nextTurn = turn + 1;
@@ -485,7 +516,7 @@ void Supervisor::take() {
         std::string text = std::move(queue_.front());
         queue_.erase(queue_.begin());
         ++out_.taken;
-        const Encoded line = encode(Send{state_.nextTurn, text});
+        const Encoded line = encode(sendOf(state_.nextTurn, text));
         if (!line.error.empty()) {
             effect(Effect::What::Notice, "A queued prompt to " + config_.name + " was not sent: " +
                 sentence(line.error));
@@ -497,10 +528,29 @@ void Supervisor::take() {
     }
 }
 
-// What follows every event: the oldest queued prompt taken at a turn's end, a driver started for a waiting prompt, or
-// the prompt written to an idle one.
+// With no turn open, a driver started under an account that is no longer the session's is ended quietly: the next one
+// starts under the session's account. So is one told a model or effort the session has since put back to the
+// harness's default, which a settings line cannot say: the next one starts on the defaults. A turn open runs to its
+// end first.
+void Supervisor::retire(Millis now) {
+    const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
+        (!driverEffort_.empty() && config_.effort.empty());
+    if (phase_ == Phase::Idle && (driverAccount_ != config_.account || cleared)) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+}
+
+// A send of turn `turn`.
+driver::Send Supervisor::sendOf(std::uint64_t turn, const std::string& prompt) const {
+    return driver::Send{turn, prompt};
+}
+
+// What follows every event: the oldest queued prompt taken at a turn's end, a driver under an old account ended, a
+// driver started for a waiting prompt, or the prompt written to an idle one.
 void Supervisor::advance(Millis now) {
     take();
+    retire(now);
     startDriver(now);
     writeNext();
 }

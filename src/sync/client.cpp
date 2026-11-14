@@ -41,11 +41,29 @@ bool takePrompt(Model& model, std::size_t i, std::size_t limit, std::string* tex
     return true;
 }
 
-bool stopTarget(const Model& model, std::size_t i, std::string* tab) {
+SessionId sessionOf(const Model& model, std::size_t i, const Mirror& mirror) {
     if (i >= model.tab_count() || model.tab(i).kind != TabKind::Friend) {
+        return 0;
+    }
+    return mirror.session(model.tab(i).id);
+}
+
+std::vector<std::string> friendsToEnsure(const Model& model) {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < model.tab_count(); ++i) {
+        if (model.tab(i).kind == TabKind::Friend) {
+            out.push_back(model.tab(i).name);
+        }
+    }
+    return out;
+}
+
+bool stopTarget(const Model& model, std::size_t i, const Mirror& mirror, SessionId* session) {
+    const SessionId id = sessionOf(model, i, mirror);
+    if (id == 0) {
         return false;
     }
-    *tab = model.tab(i).name;
+    *session = id;
     return true;
 }
 

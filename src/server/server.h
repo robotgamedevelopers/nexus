@@ -33,7 +33,7 @@ struct Paths {
     std::string config;     // <dir>/config: the server's settings (config.h); it takes none yet
     std::string socket;     // <dir>/server.sock: the control socket
     std::string log;        // <dir>/server.log: a server `new` started writes here
-    std::string store;      // <dir>/store: the tabs and the applied counters (src/store)
+    std::string store;      // <dir>/store: the sessions and the applied counters (src/store)
     std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
 };
 
