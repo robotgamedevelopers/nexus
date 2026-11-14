@@ -15,6 +15,7 @@
      ("sprint" "6. Sprint: see and deal cards without leaving the window")
      ("panels" "7. Panels: friends add UI elements when asked; a panel is data (what to show, which tool's output feeds it, what each button sends) rendered by nexus, never code loaded into it")
      ("one-app" "Later: one app, nexus-server, starts at boot on the always-on machine and runs every tool and every friend as its own child process, so permissions are granted once to that app and nothing else runs as a separate app or daemon")
+     ("writer-thread" "Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
      ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer." :later t)
      )
@@ -28,6 +29,7 @@
      ("sprint" "done" "t-sprint")
      ("panels" "done" "t-panels")
      ("one-app" "done" "t-one-app")
+     ("writer-thread" "done" "t-writer-thread")
      ("ios-client" "done" "t-ios-client")
      ("install-through-ai" "done" "t-install-through-ai")
      ))
@@ -58,6 +60,7 @@
   (:id "t-upload-store" :type :task :title "Upload storage: blobs by content hash in the store, chunks that resume, atomic placement in incoming/" :state :todo)  (:id "t-window" :type :task :title "Window: tabs, transcript and prompt draw and take input" :state :doing)
   (:id "t-server-sync" :type :task :title "Server and sync: server holds the state; mosh-style sync over the tailnet; nothing typed lost or applied twice" :state :doing)
   (:id "t-wire-version" :type :task :title "Wire version: the window names the wire it speaks in its new request, and the server refuses another with which side to update (today an older window against a newer server fails its diffs)" :state :todo)
+  (:id "t-writer-thread" :type :task :title "Writer thread: store write and flush off the loop thread; an app-level durable counter in the server's state, the window trimming by it; Link model, Applier and trace binding" :state :todo)
   (:id "t-session-close" :type :task :title "Closing a session: sessions are never removed, so the limit of 16 counts every session ever made; a closed session frees its place, its id still never reused" :state :todo)
   (:id "t-friends" :type :work-set :children ("t-friends-protocol" "t-friends-supervisor" "t-friends-wire"
                                                "t-friends-sessions" "t-friends-claude" "t-friends-claude-model"
