@@ -463,10 +463,12 @@ jobs:
             run: '^tlc_supervisor_switch$'
           - shard: supervisor-place
             run: '^tlc_supervisor_place$'
+          - shard: supervisor-signin
+            run: '^tlc_supervisor_signin$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch|place)$'
+            skip: '^tlc_supervisor_(switch|place|signin)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
           - shard: link-one-window

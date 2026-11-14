@@ -400,7 +400,12 @@ Reconfigure(c) ==
 \* The session's account signed in while starting is held back: its login arrived through the secret dialog
 \* (docs/secrets.md, Drivers::signedIn). Like a prompt, it lifts the hold, without a restart, so what waits goes on
 \* and the oldest queued prompt is taken. It counts as a change of the person's (they pasted the login).
+\* SignIns says whether an instance takes it: TRUE here; the per-commit switch and place instances replace it with
+\* MCSupervisor's NoSignIns, so that their one change stays a setting, an account or a place, and
+\* MCSupervisorSignIn.cfg spends its one change on a sign-in instead.
+SignIns == TRUE
 SignIn ==
+    /\ SignIns
     /\ s.blocked
     /\ switches < MaxSwitches
     /\ switches' = switches + 1
