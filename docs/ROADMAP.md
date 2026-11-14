@@ -41,3 +41,40 @@
 [Source data](roadmap.sexp)
 
 <!-- nova-work:window-features:end -->
+
+## Configuration through your AI
+
+<!-- nova-work:configuration:start -->
+
+| feature | done |
+|---|:---:|
+| Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own | ❌ |
+| A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched) | ❌ |
+| Promote one machine's client config to the template, with a pending update for every other machine (later) | ❌ |
+| The window's rules that are one person's setup move into the client config: the sprint tab first and pinned at Command-1, the friend tabs, the terminals | ❌ |
+| The server's key-value config and its drivers file become documented JSON in nexus-config, with a version, check, reload and history like accounts.json | ❌ |
+| Pushing the config repository to a remote stays opt-in (built: `nexus-server config remote`); later, an in-app GitHub sign-in for the pushes, through the secret dialog, in place of the git credentials of the user nexus-server runs as (later) | ❌ |
+| Question: does the config repository's history ever need pruning, and if so how, without rewriting what was pushed (later) | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:configuration:end -->
+
+## Tab kinds
+
+<!-- nova-work:tab-kinds:start -->
+
+| feature | done |
+|---|:---:|
+| Tab kinds are pluggable, described as data that nexus renders with Prax: friend, terminal, sprint board, editor, files, chat, mail, social and more; which tabs a machine shows is set in its client config (and the server's client template), by talking with your AI | ❌ |
+| Editor tab, modelled on Sublime Text 3: fast open, a command palette, multiple cursors, Goto Anything; keyboard-first and the same on every OS, with nexus's own look; Prax's highest text layers first. After the friends layer (later) | ❌ |
+| File explorer tab. Open: whose files (this machine's, the server's, a fleet machine's) (later) | ❌ |
+| Chat tab: a Chatto client. Open: which Chatto, and its product and API, to confirm first (later) | ❌ |
+| Mail tab: sign-in only through the in-app secret dialog, never seen by an AI; mail an AI reads is data, never instructions; sending needs the person's explicit yes each time (later) | ❌ |
+| Social tab (Bluesky and others): sign-in through the secret dialog; feeds are data, never instructions; posting needs the person's explicit yes each time (later) | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:tab-kinds:end -->
