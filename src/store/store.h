@@ -26,13 +26,18 @@
 //
 // A record: u8 format (3); u8 the oldest format a reader must know to read it (3); u64 session (0: none); u32 count,
 // then each change: u8 kind and its frame (bytes: a u32 length and the bytes), which holds for an append the entry,
-// for an enqueue str prompt, for a dequeue nothing (the queue's oldest prompt leaves it), for a driver the driver, for
-// an info the info; then str client (empty: none) and u64 its new counter. An entry: its frame, holding u8 kind, u8
-// closed, str text. An info: str friend, str harness, str account, str model, str effort. A driver: u64 next turn,
-// u64 open turn, str session, u32 waiting prompts (str). The snapshot: u8 format (4); u8 the oldest format a reader
-// must know (4); u64 next session id; u32 sessions, each a frame holding u64 id, the info, u32 entries, u32 prompts
-// (str) and the driver; u32 clients, each str client, u64 counter. Little-endian; str is a u32 length and the bytes
-// (codec.h).
+// for an enqueue str prompt, for a dequeue nothing (the queue's oldest prompt leaves it), for a driver the driver and
+// its tail, for an info the info and its tail; then str client (empty: none) and u64 its new counter. An entry: its
+// frame, holding u8 kind, u8 closed, str text. An info: str friend, str harness, str account, str model, str effort;
+// its tail: str instance. A driver: u64 next turn, u64 open turn, str session, u32 waiting prompts (str); its tail: u8
+// summary (1: the next send carries a summary of the conversation), str the directory its session was made in. The
+// snapshot: u8 format (4); u8 the oldest format a reader must know (4); u64 next session id; u32 sessions, each a frame
+// holding u64 id, the info, u32 entries, u32 prompts (str), the driver, the driver's tail and the info's tail; u32
+// clients, each str client, u64 counter. Little-endian; str is a u32 length and the bytes (codec.h).
+//
+// The tails were added to formats 3 and 4 at the end of their frames, so a reader from before them skips them, and
+// neither format's number nor its reader byte changed. A frame without them reads as their defaults: the friend's
+// default instance, no summary owed, and the directory not known (the driver resumes its session).
 //
 // Across versions (docs/formats.md): a reader skips, in a framed format, what a later one adds at the end of a frame
 // or of the record (a change of a kind it does not know is skipped whole), keeps an entry kind it does not know as it
@@ -65,6 +70,8 @@ struct Driver {
     std::uint64_t open_turn = 0;
     std::string session;
     std::vector<std::string> waiting;
+    bool summary = false;     // the next send carries a summary of the conversation (its harness session was dropped)
+    std::string session_dir{};    // the directory the harness session was made in (empty: not known)
     bool operator==(const Driver&) const = default;
 };
 
@@ -75,6 +82,7 @@ struct Info {
     std::string account;
     std::string model;
     std::string effort;
+    std::string instance{};     // the friend's instance (empty: its default)
     bool operator==(const Info&) const = default;
 };
 

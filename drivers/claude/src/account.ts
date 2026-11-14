@@ -22,14 +22,20 @@ export interface AccountRefusal {
 /** The name of the token file in an account's directory. */
 export const kTokenFile = 'oauth-token';
 
-/** An account's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.'. */
+/** An account's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-' (it reaches an argv). */
 export function isAccountName(name: string): boolean {
-    return /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(name);
+    return /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(name);
 }
+
+/**
+ * Where the logins are under HOME: the server's one path (src/server/home.h kAccountsUnderHome, which its sign-in check
+ * reads too, whatever --dir says). The unit test holds the two equal.
+ */
+export const kAccountsUnderHome = '.nexus/server/accounts';
 
 /** The accounts' directory under `home`. */
 export function accountsDir(home: string): string {
-    return `${home.replace(/\/+$/, '')}/.nexus/server/accounts`;
+    return `${home.replace(/\/+$/, '')}/${kAccountsUnderHome}`;
 }
 
 /** What the person runs to make the account's token, and where to save it. */

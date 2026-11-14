@@ -22,7 +22,11 @@ This page is the whole scheme, kept small so that moving it to a schema tool lat
 | Format | What it is |
 | --- | --- |
 | 1 | The first (main before formats): nothing framed, no activity, entry kinds Person 0, Friend 1, Notice 2. A reader of 1 reads exactly 1. |
-| 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. |
+| 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
+
+Fields appended to a format's frames do not change its number: a reader from before them skips them (rule 1), and
+nothing about them makes an older reader wrong. They are listed in the table in the order they were appended, and a
+later field goes after them.
 
 - Absent activity (a format 1 server): **Idle**. Idle claims least: it says nothing is running and nothing is wrong,
   and a send is always safe, since the server answers a send it cannot carry out with a notice in the session.
@@ -31,6 +35,9 @@ This page is the whole scheme, kept small so that moving it to a schema tool lat
 - Unknown activity: **Busy** (the pulsing light blue). Something a later server knows is going on; busy says work
   may be under way without claiming the friend is waiting (idle) or broken (down). A stop is always allowed.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
+- Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
+  by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
+  default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
 
 ### Agreeing on a format when the window connects
 
@@ -60,10 +67,17 @@ server's state is.
 | --- | --- | --- | --- |
 | record | 1 | | a friend tab's, by name: migrated at open |
 | record | 2 | | by session, unframed, entry kinds 0 to 2 |
-| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped |
+| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame ends with the instance (`str`), a driver's with the summary flag (`u8`) and its session's directory (`str`) |
 | snapshot | 1, 2 | | friend tabs (1 before drivers): migrated at open |
 | snapshot | 3 | | by session, unframed, entry kinds 0 to 2 |
-| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped |
+| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance |
+
+- Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
+- Absent summary flag: **none owed**. Absent session directory: **not known**, and the next driver resumes the
+  harness session as before the field existed. Resuming claims least: it is what a server from before did, and a
+  harness that has no such session in the directory starts a new one.
+- An older server that rewrites the store (a compaction) drops the appended fields; a newer one then reads their
+  defaults.
 
 - A newer server reads every older format. Format 2 records and format 3 snapshots are read as they are, never
   rewritten. A friend-tab store is compacted into the current format at open.
@@ -84,4 +98,17 @@ Today's main formats are fixed as bytes that main's own code wrote, not as bytes
 
 Each generator says how to build it against a worktree of main at 50565c6. `sync_unit` (`state_format_1_from_main`,
 `state_format_2_reads_later_formats`, `state_files`, `link_formats_agree`), `store_unit_formats`,
-`durable_unit_kinds` and `link_e2e_older_server` check the rules above.
+`durable_unit_kinds` and `link_e2e_older_server` check the rules above; `sync_unit` `sessions_instance_appended` and
+`store_unit_instance` check the appended fields both ways.
+
+## Moving to schema
+
+These formats are moving onto schema's variable tables (github.com/mas-bandwidth/schema), where every field, enum
+value and union arm rides under the hash of its name, so that rules 1 to 3 above hold by construction rather than by
+each codec's care. Step 1, the plumbing, is in: `schema/Nexus.schema` mirrors every field above (with the accounts work's
+instance and account fields), its generated C++ is checked in under `schema/gen` (the library `nexus_wire`), the
+compiler is pinned to one exact commit in `cmake/schema.cmake` (its table wire is pre-release until schema 3.0.0), and
+`schema/tables.baseline` refuses an edit that would change what stored bytes mean. CI regenerates the code at the pin
+and fails on any difference (`schema-generated`). `wire_unit_versions` proves the requirement: a later version that adds
+a field, an enum value and a union arm (`tests/wire/next/NexusNext.schema`) and this one read each other's bytes both
+ways. Nothing reads or writes these tables yet; the codecs above are unchanged until each is swapped onto them.

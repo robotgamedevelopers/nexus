@@ -13,19 +13,19 @@ sync::EntryRef toRef(const store::Entry& e) {
 }
 
 sync::DriverState toState(const store::Driver& d) {
-    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting};
+    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir};
 }
 
 store::Driver toDriver(const sync::DriverState& d) {
-    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting};
+    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir};
 }
 
 sync::SessionInfo toInfo(const store::Info& i) {
-    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort};
+    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort, i.instance};
 }
 
 store::Info toStored(const sync::SessionInfo& i) {
-    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort};
+    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort, i.instance};
 }
 
 } // namespace

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -1265,6 +1266,9 @@ void test_formats() {
         session.u64(0);
         session.str("");
         session.u32(0);
+        session.u8(0);              // the tails appended to format 4 since it began: no summary, no directory,
+        session.str("");            // no instance
+        session.str("");
         session.str("a later field of a session");
         w.bytes(session.out());
         w.u32(1);
@@ -1280,6 +1284,143 @@ void test_formats() {
             CHECK(o.st.code() == Status::Code::Failed);
             CHECK(o.st.message().find("its snapshot is in format 6") != std::string::npos);
         }
+    }
+}
+
+// A session's info and driver as main writes them in the framed formats, before the tails (store.h): an info of five
+// fields, and a driver of four.
+void put_main_info(Writer& w, std::initializer_list<const char*> fields) {
+    for (const char* f : fields) {
+        w.str(f);
+    }
+}
+
+void put_main_driver(Writer& w, std::uint64_t next, const std::string& session) {
+    w.u64(next);
+    w.u64(0);
+    w.str(session);
+    w.u32(0);
+}
+
+// The tails (a session's instance, a driver's summary flag and its session's directory) are appended inside formats 3
+// and 4's frames, so neither format's number changed. Old to new: main's stores, unframed (records of format 2, a
+// snapshot of format 3) and framed as main writes them (a record of format 3, a snapshot of format 4, without the
+// tails), open with each session on no instance (its friend's default), no summary owed and its session's directory
+// not known. New to old: this build's record is main's, each tail at its frame's end, which a reader from before skips
+// as it skips what any later frame adds. Both kept across a crash and a compaction.
+void test_instance() {
+    auto defaults = [](const Session* t) {
+        return t != nullptr && t->info.instance.empty() && !t->driver.summary && t->driver.session_dir.empty();
+    };
+    {
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second)});
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && defaults(o.s->session(1)));
+    }
+    {
+        MemFs fs = journaled({}, fixture(kMainSnapshot3));
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && defaults(o.s->session(1)));
+    }
+    Writer snap;
+    snap.u8(4);
+    snap.u8(4);
+    snap.u64(2);
+    snap.u32(1);
+    {
+        Writer session;
+        session.u64(1);
+        put_main_info(session, {"ada", "claude", "work", "", ""});
+        session.u32(0);
+        session.u32(0);
+        put_main_driver(session, 2, "s-1");
+        snap.bytes(session.out());
+    }
+    snap.u32(0);
+    Writer rec;
+    rec.u8(3);
+    rec.u8(3);
+    rec.u64(1);
+    rec.u32(1);
+    rec.u8(std::uint8_t(Change::Kind::SetInfo));
+    {
+        Writer frame;
+        put_main_info(frame, {"ada", "claude", "home", "fast", ""});
+        rec.bytes(frame.out());
+    }
+    rec.str("w1");
+    rec.u64(4);
+    MemFs fs = journaled({rec.out()}, snap.out());
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        if (o.s == nullptr) {
+            return;
+        }
+        CHECK(about(o.s->session(1)->info) == "ada/claude/home/fast/" && defaults(o.s->session(1)));
+        CHECK(o.s->session(1)->driver.session == "s-1" && o.s->applied("w1") == 4);
+        Change c = info("ada");
+        c.info.instance = "rocketnet";
+        Change d = setDriver(3, 0, "", {});
+        d.driver.summary = true;
+        d.driver.session_dir = "/work/rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}, "w1", 5));
+    }
+    {
+        Writer want;
+        want.u8(3);
+        want.u8(3);
+        want.u64(1);
+        want.u32(2);
+        want.u8(std::uint8_t(Change::Kind::SetInfo));
+        Writer infoFrame;
+        put_main_info(infoFrame, {"ada", "claude", "", "", ""});
+        infoFrame.str("rocketnet");
+        want.bytes(infoFrame.out());
+        want.u8(std::uint8_t(Change::Kind::SetDriver));
+        Writer driverFrame;
+        put_main_driver(driverFrame, 3, "");
+        driverFrame.u8(1);
+        driverFrame.str("/work/rocketnet");
+        want.bytes(driverFrame.out());
+        want.str("w1");
+        want.u64(5);
+        Journal j(fs, "store");
+        Journal::Recovery r;
+        CHECK_OK(j.open(r));
+        CHECK(!r.records.empty() && r.records.back() == want.out());
+    }
+    fs.crash(fs.plan_all(false));
+    {
+        Opened o = open_store(fs);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
+        CHECK(o.s != nullptr && o.s->session(1)->driver.summary &&
+              o.s->session(1)->driver.session_dir == "/work/rocketnet");
+    }
+    // Through a snapshot of this build's: a store that compacts at every step.
+    StoreOptions small;
+    small.compact_bytes = 1;
+    MemFs fs2;
+    {
+        Opened o = open_store(fs2, small);
+        CHECK_OK(o.st);
+        CHECK_OK(o.s->commit(1, made("ada")));
+        Change c = info("ada");
+        c.info.instance = "rocketnet";
+        Change d = setDriver(3, 0, "s-2", {});
+        d.driver.summary = true;
+        d.driver.session_dir = "/work/rocketnet";
+        CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}));
+    }
+    fs2.crash(fs2.plan_all(false));
+    {
+        Opened o = open_store(fs2, small);
+        CHECK_OK(o.st);
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->driver.summary &&
+              o.s->session(1)->driver.session_dir == "/work/rocketnet" && o.s->session(1)->driver.session == "s-2");
     }
 }
 
@@ -1299,6 +1440,7 @@ const Group kGroups[] = {
     {"driver", test_driver},
     {"migrate", test_migrate},
     {"dequeue", test_dequeue},
+    {"instance", test_instance},
     {"formats", test_formats},
 };
 

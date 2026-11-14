@@ -97,13 +97,20 @@ add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
+# The accounts and friends nexus-server holds (src/accounts/registry.h): their rules, their JSON files' text (with
+# Prax's JSON), and the accounts the server picks. No OS, no time.
+add_library(nexus_accounts STATIC src/accounts/registry.cpp)
+target_include_directories(nexus_accounts PUBLIC src)
+target_compile_options(nexus_accounts PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
+
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
     src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_sync PUBLIC nexus_model)
+target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
 
 # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
 # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
@@ -145,6 +152,12 @@ if(NOT WIN32)
     target_include_directories(nexus_drivers PUBLIC src)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+
+    # The accounts and friends' config repository (src/server/config_repo.h): the files, and git as a child process.
+    add_library(nexus_config_repo STATIC src/server/config_repo.cpp)
+    target_include_directories(nexus_config_repo PUBLIC src)
+    target_compile_options(nexus_config_repo PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_config_repo PUBLIC nexus_sync)
 endif()
 
 # The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
@@ -158,6 +171,10 @@ target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 add_library(nexus_config STATIC src/config.cpp)
 target_include_directories(nexus_config PUBLIC src)
 target_compile_options(nexus_config PRIVATE ${NEXUS_WARNINGS})
+
+# The formats across versions as schema's variable tables (schema/Nexus.schema), generated and checked in under
+# schema/gen: the library nexus_wire, and the target schema_generate that regenerates it at the pinned schema commit.
+include(cmake/schema.cmake)
 
 if(NEXUS_WINDOW_LOGIC)
     # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
@@ -204,7 +221,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_library(nexus_server STATIC src/server/server.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers)
+    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
@@ -255,10 +272,12 @@ endif()
 enable_testing()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
+add_subdirectory(tests/accounts)
 add_subdirectory(tests/window)
 add_subdirectory(tests/store)
 add_subdirectory(tests/driver)
 add_subdirectory(tests/server)
+add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()

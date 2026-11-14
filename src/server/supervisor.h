@@ -36,6 +36,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -76,6 +77,12 @@ struct Config {
     std::string model;                  // the session's model and effort, written with each send (empty: the
     std::string effort;                 // harness's default)
     std::string account;                // the session's account: a driver runs under the one it was started with
+    // What goes before the prompt of the first send after the session moved to another directory, where its harness
+    // session cannot be resumed: a summary of the conversation so far (Drivers gives it from the transcript). Called
+    // only then, with the prompt it goes before (already the transcript's, which the summary leaves out); unset,
+    // nothing goes before it.
+    std::function<std::string(const std::string& prompt)> summarize;
+    bool here = true;                   // the session's instance is on this machine (setPlace): else no driver starts
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
@@ -115,6 +122,12 @@ struct Output {
     bool durable = false;               // the durable state changed: commit Supervisor::state() with the effects
     std::vector<Command> commands;
     std::optional<driver::Credential> credential;   // the driver reported the credential it uses
+    // What the driver said of its account's login, for the hub (Hub::reportSignedIn, Hub::rotate): signed in (a
+    // subscription credential), not usable (no credential, or not a subscription), or at its usage limit. `account` is
+    // the one the driver alive was started under (empty: none).
+    std::optional<bool> signedIn;
+    bool usageLimit = false;
+    std::string account;
     std::optional<double> sessionCostUsd;           // a turn's done reported the session's cost so far
     std::size_t taken = 0;      // prompts taken from the head of the session's queue: commit as many dequeues, first
 };
@@ -162,6 +175,14 @@ public:
     // The person set the session's account. A driver started under another is ended quietly once no turn is open (an
     // open turn runs to its end first), never counted as a failed start; the next starts under this account.
     Output setAccount(std::string account, Millis now);
+    // The session's instance changed (sync::Hub settles it, or a reload moved it): its directory is `cwd`, and `here`
+    // says whether it is on this server's machine. A driver started in another directory, or any driver once the
+    // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
+    // The harness keeps its sessions by directory (the state's sessionDir): in the same directory the next driver
+    // resumes the harness session; in another it is dropped, and the next driver starts afresh, its first send
+    // carrying a summary of the conversation so far (Config::summarize), with a notice. While not here, no queued
+    // prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
+    Output setPlace(std::string cwd, bool here, Millis now);
 
     std::optional<Millis> deadline() const;     // when tick() next has something to do
     const sync::DriverState& state() const { return state_; }
@@ -182,12 +203,16 @@ public:
     const std::string& effort() const { return config_.effort; }
     const std::string& account() const { return config_.account; }
     const std::string& driverAccount() const { return driverAccount_; }    // the alive driver's; empty with none
+    const std::string& cwd() const { return config_.cwd; }                  // the session's directory
+    const std::string& driverCwd() const { return driverCwd_; }    // the alive driver's directory; empty with none
+    bool here() const { return config_.here; }                           // the session's instance is on this machine
     bool retiring() const { return retiring_; }     // the driver is being ended for an account change
     const std::string& openPrompt() const { return openPrompt_; }
     // What the friend is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
     // held back (failed starts, or no credential); otherwise Busy while a turn is open or about to begin (a prompt
-    // waits, or a driver starts); otherwise Down when no driver is configured (nothing queued is taken, and a prompt
-    // reaches no driver), or when the last driver failed (crashed, broke the protocol, missed a deadline) and none has
+    // waits with the instance here, or a driver starts); otherwise Down when no driver is configured (nothing queued is
+    // taken, and a prompt reaches no driver), or the instance is on another machine (no driver starts here), or when
+    // the last driver failed (crashed, broke the protocol, missed a deadline) and none has
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
     sync::Activity activity() const;
@@ -229,9 +254,10 @@ private:
     std::string lastCause_;             // the cause the driver gave with its last error, if any
     std::string lastFix_;               // and its fix
     std::string driverAccount_;         // the account the driver alive was started under
+    std::string driverCwd_;             // the directory it was started in
     std::string driverModel_;           // the model and effort it was told (empty: the harness's default)
     std::string driverEffort_;
-    bool retiring_ = false;             // it is being ended for a change of account (or a setting put back)
+    bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)
     Output out_;                        // the output of the event in progress
 };
 
