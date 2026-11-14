@@ -1,7 +1,7 @@
-# CI for nexus: the build with its unit and functional tests, the model under the sanitizers, and the TLA+ models
-# with their trace checks, and the Claude driver (drivers/claude), as four jobs in parallel on the fleet's macOS runners
-# (never GitHub-hosted); and the build
-# without the window, its unit and functional tests and the sanitizers' programs, and the code generated from
+# CI for nexus: the build with its unit and functional tests, the model under the sanitizers, the Claude driver
+# (drivers/claude) and the tab label's trace checks, as jobs in parallel on the fleet's macOS runners (never
+# GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
+# TLA+ models with their trace checks (in parallel shards), and the code generated from
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
 # captain (wsl2-functional), where nexus runs everything but the overlay on Windows. Every pull request runs it, whatever its base,
 # and so does every push to main.
@@ -326,9 +326,11 @@ jobs:
           fi
 
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
+  # On the runners labelled tlc, as the model shards: on hulk's loaded general runners its build ran past the 2 minutes.
+  # It builds the programs it runs and nothing else, through ccache (sanitizer flags key their own entries).
   sanitizers-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: [self-hosted, fleet, Linux, X64, tlc]
     timeout-minutes: 2
     env:
       CC: clang
@@ -338,21 +340,36 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Prax's download cache, one per runner
+      - name: Caches outside the workspace
         shell: bash
         run: |
           set -euo pipefail
-          downloads="$HOME/.cache/nexus-ci/$RUNNER_NAME/prax-downloads"
-          mkdir -p "$downloads"
-          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(nproc)"
+          } >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
+            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}" \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      # Exactly the programs the next step runs (model_checks would add the accounts' and the glide's, which it does not).
+      - name: Build the programs it runs
         run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DCMAKE_LINKER_TYPE=LLD
-          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
-          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks and wire_test
-        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
+          cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
+          link_walk store_test durable_test journal_walk driver_protocol_test supervisor_test supervisor_walk wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -407,8 +424,161 @@ jobs:
           # the formats as schema's tables: every table read back, and two versions reading each other both ways
           build/tests/wire/wire_test
 
-
+  # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
+  # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
+  # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`) and builds only
+  # the walks they run (`build`), and the last,
+  # window, takes every test no other shard names, so a new test is never missed. `--no-tests=error` fails a shard
+  # whose regex matches nothing. The largest instances each have a shard of their own. The tab label's traces need the
+  # window's logic, which does not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS
+  # (model-label).
   model:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
+    # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
+    # past their 60 s. A shard waiting for a runner is not counted in its 2 minutes.
+    runs-on: [self-hosted, fleet, Linux, X64, tlc]
+    timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: supervisor
+            run: '^tlc_supervisor$'
+          - shard: supervisor-switch
+            run: '^tlc_supervisor_switch$'
+          - shard: supervisor-place
+            run: '^tlc_supervisor_place$'
+          - shard: supervisor-rest
+            run: '^tlc_supervisor_'
+            build: supervisor_walk
+            skip: '^tlc_supervisor_(switch|place)$'
+          - shard: link-ensure
+            run: '^tlc_link_ensure$'
+          - shard: link-one-window
+            run: '^tlc_link_one_window$'
+          - shard: link-tabs
+            run: '^tlc_link_(tabs|two_windows)$'
+          - shard: link-rest
+            run: '^tlc_link_'
+            build: link_walk
+            skip: '^tlc_link_(ensure|one_window|tabs|two_windows)$'
+          - shard: accounts-journal
+            run: '^tlc_(accounts|journal)'
+            build: accounts_walk journal_walk
+          - shard: claude
+            run: '^tlc_claude'
+            node: true
+          - shard: witnesses
+            run: '^tlc_witness'
+          - shard: window
+            run: ''
+            build: trace_walk overlay_walk glide_walk
+            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness)'
+    name: model (${{ matrix.shard }})
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Java and the pinned TLC jar from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          java=""
+          for c in "$(command -v java || true)" "$HOME/sdk/bin/java" /usr/bin/java; do
+            if [ -n "$c" ] && [ -x "$c" ] && "$c" -version >/dev/null 2>&1; then java=$c; break; fi
+          done
+          if [ -z "$java" ]; then
+            echo "::error::no working java on $(hostname -s) (looked on PATH, at \$HOME/sdk/bin/java and /usr/bin/java): install a JDK 21 on this runner's machine through the fleet play, then re-run"
+            exit 1
+          fi
+          "$java" -version
+          dirname "$java" >> "$GITHUB_PATH"
+          jar=""
+          for c in "$HOME/sdk/tla/tla2tools.jar" /opt/tla/tla2tools.jar; do
+            if [ -f "$c" ]; then jar=$c; break; fi
+          done
+          if [ -z "$jar" ]; then
+            echo "::error::no TLC jar on $(hostname -s) (looked at \$HOME/sdk/tla/tla2tools.jar and /opt/tla/tla2tools.jar): place tla2tools.jar v1.7.4 there (sha256 in .github/tla2tools.sha256; another fleet machine holds one), then re-run"
+            exit 1
+          fi
+          want=$(cut -d' ' -f1 .github/tla2tools.sha256)
+          have=$(sha256sum "$jar" | cut -d' ' -f1)
+          if [ "$want" != "$have" ]; then
+            echo "::error::$jar on $(hostname -s) is not the pinned tla2tools.jar v1.7.4 (sha256 $have, want $want): replace it with the pinned jar, then re-run"
+            exit 1
+          fi
+          echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(nproc)"
+          } >> "$GITHUB_ENV"
+      # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
+      # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
+      - name: Node from the runner's machine, and the Claude driver built
+        if: matrix.node
+        shell: bash
+        working-directory: drivers/claude
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          npm ci --omit=optional --no-audit --no-fund
+          npm run build
+      # Without the window, its logic and the link's transport, which no check program uses (as build-and-unit-linux).
+      - name: Configure (Release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
+            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}"
+      # Only the walks this shard's trace checks run (`build`); a shard of specs and witnesses alone builds nothing.
+      - name: Build the shard's walks
+        if: matrix.build
+        shell: bash
+        env:
+          TARGETS: ${{ matrix.build }}
+        run: |
+          set -euo pipefail
+          read -r -a targets <<< "$TARGETS"
+          cmake --build build --parallel "$JOBS" --target "${targets[@]}"
+      # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
+      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
+      # model_nightly, run in nightly.yml; every property is still checked here, on the smaller instances.
+      - name: Models and trace checks
+        shell: bash
+        env:
+          RUN: ${{ matrix.run }}
+          SKIP: ${{ matrix.skip }}
+        run: |
+          set -euo pipefail
+          select=()
+          if [ -n "$RUN" ]; then select+=(-R "$RUN"); fi
+          if [ -n "$SKIP" ]; then select+=(-E "$SKIP"); fi
+          ctest --test-dir build -L '^model$' "${select[@]}" -j "$JOBS" --output-on-failure --no-tests=error
+
+  # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
+  # ran them before it moved to Linux.
+  model-label:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
@@ -443,38 +613,34 @@ jobs:
             exit 1
           fi
           echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
-      - name: Prax's download cache, one per runner
+      - name: Caches outside the workspace
         shell: bash
         run: |
           set -euo pipefail
-          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
-          mkdir -p "$downloads"
-          echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
-      # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
-      # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
-      - name: Node from the runner's machine, and the Claude driver built
-        shell: bash
-        working-directory: drivers/claude
-        run: |
-          set -euo pipefail
-          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
-            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
-            exit 1
-          fi
-          npm ci --omit=optional --no-audit --no-fund
-          npm run build
-      # Without the link's transport (mosh and protobuf), which no check program uses.
+          caches="$HOME/Library/Caches/nexus-ci"
+          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "CCACHE_DIR=$caches/ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_MAXSIZE=4G"
+            echo "JOBS=$(sysctl -n hw.ncpu)"
+          } >> "$GITHUB_ENV"
+      # Without the link's transport (mosh and protobuf), which the walk does not use.
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
-      # Only the model and its check programs: no app and no Prax shaders, so any macOS runner will do.
-      - name: Build the model checks
-        run: cmake --build build --parallel "$JOBS" --target model_checks
-      # One TLC worker per core: the instances with tens of thousands of states run eight workers each and ctest counts
-      # them as eight of its slots (PROCESSORS in tests/model/CMakeLists.txt). The largest instances, label
-      # model_nightly (the window model's three largest, the link's, the store's, and the Claude driver's with both settings), run in nightly.yml; every property is still checked here, on the smaller instances.
-      - name: Models and trace checks
-        run: ctest --test-dir build -L '^model$' -j "$JOBS" --output-on-failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher=()
+          if command -v ccache >/dev/null; then
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF "${launcher[@]}"
+      - name: Build the label's walk
+        run: cmake --build build --parallel "$JOBS" --target label_walk
+      - name: The label's trace checks
+        run: ctest --test-dir build -L '^model$' -R '^tlc_label_trace' -j "$JOBS" --output-on-failure --no-tests=error
 
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run

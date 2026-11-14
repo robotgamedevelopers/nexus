@@ -135,13 +135,17 @@ table StoreEntry
 }
 
 // A session's driver as the server keeps it across restarts: the next turn number, the turn open (0: none), the last
-// session id the harness reported, and the prompts waiting for a driver.
+// session id the harness reported, the prompts waiting for a driver, whether the next send carries a summary of the
+// conversation (its harness session was dropped for a move), and the directory that harness session was made in
+// (absent: not known, and the next driver resumes it).
 table Driver
 {
-    next_turn uint64
-    open_turn uint64
-    session   *string
-    waiting   []string
+    next_turn   uint64
+    open_turn   uint64
+    session     *string
+    waiting     []string
+    summary     bool
+    session_dir *string
 }
 
 // One change of a step (store::Change): an entry appended to the transcript, a prompt queued, the driver replaced

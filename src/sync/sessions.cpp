@@ -76,8 +76,9 @@ void writeEntry(Writer& w, const SessionEntry& e, const EntryRef* had, std::uint
 
 // One changed session: what it is (its friend, harness, account, model and effort); from format 2 its activity; its
 // first index; the index k of the first entry `a` does not hold as it is; the entries from k to the end; then a byte, 1
-// if the queue changed, and if so the queue. From format 2 the whole is framed by its length, and fields a later format
-// adds go after the queue.
+// if the queue changed, and if so the queue. From format 2 the whole is framed by its length, and fields added since
+// go after the queue, each only ever appended: its instance (empty: the friend's default instance). A window of
+// format 1 is not sent the instance.
 void writeSession(Writer& w, const SessionView& b, const SessionView* a, std::uint32_t format) {
     Writer body;
     Writer& out = format < 2 ? w : body;
@@ -112,6 +113,7 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a, std::ui
         }
     }
     if (format >= 2) {
+        out.str(b.info.instance);
         w.str(body.take());
     }
 }
@@ -201,6 +203,10 @@ SessionRef readFields(Reader& r, std::size_t left, SessionId id, const SessionVi
         }
     } else {
         throw BadDiff(name + ": queue flag " + std::to_string(queueChanged) + ", neither 0 nor 1");
+    }
+    // From format 2, the fields appended after the queue; a frame from before them gives their defaults.
+    if (format >= 2 && !r.done()) {
+        t->info.instance = r.str();
     }
     return t;
 }

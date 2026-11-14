@@ -86,3 +86,40 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
 }
 
 } // namespace nexus::server
+
+namespace nexus::server {
+
+accounts::Registry accountsFromDrivers(const DriverTable& table, const std::string& machine) {
+    accounts::Registry r;
+    std::map<std::string, std::string> accountOf;   // harness: the account its line passes
+    for (const auto& [harness, command] : table.drivers) {
+        for (std::size_t i = 0; i + 1 < command.size(); ++i) {
+            if (command[i] == "--account" && accounts::isName(command[i + 1]) && accounts::isProvider(harness)) {
+                accountOf[harness] = command[i + 1];
+                if (r.account(command[i + 1]) == nullptr) {
+                    r.accounts.push_back(accounts::Account{command[i + 1], harness});
+                }
+            }
+        }
+    }
+    for (const auto& [name, f] : table.friends) {
+        if (!accounts::isName(name)) {
+            continue;
+        }
+        accounts::Friend fr{name, {}, {}};
+        auto a = accountOf.find(f.harness);
+        if (a != accountOf.end() && r.account(a->second)->provider == f.harness) {
+            fr.accounts = {a->second};
+            fr.preferred = a->second;
+        }
+        if (accounts::isName(machine) && accounts::isMachine(machine) && accounts::isDir(f.cwd)) {
+            fr.instances.push_back(accounts::Instance{machine, machine, f.cwd});
+        }
+        if (!fr.accounts.empty() || !fr.instances.empty()) {
+            r.friends.push_back(std::move(fr));
+        }
+    }
+    return r;
+}
+
+} // namespace nexus::server

@@ -15,12 +15,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <vector>
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "server/config_repo.h"
+#include "server/driver_table.h"
 #include "server/drivers.h"
 #include "server/durable.h"
 #include "server/home.h"
@@ -43,6 +47,15 @@ volatile sig_atomic_t gStop = 0;
 
 void onSignal(int) {
     gStop = 1;
+}
+
+// This machine's host name, as gethostname gives it; empty when it fails (serverMachine() cuts it short).
+std::string hostName() {
+    char name[256] = {};
+    if (gethostname(name, sizeof name - 1) != 0) {
+        return std::string();
+    }
+    return std::string(name);
 }
 
 // Milliseconds on the steady clock: the drivers' deadlines.
@@ -163,7 +176,7 @@ bool ensureHome(const Paths& p, std::string* why) {
 
 // The server's config: none is fine; a malformed line stops the server, naming the file and the line; an unknown key
 // is logged.
-bool readConfig(const std::string& path, std::string* why) {
+bool readConfig(const std::string& path, ServerSettings* settings, std::string* why) {
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) {
@@ -191,7 +204,7 @@ bool readConfig(const std::string& path, std::string* why) {
     }
     close(fd);
     std::vector<std::string> warnings;
-    const bool ok = readServerConfig(text, path, &warnings, why);
+    const bool ok = readServerConfig(text, path, settings, &warnings, why);
     for (const std::string& w : warnings) {
         std::fprintf(stderr, "nexus-server: %s\n", w.c_str());
     }
@@ -224,11 +237,14 @@ private:
     bool listenControl(std::string* why);
     void control(int fd);
     bool endDrivers();
+    void configApply(int fd, const std::string& request);
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
+    std::unique_ptr<ConfigRepo> config_;
+    ServerSettings settings_;
     std::vector<Link> links_;
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
@@ -239,9 +255,93 @@ bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     if (!store_.open(*fs_, paths_.store, why))
         return false;
-    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs});
+    // The machine a friend's instance names to run here: the config's, else the short host name.
+    const std::string host = hostName();
+    const std::string machine = serverMachine(settings_.machine, host);
+    if (machine.empty()) {
+        std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
+            "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
+    }
+    drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
+                                                                  machine, host});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
+    // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
+    // settled against them before any driver starts.
+    config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
+    // An account is taken as signed in from the start when its credential is there, until its driver says otherwise
+    // (a no-credential or authentication error): for a claude account, its oauth-token, where the driver reads it
+    // (server/home.h accountsDir, under HOME whatever --dir says; drivers/claude/src/account.ts).
+    hub_->probeSignInWith([logins = paths_.accounts](const accounts::Account& a) {
+        return a.provider == "claude" && access((logins + "/" + a.name + "/oauth-token").c_str(), F_OK) == 0;
+    });
+    std::string configWhy;
+    accounts::Registry registry;
+    std::vector<std::string> report;
+    const bool opened = config_->open(&configWhy);
+    if (!opened) {
+        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
+    } else if (!config_->hasAccounts() && !config_->pending(&configWhy)) {
+        // A server from before accounts: its accounts are what the drivers file passed with --account, so that no
+        // session moves (server/driver_table.h accountsFromDrivers), committed as an upgrade.
+        std::string text;
+        std::ifstream in(paths_.drivers);
+        if (in) {
+            std::ostringstream all;
+            all << in.rdbuf();
+            text = all.str();
+        }
+        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home), machine);
+        if (!seed.accounts.empty() || !seed.friends.empty()) {
+            std::string why;
+            if (config_->keepSeed(seed, "upgrade: the accounts and friends taken from the drivers file (its --account "
+                              "values, and each friend's directory on this machine as its instance), so that every "
+                              "session runs as it ran before", &why)) {
+                std::fprintf(stderr, "nexus-server: config: accounts.json and friends.json made from %s\n",
+                    paths_.drivers.c_str());
+            } else {
+                std::fprintf(stderr, "nexus-server: config: the accounts in %s were not taken: %s\n",
+                    paths_.drivers.c_str(), why.c_str());
+            }
+        }
+    }
+    if (!opened) {
+        // the line above said why
+    } else if (!config_->committed(&registry, &report)) {
+        for (const std::string& l : report) {
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
+        std::fprintf(stderr, "nexus-server: config: the committed accounts and friends do not read, so the server "
+            "holds none until `nexus-server config reload` applies good ones\n");
+        hub_->keepWith(config_.get());
+    } else {
+        for (const std::string& l : report) {
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
+        for (const std::string& l : hub_->useAccounts(registry, config_.get())) {
+            std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
+        if (config_->adopting()) {
+            // The sessions from before accounts ran on their friend's --account: they keep it. Until all have, the
+            // mark stays, so a server stopped part way (a store that failed) adopts the rest at its next start.
+            for (const std::string& l : hub_->adoptDefaults()) {
+                std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+            }
+            if (hub_->failed()) {
+                *why = "the store failed while the sessions took the drivers file's accounts; restart the server, "
+                    "which takes them again";
+                return false;
+            }
+            std::string adoptWhy;
+            if (!config_->adopted(&adoptWhy)) {
+                std::fprintf(stderr, "nexus-server: config: %s; until it is removed, each start gives every session "
+                    "on no account its friend's default account again\n", adoptWhy.c_str());
+            }
+        }
+        std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
+            registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
+            config_->dir().c_str());
+    }
     const store::OpenReport& r = store_.report();
     std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
         "cut\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
@@ -306,11 +406,15 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
+    if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
+        configApply(fd, request);
+        return;
+    }
     Client client;
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>`, and `stop`\n");
+            "` format <n>`, `stop`, `config reload` and `config restore <commit>`\n");
         return;
     }
     // A window whose state format this server no longer sends: refused in one plain line, which the window shows and
@@ -360,6 +464,49 @@ void Server::control(int fd) {
     }
 }
 
+// `config reload` (the working files, hand-edited) or `config restore <commit>` (the files as that commit held them),
+// applied by the hub and committed, with what was applied or refused written back line by line, then OK or ERROR, and
+// to the log. Decided against the server's state as it is now.
+void Server::configApply(int fd, const std::string& request) {
+    std::vector<std::string> lines;
+    accounts::Registry next;
+    std::string message;
+    bool ok = false;
+    if (!config_) {
+        lines.push_back("the server has no config repository");
+    } else if (request == "config reload") {
+        ok = config_->working(&next, &lines);
+        message = "reload: the hand edit of accounts.json and friends.json applied (the person's or their AI's)";
+    } else {
+        const std::string commit = request.substr(std::string("config restore ").size());
+        ok = config_->restoring(commit, &next, &lines);
+        message = "restore: the files as commit " + commit + " held them, applied as a new version";
+    }
+    if (ok) {
+        const bool reload = request == "config reload";
+        config_->applying(reload);   // only a reload commits over the working files: they are what it applies
+        ok = hub_->applyAccounts(next, message, &lines);
+        config_->applying(false);
+        for (const std::string& n : config_->notes()) {
+            lines.push_back(n);
+        }
+        for (Link& s : links_) {
+            s.link->setState(hub_->state());
+        }
+    }
+    if (ok && lines.empty()) {
+        lines.push_back("nothing changed: the files already said what the server holds");
+    }
+    std::string reply;
+    for (const std::string& l : lines) {
+        reply += (ok ? "applied: " : "refused: ") + l + "\n";
+        std::fprintf(stderr, "nexus-server: config %s: %s%s\n", request.c_str() + 7, ok ? "applied: " : "refused: ",
+            l.c_str());
+    }
+    reply += ok ? "OK\n" : "ERROR nothing was applied; the server keeps the accounts and friends it had\n";
+    writeAll(fd, reply);
+}
+
 // Ends every driver (input closed, then SIGTERM, then SIGKILL, each after its grace period) and waits for them. False
 // when the store failed on the way; the drivers are killed and collected even then.
 bool Server::endDrivers() {
@@ -379,7 +526,8 @@ bool Server::endDrivers() {
 int Server::run() {
     std::string why;
     // The store opens before the control socket listens, so no session is made on a state not yet read.
-    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &why) || !openStore(&why) || !listenControl(&why)) {
+    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why) || !openStore(&why) ||
+            !listenControl(&why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
@@ -401,9 +549,19 @@ int Server::run() {
                 ++it;
             }
         }
+        // A commit to the config repository asked for a push: it runs as a child the loop watches, never here.
+        if (config_ && config_->pushWanted() && !config_->pushRunning()) {
+            std::string pushWhy;
+            if (!config_->pushStart(nowMs(), &pushWhy)) {
+                std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
+            }
+        }
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
         int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+        if (config_ && config_->pushRunning()) {
+            wait = std::min(wait, config_->pushWaitMs(nowMs()));
+        }
         for (std::size_t i = 0; i < links_.size(); ++i) {
             wait = std::min(wait, std::max(0, links_[i].link->waitMs()));
             for (int fd : links_[i].link->fds()) {
@@ -415,11 +573,20 @@ int Server::run() {
         const std::size_t linkFds = fds.size();
         for (const pollfd& p : drivers_->fds())
             fds.push_back(p);
+        if (config_) {
+            for (int fd : config_->pushFds()) {
+                fds.push_back(pollfd{fd, POLLIN, 0});
+            }
+        }
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
             std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
             break;
         }
         link::freezeClock();
+        std::string pushed;
+        if (config_ && config_->pushServe(nowMs(), &pushed)) {
+            std::fprintf(stderr, "nexus-server: config push: %s\n", pushed.c_str());
+        }
         bool changed = false;
         if (!drivers_->serve(nowMs(), &changed)) {
             std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
@@ -578,6 +745,7 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     out->log = d + "/server.log";
     out->store = d + "/store";
     out->drivers = d + "/drivers";
+    out->accounts = accountsDir(out->home);
     sockaddr_un addr;
     if (!socketAddress(out->socket, &addr)) {
         *why = out->socket + " is longer than a Unix socket's address holds (" + std::to_string(sizeof addr.sun_path - 1) +
@@ -608,6 +776,105 @@ bool validClientId(const std::string& id) {
             return false;
     }
     return true;
+}
+
+int config(const Paths& p, const std::vector<std::string>& args) {
+    signal(SIGPIPE, SIG_IGN);
+    ConfigRepo repo(p.dir + "/nexus-config");
+    const std::string verb = args.empty() ? std::string() : args[0];
+    auto fail = [](const std::string& why) {
+        std::fprintf(stderr, "nexus-server: config: %s\n", why.c_str());
+        return 1;
+    };
+    if (verb == "path" && args.size() == 1) {
+        std::printf("%s\n%s\n%s\n", repo.dir().c_str(), repo.accountsPath().c_str(), repo.friendsPath().c_str());
+        return 0;
+    }
+    if (verb != "reload" && verb != "restore" && access((repo.dir() + "/.git").c_str(), F_OK) != 0) {
+        return fail(repo.dir() + " is not made yet: nexus-server makes it when it starts (`nexus-server new` starts "
+            "it); write accounts.json and friends.json there (docs/accounts.md), and the first start takes them");
+    }
+    if (verb == "check" && args.size() == 1) {
+        accounts::Registry working;
+        accounts::Registry head;
+        std::vector<std::string> errors;
+        if (!repo.working(&working, &errors)) {
+            for (const std::string& e : errors) {
+                std::printf("error: %s\n", e.c_str());
+            }
+            std::printf("ERROR %zu problem%s; nothing was changed\n", errors.size(), errors.size() == 1 ? "" : "s");
+            return 1;
+        }
+        std::vector<std::string> headErrors;
+        if (!repo.committed(&head, &headErrors, false)) {   // a check writes nothing, not even an upgrade
+            head = accounts::Registry{};
+        }
+        const std::vector<std::string> lines = accounts::changes(head, working);
+        for (const std::string& l : lines) {
+            std::printf("would apply: %s\n", l.c_str());
+        }
+        std::printf("OK the files read and agree; %s\n", lines.empty() ? "they hold what the server last applied" :
+            "`nexus-server config reload` applies them (sessions on accounts no longer linked move, and are told)");
+        return 0;
+    }
+    if (verb == "history" && args.size() == 1) {
+        std::vector<std::string> lines;
+        std::string why;
+        if (!repo.history(&lines, &why)) {
+            return fail(why);
+        }
+        for (const std::string& l : lines) {
+            std::printf("%s\n", l.c_str());
+        }
+        return 0;
+    }
+    if (verb == "remote" && args.size() <= 2) {
+        std::string url;
+        std::string why;
+        if (args.size() == 1) {
+            if (!repo.remote(&url, &why)) {
+                return fail(why);
+            }
+            std::printf("%s\n", url.empty() ? "none" : url.c_str());
+            return 0;
+        }
+        if (args[1] == "--clear") {
+            return repo.clearRemote(&why) ? 0 : fail(why);
+        }
+        return repo.setRemote(args[1], &why) ? 0 : fail(why);
+    }
+    if ((verb == "reload" && args.size() == 1) || (verb == "restore" && args.size() == 2)) {
+        const int fd = connectControl(p.socket);
+        if (fd < 0) {
+            return fail(errnoText("no server answers on " + p.socket) + "; `nexus-server new` starts it, and a "
+                "server that starts applies what the repository's last commit holds");
+        }
+        const std::string request = verb == "reload" ? std::string("config reload") : "config restore " + args[1];
+        if (!writeAll(fd, request + "\n")) {
+            close(fd);
+            return fail("the request could not be written to " + p.socket);
+        }
+        std::string line;
+        int status = 1;
+        while (readLine(fd, &line, 30000)) {
+            if (line == "OK") {
+                status = 0;
+                break;
+            }
+            std::printf("%s\n", line.c_str());
+            if (line.rfind("ERROR", 0) == 0) {
+                break;
+            }
+        }
+        close(fd);
+        return status;
+    }
+    std::fprintf(stderr, "usage: nexus-server config path|check|reload|history [--dir DIR]\n"
+                         "       nexus-server config restore <commit> [--dir DIR]\n"
+                         "       nexus-server config remote [<url> | --clear] [--dir DIR]\n"
+                         "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
+                         "(docs/accounts.md)\n");
+    return 2;
 }
 
 std::string newRequest(const Client& client) {

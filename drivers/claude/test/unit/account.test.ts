@@ -3,11 +3,13 @@
 // prepare), and Claude's environment: the account's login and no inherited one (src/env.ts).
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { accountsDir, isAccount, readAccount, type Account, type AccountRefusal } from '../../src/account.js';
+import {
+    accountsDir, isAccount, kAccountsUnderHome, readAccount, type Account, type AccountRefusal,
+} from '../../src/account.js';
 import { harnessEnv, scrub } from '../../src/env.js';
 import { prepare } from '../../src/run.js';
 
@@ -37,6 +39,14 @@ void test('an account is its directory under ~/.nexus/server/accounts and the on
     assert.deepEqual(a, { name: 'main', dir, token: 'sk-ant-oat01-secret' });
     makeAccount('crlf', '  tok-2\r\n\r\n');
     assert.deepEqual(readAccount(`${home}/`, 'crlf'), { name: 'crlf', dir: `${home}/.nexus/server/accounts/crlf`, token: 'tok-2' });
+});
+
+void test('the logins are where the server looks for them: the one path of src/server/home.h', () => {
+    // dist/test/unit -> the repository's root.
+    const header = readFileSync(join(import.meta.dirname, '..', '..', '..', '..', '..', 'src', 'server', 'home.h'),
+        'utf8');
+    assert.ok(header.includes(`kAccountsUnderHome = "${kAccountsUnderHome}";`), 'home.h names another accounts path');
+    assert.equal(accountsDir('/h/'), `/h/${kAccountsUnderHome}`);
 });
 
 void test('each missing or unsafe login is refused, naming the file and the fix, never the token', () => {

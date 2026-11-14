@@ -72,6 +72,11 @@ public:
         std::string home;               // the home directory, for a friend with no directory
         Timing timing;
         std::function<Millis()> clock;  // now, for the prompts the hub hands over
+        std::string machine{};          // this server's machine, by its name in the fleet (server/home.h
+                                        // serverMachine): an instance on another machine, or every instance while
+                                        // this is empty, starts no driver here yet
+        std::string hostName{};         // this machine's full host name, which an instance may name instead
+                                        // (server/home.h sameMachine)
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.
@@ -131,7 +136,8 @@ private:
 
     std::string friendOf(sync::SessionId id) const;
     ResolvedDriver resolve(sync::SessionId id) const;
-    ResolvedDriver resolveFriend(const std::string& friendName) const;
+    const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
+    ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);

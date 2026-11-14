@@ -31,6 +31,13 @@ enum class ActionKind : std::uint8_t {
     SetAccount = 6, // the session's account, model or effort becomes `text` (empty: the harness's default), from its
     SetModel = 7,   // next turn on
     SetEffort = 8,
+    // The accounts and friends (accounts/registry.h, docs/accounts.md), decided by the server against its own:
+    AddAccount = 9,     // an account (`account`) set up with its provider (`text`)
+    RemoveAccount = 10, // an account (`account`) removed: every link to it goes, and its sessions move off it
+    AddFriend = 11,     // a friend (friendName) set up, with no accounts
+    LinkAccount = 12,   // the friend (friendName) may run on the account (`account`), after those it has
+    UnlinkAccount = 13, // the friend no longer runs on the account: its sessions on it move off it
+    SetDefault = 14,    // the friend's default account becomes `account` (empty: none)
 };
 
 struct Action {
@@ -39,6 +46,7 @@ struct Action {
     SessionId session = 0;  // the session it names; a create's to copy from (0: none); an ensure's is 0
     std::string friendName; // a create's and an ensure's friend; empty for the rest
     std::string text;
+    std::string account;    // the account an account action names; empty for the rest (and not on the wire for them)
     bool operator==(const Action&) const = default;
 };
 

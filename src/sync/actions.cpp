@@ -8,8 +8,8 @@ namespace nexus::sync {
 
 namespace {
 
-// A diff: the number of its first action, how many follow, and each action's kind, session, friend and text. The
-// numbers of the rest follow from the first, so a diff is always one unbroken run.
+// A diff: the number of its first action, how many follow, and each action's kind, session, friend and text, and an
+// account action's account. The numbers of the rest follow from the first, so a diff is always one unbroken run.
 std::string encode(std::uint64_t start, const std::vector<Action>& held, std::size_t from) {
     Writer w;
     w.u64(start);
@@ -19,6 +19,9 @@ std::string encode(std::uint64_t start, const std::vector<Action>& held, std::si
         w.u64(held[i].session);
         w.str(held[i].friendName);
         w.str(held[i].text);
+        if (held[i].kind >= ActionKind::AddAccount) {
+            w.str(held[i].account);    // only the account actions carry it, so the older kinds' bytes are as they were
+        }
     }
     return w.take();
 }
@@ -74,14 +77,17 @@ std::vector<Action> Actions::parse(const std::string& diff) {
         a.num = start + i;
         const std::uint8_t kind = r.byte();
         if (kind < static_cast<std::uint8_t>(ActionKind::Send) ||
-                kind > static_cast<std::uint8_t>(ActionKind::SetEffort)) {
+                kind > static_cast<std::uint8_t>(ActionKind::SetDefault)) {
             throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", none of send (1) to set "
-                "effort (8)");
+                "default (14)");
         }
         a.kind = static_cast<ActionKind>(kind);
         a.session = r.u64();
         a.friendName = r.str();
         a.text = r.str();
+        if (a.kind >= ActionKind::AddAccount) {
+            a.account = r.str();
+        }
         out.push_back(std::move(a));
     }
     r.end();

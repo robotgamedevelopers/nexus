@@ -338,7 +338,7 @@ void applier_exactly_once() {
     auto range = [](std::uint64_t from, std::uint64_t to) {
         std::vector<Action> v;
         for (std::uint64_t n = from; n <= to; ++n)
-            v.push_back(Action{n, ActionKind::Send, sid("ada"), "", std::to_string(n)});
+            v.push_back(Action{n, ActionKind::Send, sid("ada"), "", std::to_string(n), {}});
         return v;
     };
     CHECK(ap.apply(range(1, 2)).size() == 2);
@@ -691,8 +691,8 @@ void hub_send_and_queue() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hello"}));
-    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "later"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hello", {}}));
+    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "later", {}}));
     const SessionView* t = hub.state().find(sid("ada"));
     CHECK(t != nullptr && t->entries.size() == 2 && t->first == 0);
     CHECK(t->entries[0]->kind == EntryKind::Person && t->entries[0]->text == "hello" && t->entries[0]->closed);
@@ -712,16 +712,16 @@ void hub_limits() {
     Hub hub(store, limits);
     withSessions(hub, {"ada", "bo"});
     std::string why;
-    CHECK(!hub.apply(Action{1, ActionKind::Send, sid("ada"), "", std::string(11, 'x')}, &why));
+    CHECK(!hub.apply(Action{1, ActionKind::Send, sid("ada"), "", std::string(11, 'x'), {}}, &why));
     CHECK(why.find("limit") != std::string::npos);
     CHECK(hub.state().find(sid("ada"))->entries.back()->kind == EntryKind::Notice);
-    CHECK(!hub.apply(Action{2, ActionKind::Send, sid("ada"), "", " \t\n"}, &why));
-    CHECK(hub.apply(Action{3, ActionKind::Queue, sid("ada"), "", "123456"}));
-    CHECK(!hub.apply(Action{4, ActionKind::Queue, sid("ada"), "", "1234567"}, &why));   // 13 bytes queued: over
-    CHECK(hub.apply(Action{5, ActionKind::Queue, sid("ada"), "", "12345"}));
-    CHECK(!hub.apply(Action{6, ActionKind::Queue, sid("ada"), "", "1"}, &why));         // a third prompt: over
+    CHECK(!hub.apply(Action{2, ActionKind::Send, sid("ada"), "", " \t\n", {}}, &why));
+    CHECK(hub.apply(Action{3, ActionKind::Queue, sid("ada"), "", "123456", {}}));
+    CHECK(!hub.apply(Action{4, ActionKind::Queue, sid("ada"), "", "1234567", {}}, &why));   // 13 bytes queued: over
+    CHECK(hub.apply(Action{5, ActionKind::Queue, sid("ada"), "", "12345", {}}));
+    CHECK(!hub.apply(Action{6, ActionKind::Queue, sid("ada"), "", "1", {}}, &why));         // a third prompt: over
     CHECK(hub.state().find(sid("ada"))->queue.size() == 2);
-    CHECK(hub.apply(Action{7, ActionKind::Send, sid("bo"), "", "hi"}));
+    CHECK(hub.apply(Action{7, ActionKind::Send, sid("bo"), "", "hi", {}}));
     // a third session: refused, and none made
     CHECK(!hub.apply(ensure(8, "cy"), &why));
     CHECK(why.find("limit") != std::string::npos);
@@ -734,10 +734,10 @@ void hub_shares_untouched_sessions() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada", "bo"});
-    hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "a"});
-    hub.apply(Action{2, ActionKind::Send, sid("bo"), "", "b"});
+    hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "a", {}});
+    hub.apply(Action{2, ActionKind::Send, sid("bo"), "", "b", {}});
     const Sessions before = hub.state();
-    hub.apply(Action{3, ActionKind::Send, sid("bo"), "", "c"});
+    hub.apply(Action{3, ActionKind::Send, sid("bo"), "", "c", {}});
     CHECK(before.find(sid("ada")) == hub.state().find(sid("ada")));
     CHECK(before.find(sid("bo")) != hub.state().find(sid("bo")));
 }
@@ -939,28 +939,28 @@ void hub_stop_reaches_the_responder_once() {
     Hub hub(store, Limits{}, &r);
     std::string why;
     // a session the server does not hold: refused, counted, and no session made
-    CHECK(!hub.apply(Action{1, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(!hub.apply(Action{1, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(why == "no session 1");
     CHECK(store.applied("w") == 1);
     CHECK(store.find(sid("ada")) == nullptr && hub.state().find(sid("ada")) == nullptr);
     CHECK(r.stopped.empty() && r.sentTo.empty());
     CHECK(hub.apply(ensure(2, "ada"), &why, "w"));
-    CHECK(hub.apply(Action{3, ActionKind::Send, sid("ada"), "", "hi"}, &why, "w"));
+    CHECK(hub.apply(Action{3, ActionKind::Send, sid("ada"), "", "hi", {}}, &why, "w"));
     // a stop that carries text: refused, counted, and not passed on
     why.clear();
-    CHECK(!hub.apply(Action{4, ActionKind::Stop, sid("ada"), "", "x"}, &why, "w"));
+    CHECK(!hub.apply(Action{4, ActionKind::Stop, sid("ada"), "", "x", {}}, &why, "w"));
     CHECK(why == "a stop that carried text was not applied: a stop carries none");
     CHECK(store.applied("w") == 4);
     CHECK(r.stopped.empty());
     // a stop: to the responder, once, with nothing in the store
     const std::size_t entries = store.find(sid("ada"))->transcript.size();
-    CHECK(hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(r.stopped == std::vector<SessionId>{1});
     CHECK(r.sentTo.back() == "1 committed");
     CHECK(store.applied("w") == 5);
     CHECK(store.find(sid("ada"))->transcript.size() == entries);
     // the same number again is the store's to refuse: the Applier never gives it twice
-    CHECK(!hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", ""}, &why, "w"));
+    CHECK(!hub.apply(Action{5, ActionKind::Stop, sid("ada"), "", "", {}}, &why, "w"));
     CHECK(r.stopped.size() == 1 && r.sentTo.back() == "1 not committed");
 }
 
@@ -968,9 +968,9 @@ void hub_stop_without_responder_changes_nothing() {
     MemoryStore store;
     Hub hub(store);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
     const Sessions before = hub.state();
-    CHECK(hub.apply(Action{2, ActionKind::Stop, sid("ada"), "", ""}));
+    CHECK(hub.apply(Action{2, ActionKind::Stop, sid("ada"), "", "", {}}));
     CHECK(hub.state() == before);
 }
 
@@ -979,10 +979,10 @@ void hub_queue_goes_to_the_responder() {
     RecordingResponder r;
     Hub hub(store, Limits{}, &r);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Queue, sid("ada"), "", "later"}));
+    CHECK(hub.apply(Action{1, ActionKind::Queue, sid("ada"), "", "later", {}}));
     CHECK(hub.state().find(sid("ada"))->queue == std::vector<std::string>{"later"});
     r.deliver = true;
-    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "now"}));
+    CHECK(hub.apply(Action{2, ActionKind::Queue, sid("ada"), "", "now", {}}));
     // the oldest left the queue, as the person's entry; the new one waits
     const SessionView* t = hub.state().find(sid("ada"));
     CHECK(t->queue == std::vector<std::string>{"now"});
@@ -1012,7 +1012,7 @@ void hub_open_entry() {
     CHECK(!hub.setOpen(sid("ada"), "part"));                 // a session the store does not hold
     CHECK(hub.state().find(sid("ada")) == nullptr);
     withSessions(hub, {"ada"});
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
     CHECK(!hub.setOpen(sid("ada"), "123456789"));            // past the text limit
     CHECK(!hub.setOpen(sid("ada"), ""));                     // none to drop
     CHECK(hub.setOpen(sid("ada"), "part"));
@@ -1144,6 +1144,7 @@ void state_format_2_reads_later_formats() {
     session.byte(1);            // the queue
     session.u64(1);
     session.str("queued");
+    session.str("studio");      // the instance, appended to format 2 since it began
     session.u64(42);            // a field a later format adds to a session
     session.str("more of it");
     Writer diff;
@@ -1162,7 +1163,89 @@ void state_format_2_reads_later_formats() {
         CHECK(v->entries.size() == 1 && v->entries[0]->kind == EntryKind::Notice && v->entries[0]->closed);
         CHECK(v->entries[0]->text == "a line of a kind this build does not know");
         CHECK(v->queue == std::vector<std::string>{"queued"});
+        CHECK(v->info.instance == "studio");
     }
+}
+
+// A session of format 2 as main wrote it before instances (its frame ends with the queue), by hand: friend "ada",
+// account "work", idle, one closed entry of the person's, "hi", and the queue empty. The instance is appended to the
+// frame when given, as this build writes it.
+std::string mainSessionFrame(const std::string* instance) {
+    Writer entry1;
+    entry1.byte(0);             // the person's
+    entry1.byte(1);             // closed
+    entry1.u64(0);
+    entry1.str("hi");
+    Writer session;
+    for (const char* f : {"ada", "claude", "work", "", ""}) {
+        session.str(f);
+    }
+    session.byte(0);            // idle
+    session.u64(0);             // first
+    session.u64(0);             // from entry 0
+    session.u64(1);             // one entry
+    session.str(entry1.take());
+    session.byte(1);            // the queue, changed, empty
+    session.u64(0);
+    if (instance != nullptr) {
+        session.str(*instance);
+    }
+    Writer diff;
+    diff.u64(1);
+    diff.u64(sid("ada"));
+    diff.byte(1);
+    diff.str(session.take());
+    return diff.take();
+}
+
+// The instance crosses the wire as a field appended to format 2's session frame, so no format number changed: a
+// diff main wrote before instances (old to new) reads each session on no instance, its friend's default; this build's
+// diff is main's with the instance at the frame's end (new to old: a reader from before skips it, as format 2's readers
+// skip what a frame adds); a diff that sends one session carries its instance, and a kept one keeps its own; and a
+// window of format 1 is sent no instance, byte for byte main's (fixtures/main-state-1.init).
+void sessions_instance_appended() {
+    auto with = [](const std::string& ada, const std::string& bo) {
+        std::vector<SessionRef> v;
+        for (const auto& [name, inst] : {std::pair<std::string, std::string>{"ada", ada}, {"bo", bo}}) {
+            SessionView t = tailOf(sid(name), SessionInfo{name, "claude", "work", "", "", inst},
+                {entry(EntryKind::Person, "hi")}, {}, Tail{});
+            v.push_back(std::make_shared<const SessionView>(std::move(t)));
+        }
+        return Sessions(std::move(v));
+    };
+    Sessions read;
+    read.apply_string(mainSessionFrame(nullptr));
+    const SessionView* a = read.find(sid("ada"));
+    CHECK(a != nullptr && a->info.account == "work" && a->info.instance.empty());
+    CHECK(a != nullptr && a->entries.size() == 1 && a->entries[0]->text == "hi");
+    // New to old: this build's bytes are main's, the instance appended inside the frame.
+    SessionView one = tailOf(sid("ada"), SessionInfo{"ada", "claude", "work", "", "", "studio"},
+        {entry(EntryKind::Person, "hi")}, {}, Tail{});
+    const Sessions b({std::make_shared<const SessionView>(one)});
+    const std::string studio = "studio";
+    CHECK(b.init_diff() == mainSessionFrame(&studio));
+    Sessions c;
+    c.apply_string(b.init_diff());
+    CHECK(c == b && c.find(sid("ada"))->info.instance == "studio");
+    // One session sent, one kept.
+    const Sessions both = with("studio", "");
+    const Sessions moved = with("studio", "laptop");
+    Sessions d;
+    d.apply_string(both.init_diff());
+    CHECK(d == both);
+    d.apply_string(moved.diff_from(both));
+    CHECK(d == moved && d.find(sid("bo"))->info.instance == "laptop" && d.find(sid("ada"))->info.instance == "studio");
+    // Format 1: no instance, main's bytes exactly.
+    const Sessions mainOne = mainState("The nightly");
+    std::vector<SessionRef> placed;
+    for (const SessionRef& r : mainOne.sessions()) {
+        SessionView v = *r;
+        v.info.instance = "studio";
+        placed.push_back(std::make_shared<const SessionView>(std::move(v)));
+    }
+    Sessions withInstances(std::move(placed));
+    withInstances.setFormat(1);
+    CHECK(withInstances.init_diff() == fixture("main-state-1.init"));
 }
 
 // The link's format is the older of the two stated, and a floor refuses an older end in one plain line; no format is
@@ -1216,7 +1299,7 @@ void hub_activity() {
     CHECK(hub.setActivity(sid("ada"), Activity::Down));
     CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
     // it stays as the session changes
-    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi"}));
+    CHECK(hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "hi", {}}));
     CHECK(hub.state().find(sid("ada"))->activity == Activity::Down);
     CHECK(hub.setActivity(sid("ada"), Activity::Idle));
     CHECK(hub.state().find(sid("ada"))->activity == Activity::Idle);
@@ -1557,6 +1640,7 @@ const Case kCases[] = {
     {"sessions_diff_bounded_by_tail", sessions_diff_bounded_by_tail},
     {"sessions_copy_is_cheap_and_shared", sessions_copy_is_cheap_and_shared},
     {"sessions_removed_session", sessions_removed_tab},
+    {"sessions_instance_appended", sessions_instance_appended},
     {"sessions_malformed_refused_unchanged", sessions_malformed_refused_unchanged},
     {"sessions_through_mosh_bookkeeping", sessions_through_mosh_bookkeeping},
     {"hub_send_and_queue", hub_send_and_queue},

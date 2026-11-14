@@ -85,6 +85,34 @@ void get_info(Reader& r, Info& i) {
     i.effort = r.str();
 }
 
+// What the framed formats append, at the end of a frame (store.h): a driver's summary flag and its session's directory,
+// and an info's instance. A frame written before they were has none of them, and each reads as its default: no
+// summary owed, the directory unknown (the driver resumes its session), and the friend's default instance.
+void put_driver_tail(Writer& w, const Driver& d) {
+    w.u8(d.summary ? 1 : 0);
+    w.str(d.session_dir);
+}
+
+bool get_driver_tail(Reader& r, Driver& d) {
+    d.summary = false;
+    d.session_dir.clear();
+    if (r.done()) {
+        return true;
+    }
+    const std::uint8_t summary = r.u8();
+    d.summary = summary == 1;
+    d.session_dir = r.str();
+    return summary <= 1;
+}
+
+void put_info_tail(Writer& w, const Info& i) {
+    w.str(i.instance);
+}
+
+void get_info_tail(Reader& r, Info& i) {
+    i.instance = r.done() ? std::string() : r.str();
+}
+
 // A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
 void put_change(Writer& w, const Change& c) {
     if (c.kind == Change::Kind::Append) {
@@ -93,8 +121,10 @@ void put_change(Writer& w, const Change& c) {
         w.str(c.prompt);
     } else if (c.kind == Change::Kind::SetDriver) {
         put_driver(w, c.driver);
+        put_driver_tail(w, c.driver);
     } else if (c.kind == Change::Kind::SetInfo) {
         put_info(w, c.info);
+        put_info_tail(w, c.info);
     }
 }
 
@@ -334,11 +364,17 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         } else if (kind == std::uint8_t(Change::Kind::SetDriver)) {
             c.kind = Change::Kind::SetDriver;
             get_driver(in, c.driver);
+            if (framed && !get_driver_tail(in, c.driver)) {
+                return unreadable(dir_, what, "a driver's summary flag is neither 0 nor 1");
+            }
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
         } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format >= 2) {
             c.kind = Change::Kind::SetInfo;
             get_info(in, c.info);
+            if (framed) {
+                get_info_tail(in, c.info);
+            }
         } else if (framed) {
             continue;   // a change a later format adds: skipped, its frame read past
         } else {
@@ -392,6 +428,8 @@ Bytes Store::encode_snapshot() const {
             frame.str(q);
         }
         put_driver(frame, t.driver);
+        put_driver_tail(frame, t.driver);
+        put_info_tail(frame, t.info);
         w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
@@ -467,6 +505,12 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
         }
         if (format != 1) {
             get_driver(in, t.driver);
+        }
+        if (framed) {
+            if (!get_driver_tail(in, t.driver)) {
+                return unreadable(dir_, what, "session " + std::to_string(id) + " has a summary flag neither 0 nor 1");
+            }
+            get_info_tail(in, t.info);
         }
         // A framed session may go on with what a later format adds, which is skipped.
         if (framed && !framedIn.ok()) {
