@@ -64,7 +64,12 @@ each run; a frame the scheduler held up on a loaded host does not. The same fram
 runs have as many frames, and otherwise (a case that waits on real time) the same place among the case's input events
 with the same phase taking the most time. A failure names the frame, that phase, and each run's wall-clock time beside
 the frame thread's CPU time (`CLOCK_THREAD_CPUTIME_ID`): CPU time near the wall time is work, far below it is waiting.
-A frame that is not over again is reported as held up by the host. The budget stays 8.3 ms in every run. On macOS the
+A frame that is not over again is reported as held up by the host. The budget stays 8.3 ms in every run.
+
+**A window's first frame keeps half the budget, 4 ms.** Each case reports its first frame's work, CPU time and phases.
+A first frame over 4 ms in every run fails the case, by the same three-run rule, so that a host doing the same work at
+half the speed (every core busy) still keeps 8.3 ms. With the faces made before it (`warmShaper`) a first frame needs
+0.2 to 1.1 ms on an unloaded studio; without, 4.3 to 5.5 ms, and the check failed in every run. On macOS the
 test's frames run at the QoS of an app's main thread (user-interactive), as the window's do; at the default QoS a loaded
 host moves the thread to the efficiency cores, where the same work takes about twice the CPU time.
 
@@ -90,6 +95,7 @@ Every hitch below failed the test before its fix.
 | 6 ms opening a terminal during a text scale change | (as Command-T) | (as Command-T); a new text scale reaches a terminal when it shows |
 | 197 ms on the frame the board first painted; 8 to 12 ms of page tasks a frame | the board's page made, run and painted on the frame | the page runs on its own thread, as Prax's browser runs a tab (`src/board.h`) |
 | 184 ms on the first emoji or CJK text | the font set finding and loading the fallback faces on the frame | `FontPrefetch` (`src/font_prefetch.h`) loads them on a thread at launch (98 to 122 ms remain: below) |
+| 3.4 to 5.2 ms on every window's first frame (9 to 9.7 ms with every core busy) | the shaper making each text font's face (CoreText reading the font's tables) the first time it shapes with it: over half the frame, and nearly all of it with no history | `warmShaper` (`src/font_prefetch.h`): when the window opens, before its first frame, a line of Latin text is set in every text role of the window's theme over the Studio app's shaper, which keeps the faces; first frames are now 0.2 to 1.1 ms |
 | a swap chain made twice at the first show | the overlay made at one size and resized to the screen as it showed | the window is given the screen's frame at launch, while hidden (not covered by the test: there is no window in it) |
 
 ## Known hitches: fixes outside nexus

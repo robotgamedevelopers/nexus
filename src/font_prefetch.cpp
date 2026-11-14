@@ -1,5 +1,7 @@
 #include "font_prefetch.h"
 
+#include <cstddef>
+#include <iterator>
 #include <string_view>
 
 #include "pr/kit.h"
@@ -28,45 +30,64 @@ constexpr std::string_view kSample =
     "\xE2\x86\x92\xE2\x86\x90\xE2\x94\x80\xE2\x94\x82\xE2\x94\x8C\xE2\x88\x91\xE2\x88\x9E"
     "\xE2\x9C\x93\xE2\x80\xA2\xE2\x80\xA6";                                                 // arrows, boxes, math
 
-struct Prefetch {
+// A line of the window's own text: Latin letters, digits and punctuation.
+constexpr std::string_view kLatin = "Aa Bb Cc 0123456789 .,:;!?'\"()[]{}<>/\\|-_=+*&%$#@~`^";
+
+struct Samples {
     PrKit* kit;
+    std::string_view text;
+    const PrKitTextRole* roles;
+    std::size_t roleCount;
 };
 
 void buildSamples(void* context, PrUi*, const PrUiRound*) {
-    PrKit* kit = static_cast<Prefetch*>(context)->kit;
+    const Samples& s = *static_cast<Samples*>(context);
     PrKitSurfaceStyle surface{
         .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
         .background = PrKitBackground_App,
     };
-    PrLayoutNode root = prKitSurface(kit, kPrLayoutNodeNone, {}, surface);
-    const PrKitTextRole roles[] = {PrKitTextRole_Body, PrKitTextRole_BodySmall, PrKitTextRole_Meta,
-        PrKitTextRole_Mono};
-    for (PrKitTextRole role : roles) {
-        PrKitTextStyle style{.role = role, .tone = PrKitTone_Primary, .wrap = PrKitWrap_Auto,
+    PrLayoutNode root = prKitSurface(s.kit, kPrLayoutNodeNone, {}, surface);
+    for (std::size_t i = 0; i < s.roleCount; ++i) {
+        PrKitTextStyle style{.role = s.roles[i], .tone = PrKitTone_Primary, .wrap = PrKitWrap_Auto,
             .align = PrKitTextAlign_Start, .preserve = true};
-        prKitLabel(kit, root, PrKitLabel{.key = 0, .text = PrStringView{kSample.data(), kSample.size()}},
-            style);
+        prKitLabel(s.kit, root, PrKitLabel{.key = 0, .text = PrStringView{s.text.data(), s.text.size()}}, style);
     }
+}
+
+// Sets `text` in each of `roles`, in a layout of its own over `fonts` and `shaper`, in the window's theme.
+void setSamples(PrTextShaper* shaper, PrFontSet* fonts, bool overlay, std::string_view text, const PrKitTextRole* roles,
+        std::size_t roleCount) {
+    PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 2};
+    PrLayoutTree* tree = prLayoutTreeCreate(&desc);
+    PrUi* ui = prUiCreate(tree);
+    PrKitTheme theme = windowTheme(fonts, overlay);
+    PrKit* kit = prKitCreate(ui, &theme);
+    Samples s{kit, text, roles, roleCount};
+    PrUiFrameDesc frame{.time = 0, .delta = 0, .extent = PrVec2{1200, 800}, .maxRounds = 1,
+        .display = prAppDisplayDefault(), .preferences = {}};
+    prUiFrame(ui, &frame, buildSamples, &s);
+    prKitDestroy(kit);
+    prUiDestroy(ui);
+    prLayoutTreeDestroy(tree);
 }
 
 void prefetch(PrFontSet* fonts) {
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
-    PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 2};
-    PrLayoutTree* tree = prLayoutTreeCreate(&desc);
-    PrUi* ui = prUiCreate(tree);
-    PrKitTheme theme = windowTheme(fonts, false);
-    PrKit* kit = prKitCreate(ui, &theme);
-    Prefetch p{kit};
-    PrUiFrameDesc frame{.time = 0, .delta = 0, .extent = PrVec2{1200, 800}, .maxRounds = 1,
-        .display = prAppDisplayDefault(), .preferences = {}};
-    prUiFrame(ui, &frame, buildSamples, &p);
-    prKitDestroy(kit);
-    prUiDestroy(ui);
-    prLayoutTreeDestroy(tree);
+    const PrKitTextRole roles[] = {PrKitTextRole_Body, PrKitTextRole_BodySmall, PrKitTextRole_Meta,
+        PrKitTextRole_Mono};
+    setSamples(shaper, fonts, false, kSample, roles, std::size(roles));
     prTextShaperDestroy(shaper);
 }
 
 } // namespace
+
+void warmShaper(PrTextShaper* shaper, PrFontSet* fonts, bool overlay) {
+    PrKitTextRole roles[PrKitTextRole_Count];
+    for (std::size_t i = 0; i < std::size(roles); ++i) {
+        roles[i] = PrKitTextRole(i);
+    }
+    setSamples(shaper, fonts, overlay, kLatin, roles, std::size(roles));
+}
 
 FontPrefetch::FontPrefetch(PrFontSet* fonts) : thread_([fonts] { prefetch(fonts); }) {}
 

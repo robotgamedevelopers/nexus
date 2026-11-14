@@ -14,8 +14,16 @@
 #include <thread>
 
 #include "pr/font_set.h"
+#include "pr/text.h"
 
 namespace nexus {
+
+// Makes the faces of the window's text fonts in `shaper` before the window's first frame. A shaper makes a font's face
+// (CoreText reads the font's tables) the first time it shapes with a font of that file; on the window's first frame that
+// was over half its work. This sets a line of Latin text in every text role of the window's theme, in a layout of its
+// own over `shaper` and `fonts`, so that the faces are made and kept in the shaper (faces are shared by every font made
+// from a file). Called on the thread that uses `shaper`, before its first frame.
+void warmShaper(PrTextShaper* shaper, PrFontSet* fonts, bool overlay);
 
 class FontPrefetch {
 public:
