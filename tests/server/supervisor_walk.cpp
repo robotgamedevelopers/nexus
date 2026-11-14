@@ -192,11 +192,12 @@ public:
             return restart();
         }
         if (r < 215 && switches_ < kMaxSwitches) {
-            const std::size_t which = rng.below(s.held() ? 5 : 4);
-            if (which == 4) {
-                return signin();
-            }
+            const std::size_t which = rng.below(4);
             return which == 0 ? setting(rng) : which == 1 ? account(rng) : which == 2 ? place(rng) : configure();
+        }
+        // While starting is held back, the account's login may arrive (the secret dialog): it lifts the hold.
+        if (r < 400 && s.held() && switches_ < kMaxSwitches) {
+            return signin();
         }
         if (alive) {
             return message(rng);

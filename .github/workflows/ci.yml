@@ -163,6 +163,10 @@ jobs:
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
           done
+          # the secret dialog's walks: each fails if a value's bytes reach anything but the keeper
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
+          done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
           build/tests/store/store_test
@@ -369,7 +373,8 @@ jobs:
       - name: Build the programs it runs
         run: >-
           cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
-          link_walk store_test durable_test journal_walk driver_protocol_test supervisor_test supervisor_walk wire_test
+          link_walk secrets_walk store_test durable_test journal_walk driver_protocol_test supervisor_test supervisor_walk
+          wire_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -400,6 +405,10 @@ jobs:
           done
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
+          done
+          # the secret dialog's walks: each fails if a value's bytes reach anything but the keeper
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
           done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
@@ -479,9 +488,14 @@ jobs:
             node: true
           - shard: witnesses
             run: '^tlc_witness'
-          # The secret dialog's instances and witnesses (models/Secrets.tla): no walk until its code lands.
+          # The secret dialog's instances and witnesses (models/Secrets.tla), then its code's walks against
+          # SecretsTrace.tla (about 90 records each) and their faults.
           - shard: secrets
             run: '^tlc_secrets_'
+            skip: '^tlc_secrets_trace_'
+          - shard: secrets-trace
+            run: '^tlc_secrets_trace_'
+            build: secrets_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window

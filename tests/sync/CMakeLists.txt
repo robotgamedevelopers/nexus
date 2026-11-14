@@ -18,7 +18,12 @@ add_executable(link_walk link_walk.cpp)
 target_link_libraries(link_walk PRIVATE nexus_sync)
 target_compile_options(link_walk PRIVATE ${warnings})
 
-add_dependencies(model_checks sync_test link_walk)
+# The secret dialog's walk (src/sync/secrets.h through the hub, and the windows' prompts), for SecretsTrace.tla.
+add_executable(secrets_walk secrets_walk.cpp)
+target_link_libraries(secrets_walk PRIVATE nexus_sync)
+target_compile_options(secrets_walk PRIVATE ${warnings})
+
+add_dependencies(model_checks sync_test link_walk secrets_walk)
 
 add_test(NAME sync_unit COMMAND sync_test)
 set_tests_properties(sync_unit PROPERTIES LABELS unit TIMEOUT 30)
@@ -76,4 +81,16 @@ tlc_test(tlc_link_trace_three_windows LinkTrace LinkTrace.cfg pass LINKWALK SEED
 foreach(fault applier mirror tail close ensure)
     tlc_test(tlc_link_trace_faulty_${fault}_rejected LinkTrace LinkTrace.cfg invariant PROPERTY TraceMatches
              LINKWALK SEED 1 STEPS 400 WINDOWS 2 FAULTY ${fault})
+endforeach()
+
+# Trace binding of the secret dialog (models/SecretsTrace.tla): the code's random walks (secrets_walk), each a
+# behaviour of Secrets.tla with every safety property, and each checking that no value's bytes reach a session line,
+# the store, a log line, an answer, or a state sent to any window. The faulty walks (a late answer stored anyway, a
+# value in the log) must be rejected.
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_secrets_trace_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000)
+endforeach()
+foreach(fault store-late echo)
+    tlc_test(tlc_secrets_trace_faulty_${fault}_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
+             SECWALK SEED 1 STEPS 2000 FAULTY ${fault})
 endforeach()
