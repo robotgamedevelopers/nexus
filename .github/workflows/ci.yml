@@ -417,9 +417,10 @@ jobs:
   # (model-label).
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The largest instances (tlc: true) on the fleet's runners labelled tlc, away from hulk, where most of the general
-    # Linux runners share one machine with other repositories' CI and run these past their 60 s.
-    runs-on: ${{ matrix.tlc && fromJSON('["self-hosted", "fleet", "Linux", "X64", "tlc"]') || fromJSON('["self-hosted", "fleet", "Linux", "X64"]') }}
+    # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
+    # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
+    # past their 60 s. A shard waiting for a runner is not counted in its 2 minutes.
+    runs-on: [self-hosted, fleet, Linux, X64, tlc]
     timeout-minutes: 2
     strategy:
       fail-fast: false
@@ -427,26 +428,20 @@ jobs:
         include:
           - shard: supervisor
             run: '^tlc_supervisor$'
-            tlc: true
           - shard: supervisor-switch
             run: '^tlc_supervisor_switch$'
-            tlc: true
           - shard: supervisor-place
             run: '^tlc_supervisor_place$'
-            tlc: true
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
             skip: '^tlc_supervisor_(switch|place)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
-            tlc: true
           - shard: link-one-window
             run: '^tlc_link_one_window$'
-            tlc: true
           - shard: link-tabs
             run: '^tlc_link_(tabs|two_windows)$'
-            tlc: true
           - shard: link-rest
             run: '^tlc_link_'
             build: link_walk
