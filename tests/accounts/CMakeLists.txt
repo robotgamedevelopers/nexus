@@ -5,6 +5,7 @@
 #                  logic only
 #   model          TLC: Accounts.tla, its reversed witnesses, and the code's walks (accounts_walk) checked against it.
 #                  Needs TLA2TOOLS_JAR and java.
+#   functional     accounts_functional_config_repo: the config repository over real git, in a directory of its own
 #   model_nightly  TLC: Accounts.tla on its largest instance
 
 set(warnings ${NEXUS_WARNINGS})
@@ -77,3 +78,14 @@ tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 5 STEPS 400 FAULTY harness)
+
+# The config repository (src/server/config_repo.h): real git in a directory of the test's own, with HOME there too and
+# a bare repository beside it as the remote, by path; no network. POSIX, like nexus-server.
+if(NOT WIN32)
+    add_executable(config_repo_test config_repo_test.cpp)
+    target_link_libraries(config_repo_test PRIVATE nexus_config_repo)
+    target_compile_options(config_repo_test PRIVATE ${warnings})
+    add_test(NAME accounts_functional_config_repo
+             COMMAND config_repo_test ${CMAKE_CURRENT_BINARY_DIR}/config_repo_work)
+    set_tests_properties(accounts_functional_config_repo PROPERTIES LABELS functional TIMEOUT 60)
+endif()
