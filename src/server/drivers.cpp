@@ -656,7 +656,9 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
         case Command::Kind::Write:
             if (p != nullptr) {
                 p->pending += c.line;
-                if (!holding_) {
+                if (holding_) {
+                    held_.push_back(Held{p->pid, 0});
+                } else {
                     flushInput(*p, now);
                 }
             }
@@ -664,7 +666,9 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
         case Command::Kind::CloseInput:
             if (p != nullptr) {
                 p->closeInput = true;
-                if (!holding_) {
+                if (holding_) {
+                    held_.push_back(Held{p->pid, 0});
+                } else {
                     flushInput(*p, now);
                 }
             }
@@ -674,7 +678,7 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
             if (p != nullptr) {
                 const int sig = c.kind == Command::Kind::Terminate ? SIGTERM : SIGKILL;
                 if (holding_) {
-                    heldSignals_.emplace_back(p->pid, sig);
+                    held_.push_back(Held{p->pid, sig});
                 } else {
                     ::killpg(p->pid, sig);
                 }
@@ -683,20 +687,31 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
     }
 }
 
-// The batch is durable: what its steps told the drivers goes out, in the order they told it. Every process a signal was
-// kept for is still uncollected (only serve() collects, and the server releases before it serves again), so its pid
-// still names its group.
+// The batch is durable: what its steps told the drivers goes out in the order they told it, each write or close of a
+// driver's input and each signal in turn, as carryOut does them unheld. A process's input is written up to where it was
+// told (its bytes are queued in order, and a close waits for them); a write the pipe will not take now is finished by
+// serve() later, as unheld. Then whatever an earlier pass left unwritten, which serve() kept while holding. Every
+// process a signal was kept for is still uncollected (only serve() collects, and the server releases before it serves
+// again), so its pid still names its group.
 void Drivers::release(Millis now) {
     holding_ = false;
+    for (const Held& h : held_) {
+        if (h.sig != 0) {
+            ::killpg(h.pid, h.sig);
+            continue;
+        }
+        for (auto& [id, t] : slots_) {
+            if (t.proc && t.proc->pid == h.pid) {
+                flushInput(*t.proc, now);
+            }
+        }
+    }
+    held_.clear();
     for (auto& [id, t] : slots_) {
         if (t.proc) {
             flushInput(*t.proc, now);
         }
     }
-    for (const auto& [pid, sig] : heldSignals_) {
-        ::killpg(pid, sig);
-    }
-    heldSignals_.clear();
 }
 
 // Writes what the driver will take now; a driver that stopped reading its input loses what is left.

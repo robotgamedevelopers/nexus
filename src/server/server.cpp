@@ -27,7 +27,9 @@
 #include "server/driver_table.h"
 #include "server/drivers.h"
 #include "server/durable.h"
+#include "server/flush_gate.h"
 #include "server/home.h"
+#include "server/pass.h"
 #include "store/fs.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
@@ -253,6 +255,10 @@ private:
 
 bool Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
+    // A test seam, set only by tests/link/link_e2e.cpp's flush run (server/flush_gate.h).
+    if (const char* gate = std::getenv(kFlushGateVariable)) {
+        fs_ = withFlushGate(std::move(fs_), gate);
+    }
     if (!store_.open(*fs_, paths_.store, why))
         return false;
     // The machine a friend's instance names to run here: the config's, else the short host name.
@@ -636,18 +642,21 @@ int Server::run() {
             status = 1;
             break;
         }
-        if (!store_.flush(&why)) {
+        // The flush, then the drivers released and the state set (server/pass.h).
+        const PassEnd end{
+            [&](std::string* w) { return store_.flush(w); },
+            [&] { drivers_->release(nowMs()); },
+            [&] {
+                for (Link& s : links_) {
+                    s.link->setState(hub_->state());
+                }
+            }};
+        if (!endPass(end, changed, &why)) {
             // The batch's flush failed: what reached the disk is unknown, so nothing of it is told to anyone.
             std::fprintf(stderr, "nexus-server: the store failed (%s); stopping without acknowledging the actions "
                 "since\n", why.c_str());
             status = 1;
             break;
-        }
-        drivers_->release(nowMs());
-        if (changed) {
-            for (Link& s : links_) {
-                s.link->setState(hub_->state());
-            }
         }
         // The control socket last: a new link may end an earlier one, and the links' fds above are by index.
         if (fds[0].revents & POLLIN) {

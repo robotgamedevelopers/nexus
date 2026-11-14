@@ -20,6 +20,11 @@
 //       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
 //       session of the same window (its client id) finds every session and queue there, sends all its actions again
 //       under the same numbers, and only the new one is applied; a session that would skip actions is refused
+//   link_e2e <nexus-server> <dir> flush <nexus-fake-driver>
+//       the server started by the test with its store's flush gated (server/flush_gate.h): a batch held between its
+//       write and its flush tells the driver nothing, shows the window nothing and acknowledges nothing; lost there (the
+//       server killed), the restarted server holds what was durable, and the window's action sent again is applied
+//       and sent to the driver once
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -814,6 +819,139 @@ int restart(const std::string& binary, const std::string& dir) {
 
 } // namespace
 
+// ---- flush: nothing of a batch leaves the server before its flush ----
+
+std::string readFile(const std::string& path) {
+    std::ifstream in(path);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return text;
+}
+
+std::size_t count(const std::string& text, const std::string& part) {
+    std::size_t n = 0;
+    for (std::size_t at = text.find(part); at != std::string::npos; at = text.find(part, at + 1)) {
+        ++n;
+    }
+    return n;
+}
+
+// The real server, with the store's flush gated (server/flush_gate.h). ada's driver (the fake) has answered "zero" and
+// is idle, so a prompt to her is written to it in the same pass that applies the window's action. The gate holds the
+// batch with "one" after its write and before its flush: for as long as it is held the driver has not been sent
+// "one", the window has no state that shows it, and the action is not acknowledged. Then the batch is lost (the log
+// cut back to its last flush, the server killed). Started again, the server holds "zero" and not "one"; the window
+// sends its actions again under their numbers, "one" is applied, and the driver is sent each prompt once.
+int flush(const std::string& binary, const std::string& dir, const std::string& fake) {
+    Server server(binary, dir);
+    mkdir(dir.c_str(), 0700);
+    const std::string sent = dir + "/sent";
+    const std::string reply = "send\nrecord-send " + sent + "\nemit {\"kind\":\"text\",\"delta\":\"back\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+        "\n"));
+    const std::string gate = dir + "/gate";
+    ::setenv("NEXUS_TEST_FLUSH_GATE", gate.c_str(), 1);
+    pid_t pid = startServe(binary, dir);
+    ::unsetenv("NEXUS_TEST_FLUSH_GATE");
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    auto session = [&](Window* w) {
+        link::Bootstrap b = server.bootstrap("localhost");
+        b.command.insert(b.command.end(), {"--client", "window-1", "--next", "1"});
+        link::Connect connect;
+        std::string why;
+        if (!link::bootstrap(b, runCommand, &connect, &why)) {
+            std::fprintf(stderr, "link_e2e: %s\n", why.c_str());
+            return false;
+        }
+        w->session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", connect.port, 1);
+        return true;
+    };
+    auto settle = [](Window& w, const std::function<bool()>& done) {
+        std::vector<Window*> ws{&w};
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(ws, nullptr, 20); });
+    };
+    auto adaTexts = [](const sync::Sessions& sessions) {
+        std::vector<std::string> out;
+        if (const sync::SessionView* v = sessions.find(sid("ada"))) {
+            for (const sync::EntryRef& e : v->entries)
+                out.push_back(e->text);
+        }
+        return out;
+    };
+    auto adaIdle = [](const sync::Sessions& sessions) {
+        const sync::SessionView* v = sessions.find(sid("ada"));
+        return v != nullptr && v->activity == sync::Activity::Idle;
+    };
+    auto all = [](Window& w, bool withOne) {
+        for (const sync::Action& a : ensures()) {
+            w.session->add(a);
+        }
+        w.session->add(act(sync::ActionKind::Send, sid("ada"), "zero"));
+        if (withOne) {
+            w.session->add(act(sync::ActionKind::Send, sid("ada"), "one"));
+        }
+    };
+    const std::vector<std::string> answered = {"zero", "back"};
+    {
+        Window w;
+        if (!session(&w))
+            return 1;
+        all(w, false);
+        CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == answered &&
+            adaIdle(w.session->state()); }));
+        CHECK(count(readFile(sent), "\nzero\n") == 1);
+        // The next batch's flush is held.
+        CHECK(writeFile(gate, "hold\n"));
+        w.session->add(act(sync::ActionKind::Send, sid("ada"), "one"));
+        std::vector<Window*> ws{&w};
+        CHECK(waitFor([&] { step(ws, nullptr, 20); return ::access((gate + ".reached").c_str(), F_OK) == 0; },
+            kStallSeconds));
+        // Held, a while: the driver would have written what it was sent by now, and the window received what was sent.
+        const auto end = Clock::now() + std::chrono::seconds(2);
+        while (Clock::now() < end) {
+            step(ws, nullptr, 20);
+        }
+        CHECK(count(readFile(sent), "\none\n") == 0);
+        CHECK(adaTexts(w.session->state()) == answered);
+        CHECK(!w.session->allAcknowledged());
+        std::printf("held between the batch's write and its flush: nothing of it left the server\n");
+        // The machine stops before the flush.
+        CHECK(writeFile(gate, "lose\n"));
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    CHECK(count(readFile(sent), "\none\n") == 0);
+    ::unlink(gate.c_str());
+
+    pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    Window w;
+    if (!session(&w))
+        return 1;
+    // What the server holds after the crash: the durable batches, not the lost one.
+    CHECK(settle(w, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 2; }));
+    CHECK(adaTexts(w.session->state()) == answered);
+    all(w, true);
+    const std::vector<std::string> want = {"zero", "back", "one", "back"};
+    CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
+    CHECK(adaTexts(w.session->state()) == want);
+    CHECK(count(readFile(sent), "\nzero\n") == 1);
+    CHECK(count(readFile(sent), "\none\n") == 1);
+    w.session->shutdown();
+    std::vector<Window*> ws{&w};
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(ws, nullptr, 20);
+    std::printf("flush: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server stops the restarted server
+}
+
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
 // A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
@@ -883,8 +1021,10 @@ int main(int argc, char** argv) {
         return olderServer(argv[1], argv[2]);
     if (argc == 4 && std::strcmp(argv[3], "restart") == 0)
         return restart(argv[1], argv[2]);
+    if (argc == 5 && std::strcmp(argv[3], "flush") == 0)
+        return flush(argv[1], argv[2], argv[4]);
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
-                         "soak <clients> <prompts> | restart | older_server\n"
+                         "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver>\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

@@ -118,8 +118,10 @@ public:
     // server before the batch's flush has made it durable. A crash before then loses the batch and told no driver
     // anything: a prompt is still written at most once (AtMostOnce in models/Supervisor.tla; the reversed witness
     // WSupWriteBeforeFlush is a write carried out before its step is durable). release() carries out what was kept,
-    // in order, and is called only once the flush has returned. A driver may be started while held: what it is
-    // started with is durable already, and it is told nothing until release().
+    // in the order it was told (writes, closes and signals interleaved as told), and is called only once the flush
+    // has returned. A driver may be started while held, by a step of the same batch: its process exists before the
+    // flush, but nothing reaches it, not even its input's first byte, until release(). A crash before the flush
+    // leaves a started driver that was told nothing; its input closes with the server, and it ends.
     void hold() { holding_ = true; }
     void release(Millis now);
     bool holding() const { return holding_; }
@@ -172,7 +174,13 @@ private:
     std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
     Millis resolveAt_ = 0;
     bool holding_ = false;
-    std::vector<std::pair<pid_t, int>> heldSignals_;    // process group and signal, kept while holding
+    // What a step told a driver while holding, in order: a signal (sig) to its process group, or (sig 0) its input
+    // carried out as far as it was told.
+    struct Held {
+        pid_t pid = -1;
+        int sig = 0;
+    };
+    std::vector<Held> held_;
 };
 
 } // namespace nexus::server

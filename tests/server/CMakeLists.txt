@@ -1,7 +1,8 @@
 # Tests of nexus-server's driver supervisor (src/server/supervisor.h) and the friends layer over it, with four labels:
 #   unit           supervisor_test: the state machine by rule, every refusal and every deadline at its edges, text
 #                  gathering and splitting, the failed-start count, shutdown from every phase; friends_unit: the
-#                  drivers file; server_unit_home: the server's home and the settings files. Logic only: no processes,
+#                  drivers file; server_unit_home: the server's home and the settings files; server_unit_pass: the
+#                  order of a pass's end (flush, then release and state). Logic only: no processes,
 #                  files, sockets or clock.
 #   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver, and shell
 #                  scripts for drivers that start processes of their own) over real pipes, on a real store in a
@@ -27,6 +28,13 @@ target_link_libraries(server_home_test PRIVATE nexus_supervisor)
 target_compile_options(server_home_test PRIVATE ${warnings})
 add_test(NAME server_unit_home COMMAND server_home_test)
 set_tests_properties(server_unit_home PROPERTIES LABELS unit TIMEOUT 30)
+
+# The end of a pass of the server's loop: flush, then release and state (src/server/pass.h).
+add_executable(server_pass_test pass_test.cpp)
+target_include_directories(server_pass_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_options(server_pass_test PRIVATE ${warnings})
+add_test(NAME server_unit_pass COMMAND server_pass_test)
+set_tests_properties(server_unit_pass PROPERTIES LABELS unit TIMEOUT 30)
 
 add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
