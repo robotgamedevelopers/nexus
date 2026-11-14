@@ -53,6 +53,8 @@ standard input first, and ends a driver that does not exit.
 | `send` | `turn` (required), `prompt` (string, required) | a prompt; opens turn `turn` |
 | `stop` | `turn` (required) | stop turn `turn`, if it is the open turn |
 | `settings` | `model` (non-empty string, optional), `effort` (non-empty string, optional); at least one | the model and effort for the turns that follow |
+| `server` | `features` (array of strings, required) | what this server takes beyond version 1, written once, right after the driver's `hello` and before any `send`: `"secrets"` means it takes `ask-secret` (docs/secrets.md). A driver that does not know the kind skips it (rule 8) and never asks. |
+| `secret` | `ask` (whole number from 1, required), `outcome` (required: `"stored"` or `"refused"`), `reason` (non-empty string, required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"unwritable"`) | the one answer to the driver's `ask-secret` numbered `ask`; never the value. `stored` is written only once the value's file is durable. |
 
 `settings` came into version 1 after it was first written. A driver that does not know it skips it, as any unknown kind
 (sequence rule 8), so the version stays 1; a server that needs to know whether a driver honours it asks of the driver's
@@ -82,6 +84,7 @@ reply, is unknown, and the person decides whether to send it again.
 | `tool` | `turn`, `name` (non-empty string, required), `summary` (string, required) | the friend started using a tool; the summary says what it does, in one line |
 | `done` | `turn`, `outcome` (required: `"ok"`, `"stopped"` or `"error"`), `session_cost_usd` (finite number, zero or more, optional), `usage` (object, optional) | the turn has ended |
 | `error` | `cause` (non-empty string, required), `fix` (non-empty string, required: what a person does about it), `turn` (optional), `code` (string, optional) | something went wrong |
+| `ask-secret` | `ask` (whole number from 1, required: the driver's own number, unique within its process), `account` (non-empty string, required), `what` (non-empty string, required: a file the account's provider documents, as `"oauth-token"`), `why` (string, required: one line, no control characters, at most 200 bytes) | ask the person, in nexus's window, for a secret for the account (docs/secrets.md); written only after a `server` line naming `"secrets"`. The server answers with one `secret` line; an ask it cannot take (an account not set up, a file not documented, a `why` past its limit) is refused as a malformed line: no request is made and, as for any line the server refuses, the driver is ended. |
 
 `turn` is required wherever the table names it without saying optional.
 
