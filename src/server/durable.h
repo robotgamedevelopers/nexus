@@ -1,6 +1,6 @@
 // nexus-server's sessions on disk: the sync::SessionStore the server's Hub writes to, over the store
-// (src/store/store.h). Each commit is one record of the store's journal, synced before commit returns, so the server
-// acknowledges an action, and sends the state it made, only once it is durable. The sessions are kept in memory too,
+// (src/store/store.h). Each commit is one record of the store's journal, synced before commit returns or, in a batch,
+// by the batch's flush, so the server acknowledges an action, and sends the state it made, only once it is durable. The sessions are kept in memory too,
 // as the shared entries the down state is made of (sync/sessions.h). A store in an older format (friend tabs) opens
 // as sessions, one per tab (store.h).
 
@@ -32,6 +32,12 @@ public:
     bool failed() const override { return store_ == nullptr || store_->failed(); }
 
     const store::OpenReport& report() const { return report_; }
+
+    // Group commit (store::Store::begin_batch, flush): every commit until flush() is applied here and appended, and
+    // all of them are made durable by flush()'s one sync. Nothing made by a step of the batch may leave the server
+    // until flush() has returned true. False, with why, when the sync failed: then nothing of the batch may be told.
+    void beginBatch();
+    bool flush(std::string* why);
 
 private:
     std::unique_ptr<store::Store> store_;

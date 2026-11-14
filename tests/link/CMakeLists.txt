@@ -35,15 +35,21 @@ add_test(NAME link_e2e_outage COMMAND link_e2e ${server} ${e2e_dir}-outage outag
 add_test(NAME link_e2e_soak COMMAND link_e2e ${server} ${e2e_dir}-soak soak 6 300)
 add_test(NAME link_e2e_restart COMMAND link_e2e ${server} ${e2e_dir}-restart restart)
 add_test(NAME link_e2e_older_server COMMAND link_e2e ${server} ${e2e_dir}-older older_server)
-set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server)
-set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older)
+add_test(NAME link_e2e_flush COMMAND link_e2e ${server} ${e2e_dir}-flush flush $<TARGET_FILE:nexus_fake_driver>)
+set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush)
+set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
+    ${e2e_dir}-flush)
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)
     list(APPEND e2e_tests link_e2e_tailnet)
     list(APPEND e2e_dirs ${e2e_dir}-tailnet)
 endif()
-set_tests_properties(${e2e_tests} PROPERTIES LABELS functional TIMEOUT 90 FIXTURES_REQUIRED link_e2e_servers)
+# The runs fail a link that stops making progress themselves, 30 s after its last step (kStallSeconds in link_e2e.cpp),
+# whatever the clock says, so a slow run that is still progressing is not cut: the server's flush per pass waits on
+# every other writer to the drive. TIMEOUT is only the backstop for a process blocked outside any wait (ssh, a socket
+# call).
+set_tests_properties(${e2e_tests} PROPERTIES LABELS functional TIMEOUT 600 FIXTURES_REQUIRED link_e2e_servers)
 add_test(NAME link_e2e_stop_servers COMMAND link_e2e ${server} stop ${e2e_dirs})
 set_tests_properties(link_e2e_stop_servers PROPERTIES LABELS functional TIMEOUT 60
     FIXTURES_CLEANUP link_e2e_servers)

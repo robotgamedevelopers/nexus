@@ -65,6 +65,8 @@ Status Journal::open(Recovery& out) {
     last_ = durable_ = log_bytes_ = 0;
     open_ = false;
     failed_ = false;
+    log_.reset();
+    unwritten_.clear();
     Status s = fs_.make_dir(dir_);
     if (!s.is_ok())
         return fail(s);
@@ -181,6 +183,10 @@ Status Journal::open(Recovery& out) {
     } else {
         log_bytes_ = log.size();
     }
+    // The log, open from here on: every batch is written and flushed through it.
+    if (!(s = fs_.open_append(path("log"), log_)).is_ok()) {
+        return fail(s);
+    }
     open_ = true;
     return Status::ok();
 }
@@ -191,10 +197,9 @@ Status Journal::append(std::span<const std::uint8_t> payload) {
         return s;
     if (payload.empty())
         return Status::refused("journal " + dir_ + ": a record needs at least one byte");
-    // Append: the record goes at the end of the log, not yet durable.
+    // The record waits in memory for the batch's one write (sync).
     Bytes rec = record_bytes(last_ + 1, payload);
-    if (!(s = fs_.append(path("log"), rec)).is_ok())
-        return fail(s);
+    unwritten_.insert(unwritten_.end(), rec.begin(), rec.end());
     ++last_;
     log_bytes_ += rec.size();
     return Status::ok();
@@ -206,9 +211,17 @@ Status Journal::sync() {
         return s;
     if (durable_ == last_)
         return Status::ok();
+    // AppendRec, once per record since the last sync: the batch at the end of the log in one write, not yet durable.
+    if (!unwritten_.empty()) {
+        if (!(s = log_->append(unwritten_)).is_ok()) {
+            return fail(s);
+        }
+        unwritten_.clear();
+    }
     // SyncFile("log"): every record appended so far is durable.
-    if (fault_ != Fault::NoSync && !(s = fs_.sync(path("log"))).is_ok())
+    if (fault_ != Fault::NoSync && !(s = log_->sync()).is_ok()) {
         return fail(s);
+    }
     durable_ = last_;
     return Status::ok();
 }
@@ -227,6 +240,10 @@ Status Journal::compact(std::span<const std::uint8_t> snapshot) {
     if (!(s = fs_.create(path("log.new"))).is_ok() || !(s = fs_.rename(path("log.new"), path("log"))).is_ok() ||
         !(s = fs_.sync_dir(dir_)).is_ok())
         return fail(s);
+    // The open log is the old one, no longer named: open the new one.
+    if (!(s = fs_.open_append(path("log"), log_)).is_ok()) {
+        return fail(s);
+    }
     log_bytes_ = 0;
     return Status::ok();
 }

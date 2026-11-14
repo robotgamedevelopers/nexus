@@ -220,11 +220,18 @@ void test_journal() {
         OpenedJournal o = open_journal(fs);
         CHECK_OK(o.st);
         CHECK(o.j->last_seq() == 0);
+        std::uint64_t calls = fs.calls();
         for (int i = 1; i <= 3; ++i)
             CHECK_OK(o.j->append(span_of(rec_text(std::uint64_t(i)))));
+        // appended, not written: nothing reaches the filesystem until the sync
+        CHECK(fs.calls() == calls);
+        CHECK(fs.data("j/log").empty());
         CHECK(o.j->durable_seq() == 0);
         CHECK_OK(o.j->sync());
         CHECK(o.j->durable_seq() == 3);
+        // the batch: one write and one flush
+        CHECK(fs.calls() == calls + 2);
+        CHECK(fs.durable("j/log").size() == o.j->log_bytes());
         CHECK(o.j->append(Bytes{}).code() == Status::Code::Refused);
     }
     fs.crash(fs.plan_all(false));
@@ -263,6 +270,10 @@ void test_journal() {
         synced_bytes = o.j->log_bytes();
         CHECK_OK(o.j->append(span_of(rec_text(3))));
         CHECK_OK(o.j->append(span_of(rec_text(4))));
+        // records 3 and 4 written in one write, and the machine stops before the flush (the second call from here)
+        base.fail_at(2);
+        CHECK(!o.j->sync().is_ok());
+        CHECK(base.data("j/log").size() == o.j->log_bytes());
         total = o.j->log_bytes();
     }
     std::uint64_t rec3_end = synced_bytes + Journal::kRecordHeader + rec_text(3).size();
@@ -356,8 +367,9 @@ void test_journal() {
     {
         MemFs c;
         OpenedJournal o = open_journal(c);
+        CHECK_OK(o.j->append(span_of("a")));
         c.fail_at(1);
-        CHECK(!o.j->append(span_of("a")).is_ok());
+        CHECK(!o.j->sync().is_ok());
         CHECK(o.j->failed());
         c.crash(c.plan_all(true));
         CHECK(o.j->append(span_of("b")).code() == Status::Code::Failed);

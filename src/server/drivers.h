@@ -113,8 +113,22 @@ public:
     int waitMs(Millis now) const;
     bool serve(Millis now, bool* changed);
 
+    // Group commit (DurableStore::beginBatch, flush): from hold() until release(), what a step tells a driver (bytes
+    // written to its input, its input closed, a signal) is kept, not carried out, so that nothing of a step leaves the
+    // server before the batch's flush has made it durable. A crash before then loses the batch and told no driver
+    // anything: a prompt is still written at most once (AtMostOnce in models/Supervisor.tla; the reversed witness
+    // WSupWriteBeforeFlush is a write carried out before its step is durable). release() carries out what was kept,
+    // in the order it was told (writes, closes and signals interleaved as told), and is called only once the flush
+    // has returned. A driver may be started while held, by a step of the same batch: its process exists before the
+    // flush, but nothing reaches it, not even its input's first byte, until release(). A crash before the flush
+    // leaves a started driver that was told nothing; its input closes with the server, and it ends.
+    void hold() { holding_ = true; }
+    void release(Millis now);
+    bool holding() const { return holding_; }
+
     const Supervisor* supervisor(sync::SessionId id) const;   // for the tests
     pid_t pid(sync::SessionId id) const;                      // -1 when no driver runs
+    std::size_t unwritten(sync::SessionId id) const;          // bytes for its driver not yet written: for the tests
 
 private:
     struct Process {
@@ -159,6 +173,14 @@ private:
     Output pendingOut_;
     std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
     Millis resolveAt_ = 0;
+    bool holding_ = false;
+    // What a step told a driver while holding, in order: a signal (sig) to its process group, or (sig 0) its input
+    // carried out as far as it was told.
+    struct Held {
+        pid_t pid = -1;
+        int sig = 0;
+    };
+    std::vector<Held> held_;
 };
 
 } // namespace nexus::server
