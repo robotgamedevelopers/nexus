@@ -37,20 +37,16 @@ std::string narrow(const std::wstring& text) {
 
 } // namespace
 
-std::string startErrorLog() {
+std::string startErrorLog(const std::string& home) {
     // A redirected stderr (nexus.exe 2> file, or a test harness's pipe) is kept.
     const HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
         return {};
     }
-    wchar_t local[MAX_PATH];
-    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
+    if (home.empty()) {
         return {};
     }
-    const std::wstring dir = std::wstring(local) + L"\\nexus";
-    CreateDirectoryW(dir.c_str(), nullptr);    // ERROR_ALREADY_EXISTS is fine; a failure shows at the open below
-    const std::wstring path = dir + L"\\nexus.log";
+    const std::wstring path = wide(home) + L"\\nexus.log";
     FILE* file = nullptr;
     if (_wfreopen_s(&file, path.c_str(), L"a", stderr) != 0 || file == nullptr) {
         return {};

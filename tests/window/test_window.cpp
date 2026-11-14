@@ -81,7 +81,7 @@ constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config friend list --j
 constexpr const char* kProgram = "/bin/zsh";
 #endif
 
-// The command goes through the person's login shell, or /bin/sh without SHELL, or straight to NEXUS_NOVA_CONFIG.
+// The command goes through the person's login shell, or /bin/sh without SHELL, or straight to the client config's nova-config.
 void commandIsTheLoginShellOrTheOverride() {
 #if defined(_WIN32)
     // Windows: straight to nova-config on PATH, whatever SHELL says.
@@ -133,10 +133,10 @@ void commandNotFoundSaysWhatToDo() {
         "zsh:1: command not found: nova-config\n"});
     CHECK(shell.friends.empty());
     CHECK(has(shell.error, kShown) && has(shell.error, "status 127") && has(shell.error, "command not found"));
-    CHECK(has(shell.error, "NEXUS_NOVA_CONFIG"));
+    CHECK(has(shell.error, "nova-config <path>"));
     FriendList missing = loadWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
     CHECK(has(missing.error, kShown) && has(missing.error, (std::string(kProgram) + " was not found").c_str()));
-    CHECK(has(missing.error, "NEXUS_NOVA_CONFIG"));
+    CHECK(has(missing.error, "nova-config <path>"));
 }
 
 void failureWithEmptyStderrNamesTheCommand() {

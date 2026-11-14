@@ -3,7 +3,8 @@
 #   functional  link_e2e_*: nexus-server and headless windows over real ssh to this machine and real UDP. They need
 #               `ssh localhost` to work without a password prompt (BatchMode), as it does on the studio's runners.
 #               NEXUS_E2E_TAILNET names a second way to reach this same machine (its tailnet address or name); when
-#               set, the round trip runs through it too.
+#               set, the round trip runs through it too. server_home_functional: nexus-server's own home under a
+#               HOME of the test's own, with no --dir.
 
 set(warnings ${NEXUS_WARNINGS})
 set(NEXUS_E2E_TAILNET "" CACHE STRING "This machine's tailnet address or name, for the functional round trip over it")
@@ -45,3 +46,11 @@ set_tests_properties(${e2e_tests} PROPERTIES LABELS functional TIMEOUT 90 FIXTUR
 add_test(NAME link_e2e_stop_servers COMMAND link_e2e ${server} stop ${e2e_dirs})
 set_tests_properties(link_e2e_stop_servers PROPERTIES LABELS functional TIMEOUT 60
     FIXTURES_CLEANUP link_e2e_servers)
+
+# nexus-server's own home with no --dir (src/server/home.h): HOME is a directory of the test's own under /tmp, named for
+# this build tree like the servers above.
+add_executable(server_home server_home.cpp)
+target_compile_options(server_home PRIVATE ${warnings})
+add_dependencies(server_home nexus-server)
+add_test(NAME server_home_functional COMMAND server_home ${server} /tmp/nexus-home-${build_hash})
+set_tests_properties(server_home_functional PROPERTIES LABELS functional TIMEOUT 60)

@@ -103,15 +103,16 @@ void test('the lines the driver writes', () => {
     }
 });
 
-void test('the environment loses every API-key variable and keeps the account\'s', () => {
+void test('the environment loses every API-key and inherited login variable', () => {
     const { env, removed } = scrub({
         ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'u', CLAUDE_CODE_USE_BEDROCK: '1',
         AWS_BEARER_TOKEN_BEDROCK: 'b', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', VERTEX_API_KEY: 'v',
         CLAUDE_CODE_OAUTH_TOKEN: 'o', CLAUDE_CONFIG_DIR: '/c', PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s',
     });
-    assert.deepEqual(env, { CLAUDE_CODE_OAUTH_TOKEN: 'o', CLAUDE_CONFIG_DIR: '/c', PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s' });
+    assert.deepEqual(env, { PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s' });
     assert.deepEqual(removed, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'AWS_BEARER_TOKEN_BEDROCK',
-        'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_USE_BEDROCK', 'VERTEX_API_KEY']);
+        'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR',
+        'VERTEX_API_KEY']);
     assert.ok(isApiKeyVariable('ANTHROPIC_FOUNDRY_API_KEY'));
     assert.ok(!isApiKeyVariable('GITHUB_TOKEN'));
 });

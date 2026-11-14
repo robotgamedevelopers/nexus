@@ -60,12 +60,43 @@ remote side that sets its own title does not change it. When ssh ends, the tab h
 back until its shell sets a new title. A nested ssh on the remote machine is not seen: the tab names the machine the
 local ssh reaches.
 
-nexus finds `nova-config` on the PATH your login shell gives, or at the full path in `NEXUS_NOVA_CONFIG`.
+nexus finds `nova-config` on the PATH your login shell gives, or at the full path its config names (`nova-config
+<path>` in `~/.nexus/client/config`, below).
 
 The window writes its errors to stderr. On Windows it has no terminal, so unless stderr was redirected they go to
-`%LOCALAPPDATA%\nexus\nexus.log`, appended to on each launch; if the hotkey does not register, a message box says
+`%USERPROFILE%\.nexus\client\nexus.log`, appended to on each launch; if the hotkey does not register, a message box says
 so and names that file. On Windows only the window is native: `nexus-server` and the link run as the Linux build inside WSL2, and
 the Windows window has no `--server` yet.
+
+## Where nexus keeps things
+
+Everything nexus keeps lives under `~/.nexus` (mode 0700), in two homes, each mode 0700 and each with its own
+config. Whichever side starts first makes `~/.nexus`; each side makes its own home. Every token and key is a file of mode 0600 there: none is read from
+the Keychain, the environment or another tool's directory (`~/.claude` included).
+
+```
+~/.nexus/client/                the window
+    config                      its settings: `nova-config <path>`, `sprint-url <url>`
+    tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
+                                its saved order, selection, text size and terminals
+    nexus.log                   Windows only: its errors
+~/.nexus/server/                nexus-server (`--dir` gives another directory)
+    config                      its settings (it takes none yet)
+    drivers                     which program drives which friend
+    store/                      the tabs and what each window has had applied
+    server.sock, server.log     its control socket (mode 0600) and its log
+    accounts/<name>/            one harness login each (always here, whatever `--dir` says)
+        oauth-token             the Claude account's token, mode 0600
+```
+
+A config file holds one setting per line, `<key> <value>`; a line starting with `#` is a comment. A key the side does
+not know is a warning and skipped; a key with no value, or one given twice, is an error naming the file and the line
+(the server does not start on one; the window logs it and goes on without that line). No config file means the
+defaults: `nova-config` found on the login shell's PATH, and the sprint board found from the sprint's own record.
+
+On Windows the two sides are two machines as far as nexus is concerned: the native window's home is
+`%USERPROFILE%\.nexus\client` (with its own config), and `nexus-server`, inside WSL2, keeps its own
+`$HOME/.nexus/server` in the Linux home there. They are different directories on purpose; each side reads only its own.
 
 ## The server
 
@@ -84,24 +115,37 @@ missed (the server sends each transcript's newest 16 entries, so that a diff sta
 is). The friend list still comes from `nova-config` on the window's machine.
 
 `nexus-server` keeps every tab's transcript and queue, and how far it has applied each window's actions, in
-`~/.nexus/store/`: each action is written and synced there before any window sees it, so a restart, or the server
+`~/.nexus/server/store/`: each action is written and synced there before any window sees it, so a restart, or the server
 killed, loses nothing a window was shown. A window that names itself (`nexus-server new --client <id> --next <n>`)
 can open a new session after a restart and send its actions again from action n under the same numbers; the server
 applies only those it had not, and refuses a session that would skip some. It listens on a Unix socket only its user
-can use, `~/.nexus/server.sock` (mode 0600, in a directory of mode 0700), logs to `~/.nexus/server.log` (never a key),
+can use, `~/.nexus/server/server.sock` (mode 0600, in a directory of mode 0700), logs to `~/.nexus/server/server.log`
+(never a key),
 and takes UDP on ports 60001 to 60999, one per window. `nexus-server stop` stops it. If the disk fails under the
 store, the server stops; started again, it opens the store from what is durable.
 
 A friend's AI is reached through a driver, a child process of `nexus-server` per friend that speaks the line protocol
-in [docs/driver-protocol.md](docs/driver-protocol.md). Which program drives which friend comes from `~/.nexus/drivers`
+in [docs/driver-protocol.md](docs/driver-protocol.md). Which program drives which friend comes from `~/.nexus/server/drivers`
 (an example: [drivers/claude/drivers.example](drivers/claude/drivers.example)). The Claude driver,
 [drivers/claude](drivers/claude), runs Claude on the Claude Agent SDK (TypeScript, Node 20.19 or newer; the SDK is a
 dependency fetched by npm, never kept in this repository) with permission prompts bypassed, in the friend's directory.
 It runs only on a subscription: it removes every API-key variable from Claude's environment, loads no Claude settings
 files unless told to, and refuses any session that would bill an API key, another provider or paid extra usage, with
-a `no-credential` error saying why and what to do. It uses the login of the user session `nexus-server` runs in (a
-process started over ssh cannot read the login keychain, so the server runs as a LaunchAgent), or the account's
-`CLAUDE_CODE_OAUTH_TOKEN` when the server's environment gives one. Model and effort can be set in the drivers file and
+a `no-credential` error saying why and what to do. Its login is the account its `--account <name>` names, and
+nothing else: Claude runs with `~/.nexus/server/accounts/<name>` as `CLAUDE_CONFIG_DIR` and the token in its
+`oauth-token` file as `CLAUDE_CODE_OAUTH_TOKEN`, in Claude's environment only. Any `CLAUDE_CONFIG_DIR` or
+`CLAUDE_CODE_OAUTH_TOKEN` the server's environment carries is removed; the Keychain's login and `~/.claude` are never
+used. Without the directory, or with a token file that is missing, not one line, or readable by anyone but its owner,
+the driver refuses to start with a `no-credential` error naming the file. To log an account in:
+
+```sh
+mkdir -p -m 700 ~/.nexus/server/accounts/main
+CLAUDE_CONFIG_DIR=~/.nexus/server/accounts/main claude setup-token   # sign in with the subscription account
+# save the token it prints, alone on one line, with mode 0600:
+(umask 077 && cat > ~/.nexus/server/accounts/main/oauth-token)       # paste, Enter, then Control-D
+```
+
+Model and effort can be set in the drivers file and
 changed between turns. Build and test it:
 
 ```sh

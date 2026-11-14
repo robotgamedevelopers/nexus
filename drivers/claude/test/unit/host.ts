@@ -22,7 +22,6 @@ export class TestHost implements Host {
     readonly logs: string[] = [];
     readonly harnesses: FakeHarness[] = [];
     exitCode: number | undefined;
-    oauthToken = false;
     readonly trace = new Trace();
     /** Why this test's trace is not checked against the model: it goes where the model does not (a line the driver
      * refuses, a setting Claude refuses, a model Claude cannot run). */
@@ -103,7 +102,7 @@ export async function started(args: Partial<Arguments> = {}, prepare?: (h: FakeH
     if (prepare !== undefined) {
         host.prepare = prepare;
     }
-    const driver = new Driver(host, { cwd: '/work', settingSources: [], ...args });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [], ...args });
     driver.start();
     await settle();
     host.take();

@@ -8,6 +8,8 @@
 #include "pr/json.h"
 #include "pr/process.h"
 
+#include "client_home.h"
+
 namespace nexus {
 
 namespace {
@@ -130,8 +132,8 @@ Command friendListCommand(const char* override, const char* shell) {
 
 std::string commandProblem(const Command& command, const CommandResult& r, int timeoutSeconds) {
     const std::string cmd = "`" + command.shown + "`";
-    const std::string fix = "set NEXUS_NOVA_CONFIG to the full path of nova-config, or install nova-tools so that "
-        "nova-config is on your login shell's PATH";
+    const std::string fix = "put the full path of nova-config in nexus's client config (a line `nova-config <path>` in "
+        "~/.nexus/client/config), or install nova-tools so that nova-config is on your login shell's PATH";
     switch (r.end) {
         case CommandResult::End::NotFound:
             return "cannot run " + cmd + ": " + command.program + " was not found; " + fix;
@@ -214,7 +216,7 @@ CommandResult runCommand(const Command& command, int timeoutSeconds) {
 }
 
 FriendList loadFriends() {
-    return loadFriends(friendListCommand(std::getenv("NEXUS_NOVA_CONFIG"), std::getenv("SHELL")), runCommand);
+    return loadFriends(friendListCommand(clientConfig().novaConfig.c_str(), std::getenv("SHELL")), runCommand);
 }
 
 } // namespace nexus

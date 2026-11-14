@@ -5,6 +5,8 @@
 
 #include "pr/file.h"
 
+#include "client_home.h"
+
 namespace nexus {
 
 namespace {
@@ -110,28 +112,32 @@ TabOrderStore fileTabOrderStore(std::string path) {
 
 namespace {
 
-// The store in the file `name` in nexus's own directory under the user's application-support directory.
+// The store in the file `name` in the window's home, ~/.nexus/client (client_home.h), which a write makes (mode 0700)
+// if it is missing.
 TabOrderStore fileStoreNamed(std::string_view name) {
-    PrRawString data = prFileUserDirectory(PrFileUserDirectory_Data);
-    std::string path;
-    if (!prRawStringIsNull(&data)) {
-        PrStringView v = prRawStringView(&data);
-        path = std::string(v.data, v.size) + "/nexus/" + std::string(name);
-    }
-    prRawStringReset(&data);
-    if (path.empty()) {
+    std::string dir;
+    std::string why;
+    if (!clientHome(&dir, &why)) {
         TabOrderStore none;
-        none.read = [](std::string*, std::string* error) {
-            *error = "the platform names no application-support directory";
+        none.read = [why](std::string*, std::string* error) {
+            *error = why;
             return false;
         };
-        none.write = [](const std::string&, std::string* error) {
-            *error = "the platform names no application-support directory";
+        none.write = [why](const std::string&, std::string* error) {
+            *error = why;
             return false;
         };
         return none;
     }
-    return fileTabOrderStore(path);
+#if defined(_WIN32)
+    TabOrderStore store = fileTabOrderStore(dir + "\\" + std::string(name));
+#else
+    TabOrderStore store = fileTabOrderStore(dir + "/" + std::string(name));
+#endif
+    store.write = [dir, write = store.write](const std::string& text, std::string* error) {
+        return makeClientHome(dir, error) && write(text, error);
+    };
+    return store;
 }
 
 // The first line of the selected tab's file: what it is, and its format's version. Version 1 saved a terminal as

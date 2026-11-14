@@ -1,8 +1,8 @@
 // The order of the friend tabs, the selected tab, the text scale and the terminal tabs, kept across launches: the
 // person's drag, choice, size and open terminals are remembered.
 //
-// Kept on this machine for now, in one small file under the user's application-support directory. Later this state
-// moves to the server, with the rest of what the window shows.
+// Kept on this machine for now, each in one small file in the window's home, ~/.nexus/client (client_home.h). Later
+// this state moves to the server, with the rest of what the window shows.
 
 #pragma once
 
@@ -41,8 +41,8 @@ struct TabOrderStore {
     std::function<bool(const std::string& text, std::string* error)> write;
 };
 
-// The store in a file, tab-order.txt in nexus's own directory under the user's application-support directory
-// (Prax's PrFileUserDirectory_Data). `where` is empty if the platform names no such directory.
+// The store in a file, tab-order.txt in the window's home, ~/.nexus/client (client_home.h), made mode 0700 at the first
+// write. With no home (HOME, or USERPROFILE on Windows, unset), `where` is empty and both calls fail saying so.
 TabOrderStore fileTabOrderStore();
 
 // The store in a file at `path`, written atomically (Prax's prFileWrite: a file beside it, then a rename).
@@ -78,7 +78,7 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
 // model. Pure.
 std::size_t savedTabPosition(const Model& model, const SavedTab& saved);
 
-// The store in a file, selected-tab.txt beside tab-order.txt. `where` is empty if the platform names no such directory.
+// The store in a file, selected-tab.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileSelectedTabStore();
 
 // The position to select at launch (savedTabPosition): position 0 if nothing is saved, and on an unreadable or malformed
@@ -98,7 +98,7 @@ std::string formatTextScale(int steps);
 // scale file. Pure.
 bool parseTextScale(std::string_view text, int* steps, std::string* error);
 
-// The store in a file, text-scale.txt beside tab-order.txt. `where` is empty if the platform names no such directory.
+// The store in a file, text-scale.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileTextScaleStore();
 
 // The steps to start at: 0 (the default scale) if nothing is saved, and on an unreadable or malformed file, with
@@ -129,7 +129,7 @@ std::string formatTerminals(const std::vector<std::string>& directories);
 // wrong, for text that is not a terminals file. Pure.
 bool parseTerminals(std::string_view text, std::vector<std::string>* directories, std::string* error);
 
-// The store in a file, terminals.txt beside tab-order.txt. `where` is empty if the platform names no such directory.
+// The store in a file, terminals.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileTerminalsStore();
 
 // The terminal tabs to reopen at launch, at most kMaxSavedTerminals: none if nothing is saved, and on an unreadable or

@@ -391,7 +391,7 @@ void anUnreachableBoardSaysWhyAndRecovers() {
     h.server.down = true;
     h.frames(10);
     CHECK(has(h.board->problem(), "cannot load the sprint board from http://board.test:8080/"));
-    CHECK(has(h.board->problem(), "nova-sprint up") && has(h.board->problem(), "NEXUS_SPRINT_URL"));
+    CHECK(has(h.board->problem(), "nova-sprint up") && has(h.board->problem(), "sprint-url http://<host>:<port>/"));
     h.server.down = false;
     h.frames(100);      // 5 s: not yet
     CHECK(!h.board->problem().empty() && h.server.pages == 0);

@@ -1,13 +1,21 @@
 // Functional test of the tab order's, the selected tab's, the text scale's and the terminals' file stores
-// (src/tab_order.h): real files, inside this test's working directory.
+// (src/tab_order.h), and of the window's home and config (src/client_home.h): real files, inside this test's working
+// directory, with HOME set to a directory there.
 
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include "pr/file.h"
 
+#include "client_home.h"
 #include "tab_order.h"
 
 namespace {
@@ -24,6 +32,63 @@ void check(bool ok, const char* what, int line) {
 }
 
 #define CHECK(x) check((x), #x, __LINE__)
+
+#if !defined(_WIN32)
+// The mode bits of `path`, or -1.
+int modeOf(const std::string& path) {
+    struct stat st {};
+    return lstat(path.c_str(), &st) == 0 ? int(st.st_mode & 0777) : -1;
+}
+
+// The window's home under a HOME inside this test's working directory: the stores' files are in ~/.nexus/client, which
+// the first write makes, mode 0700 (and ~/.nexus above it); the config is read from there, and no config is the
+// defaults.
+void clientHomeFiles() {
+    char cwd[4096];
+    CHECK(getcwd(cwd, sizeof cwd) != nullptr);
+    const std::string home = std::string(cwd) + "/home-test";
+    const std::string top = home + "/.nexus";
+    const std::string dir = top + "/client";
+    for (const char* f : {"tab-order.txt", "selected-tab.txt", "text-scale.txt", "terminals.txt", "config"}) {
+        const std::string path = dir + "/" + f;
+        prFileRemove(PrStringView{path.data(), path.size()});
+    }
+    rmdir(dir.c_str());
+    rmdir(top.c_str());
+    CHECK(mkdir(home.c_str(), 0755) == 0 || modeOf(home) != -1);
+    CHECK(setenv("HOME", home.c_str(), 1) == 0);
+    std::string got;
+    std::string why;
+    CHECK(clientHome(&got, &why) && got == dir);
+    CHECK(fileTabOrderStore().where == dir + "/tab-order.txt");
+    CHECK(fileSelectedTabStore().where == dir + "/selected-tab.txt");
+    CHECK(fileTextScaleStore().where == dir + "/text-scale.txt");
+    CHECK(fileTerminalsStore().where == dir + "/terminals.txt");
+    CHECK(modeOf(top) == -1);
+    std::string error;
+    CHECK(saveTextScale(fileTextScaleStore(), 3, &error));
+    CHECK(modeOf(top) == 0700 && modeOf(dir) == 0700);
+    std::string warning;
+    CHECK(loadTextScale(fileTextScaleStore(), -5, 10, &warning) == 3 && warning.empty());
+    // A home made by someone else with a looser mode is set to 0700.
+    CHECK(chmod(top.c_str(), 0755) == 0 && makeClientHome(dir, &why) && modeOf(top) == 0700);
+    // No config: the defaults. A config: its settings, and its problems named by file and line.
+    ClientConfig c = readClientConfig(dir);
+    CHECK(c.path == dir + "/config" && c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());
+    const std::string text = "nova-config /opt/nova-config\nsprint-url http://h:1/\nwho knows\n";
+    const std::string path = dir + "/config";
+    CHECK(prFileWrite(PrStringView{path.data(), path.size()},
+        PrByteView{reinterpret_cast<const uint8_t*>(text.data()), text.size()}));
+    c = readClientConfig(dir);
+    CHECK(c.novaConfig == "/opt/nova-config" && c.sprintUrl == "http://h:1/");
+    CHECK(c.problems.size() == 1 && c.problems[0].find(path + " line 3:") != std::string::npos);
+    // No HOME: the stores say so and write nothing.
+    CHECK(unsetenv("HOME") == 0);
+    TabOrderStore none = fileTabOrderStore();
+    CHECK(none.where.empty() && !none.write("x", &error) && error.find("HOME is not set") != std::string::npos);
+    CHECK(setenv("HOME", home.c_str(), 1) == 0);
+}
+#endif
 
 } // namespace
 
@@ -85,6 +150,9 @@ int main() {
         back.add_terminal();
     CHECK(back.tab_count() == 6);
     CHECK(loadSelectedTab(selected, back, &warning) == 5 && warning.empty());
+#if !defined(_WIN32)
+    clientHomeFiles();
+#endif
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

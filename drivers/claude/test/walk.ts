@@ -90,7 +90,6 @@ class WalkHost implements Host {
     readonly trace = new Trace();
     readonly queries: Query[] = [];
     exited = false;
-    oauthToken = false;
     /** The turns the server has sent and has not yet seen the done of: at most one. */
     awaiting = 0;
     private ids = 0;
@@ -351,7 +350,7 @@ async function main(argv: readonly string[]): Promise<number> {
         host.hold = rng.chance(30);
         const resume = rng.chance(40) ? `resumed-${String(lives)}` : undefined;
         const driver = new Driver(host, {
-            cwd: '/walk', settingSources: [], ...(resume === undefined ? {} : { resume }),
+            account: 'walk', cwd: '/walk', settingSources: [], ...(resume === undefined ? {} : { resume }),
             ...(rng.chance(30) ? { model: 'opus' } : {}),
         });
         driver.start();

@@ -4,7 +4,7 @@
 // The board's address is read from the sprint's own record: the service `sprint-run` in nova-config, which
 // `nova-sprint up` installs to run `nova-sprint run --listen <host:port>`, and which `nova-sprint up` and `check` read
 // back. (`nova-sprint show run` names the same service, but answers only a name hooked in to the sprint's bus, which an
-// app launched at login is not.) NEXUS_SPRINT_URL overrides it with the board's address.
+// app launched at login is not.) The client config's `sprint-url` (client_home.h) overrides it with the board's address.
 
 #pragma once
 
@@ -34,11 +34,11 @@ Command sprintRunCommand(const char* override, const char* shell);
 // Pure: no OS.
 SprintBoardAddress parseSprintRun(std::string_view json);
 
-// The board's address: `override` (NEXUS_SPRINT_URL) if set, else what `command` prints, run with `run`. Every error
+// The board's address: `override` (the client config's sprint-url) if set, else what `command` prints, run with `run`. Every error
 // names what failed and what to do.
 SprintBoardAddress findSprintBoard(const char* override, const Command& command, const CommandRunner& run);
 
-// findSprintBoard with NEXUS_SPRINT_URL, sprintRunCommand(NEXUS_NOVA_CONFIG, SHELL) and runCommand. Blocks for up to
+// findSprintBoard with the client config's sprint-url, sprintRunCommand(its nova-config, SHELL) and runCommand. Blocks for up to
 // kSprintRunTimeoutSeconds: call it off the window's thread.
 SprintBoardAddress findSprintBoard();
 

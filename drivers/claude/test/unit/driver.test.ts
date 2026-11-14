@@ -22,7 +22,7 @@ const S = 'session-1';
 
 void test('start: hello first, then the credential and the session, before any prompt', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
     assert.deepEqual(host.out, [{ kind: 'hello', protocol: 1, harness: 'claude' }]);
     await settle();
@@ -113,7 +113,7 @@ void test('a stop before the prompt reached the query ends the turn at once; the
     host.prepare = (h) => {
         h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
     };
-    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
     driver.feed(line({ kind: 'send', turn: 4, prompt: 'never' }));
     driver.feed(line({ kind: 'stop', turn: 4 }));
@@ -125,11 +125,10 @@ void test('a stop before the prompt reached the query ends the turn at once; the
     assert.deepEqual(host.harness.calls, []);
 });
 
-async function refusedAtStart(account: object, oauthToken = false): Promise<TestHost> {
+async function refusedAtStart(account: object): Promise<TestHost> {
     const host = new TestHost();
-    host.oauthToken = oauthToken;
     host.prepare = (h) => { h.account = account; };
-    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
     driver.feed(line({ kind: 'send', turn: 3, prompt: 'hello' }));
     await settle();
@@ -150,7 +149,8 @@ void test('an API key is refused before any prompt reaches Claude', async () => 
     assert.equal(e.code, 'no-credential');
     assert.equal(e.turn, 3);
     assert.match(e.cause, /API key/);
-    assert.match(e.fix, /claude \/login/);
+    assert.match(e.fix, /CLAUDE_CONFIG_DIR=~\/\.nexus\/server\/accounts\/main claude setup-token/);
+    assert.match(e.fix, /accounts\/main\/oauth-token with mode 0600/);
     assert.deepEqual(out[out.length - 1], { kind: 'done', turn: 3, outcome: 'error' });
     assert.equal(host.exitCode, 1);
     assert.deepEqual(host.harness.prompts, []);
@@ -166,7 +166,7 @@ void test('another provider is refused', async () => {
     assert.deepEqual(host.harness.prompts, []);
 });
 
-void test('no subscription is refused; an account token counts as one', async () => {
+void test('no subscription is refused; the account token counts as one only when Claude says it uses it', async () => {
     const none = await refusedAtStart({ apiProvider: 'firstParty' });
     const out = none.take();
     assert.deepEqual(out[1], { kind: 'credential', billing: 'none' });
@@ -174,7 +174,7 @@ void test('no subscription is refused; an account token counts as one', async ()
     assert.equal(none.exitCode, 1);
     assert.deepEqual(none.harness.prompts, []);
 
-    const token = await refusedAtStart({ apiProvider: 'firstParty' }, true);
+    const token = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' });
     assert.deepEqual(token.take()[1], { kind: 'credential', billing: 'subscription' });
     assert.equal(token.exitCode, undefined);
     assert.deepEqual(token.harness.prompts, ['hello']);
@@ -214,7 +214,7 @@ void test('paid extra usage (overage) ends the turn and the driver', async () =>
 
 void test('--resume resumes that session and reports it', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', resume: 'abc-123', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'abc-123', settingSources: [] });
     driver.start();
     await settle();
     assert.equal(host.harness.start.resume, 'abc-123');
@@ -233,7 +233,7 @@ void test('a --resume id Claude does not know: a notice, a new session, and the 
             h.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-1'));
         }
     };
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-1', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-1', settingSources: [] });
     driver.start();
     driver.feed(line({ kind: 'send', turn: 5, prompt: 'go on' }));
     await settle();
@@ -475,7 +475,7 @@ void test('settings sent with a turn stopped before its prompt went in carry to 
     host.prepare = (h) => {
         h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
     };
-    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
     driver.feed(line({ kind: 'settings', model: 'opus', effort: 'low' }));
     driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
@@ -515,7 +515,7 @@ void test('a stop before the query took the prompt withdraws it: no interrupt, n
 
 void test('a --resume id Claude finds unknown only when the turn starts: a new session, and the prompt goes there', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-2', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-2', settingSources: [] });
     driver.start();
     await settle();
     host.take();
@@ -560,7 +560,7 @@ void test('a token source that is an API key or auth token is refused', async ()
         assert.equal(host.exitCode, 1);
         assert.deepEqual(host.harness.prompts, []);
     }
-    const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' }, true);
+    const odd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'something-else' });
     assert.deepEqual(odd.take()[1], { kind: 'credential', billing: 'none' });
     assert.equal(odd.exitCode, 1);
 });
@@ -573,7 +573,7 @@ void test('settings carried by a turn stopped before it began reach the very nex
     host.prepare = (h) => {
         h.accountInfo = () => new Promise((resolve) => { release = () => { resolve(kSubscription); }; });
     };
-    const driver = new Driver(host, { cwd: '/work', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
     driver.feed(line({ kind: 'settings', model: 'opus' }));
     driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
@@ -587,7 +587,7 @@ void test('settings carried by a turn stopped before it began reach the very nex
 
 void test('a --resume id lost once the turn began: the new session runs with the settings in use', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-3', model: 'opus', effort: 'low', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-3', model: 'opus', effort: 'low', settingSources: [] });
     driver.start();
     await settle();
     driver.feed(line({ kind: 'settings', model: 'sonnet', effort: 'max' }));
@@ -604,7 +604,7 @@ void test('a --resume id lost once the turn began: the new session runs with the
 
 void test('a stopped turn whose --resume id is lost before its result still gets its done', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-4', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-4', settingSources: [] });
     driver.start();
     await settle();
     driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
@@ -625,7 +625,7 @@ void test('a stopped turn whose --resume id is lost before its result still gets
 
 void test('a --resume id lost with a text block open: the block is ended before the notice', async () => {
     const host = new TestHost();
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-5', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-5', settingSources: [] });
     driver.start();
     await settle();
     driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
@@ -649,7 +649,7 @@ void test('a --resume id lost while settings are applied: the prompt waits for t
             h.setModel = (m) => { h.calls.push(`model ${m ?? ''}`); return new Promise((resolve) => { applied = resolve; }); };
         }
     };
-    const driver = new Driver(host, { cwd: '/work', resume: 'gone-6', settingSources: [] });
+    const driver = new Driver(host, { account: 'main', cwd: '/work', resume: 'gone-6', settingSources: [] });
     driver.start();
     await settle();
     driver.feed(line({ kind: 'settings', model: 'sonnet' }));
@@ -670,11 +670,14 @@ void test('a --resume id lost while settings are applied: the prompt waits for t
 });
 
 void test('parseArguments', () => {
-    assert.deepEqual(parseArguments(['--cwd', '/w']), { cwd: '/w', settingSources: [] });
-    assert.deepEqual(parseArguments(['--cwd', '/w', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
-        { cwd: '/w', resume: 'abc', effort: 'max', settingSources: ['user', 'local'] });
-    for (const bad of [[], ['--cwd'], ['--cwd', '/w', '--x', 'y'], ['--cwd', '/w', '--effort', 'huge'],
-        ['--cwd', '/w', '--resume', 'has space'], ['--cwd', '/w', '--setting-sources', 'policy']]) {
+    assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w']), { account: 'a', cwd: '/w', settingSources: [] });
+    assert.deepEqual(parseArguments(['--cwd', '/w', '--account', 'a', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
+        { account: 'a', cwd: '/w', resume: 'abc', effort: 'max', settingSources: ['user', 'local'] });
+    const noAccount = parseArguments(['--cwd', '/w']);
+    assert.ok('error' in noAccount && noAccount.error.includes('--account <name> is required'));
+    for (const bad of [[], ['--cwd'], ['--account', 'a'], ['--account', '', '--cwd', '/w'], ['--cwd', '/w', '--x', 'y'],
+        ['--account', 'a', '--cwd', '/w', '--effort', 'huge'], ['--account', 'a', '--cwd', '/w', '--resume', 'has space'],
+        ['--account', 'a', '--cwd', '/w', '--setting-sources', 'policy']]) {
         assert.ok('error' in parseArguments(bad), bad.join(' '));
     }
 });

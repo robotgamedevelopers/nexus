@@ -11,6 +11,11 @@ The rules for an AI working in this repository. Each one holds on every change.
 - Make decisions on the server. `nexus-server` is where the real work runs: anything that affects the state of the AI models (sessions, accounts, models, effort, transcripts, queues, session logs) lives and is decided there, against the server's state when it processes each message. The client is a thin client, a portal: it sends inputs and events and displays what comes back. Its only state is what is being prepared to send (text typed with no latency) and its own visual-only preferences (tab order, the selected tab, scroll position, text scale). So behaviour never depends on latency, and nothing here is a distributed-programming problem.
 - The server and the wire know sessions and accounts, never tabs or any other part of the UI. How sessions are shown (tabs, subtabs, several per tab, one in two windows) is the client's business alone.
 
+- Everything nexus keeps lives under ~/.nexus: ~/.nexus/server and ~/.nexus/client, each with its own config. Every token and key is a 0600 file there; none in the Keychain, the environment or another tool's directory. No exceptions.
+  - `~/.nexus/server/` (`src/server/home.h`): `config`, `drivers`, `store/`, `server.sock`, `server.log`, and `accounts/<name>/`, one harness login each (the Claude driver's `--account`; its token is `accounts/<name>/oauth-token`).
+  - `~/.nexus/client/` (`src/client_home.h`): `config` (`nova-config <path>`, `sprint-url <url>`), the window's saved preferences, and on Windows `nexus.log`.
+  - Each side resolves its home in one function (`serverHome`, `clientHome`: HOME, or USERPROFILE for the native Windows window) and reads nothing nexus-specific from the environment. On Windows the native window's `%USERPROFILE%\.nexus\client` and the WSL2 server's `$HOME/.nexus/server` are different directories on purpose.
+
 - Use Prax fully: take the highest Prax layer that does the job, and never rewrite what Prax already has.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.

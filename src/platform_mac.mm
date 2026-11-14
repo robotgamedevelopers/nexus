@@ -4,7 +4,7 @@
 
 namespace nexus {
 
-std::string startErrorLog() {
+std::string startErrorLog(const std::string&) {
     return {};
 }
 

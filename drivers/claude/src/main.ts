@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 // nexus-claude-driver: nexus-server's driver for Claude (docs/driver-protocol.md), on the Claude Agent SDK.
 //
-//   node dist/src/main.js --cwd <dir> [--resume <session id>] [--model <model>] [--effort <level>]
+//   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--model <model>] [--effort <level>]
 //                         [--setting-sources <user,project,local>] [--claude <path>]
 //
-// The server passes --cwd and --resume; the others come from the drivers file. The account is the environment's: the
-// login of the user session the server runs in, or CLAUDE_CODE_OAUTH_TOKEN (and CLAUDE_CONFIG_DIR) when the server
-// gives one. Every API-key variable is removed first (env.ts), and the driver refuses any session not on a
+// The server passes --cwd and --resume; the others come from the drivers file. The account is the directory
+// ~/.nexus/server/accounts/<name>/ and its token file (account.ts): Claude gets them as CLAUDE_CONFIG_DIR and
+// CLAUDE_CODE_OAUTH_TOKEN, in its own environment only, and never the Keychain's login, the server's environment's or
+// ~/.claude. Every API-key and login variable is removed first (env.ts), and the driver refuses any session not on a
 // subscription: a nexus friend never bills the API.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import type { Account } from './account.js';
 import type { Harness, HarnessStart } from './driver.js';
-import { scrub } from './env.js';
+import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 
 const { env, removed } = scrub(process.env);
@@ -22,13 +24,13 @@ for (const name of removed) {
 }
 env['CLAUDE_AGENT_SDK_CLIENT_APP'] = 'nexus-claude-driver/0.1.0';
 
-function startHarness(start: HarnessStart): Harness {
+function startHarness(start: HarnessStart, account: Account): Harness {
     return query({
         prompt: start.prompts,
         options: {
             cwd: start.cwd,
-            // The whole environment the harness gets (it replaces, not merges): the scrubbed one.
-            env,
+            // The whole environment the harness gets (it replaces, not merges): the scrubbed one, with the account's login.
+            env: harnessEnv(env, account),
             ...(start.sessionId === undefined ? {} : { sessionId: start.sessionId }),
             ...(start.resume === undefined ? {} : { resume: start.resume }),
             ...(start.model === undefined ? {} : { model: start.model }),
@@ -46,4 +48,4 @@ function startHarness(start: HarnessStart): Harness {
     });
 }
 
-runProcess(startHarness, (env['CLAUDE_CODE_OAUTH_TOKEN'] ?? '') !== '', removed);
+runProcess(startHarness, removed);

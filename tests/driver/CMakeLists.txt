@@ -47,7 +47,7 @@ if(NOT WIN32)
         foreach(case ${conformance_cases})
             add_test(NAME driver_conformance_claude_${case}
                 COMMAND driver_conformance_test ${case} prompted ${NEXUS_NODE}
-                    "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test/fake-main.js"
+                    "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test/fake-main.js" --account conformance
                 WORKING_DIRECTORY "${conformance_dir}")
             set_tests_properties(driver_conformance_claude_${case} PROPERTIES LABELS claude_driver TIMEOUT 60)
         endforeach()
