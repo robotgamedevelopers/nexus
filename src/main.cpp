@@ -220,6 +220,9 @@ bool open(void* context, PrStudioWindow* window) {
     a.opened = true;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
+    // The faces of the window's text fonts made in the Studio app's shaper now, before the first frame (font_prefetch.h):
+    // made on the first frame, they were most of its work.
+    warmShaper(prStudioWindowShaper(window), a.fonts, a.overlay);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window), a.overlay);
     a.terminals->machines = a.machines;

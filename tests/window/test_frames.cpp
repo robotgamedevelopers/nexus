@@ -108,7 +108,13 @@ struct Over {
     double cpu = 0;
     std::string phase;
     std::string line;           // the hitch's log line
+    bool first = false;         // the window's first frame, over kFirstFrameMs (not over the budget)
 };
+
+// The most a window's first frame may take: half the budget, so that a host that does the same work at half the speed
+// (every core busy) still keeps the budget. Its fonts' faces are made before it (font_prefetch.h warmShaper), so it needs
+// about 1 ms.
+constexpr double kFirstFrameMs = 4;
 
 // The hitch lines as the app logs them, kept for the case's report.
 struct Lines {
@@ -244,6 +250,11 @@ struct Window {
     std::uint64_t events = 0;           // input events pushed so far
     std::map<std::uint64_t, std::pair<std::uint64_t, double>> frameInfo; // over-budget frames: events before, CPU ms
     std::uint64_t injectFrame = 0;      // a frame given 10 ms of work in Keep (--inject); 0 for none
+    double firstWall = 0;               // the first frame's work, ms
+    double firstCpu = 0;                // and the frame thread's CPU time over it
+    std::uint64_t firstEvents = 0;      // and the input events pushed before it
+    Hitch firstHitch;                   // and the frame as the detector measured it
+    std::string firstLine;              // and its phases, as a hitch's line gives them
 
     Window() : model(std::vector<FriendInfo>{FriendInfo{"alex", "m"}, FriendInfo{"emma", "m"}, FriendInfo{"stella", "m"}},
             true) {
@@ -252,6 +263,8 @@ struct Window {
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         // As the app does at launch, while nothing shows (main.cpp): the fallback fonts loaded before any frame.
         FontPrefetch(fonts).wait();
+        // As the app does when its window opens, before the first frame (main.cpp open): the text fonts' faces made.
+        warmShaper(shaper, fonts, true);
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 2};
         tree = prLayoutTreeCreate(&desc);
         ui = prUiCreate(tree);
@@ -323,6 +336,7 @@ struct Window {
         boardMs = boardMs.load() + 1000.0 / 120;
         const std::uint64_t hitchesBefore = hitch.hitches();
         const double cpuBefore = threadCpuMs();
+        const double wallBefore = hitch.now();
         hitch.begin();
         view.extent = extent;
         if (hitch.frames() + 1 == injectFrame) {
@@ -359,6 +373,18 @@ struct Window {
             prDrawListPushTransformAffine2(list, prAffine2Scale(PrVec2{2, 2}));
             prLayoutScenePlay(scene, list, &options);
             prDrawListPopTransform(list);
+        }
+        if (hitch.frames() == 0) {
+            // The window's first frame, whatever its time: its work, CPU time and phases, for the case's report.
+            Hitch& first = firstHitch;
+            first = hitch.current();
+            first.frame = 1;
+            first.work = hitch.now() - wallBefore;
+            firstWall = first.work;
+            firstCpu = threadCpuMs() - cpuBefore;
+            firstEvents = events;
+            char line[1024];
+            firstLine = HitchDetector::format(first, hitch.budget(), line, sizeof line);
         }
         hitch.end();
         if (hitch.hitches() != hitchesBefore) {
@@ -901,8 +927,22 @@ Pass once(const Case& c, int run) {
         static_cast<unsigned long long>(w.hitch.frames()), w.hitch.worst(),
         static_cast<unsigned long long>(w.hitch.hitches()), took / 1000,
         run == 1 ? "" : run == 2 ? " [run 2]" : " [run 3]");
+    const std::size_t phases = w.firstLine.find("): ");
+    std::printf("  %s: first frame %.2f ms, thread cpu %.2f ms: %s\n", c.name, w.firstWall, w.firstCpu,
+        phases == std::string::npos ? w.firstLine.c_str() : w.firstLine.c_str() + phases + 3);
     Pass pass;
     pass.frames = w.hitch.frames();
+    if (w.firstWall > kFirstFrameMs) {
+        Over o;
+        o.frame = 1;
+        o.events = w.firstEvents;
+        o.wall = w.firstWall;
+        o.cpu = w.firstCpu;
+        o.phase = mostPhase(w.firstHitch);
+        o.line = w.firstLine;
+        o.first = true;
+        pass.over.push_back(o);
+    }
     if (w.hitch.hitches() > w.hitch.held()) {
         std::printf("  %s: %llu hitches, more than the detector holds: the ones not held count as hitches\n", c.name,
             static_cast<unsigned long long>(w.hitch.hitches()));
@@ -947,7 +987,7 @@ Pass once(const Case& c, int run) {
 const Over* again(const Over& o, std::uint64_t frames, const Pass& other) {
     for (const Over& p : other.over) {
         const bool same = frames == other.frames ? p.frame == o.frame : p.events == o.events && p.phase == o.phase;
-        if (same) {
+        if (same && p.first == o.first) {
             return &p;
         }
     }
@@ -973,16 +1013,16 @@ Outcome run(const Case& c) {
             if (again(*o, passes[0].frames, passes.back()) != nullptr) {
                 next.push_back(o);
             } else {
-                std::printf("  %s: frame %llu (%s) at %.2f ms, cpu %.2f ms: not over the budget again in run %d, the "
-                    "host held it up\n", c.name, static_cast<unsigned long long>(o->frame), o->phase.c_str(), o->wall,
-                    o->cpu, r);
+                std::printf("  %s: frame %llu (%s) at %.2f ms, cpu %.2f ms: not over %s again in run %d, the host held "
+                    "it up\n", c.name, static_cast<unsigned long long>(o->frame), o->phase.c_str(), o->wall, o->cpu,
+                    o->first ? "the first frame's 4 ms" : "the budget", r);
             }
         }
         still = next;
     }
     for (const Over* o : still) {
-        std::printf("  %s: HITCH in every run: frame %llu, phase %s:", c.name, static_cast<unsigned long long>(o->frame),
-            o->phase.c_str());
+        std::printf("  %s: %s in every run: frame %llu, phase %s:", c.name,
+            o->first ? "FIRST FRAME over 4 ms" : "HITCH", static_cast<unsigned long long>(o->frame), o->phase.c_str());
         for (std::size_t r = 0; r < passes.size(); ++r) {
             const Over* p = r == 0 ? o : again(*o, passes[0].frames, passes[r]);
             std::printf(" %.2f ms (cpu %.2f)", p->wall, p->cpu);
@@ -1066,11 +1106,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (hitched != 0 || failures != 0) {
-        std::fprintf(stderr, "%d of %d cases hitched over the %.2f ms budget; %d other failures\n", hitched, ran,
-            1000.0 / 120, failures);
+        std::fprintf(stderr, "%d of %d cases had a frame over the %.2f ms budget or a first frame over %.0f ms in every "
+            "run; %d other failures\n", hitched, ran, 1000.0 / 120, kFirstFrameMs, failures);
         return 1;
     }
-    std::printf("every frame of %d cases within the %.2f ms budget, but for %d known cases\n", ran - known, 1000.0 / 120,
-        known);
+    std::printf("every frame of %d cases within the %.2f ms budget, but for %d known cases; every first frame within "
+        "%.0f ms\n", ran - known, 1000.0 / 120, known, kFirstFrameMs);
     return 0;
 }
