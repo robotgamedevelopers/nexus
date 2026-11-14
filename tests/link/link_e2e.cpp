@@ -20,6 +20,11 @@
 //       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
 //       session of the same window (its client id) finds every session and queue there, sends all its actions again
 //       under the same numbers, and only the new one is applied; a session that would skip actions is refused
+//   link_e2e <nexus-server> <dir> flush <nexus-fake-driver>
+//       the server started by the test with its store's flush gated (server/flush_gate.h): a batch held between its
+//       write and its flush tells the driver nothing, shows the window nothing and acknowledges nothing; lost there (the
+//       server killed), the restarted server holds what was durable, and the window's action sent again is applied
+//       and sent to the driver once
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -160,6 +165,35 @@ struct Server {
     }
 };
 
+// These tests check what the link does, never how fast this machine is. A wait for the link to get somewhere ends when
+// its condition holds, and fails only when nothing has moved for kStallSeconds. Every action the server applies is
+// durable before it is acknowledged: each pass of its loop writes the pass's actions in one write and makes them
+// durable in one F_FULLFSYNC (fsync off macOS; server/server.cpp, store/journal.cpp), and that flush waits on every
+// other writer to the drive, so on a loaded machine one pass can take seconds where it takes milliseconds alone. A
+// fixed deadline on a whole wait measures the machine; a run that is still making progress is not cut. A link that
+// hangs, or loses an action, makes no progress and still fails, kStallSeconds after its last step. kStallSeconds is
+// the bound the link gives one step of its own: the bootstrap's ssh (link::Bootstrap::timeoutSeconds).
+constexpr int kStallSeconds = 30;
+
+// Calls step() until done() holds, or until progress() has not changed for kStallSeconds.
+bool whileProgressing(const std::function<bool()>& done, const std::function<std::uint64_t()>& progress,
+                      const std::function<void()>& step) {
+    std::uint64_t last = progress();
+    auto moved = Clock::now();
+    while (!done()) {
+        step();
+        const std::uint64_t now = progress();
+        if (now != last) {
+            last = now;
+            moved = Clock::now();
+        } else if (Clock::now() - moved > std::chrono::seconds(kStallSeconds)) {
+            return done();
+        }
+    }
+    return true;
+}
+
+// One step with nothing to watch but the clock (a server starting, a link connecting): up to `seconds`.
 bool waitFor(const std::function<bool()>& done, int seconds) {
     const auto deadline = Clock::now() + std::chrono::seconds(seconds);
     while (Clock::now() < deadline) {
@@ -227,7 +261,16 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
             if (link.poll(&s))
                 mirror.apply(model, s.sessions);
         };
-        CHECK(waitFor([&] { pump(); return s.phase != sync::LinkPhase::Connecting; }, 30));
+        // Until the link gets somewhere: the server's next state, or its acknowledging everything sent.
+        auto until = [&](const std::function<bool()>& done) {
+            return whileProgressing([&] { pump(); return done(); },
+                [&] { return s.stateNum * 2 + (s.acknowledged ? 1 : 0); },
+                [] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
+        };
+        // The link ends Connecting by itself, connected or failed, within its own bounds: ssh -G (10 s), then the
+        // bootstrap's ssh (timeoutSeconds). The wait is those, and one stall more.
+        CHECK(waitFor([&] { pump(); return s.phase != sync::LinkPhase::Connecting; },
+            10 + options.bootstrap.timeoutSeconds + kStallSeconds));
         if (s.phase == sync::LinkPhase::Failed)
             std::fprintf(stderr, "link_e2e: %s\n", s.problem.c_str());
         CHECK(s.phase == sync::LinkPhase::Connected);
@@ -244,10 +287,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         const std::size_t ada = tabOf(model, "ada");
         const std::size_t bo = tabOf(model, "bo");
         const std::size_t want = older ? 6 : 3;
-        CHECK(waitFor([&] {
-            pump();
-            return model.tab(ada).transcript.size() == want && model.tab(bo).queue.size() == 1;
-        }, 10));
+        CHECK(until([&] { return model.tab(ada).transcript.size() == want && model.tab(bo).queue.size() == 1; }));
         std::printf("round trip in %.3f s\n", seconds(sent));
         const std::vector<Entry>& t = model.tab(ada).transcript;
         CHECK(t.size() == want);
@@ -260,11 +300,11 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         }
         // The friend is idle once its turn ends; a window of format 1 hears no activity, and reads idle.
         const std::size_t adaId = model.tab(ada).id;
-        CHECK(waitFor([&] { pump(); const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
-            *a == sync::Activity::Idle; }, 10));
+        CHECK(until([&] { const sync::Activity* a = mirror.activity(adaId); return a != nullptr &&
+            *a == sync::Activity::Idle; }));
         CHECK(model.tab(bo).queue == std::vector<std::string>{"for later"});
         CHECK(model.tab(bo).transcript.empty());
-        CHECK(waitFor([&] { pump(); return s.acknowledged && s.sent == (older ? 4u : 5u); }, 10));
+        CHECK(until([&] { return s.acknowledged && s.sent == (older ? 4u : 5u); }));
         CHECK(sessionsAsMinted(s.sessions));
     }   // each link shuts down at the end of its pass
     std::printf("roundtrip through %s: %s\n", host.c_str(), failures == 0 ? "ok" : "FAILED");
@@ -410,18 +450,16 @@ int outage(const std::string& binary, const std::string& dir) {
     w.session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", relay.port());
     std::vector<Window*> windows{&w};
     const std::size_t ada = tabOf(w.model, "ada");
-    auto settle = [&](int seconds, const std::function<bool()>& done) {
-        const auto deadline = Clock::now() + std::chrono::seconds(seconds);
-        while (Clock::now() < deadline && !done())
-            step(windows, &relay, 50);
-        return done();
+    auto settle = [&](const std::function<bool()>& done) {
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(windows, &relay, 50); });
     };
-    CHECK(settle(10, [&] { return w.session->stateNum() > 0; }));
+    CHECK(settle([&] { return w.session->stateNum() > 0; }));
     for (const sync::Action& a : ensures()) {
         w.session->add(a);
     }
     w.session->add(act(sync::ActionKind::Send, sid("ada"), "before"));
-    CHECK(settle(10, [&] { return w.model.tab(ada).transcript.size() == 2 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).transcript.size() == 2 && w.session->allAcknowledged(); }));
 
     // The network goes down for 8 s; three prompts are sent during it.
     relay.down = true;
@@ -446,7 +484,7 @@ int outage(const std::string& binary, const std::string& dir) {
     // Back up: everything sent arrives once, in order, and the window converges.
     relay.down = false;
     const auto back = Clock::now();
-    CHECK(settle(15, [&] { return w.model.tab(ada).transcript.size() == 8 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).transcript.size() == 8 && w.session->allAcknowledged(); }));
     std::printf("converged %.2f s after the network came back\n", seconds(back));
     const auto& t = w.model.tab(ada).transcript;
     const std::vector<std::string> want = {"before", "during 0", "during 1", "during 2"};
@@ -464,10 +502,12 @@ int outage(const std::string& binary, const std::string& dir) {
     while (seconds(cut2) < 2)
         step(windows, &relay, 50);
     relay.down = false;
-    CHECK(settle(10, [&] { return w.model.tab(ada).queue.size() == 1 && w.session->allAcknowledged(); }));
+    CHECK(settle([&] { return w.model.tab(ada).queue.size() == 1 && w.session->allAcknowledged(); }));
     CHECK(w.model.tab(ada).transcript.size() == 8);
     w.session->shutdown();
-    settle(3, [&] { return w.session->shutdownDone(); });
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(windows, &relay, 50);
     std::printf("outage: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;
 }
@@ -511,6 +551,23 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
     std::map<std::string, int> sends;
     std::map<std::string, int> queues;
     const auto sending = Clock::now();
+    // The longest any window goes without a new state from the server, from the first prompt to convergence: what a
+    // person at that window would see as the server not answering.
+    std::vector<std::uint64_t> heardNum;
+    for (Window* w : windows)
+        heardNum.push_back(w->session->stateNum());
+    std::vector<Clock::time_point> heardAt(windows.size(), sending);
+    double longestGap = 0;
+    auto watch = [&] {
+        for (std::size_t i = 0; i < windows.size(); ++i) {
+            const std::uint64_t n = windows[i]->session->stateNum();
+            if (n != heardNum[i]) {
+                longestGap = std::max(longestGap, std::chrono::duration<double>(Clock::now() - heardAt[i]).count());
+                heardNum[i] = n;
+                heardAt[i] = Clock::now();
+            }
+        }
+    };
     std::vector<int> next(static_cast<std::size_t>(clients), 0);
     for (int p = 0; p < prompts; ++p) {
         const std::size_t c = rng.below(static_cast<std::size_t>(clients));
@@ -524,8 +581,10 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
             windows[c]->session->add(act(sync::ActionKind::Send, sid(tab), text));
             ++sends[tab];
         }
-        if (rng.chance(4))
+        if (rng.chance(4)) {
             step(windows, nullptr, 0);
+            watch();
+        }
     }
     auto converged = [&] {
         for (Window* w : windows) {
@@ -541,12 +600,15 @@ int soak(const std::string& binary, const std::string& dir, int clients, int pro
         }
         return true;
     };
-    const auto deadline = Clock::now() + std::chrono::seconds(60);
-    while (Clock::now() < deadline && !converged())
-        step(windows, nullptr, 20);
-    CHECK(converged());
-    std::printf("%d prompts from %d windows applied and seen by every window in %.2f s\n", prompts, clients,
-        seconds(sending));
+    // Every window hears every state the server makes: the sum of their state numbers moves with each applied prompt.
+    CHECK(whileProgressing(converged, [&] {
+        std::uint64_t sum = 0;
+        for (Window* w : windows)
+            sum += w->session->stateNum();
+        return sum;
+    }, [&] { step(windows, nullptr, 20); watch(); }));
+    std::printf("%d prompts from %d windows applied and seen by every window in %.2f s; the longest any window went "
+        "without a new state: %.2f s\n", prompts, clients, seconds(sending), longestGap);
     // Every window holds the same state (the server's), and its view agrees with every other's.
     for (Window* w : windows)
         CHECK(w->session->state() == windows[0]->session->state());
@@ -649,7 +711,7 @@ int restart(const std::string& binary, const std::string& dir) {
     mkdir(dir.c_str(), 0700);
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
-    CHECK(waitFor([&] { return answering(dir); }, 10));
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
     const std::vector<std::pair<std::string, std::string>> before = {{"ada", "one"}, {"bo", "later"}, {"ada", "two"},
                                                                     {"ada", "three"}};
     auto session = [&](std::uint64_t next, Window* w) {
@@ -667,12 +729,17 @@ int restart(const std::string& binary, const std::string& dir) {
     auto add = [](Window& w, const std::pair<std::string, std::string>& a) {
         w.session->add(act(a.first == "bo" ? sync::ActionKind::Queue : sync::ActionKind::Send, sid(a.first), a.second));
     };
-    auto settle = [](Window& w, int seconds, const std::function<bool()>& done) {
+    auto settle = [](Window& w, const std::function<bool()>& done) {
         std::vector<Window*> ws{&w};
-        const auto deadline = Clock::now() + std::chrono::seconds(seconds);
-        while (Clock::now() < deadline && !done())
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(ws, nullptr, 20); });
+    };
+    // For as long as `seconds`, whatever happens: the timing the run itself is about.
+    auto run = [](Window& w, int seconds) {
+        std::vector<Window*> ws{&w};
+        const auto end = Clock::now() + std::chrono::seconds(seconds);
+        while (Clock::now() < end)
             step(ws, nullptr, 20);
-        return done();
     };
     // ada's texts, with the notice that ada has no driver as "no driver".
     auto adaTexts = [](const sync::Sessions& sessions) {
@@ -692,10 +759,10 @@ int restart(const std::string& binary, const std::string& dir) {
         }
         for (std::size_t i = 0; i < 3; ++i)
             add(w, before[i]);
-        CHECK(settle(w, 10, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
+        CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()).size() == 4; }));
         // The fourth is sent and the server killed at once: applied and durable, or not applied at all.
         add(w, before[3]);
-        settle(w, 1, [&] { return false; });
+        run(w, 1);
     }
     CHECK(kill(pid, SIGKILL) == 0);
     int status = 0;
@@ -705,12 +772,12 @@ int restart(const std::string& binary, const std::string& dir) {
 
     pid = startServe(binary, dir);
     CHECK(pid > 0);
-    CHECK(waitFor([&] { return answering(dir); }, 10));
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
     Window w;
     if (!session(1, &w))
         return 1;
     // The fresh sync: what was acknowledged before the kill is there before the window sends anything.
-    CHECK(settle(w, 10, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 4; }));
+    CHECK(settle(w, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 4; }));
     const std::vector<std::string> first = adaTexts(w.session->state());
     std::printf("after the restart the server holds %zu entries in ada\n", first.size());
     CHECK(first.size() == 4 || first.size() == 6);
@@ -726,7 +793,7 @@ int restart(const std::string& binary, const std::string& dir) {
     add(w, {"ada", "four"});
     const std::vector<std::string> want = {"one", "no driver", "two", "no driver", "three", "no driver",
                                            "four", "no driver"};
-    CHECK(settle(w, 15, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
+    CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
     CHECK(adaTexts(w.session->state()) == want);
     bo = w.session->state().find(sid("bo"));
     CHECK(sessionsAsMinted(w.session->state()));
@@ -742,12 +809,148 @@ int restart(const std::string& binary, const std::string& dir) {
         CHECK(why.find("applied its actions up to 8") != std::string::npos);
     }
     w.session->shutdown();
-    settle(w, 3, [&] { return w.session->shutdownDone(); });
+    std::vector<Window*> ws{&w};
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(ws, nullptr, 20);
     std::printf("restart: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;   // the Server stops the restarted server
 }
 
 } // namespace
+
+// ---- flush: nothing of a batch leaves the server before its flush ----
+
+std::string readFile(const std::string& path) {
+    std::ifstream in(path);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return text;
+}
+
+std::size_t count(const std::string& text, const std::string& part) {
+    std::size_t n = 0;
+    for (std::size_t at = text.find(part); at != std::string::npos; at = text.find(part, at + 1)) {
+        ++n;
+    }
+    return n;
+}
+
+// The real server, with the store's flush gated (server/flush_gate.h). ada's driver (the fake) has answered "zero" and
+// is idle, so a prompt to her is written to it in the same pass that applies the window's action. The gate holds the
+// batch with "one" after its write and before its flush: for as long as it is held the driver has not been sent
+// "one", the window has no state that shows it, and the action is not acknowledged. Then the batch is lost (the log
+// cut back to its last flush, the server killed). Started again, the server holds "zero" and not "one"; the window
+// sends its actions again under their numbers, "one" is applied, and the driver is sent each prompt once.
+int flush(const std::string& binary, const std::string& dir, const std::string& fake) {
+    Server server(binary, dir);
+    mkdir(dir.c_str(), 0700);
+    const std::string sent = dir + "/sent";
+    const std::string reply = "send\nrecord-send " + sent + "\nemit {\"kind\":\"text\",\"delta\":\"back\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+        "\n"));
+    const std::string gate = dir + "/gate";
+    ::setenv("NEXUS_TEST_FLUSH_GATE", gate.c_str(), 1);
+    pid_t pid = startServe(binary, dir);
+    ::unsetenv("NEXUS_TEST_FLUSH_GATE");
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    auto session = [&](Window* w) {
+        link::Bootstrap b = server.bootstrap("localhost");
+        b.command.insert(b.command.end(), {"--client", "window-1", "--next", "1"});
+        link::Connect connect;
+        std::string why;
+        if (!link::bootstrap(b, runCommand, &connect, &why)) {
+            std::fprintf(stderr, "link_e2e: %s\n", why.c_str());
+            return false;
+        }
+        w->session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", connect.port, 1);
+        return true;
+    };
+    auto settle = [](Window& w, const std::function<bool()>& done) {
+        std::vector<Window*> ws{&w};
+        return whileProgressing(done, [&] { return w.session->stateNum() * 2 + (w.session->allAcknowledged() ? 1 : 0); },
+            [&] { step(ws, nullptr, 20); });
+    };
+    auto adaTexts = [](const sync::Sessions& sessions) {
+        std::vector<std::string> out;
+        if (const sync::SessionView* v = sessions.find(sid("ada"))) {
+            for (const sync::EntryRef& e : v->entries)
+                out.push_back(e->text);
+        }
+        return out;
+    };
+    auto adaIdle = [](const sync::Sessions& sessions) {
+        const sync::SessionView* v = sessions.find(sid("ada"));
+        return v != nullptr && v->activity == sync::Activity::Idle;
+    };
+    auto all = [](Window& w, bool withOne) {
+        for (const sync::Action& a : ensures()) {
+            w.session->add(a);
+        }
+        w.session->add(act(sync::ActionKind::Send, sid("ada"), "zero"));
+        if (withOne) {
+            w.session->add(act(sync::ActionKind::Send, sid("ada"), "one"));
+        }
+    };
+    const std::vector<std::string> answered = {"zero", "back"};
+    {
+        Window w;
+        if (!session(&w))
+            return 1;
+        all(w, false);
+        CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == answered &&
+            adaIdle(w.session->state()); }));
+        CHECK(count(readFile(sent), "\nzero\n") == 1);
+        // The next batch's flush is held.
+        CHECK(writeFile(gate, "hold\n"));
+        w.session->add(act(sync::ActionKind::Send, sid("ada"), "one"));
+        std::vector<Window*> ws{&w};
+        CHECK(waitFor([&] { step(ws, nullptr, 20); return ::access((gate + ".reached").c_str(), F_OK) == 0; },
+            kStallSeconds));
+        // Held, a while: the driver would have written what it was sent by now, and the window received what was sent.
+        const auto end = Clock::now() + std::chrono::seconds(2);
+        while (Clock::now() < end) {
+            step(ws, nullptr, 20);
+        }
+        CHECK(count(readFile(sent), "\none\n") == 0);
+        CHECK(adaTexts(w.session->state()) == answered);
+        CHECK(!w.session->allAcknowledged());
+        std::printf("held between the batch's write and its flush: nothing of it left the server\n");
+        // The machine stops before the flush.
+        CHECK(writeFile(gate, "lose\n"));
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    CHECK(count(readFile(sent), "\none\n") == 0);
+    ::unlink(gate.c_str());
+
+    pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    Window w;
+    if (!session(&w))
+        return 1;
+    // What the server holds after the crash: the durable batches, not the lost one.
+    CHECK(settle(w, [&] { return w.session->stateNum() > 0 && adaTexts(w.session->state()).size() >= 2; }));
+    CHECK(adaTexts(w.session->state()) == answered);
+    all(w, true);
+    const std::vector<std::string> want = {"zero", "back", "one", "back"};
+    CHECK(settle(w, [&] { return w.session->allAcknowledged() && adaTexts(w.session->state()) == want; }));
+    CHECK(adaTexts(w.session->state()) == want);
+    CHECK(count(readFile(sent), "\nzero\n") == 1);
+    CHECK(count(readFile(sent), "\none\n") == 1);
+    w.session->shutdown();
+    std::vector<Window*> ws{&w};
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone())
+        step(ws, nullptr, 20);
+    std::printf("flush: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server stops the restarted server
+}
 
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
@@ -818,8 +1021,10 @@ int main(int argc, char** argv) {
         return olderServer(argv[1], argv[2]);
     if (argc == 4 && std::strcmp(argv[3], "restart") == 0)
         return restart(argv[1], argv[2]);
+    if (argc == 5 && std::strcmp(argv[3], "flush") == 0)
+        return flush(argv[1], argv[2], argv[4]);
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
-                         "soak <clients> <prompts> | restart | older_server\n"
+                         "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver>\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

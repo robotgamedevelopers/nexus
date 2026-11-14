@@ -91,6 +91,9 @@ int MemFs::new_file() {
 
 void MemFs::collect() {
     std::vector<bool> used(files_.size(), false);
+    for (const auto& [ino, count] : opened_) {
+        used[std::size_t(ino)] = true;
+    }
     for (const auto& [path, d] : dirs_) {
         for (const auto& [n, ino] : d.now)
             used[std::size_t(ino)] = true;
@@ -107,6 +110,73 @@ void MemFs::collect() {
             files_[i] = File{};
         }
     }
+}
+
+// An AppendFile on MemFs: the inode it opened, and the epoch it was opened in.
+class MemFs::Open : public AppendFile {
+public:
+    Open(MemFs& fs, std::string path, int ino) : fs_(fs), path_(std::move(path)), ino_(ino), epoch_(fs.epoch_) {
+        ++fs_.opened_[ino_];
+    }
+    ~Open() override {
+        if (epoch_ != fs_.epoch_)
+            return;
+        auto o = fs_.opened_.find(ino_);
+        if (o != fs_.opened_.end() && --o->second == 0)
+            fs_.opened_.erase(o);
+    }
+    Open(const Open&) = delete;
+    Open& operator=(const Open&) = delete;
+
+    Status append(std::span<const std::uint8_t> data) override {
+        Status s = alive("append");
+        if (!s.is_ok())
+            return s;
+        File& f = fs_.files_[std::size_t(ino_)];
+        f.data.insert(f.data.end(), data.begin(), data.end());
+        return Status::ok();
+    }
+    Status sync() override {
+        Status s = alive("sync");
+        if (!s.is_ok())
+            return s;
+        File& f = fs_.files_[std::size_t(ino_)];
+        f.dur = f.data;
+        return Status::ok();
+    }
+
+private:
+    Status alive(const char* what) {
+        Status s = fs_.step(what, path_);
+        if (!s.is_ok())
+            return s;
+        if (epoch_ != fs_.epoch_)
+            return Status::failed(std::string("memfs: ") + what + " " + path_ + ": opened before a crash");
+        return Status::ok();
+    }
+
+    MemFs& fs_;
+    std::string path_;
+    int ino_;
+    std::uint64_t epoch_;
+};
+
+MemFs::MemFs(const MemFs& other)
+    : dirs_(other.dirs_), files_(other.files_), live_(other.live_), epoch_(other.epoch_), calls_(other.calls_),
+      fail_at_(other.fail_at_), dead_(other.dead_) {}
+
+Status MemFs::open_append(const std::string& path, std::unique_ptr<AppendFile>& out) {
+    out.reset();
+    if (dead_)
+        return Status::failed("memfs: open " + path + " after an injected crash");
+    auto d = dirs_.find(dir_of(path));
+    if (d == dirs_.end())
+        return Status::not_found("memfs: no file " + path);
+    auto n = d->second.now.find(name_of(path));
+    if (n == d->second.now.end())
+        return Status::not_found("memfs: no file " + path);
+    out = std::make_unique<Open>(*this, path, n->second);
+    return Status::ok();
 }
 
 Status MemFs::make_dir(const std::string& dir) {
@@ -328,6 +398,9 @@ void MemFs::crash(const CrashPlan& plan) {
     }
     dead_ = false;
     fail_at_ = 0;
+    // The process died: what it held open is gone.
+    ++epoch_;
+    opened_.clear();
     collect();
 }
 

@@ -1,7 +1,8 @@
 # Tests of nexus-server's driver supervisor (src/server/supervisor.h) and the friends layer over it, with four labels:
 #   unit           supervisor_test: the state machine by rule, every refusal and every deadline at its edges, text
 #                  gathering and splitting, the failed-start count, shutdown from every phase; friends_unit: the
-#                  drivers file; server_unit_home: the server's home and the settings files. Logic only: no processes,
+#                  drivers file; server_unit_home: the server's home and the settings files; server_unit_pass: the
+#                  order of a pass's end (flush, then release and state). Logic only: no processes,
 #                  files, sockets or clock.
 #   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver, and shell
 #                  scripts for drivers that start processes of their own) over real pipes, on a real store in a
@@ -27,6 +28,13 @@ target_link_libraries(server_home_test PRIVATE nexus_supervisor)
 target_compile_options(server_home_test PRIVATE ${warnings})
 add_test(NAME server_unit_home COMMAND server_home_test)
 set_tests_properties(server_unit_home PROPERTIES LABELS unit TIMEOUT 30)
+
+# The end of a pass of the server's loop: flush, then release and state (src/server/pass.h).
+add_executable(server_pass_test pass_test.cpp)
+target_include_directories(server_pass_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_options(server_pass_test PRIVATE ${warnings})
+add_test(NAME server_unit_pass COMMAND server_pass_test)
+set_tests_properties(server_unit_pass PROPERTIES LABELS unit TIMEOUT 30)
 
 add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
@@ -55,7 +63,7 @@ if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured sign_in no_credential usage_limit no_account instance_dir
-                 instance_elsewhere instance_moved instance_default instance_removed)
+                 instance_elsewhere instance_moved instance_default instance_removed held)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -82,6 +90,8 @@ tlc_test(tlc_supervisor_witness_no_cut_on_exit WSupNoCutOnExit   WSupNoCutOnExit
 tlc_test(tlc_supervisor_witness_start_loop     WSupStartLoop     WSupStartLoop.cfg     invariant PROPERTY LimitHolds)
 tlc_test(tlc_supervisor_witness_no_stop_timeout WSupNoStopTimeout WSupNoStopTimeout.cfg liveness PROPERTY Settles)
 tlc_test(tlc_supervisor_witness_send_while_open WSupSendWhileOpen WSupSendWhileOpen.cfg invariant PROPERTY OneTurn)
+tlc_test(tlc_supervisor_witness_write_before_flush WSupWriteBeforeFlush WSupWriteBeforeFlush.cfg invariant
+    PROPERTY AtMostOnce)
 tlc_test(tlc_supervisor_witness_text_lost      WSupTextLost      WSupTextLost.cfg      action    PROPERTY TextKept)
 tlc_test(tlc_supervisor_witness_start_fresh    WSupStartFresh    WSupStartFresh.cfg    action    PROPERTY StartsSound)
 tlc_test(tlc_supervisor_witness_send_no_credential WSupSendNoCredential WSupSendNoCredential.cfg action

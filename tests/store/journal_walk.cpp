@@ -10,8 +10,9 @@
 // then appends and syncs or compacts, so that crashes land between every pair of calls, compaction's included. A
 // crash takes a plan drawn from the seed (MemFs::plan: each pending directory change kept or not, each changed file
 // reverted, cut short or damaged); the journal is then opened again, and a crash is sometimes armed inside that open
-// too. Every filesystem call the journal makes that succeeds is a record of the trace, with its file and byte count;
-// so are the recovery's decision (from Journal::Observer), each crash with its plan, and each acknowledgement. Each
+// too. Every filesystem call the journal makes that succeeds is a record of the trace, with its file and byte count
+// (a write to the log, which holds every record appended since the last sync, also with each record's length: the
+// spec's AppendRec once per record, bound to the one write); so are the recovery's decision (from Journal::Observer), each crash with its plan, and each acknowledgement. Each
 // record carries the size of every file in the directory after it, and the highest number acknowledged.
 //
 // --fault walks the journal with a test-only fault (Journal::Fault); TLC must reject its trace.
@@ -45,6 +46,7 @@ struct Step {
     std::string op;
     std::string name;
     std::uint64_t n = 0;
+    std::vector<std::uint64_t> lens;    // a write to the log: each record's length
     std::uint64_t k = 0, s = 0, cut = 0;
     std::vector<bool> keep;
     std::map<std::string, MemFs::FileFate> fates;
@@ -66,10 +68,38 @@ struct Walk {
     }
 };
 
+// The lengths of the whole records in a write to the log, header included: a batch is several records back to back.
+// Whatever is left at the end that is not a whole record is one length of its own, which the spec has no record for.
+std::vector<std::uint64_t> record_lens(std::span<const std::uint8_t> d) {
+    std::vector<std::uint64_t> out;
+    std::uint64_t at = 0;
+    while (d.size() - at >= Journal::kRecordHeader) {
+        std::uint64_t len = Journal::kRecordHeader + nexus::store::get_u32(d.data() + at);
+        if (len > d.size() - at) {
+            break;
+        }
+        out.push_back(len);
+        at += len;
+    }
+    if (at < d.size()) {
+        out.push_back(d.size() - at);
+    }
+    return out;
+}
+
 // The filesystem the journal sees: MemFs, with every successful mutating call recorded as a step.
 class RecordingFs : public Fs {
 public:
     explicit RecordingFs(Walk& w) : w_(w) {}
+    Status open_append(const std::string& p, std::unique_ptr<nexus::store::AppendFile>& out) override {
+        std::unique_ptr<nexus::store::AppendFile> inner;
+        Status s = w_.mem.open_append(p, inner);
+        out.reset();
+        if (s.is_ok()) {
+            out = std::make_unique<Recording>(*this, p, std::move(inner));
+        }
+        return s;
+    }
     Status make_dir(const std::string& d) override { return w_.mem.make_dir(d); }
     Status list(const std::string& d, std::vector<std::string>& n) override { return w_.mem.list(d, n); }
     Status size(const std::string& p, std::uint64_t& o) override { return w_.mem.size(p, o); }
@@ -79,13 +109,18 @@ public:
     Status create(const std::string& p) override { return note(w_.mem.create(p), "create", p, 0); }
     Status append(const std::string& p, std::span<const std::uint8_t> d) override {
         Status s = w_.mem.append(p, d);
-        if (s.is_ok()) {
-            if (nexus::store::name_of(p) == "log")
-                w_.rec_lens.insert(d.size());
-            else
-                w_.snap_lens.insert(d.size());
+        std::vector<std::uint64_t> lens;
+        if (nexus::store::name_of(p) == "log") {
+            lens = record_lens(d);
         }
-        return note(s, "append", p, d.size());
+        if (s.is_ok()) {
+            if (nexus::store::name_of(p) == "log") {
+                w_.rec_lens.insert(lens.begin(), lens.end());
+            } else {
+                w_.snap_lens.insert(d.size());
+            }
+        }
+        return note(s, "append", p, d.size(), lens);
     }
     Status truncate(const std::string& p, std::uint64_t n) override { return note(w_.mem.truncate(p, n), "truncate", p, n); }
     Status sync(const std::string& p) override { return note(w_.mem.sync(p), "sync", p, 0); }
@@ -94,7 +129,30 @@ public:
     Status remove(const std::string& p) override { return note(w_.mem.remove(p), "remove", p, 0); }
 
 private:
-    Status note(Status s, const char* op, const std::string& path, std::uint64_t n) {
+    // The log, open: one write of a batch is one step with each record's length (the spec's AppendRec, once per
+    // record), and its flush is a sync of the log.
+    class Recording : public nexus::store::AppendFile {
+    public:
+        Recording(RecordingFs& fs, std::string path, std::unique_ptr<nexus::store::AppendFile> inner)
+            : fs_(fs), path_(std::move(path)), inner_(std::move(inner)) {}
+        Status append(std::span<const std::uint8_t> d) override {
+            Status s = inner_->append(d);
+            std::vector<std::uint64_t> lens = record_lens(d);
+            if (s.is_ok()) {
+                fs_.w_.rec_lens.insert(lens.begin(), lens.end());
+            }
+            return fs_.note(s, "append", path_, d.size(), lens);
+        }
+        Status sync() override { return fs_.note(inner_->sync(), "sync", path_, 0); }
+
+    private:
+        RecordingFs& fs_;
+        std::string path_;
+        std::unique_ptr<nexus::store::AppendFile> inner_;
+    };
+
+    Status note(Status s, const char* op, const std::string& path, std::uint64_t n,
+                std::vector<std::uint64_t> lens = {}) {
         if (s.is_ok()) {
             Step st;
             st.op = op;
@@ -102,6 +160,7 @@ private:
             if (st.name == ".")
                 st.name = "";
             st.n = n;
+            st.lens = std::move(lens);
             w_.push(std::move(st));
         }
         return s;
@@ -204,7 +263,11 @@ std::string fmt_set(const std::set<std::uint64_t>& s) {
 
 std::string fmt_step(const Step& st) {
     std::ostringstream o;
-    o << "[op |-> \"" << st.op << "\", name |-> \"" << st.name << "\", n |-> " << st.n << ", k |-> " << st.k
+    o << "[op |-> \"" << st.op << "\", name |-> \"" << st.name << "\", n |-> " << st.n << ", lens |-> <<";
+    for (std::size_t i = 0; i < st.lens.size(); ++i) {
+        o << (i ? ", " : "") << st.lens[i];
+    }
+    o << ">>, k |-> " << st.k
       << ", s |-> " << st.s << ", cut |-> " << st.cut << ", keep |-> <<";
     for (std::size_t i = 0; i < st.keep.size(); ++i)
         o << (i ? ", " : "") << (st.keep[i] ? "TRUE" : "FALSE");
@@ -279,9 +342,11 @@ int main(int argc, char** argv) {
         std::uint64_t r = rng.below(100);
         bool armed = false;
         if (r >= 88) {
-            w.mem.fail_at(1 + rng.below(9));
             armed = true;
             r = rng.below(2) == 0 ? 0 : 70;
+            // An append and sync is two calls (the batch's write, its flush): the crash lands on one of them, so that
+            // a written batch is often torn by the crash before its flush. A compaction is up to nine.
+            w.mem.fail_at(1 + rng.below(r == 0 ? 2 : 9));
         }
         if (r < 50) {
             j.append(payload(rng, 1, 8));
