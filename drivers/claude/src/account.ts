@@ -22,9 +22,9 @@ export interface AccountRefusal {
 /** The name of the token file in an account's directory. */
 export const kTokenFile = 'oauth-token';
 
-/** An account's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.'. */
+/** An account's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-' (it reaches an argv). */
 export function isAccountName(name: string): boolean {
-    return /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(name);
+    return /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(name);
 }
 
 /** The accounts' directory under `home`. */

@@ -133,6 +133,11 @@ void versions() {
     CHECK(!rd.ok && has(rd.errors, "not a whole number"));
     rd = accounts::readAccounts("{\"version\": 0, \"accounts\": []}", "a", &r);
     CHECK(!rd.ok);
+    // A version past any integer: refused with words, never cast (1e300 overflows a long long).
+    rd = accounts::readAccounts("{\"version\": 1e300, \"accounts\": []}", "a", &r);
+    CHECK(!rd.ok && has(rd.errors, "\"version\" is a number past any version, newer than this nexus-server reads"));
+    rd = accounts::readAccounts("{\"version\": 2e9, \"accounts\": []}", "a", &r);
+    CHECK(!rd.ok && has(rd.errors, "past any version"));
 }
 
 void consistency() {
@@ -143,6 +148,12 @@ void consistency() {
     r = sample();
     r.friends[1].preferred = "work";
     CHECK(has(accounts::problems(r), "\"default\" is \"work\", which is not in its \"accounts\""));
+    // A name or provider starting with '-' would read as an option where it reaches an argv (--account <name>).
+    CHECK(!accounts::isName("-x") && !accounts::isName("--account") && accounts::isName("a-") && accounts::isName("_a"));
+    CHECK(!accounts::isProvider("-claude") && accounts::isProvider("claude-2"));
+    r = sample();
+    r.accounts.push_back({"-rf", "claude"});
+    CHECK(has(accounts::problems(r), "the account \"-rf\" is not a name"));
     r = sample();
     r.accounts.push_back({"work", "claude"});
     CHECK(has(accounts::problems(r), "the account \"work\" is there twice"));
@@ -335,6 +346,105 @@ void hubReloadAndRotate() {
     CHECK(keeper.kept.size() == 2 && keeper.kept.back() == edit);
 }
 
+// A memory store that fails from a chosen step on, as a disk that stops taking writes: that step and every later one
+// refused, and failed() set.
+class FailingStore : public sync::MemoryStore {
+public:
+    bool commit(sync::SessionId id, const std::vector<sync::SessionChange>& changes, const std::string& client,
+                std::uint64_t num, std::string* why) override {
+        if (failing) {
+            broken = true;
+        }
+        if (broken) {
+            *why = "the disk took no more";
+            return false;
+        }
+        return sync::MemoryStore::commit(id, changes, client, num, why);
+    }
+    bool failed() const override { return broken; }
+    bool failing = false;
+    bool broken = false;
+};
+
+// The store fails after the keeper has committed: what was committed is reported applied, never "nothing applied",
+// with the store's failure said, and the hub holds the committed registry (the server stops, and settles the sessions
+// against it at its next start).
+void hubStoreFails() {
+    FailingStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    std::string why;
+    CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.useAccounts(sample(), &keeper).empty());
+    CHECK(hub.apply(act(2, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
+    // A reload that unlinks work: committed, then the store fails while the session moves.
+    Registry edit = sample();
+    edit.friends[0].accounts = {"home", "cx"};
+    edit.friends[0].preferred = "home";
+    store.failing = true;
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "friend ada's accounts") && has(report, "the store failed while the sessions were moved"));
+    CHECK(*hub.accounts() == edit && keeper.kept.back() == edit && hub.failed());
+    // An account action: committed and taken, then the store fails as it is counted.
+    FailingStore store2;
+    sync::Hub hub2(store2);
+    Keeper keeper2;
+    CHECK(hub2.useAccounts(sample(), &keeper2).empty());
+    store2.failing = true;
+    CHECK(!hub2.apply(act(1, sync::ActionKind::AddAccount, "", "new", "claude"), &why, "w"));
+    CHECK(has({why}, "the accounts were changed and committed") && has({why}, "the store failed"));
+    CHECK(hub2.accounts()->account("new") != nullptr && keeper2.kept.size() == 1);
+}
+
+// After accounts.json was made from the drivers file: each session on no account whose friend has a default takes
+// it, told; one already on an account, or whose friend has none, stays.
+void hubAdoptDefaults() {
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    std::string why;
+    CHECK(hub.adoptDefaults().empty());     // no accounts held: nothing to adopt
+    CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{2, sync::ActionKind::Ensure, 0, "bo", "", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{3, sync::ActionKind::Ensure, 0, "cy", "", ""}, &why, "w"));
+    Registry r;
+    r.accounts = {{"work", "claude"}};
+    r.friends = {{"ada", {"work"}, "work"}, {"bo", {"work"}, ""}};
+    CHECK(hub.useAccounts(r, nullptr).empty());
+    const std::vector<std::string> report = hub.adoptDefaults();
+    CHECK((report == std::vector<std::string>{"session 1 (ada): account none -> work, as the drivers file ran it"}));
+    CHECK(store.find(1)->info.account == "work" && store.find(1)->info.harness == "claude");
+    CHECK(has({lastNotice(store, 1)}, "This session runs on the account work, which the drivers file gave ada"));
+    CHECK(store.find(2)->info.account.empty() && store.find(3)->info.account.empty());
+    CHECK(hub.adoptDefaults().empty());     // once on it, a session stays
+}
+
+// The sign-in probe: asked of each account as it first appears (at the start, every one), before the sessions are
+// settled; a driver's report overrides it; an account already held is not asked again.
+void hubProbe() {
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    std::vector<std::string> asked;
+    hub.probeSignInWith([&](const accounts::Account& a) {
+        asked.push_back(a.name);
+        return a.name != "home";
+    });
+    std::string why;
+    CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.apply(act(2, sync::ActionKind::SetAccount, "", "", "gone", 1), &why, "w"));
+    // ada's session is on an account not held, so it lands on her default, work, which the probe found signed in.
+    const std::vector<std::string> report = hub.useAccounts(sample(), &keeper);
+    CHECK((asked == std::vector<std::string>{"work", "home", "cx"}));
+    CHECK(hub.signedIn() == (std::set<std::string>{"work", "cx"}));
+    CHECK(has(report, "session 1 (ada): account gone -> work"));
+    hub.reportSignedIn("work", false);
+    asked.clear();
+    CHECK(hub.apply(act(3, sync::ActionKind::AddAccount, "", "new", "claude"), &why, "w"));
+    CHECK((asked == std::vector<std::string>{"new"}));
+    CHECK(hub.signedIn() == (std::set<std::string>{"cx", "new"}));
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -348,6 +458,9 @@ const Group kGroups[] = {
     {"picks", picks},
     {"hub_actions", hubActions},
     {"hub_reload_rotate", hubReloadAndRotate},
+    {"hub_store_fails", hubStoreFails},
+    {"hub_adopt_defaults", hubAdoptDefaults},
+    {"hub_probe", hubProbe},
 };
 
 } // namespace

@@ -86,3 +86,29 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
 }
 
 } // namespace nexus::server
+
+namespace nexus::server {
+
+accounts::Registry accountsFromDrivers(const DriverTable& table) {
+    accounts::Registry r;
+    std::map<std::string, std::string> accountOf;   // harness: the account its line passes
+    for (const auto& [harness, command] : table.drivers) {
+        for (std::size_t i = 0; i + 1 < command.size(); ++i) {
+            if (command[i] == "--account" && accounts::isName(command[i + 1]) && accounts::isProvider(harness)) {
+                accountOf[harness] = command[i + 1];
+                if (r.account(command[i + 1]) == nullptr) {
+                    r.accounts.push_back(accounts::Account{command[i + 1], harness});
+                }
+            }
+        }
+    }
+    for (const auto& [name, f] : table.friends) {
+        auto a = accountOf.find(f.harness);
+        if (a != accountOf.end() && accounts::isName(name) && r.account(a->second)->provider == f.harness) {
+            r.friends.push_back(accounts::Friend{name, {a->second}, a->second});
+        }
+    }
+    return r;
+}
+
+} // namespace nexus::server

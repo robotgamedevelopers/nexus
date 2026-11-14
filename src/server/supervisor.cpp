@@ -225,6 +225,8 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
     if (std::holds_alternative<Hello>(message)) {
         end(brokeProtocol("wrote a second hello"), now);
     } else if (const Credential* c = std::get_if<Credential>(&message)) {
+        out_.account = driverAccount_;
+        out_.signedIn = c->billing == Billing::Subscription;
         if (c->billing == Billing::Subscription) {
             out_.credential = *c;
         } else {
@@ -252,7 +254,13 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             effect(Effect::What::Error, std::move(text), open);
         }
         // an error of a turn not open (the one a driver writes as it refuses a line) is dropped: it exits next
+        if (e->code == ErrorCode::UsageLimit) {
+            out_.account = driverAccount_;
+            out_.usageLimit = true;
+        }
         if (e->code == ErrorCode::NoCredential) {
+            out_.account = driverAccount_;
+            out_.signedIn = false;
             // It ends the open turn, if any, and exits (protocol rule 11): nothing more is written to it, and no
             // driver is started again until the person's next prompt.
             held_ = true;

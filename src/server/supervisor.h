@@ -115,6 +115,12 @@ struct Output {
     bool durable = false;               // the durable state changed: commit Supervisor::state() with the effects
     std::vector<Command> commands;
     std::optional<driver::Credential> credential;   // the driver reported the credential it uses
+    // What the driver said of its account's login, for the hub (Hub::reportSignedIn, Hub::rotate): signed in (a
+    // subscription credential), not usable (no credential, or not a subscription), or at its usage limit. `account` is
+    // the one the driver alive was started under (empty: none).
+    std::optional<bool> signedIn;
+    bool usageLimit = false;
+    std::string account;
     std::optional<double> sessionCostUsd;           // a turn's done reported the session's cost so far
     std::size_t taken = 0;      // prompts taken from the head of the session's queue: commit as many dequeues, first
 };

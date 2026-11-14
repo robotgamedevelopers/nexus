@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -219,10 +220,17 @@ public:
     void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
     const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
 
+    // After accounts.json was first made from the drivers file (the accounts its lines passed with --account): each
+    // session on no account whose friend now has a default takes it, told, so that it runs on the account it ran on
+    // before. Returns what it did, a line per session.
+    std::vector<std::string> adoptDefaults();
+
     // A hand edit of the files (`nexus-server config reload`), or an earlier version of them (`config restore`):
     // `next` becomes the registry, kept by the keeper with `message`, and the sessions are settled. Refused whole,
-    // changing nothing, when it is not consistent (accounts::problems) or the keeper refuses it; `report` gets every
-    // problem then, else every change made, the sessions' included.
+    // changing nothing, when it is not consistent (accounts::problems) or the keeper refuses it (false); `report` gets
+    // every problem then, else every change made, the sessions' included. Once the keeper has committed it, it is
+    // applied (true) even if the store fails while the sessions move: `report` then says so, and the server, whose
+    // store has failed, stops; at its next start it settles the sessions against what was committed.
     bool applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report);
 
     // A sign-in (or its loss) reported for an account: the server's own state, in memory only (every account needs
@@ -230,6 +238,10 @@ public:
     // removed loses its sign-in, so one set up again needs sign-in again (models/Accounts.tla, Report and AddAccount).
     void reportSignedIn(const std::string& account, bool signedIn);
     const std::set<std::string>& signedIn() const { return signedIn_; }
+    // What says, before any driver reports, whether an account is signed in (the server: its credential file is
+    // there). Asked of each account when it first appears in the registry (at useAccounts() for every one), before the
+    // sessions are settled; a driver's report afterwards overrides it. Set before useAccounts().
+    void probeSignInWith(std::function<bool(const accounts::Account&)> probe) { probe_ = std::move(probe); }
 
     // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
     // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
@@ -255,6 +267,7 @@ private:
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
     std::set<std::string> signedIn_;
+    std::function<bool(const accounts::Account&)> probe_;
 };
 
 } // namespace nexus::sync

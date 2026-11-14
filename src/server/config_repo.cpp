@@ -5,11 +5,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -28,25 +31,51 @@ const char* const kIgnore =
     "!accounts.json\n"
     "!friends.json\n";
 
+std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 std::string errnoText(const std::string& what) {
     return what + ": " + std::strerror(errno);
 }
 
-// The file's text, or empty when it is missing. False on any other failure.
-bool readFile(const std::string& path, std::string* out, std::string* why) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        out->clear();
+// The file's text, and whether it exists. False on any failure but a missing file.
+bool readFile(const std::string& path, std::string* out, bool* exists, std::string* why) {
+    out->clear();
+    *exists = false;
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
         if (errno == ENOENT) {
             return true;
         }
         *why = errnoText("cannot read " + path);
         return false;
     }
-    std::ostringstream all;
-    all << in.rdbuf();
-    *out = all.str();
+    *exists = true;
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = ::read(fd, buf, sizeof buf);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0) {
+            *why = errnoText("cannot read " + path);
+            ::close(fd);
+            return false;
+        }
+        if (n == 0) {
+            break;
+        }
+        out->append(buf, static_cast<std::size_t>(n));
+    }
+    ::close(fd);
     return true;
+}
+
+bool readFile(const std::string& path, std::string* out, std::string* why) {
+    bool exists = false;
+    return readFile(path, out, &exists, why);
 }
 
 // Writes `text` to `path` atomically, mode 0600: a temporary file beside it, synced, renamed over it.
@@ -66,16 +95,19 @@ bool writeAtomic(const std::string& path, const std::string& text, std::string* 
         if (n <= 0) {
             *why = errnoText("cannot write " + tmp);
             ::close(fd);
+            ::unlink(tmp.c_str());
             return false;
         }
         done += static_cast<std::size_t>(n);
     }
     if (::fchmod(fd, 0600) != 0 || ::fsync(fd) != 0 || ::close(fd) != 0) {
         *why = errnoText("cannot finish " + tmp);
+        ::unlink(tmp.c_str());
         return false;
     }
     if (::rename(tmp.c_str(), path.c_str()) != 0) {
         *why = errnoText("cannot rename " + tmp + " to " + path);
+        ::unlink(tmp.c_str());
         return false;
     }
     return true;
@@ -89,94 +121,179 @@ std::string trimmed(std::string s) {
 }
 
 std::string gitWhy(const std::string& what, const GitResult& r) {
-    return what + " failed" + (r.status < 0 ? std::string(" (git could not be run; put git on PATH)") :
+    return what + " failed" + (r.status < 0 && r.err.empty() ? std::string(" (git could not be run; put git on PATH)") :
         " (git: " + trimmed(r.err.empty() ? r.out : r.err) + ")");
 }
 
-} // namespace
-
-GitResult runGit(const std::string& dir, const std::vector<std::string>& args) {
-    GitResult r;
-    int out[2] = {-1, -1};
-    int err[2] = {-1, -1};
-    if (::pipe(out) != 0 || ::pipe(err) != 0) {
-        r.err = errnoText("pipe");
-        return r;
+std::string parentOf(const std::string& dir) {
+    std::string d = dir;
+    while (d.size() > 1 && d.back() == '/') {
+        d.pop_back();
     }
-    std::vector<std::string> full = {"git", "-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
-        "-c", "user.name=nexus", "-c", "user.email=nexus@localhost", "-c", "init.defaultBranch=main"};
+    const std::size_t slash = d.rfind('/');
+    return slash == std::string::npos ? std::string(".") : slash == 0 ? std::string("/") : d.substr(0, slash);
+}
+
+void setNonBlocking(int fd) {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+// git, started on the repository in `dir` with the clean environment (config_repo.h), its output on two pipes, in a
+// process group of its own (so that a kill at a deadline ends what it started too, ssh included). With `push`, the
+// two credential sources a push may use. False, with why, when it could not be started.
+bool spawnGit(const std::string& dir, const std::vector<std::string>& args, bool push, pid_t* pid, int* out, int* err,
+              std::string* why) {
+    int o[2] = {-1, -1};
+    int e[2] = {-1, -1};
+    if (::pipe(o) != 0) {
+        *why = errnoText("pipe");
+        return false;
+    }
+    if (::pipe(e) != 0) {
+        *why = errnoText("pipe");
+        ::close(o[0]);
+        ::close(o[1]);
+        return false;
+    }
+    std::vector<std::string> full = {"git", "-C", dir, "--git-dir=" + dir + "/.git", "--work-tree=" + dir,
+        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false",
+        "-c", "tag.gpgsign=false", "-c", "user.name=nexus", "-c", "user.email=nexus@localhost",
+        "-c", "init.defaultBranch=main", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
+        "-c", "protocol.ssh.allow=always", "-c", "protocol.https.allow=always", "-c", "credential.helper="};
+    if (push) {
+        full.insert(full.end(), {"-c", "credential.helper=!gh auth git-credential"});
+    }
     full.insert(full.end(), args.begin(), args.end());
     std::vector<char*> argv;
     for (std::string& a : full) {
         argv.push_back(a.data());
     }
     argv.push_back(nullptr);
-    std::vector<std::string> env = {"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"};
-    for (const char* name : {"PATH", "HOME"}) {
+    std::vector<std::string> env = {"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+        "GIT_ASKPASS=true", "SSH_ASKPASS=true", "SSH_ASKPASS_REQUIRE=never",
+        "GIT_CEILING_DIRECTORIES=" + parentOf(dir), "LC_ALL=C"};
+    std::vector<const char*> pass = {"PATH"};
+    if (push) {
+        // The push's credentials only: the user's ssh keys or agent, and the GitHub CLI's login (its config).
+        env.push_back("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=15");
+        pass.insert(pass.end(), {"HOME", "SSH_AUTH_SOCK", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"});
+    }
+    for (const char* name : pass) {
         if (const char* v = std::getenv(name)) {
             env.push_back(std::string(name) + "=" + v);
         }
     }
     std::vector<char*> envp;
-    for (std::string& e : env) {
-        envp.push_back(e.data());
+    for (std::string& x : env) {
+        envp.push_back(x.data());
     }
     envp.push_back(nullptr);
     posix_spawn_file_actions_t files;
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_addopen(&files, 0, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_adddup2(&files, out[1], 1);
-    posix_spawn_file_actions_adddup2(&files, err[1], 2);
-    posix_spawn_file_actions_addclose(&files, out[0]);
-    posix_spawn_file_actions_addclose(&files, err[0]);
-    pid_t pid = 0;
-    const int rc = posix_spawnp(&pid, "git", &files, nullptr, argv.data(), envp.data());
+    posix_spawn_file_actions_adddup2(&files, o[1], 1);
+    posix_spawn_file_actions_adddup2(&files, e[1], 2);
+    posix_spawn_file_actions_addclose(&files, o[0]);
+    posix_spawn_file_actions_addclose(&files, e[0]);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attr, 0);
+    const int rc = posix_spawnp(pid, "git", &files, &attr, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&files);
-    ::close(out[1]);
-    ::close(err[1]);
+    posix_spawnattr_destroy(&attr);
+    ::close(o[1]);
+    ::close(e[1]);
     if (rc != 0) {
-        ::close(out[0]);
-        ::close(err[0]);
-        r.err = std::string("cannot run git: ") + std::strerror(rc);
+        ::close(o[0]);
+        ::close(e[0]);
+        *why = std::string("cannot run git: ") + std::strerror(rc) + "; put git on PATH";
+        return false;
+    }
+    *out = o[0];
+    *err = e[0];
+    return true;
+}
+
+// Reads what is there on `fd` into `into`; closes it at its end. False once it is closed.
+bool drain(int* fd, std::string* into) {
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = ::read(*fd, buf, sizeof buf);
+        if (n > 0) {
+            into->append(buf, static_cast<std::size_t>(n));
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return true;
+        }
+        ::close(*fd);
+        *fd = -1;
+        return false;
+    }
+}
+
+int exitStatus(int status) {
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+} // namespace
+
+GitResult runGit(const std::string& dir, const std::vector<std::string>& args, int deadlineMs) {
+    GitResult r;
+    pid_t pid = -1;
+    int fds[2] = {-1, -1};
+    if (!spawnGit(dir, args, false, &pid, &fds[0], &fds[1], &r.err)) {
         return r;
     }
-    pollfd fds[2] = {{out[0], POLLIN, 0}, {err[0], POLLIN, 0}};
-    int open = 2;
-    char buf[4096];
-    while (open > 0) {
-        if (::poll(fds, 2, -1) < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
+    setNonBlocking(fds[0]);
+    setNonBlocking(fds[1]);
+    const std::int64_t deadline = steadyMs() + deadlineMs;
+    bool killed = false;
+    while (fds[0] >= 0 || fds[1] >= 0) {
+        pollfd p[2] = {{fds[0], POLLIN, 0}, {fds[1], POLLIN, 0}};
+        const std::int64_t left = deadline - steadyMs();
+        if (left <= 0) {
+            ::kill(-pid, SIGKILL);
+            killed = true;
+            break;
+        }
+        if (::poll(p, 2, static_cast<int>(left)) < 0 && errno != EINTR) {
             break;
         }
         for (int i = 0; i < 2; ++i) {
-            if (fds[i].fd < 0 || fds[i].revents == 0) {
-                continue;
-            }
-            const ssize_t n = ::read(fds[i].fd, buf, sizeof buf);
-            if (n > 0) {
-                (i == 0 ? r.out : r.err).append(buf, static_cast<std::size_t>(n));
-            } else if (n == 0 || errno != EINTR) {
-                ::close(fds[i].fd);
-                fds[i].fd = -1;
-                --open;
+            if (fds[i] >= 0 && p[i].revents != 0) {
+                drain(&fds[i], i == 0 ? &r.out : &r.err);
             }
         }
     }
-    for (pollfd& p : fds) {
-        if (p.fd >= 0) {
-            ::close(p.fd);
+    for (int& fd : fds) {
+        if (fd >= 0) {
+            ::close(fd);
         }
     }
     int status = 0;
     while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
-    r.status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    r.status = killed ? -1 : exitStatus(status);
+    if (killed) {
+        r.err = "git did not finish within " + std::to_string(deadlineMs / 1000) + " s and was ended";
+    }
     return r;
 }
 
 ConfigRepo::ConfigRepo(std::string dir) : dir_(std::move(dir)) {}
+
+ConfigRepo::~ConfigRepo() {
+    if (push_.pid > 0) {
+        ::kill(-push_.pid, SIGKILL);
+    }
+    endPush();
+}
 
 bool ConfigRepo::open(std::string* why) {
     struct stat st{};
@@ -200,26 +317,33 @@ bool ConfigRepo::open(std::string* why) {
     if (!writeAtomic(dir_ + "/.gitignore", kIgnore, why)) {
         return false;
     }
-    std::vector<std::string> add = {"add", "--", ".gitignore"};
+    std::vector<std::string> files = {".gitignore"};
     accounts::Registry found;
     std::vector<std::string> errors;
     std::string a;
     std::string f;
     if (readFile(accountsPath(), &a, why) && readFile(friendsPath(), &f, why) && (!a.empty() || !f.empty()) &&
             working(&found, &errors)) {
-        add.push_back("accounts.json");
-        add.push_back("friends.json");
+        files.push_back("accounts.json");
+        files.push_back("friends.json");
         if (!writeAtomic(accountsPath(), accounts::accountsText(found), why) ||
                 !writeAtomic(friendsPath(), accounts::friendsText(found), why)) {
             return false;
         }
     }
-    if ((g = runGit(dir_, add)).status != 0 ||
-            (g = runGit(dir_, {"commit", "-q", "-m", "nexus-server made its config repository"})).status != 0) {
+    std::vector<std::string> add = {"add", "--"};
+    add.insert(add.end(), files.begin(), files.end());
+    std::vector<std::string> commit = {"commit", "-q", "-m", "nexus-server made its config repository", "--"};
+    commit.insert(commit.end(), files.begin(), files.end());
+    if ((g = runGit(dir_, add)).status != 0 || (g = runGit(dir_, commit)).status != 0) {
         *why = gitWhy("the config repository's first commit", g);
         return false;
     }
     return true;
+}
+
+bool ConfigRepo::hasAccounts() {
+    return runGit(dir_, {"cat-file", "-e", "HEAD:accounts.json"}).status == 0;
 }
 
 bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::vector<std::string>* errors,
@@ -262,21 +386,23 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
     return errors->size() == had;
 }
 
-bool ConfigRepo::committed(accounts::Registry* out, std::vector<std::string>* report) {
+bool ConfigRepo::committed(accounts::Registry* out, std::vector<std::string>* report, bool write) {
     bool upgraded = false;
     if (!readAt("HEAD", out, report, &upgraded)) {
         return false;
     }
-    if (upgraded) {
-        // An older version, read as this one: written in this version, committed, so that it is never read old again.
+    if (upgraded && write) {
         std::string why;
-        const bool was = applying_;
-        applying_ = true;
-        const bool ok = keep(*out, "upgrade: the files written in version " + std::to_string(accounts::kVersion) +
-                             ", the person's entries kept as they were", &why);
-        applying_ = was;
-        report->push_back(ok ? "upgraded accounts.json and friends.json to version " +
-                          std::to_string(accounts::kVersion) : "the upgrade was not committed: " + why);
+        if (pending(&why)) {
+            // Never written over: the person's edit stays as it is, and the next reload writes the new version.
+            report->push_back("the files are an older version, read as version " + std::to_string(accounts::kVersion) +
+                "; not rewritten now, because " + why);
+        } else {
+            const bool ok = keep(*out, "upgrade: the files written in version " + std::to_string(accounts::kVersion) +
+                                 ", the person's entries kept as they were", &why);
+            report->push_back(ok ? "upgraded accounts.json and friends.json to version " +
+                              std::to_string(accounts::kVersion) : "the upgrade was not committed: " + why);
+        }
     }
     return true;
 }
@@ -286,12 +412,25 @@ bool ConfigRepo::working(accounts::Registry* out, std::vector<std::string>* erro
 }
 
 bool ConfigRepo::at(const std::string& commit, accounts::Registry* out, std::vector<std::string>* errors) {
+    if (commit.empty() || commit[0] == '-') {
+        errors->push_back("\"" + commit + "\" is not a commit; `nexus-server config history` lists them");
+        return false;
+    }
     const GitResult g = runGit(dir_, {"rev-parse", "--verify", "-q", commit + "^{commit}"});
     if (g.status != 0) {
         errors->push_back("no commit " + commit + " in " + dir_ + "; `nexus-server config history` lists them");
         return false;
     }
     return readAt(trimmed(g.out), out, errors, nullptr);
+}
+
+bool ConfigRepo::restoring(const std::string& commit, accounts::Registry* out, std::vector<std::string>* errors) {
+    std::string why;
+    if (pending(&why)) {
+        errors->push_back("no restore while hand edits are pending: " + why + "; then restore");
+        return false;
+    }
+    return at(commit, out, errors);
 }
 
 bool ConfigRepo::pending(std::string* why) {
@@ -314,64 +453,183 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
     if (!applying_ && pending(why)) {
         return false;
     }
-    if (!writeAtomic(accountsPath(), accounts::accountsText(registry), why) ||
-            !writeAtomic(friendsPath(), accounts::friendsText(registry), why)) {
-        return false;
-    }
-    GitResult g = runGit(dir_, {"add", "--", "accounts.json", "friends.json"});
-    if (g.status != 0) {
-        *why = gitWhy("staging accounts.json and friends.json", g);
-        return false;
-    }
-    if (runGit(dir_, {"diff", "--cached", "--quiet"}).status == 0) {
-        return true;    // the files already said this
-    }
-    g = runGit(dir_, {"commit", "-q", "-m", message});
-    if (g.status != 0) {
-        *why = gitWhy("committing accounts.json and friends.json", g);
-        return false;
-    }
-    push();
-    return true;
-}
-
-bool ConfigRepo::onlyKnownTracked(std::string* why) {
-    const GitResult g = runGit(dir_, {"ls-files"});
-    if (g.status != 0) {
-        *why = gitWhy("listing the config repository's files", g);
-        return false;
-    }
-    std::istringstream in(g.out);
-    std::string line;
-    while (std::getline(in, line)) {
-        bool known = false;
-        for (const std::string& k : kConfigFiles) {
-            known = known || line == k;
-        }
-        if (!known) {
-            *why = dir_ + " tracks " + line + ", which is not one of its files (.gitignore, accounts.json, "
-                "friends.json), so nothing is pushed: `git -C " + dir_ + " rm --cached " + line + "` and commit, then "
-                "set the remote again";
+    // What the files hold now (the person's edit, while a reload applies it): put back if anything below fails.
+    const std::string paths[2] = {accountsPath(), friendsPath()};
+    std::string before[2];
+    bool existed[2] = {false, false};
+    for (int i = 0; i < 2; ++i) {
+        if (!readFile(paths[i], &before[i], &existed[i], why)) {
             return false;
         }
     }
+    auto undo = [&](const std::string& failed) {
+        for (int i = 0; i < 2; ++i) {
+            std::string ignored;
+            if (existed[i]) {
+                writeAtomic(paths[i], before[i], &ignored);
+            } else {
+                ::unlink(paths[i].c_str());
+            }
+        }
+        runGit(dir_, {"reset", "-q", "--", "accounts.json", "friends.json"});
+        *why = failed + "; the files and the index were put back as they were, and nothing was committed";
+        return false;
+    };
+    std::string failed;
+    if (!writeAtomic(paths[0], accounts::accountsText(registry), &failed) ||
+            !writeAtomic(paths[1], accounts::friendsText(registry), &failed)) {
+        return undo(failed);
+    }
+    GitResult g = runGit(dir_, {"add", "--", "accounts.json", "friends.json"});
+    if (g.status != 0) {
+        return undo(gitWhy("staging accounts.json and friends.json", g));
+    }
+    g = runGit(dir_, {"diff", "--cached", "--quiet", "--", "accounts.json", "friends.json"});
+    if (g.status == 0) {
+        return true;    // the files already said this
+    }
+    if (g.status != 1) {
+        return undo(gitWhy("comparing accounts.json and friends.json with HEAD", g));
+    }
+    g = runGit(dir_, {"commit", "-q", "-m", message, "--", "accounts.json", "friends.json"});
+    if (g.status != 0) {
+        return undo(gitWhy("committing accounts.json and friends.json", g));
+    }
+    std::string url;
+    std::string ignored;
+    if (remote(&url, &ignored) && !url.empty()) {
+        pushWanted_ = true;
+        notes_.push_back("committed; pushing to " + url + " in the background (the server's log says how it went)");
+    }
     return true;
 }
 
-void ConfigRepo::push() {
+bool ConfigRepo::onlyKnownHistory(std::string* why) {
+    // Every path any commit touched, on every ref, and every path the index holds: a push publishes the history.
+    const GitResult log = runGit(dir_, {"-c", "core.quotePath=true", "log", "--all", "--format=", "--name-only"});
+    const GitResult index = runGit(dir_, {"-c", "core.quotePath=true", "ls-files"});
+    if (log.status != 0 || index.status != 0) {
+        *why = gitWhy("listing every file in the config repository's history", log.status != 0 ? log : index);
+        return false;
+    }
+    std::istringstream in(log.out + "\n" + index.out);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || std::find(kConfigFiles.begin(), kConfigFiles.end(), line) != kConfigFiles.end()) {
+            continue;
+        }
+        *why = "the history of " + dir_ + " holds " + line + ", which is not one of its files (.gitignore, "
+            "accounts.json, friends.json), so nothing is pushed: a push would publish it, whatever the index says now. "
+            "Make a new repository (move " + dir_ + " aside, start nexus-server, which makes a new one, and copy "
+            "accounts.json and friends.json into it, then `nexus-server config reload`), or rewrite this one's history "
+            "so that no commit holds " + line + "; if it was a credential, replace that credential";
+        return false;
+    }
+    return true;
+}
+
+bool ConfigRepo::pushStart(std::int64_t nowMs, std::string* why) {
+    pushWanted_ = false;
+    if (push_.pid > 0) {
+        pushWanted_ = true;     // one at a time: this commit is pushed by the next
+        *why = "a push is still running";
+        return false;
+    }
     std::string url;
-    std::string why;
-    if (!remote(&url, &why) || url.empty()) {
-        return;
+    if (!remote(&url, why)) {
+        return false;
     }
-    if (!onlyKnownTracked(&why)) {
-        notes_.push_back("not pushed: " + why);
-        return;
+    if (url.empty()) {
+        *why = "no remote is set";
+        return false;
     }
-    const GitResult g = runGit(dir_, {"push", "-q", "origin", "HEAD:main"});
-    if (g.status != 0) {
-        notes_.push_back(gitWhy("pushing to " + url + " (applied all the same; the next commit pushes again)", g));
+    if (!onlyKnownHistory(why)) {
+        return false;
     }
+    Child c;
+    if (!spawnGit(dir_, {"push", "-q", "origin", "HEAD:main"}, true, &c.pid, &c.out, &c.err, why)) {
+        return false;
+    }
+    setNonBlocking(c.out);
+    setNonBlocking(c.err);
+    c.deadline = nowMs + kPushMs;
+    c.url = url;
+    push_ = std::move(c);
+    return true;
+}
+
+std::vector<int> ConfigRepo::pushFds() const {
+    std::vector<int> fds;
+    for (int fd : {push_.out, push_.err}) {
+        if (fd >= 0) {
+            fds.push_back(fd);
+        }
+    }
+    return fds;
+}
+
+int ConfigRepo::pushWaitMs(std::int64_t nowMs) const {
+    if (push_.pid <= 0) {
+        return -1;
+    }
+    if (push_.out < 0 && push_.err < 0) {
+        return 20;      // its pipes are closed: it is exiting
+    }
+    return static_cast<int>(std::max<std::int64_t>(0, push_.deadline - nowMs));
+}
+
+void ConfigRepo::endPush() {
+    for (int* fd : {&push_.out, &push_.err}) {
+        if (*fd >= 0) {
+            ::close(*fd);
+            *fd = -1;
+        }
+    }
+    if (push_.pid > 0) {
+        int status = 0;
+        while (::waitpid(push_.pid, &status, 0) < 0 && errno == EINTR) {
+        }
+    }
+    push_ = Child{};
+}
+
+bool ConfigRepo::pushServe(std::int64_t nowMs, std::string* result) {
+    if (push_.pid <= 0) {
+        return false;
+    }
+    if (push_.out >= 0) {
+        drain(&push_.out, &push_.outText);
+    }
+    if (push_.err >= 0) {
+        drain(&push_.err, &push_.errText);
+    }
+    const std::string url = push_.url;
+    const std::string again = "; the change stays committed here, and the next commit pushes again";
+    if (nowMs >= push_.deadline) {
+        ::kill(-push_.pid, SIGKILL);
+        endPush();
+        *result = "pushing to " + url + " did not finish within " + std::to_string(kPushMs / 1000) +
+            " s and was ended" + again;
+        return true;
+    }
+    if (push_.out >= 0 || push_.err >= 0) {
+        return false;
+    }
+    int status = 0;
+    pid_t done = 0;
+    while ((done = ::waitpid(push_.pid, &status, WNOHANG)) < 0 && errno == EINTR) {
+    }
+    if (done == 0) {
+        return false;
+    }
+    GitResult g;
+    g.status = done < 0 ? -1 : exitStatus(status);
+    g.out = push_.outText;
+    g.err = push_.errText;
+    push_.pid = -1;     // collected
+    endPush();
+    *result = g.status == 0 ? "pushed to " + url : gitWhy("pushing to " + url, g) + again;
+    return true;
 }
 
 bool ConfigRepo::history(std::vector<std::string>* lines, std::string* why) {
@@ -407,7 +665,7 @@ bool ConfigRepo::setRemote(const std::string& url, std::string* why) {
         *why = "a remote is a git url, as git@github.com:<owner>/nexus-config.git";
         return false;
     }
-    if (!onlyKnownTracked(why)) {
+    if (!onlyKnownHistory(why)) {
         return false;
     }
     std::string was;
@@ -436,6 +694,7 @@ bool ConfigRepo::clearRemote(std::string* why) {
         *why = gitWhy("clearing the remote", g);
         return false;
     }
+    pushWanted_ = false;
     return true;
 }
 

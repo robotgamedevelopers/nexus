@@ -9,7 +9,9 @@
 // SIGKILL ends it), flood, fails_first_start, resume, restart (the server killed mid-turn and started again),
 // orphan (what a driver started is ended with it), escaped_output (a driver whose output another process holds open),
 // queue (the open entry while the friend writes, and a queued prompt taken at the turn's end), account (an account
-// change restarts the session's driver).
+// change restarts the session's driver), sign_in and no_credential (what a driver says of its account's login reaches
+// the hub), usage_limit (a usage limit moves the session to its friend's next signed-in account), no_account (a session
+// on no account starts no driver that needs one).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -513,6 +515,95 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(readFile(dir + "/starts.log"), "resume=s-1"));
 }
 
+// ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and
+// the server's accounts: a1 and a2, both ada's, a1 her default.
+void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, const std::string& script) {
+    writeFile(dir + "/ada.script", script);
+    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
+        "friend ada fake " + dir + "\n");
+    accounts::Registry r;
+    r.accounts = {{"a1", "fake"}, {"a2", "fake"}};
+    r.friends = {{"ada", {"a1", "a2"}, "a1"}};
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+}
+
+bool signedIn(Server& s, const std::string& account) {
+    return s.hub->signedIn().count(account) == 1;
+}
+
+// A driver's credential event reports its account signed in, and the driver runs on the session's account: the
+// drivers file's --account value is replaced by it.
+void signIn(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    CHECK(s.hub->signedIn().empty());
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("q");
+    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
+    CHECK(signedIn(s, "a1") && !signedIn(s, "a2"));
+    const std::string log = readFile(dir + "/starts.log");
+    CHECK(has(log, "account=a1\n"));
+    CHECK(!has(log, "from-the-file"));
+}
+
+// A driver that has no credential for its account reports it as needing sign-in: the account is signed in no more.
+void noCredential(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"error\",\"cause\":\"a1 has no token\",\"fix\":\"make one\",\"code\":\"no-credential\"}\n"
+        "exit 0\n");
+    s.hub->reportSignedIn("a1", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("q");
+    CHECK(s.serveUntil([&] { return !signedIn(s, "a1"); }, 10));
+    CHECK(!signedIn(s, "a1"));
+    CHECK(s.serveUntil([&] { return none(s); }, 10));
+}
+
+// A usage limit on the session's account: the session moves to ada's next signed-in account, told, and its next
+// prompt starts a driver on that account.
+void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello + "send\n"
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"the limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
+        "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"error\"}\n"
+        "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("first");
+    CHECK(s.serveUntil([&] { return s.store.find(kAda)->info.account == "a2"; }, 10));
+    CHECK(s.store.find(kAda)->info.account == "a2");
+    bool told = false;
+    for (const std::string& line : s.transcript()) {
+        told = told || has(line, "The account a1 reached its usage limit, so this session now runs on the account a2");
+    }
+    CHECK(told);
+    CHECK(s.serveUntil([&] { return none(s) || idle(s); }, 10));
+    s.send("second");
+    CHECK(s.serveUntil([&] { return idle(s) && has(readFile(dir + "/starts.log"), "account=a2\n"); }, 10));
+    CHECK(has(readFile(dir + "/starts.log"), "account=a2\n"));
+}
+
+// A session on no account, whose friend's driver takes one: no driver starts, and the session is told how to link an
+// account.
+void noAccount(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\n" + std::string(kHello) + "send\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    CHECK(s.store.find(kAda)->info.account.empty());
+    s.send("q");
+    const auto told = [&] {
+        for (const std::string& line : s.transcript()) {
+            if (has(line, "runs on no account, and ada's driver needs one, so the prompt was not sent. Link an "
+                          "account to ada in friends.json")) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(s.serveUntil(told, 10));
+    s.serveUntil([] { return false; }, 0.3);
+    CHECK(s.drivers->pid(kAda) < 0);
+    CHECK(!std::filesystem::exists(dir + "/starts"));
+}
+
 // ada's driver as a shell script, for what the fake driver does not do: start processes of its own.
 void setUpShell(const std::string& dir, const std::string& script) {
     writeFile(dir + "/ada.sh", script);
@@ -644,7 +735,8 @@ int main(int argc, char** argv) {
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
-                {"stop_hammered", stopHammered}, {"account", account}};
+                {"stop_hammered", stopHammered}, {"account", account}, {"sign_in", signIn},
+                {"no_credential", noCredential}, {"usage_limit", usageLimit}, {"no_account", noAccount}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });
             if (it == cases.end()) {
                 std::fprintf(stderr, "drivers_functional: no case %s\n", name.c_str());

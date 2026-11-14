@@ -101,6 +101,7 @@ An error's `code` is one of these; an absent code, or one this version does not 
 | `no-credential` | the harness has no credential it can use; the driver ends the open turn, if any, with this error (with the turn) and `done` outcome `error`, then exits |
 | `session-not-found` | the harness does not know the `--resume` id, at start or once the first turn begins; a notice, after which the driver carries on in a new session (sequence rule 10) |
 | `harness` | the harness itself failed |
+| `usage-limit` | the account reached its usage limit; nexus-server moves the session to its friend's next signed-in account (docs/accounts.md), or tells it there is none |
 | `other` | anything else |
 
 Every message that belongs to a turn carries that turn's number, so the server can drop messages from a turn it no

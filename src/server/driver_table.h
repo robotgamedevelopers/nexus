@@ -18,6 +18,8 @@
 #include <string_view>
 #include <vector>
 
+#include "accounts/registry.h"
+
 namespace nexus::server {
 
 struct DriverTable {
@@ -42,5 +44,11 @@ struct ResolvedDriver {
 };
 
 ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, const std::string& path);
+
+// The accounts and friends the table implies, for a server that had none (accounts/registry.h): an account for each
+// driver line that passes `--account <name>` (its provider the line's harness), and each friend of that harness linked
+// to it as its default, so that its sessions run on the account they ran on before. Names that are not names
+// (accounts::isName) are left out.
+accounts::Registry accountsFromDrivers(const DriverTable& table);
 
 } // namespace nexus::server

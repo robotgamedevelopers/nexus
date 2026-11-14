@@ -158,7 +158,10 @@ PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& exam
             r.errorAt(v, "\"version\" is not a whole number from 1", "set it to " + std::to_string(kVersion));
             ok = false;
         } else if (n > kVersion) {
-            r.errorAt(v, "\"version\" is " + std::to_string(static_cast<long long>(n)) + ", newer than this " +
+            // n is range-checked before the cast: 1e300 is a number JSON allows, and no long long holds it
+            const std::string said = n < 1e9 ? std::to_string(static_cast<long long>(n))
+                                             : std::string("a number past any version");
+            r.errorAt(v, "\"version\" is " + said + ", newer than this " +
                       "nexus-server reads (" + std::to_string(kVersion) + ")",
                       "run the nexus-server that wrote it, or update this one; the file was left as it is");
             ok = false;
@@ -203,7 +206,7 @@ bool stringField(Reader& r, PrJsonValueIndex object, const std::string& key, con
     return true;
 }
 
-const char* const kNameRule = "1 to 64 letters, digits, '-', '_' or '.', not starting with '.'";
+const char* const kNameRule = "1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-'";
 const char* const kProviderRule = "1 to 32 lowercase letters, digits or '-', as \"claude\"";
 const char* const kAccountsExample =
     "{ \"version\": 1, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\" } ] }";
@@ -249,7 +252,7 @@ bool Registry::linked(std::string_view friendName, std::string_view account) con
 }
 
 bool isName(std::string_view name) {
-    if (name.empty() || name.size() > 64 || name.front() == '.') {
+    if (name.empty() || name.size() > 64 || name.front() == '.' || name.front() == '-') {   // '-': it reaches an argv
         return false;
     }
     return std::all_of(name.begin(), name.end(), [](char c) {
@@ -259,7 +262,7 @@ bool isName(std::string_view name) {
 }
 
 bool isProvider(std::string_view provider) {
-    if (provider.empty() || provider.size() > 32) {
+    if (provider.empty() || provider.size() > 32 || provider.front() == '-') {
         return false;
     }
     return std::all_of(provider.begin(), provider.end(),

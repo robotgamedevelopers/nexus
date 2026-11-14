@@ -15,13 +15,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <vector>
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
 #include "server/config_repo.h"
+#include "server/driver_table.h"
 #include "server/drivers.h"
 #include "server/durable.h"
 #include "server/home.h"
@@ -260,11 +263,45 @@ bool Server::openStore(std::string* why) {
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
+    // An account is taken as signed in from the start when its credential is there, until its driver says otherwise
+    // (a no-credential or authentication error): for a claude account, its oauth-token (drivers/claude/src/account.ts).
+    const std::string accountsDir = paths_.dir + "/accounts/";
+    hub_->probeSignInWith([accountsDir](const accounts::Account& a) {
+        return a.provider == "claude" && access((accountsDir + a.name + "/oauth-token").c_str(), F_OK) == 0;
+    });
     std::string configWhy;
     accounts::Registry registry;
     std::vector<std::string> report;
-    if (!config_->open(&configWhy)) {
+    bool seeded = false;
+    const bool opened = config_->open(&configWhy);
+    if (!opened) {
         std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
+    } else if (!config_->hasAccounts() && !config_->pending(&configWhy)) {
+        // A server from before accounts: its accounts are what the drivers file passed with --account, so that no
+        // session moves (server/driver_table.h accountsFromDrivers), committed as an upgrade.
+        std::string text;
+        std::ifstream in(paths_.drivers);
+        if (in) {
+            std::ostringstream all;
+            all << in.rdbuf();
+            text = all.str();
+        }
+        const accounts::Registry seed = accountsFromDrivers(parseDriverTable(text, paths_.home));
+        if (!seed.accounts.empty()) {
+            std::string why;
+            if (config_->keep(seed, "upgrade: the accounts and friends taken from the drivers file's --account, so "
+                              "that every session runs on the account it ran on before", &why)) {
+                seeded = true;
+                std::fprintf(stderr, "nexus-server: config: accounts.json and friends.json made from %s\n",
+                    paths_.drivers.c_str());
+            } else {
+                std::fprintf(stderr, "nexus-server: config: the accounts in %s were not taken: %s\n",
+                    paths_.drivers.c_str(), why.c_str());
+            }
+        }
+    }
+    if (!opened) {
+        // the line above said why
     } else if (!config_->committed(&registry, &report)) {
         for (const std::string& l : report) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
@@ -278,6 +315,16 @@ bool Server::openStore(std::string* why) {
         }
         for (const std::string& l : hub_->useAccounts(registry, config_.get())) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+        }
+        if (seeded) {
+            // The sessions from before accounts ran on their friend's --account: they keep it.
+            for (const std::string& l : hub_->adoptDefaults()) {
+                std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
+            }
+            if (hub_->failed()) {
+                *why = "the store failed while the sessions took the drivers file's accounts; restart the server";
+                return false;
+            }
         }
         std::fprintf(stderr, "nexus-server: config: %zu account%s and %zu friend%s from %s\n", registry.accounts.size(),
             registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
@@ -408,11 +455,12 @@ void Server::configApply(int fd, const std::string& request) {
         message = "reload: the hand edit of accounts.json and friends.json applied (the person's or their AI's)";
     } else {
         const std::string commit = request.substr(std::string("config restore ").size());
-        ok = config_->at(commit, &next, &lines);
+        ok = config_->restoring(commit, &next, &lines);
         message = "restore: the files as commit " + commit + " held them, applied as a new version";
     }
     if (ok) {
-        config_->applying(true);
+        const bool reload = request == "config reload";
+        config_->applying(reload);   // only a reload commits over the working files: they are what it applies
         ok = hub_->applyAccounts(next, message, &lines);
         config_->applying(false);
         for (const std::string& n : config_->notes()) {
@@ -476,9 +524,19 @@ int Server::run() {
                 ++it;
             }
         }
+        // A commit to the config repository asked for a push: it runs as a child the loop watches, never here.
+        if (config_ && config_->pushWanted() && !config_->pushRunning()) {
+            std::string pushWhy;
+            if (!config_->pushStart(nowMs(), &pushWhy)) {
+                std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
+            }
+        }
         std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
         std::vector<std::size_t> owner{0};
         int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+        if (config_ && config_->pushRunning()) {
+            wait = std::min(wait, config_->pushWaitMs(nowMs()));
+        }
         for (std::size_t i = 0; i < links_.size(); ++i) {
             wait = std::min(wait, std::max(0, links_[i].link->waitMs()));
             for (int fd : links_[i].link->fds()) {
@@ -490,11 +548,20 @@ int Server::run() {
         const std::size_t linkFds = fds.size();
         for (const pollfd& p : drivers_->fds())
             fds.push_back(p);
+        if (config_) {
+            for (int fd : config_->pushFds()) {
+                fds.push_back(pollfd{fd, POLLIN, 0});
+            }
+        }
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
             std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
             break;
         }
         link::freezeClock();
+        std::string pushed;
+        if (config_ && config_->pushServe(nowMs(), &pushed)) {
+            std::fprintf(stderr, "nexus-server: config push: %s\n", pushed.c_str());
+        }
         bool changed = false;
         if (!drivers_->serve(nowMs(), &changed)) {
             std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
@@ -713,7 +780,7 @@ int config(const Paths& p, const std::vector<std::string>& args) {
             return 1;
         }
         std::vector<std::string> headErrors;
-        if (!repo.committed(&head, &headErrors)) {
+        if (!repo.committed(&head, &headErrors, false)) {   // a check writes nothing, not even an upgrade
             head = accounts::Registry{};
         }
         const std::vector<std::string> lines = accounts::changes(head, working);

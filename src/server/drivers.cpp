@@ -67,6 +67,14 @@ void append(Output& into, Output from) {
     if (from.sessionCostUsd) {
         into.sessionCostUsd = from.sessionCostUsd;
     }
+    if (from.signedIn) {
+        into.signedIn = from.signedIn;
+        into.account = from.account;
+    }
+    if (from.usageLimit) {
+        into.usageLimit = true;
+        into.account = from.account;
+    }
     into.taken += from.taken;
 }
 
@@ -167,24 +175,45 @@ std::string Drivers::friendOf(sync::SessionId id) const {
     return stored == nullptr ? std::string() : stored->info.friendName;
 }
 
-// The session's driver: its friend's line of the drivers file.
-// The session's account, where the friend's line already passes one (`--account <name>`, the Claude driver's): the
-// session's account in its place. A line that passes none is left as it is: how a driver is given its account is part
-// 4 of the sign-in work (docs/roadmap.sexp). A session on another provider's account than its friend's harness has no
-// driver here until that provider's driver exists: refused with the fix.
+// The session's driver: its friend's line of the drivers file, with the session's account in place of the value its
+// command passes after `--account` (the Claude driver's: part 4 of the sign-in work gives every driver its account,
+// docs/roadmap.sexp). A command that takes an account starts for a session with one only: a session on no account (one
+// whose friend had no signed-in account left when its own was unlinked) gets the reason and how to link one. A session
+// on an account of another provider than its friend's harness has no driver here until that provider's driver exists.
 ResolvedDriver Drivers::resolve(sync::SessionId id) const {
-    ResolvedDriver r = resolveFriend(friendOf(id));
+    const std::string friendName = friendOf(id);
+    DriverTable table;
+    ResolvedDriver r = resolveFriend(friendName, &table);
     const sync::StoredSession* stored = store_.find(id);
-    if (!r.problem.empty() || stored == nullptr || stored->info.account.empty()) {
+    if (!r.problem.empty() || stored == nullptr) {
         return r;
     }
     const sync::SessionInfo& info = stored->info;
-    if (!info.harness.empty() && info.harness != sync::kDefaultHarness) {
-        r.problem = "Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
-            info.harness + ", and nexus-server has no " + info.harness + " driver yet, so the prompt was not sent. "
-            "Set the session to one of " + info.friendName + "'s " + sync::kDefaultHarness + " accounts.";
+    const bool takesAccount = std::find(r.command.begin(), r.command.end(), "--account") != r.command.end();
+    auto refuse = [&](const std::string& problem) {
+        r.problem = problem;
         r.command.clear();
         return r;
+    };
+    if (info.account.empty()) {
+        if (takesAccount && hub_ != nullptr && hub_->accounts() != nullptr) {
+            return refuse("Session " + std::to_string(id) + " with " + friendName + " runs on no account, and " +
+                friendName + "'s driver needs one, so the prompt was not sent. Link an account to " + friendName +
+                " in friends.json (its \"accounts\", and its \"default\") and run `nexus-server config reload`, then "
+                "set this session to it; docs/accounts.md says how.");
+        }
+        return r;
+    }
+    // The account's provider, where the server holds accounts (before them, an account is any name, of no provider).
+    const accounts::Account* held = hub_ != nullptr && hub_->accounts() != nullptr ?
+        hub_->accounts()->account(info.account) : nullptr;
+    auto line = table.friends.find(friendName);
+    const std::string harness = line == table.friends.end() ? std::string() : line->second.harness;
+    if (held != nullptr && held->provider != harness) {
+        return refuse("Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
+            held->provider + ", but " + friendName + "'s driver in " + options_.table + " is " + harness + "'s, and "
+            "nexus-server has no " + held->provider + " driver for it yet, so the prompt was not sent. Set the "
+            "session to one of " + friendName + "'s " + harness + " accounts.");
     }
     for (std::size_t i = 1; i + 1 < r.command.size(); ++i) {
         if (r.command[i] == "--account") {
@@ -194,7 +223,7 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     return r;
 }
 
-ResolvedDriver Drivers::resolveFriend(const std::string& friendName) const {
+ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
     std::ifstream in(options_.table);
     std::string text;
     if (in) {
@@ -207,7 +236,12 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName) const {
             friendName + " was not sent. Make the file readable by this user.";
         return r;
     }
-    return resolveDriver(parseDriverTable(text, options_.home), friendName, options_.table);
+    DriverTable parsed = parseDriverTable(text, options_.home);
+    ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
+    if (table != nullptr) {
+        *table = std::move(parsed);
+    }
+    return r;
 }
 
 sync::SessionInfo Drivers::defaults(const std::string& friendName) const {
@@ -618,6 +652,13 @@ int Drivers::waitMs(Millis now) const {
 }
 
 bool Drivers::serve(Millis now, bool* changed) {
+    struct Report {
+        sync::SessionId id;
+        std::string account;
+        std::optional<bool> signedIn;
+        bool usageLimit;
+    };
+    std::vector<Report> reports;
     for (auto& [id, t] : slots_) {
         Output out;
         if (t.proc) {
@@ -632,6 +673,9 @@ bool Drivers::serve(Millis now, bool* changed) {
             append(out, t.sup.closed(t.proc->broken, now));
         }
         append(out, t.sup.tick(now));
+        if ((out.signedIn || out.usageLimit) && !out.account.empty()) {
+            reports.push_back(Report{id, out.account, out.signedIn, out.usageLimit});
+        }
         const bool any = !out.effects.empty() || out.durable || !out.commands.empty() || out.taken != 0;
         if (any) {
             if (!commit(id, out, changed)) {
@@ -644,7 +688,32 @@ bool Drivers::serve(Millis now, bool* changed) {
             *changed = true;    // text that only grew changes nothing durable: it shows as the open entry
         }
     }
-    return true;
+    // What the drivers said of their accounts, once every slot is served: the hub's sign-in state, and a session
+    // whose account reached its usage limit moved to its friend's next signed-in account (a rotation changes the
+    // session's settings, which reach its supervisor through configured()).
+    for (const Report& r : reports) {
+        if (hub_ == nullptr) {
+            break;
+        }
+        if (r.signedIn) {
+            hub_->reportSignedIn(r.account, *r.signedIn);
+            log(r.id, "the account " + r.account + (*r.signedIn ? " is signed in" : " needs sign-in"));
+        }
+        const sync::StoredSession* s = store_.find(r.id);
+        if (r.usageLimit && s != nullptr && s->info.account == r.account) {
+            std::string why;
+            if (hub_->rotate(r.id, &why)) {
+                log(r.id, "the account " + r.account + " reached its usage limit; the session moved to " +
+                    store_.find(r.id)->info.account);
+            } else {
+                log(r.id, "the account " + r.account + " reached its usage limit: " + why);
+            }
+            if (changed != nullptr) {
+                *changed = true;
+            }
+        }
+    }
+    return hub_ == nullptr || !hub_->failed();
 }
 
 } // namespace nexus::server

@@ -80,12 +80,27 @@ void resolve() {
     CHECK(has(resolveDriver(parseDriverTable("", "/h"), "ada", "/d/drivers").problem, "ada has no driver"));
 }
 
+// The accounts the drivers file implies, for a server that had none: each line's --account, its friends linked to it.
+void seed() {
+    const DriverTable t = parseDriverTable(
+        "driver claude /bin/drv --account work --model x\n"
+        "driver codex /bin/cx\n"
+        "driver odd /bin/odd --account -rf\n"
+        "friend ada claude\nfriend bo claude\nfriend cy codex\nfriend dee odd\n", "/h");
+    const nexus::accounts::Registry r = accountsFromDrivers(t);
+    CHECK((r.accounts == std::vector<nexus::accounts::Account>{{"work", "claude"}}));
+    CHECK((r.friends == std::vector<nexus::accounts::Friend>{{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}}));
+    CHECK(nexus::accounts::problems(r).empty());
+    CHECK(accountsFromDrivers(parseDriverTable("", "/h")) == nexus::accounts::Registry{});
+}
+
 } // namespace
 
 int main() {
     lines();
     refusals();
     resolve();
+    seed();
     if (failures != 0) {
         std::fprintf(stderr, "driver_table_test: %d check(s) failed\n", failures);
         return 1;

@@ -49,7 +49,7 @@ struct Registry {
     bool linked(std::string_view friendName, std::string_view account) const;
 };
 
-// An account's or a friend's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' (the Claude
+// An account's or a friend's name: 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-' (the Claude
 // driver's rule for an account, drivers/claude/src/account.ts). A provider's: 1 to 32 lowercase letters, digits or '-'.
 bool isName(std::string_view name);
 bool isProvider(std::string_view provider);

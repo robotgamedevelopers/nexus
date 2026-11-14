@@ -499,18 +499,29 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
     }
     lines = accounts::changes(accounts_ ? *accounts_ : accounts::Registry{}, next);
     take(next);
-    const bool ok = settle(&lines, "the accounts and friends were changed: " + message);
+    if (!settle(&lines, "the accounts and friends were changed: " + message)) {
+        lines.push_back("the store failed while the sessions were moved, so the server stops; at its next start it "
+            "moves them, against what was committed");
+    }
     if (report != nullptr) {
         *report = std::move(lines);
     }
-    return ok;
+    return true;    // committed: applied, whatever the store did after
 }
 
-// The registry becomes `next`; an account it no longer holds loses its sign-in.
+// The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
+// probed (probeSignInWith).
 void Hub::take(accounts::Registry next) {
+    std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
         it = accounts_->account(*it) == nullptr ? signedIn_.erase(it) : std::next(it);
+    }
+    for (const accounts::Account& a : accounts_->accounts) {
+        const accounts::Account* before = was ? was->account(a.name) : nullptr;
+        if (probe_ && (before == nullptr || before->provider != a.provider) && probe_(a)) {
+            signedIn_.insert(a.name);
+        }
     }
 }
 
@@ -562,6 +573,30 @@ bool Hub::rotate(SessionId id, std::string* why) {
     return true;
 }
 
+std::vector<std::string> Hub::adoptDefaults() {
+    std::vector<std::string> report;
+    if (!accounts_) {
+        return report;
+    }
+    for (SessionId id : store_.ids()) {
+        SessionInfo info = store_.find(id)->info;
+        const accounts::Friend* f = accounts_->friendNamed(info.friendName);
+        if (!info.account.empty() || f == nullptr || f->preferred.empty()) {
+            continue;
+        }
+        info.account = f->preferred;
+        info.harness = harnessOf(info.account, info.harness);
+        if (!moveTo(id, info, "This session runs on the account " + info.account + ", which the drivers file gave " +
+                    info.friendName + " before accounts were set up; accounts.json and friends.json now say so "
+                    "(docs/accounts.md).")) {
+            break;
+        }
+        report.push_back("session " + std::to_string(id) + " (" + info.friendName + "): account none -> " +
+                         info.account + ", as the drivers file ran it");
+    }
+    return report;
+}
+
 // An account action: the registry it makes, kept by the keeper, then taken, then the sessions settled; refused and
 // counted, changing nothing, when it does not fit the registry the hub holds.
 bool Hub::accountAction(const Action& action, std::string* why, const std::string& client) {
@@ -578,7 +613,8 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
         case ActionKind::AddAccount:
             if (!accounts::isName(a) || !accounts::isProvider(action.text)) {
                 refused = "an account is set up with a name (1 to 64 letters, digits, '-', '_' or '.', not starting "
-                    "with '.') and a provider (lowercase, as claude): \"" + a + "\" of \"" + action.text + "\" is not";
+                    "with '.' or '-') and a provider (lowercase, as claude): \"" + a + "\" of \"" + action.text +
+                    "\" is not";
             } else if (next.account(a) != nullptr) {
                 refused = "the account " + a + " is already set up";
             } else {
@@ -601,8 +637,8 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
             break;
         case ActionKind::AddFriend:
             if (!accounts::isName(f)) {
-                refused = "a friend's name is 1 to 64 letters, digits, '-', '_' or '.', not starting with '.': \"" + f +
-                    "\" is not";
+                refused = "a friend's name is 1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-': \"" +
+                    f + "\" is not";
             } else if (fr != nullptr) {
                 refused = "the friend " + f + " is already set up";
             } else {
@@ -654,10 +690,15 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
         return counted(action, "the accounts were not changed: " + failed, why, client);
     }
     take(std::move(next));
-    if (!count(action, why, client)) {
+    // Committed and taken: a store that fails now stops the server, which settles the sessions at its next start.
+    if (!count(action, why, client) || !settle(nullptr, message)) {
+        if (why != nullptr) {
+            *why = "the accounts were changed and committed (" + message + "), but the store failed while the "
+                "action was counted or the sessions moved; the server stops, and moves them at its next start";
+        }
         return false;
     }
-    return settle(nullptr, message);
+    return true;
 }
 
 // The session's new tail, in place of its old one; every other session is shared with the state before.

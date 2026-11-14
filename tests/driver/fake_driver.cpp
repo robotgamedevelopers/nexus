@@ -1,7 +1,7 @@
 // A driver that speaks the protocol (src/driver/protocol.h) from a script instead of a harness: the stand-in the
 // server's functional tests start as a friend's driver.
 //
-//   nexus-fake-driver --cwd <dir> [--resume <session id>] --script <file>
+//   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] --script <file>
 //
 // The script is lines of text; blank lines and lines starting with # are skipped. The lines before the first `send`
 // run at start (they write the hello, so a script can also write a wrong one). Each `send` line starts the block that
@@ -20,8 +20,9 @@
 //   stderr <text>        write <text> and a newline to standard error
 //   record <path> [VAR ...]
 //                        append to <path> the arguments it was started with and the directory it works in, as
-//                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), and each
-//                        named environment variable as `VAR=<value>` or `VAR unset`
+//                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), then
+//                        `account=<name>` (only when given), and each named environment variable as `VAR=<value>` or
+//                        `VAR unset`
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
 //   option <name>        anywhere in the script, for the whole run:
@@ -96,6 +97,7 @@ void emit(const DriverMessage& message) {
 struct Arguments {
     std::string cwd;
     std::optional<std::string> resume;
+    std::optional<std::string> account;
     std::string script;
 };
 
@@ -373,6 +375,9 @@ private:
         std::ofstream out(path, std::ios::app);
         const std::string dir = std::filesystem::current_path().string();
         out << "cwd=" << arguments_.cwd << "\ndir=" << dir << "\nresume=" << arguments_.resume.value_or("") << "\n";
+        if (arguments_.account) {
+            out << "account=" << *arguments_.account << "\n";
+        }
         while (!names.empty()) {
             auto [name, rest] = split(names);
             const char* value = std::getenv(name.c_str());
@@ -405,17 +410,20 @@ int main(int argc, char** argv) {
     Arguments arguments;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if ((a == "--cwd" || a == "--resume" || a == "--script") && i + 1 < argc) {
+        if ((a == "--cwd" || a == "--resume" || a == "--script" || a == "--account") && i + 1 < argc) {
             const char* value = argv[++i];
-            if (a == "--cwd")
+            if (a == "--cwd") {
                 arguments.cwd = value;
-            else if (a == "--resume")
+            } else if (a == "--resume") {
                 arguments.resume = value;
-            else
+            } else if (a == "--account") {
+                arguments.account = value;
+            } else {
                 arguments.script = value;
+            }
         } else {
             scriptBug("unknown or incomplete argument " + std::string(a) + "; the arguments are --cwd <dir>, "
-                "--resume <session id> and --script <file>");
+                "--resume <session id>, --account <name> and --script <file>");
         }
     }
     if (arguments.cwd.empty() || arguments.script.empty())

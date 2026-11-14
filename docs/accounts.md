@@ -21,8 +21,14 @@ with the commands below.
   a friend removed), the server moves it at once to the friend's default if that is signed in, else to its first
   signed-in linked account, else to none, and tells the session. When an account's provider changes, its sessions take
   the new harness and are told. A default that is unlinked or removed becomes none.
-- Which accounts are signed in is the server's own state, reported by sign-in and by the drivers; it is not in these
-  files. After a restart every account needs sign-in again until one is reported.
+- Which accounts are signed in is the server's own state; it is not in these files. When the server starts, and when an
+  account is set up, it is signed in if its login is there (for a `claude` account, the token file
+  `~/.nexus/server/accounts/<name>/oauth-token`). From then on the drivers report it: a driver that starts on the
+  account and reports its credential signs it in; one that reports no credential, or a failed authentication, marks it
+  as needing sign-in; one that reports a usage limit (`usage-limit`, `docs/driver-protocol.md`) moves its session on,
+  as above.
+- A session on no account whose friend's driver needs one (the Claude driver's line passes `--account`) starts no
+  driver: its prompt is not sent, and it is told to link an account to the friend and set the session to it.
 
 These rules are `models/Accounts.tla`, and the server's code is checked against it.
 
@@ -65,7 +71,7 @@ in-app sign-in, never through an AI and never by editing a file.
 |---|---|---|---|
 | `version` | top | yes | the whole number `1` (see Versions) |
 | `accounts` | top | yes | a list of accounts, in any order you like; `[]` for none |
-| `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.`; unique among the accounts |
+| `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the accounts |
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
 
 The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
@@ -100,7 +106,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 |---|---|---|---|
 | `version` | top | yes | the whole number `1` (see Versions) |
 | `friends` | top | yes | a list of friends; `[]` for none |
-| `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.`; unique among the friends |
+| `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
 | `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the order is the order a rotation at a usage limit goes through them |
 | `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
 
@@ -123,8 +129,14 @@ JSON is read; this is only how it is written back).
    lines go to the server's log, `~/.nexus/server/server.log`. An edit is applied whole or not at all.
 
 A reload is explicit: the server never applies a file because it changed on disk, so a half-finished edit is never
-applied. While the files hold edits not yet applied, an account change from a window is refused rather than written
-over them, and says so; reload the edit, or drop it with `git -C ~/.nexus/server/nexus-config checkout -- .`.
+applied. While the files hold edits not yet applied, nothing else writes them: an account change from a window and a
+restore are refused, and an upgrade waits, each saying so; reload the edit, or drop it with
+`git -C ~/.nexus/server/nexus-config checkout -- .`.
+
+An apply is all or nothing on disk as well: if writing a file, staging or committing fails, the files and git's index
+are put back as they were and nothing is committed. Once it is committed it is applied; if the server's own store then
+fails while sessions move, the reply says so, the server stops, and at its next start it moves them against what was
+committed.
 
 Examples of what the server says:
 
@@ -167,10 +179,17 @@ edit applied by a reload (the person's or their AI's), a version restored, or an
 
 - `nexus-server config history` lists the commits, newest first: `<commit> <date> <what changed and who asked>`.
 - `nexus-server config restore <commit>` applies the files as that commit held them, as a new commit. History is never
-  rewritten, so a restore can itself be undone the same way.
+  rewritten, so a restore can itself be undone the same way. It is refused while the files hold edits not yet applied.
 
-Its `.gitignore` admits only `.gitignore`, `accounts.json` and `friends.json`, and the server stages only those files
-by name. git runs with no system config, no hooks, no signing and no prompts, as the identity `nexus`.
+Its `.gitignore` admits only `.gitignore`, `accounts.json` and `friends.json`, and every commit names only
+`accounts.json` and `friends.json`. git runs as a child process with a clean environment: no system or global git
+config (your `~/.gitconfig` is never read), no hooks, no signing, no prompts, never above this directory, the
+transports file, ssh and https only, the identity `nexus`, and a deadline on every call.
+
+A server from before accounts has no accounts.json: at its first start with this version, the accounts and friends are
+taken from the drivers file (each driver line's `--account <name>` becomes an account whose provider is that line's
+harness, linked to that harness's friends as their default), committed as an upgrade, and each session moves onto its
+friend's default, told, so that it runs on the account it ran on before.
 
 ### A remote (optional)
 
@@ -181,16 +200,31 @@ To keep the history somewhere else too, make a **private** repository of your ow
 - `nexus-server config remote` prints it, or `none`.
 - `nexus-server config remote --clear` removes it.
 
-With a remote, every commit is followed by a push, with the git credentials of the user nexus-server runs as. A push
-that fails never blocks or undoes the change: the reload says so (`applied: pushing to <url> (applied all the same;
-the next commit pushes again) failed (git: <why>)`), and the next commit pushes again. The server refuses to set a remote, and never
-pushes, while the repository tracks any file other than its three. It never creates the remote repository.
+With a remote, every commit is followed by a push. The push runs in the background, as a child process the server
+watches with a 60 s deadline, so nothing waits on it: the reload replies at once (`applied: committed; pushing to <url>
+in the background ...`), and the push's result goes to the server's log (`nexus-server: config push: pushed to <url>`,
+or why it failed). A push that fails or runs past its deadline never undoes the change; the next commit pushes again.
+
+A push uses exactly one of two credentials, and never asks for anything:
+
+- an ssh remote (`git@github.com:...`): the ssh keys or agent of the user nexus-server runs as, with
+  `BatchMode=yes` and a 15 s `ConnectTimeout`;
+- an https remote (`https://github.com/...`): the GitHub CLI's stored login, through `gh auth git-credential`
+  (`gh auth login` once, as that user).
+
+Before setting a remote and before every push, the server checks every file in the repository's whole history, not
+only the files tracked now. If any commit ever held a file other than its three, nothing is pushed, ever: a push would
+publish that commit. The message names the file and the two ways out: make a new repository (move the directory
+aside, start nexus-server, copy the two files in, `nexus-server config reload`), or rewrite the history so that no
+commit holds it; and if it was a credential, replace the credential. The server never creates the remote repository.
 
 ## Versions
 
 Both files carry `"version"`, from the first release. A nexus-server reads its own version and every older one; an
 older file is upgraded in place when the server starts (your entries kept as they were, written in the new version, and
-committed as an upgrade, which the server's log reports). A file whose version is newer than the server reads is refused
+committed as an upgrade, which the server's log reports), unless the files hold edits not yet applied: those are never
+written over, and the next reload writes the new version. `config check` never writes anything, an upgrade included.
+(Version 1 is the first, so no file is older yet.) A file whose version is newer than the server reads is refused
 with a message saying so, and left exactly as it is: run the newer nexus-server, or update this one. The version only
 rises when a change cannot be read by an older reader.
 
