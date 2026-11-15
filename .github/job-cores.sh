@@ -1,6 +1,7 @@
-# The parallelism for a CI job's builds and tests (ci.yml and nightly.yml, as `JOBS=$(sh .github/job-cores.sh)`): the
-# runner's share of its host's cores, NOVA_JOB_CORES, which each fleet runner exports, so that jobs sharing a host do
-# not each ask for the whole machine; the machine's core count where it is unset or not a positive integer. Prints the
+# The parallelism for a CI job's compiles (ci.yml and nightly.yml, as `JOBS=$(sh .github/job-cores.sh)`; tests keep
+# the machine's core count, TEST_JOBS, and ci.yml's opening comment says why): the runner's share of its host's cores,
+# NOVA_JOB_CORES, which each fleet runner exports, so that compiles sharing a host do not each ask for the whole
+# machine; the machine's core count where it is unset or not a positive integer. Prints the
 # number, and says on stderr (the step's log) which it used. Windows does the same in pwsh (ci.yml, windows).
 cores=${NOVA_JOB_CORES:-}
 case "$cores" in

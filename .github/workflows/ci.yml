@@ -16,11 +16,14 @@
 # jar must be the pinned tla2tools.jar v1.7.4, whose sha256 is in .github/tla2tools.sha256; any other jar
 # fails the job.
 #
-# Builds use the job's share of its host's cores and tests run one job per core of that share: NOVA_JOB_CORES, which
-# each fleet runner exports, or the machine's core count where it is unset (.github/job-cores.sh; the windows job does
-# the same in pwsh). Runners share hosts, so a job that took every core would starve the others. Caches live outside
-# the workspace, under ~/Library/Caches/nexus-ci on the runner's machine, so a build is from scratch but Prax is not
-# recompiled each time:
+# Compiles use the job's share of its host's cores (JOBS, for `cmake --build --parallel`): NOVA_JOB_CORES, which each
+# fleet runner exports, or the machine's core count where it is unset or not a positive integer (.github/job-cores.sh;
+# the windows job does the same in pwsh). Runners share hosts, and a compile that took every core starved the other
+# jobs on its host. Tests run one ctest job per core of the whole machine (TEST_JOBS, for `ctest -j`), as before: the
+# model shards' TLC tests reserve 8 processors each (PROCESSORS) and run one at a time under a share of 2, and the
+# functional tests mostly wait on processes and sockets, so a share made them slower (2 s to 16 s on hulk) for no
+# saving in CPU. Caches live outside the workspace, under ~/Library/Caches/nexus-ci on the runner's machine, so a build
+# is from scratch but Prax is not recompiled each time:
 #   ccache/                    compiled objects, when the machine has ccache; CCACHE_BASEDIR makes the runners'
 #                              different workspaces hit (it compiles with relative paths, so objects are identical)
 #   lto/                       the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
@@ -73,6 +76,7 @@ jobs:
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -97,13 +101,13 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
-        run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,
       # alone, and with every nova-reserve slot on this host when it can have them within 20 s; else shared.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -E '^window_frame_budget$' -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L functional -E '^window_frame_budget$' -j "$TEST_JOBS" --output-on-failure
       - name: Frame budget, alone
         shell: bash
         run: |
@@ -149,6 +153,7 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
@@ -243,6 +248,7 @@ jobs:
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
           echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - name: Install the pinned packages
         working-directory: drivers/claude
         run: npm ci --omit=optional --no-audit --no-fund
@@ -254,7 +260,7 @@ jobs:
       - name: Build the conformance test
         run: cmake --build build --parallel "$JOBS" --target driver_conformance_test
       - name: Conformance of the Claude driver
-        run: ctest --test-dir build -L claude_driver -j "$JOBS" --output-on-failure --no-tests=error
+        run: ctest --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
@@ -288,6 +294,7 @@ jobs:
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(nproc)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -318,10 +325,10 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
-        run: ctest --test-dir build -L unit -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # Real child processes and real files: not unit tests.
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
       - name: ccache hits in this job
         if: always()
         shell: bash
@@ -382,6 +389,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(nproc)"
           } >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         shell: bash
@@ -582,6 +590,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(nproc)"
           } >> "$GITHUB_ENV"
       # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
       # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
@@ -631,7 +640,7 @@ jobs:
           select=()
           if [ -n "$RUN" ]; then select+=(-R "$RUN"); fi
           if [ -n "$SKIP" ]; then select+=(-E "$SKIP"); fi
-          ctest --test-dir build -L '^model$' "${select[@]}" -j "$JOBS" --output-on-failure --no-tests=error
+          ctest --test-dir build -L '^model$' "${select[@]}" -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
   # ran them before it moved to Linux.
@@ -682,6 +691,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
           } >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which the walk does not use.
       - name: Configure (Release)
@@ -697,7 +707,7 @@ jobs:
       - name: Build the label's walk
         run: cmake --build build --parallel "$JOBS" --target label_walk
       - name: The label's trace checks
-        run: ctest --test-dir build -L '^model$' -R '^tlc_label_trace' -j "$JOBS" --output-on-failure --no-tests=error
+        run: ctest --test-dir build -L '^model$' -R '^tlc_label_trace' -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
@@ -736,6 +746,7 @@ jobs:
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "TEST_JOBS=$(nproc)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -752,7 +763,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$JOBS"
       - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$JOBS" --output-on-failure --no-tests=error
+        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure --no-tests=error
       - name: ccache hits in this job
         if: always()
         shell: bash
@@ -828,6 +839,7 @@ jobs:
             Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is '$shown', not a positive integer: jobs use the processor count, $jobs"
           }
           "JOBS=$jobs" >> $env:GITHUB_ENV
+          "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
           cmake --version
           if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
       # Prax at the commit CMakeLists.txt pins, fetched once per runner at depth 1 (a full clone outlasts the job's 2
@@ -897,7 +909,7 @@ jobs:
           Remove-Item -Force -ErrorAction SilentlyContinue "$env:NEXUS_BUILD.unfinished"
       - name: Unit tests
         run: |
-          ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
+          ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
       # The terminal tab's WSL2 shell test, for wsl2-terminal to run (this job's NETWORK SERVICE has no WSL2 distribution).
       - name: Keep the WSL2 terminal test for wsl2-terminal
