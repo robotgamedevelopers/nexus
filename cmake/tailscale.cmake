@@ -106,6 +106,7 @@ if(WIN32)
         COMMENT "Building the Tailscale shim (nts.dll and its import library) with go${NEXUS_TAILSCALE_GO}"
         VERBATIM)
     add_custom_target(nexus_tailscale_shim DEPENDS ${nexus_ts_dll} ${nexus_ts_implib})
+    set(nexus_ts_host_env GOOS=windows GOARCH=amd64 "CC=\"${nexus_ts_cc}\"")
     add_library(nexus_tailscale SHARED IMPORTED GLOBAL)
     set_target_properties(nexus_tailscale PROPERTIES IMPORTED_LOCATION ${nexus_ts_dll}
         IMPORTED_IMPLIB ${nexus_ts_implib} INTERFACE_INCLUDE_DIRECTORIES ${nexus_ts_source})
@@ -141,6 +142,10 @@ else()
             COMMENT "Building the Tailscale shim (libnts.a, ${arch}) with go${NEXUS_TAILSCALE_GO}"
             VERBATIM)
         list(APPEND nexus_ts_archives ${archive})
+        if(NOT nexus_ts_host_env)
+            set(nexus_ts_host_env GOOS=${goos} GOARCH=${goarch} "CC=\"${CMAKE_C_COMPILER}\"" "CGO_CFLAGS=-O2 ${flags}"
+                "CGO_LDFLAGS=${flags}")
+        endif()
     endforeach()
     set(nexus_ts_archive ${nexus_ts_out}/libnts.a)
     list(LENGTH nexus_ts_archives nexus_ts_count)
@@ -162,13 +167,28 @@ else()
         INTERFACE_INCLUDE_DIRECTORIES ${nexus_ts_source})
     find_package(Threads REQUIRED)
     if(APPLE)
-        # What the Go runtime and tsnet call on macOS.
+        # What the shim's packages ask the linker for (go list -deps -f '{{.CgoLDFLAGS}}' ./shim): runtime/cgo threads,
+        # net the resolver, and github.com/tailscale/certstore two frameworks.
         set_property(TARGET nexus_tailscale PROPERTY INTERFACE_LINK_LIBRARIES Threads::Threads resolv
-            "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration" "-framework IOKit")
+            "-framework CoreFoundation" "-framework Security")
     else()
-        set_property(TARGET nexus_tailscale PROPERTY INTERFACE_LINK_LIBRARIES Threads::Threads ${CMAKE_DL_LIBS} resolv)
+        # runtime/cgo's threads (and dl, where the C library keeps it apart).
+        set_property(TARGET nexus_tailscale PROPERTY INTERFACE_LINK_LIBRARIES Threads::Threads ${CMAKE_DL_LIBS})
     endif()
 endif()
+
+# go vet over the shim and the notices program, for the first architecture built here (CI runs it on every OS); and
+# the check that src/tailscale/NOTICES.md is what the notices program writes at these pins (CI runs it on Linux).
+add_custom_target(nexus_tailscale_vet
+    COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${nexus_ts_host_env} ${NEXUS_GO} vet ./...
+    WORKING_DIRECTORY ${nexus_ts_source}
+    COMMENT "go vet of the Tailscale shim with go${NEXUS_TAILSCALE_GO}"
+    VERBATIM)
+add_custom_target(nexus_tailscale_notices_check
+    COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO} run ./notices -check -go ${NEXUS_GO}
+    WORKING_DIRECTORY ${nexus_ts_source}
+    COMMENT "src/tailscale/NOTICES.md against the modules the shim links"
+    VERBATIM)
 
 # Links the shim into target: the library, the build order, and on Windows the manifest and nts.dll beside the program.
 function(nexus_link_tailscale target)

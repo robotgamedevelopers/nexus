@@ -4,6 +4,7 @@
 //
 //	go run ./notices          (from src/tailscale) rewrites NOTICES.md
 //	go run ./notices -check   fails if NOTICES.md is not what it would write
+//	  -go <path>              the go command that lists the modules (default: go on PATH)
 //
 // Run it with the pinned toolchain (GOTOOLCHAIN=go1.27.1, as cmake/tailscale.cmake does) after any change to go.mod.
 package main
@@ -114,8 +115,11 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// goCommand is the go command that lists the modules (-go): the pinned toolchain's, as cmake/tailscale.cmake passes it.
+var goCommand = "go"
+
 func deps(goos, goarch string) ([]string, error) {
-	cmd := exec.Command("go", "list", "-deps", "-f",
+	cmd := exec.Command(goCommand, "list", "-deps", "-f",
 		"{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{if .Replace}}{{.Replace.Dir}}{{else}}{{.Dir}}{{end}}{{end}}{{end}}",
 		"./shim")
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=1")
@@ -211,6 +215,7 @@ func render() (string, error) {
 
 func main() {
 	check := flag.Bool("check", false, "fail if NOTICES.md differs from what would be written")
+	flag.StringVar(&goCommand, "go", "go", "the go command to list modules with")
 	flag.Parse()
 	text, err := render()
 	if err != nil {
