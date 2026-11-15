@@ -3,9 +3,11 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include "store/fs.h"
 #include "sync/secrets.h"
@@ -35,12 +37,17 @@ LoginTerm loginTerm(const std::string& provider) {
 std::string dateOf(std::uint64_t ms) {
     const std::time_t t = static_cast<std::time_t>(ms / 1000);
     std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
     gmtime_r(&t, &tm);
+#endif
     char out[16];
     std::strftime(out, sizeof out, "%Y-%m-%d", &tm);
     return out;
 }
 
+#ifndef _WIN32
 LoginSeen inspectLogin(const std::string& path) {
     LoginSeen seen;
     auto unusable = [&](const std::string& problem) {
@@ -102,6 +109,7 @@ LoginSeen inspectLogin(const std::string& path) {
     seen.file = LoginSeen::File::Usable;
     return seen;
 }
+#endif
 
 bool loginLive(const std::string& provider, const LoginSeen& seen, std::uint64_t now) {
     if (seen.file != LoginSeen::File::Usable) {

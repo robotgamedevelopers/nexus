@@ -48,7 +48,10 @@ struct LoginSeen {
     std::string problem;            // for Malformed and Unusable, with the fix
 };
 // Reads `path` without following a link, through one descriptor. The value is wiped after its shape is checked.
+// POSIX: nexus-server runs on macOS and Linux, and inside WSL2 on Windows, whose native build is only the window.
+#ifndef _WIN32
 LoginSeen inspectLogin(const std::string& path);
+#endif
 
 // The day `ms` falls on, UTC, as YYYY-MM-DD.
 std::string dateOf(std::uint64_t ms);
