@@ -55,7 +55,7 @@ export interface Usage {
 }
 
 export type DriverMessage =
-    | { kind: 'hello'; protocol: number; harness: string }
+    | { kind: 'hello'; protocol: number; harness: string; features?: string[] }
     | { kind: 'credential'; billing: Billing; plan?: string }
     | { kind: 'session'; id: string }
     | { kind: 'text'; turn: number; delta: string }

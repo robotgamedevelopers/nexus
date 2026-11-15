@@ -248,7 +248,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
         "emit {\"kind\":\"text\",\"delta\":\"back\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"tool\",\"name\":\"Read\",\"summary\":\"a file\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
-    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
     CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
         "\n"));
@@ -867,7 +867,7 @@ int flush(const std::string& binary, const std::string& dir, const std::string& 
     const std::string sent = dir + "/sent";
     const std::string reply = "send\nrecord-send " + sent + "\nemit {\"kind\":\"text\",\"delta\":\"back\"}\n"
         "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
-    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply + reply));
     CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
         "\n"));
@@ -1030,7 +1030,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
     CHECK(::chmod(file.c_str(), 0600) == 0);
     const std::string heard = dir + "/heard";
     CHECK(writeFile(dir + "/ada.script", "option echo-input\nrecord-env " + dir + "/env\n"
-        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
         "send\nstderr the fake driver asks for a1's login\n"
         "raw {\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"a1\",\"what\":\"oauth-token\",\"why\":\"the login expired\"}\n"

@@ -24,7 +24,7 @@ void test('start: hello first, then the credential and the session, before any p
     const host = new TestHost();
     const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [] });
     driver.start();
-    assert.deepEqual(host.out, [{ kind: 'hello', protocol: 1, harness: 'claude' }]);
+    assert.deepEqual(host.out, [{ kind: 'hello', protocol: 1, harness: 'claude', features: ['limit'] }]);
     await settle();
     assert.deepEqual(host.take().slice(1), [
         { kind: 'credential', billing: 'subscription', plan: 'Claude Ultra' },

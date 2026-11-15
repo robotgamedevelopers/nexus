@@ -46,6 +46,7 @@ Config config() {
     c.maxWaiting = 2;
     c.maxWaitingBytes = 64;
     c.maxEntryBytes = 10;
+    c.limited = false;      // the tests of the limit set it; a Config is limited by default (testLimit)
     return c;
 }
 
@@ -767,7 +768,7 @@ void testLimit() {
     Supervisor s(c, {}, kStart, &o);
     o = s.prompt("one", kStart);
     CHECK(hasArgs(o, {"--cwd", "/w", "--limit", "cwd"}) && s.driverLimited());
-    s.message(Hello{1, "h"}, kStart + 1);
+    s.message(Hello{1, "h", {"limit"}}, kStart + 1);
     // Working: a change of limit waits for the turn's end; the turn finishes under the limit it started with.
     o = s.setLimited(false, kStart + 2);
     CHECK(o.commands.empty() && s.phase() == Phase::Working && s.driverLimited() && !s.limited());
@@ -789,6 +790,57 @@ void testLimit() {
     s.exited("exited with status 0", kStart + 10);
     o = s.prompt("three", kStart + 11);
     CHECK(hasArgs(o, {"--limit", "cwd"}) && s.driverLimited() && s.failedStarts() == 0);
+
+    // A Config is limited unless the server says otherwise.
+    CHECK(Config{}.limited);
+
+    // Tightened while a turn runs unlimited: the turn is stopped now (the person's stop: Stop, then its deadline),
+    // the transcript says why, and once it is done the driver is ended and the next starts limited.
+    {
+        Output to;
+        Supervisor ts(config(), {}, kStart, &to);
+        ts.prompt("one", kStart);
+        ts.message(Hello{1, "h"}, kStart + 1);
+        CHECK(ts.phase() == Phase::Working && !ts.driverLimited());
+        to = ts.setLimited(true, kStart + 2);
+        CHECK(ts.phase() == Phase::Stopping && to.commands.size() == 1 &&
+              contains(to.commands[0].line, "\"kind\":\"stop\"") && whats(to) == std::vector<What>{What::Notice} &&
+              contains(to.effects[0].text, "the turn that was running without the limit was stopped"));
+        to = ts.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(ts, to) && ts.retiring());
+        ts.exited("exited with status 0", kStart + 4);
+        to = ts.prompt("two", kStart + 5);
+        CHECK(hasArgs(to, {"--limit", "cwd"}) && ts.driverLimited());
+        // A driver that ignores the stop is killed at the stop deadline, as for the person's stop.
+        Output ko;
+        Supervisor ks(config(), {}, kStart, &ko);
+        ks.prompt("one", kStart);
+        ks.message(Hello{1, "h"}, kStart + 1);
+        ks.setLimited(true, kStart + 2);
+        ko = ks.tick(kStart + 2 + config().timing.stop);
+        CHECK(ks.phase() == Phase::Ending);
+    }
+
+    // A driver that does not list "limit" in its hello is never trusted with a limited session: ended, with why. An
+    // unlimited session on it runs as before.
+    {
+        Config lc = config();
+        lc.limited = true;
+        Output lo;
+        Supervisor ls(lc, {}, kStart, &lo);
+        ls.prompt("one", kStart);
+        lo = ls.message(Hello{1, "h"}, kStart + 1);
+        CHECK(ended(ls, lo) && ls.phase() == Phase::Ending);
+        bool said = false;
+        for (const auto& e : lo.effects) {
+            said = said || contains(e.text, "does not support the limit to its directory");
+        }
+        CHECK(said);
+        Supervisor us(config(), {}, kStart, &lo);
+        us.prompt("one", kStart);
+        lo = us.message(Hello{1, "h"}, kStart + 1);
+        CHECK(us.phase() == Phase::Working);
+    }
 }
 
 // ---- the credential, errors, the session ----

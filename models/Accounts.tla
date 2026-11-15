@@ -264,7 +264,8 @@ ReloadDropAccount(a) == Reload(None, a, [acct EXCEPT ![a] = "absent"], prov, kno
 \* An account's provider changed.
 ReloadProvider(a, p) == Reload(None, a, acct, [prov EXCEPT ![a] = p], known, links, dflt)
 \* A friend's limit set (refused for a friend not set up, or false while it links an account billed at API rate).
-\* When it changes, each of the friend's sessions is told (its driver restarts with it once no turn is open).
+\* When it changes, each of the friend's sessions is told (tightened, an open turn stops and the driver restarts limited;
+\* loosened, once no turn is open: Supervisor.tla SetLimit).
 ReloadLimit(f, v) ==
     IF f \in known /\ ConsistentLB(acct, known, links, dflt, insts, [lim EXCEPT ![f] = v], bill)
     THEN /\ lim' = [lim EXCEPT ![f] = v]
@@ -329,8 +330,11 @@ Create(f, from) ==
     ELSE Refused("create", f, None, from, {})
 
 \* The server's: a session's driver started, limited when its friend is limited or its account is billed at API rate,
-\* from the files as they are now (accounts::limitedFor). Eff is passed in so that a witness can break it.
-Eff(s) == lim[ses[s].friend] \/ (ses[s].acct /= None /\ bill[ses[s].acct] = "api")
+\* from the files as they are now (accounts::limitedFor). Eff is passed in so that a witness can break it. A friend or
+\* an account the files no longer hold reads limited: the safe direction.
+Eff(s) == \/ ses[s].friend \notin known
+          \/ lim[ses[s].friend]
+          \/ ses[s].acct /= None /\ (acct[ses[s].acct] = "absent" \/ bill[ses[s].acct] = "api")
 StartWith(E(_), s) ==
     IF ses[s].made /\ run[s].st = "off"
     THEN /\ run' = [run EXCEPT ![s] = [st |-> IF E(s) THEN "limited" ELSE "open",

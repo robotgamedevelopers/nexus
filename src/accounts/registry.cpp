@@ -477,7 +477,7 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
     return r.read;
 }
 
-Read readFriends(std::string_view text, const std::string& path, Registry* registry) {
+Read readFriends(std::string_view text, const std::string& path, Registry* registry, const Registry* committed) {
     registry->friends.clear();
     Reader r(text, path);
     if (text.find_first_not_of(" \t\r\n") == std::string_view::npos) {
@@ -504,8 +504,10 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
         ok = stringField(r, e, "name", "a friend", true, false, &f.name) && ok;
         const std::string named = f.name.empty() ? std::string("a friend") : "the friend \"" + f.name + "\"";
         // Absent: limited, for a friend written since the field (version 2); not limited in a version 1 file, whose
-        // friends ran unlimited, so that nothing changes under a person until the file says so.
-        ok = boolField(r, e, "limit", named, r.read.version >= 2, &f.limit) && ok;
+        // friends ran unlimited, so that nothing changes under a person until the file says so. A friend the committed
+        // files do not hold never ran: limited, whatever the file's version.
+        const bool known = committed == nullptr || committed->friendNamed(f.name) != nullptr;
+        ok = boolField(r, e, "limit", named, r.read.version >= 2 || !known, &f.limit) && ok;
         ok = stringField(r, e, "default", named, false, true, &f.preferred) && ok;
         const PrJsonValueIndex l = prJsonMember(r.doc(), e, pr("accounts"));
         if (l != kPrJsonMissing && prJsonKind(r.doc(), l) != PrJsonKind_Array) {
@@ -625,8 +627,12 @@ bool limitedFor(const Registry* registry, std::string_view friendName, std::stri
     if (f == nullptr || f->limit) {
         return true;
     }
-    const Account* a = account.empty() ? nullptr : registry->account(account);
-    return a != nullptr && a->billing == Billing::Api;
+    if (account.empty()) {
+        return false;
+    }
+    // An account the files do not name reads limited: the safe direction.
+    const Account* a = registry->account(account);
+    return a == nullptr || a->billing == Billing::Api;
 }
 
 std::vector<std::string> changes(const Registry& before, const Registry& after) {

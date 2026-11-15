@@ -80,6 +80,9 @@ using ServerMessage = std::variant<Send, Stop, Settings, ServerInfo, SecretAnswe
 struct Hello {
     int protocol = kProtocolVersion;
     std::string harness;        // the harness's name, as "claude"
+    // What the driver supports past the protocol's base: "limit" for `--limit cwd` (docs/driver-protocol.md). The
+    // server never runs a limited session on a driver that does not list "limit". Absent: none.
+    std::vector<std::string> features = {};
     bool operator==(const Hello&) const = default;
 };
 

@@ -187,8 +187,13 @@ names none, the server has no machine: no instance is on it, and it says so in i
 runs in: it reads and writes there, and nowhere else people keep files. `"limit": false` is the AI as it ran before
 the field existed: under the token wall (docs/secrets.md), but free to read the rest of the home directory.
 
-- **A friend added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`.
-  Set `"limit": false` on a friend you want unlimited (yourself as administrator, say) by editing the file.
+- **A friend added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`,
+  whatever the file's version: a friend added by hand to a version 1 file, not yet reloaded, reads limited too (only
+  the friends a version 1 file already held when it was committed read unlimited, as they ran). Set `"limit": false` on
+  a friend you want unlimited (yourself as administrator, say) by editing the file.
+- **A fresh install's first friend is unlimited.** The friends a new server makes from its drivers file, at its first
+  start with no accounts set up (or the upgrade of an install from before accounts), are `"limit": false`, as they ran:
+  that is the person setting nexus up, as administrator. Every friend added after that is limited.
 - **A friend on an API-billed account is always limited.** A friend that links any account with `"billing": "api"`
   cannot be `false`: `config check` and a reload refuse it, naming both files and the fix; linking such an account to an
   unlimited friend in the window is refused the same way. (The fleet's own workers that run models at API rate outside
@@ -202,14 +207,22 @@ the field existed: under the token wall (docs/secrets.md), but free to read the 
   refusals already show, when its directory does not exist, is the home directory or the root, holds `~/.nexus`, or is
   inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; or when the drivers file names another Claude
   (`--claude`). It never starts unlimited instead.
-- **A change takes effect at the next start.** Setting a friend's `limit` (or an account's `billing`) and reloading
-  tells each of the friend's sessions; a driver that is running ends once no turn is open (an open turn finishes as it
-  started), and the next starts with the new limit.
+- **Tightening takes effect at once; loosening at the turn's end.** When a reload makes a session limited (its
+  friend's `limit` set to `true`, or its account's `billing` set to `"api"`), a turn running on a driver started
+  without the limit is stopped at once, as the stop button stops it (the driver has the stop's deadline to finish, then
+  it is killed), the transcript says why, and the next turn starts limited: an old, weaker limit never lasts past that
+  stop. When a reload lifts the limit, the open turn finishes as it started, and the next starts unlimited. A change of
+  a friend's `limit` is also told in each of its sessions' transcripts; a change of an account's `billing` is told only
+  where it stops a turn (the server's reply and log list it either way).
+- **A driver must say it supports the limit.** A limited session runs only on a driver whose hello lists the `limit`
+  feature (docs/driver-protocol.md); any other driver is ended before it is given a prompt, and the session says why.
 
 The server decides a session's limit each time it starts the session's driver, from the files as they are then: limited
-when the friend is limited, when its account is billed at API rate, or when the friend is not in friends.json at all.
-models/Accounts.tla checks the rules (no driver on an API-billed account starts unlimited; none starts weaker than its
-friend's limit).
+when the friend is limited, when its account is billed at API rate, when the friend is not in friends.json at all, or
+when its account is not in accounts.json; and limited when it cannot tell. models/Accounts.tla checks the rules (no
+driver on an API-billed account starts unlimited; none starts weaker than its friend's limit); models/Supervisor.tla
+checks that no session keeps running with a weaker limit than its friend's (tightening stops the open turn, and a
+driver started under another limit is ended).
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
 the order they hold, and a newline at the end. Write them the same way and a save never reshuffles your edit (any valid
@@ -374,10 +387,16 @@ older file is upgraded in place when the server starts (your entries kept as the
 committed as an upgrade, which the server's log reports), unless the files hold edits not yet applied: those are never
 written over, and the next reload writes the new version. `config check` never writes anything, an upgrade included.
 Version 2 added `billing` (accounts.json) and `limit` (friends.json). A version 1 file is read with every account billed
-by subscription and every friend **not** limited, as it ran before (a friend in a version 1 file that a person added by
-hand while the edit was pending reads unlimited too: set its `limit` after the upgrade), and the upgrade writes each
-friend's `"limit": false` and each account's `"billing": "subscription"` into the files, so that the choice is plain
-to see and to change. An older nexus-server refuses a version 2 file rather than drop the limit. A file whose version is newer than the server reads is refused
+by subscription and every friend it held when committed **not** limited, as it ran before (a friend added by hand to a
+version 1 file while the edit is pending reads limited: it never ran), and the upgrade writes each friend's `"limit"`
+and each account's `"billing": "subscription"` into the files, so that the choice is plain to see and to change.
+
+**A downgrade drops the limit for everyone.** An older nexus-server refuses the version 2 files, so it holds no
+accounts and no friends, and its Claude driver has no limit: every session it runs is unlimited. Do not run an older
+nexus-server against version 2 files while any friend is limited; if you must go back, stop the friends that are
+limited first (or remove their instances), and expect every session to run as it did before the limit existed.
+
+A file whose version is newer than the server reads is refused
 with a message saying so, and left exactly as it is: run the newer nexus-server, or update this one. The version only
 rises when a change cannot be read by an older reader.
 

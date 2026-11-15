@@ -189,6 +189,21 @@ void test('a limited friend starts only where the limit holds, else it is refuse
     assert.ok('account' in start('/h/w', { ...linux, platform: 'darwin' }));
     // Unlimited, the same places start as before.
     assert.ok('account' in prepare(['--account', 'ready', '--cwd', '/h'], () => true, findAny, () => undefined, undefined, linux));
+    // The directory is resolved once: the path checked is the path the session works in (and limitOf is given). A
+    // link that a second resolve would see moved (to HOME) changes nothing: the first answer is the one used.
+    let calls = 0;
+    const moving = { ...linux, realpath: (p: string): string => {
+        if (p !== '/link/w') {
+            return p;
+        }
+        calls += 1;
+        return calls === 1 ? '/srv/w' : '/h';
+    } };
+    const once = start('/link/w', moving);
+    assert.ok('args' in once && once.args.cwd === '/srv/w' && calls === 1, JSON.stringify(once));
+    assert.match(refused(start('/gone', { ...linux, realpath: () => { throw new Error('ENOENT'); } })), /does not resolve/);
+    const plain = prepare(['--account', 'ready', '--cwd', '/link/w'], () => true, findAny, () => undefined, undefined, linux);
+    assert.ok('args' in plain && plain.args.cwd === '/link/w', 'unlimited: the directory as given');
 });
 
 void test('Claude gets the account\'s directory, none it inherited, and its token in no environment', () => {

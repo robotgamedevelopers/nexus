@@ -25,7 +25,7 @@
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
-#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue,
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue, limit,
 #               setting, account, activity, dir
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
@@ -145,10 +145,10 @@ elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue" OR FAULTY STREQUAL "setting" OR
-            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir")
+            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir" OR FAULTY STREQUAL "limit")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity or dir")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity, dir or limit")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

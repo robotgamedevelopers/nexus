@@ -71,7 +71,7 @@ int failures = 0;
 // input, the grace after SIGTERM.
 const Timing kTiming{1000, 300, 200, 200};
 
-const char* const kHello = "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+const char* const kHello = "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
                            "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n";
 
 Millis now() {
@@ -714,7 +714,7 @@ void signIn(Server& s, const std::string& dir, const std::string& fake) {
 
 // A driver that has no credential for its account reports it as needing sign-in: the account is signed in no more.
 void noCredential(Server& s, const std::string& dir, const std::string& fake) {
-    setUpAccounts(s, dir, fake, "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+    setUpAccounts(s, dir, fake, "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "emit {\"kind\":\"error\",\"cause\":\"a1 has no token\",\"fix\":\"make one\",\"code\":\"no-credential\"}\n"
         "exit 0\n");
     s.hub->reportSignedIn("a1", true);
@@ -723,6 +723,29 @@ void noCredential(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return !signedIn(s, "a1"); }, 10));
     CHECK(!signedIn(s, "a1"));
     CHECK(s.serveUntil([&] { return none(s); }, 10));
+}
+
+// A limited friend (ada: no "limit" in her entry) on a driver whose hello does not list "limit": the driver is ended
+// before any prompt is written to it, and the session is told why. It never runs the prompt unlimited.
+void limitUnsupported(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\nsend\nrecord-send " + dir + "/sends.log\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.hub->reportSignedIn("a1", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("q");
+    const auto told = [&] {
+        for (const std::string& line : s.transcript()) {
+            if (has(line, "does not support the limit to its directory")) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(s.serveUntil(told, 10));
+    CHECK(told());
+    CHECK(has(readFile(dir + "/starts.log"), "limit=cwd\n"));
+    CHECK(readFile(dir + "/sends.log").empty());     // the prompt never reached it
 }
 
 // A usage limit on the session's account: the session moves to ada's next signed-in account, told, and its next
@@ -935,7 +958,7 @@ bool goneWithin(pid_t pid, double seconds) {
     return ::kill(pid, 0) != 0 && errno == ESRCH;
 }
 
-const char* const kShellHello = "printf '%s\\n' '{\"kind\":\"hello\",\"protocol\":1,\"harness\":\"sh\"}'\n";
+const char* const kShellHello = "printf '%s\\n' '{\"kind\":\"hello\",\"protocol\":1,\"harness\":\"sh\",\"features\":[\"limit\"]}'\n";
 
 // A driver that exits on its own: what it started in its process group (its harness) is ended with it, so that the
 // next driver for the tab never works beside it.
@@ -1144,7 +1167,7 @@ void secretLeakWitness(Server& s, const std::string& dir, const std::string& fak
 // another prompt (Supervisor.tla SignIn).
 void secretSignIn(Server& s, const std::string& dir, const std::string& fake) {
     setUpClaude(s, dir, fake, "option echo-input\nrecord-env " + dir + "/env\ncount-starts " + dir + "/starts\n"
-        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\",\"features\":[\"limit\"]}\n"
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"a1 has no token\",\"fix\":\"paste one\",\"code\":\"no-credential\"}\n"
         "on-start 1 exit 0\n"
         "on-start 2 emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
@@ -1264,7 +1287,8 @@ int main(int argc, char** argv) {
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
                 {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
-                {"usage_limit", usageLimit}, {"no_account", noAccount}, {"instance_dir", instanceDir},
+                {"usage_limit", usageLimit}, {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
+                {"instance_dir", instanceDir},
                 {"instance_elsewhere", instanceElsewhere}, {"instance_moved", instanceMoved},
                 {"instance_removed", instanceRemoved}, {"instance_default", instanceDefault}, {"held", held}};
             auto it = std::find_if(cases.begin(), cases.end(), [&](const auto& c) { return c.first == name; });

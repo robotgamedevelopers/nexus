@@ -269,14 +269,15 @@ jobs:
   # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
-  # nothing and reaches no outside service. Each of the test's runs in a job of its own (NEXUS_WALL_RUN): the whole
-  # wall, the wall without its hook, and a friend limited to its directory with the hook and without it.
+  # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
+  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # short runs in one job: the setup is the cost).
   claude-driver-wall:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
-        run: [whole-wall, without-the-hook, limited, limited-nohook]
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
     steps:
@@ -326,8 +327,9 @@ jobs:
       fail-fast: false
       matrix:
         where: [ubuntu, wsl2]
-        # Each of the test's runs in a job of its own: on WSL2 under load one run took 52 s, two past the cap.
-        run: [whole-wall, without-the-hook, limited, limited-nohook]
+        # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
+        # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
             labels: [self-hosted, fleet, Linux, X64, tlc]
@@ -652,10 +654,12 @@ jobs:
             run: '^tlc_supervisor_place$'
           - shard: supervisor-signin
             run: '^tlc_supervisor_signin$'
+          - shard: supervisor-limit
+            run: '^tlc_supervisor_limit$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch|place|signin)$'
+            skip: '^tlc_supervisor_(switch|place|signin|limit)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
           - shard: link-one-window

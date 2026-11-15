@@ -113,7 +113,8 @@ Init ==
             nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE, signin |-> FALSE,
             setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
-            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE]
+            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE,
+            lim |-> FALSE, dlim |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -171,7 +172,7 @@ StartDriverWith(D(_), x) ==
     THEN LET y == D(x) IN
          [y EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
                    !.resumed = IF y.unconf THEN "" ELSE y.session, !.drv = y.account, !.told = Default,
-                   !.retiring = FALSE, !.ddir = y.dir]
+                   !.retiring = FALSE, !.ddir = y.dir, !.dlim = y.lim]
     ELSE x
 StartDriver(x) == StartDriverWith(Drop, x)
 
@@ -180,8 +181,12 @@ StartDriver(x) == StartDriverWith(Drop, x)
 \* default, is ended quietly: the next one starts on the defaults under the session's account, in its directory.
 Cleared(x) == (x.told.m # "" /\ x.setting.m = "") \/ (x.told.e # "" /\ x.setting.e = "")
 Moved(x) == x.ddir # x.dir \/ ~x.here
-RetireWith(C(_), x) ==
-    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x) \/ Moved(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
+\* A driver started under another limit than the session's (Supervisor::retire's driverLimited_ check).
+OtherLimit(x) == x.dlim # x.lim
+RetireAll(C(_), L(_), x) ==
+    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x) \/ Moved(x) \/ L(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE]
+    ELSE x
+RetireWith(C(_), x) == RetireAll(C, OtherLimit, x)
 Retire(x) == RetireWith(Cleared, x)
 
 \* When a driver is configured, no turn is open, no prompt waits and starting is not held back: the oldest queued
@@ -208,7 +213,7 @@ ExitedWith(x) ==
         f == IF count THEN y.failed + 1 ELSE y.failed
         z == [y EXCEPT !.phase = "none", !.stage = "none", !.procs = @ - 1, !.failed = f, !.finished = FALSE,
                        !.nocred = FALSE, !.gathered = FALSE, !.drv = "", !.told = Default, !.retiring = FALSE,
-                       !.ddir = ""]
+                       !.ddir = "", !.dlim = FALSE]
     IN IF count /\ f >= MaxFailedStarts THEN [Fx(z, E("N", 0, 0)) EXCEPT !.blocked = TRUE] ELSE z
 
 \* An error of code no-credential (v): the driver ends the open turn, if any, and exits (protocol rule 11). No
@@ -221,7 +226,8 @@ NoCredential(m, x) ==
 \* A message from the driver.
 ReceiveWith(x, m, Txt(_, _)) ==
     CASE x.phase = "ending"   -> x
-      [] x.phase = "starting" -> IF m.kind = "hello" /\ m.v = "1" THEN [x EXCEPT !.phase = "idle", !.crashed = FALSE]
+      [] x.phase = "starting" -> IF m.kind = "hello" /\ (m.v = "1" \/ (m.v = "1n" /\ ~x.dlim))
+                                 THEN [x EXCEPT !.phase = "idle", !.crashed = FALSE]
                                  ELSE End(x)
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
@@ -238,10 +244,15 @@ ReceiveWith(x, m, Txt(_, _)) ==
 \* text gathers for the open turn; for any other turn it breaks the protocol.
 Gather(x, m) == IF m.t = x.open /\ x.open # 0 THEN [x EXCEPT !.gathered = TRUE] ELSE End(x)
 
+\* Whether an instance takes changes of the session's limit (SetLimit), as SignIns does for sign-ins: the instances
+\* that spend their changes on something else replace it with MCSupervisor's NoLimitChanges. With it, a driver may
+\* also say hello without the "limit" feature ("1n"), and one started limited that does is ended.
+LimitChanges == TRUE
+
 \* The messages a driver may write here: every kind, for turns about the open one.
 Turns(x) == {t \in {x.open - 1, x.open, x.open + 1, x.next - 1, x.next} : t >= 1}
 Messages(x) ==
-    {[kind |-> "hello", t |-> 0, v |-> v] : v \in {"1", "2"}} \cup
+    {[kind |-> "hello", t |-> 0, v |-> v] : v \in {"1", "2"} \cup (IF LimitChanges THEN {"1n"} ELSE {})} \cup
     {[kind |-> "credential", t |-> 0, v |-> b] : b \in Billings} \cup
     {[kind |-> "session", t |-> 0, v |-> i] : i \in Sessions} \cup
     {[kind |-> k, t |-> t, v |-> ""] : k \in {"text", "text-end", "tool"}, t \in Turns(x)} \cup
@@ -355,7 +366,7 @@ Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
     [y EXCEPT !.phase = "none", !.stage = "none", !.gathered = FALSE, !.finished = FALSE, !.failed = 0,
               !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0, !.drv = "", !.told = Default,
-              !.retiring = FALSE, !.crashed = FALSE, !.ddir = ""]
+              !.retiring = FALSE, !.crashed = FALSE, !.ddir = "", !.dlim = FALSE]
 Restart == RestartWith(Restarted)
 
 \* The person sets the session's model and effort (v): the next send is written with it, and an idle driver told a
@@ -412,7 +423,27 @@ SignIn ==
     /\ UNCHANGED <<sent, restarts>>
     /\ s' = Advance([Fresh EXCEPT !.blocked = FALSE, !.failed = 0, !.signin = TRUE])
 
-NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
+\* The session's limit changed (lim: its friend is limited to its directory, from the files; Supervisor::setLimited).
+\* Tightened while a turn runs on a driver started without the limit (dlim, the ghost of `--limit cwd`), that turn is
+\* stopped at once, as the person's stop does, with a notice; the driver is then ended once no turn is open (Retire's
+\* OtherLimit) and the next starts limited. Loosened, the open turn finishes as it started. It counts as a change.
+\* LimitChanges (defined with the messages) says whether an instance takes it.
+SetLimitWith(Sl(_, _), v) ==
+    /\ LimitChanges
+    /\ v # s.lim
+    /\ switches < MaxSwitches
+    /\ switches' = switches + 1
+    /\ UNCHANGED <<sent, restarts>>
+    /\ s' = Sl(Fresh, v)
+LimitSet(x, v) ==
+    LET y == [x EXCEPT !.lim = v] IN
+    Advance(IF v /\ ~y.dlim /\ y.phase = "working"
+            THEN [Fx(y, E("N", 0, 0)) EXCEPT !.phase = "stopping", !.stops = Append(@, y.open)]
+            ELSE y)
+SetLimit(v) == SetLimitWith(LimitSet, v)
+
+\* Every step but the change of limit, for the limit's witnesses to give their own.
+NextCore(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     \/ P
     \/ SignIn
     \/ \E c \in BOOLEAN : Reconfigure(c)
@@ -427,6 +458,9 @@ NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     \/ \E v \in Settings : Se(v)
     \/ \E a \in Accounts \cup {""} : Ac(a)
     \/ \E d \in Dirs \cup {""}, h \in BOOLEAN : Pl(d, h)
+
+NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
+    NextCore(P, Q, St, M, Ex, T, R, Se, Ac, Pl) \/ \E v \in BOOLEAN : SetLimit(v)
 
 NextWithSet(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_)) == NextWithPlace(P, Q, St, M, Ex, T, R, Se, Ac, SetPlace)
 
@@ -477,6 +511,8 @@ TypeOK ==
     /\ s.unconf \in BOOLEAN
     /\ s.retiring => s.phase = "ending"
     /\ s.dir \in Dirs \cup {""}
+    /\ s.lim \in BOOLEAN /\ s.dlim \in BOOLEAN
+    /\ (s.procs = 0) => ~s.dlim
     /\ s.here \in BOOLEAN
     /\ s.summary \in BOOLEAN
     /\ (s.procs = 0) => s.ddir = ""
@@ -560,9 +596,11 @@ StopEndsWhatRuns ==
               -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE]]_vars
 
 \* No stop is kept for later: a stop is written, or a turn cancelled, only in the step of the person's stop that
-\* found it running. So a stop that found nothing never touches a turn that begins after it.
+\* found it running, or in the step that tightened the limit under it (SetLimit). So a stop that found nothing never
+\* touches a turn that begins after it.
 NoLatchedStop ==
-    [][Len(s'.stops) > Len(s.stops) \/ CancelledBy(s, s') # {} => s'.asked]_vars
+    [][/\ Len(s'.stops) > Len(s.stops) => s'.asked \/ (s'.lim /\ ~s.lim)
+       /\ CancelledBy(s, s') # {} => s'.asked]_vars
 
 \* A turn ends only by its done or by a cut with its notice.
 EndsAnsweredOrCut ==
@@ -607,6 +645,15 @@ NoSendInOldPlace == [][Len(s'.written) > Len(s.written) => s'.ddir = s'.dir /\ s
 
 \* A change of the place never ends a turn: the driver is ended only once no turn is open.
 PlaceKeepsTurn == [][s'.dir # s.dir \/ s'.here # s.here => s'.open = s.open /\ s'.written = s.written]_vars
+
+\* No session keeps running with a weaker limit than its friend's: a driver started without the limit, while the
+\* session is limited, runs no turn; it is starting (nothing runs yet), stopping or being ended. Tightening under an
+\* open turn stops it in the same step.
+NeverWeaker == (s.procs > 0 /\ s.lim /\ ~s.dlim) => s.phase \in {"starting", "stopping", "ending"}
+\* A send is written only to a driver started under the session's limit or a stricter one.
+NoSendWeaker == [][Len(s'.written) > Len(s.written) => (s'.lim => s'.dlim)]_vars
+\* Loosening never ends a turn: the driver started limited finishes it, and is ended once no turn is open.
+LooseningKeepsTurn == [][s.lim /\ ~s'.lim => s'.open = s.open /\ s'.written = s.written /\ s'.stops = s.stops]_vars
 
 \* A driver resumes a harness session only in the directory it was made in.
 ResumesItsDir == [][s'.procs > s.procs /\ s'.resumed # "" => s.sdir = s'.ddir]_vars

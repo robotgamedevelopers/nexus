@@ -1,5 +1,6 @@
 #include "server/supervisor.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <numeric>
 #include <type_traits>
@@ -134,8 +135,19 @@ Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
     return finish();
 }
 
+// Tightened under an open turn on a driver started unlimited: that turn is stopped now, through the person's stop
+// (Stop, then the stop deadline and the kill), so no driver runs with a weaker limit than its friend's for longer than
+// the stop takes; once it is done the driver is ended (retire) and the next starts limited. Loosened: the open turn
+// finishes as it started. Models: models/Supervisor.tla SetLimit, NeverWeaker.
 Output Supervisor::setLimited(bool limited, Millis now) {
     config_.limited = limited;
+    if (limited && !driverLimited_ && phase_ == Phase::Working) {
+        effect(Effect::What::Notice, config_.name + " is now limited to its directory, so the turn that was running "
+               "without the limit was stopped; the next turn starts limited.");
+        command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
+        phase_ = Phase::Stopping;
+        deadline_ = now + config_.timing.stop;
+    }
     advance(now);
     return finish();
 }
@@ -241,7 +253,14 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
     }
     if (phase_ == Phase::Starting) {
         const Hello* hello = std::get_if<Hello>(&message);
-        if (hello != nullptr && hello->protocol == kProtocolVersion) {
+        const bool canLimit = hello != nullptr &&
+            std::find(hello->features.begin(), hello->features.end(), "limit") != hello->features.end();
+        if (hello != nullptr && hello->protocol == kProtocolVersion && driverLimited_ && !canLimit) {
+            // Started limited, and it does not say it keeps to its directory: it is never trusted to.
+            end(config_.name + "'s driver does not support the limit to its directory (its hello lists no \"limit\" "
+                "feature), and " + config_.name + " is limited, so it was ended. Install a driver that supports it ("
+                + config_.configured + "), or set the friend's \"limit\" to false (docs/accounts.md).", now);
+        } else if (hello != nullptr && hello->protocol == kProtocolVersion) {
             phase_ = Phase::Idle;
             crashed_ = false;
             deadline_.reset();
@@ -379,6 +398,7 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     gathered_.clear();
     driverAccount_.clear();
     driverCwd_.clear();
+    driverLimited_ = false;
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;

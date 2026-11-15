@@ -4,7 +4,7 @@
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
 //   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue | --faulty-setting |
-//                                   --faulty-account | --faulty-activity | --faulty-dir] <out.tla>
+//                                   --faulty-account | --faulty-activity | --faulty-dir | --faulty-limit] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
@@ -21,10 +21,10 @@
 //             walk ticks one millisecond early and requires that nothing happens
 //   shutdown  the server stops
 //   restart   the server starts again from the durable state committed last, the driver of the old one gone
-//   setting, account, place, configure
+//   setting, account, place, configure, limit
 //             the person changes the model and effort, or the account; an edit moves the session's instance
 //             (/work, the model's "", or /work/d, its "d"; on this machine or another); the drivers file loses the
-//             friend's driver, or gives it back
+//             friend's driver, or gives it back; the session's limit is tightened or loosened ("on", "off")
 //
 // The faults, for the tests that show the check can fail:
 //   --faulty-turn    a restart finds the next turn number as 1, as if the store had not kept it
@@ -34,7 +34,9 @@
 //   --faulty-account a restart finds the account empty, as if the store had not kept it
 //   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 //   --faulty-dir     a restart finds no directory for the harness session, as if the store had not kept it
+//   --faulty-limit   a restart starts the session unlimited, as if the limit were not decided at the start
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -60,7 +62,7 @@ constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
 constexpr std::size_t kMaxSwitches = 12;
 
-enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity, Dir };
+enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity, Dir, Limit };
 
 // The walk's directories: /work (where the session starts, the model's "") and /work/d (its "d").
 const char* const kWork = "/work";
@@ -192,8 +194,9 @@ public:
             return restart();
         }
         if (r < 215 && switches_ < kMaxSwitches) {
-            const std::size_t which = rng.below(4);
-            return which == 0 ? setting(rng) : which == 1 ? account(rng) : which == 2 ? place(rng) : configure();
+            const std::size_t which = rng.below(5);
+            return which == 0 ? setting(rng) : which == 1 ? account(rng) : which == 2 ? place(rng) : which == 3 ? limit()
+                : configure();
         }
         // While starting is held back, the account's login may arrive (the secret dialog): it lifts the hold.
         if (r < 400 && s.held() && switches_ < kMaxSwitches) {
@@ -232,6 +235,7 @@ private:
         c.account = account_;
         c.cwd = dir_;
         c.here = here_;
+        c.limited = limited_;
         if (unconfigured_) {
             c.command.clear();
         }
@@ -259,6 +263,14 @@ private:
         dir_ = rng.chance(2) ? kWork : kWorkD;
         here_ = rng.below(4) != 0;
         return take("place", "", 0, dirName(dir_), sup_->setPlace(dir_, here_, now_));
+    }
+
+    // The session's limit changes (its friend's "limit", or its account's billing, on a reload): tightened, an open
+    // turn on a driver started without it is stopped; loosened, the turn finishes as it started.
+    bool limit() {
+        ++switches_;
+        limited_ = !limited_;
+        return take("limit", "", 0, limited_ ? "on" : "off", sup_->setLimited(limited_, now_));
     }
 
     bool setting(Rng& rng) {
@@ -335,6 +347,9 @@ private:
         if (fault_ == Fault::Account) {
             c.account.clear();
         }
+        if (fault_ == Fault::Limit) {
+            c.limited = false;
+        }
         if (fault_ == Fault::Dir) {
             state.sessionDir.clear();
         }
@@ -362,8 +377,11 @@ private:
         const std::uint64_t open = sup_->state().openTurn;
         const std::size_t r = rng.below(100);
         if (phase == Phase::Starting) {
+            if (r < 82) {
+                return say(Hello{1, "walk", {"limit"}}, rng);
+            }
             if (r < 92) {
-                return say(Hello{1, "walk"}, rng);
+                return say(Hello{1, "walk"}, rng);     // without the limit feature: ended if started limited
             }
             if (r < 95) {
                 return say(Hello{2, "walk"}, rng);
@@ -421,7 +439,8 @@ private:
         std::string v;
         if (const Hello* h = std::get_if<Hello>(&m)) {
             kind = "hello";
-            v = std::to_string(h->protocol);
+            const bool limits = std::find(h->features.begin(), h->features.end(), "limit") != h->features.end();
+            v = std::to_string(h->protocol) + (h->protocol == 1 && !limits ? "n" : "");
         } else if (const Credential* c = std::get_if<Credential>(&m)) {
             kind = "credential";
             v = std::string(billingName(c->billing));
@@ -553,6 +572,7 @@ private:
           << ", activity |-> " << str(activityName(activity())) << ", dir |-> " << str(dirName(s.cwd()))
           << ", here |-> " << (s.here() ? "TRUE" : "FALSE") << ", ddir |-> " << str(dirName(s.driverCwd())) << ", sdir |-> "
           << str(dirName(s.state().sessionDir)) << ", summary |-> " << (s.state().summary ? "TRUE" : "FALSE")
+          << ", lim |-> " << (s.limited() ? "TRUE" : "FALSE") << ", dlim |-> " << (s.driverLimited() ? "TRUE" : "FALSE")
           << ", switches |-> " << switches_ << "]";
         return o.str();
     }
@@ -588,6 +608,7 @@ private:
     std::string account_;
     std::string dir_ = kWork;   // the session's place, as the accounts hold it: a restart starts from it
     bool here_ = true;
+    bool limited_ = false;      // the session's limit (its friend's, from the files): a restart starts from it
     std::vector<std::uint64_t> stops_;          // the turn of every stop written
     std::size_t queued_ = 0;
     std::size_t taken_ = 0;
@@ -615,7 +636,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         return 1;
     }
     const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue", ", faulty setting",
-                            ", faulty account", ", faulty activity", ", faulty dir"};
+                            ", faulty account", ", faulty activity", ", faulty dir", ", faulty limit"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
         << faults[static_cast<int>(fault)] << ".\n";
@@ -674,6 +695,9 @@ int main(int argc, char** argv) {
         } else if (a == "--faulty-activity") {
             fault = Fault::Activity;
             ++faults;
+        } else if (a == "--faulty-limit") {
+            fault = Fault::Limit;
+            ++faults;
         } else if (a == "--faulty-dir") {
             fault = Fault::Dir;
             ++faults;
@@ -687,7 +711,7 @@ int main(int argc, char** argv) {
     std::uint64_t seed = 0, steps = 0;
     if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
         std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
-                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir] "
+                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir | --faulty-limit] "
                      "<out.tla>\n");
         return 2;
     }

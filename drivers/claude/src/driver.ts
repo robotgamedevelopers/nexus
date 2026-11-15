@@ -316,7 +316,7 @@ export class Driver {
 
     /** Writes the hello and starts the harness; nothing reaches it before the credential check passes. */
     start(): void {
-        this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude' });
+        this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] });
         this.launch(this.args.resume);
         this.record('init');
     }

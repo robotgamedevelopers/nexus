@@ -350,6 +350,8 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
         const accounts::Instance* in = instanceOf(stored->info);
         c.here = in == nullptr || sameMachine(in->machine, options_.machine, options_.hostName);
         c.limited = limitedOf(stored->info);
+    } else {
+        c.limited = true;   // a session the store does not hold: limited, the safe direction
     }
     c.summarize = [this, id, name = c.name](const std::string& prompt) {
         const sync::StoredSession* s = store_.find(id);

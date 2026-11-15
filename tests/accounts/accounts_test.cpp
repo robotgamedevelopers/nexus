@@ -668,6 +668,7 @@ void limits() {
     CHECK(accounts::limitedFor(&fleet, "worker", "fleet"));
     CHECK(accounts::limitedFor(&fleet, "nobody", "work"));      // a friend nexus does not hold: limited
     CHECK(accounts::limitedFor(nullptr, "ada", "work"));        // no accounts and friends held: limited
+    CHECK(accounts::limitedFor(&fleet, "ada", "gone"));        // an account the files do not hold: limited
     // Even where the files' rule were bypassed, an API-billed account's session is limited (the rule at the start).
     bad = fleet;
     bad.friends[0].accounts.push_back("fleet");

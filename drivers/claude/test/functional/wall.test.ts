@@ -33,7 +33,7 @@ import {
     appArmorProfile, kAppArmorDir, kAppArmorParser, kRestrictUserns, kSandboxBinVariable, realToolsSystem, sandboxHomeFiles,
     sandboxTools,
 } from '../../src/tools.js';
-import { kDriverDir, wallOptions } from '../../src/wall.js';
+import { kDriverDir, kExtraDenyRootsVariable, wallOptions } from '../../src/wall.js';
 import { Egress, ownAddresses } from '../../src/egress.js';
 
 // Each run makes everything in one directory of its own under the system's temporary directory (runWall): not under
@@ -74,6 +74,7 @@ interface Probe {
     expect?: string | readonly string[];    // what the result must say (one of): a call that must work, not a leak
     hookOnly?: boolean;                     // expect holds only with the hook (the run without it checks no leak only)
     never?: string;                         // what the result must not say: a file a limited friend must not read
+    open?: string;                          // a read docs/secrets.md lists as open: reported as read or refused, not checked
 }
 
 // Planted in every run's HOME (runWall), outside the work directory: another project's file and a private key, each
@@ -265,6 +266,40 @@ const kLimitedRoutes: Probe[] = [
     { route: 'limited: the shell reads the token file through a glob', tool: 'Bash',
         input: { command: 'cat "$HOME"/.nexus/server/acc*/*/oauth* 2>&1; true' } },
     { route: 'limited: Read the token file', tool: 'Read', input: { file_path: '@TOKEN@' } },
+    // Other spellings of a file outside, each a plain read of a planted file: a hard link made in its directory, `..`,
+    // other letter case (of a folder in HOME, and of HOME itself), a look-alike spelling (the same letters decomposed),
+    // another volume, a file beside a PATH folder on that volume, the shell's history files.
+    { route: 'limited: the shell reads through a hard link it makes', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'ln "$HOME/elsewhere/notes.txt" ./hard-link 2>&1; cat ./hard-link 2>&1; true' } },
+    { route: 'limited: the shell reads outside by ..', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat ../elsewhere/notes.txt 2>&1; cat ./repo/../../elsewhere/notes.txt 2>&1; true' } },
+    { route: 'limited: Read outside by ..', tool: 'Read', never: kOutsideWord, input: { file_path: '@HOME@/work/../elsewhere/notes.txt' } },
+    { route: 'limited: the shell reads a folder in HOME in other letter case', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "$HOME/ELSEWHERE/NOTES.TXT" 2>&1; true' } },
+    { route: 'limited: the shell reads the private key in other letter case', tool: 'Bash', never: kKeyWord,
+        input: { command: 'cat "$HOME/.SSH/ID_ED25519" 2>&1; true' } },
+    { route: 'limited: the shell reads HOME in other letter case', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "@HOME_UPPER@/elsewhere/notes.txt" 2>&1; true' } },
+    { route: 'limited: Read HOME in other letter case', tool: 'Read', never: kOutsideWord,
+        input: { file_path: '@HOME_UPPER@/elsewhere/notes.txt' } },
+    { route: 'limited: the shell reads a volume by a look-alike spelling', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "@VOL_NFD@/other/notes.txt" 2>&1; true' } },
+    { route: 'limited: Read a volume by a look-alike spelling', tool: 'Read', never: kOutsideWord,
+        input: { file_path: '@VOL_NFD@/other/notes.txt' } },
+    { route: 'limited: the shell reads another volume', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "@VOL@/other/notes.txt" 2>&1; true' } },
+    { route: 'limited: Read another volume', tool: 'Read', never: kOutsideWord, input: { file_path: '@VOL@/other/notes.txt' } },
+    { route: 'limited: the shell reads a file beside a PATH folder', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "@VOL@/notes.txt" 2>&1; true' } },
+    { route: 'limited: the shell runs a program from a PATH folder on another volume', tool: 'Bash', expect: 'vol-tool-ran',
+        input: { command: 'vol-tool 2>&1; true' } },
+    { route: 'limited: the shell reads its history files', tool: 'Bash', never: kOutsideWord,
+        input: { command: 'cat "$HOME/.bash_history" "$HOME/.zsh_history" 2>&1; true' } },
+    { route: 'limited: Read the shell history file', tool: 'Read', never: kOutsideWord, input: { file_path: '@HOME@/.bash_history' } },
+    { route: 'limited (open): the shell reads a file in a PATH folder inside HOME', tool: 'Bash', open: 'nexusinpath',
+        input: { command: 'cat "$HOME/bin/path-notes.txt" 2>&1; true' } },
+    { route: 'limited (open): the shell reads a shell start-up file', tool: 'Bash', open: 'nexusinrc',
+        input: { command: 'cat "$HOME/.bashrc" 2>&1; true' } },
     // Its own work, in its directory.
     { route: 'limited: Write in its directory', tool: 'Write', expect: 'success',
         input: { file_path: 'hello.c', content: '#include <stdio.h>\nint main(void) { puts("hello-before"); return 0; }\n' } },
@@ -470,6 +505,21 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     mkdirSync(join(home, dirname(kKey)), { recursive: true, mode: 0o700 });
     writeFileSync(join(home, kKey), `-----BEGIN OPENSSH PRIVATE KEY-----\n${kKeyWord}\n-----END OPENSSH PRIVATE KEY-----\n`,
         { mode: 0o600 });
+    // For the limit's other spellings: the shell's history files, a folder named with an accent, a file in a PATH folder
+    // inside HOME and a shell start-up file (both open, docs/secrets.md), and a volume-like root of its own beside HOME
+    // (named in the driver's NEXUS_LIMIT_DENY_ROOTS, as a person names another data root), with a PATH folder holding a
+    // program and a file beside that folder. Its name has an accent, composed, for the look-alike spelling's probe.
+    writeFileSync(join(home, '.bash_history'), `${kOutsideWord}\n`);
+    writeFileSync(join(home, '.zsh_history'), `${kOutsideWord}\n`);
+    writeFileSync(join(home, '.bashrc'), 'export NEXUS_WALL_RC=nexusinrc\n');
+    mkdirSync(join(home, 'bin'), { recursive: true });
+    writeFileSync(join(home, 'bin', 'path-notes.txt'), 'nexusinpath\n');
+    const vol = join(runRoot, 'vol-café');
+    mkdirSync(join(vol, 'bin'), { recursive: true });
+    mkdirSync(join(vol, 'other'), { recursive: true });
+    writeFileSync(join(vol, 'notes.txt'), `${kOutsideWord}\n`);
+    writeFileSync(join(vol, 'other', 'notes.txt'), `${kOutsideWord}\n`);
+    writeFileSync(join(vol, 'bin', 'vol-tool'), '#!/bin/sh\necho vol-tool-ran\n', { mode: 0o755 });
     // This machine's addresses, as the driver's proxy sees them (egress.ts), for the probe that tries each.
     writeFileSync(join(home, 'addrs'), `${ownAddresses().map((a) => a.replace(/%.*/, '')).join('\n')}\n`);
     const account: Account = { name: 'main', dir, configDir: configDirOf(home, 'main'), token };
@@ -488,7 +538,8 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     let port = 0;
     // @LOGIN@ is spelled so that no shell command names the accounts' directory in one piece: the hook cannot be what
     // stops it (the run without the hook shows the same).
-    const api = new FakeApi(probes, (s) => s.replaceAll('@TOKEN@', tokenFile).replaceAll('@HOME@', home)
+    const api = new FakeApi(probes, (s) => s.replaceAll('@TOKEN@', tokenFile).replaceAll('@HOME_UPPER@', join(runRoot, 'H'))
+        .replaceAll('@VOL_NFD@', join(runRoot, 'vol-café')).replaceAll('@VOL@', vol).replaceAll('@HOME@', home)
         .replaceAll('@LOGIN_ABS@', `${home}/.nexus/server/acc\\"\\"ounts/main`)
         .replaceAll('@LOGIN@', '$HOME/.nexus/server/acc\\"\\"ounts/main').replaceAll('@CONFIG@', account.configDir)
         .replaceAll('@NODE_DIR@', dirname(process.execPath)).replaceAll('@DRIVER_DIR@', kDriverDir)
@@ -517,7 +568,8 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
         process.stdout.write(`${name} | sandbox setup | before: ${kFresh} | ${tools.did ?? 'nothing to do'} | made: ${made.join(' ')}\n`);
     }
     const base: Record<string, string> = {
-        PATH: `${kDriverDir}/bin:${home}/bin:${tools.path ?? process.env['PATH'] ?? '/usr/bin:/bin'}`, HOME: home, TMPDIR: join(runRoot, 't'), LANG: 'C',
+        PATH: `${kDriverDir}/bin:${home}/bin:${tools.path ?? process.env['PATH'] ?? '/usr/bin:/bin'}:${vol}/bin`, HOME: home,
+        TMPDIR: join(runRoot, 't'), LANG: 'C', [kExtraDenyRootsVariable]: vol,
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
         DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         CLAUDE_AGENT_SDK_CLIENT_APP: 'nexus-claude-driver-wall-test/0',
@@ -525,10 +577,13 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     };
     mkdirSync(base['TMPDIR'] ?? '', { recursive: true });
     let stderr = '';
+    // A limited friend's directory as the driver resolves it, once (run.ts prepare): the path checked, allowed and
+    // given to Claude.
+    const cwd = limited ? realpathSync(work) : work;
     const q = query({
         prompt: 'probe',
         options: {
-            cwd: work,
+            cwd,
             env: harnessEnv(base, account),
             // The settings files a person may load (the drivers file's --setting-sources), so that a hook written
             // into them is tried; and Glob and Grep, which this Claude leaves out by default, so that they are tried.
@@ -540,7 +595,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
             maxTurns: probes.length + 4,
             // The wall from the environment the driver hands it (main.ts: the server's, scrubbed), which names the
             // sandbox's tools (NEXUS_SANDBOX_BIN) as programs to protect.
-            ...wallOptions(account, home, work, (d) => { stderr += d; }, egressPort,
+            ...wallOptions(account, home, cwd, (d) => { stderr += d; }, egressPort,
                 { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }, limited),
         },
     });
@@ -602,8 +657,9 @@ function check(name: string, run: Run, hook: boolean, probes: Probe[]): void {
     assert.equal(run.tokenSource, 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', `${name}: Claude names another token source`);
 }
 
-// NEXUS_WALL_RUN names one of the four runs to make alone: CI makes each in a job of its own where a run takes most of a
-// minute (WSL2: a shell command in the sandbox took 1 s there under load, 0.3 s on macOS; CI, 2026-11-15).
+// NEXUS_WALL_RUN names the runs to make, comma-separated: CI makes the two unlimited runs each in a job of its own and
+// the two limited runs together in one (their setup is the cost), where a run takes most of a minute (WSL2: a shell
+// command in the sandbox took 1 s there under load, 0.3 s on macOS; CI, 2026-11-15).
 // Under the CI job's 2 minutes with room to spare after its setup (up to 45 s on a loaded WSL2: 105 s at most), so that
 // a run too slow fails and says so, rather than the job being cancelled with nothing reported. A run takes 8 to 25 s,
 // and 47 to 53 s on WSL2 under load (CI, 2026-11-15).
@@ -612,8 +668,8 @@ const kRunMs = 60_000;
 const kAll = [['whole-wall', true, false], ['without-the-hook', false, false], ['limited', true, true], ['limited-nohook', false, true]] as const;
 const kOnly = process.env['NEXUS_WALL_RUN'];
 const kRuns = kTryFile !== undefined ? [['tried', true, false]] as const
-    : kOnly === undefined || kOnly === '' ? kAll : kAll.filter(([n]) => n === kOnly);
-if (kRuns.length === 0) {
+    : kOnly === undefined || kOnly === '' ? kAll : kAll.filter(([n]) => kOnly.split(',').includes(n));
+if (kRuns.length === 0 || (kOnly !== undefined && kOnly !== '' && kRuns.length !== kOnly.split(',').length)) {
     throw new Error(`NEXUS_WALL_RUN=${kOnly ?? ''} names no run: whole-wall, without-the-hook, limited or limited-nohook`);
 }
 // One run at a time: on Linux two Claude sandboxes at once fail each other's commands now and then, on a file one of
@@ -637,7 +693,9 @@ for (const [name, hook, limited] of kRuns) {
                 const leaked = new LeakScan(run.token, 'main').in(r) || r.includes('LEAK');
                 const words = probe.route.startsWith('shell: env') || probe.route.includes('ancestors') ? '' : r.slice(0, 400);
                 const ms = run.took.get(`toolu_wall_${i}`) ?? -1;
-                process.stdout.write(`${name} | ${probe.route} | ${leaked ? 'LEAKED' : 'held'} | ${ms} ms | ${words.replaceAll('\\n', ' ')}\n`);
+                const word = probe.never ?? probe.open;
+                const read = word === undefined ? '' : r.includes(word) ? ' | READ' : ' | refused';
+                process.stdout.write(`${name} | ${probe.route} | ${leaked ? 'LEAKED' : 'held'}${read} | ${ms} ms | ${words.replaceAll('\\n', ' ')}\n`);
             }
             process.stdout.write(`${name} | start ${run.took.get('start') ?? -1} ms | file scan ${run.scanMs} ms\n`);
             process.stdout.write(`${name} | tokenSource ${run.tokenSource} | authenticated ${run.authenticated} | tools ${[...run.tools].join(',')}\n`);

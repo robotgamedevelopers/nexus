@@ -499,20 +499,29 @@ What it costs:
 
 A friend with `"limit": true` in friends.json (docs/accounts.md, "limit"; the default for a friend added, and always for
 one on an account billed at API rate) runs with the wall above and, on top of it, kept to its directory. The server
-passes the driver `--limit cwd` at every start of such a session; a driver that does not know the argument refuses to
-start (so an older driver never runs a limited friend unlimited), and the Claude driver adds the limit from what Claude
-and the machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
+passes the driver `--limit cwd` at every start of such a session and ends, before any prompt, a driver whose hello does
+not list the `limit` feature (so an older or third-party driver never runs a limited friend unlimited; a third-party
+driver must enforce the option itself). The Claude driver resolves the working directory once, and that one path is
+the one it checks, the one the limit allows and the one Claude works in; it adds the limit from what Claude and the
+machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
 
 1. *The shell* (Claude's sandbox, as layer 2). Reads are denied in the home directory and the platform's data roots
    (macOS `/Users`, `/Volumes` and their `/System/Volumes/Data` forms; Linux and WSL2 `/home`, `/root`, `/mnt`,
-   `/media`, `/run/media`, `/srv`, those that exist), and allowed again (`allowRead`) only for the working directory;
-   the parts of the account's Claude state the shell reads (its shell snapshots, its session environment, and the
-   project's memory folder); the programs nexus runs (node and its install prefix, the driver, the sandbox's tools) and
-   the PATH folders under a denied root (outside HOME, a `bin` or `sbin` folder with its parent, such as Homebrew's on
-   Linux); and, read only, the config git and the shells read at every start (`kLimitedReadsUnderHome`: `.gitconfig`,
-   `.config/git`, the bash and zsh start-up files, `.profile`, `.inputrc`; never `.npmrc` or `.envrc`, which hold tokens).
-   None of those is `~/.ssh`, `~/.nexus` or a folder above either. Writes are allowed only in the working directory and
-   the temporary directories (the session's `TMPDIR` and `/tmp`, never one that holds HOME), less the files of layer 5.
+   `/media`, `/run/media`, `/srv`, those that exist, and any more the driver's `NEXUS_LIMIT_DENY_ROOTS` names,
+   colon-separated: a network mount, a WSL2 automount root moved off `/mnt`), and allowed again (`allowRead`) only for
+   the working directory; the parts of the account's Claude state the shell reads (its shell snapshots, its session
+   environment, and the project's memory folder, all inside `~/.nexus`); the programs nexus runs (node, with its
+   install prefix only when that is not a denied root or a folder directly in one; the driver; the sandbox's tools);
+   each PATH folder under a denied root, as that folder alone, with its parent only for an exact list of install
+   prefixes (`kInstallPrefixes`: Linuxbrew's `/home/linuxbrew/.linuxbrew` on Linux; none on macOS, where a PATH folder
+   such as `/Volumes/<disk>/bin` would open the whole volume); and, read only, single named files git and the shells
+   read at every start (`kLimitedReadsUnderHome`: `.gitconfig`, `.config/git/config`, `.config/git/ignore`,
+   `.config/git/attributes`, the bash and zsh start-up files, `.profile`, `.inputrc`; never a folder, never
+   `.config/git` whole, which holds git's credential store, never a file named `credentials`, `.git-credentials`,
+   `.netrc` or `_netrc`, and never `.npmrc` or `.envrc`, which hold tokens). None of the allowed paths is `~/.ssh`,
+   `~/.nexus`, a folder above either, or a credential store; the Claude state folders allowed are inside `~/.nexus`, the
+   account's own and nothing else of it. Writes are allowed only in the working directory and the temporary directories
+   (the session's `TMPDIR` and `/tmp`, never one that holds HOME), less the files of layer 5.
 2. *The file tools* (Claude's own working-directory limit): `blockReadsOutsideWorkingDirectories` and
    `blockWritesOutsideWorkingDirectories`, which hold in every permission mode and which no allow rule lifts, with the
    project's memory folder exempt for reading; and Read and Edit deny rules on `~/.ssh`.
@@ -523,6 +532,11 @@ and the machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
 A limited session does not start, in one line, when its directory does not exist, is HOME or the root, holds `~/.nexus`,
 or is inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; when HOME is not set; or with `--claude`
 naming another Claude (whose settings nexus has not measured). It never starts unlimited instead (fail closed).
+
+**How long an old limit lasts.** Tightening (a reload that makes a session limited) stops a turn running on a driver
+started without the limit at once, through the stop's own path (the stop's deadline, then the kill); the next turn
+starts limited. A weaker limit never outlasts that stop. Loosening waits for the open turn to end. models/Supervisor.tla
+checks it (NeverWeaker; the witnesses that drop the stop or the retire are rejected).
 
 **Measured** (macOS, the pinned Claude, `NEXUS_WALL_RUN=limited` and `limited-nohook` of the functional test; CI runs both
 on Ubuntu and WSL2 too). With a file of another project and a made-up private key planted in the scratch HOME, outside
@@ -537,6 +551,13 @@ the working directory:
 | Read: the other project's file; the private key; through the link | read | refused (3, and 2 without the hook); the key also by rule |
 | Grep, Glob: HOME | found | refused (3, and 2 without the hook) |
 | Write: in the other project | written | refused (3, and 2 without the hook) |
+| shell: a hard link it makes in its directory to the other project's file, then `cat` | read | denied (1: `ln` refused) |
+| shell and Read: `..` out of its directory | read | denied (1), refused (3, and 2 without the hook) |
+| shell and Read: other letter case, of a folder in HOME, of the key, and of HOME itself | read | denied (1), refused (3, 2) |
+| shell and Read: another volume (a scratch root named in `NEXUS_LIMIT_DENY_ROOTS`), and the same by a look-alike spelling (its accented letter decomposed) | read | denied (1), refused (3, 2) |
+| shell: a file beside a PATH folder on that volume | read | denied (1); a program in the PATH folder still runs |
+| shell and Read: the shell's history files | read | denied (1), refused (3, 2) |
+| shell: a file in a PATH folder inside HOME; a shell start-up file | read | **read** (open, below) |
 | the token, by the shell through a glob and by Read | denied (wall) | denied (wall) |
 | its own directory: Write, Edit and Read a file; build and run a C program; `git status` and commit | works | works |
 
@@ -547,16 +568,74 @@ caches there: point such a tool's cache into the working directory or the tempor
 `GOMODCACHE`, `npm_config_cache`). On macOS a program that keeps a cache in the user's temporary folder (`cc`'s
 xcrun cache) warns and runs. Claude's own state is the account's, outside the sandbox, so its memory and transcripts work.
 
-**What stays open to a limited friend.** Everything outside the data roots and HOME stays readable to its shell, as to
-any program of the user: the system's folders, `/etc`, `/opt`, `/tmp` and whatever other users or programs leave there
-(macOS's `/Library`, `/Applications`, `/private/var` beyond its own temporary folder). The network is the wall's:
-unchanged, every other machine reachable through the driver's proxy, so a limited friend still fetches, pushes over
-https with credentials of its own, and reaches services on other machines. The git config files under HOME it reads
-(above) are readable. A file another friend keeps outside the data roots (in `/tmp`, say) is readable. The limit is
-best effort like the wall: the AI's own user account is the person's, and a sandboxed VM or container
-(`real-isolation`, the roadmap) is the real isolation.
+**What stays open to a limited friend.** The limit is best effort like the wall: the AI's own user account is the
+person's, and a sandboxed VM or container (`real-isolation`, the roadmap; candidates below) is the real isolation. Open:
+
+- Everything outside the data roots and HOME, readable to its shell as to any program of the user: the system's
+  folders, `/etc`, `/opt`, `/proc` on Linux and WSL2 (what it shows of other processes depends on the sandbox, not
+  measured here), and whatever other users or programs leave there (macOS's `/Library`, `/Applications`,
+  `/private/var` beyond its own temporary folder).
+- Mounts outside the listed roots: on macOS a network share or disk image mounted somewhere other than `/Volumes`; on
+  Linux an NFS or SMB mount, `/net`, `/data`, `/opt` or `/var` mounts, `/run/user/<id>` (the user's runtime folder: its
+  `gvfs` mounts and sockets); on WSL2 an automount root moved off `/mnt` by `/etc/wsl.conf`, and the Windows drives
+  then wherever it says. Name each in the driver's `NEXUS_LIMIT_DENY_ROOTS` to close it.
+- A PATH folder inside HOME or inside another project (`~/.local/bin`, `~/go/bin`, a project's `node_modules/.bin`):
+  readable, as that folder alone (measured above), so whatever is kept in it.
+- The shell start-up files (`.bashrc`, `.zshrc`, `.profile` and the rest above): readable, and people often export
+  tokens in them. Keep tokens out of them on a machine with limited friends.
+- The account's shell-snapshot and session-environment folders: per account, shared by every friend on that account,
+  unlimited ones included; what one friend's shell left there, another reads.
+- The temporary folders (the session's `TMPDIR` and `/tmp`): readable **and writable**, and shared: a limited friend can
+  read what another program left there, and plant a file an unlimited friend (or the person) later runs or reads.
+- The network is the wall's: unchanged, every other machine reachable through the driver's proxy, so a limited friend
+  still fetches, pushes over https with credentials of its own, and reaches services on other machines.
+- A driver other than the Claude driver: it is given `--limit cwd` and must honour it itself; the server only requires
+  it to say so (the `limit` feature in its hello).
 
 Not a hole, a known fault: on Linux two Claude sandboxes at once, whose working directories share an ancestor a few
 levels up, now and then fail each other's commands (`bwrap: Can't find source path <ancestor>/.mcp.json`; measured in
 CI, 2026-11-15). The command fails closed. Only the tests avoid it (each CI job's runs go under a temporary directory
 of its runner's own, one run at a time); nexus does not yet.
+
+## Real isolation: candidates
+
+Later, not built. The token wall and the limit are a process sandbox, best effort. Real isolation runs a friend, a
+fleet worker on API billing or a CI worker inside a virtual machine or a container, so nothing it runs reaches the
+machine's own files, logins or services. These are candidates, listed generously, to try and to review or reject
+later; none is chosen. All but Tart are open source and
+may be built in or bundled where their size allows; Tart runs as a separate program only, because its licence is
+source-available, not open source, so its code is never taken into this repository. Day-to-day friends on a Mac stay
+on the process sandbox, because they need the GPU and Xcode natively.
+
+Mac hosts, for CI runners and hostile-code work that must run on a Mac:
+
+- Tart: virtual machines on Apple's Virtualization framework; macOS guests with Xcode, and Linux guests; directory
+  sharing; cloning; a stricter network mode in which the guest cannot reach the host. A separate program only.
+- Apple's containerization package and its `container` tool: a small virtual machine per container; Linux guests only;
+  needs a recent macOS.
+- Lima: Linux virtual machines with file sharing, without root.
+- Cua's lume: a tool for macOS virtual machines.
+- vfkit: a small command-line front end to Apple's virtualization; a building block rather than a whole answer.
+- Podman's virtual machine mode, which runs its rootless containers on a Mac (and on Windows).
+
+Linux and WSL2 hosts:
+
+- libkrun through an embeddable microVM library such as BoxLite or microsandbox: one interface on Linux, macOS and
+  WSL2, and can be built in.
+- Firecracker with a runner-per-VM manager such as Fireactions, for CI runners: the most proven; Linux only; runs as a
+  root service.
+- Cloud Hypervisor: a microVM per run on the machine's own hypervisor (KVM), with a minimal guest kernel and warm
+  snapshots; the base of the per-run microVM idea already on the ideas list.
+- gVisor: a kernel in user space, so no virtual machine is needed; weaker network control without root.
+- Kata Containers: a virtual machine per container, under Kubernetes.
+- Podman: rootless containers.
+- Incus: system containers and virtual machines.
+
+Any host, on our own machines or on GCP or AWS:
+
+- Kubernetes itself, running friends, workers and CI in isolated pods or virtual machines; the agent-sandbox resource
+  type and a runner controller are the pieces to look at.
+- Virtual machines on GCP or AWS, with friends and workers started there.
+
+The process-level baseline, for comparison: bubblewrap, which Claude's sandbox already uses on Linux and WSL2 (with
+Seatbelt on macOS), and nsjail, a comparable process jail.

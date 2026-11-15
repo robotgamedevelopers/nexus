@@ -507,13 +507,13 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause, con
                     wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
             }
         }
-        // Its friend's "limit" changed (a reload): told, and its driver restarts under the new limit once no turn is
-        // open (Drivers::configured); an open turn runs to its end under the one it started with.
+        // Its friend's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
+        // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open.
         if (fr != nullptr && frBefore != nullptr && fr->limit != frBefore->limit) {
             instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
                 (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
-                "): this session's driver restarts " + (fr->limit ? "limited" : "unlimited") + " once no turn is "
-                "open; a turn already open finishes as it started.";
+                "): this session's driver restarts " + (fr->limit ? "limited; a turn already open is stopped now." :
+                "unlimited once no turn is open; a turn already open finishes as it started.");
             if (report != nullptr) {
                 report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
                     (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));

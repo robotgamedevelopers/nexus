@@ -84,8 +84,9 @@ struct Config {
     std::function<std::string(const std::string& prompt)> summarize;
     bool here = true;                   // the session's instance is on this machine (setPlace): else no driver starts
     // The driver starts limited to its directory (`--limit cwd`, docs/driver-protocol.md): decided by the server
-    // (accounts::limitedFor) and given at each start; a driver started otherwise is ended once no turn is open.
-    bool limited = false;
+    // (accounts::limitedFor) and given at each start. Tightened, an open turn is stopped and the driver ended; loosened,
+    // the driver is ended once no turn is open. Limited unless the server says otherwise: the safe direction.
+    bool limited = true;
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)

@@ -353,6 +353,24 @@ int main(int argc, char** argv) {
         CHECK(runGit(sdir, {"status", "--porcelain"}).out.empty());     // never in the repository's files
     }
 
+    // A version 1 friends file committed: its friends read unlimited, as they ran. A friend added by hand while the
+    // file is still version 1 never ran: it reads limited, while the committed friend stays as it was.
+    {
+        const std::string v1 = "{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}]}\n";
+        spit(repo.friendsPath(), v1);
+        CHECK(runGit(dir, {"commit", "-q", "-am", "a version 1 friends file"}).status == 0);
+        report.clear();
+        CHECK(repo.committed(&held, &report, false) && held.friendNamed("ada") != nullptr &&
+              !held.friendNamed("ada")->limit);
+        spit(repo.friendsPath(), "{\"version\": 1, \"friends\": [{\"name\": \"ada\", \"accounts\": [\"work\"]}, "
+                                 "{\"name\": \"bo\", \"accounts\": [\"work\"]}]}\n");
+        errors.clear();
+        CHECK(repo.working(&read, &errors));
+        CHECK(read.friendNamed("ada") != nullptr && !read.friendNamed("ada")->limit);
+        CHECK(read.friendNamed("bo") != nullptr && read.friendNamed("bo")->limit);
+        CHECK(runGit(dir, {"checkout", "--", "friends.json"}).status == 0);
+    }
+
     // A version newer than this server reads, committed by hand: refused, and the file left as it was.
     const std::string newer = "{\n  \"version\": 3,\n  \"accounts\": []\n}\n";
     spit(repo.accountsPath(), newer);

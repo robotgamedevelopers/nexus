@@ -105,8 +105,12 @@ struct Read {
 // registry->friends. An empty or missing file (text empty) reads as none. Refused, with every error found: text that
 // is not JSON (with the line where reading stopped), a version newer than kVersion or not a whole number, a field
 // unknown or of the wrong kind, a name or provider malformed. Consistency across the two files is problems()'s.
+// In a version 1 friends file, a friend without "limit" reads unlimited (it ran so) only when `committed` is null (the
+// committed files themselves are being read) or names it; a friend `committed` does not hold, such as one added by
+// hand while the file is still version 1, reads limited.
 Read readAccounts(std::string_view text, const std::string& path, Registry* registry);
-Read readFriends(std::string_view text, const std::string& path, Registry* registry);
+Read readFriends(std::string_view text, const std::string& path, Registry* registry,
+                 const Registry* committed = nullptr);
 
 // The accounts the server picks, from those signed in (`up`):
 // the friend's next signed-in linked account after `current`, in link order and cycling round, never `current`;

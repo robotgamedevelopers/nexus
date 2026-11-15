@@ -14,7 +14,7 @@ The server starts the driver with these arguments:
 |---|---|
 | `--cwd <dir>` | the directory the harness works in; always given |
 | `--resume <session id>` | resume this harness session (an id the driver reported in a `session` message); absent for a new session |
-| `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that cannot enforce it, or does not know the argument, refuses to start with an `error` (code `other`), never runs unlimited |
+| `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that supports it lists `"limit"` in its hello's `features`; the server never relies on an unknown argument being refused, and ends a driver that does not list it. A driver that lists it but cannot enforce it here refuses to start with an `error` (code `other`), never runs unlimited |
 
 The account the harness uses is chosen by the environment the server starts the driver with, never by the protocol.
 The driver's standard error is free text for logs; the server shows none of it as conversation.
@@ -77,7 +77,7 @@ reply, is unknown, and the person decides whether to send it again.
 
 | kind | fields | meaning |
 |---|---|---|
-| `hello` | `protocol` (whole number, required: 1), `harness` (non-empty string, required, as `"claude"`) | the first line, always |
+| `hello` | `protocol` (whole number, required: 1), `harness` (non-empty string, required, as `"claude"`), `features` (array of strings, optional) | the first line, always. `features` lists what the driver supports beyond version 1: `"limit"` means it keeps the AI to its directory under `--limit cwd`. The server ends a driver started with `--limit cwd` whose hello does not list `"limit"`, before any `send`, and tells the session why |
 | `credential` | `billing` (required: `"subscription"`, `"api-key"` or `"none"`), `plan` (string, optional: the plan's name as the harness reports it) | which credential the harness is using |
 | `session` | `id` (required: 1 to 256 bytes of printable ASCII, no spaces, not starting with `-`) | the harness's session id: what the server passes as `--resume` when it starts the driver again |
 | `text` | `turn`, `delta` (string, required) | a piece of the turn's current text block, appended to it |
@@ -156,7 +156,7 @@ starts a new driver with `--resume` to go on.
 Lines prefixed `>` go from the server to the driver, `<` from the driver to the server. The driver starts:
 
 ```
-< {"kind":"hello","protocol":1,"harness":"claude"}
+< {"kind":"hello","protocol":1,"harness":"claude","features":["limit"]}
 ```
 
 A turn, with a text block in two pieces, a tool, and a second block:
