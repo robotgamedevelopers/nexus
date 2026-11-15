@@ -52,7 +52,8 @@ else()
     set(nexus_ts_archs ${CMAKE_SYSTEM_PROCESSOR})
 endif()
 
-# Go's environment, the same for every build here.
+# Go's environment, the same for every build here. CC is quoted wherever it is set below: Go splits CC on spaces,
+# and a path may hold one (C:/Users/<name with a space>).
 set(nexus_go_env GOTOOLCHAIN=go${NEXUS_TAILSCALE_GO} GOENV=off GOWORK=off GOFLAGS=-mod=readonly CGO_ENABLED=1
     GOMODCACHE=${NEXUS_GO_MODCACHE} GOCACHE=${NEXUS_GO_BUILDCACHE})
 set(nexus_go_build ${NEXUS_GO} build -trimpath -buildvcs=false)
@@ -97,7 +98,7 @@ if(WIN32)
     set(nexus_ts_dll ${nexus_ts_out}/nts.dll)
     set(nexus_ts_implib ${nexus_ts_out}/nts.lib)
     add_custom_command(OUTPUT ${nexus_ts_dll} ${nexus_ts_implib}
-        COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} GOOS=windows GOARCH=amd64 CC=${nexus_ts_cc}
+        COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} GOOS=windows GOARCH=amd64 "CC=\"${nexus_ts_cc}\""
             ${nexus_go_build} -buildmode=c-shared "-ldflags=-s -w" -o ${nexus_ts_dll} ./shim
         COMMAND ${CMAKE_AR} /nologo /def:${nexus_ts_source}/nts.def /machine:x64 /out:${nexus_ts_implib}
         DEPENDS ${nexus_ts_depends} ${nexus_ts_source}/nts.def
@@ -132,7 +133,7 @@ else()
         endif()
         set(archive ${nexus_ts_out}/libnts-${arch}.a)
         add_custom_command(OUTPUT ${archive}
-            COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} GOOS=${goos} GOARCH=${goarch} CC=${CMAKE_C_COMPILER}
+            COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} GOOS=${goos} GOARCH=${goarch} "CC=\"${CMAKE_C_COMPILER}\""
                 "CGO_CFLAGS=-O2 ${flags}" "CGO_LDFLAGS=${flags}"
                 ${nexus_go_build} -buildmode=c-archive -o ${archive} ./shim
             DEPENDS ${nexus_ts_depends}
