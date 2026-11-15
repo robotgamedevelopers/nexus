@@ -88,7 +88,8 @@ if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured sign_in no_credential usage_limit no_account instance_dir
-                 instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in)
+                 instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in
+                 secret_leak_witness)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
