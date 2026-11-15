@@ -890,8 +890,10 @@ jobs:
         run: |
           $configure = @('-S', '.', '-B', $env:NEXUS_BUILD, '-A', 'x64', "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE",
                          '-DNEXUS_WINDOW=OFF', '-DNEXUS_WINDOW_LOGIC=OFF', '-DNEXUS_LINK=OFF')
-          $version = (cmake --version | Select-Object -First 1)
+          # All of its output, then the first line: Select-Object -First would stop cmake mid-write and fail it.
+          $versionText = @(cmake --version)
           if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
+          $version = $versionText[0]
           $stamp = "$version`n$($configure -join "`n")"
           $kept = if (Test-Path "$env:NEXUS_BUILD.configured") { Get-Content -Raw "$env:NEXUS_BUILD.configured" } else { '' }
           if ($env:NEXUS_BUILD_FINISHED -eq 'True' -and (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt") -and $kept.TrimEnd() -eq $stamp) {
