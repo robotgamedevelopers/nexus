@@ -14,17 +14,22 @@ target_link_libraries(sync_test PRIVATE nexus_sync)
 target_compile_definitions(sync_test PRIVATE NEXUS_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_compile_options(sync_test PRIVATE ${warnings})
 
-add_executable(link_walk link_walk.cpp)
-target_link_libraries(link_walk PRIVATE nexus_sync)
-target_compile_options(link_walk PRIVATE ${warnings})
+add_dependencies(model_checks sync_test)
 
-# The secret dialog's walk (src/sync/secrets.h through the hub, and the windows' prompts), for SecretsTrace.tla.
-add_executable(secrets_walk secrets_walk.cpp)
-target_link_libraries(secrets_walk PRIVATE nexus_durable)
-target_include_directories(secrets_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_compile_options(secrets_walk PRIVATE ${warnings})
+# The walks TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
+if(NEXUS_SERVER_PARTS)
+    add_executable(link_walk link_walk.cpp)
+    target_link_libraries(link_walk PRIVATE nexus_sync)
+    target_compile_options(link_walk PRIVATE ${warnings})
 
-add_dependencies(model_checks sync_test link_walk secrets_walk)
+    # The secret dialog's walk (src/sync/secrets.h through the hub, and the windows' prompts), for SecretsTrace.tla.
+    add_executable(secrets_walk secrets_walk.cpp)
+    target_link_libraries(secrets_walk PRIVATE nexus_durable)
+    target_include_directories(secrets_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+    target_compile_options(secrets_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks link_walk secrets_walk)
+endif()
 
 add_test(NAME sync_unit COMMAND sync_test)
 set_tests_properties(sync_unit PROPERTIES LABELS unit TIMEOUT 30)

@@ -76,6 +76,13 @@ target_link_libraries(nexus_hitch_tests PRIVATE nexus_hitch)
 add_test(NAME hitch_unit COMMAND nexus_hitch_tests)
 set_tests_properties(hitch_unit PROPERTIES LABELS unit)
 
+# The settings files' parsing (src/config.h), the window's and nexus-server's. Pure logic.
+add_executable(nexus_config_tests test_config.cpp)
+target_compile_options(nexus_config_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_config_tests PRIVATE nexus_config)
+add_test(NAME config_unit COMMAND nexus_config_tests)
+set_tests_properties(config_unit PROPERTIES LABELS unit)
+
 # The sprint board's scrolling (src/scroll_glide.h): the curves, a tap against a hold, repeats, release, focus loss, the
 # ends. Time is an argument.
 add_executable(nexus_scroll_glide_tests test_scroll_glide.cpp)

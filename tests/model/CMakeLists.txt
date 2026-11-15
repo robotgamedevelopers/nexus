@@ -10,35 +10,39 @@ add_executable(model_test model_test.cpp)
 target_link_libraries(model_test PRIVATE nexus_model)
 target_compile_options(model_test PRIVATE ${warnings})
 
-add_executable(trace_walk trace_walk.cpp)
-target_link_libraries(trace_walk PRIVATE nexus_model)
-target_compile_options(trace_walk PRIVATE ${warnings})
-
-# TabLabel's walk (src/remote.h), for TabLabelTrace.tla: with the window's logic (NEXUS_WINDOW_LOGIC).
-if(NEXUS_WINDOW_LOGIC)
-    add_executable(label_walk label_walk.cpp)
-    target_link_libraries(label_walk PRIVATE nexus_window_logic)
-    target_compile_options(label_walk PRIVATE ${warnings})
-endif()
-
-# The board scroller's walk (src/scroll_glide.h), for GlideTrace.tla.
-add_executable(glide_walk glide_walk.cpp)
-target_link_libraries(glide_walk PRIVATE nexus_scroll)
-target_compile_options(glide_walk PRIVATE ${warnings})
-
 # The overlay's rules (src/overlay.h): their unit tests, and the walk whose traces OverlayTrace.tla checks.
 add_executable(overlay_test overlay_test.cpp)
 target_link_libraries(overlay_test PRIVATE nexus_model)
 target_compile_options(overlay_test PRIVATE ${warnings})
 
-add_executable(overlay_walk overlay_walk.cpp)
-target_link_libraries(overlay_walk PRIVATE nexus_model)
-target_compile_options(overlay_walk PRIVATE ${warnings})
-
 # Every program the tests run, to build without the rest of the project: cmake --build <dir> --target model_checks
-add_custom_target(model_checks DEPENDS model_test trace_walk glide_walk overlay_test overlay_walk)
-if(NEXUS_WINDOW_LOGIC)
-    add_dependencies(model_checks label_walk)
+add_custom_target(model_checks DEPENDS model_test overlay_test)
+
+# The walks whose traces TLC checks, which run on Linux and macOS only: a native Windows build has no TLC tests
+# (tlc_test below) and so no walks (NEXUS_SERVER_PARTS in CMakeLists.txt).
+if(NEXUS_SERVER_PARTS)
+    add_executable(trace_walk trace_walk.cpp)
+    target_link_libraries(trace_walk PRIVATE nexus_model)
+    target_compile_options(trace_walk PRIVATE ${warnings})
+
+    # TabLabel's walk (src/remote.h), for TabLabelTrace.tla: with the window's logic (NEXUS_WINDOW_LOGIC).
+    if(NEXUS_WINDOW_LOGIC)
+        add_executable(label_walk label_walk.cpp)
+        target_link_libraries(label_walk PRIVATE nexus_window_logic)
+        target_compile_options(label_walk PRIVATE ${warnings})
+        add_dependencies(model_checks label_walk)
+    endif()
+
+    # The board scroller's walk (src/scroll_glide.h), for GlideTrace.tla.
+    add_executable(glide_walk glide_walk.cpp)
+    target_link_libraries(glide_walk PRIVATE nexus_scroll)
+    target_compile_options(glide_walk PRIVATE ${warnings})
+
+    add_executable(overlay_walk overlay_walk.cpp)
+    target_link_libraries(overlay_walk PRIVATE nexus_model)
+    target_compile_options(overlay_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -72,6 +76,10 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # tests/driver.
 find_program(NEXUS_NODE node)
 function(tlc_test name module cfg expect)
+    # TLC and the walks run on Linux and macOS; a native Windows build defines none of them (NEXUS_SERVER_PARTS).
+    if(NOT NEXUS_SERVER_PARTS)
+        return()
+    endif()
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
