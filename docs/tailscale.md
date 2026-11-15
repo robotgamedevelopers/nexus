@@ -99,11 +99,11 @@ directory over kept caches, as a CI job after the first on a machine.
 |---|---|---|
 | macOS arm64 (studio, both architectures, 4 jobs) | 34.5 s | 5.1 s (an edit to the shim rebuilt: both architectures relinked) |
 | Linux x86_64 (amd-1, 4 CPUs) | 63.0 s | 3.3 s |
-| Windows x64 (captain, 4 CPUs) | see below | 13.0 s (the test program only, shim cached) |
+| Windows x64 (captain, 4 CPUs) | 233 s (plus a 64.7 s configure that fetched llvm-mingw) | 13.0 s (the test program only, shim cached) |
 | CI | CI_TIMES | |
 
-On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per runner: 27 s on captain, inside the
-configure that measured.
+On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per machine (CI keeps it in `%LOCALAPPDATA%\nexus-ci\tailscale\downloads`): 27 s on captain, inside the
+configure that measured, 64.7 s in the cold one above.
 
 ### Tests
 
@@ -141,7 +141,7 @@ Measured on 2026-11-15, Release builds. "With the shim" links it whole, as layer
 
 nexus-server and the client build only on macOS today (Linux has no window and, at Prax's pin, no window logic or
 link, so no nexus-server; Windows builds neither natively: CMakeLists.txt says why), so elsewhere the cost is the test
-program's. The macOS arm64 test program is 23,699,776 bytes, the same as nexus-server's cost, which bears that out. A
+program's. The macOS arm64 test program is 23,699,776 bytes, close to nexus-server's cost of 23,622,192, which bears that out. A
 universal macOS build carries both architectures, about twice the cost.
 
 ### Licences

@@ -848,9 +848,10 @@ jobs:
       - name: Tests
         run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
 
-  # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles, fetched once per runner into
-  # %LOCALAPPDATA%\nexus-ci\tailscale\<runner>, beside nothing the windows job keeps), its import library, and the
-  # test program with the Windows 10 manifest. Go's caches are the machine's, under %LOCALAPPDATA%\nexus-ci\tailscale\go.
+  # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles, fetched once per machine into
+  # %LOCALAPPDATA%\nexus-ci\tailscale\downloads, beside nothing the windows job keeps; runners fetching at once is safe,
+  # cmake/tailscale.cmake), its import library, and the test program with the Windows 10 manifest. Go's caches are the
+  # machine's, under %LOCALAPPDATA%\nexus-ci\tailscale\go.
   tailscale-windows:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, Windows, X64, captain]
@@ -866,7 +867,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:LOCALAPPDATA "nexus-ci\tailscale"
-          $downloads = "$root\$env:RUNNER_NAME"
+          $downloads = "$root\downloads"
           New-Item -ItemType Directory -Force -Path "$root\go\mod", "$root\go\build", $downloads | Out-Null
           "NEXUS_GO_CACHES=$root\go" >> $env:GITHUB_ENV
           "NEXUS_TAILSCALE_DOWNLOADS=$downloads" >> $env:GITHUB_ENV

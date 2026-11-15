@@ -66,10 +66,12 @@ if(WIN32)
     endif()
     set(nexus_ts_cc "${NEXUS_LLVM_MINGW}/bin/x86_64-w64-mingw32-clang.exe")
     if(NOT EXISTS "${nexus_ts_cc}")
-        # Downloaded and unpacked beside its final place, checked, then renamed into it, so that a fetch cut short
-        # leaves nothing half made.
-        set(zip "${NEXUS_TAILSCALE_DOWNLOADS}/${NEXUS_LLVM_MINGW_NAME}.zip")
-        set(partial "${NEXUS_TAILSCALE_DOWNLOADS}/${NEXUS_LLVM_MINGW_NAME}.partial")
+        # Downloaded and unpacked beside its final place under a name of this configure's own, checked, then renamed
+        # into it, so that a fetch cut short leaves nothing half made, and configures sharing NEXUS_TAILSCALE_DOWNLOADS
+        # (CI's runners on one machine) may fetch at once: the first rename wins, and the others find it in place.
+        string(RANDOM LENGTH 12 fetch_id)
+        set(zip "${NEXUS_TAILSCALE_DOWNLOADS}/${NEXUS_LLVM_MINGW_NAME}.${fetch_id}.zip")
+        set(partial "${NEXUS_TAILSCALE_DOWNLOADS}/${NEXUS_LLVM_MINGW_NAME}.${fetch_id}.partial")
         file(MAKE_DIRECTORY "${NEXUS_TAILSCALE_DOWNLOADS}")
         message(STATUS "nexus: fetching ${NEXUS_LLVM_MINGW_NAME} (cgo's C compiler for the Tailscale shim's DLL)")
         file(DOWNLOAD
@@ -83,13 +85,13 @@ if(WIN32)
         endif()
         file(REMOVE_RECURSE "${partial}")
         file(ARCHIVE_EXTRACT INPUT "${zip}" DESTINATION "${partial}")
-        file(RENAME "${partial}/${NEXUS_LLVM_MINGW_NAME}" "${NEXUS_LLVM_MINGW}")
+        file(RENAME "${partial}/${NEXUS_LLVM_MINGW_NAME}" "${NEXUS_LLVM_MINGW}" RESULT renamed)
         file(REMOVE_RECURSE "${partial}")
         file(REMOVE "${zip}")
     endif()
     if(NOT EXISTS "${nexus_ts_cc}")
         message(FATAL_ERROR "nexus: ${nexus_ts_cc} is missing: NEXUS_LLVM_MINGW (${NEXUS_LLVM_MINGW}) is not an "
-            "unpacked ${NEXUS_LLVM_MINGW_NAME}")
+            "unpacked ${NEXUS_LLVM_MINGW_NAME} (the last rename into it: ${renamed})")
     endif()
     if(NOT CMAKE_AR)
         message(FATAL_ERROR "nexus: no MSVC lib.exe (CMAKE_AR) to make the shim's import library")
