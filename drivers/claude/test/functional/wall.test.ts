@@ -469,7 +469,10 @@ async function runWall(name: string, hook: boolean): Promise<Run> {
             allowDangerouslySkipPermissions: true,
             canUseTool: (_n, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
             maxTurns: probes.length + 4,
-            ...wallOptions(account, home, work, (d) => { stderr += d; }, egressPort, base, { hook }),
+            // The wall from the environment the driver hands it (main.ts: the server's, scrubbed), which names the
+            // sandbox's tools (NEXUS_SANDBOX_BIN) as programs to protect.
+            ...wallOptions(account, home, work, (d) => { stderr += d; }, egressPort,
+                { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }),
         },
     });
     let replies = '';

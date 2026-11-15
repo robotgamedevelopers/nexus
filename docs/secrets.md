@@ -365,7 +365,8 @@ no prompt, through passwordless sudo: `/etc/apparmor.d/nexus-bwrap-<hash of the 
 allowing user namespaces and nothing else (`tools.ts` `appArmorProfile`, as Ubuntu's own profiles for Chrome and
 Electron apps do), loaded with `apparmor_parser -r` and then kept where AppArmor loads it at boot. The profile's text
 goes to both commands on standard input, never through a file (a file the driver wrote would be one the sandbox can
-write too), and `sudo`, `apparmor_parser` and `install` are run by absolute path, never looked up on a PATH (the unit
+write too; `tee` writes it, then `chmod`, and the driver checks the file holds the text), and `sudo`,
+`apparmor_parser`, `tee` and `chmod` are run by absolute path, never looked up on a PATH (the unit
 test checks no other path is ever handed to root). It logs one line saying so. Claude's sandbox still refuses the AI's
 own commands a user namespace. Without passwordless sudo the driver refuses to start in one plain line naming what is
 missing; it never changes the sysctl, which would lift the restriction for every program. The profile trusts whatever

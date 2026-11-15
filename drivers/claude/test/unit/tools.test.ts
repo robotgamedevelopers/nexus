@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-    appArmorProfile, kAppArmorDir, kAppArmorParser, kInstall, kRestrictUserns, sandboxHomeFiles, sandboxTools, type HomeFs,
+    appArmorProfile, kAppArmorDir, kAppArmorParser, kChmod, kRestrictUserns, kTee, sandboxHomeFiles, sandboxTools, type HomeFs,
     type ToolsSystem,
 } from '../../src/tools.js';
 
@@ -26,8 +26,8 @@ function fakeSystem(files: Record<string, string>, sudo = true, failing?: string
             if (failing !== undefined && args[0] === failing) {
                 return `${failing}: it failed`;
             }
-            if (args[0] === kInstall && args[3] === '/dev/stdin') {
-                files[args[4] ?? ''] = input ?? '';
+            if (args[0] === kTee) {
+                files[args[1] ?? ''] = input ?? '';
             }
             return undefined;
         },
@@ -36,7 +36,7 @@ function fakeSystem(files: Record<string, string>, sudo = true, failing?: string
 }
 
 /**
- * Every path handed to a command run as root is a program at a fixed absolute path, /dev/stdin, or a profile under
+ * Every path handed to a command run as root is a program at a fixed absolute path, or a profile under
  * kAppArmorDir: never a file the AI's sandbox could write (its temporary directories, HOME, the working directory).
  */
 function onlyRootOwnedPaths(calls: readonly string[][]): void {
@@ -45,7 +45,7 @@ function onlyRootOwnedPaths(calls: readonly string[][]): void {
             if (arg.startsWith('-') || /^[0-7]{4}$/.test(arg) || arg === 'true') {
                 continue;
             }
-            assert.ok(arg === kAppArmorParser || arg === kInstall || arg === '/dev/stdin' || arg.startsWith(`${kAppArmorDir}/`),
+            assert.ok(arg === kAppArmorParser || arg === kTee || arg === kChmod || arg.startsWith(`${kAppArmorDir}/`),
                 `a root command was handed ${arg}`);
         }
     }
@@ -90,8 +90,9 @@ void test('a restricting kernel with no profile loads it through sudo -n, then k
     const got = sandboxTools('linux', { NEXUS_SANDBOX_BIN: kBin, PATH: '/usr/bin' }, m.sys);
     assert.deepEqual(got, { path: kPath, did: `loaded the AppArmor profile ${kAppArmorDir}/${name}, which lets ${kBwrap} make user namespaces` });
     // The text goes to root on standard input, to both commands: no file the sandbox could change between them.
-    assert.deepEqual(m.calls, [['true'], [kAppArmorParser, '-r'], [kInstall, '-m', '0644', '/dev/stdin', `${kAppArmorDir}/${name}`]]);
-    assert.deepEqual(m.inputs, [undefined, text, text]);
+    const file = `${kAppArmorDir}/${name}`;
+    assert.deepEqual(m.calls, [['true'], [kAppArmorParser, '-r'], [kTee, file], [kChmod, '0644', file]]);
+    assert.deepEqual(m.inputs, [undefined, text, text, undefined]);
     onlyRootOwnedPaths(m.calls);
     assert.equal(m.files[`${kAppArmorDir}/${name}`], text);
     // The next start finds it in place and runs nothing.
@@ -105,7 +106,7 @@ void test('a profile file that differs (another build, an older text) is loaded 
     const m = fakeSystem({ ...kRestricted, [`${kAppArmorDir}/${name}`]: 'profile old {}\n' });
     const got = sandboxTools('linux', { NEXUS_SANDBOX_BIN: kBin, PATH: '/usr/bin' }, m.sys);
     assert.ok('did' in got);
-    assert.equal(m.calls.length, 3);
+    assert.equal(m.calls.length, 4);
 });
 
 void test('no passwordless sudo refuses in one plain line naming what is missing, and runs nothing else', () => {
@@ -202,7 +203,7 @@ void test('on Linux the driver makes the missing ~/.bashrc and ~/.gitconfig, and
 
 void test('the check on root\'s paths catches a file the sandbox could write (the check\'s own witness)', () => {
     assert.throws(() => { onlyRootOwnedPaths([[kAppArmorParser, '-r', '/tmp/nexus-apparmor-x/profile']]); }, /handed \/tmp\//);
-    assert.throws(() => { onlyRootOwnedPaths([['sudo', kInstall]]); }, /handed sudo/);
+    assert.throws(() => { onlyRootOwnedPaths([['sudo', kTee]]); }, /handed sudo/);
 });
 
 void test('a home file the sandbox needs that cannot be made refuses the start in one plain line', () => {
@@ -218,4 +219,12 @@ void test('a home file the sandbox needs that cannot be made refuses the start i
         createEmpty: () => false,
     };
     assert.deepEqual(sandboxHomeFiles('linux', '/h', raced), { made: [] });
+});
+
+void test('a profile file that does not hold the text after writing it refuses', () => {
+    const m = fakeSystem({ ...kRestricted });
+    const sys: ToolsSystem = { ...m.sys, sudo: (args, input) => m.sys.sudo(args, args[0] === kTee ? 'garbled' : input) };
+    const got = sandboxTools('linux', { NEXUS_SANDBOX_BIN: kBin, PATH: '/usr/bin' }, sys);
+    assert.ok('cause' in got);
+    assert.match(got.cause, /does not hold the profile's text/);
 });

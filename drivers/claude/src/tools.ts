@@ -32,9 +32,14 @@ export const kRestrictUserns = '/proc/sys/kernel/apparmor_restrict_unprivileged_
 export const kAppArmorDir = '/etc/apparmor.d';
 /** What loads a profile into the kernel. */
 export const kAppArmorParser = '/usr/sbin/apparmor_parser';
-/** sudo, and what copies the profile into place: by absolute path, never looked up on a PATH the AI could write. */
+/**
+ * sudo, and what writes the profile into place from standard input and sets its mode: by absolute path, never looked up
+ * on a PATH the AI could write. tee reads its standard input as it is; `install /dev/stdin` fails where sudo runs the
+ * command on a terminal of its own (use_pty, Ubuntu's default: "No such device or address", CI on Ubuntu, 2026-11-15).
+ */
 export const kSudo = '/usr/bin/sudo';
-export const kInstall = '/usr/bin/install';
+export const kTee = '/usr/bin/tee';
+export const kChmod = '/usr/bin/chmod';
 
 /** What the driver needs of the machine to set up the sandbox: a seam for the unit tests. */
 export interface ToolsSystem {
@@ -163,7 +168,8 @@ function loadProfile(bwrap: string, sys: ToolsSystem): { did: string } | { cause
     // goes to root on standard input, never through a file: a file the driver wrote would be one the AI's sandbox can
     // write too (the temporary directories are writable in it), and a session already running could change it between
     // the two commands. Every path root is handed is a program's, by absolute path, or the profile's under kAppArmorDir.
-    const failed = sys.sudo([kAppArmorParser, '-r'], text) ?? sys.sudo([kInstall, '-m', '0644', '/dev/stdin', file], text);
+    const failed = sys.sudo([kAppArmorParser, '-r'], text) ?? sys.sudo([kTee, file], text) ?? sys.sudo([kChmod, '0644', file])
+        ?? (sys.read(file) === text ? undefined : `${file} does not hold the profile's text after writing it`);
     if (failed !== undefined) {
         return { cause: `${restricted}; loading nexus's profile for ${bwrap} through sudo failed: ${failed}`,
             fix: `the profile is ${file}, from drivers/claude/src/tools.ts appArmorProfile` };
