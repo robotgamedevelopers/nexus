@@ -2,9 +2,9 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds"))
+ :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds"))
+ ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale"))
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused (in progress)")
@@ -44,7 +44,7 @@
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush. Today the order is held by tests/server/pass_test.cpp and link_e2e's flush run, not by a trace")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
      ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer." :later t)
-     ("real-isolation" "Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates, using existing maintained tools: a microVM per run on the machine's own hypervisor (such as Cloud Hypervisor on KVM, with a minimal guest kernel and warm snapshots), or VMs or Kubernetes on GCP or AWS, with friends and workers spun up there." :later t)
+     ("real-isolation" "Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md \"Real isolation: candidates\": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day friends on a Mac stay on the process sandbox (GPU and Xcode natively)." :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -122,6 +122,43 @@
      ("mail-tab" "done" "t-mail-tab")
      ("social-tab" "done" "t-social-tab")
      ))
+  (:id "tailscale" :type :roadmap :title "Tailscale built in"
+   :rows (
+     ("ts-build" "0. Build: the Go shim over tsnet (src/tailscale), pinned to tailscale.com v1.104.7 and Go 1.27.4, built by CMake as a c-archive (macOS arm64 and x86_64, Linux x86_64 and WSL2) and as a DLL with an MSVC import library (Windows), linked into a test program on each, the Windows one with the manifest that declares Windows 10; log uploads off, tsnet's log in a 0600 file, the state directory owner-only; CI on all three; the binary-size cost stated; the licences of every module listed (docs/tailscale.md)")
+     ("ts-licence-texts" "Before any nexus binary that links the shim ships: the licence text of every module src/tailscale/NOTICES.md lists goes with it (embedded and shown in the app, or installed beside it), generated from the modules at their pins and checked by CI against NOTICES.md")
+     ("ts-api" "1. Shim API: start and close, a state watch (WatchIPNBus: needs login with its URL, running, expired), peers, WhoIs, TCP listen and dial, UDP listen and dial; a TLA+ model of the node's lifecycle bound to the code by a trace check")
+     ("ts-client-sign-in" "2. Client sign-in: the client starts its node in ~/.nexus/client/tailscale, opens the sign-in URL in the system browser (in Prax once it has cookies and a system auth sheet), waits for running, and keeps the state; the first-run OS prompts (macOS Local Network, Windows Firewall) observed on a desktop session")
+     ("ts-server-enrolment" "3. Server enrolment by path A, interactive only (the owner's choice): the server's node hands its sign-in URL to the client, which opens it in the browser already signed in, one Connect click per server; the local server's handoff over the pipe the client spawned it on (macOS, WSL2), and a remote server's first start")
+     ("ts-bootstrap" "4. Bootstrap over the tailnet: nexus-server as a per-user service whose tsnet node answers NEXUS CONNECT only to callers WhoIs names as the server's own login; the link model extended")
+     ("ts-mosh" "5. mosh over tsnet: mosh's transport unmodified, through an in-process loopback relay between its 127.0.0.1 socket and the shim's tailnet UDP; a layout model if the relay keeps rings; the added latency measured in milliseconds against the 8.3 ms frame")
+     ("ts-discovery" "6. Discovery: the client lists the peers named nexus-server-* and offers them as servers; --server takes a name from that list")
+     ("ts-expiry" "7. Expiry and recovery shown in the app (an untagged node expires after 180 days and is approved again); ssh retires once layers 4 to 6 are secured")
+     ("ts-own-control" "Later, not built: use your own control server (headscale). An option for people who want to run their own server: they set headscale up themselves, they give its address, and our embedded nodes use it instead of Tailscale's hosted service")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("ts-build" "done" "t-ts-build")
+     ("ts-licence-texts" "done" "t-ts-licence-texts")
+     ("ts-api" "done" "t-ts-api")
+     ("ts-client-sign-in" "done" "t-ts-client-sign-in")
+     ("ts-server-enrolment" "done" "t-ts-server-enrolment")
+     ("ts-bootstrap" "done" "t-ts-bootstrap")
+     ("ts-mosh" "done" "t-ts-mosh")
+     ("ts-discovery" "done" "t-ts-discovery")
+     ("ts-expiry" "done" "t-ts-expiry")
+     ("ts-own-control" "done" "t-ts-own-control")
+     ))
+  (:id "t-ts-build" :type :task :title "Tailscale 0. Build: the pinned shim on macOS, Linux and Windows, in CI, sizes and licences stated" :state :doing
+   :evidence ("src/tailscale/shim, src/tailscale/nts.h, cmake/tailscale.cmake, cmake/windows10.manifest" "tests/tailscale/tailscale_test.cpp: ctest -L tailscale (tailscale_unit_version, tailscale_functional_state_dir, tailscale_functional_refusals, tailscale_functional_refuses_inherited_key, tailscale_functional_lock, tailscale_functional_lock_two_process, tailscale_functional_panics, tailscale_functional_log_cap, tailscale_functional_quiet)" ".github/workflows/tailscale.yml: tailscale-macos, tailscale-linux, tailscale-windows and the commit statuses tailscale-<os>" "src/tailscale/NOTICES.md: cmake --build <dir> --target nexus_tailscale_notices_check" "docs/tailscale.md"))
+  (:id "t-ts-own-control" :type :task :title "Tailscale, later: use your own control server (headscale), set up by the person, by its address" :state :todo)
+  (:id "t-ts-licence-texts" :type :task :title "Tailscale: the licence texts of the shim's modules carried by every binary that links it, before one ships" :state :todo)
+  (:id "t-ts-api" :type :task :title "Tailscale 1. Shim API: lifecycle, state watch, peers, WhoIs, TCP and UDP; a TLA+ model with a trace check" :state :todo)
+  (:id "t-ts-client-sign-in" :type :task :title "Tailscale 2. Client sign-in through the system browser; the first-run OS prompts observed on a desktop session" :state :todo)
+  (:id "t-ts-server-enrolment" :type :task :title "Tailscale 3. Server enrolment by path A: the server's URL opened by the client, one Connect click per server" :state :todo)
+  (:id "t-ts-bootstrap" :type :task :title "Tailscale 4. Bootstrap over the tailnet: a per-user service and a WhoIs-gated CONNECT" :state :todo)
+  (:id "t-ts-mosh" :type :task :title "Tailscale 5. mosh over tsnet through a loopback relay, its latency measured in ms" :state :todo)
+  (:id "t-ts-discovery" :type :task :title "Tailscale 6. Discovery of nexus servers among the tailnet's peers" :state :todo)
+  (:id "t-ts-expiry" :type :task :title "Tailscale 7. Expiry and recovery in the app; ssh retired once 4 to 6 are secured" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
   (:id "t-client-template" :type :task :title "Client-config template on the server: pending updates applied at each client's next connect" :state :todo)
   (:id "t-client-promote" :type :task :title "Promote one machine's client config to the template" :state :todo)
@@ -168,7 +205,8 @@
    :evidence ("models/ClaudeDriver.tla: ctest -L model tlc_claude_driver tlc_claude_driver_witness_*" "drivers/claude/test/walk.ts, drivers/claude/test/unit/driver.test.ts: ctest -L model tlc_claude_driver_trace_*"))
   (:id "t-friends-accounts" :type :work-set :children ("t-accounts-server" "t-accounts-secret-dialog"
                                                        "t-accounts-sign-in" "t-accounts-drivers"
-                                                       "t-accounts-window" "t-accounts-remote-instance"))
+                                                       "t-accounts-window" "t-accounts-remote-instance"
+                                                       "t-accounts-friend-limit"))
   (:id "t-accounts-server" :type :task :title "5a. Accounts and friends on the server: providers have accounts; friends link to any number of accounts of any providers, with a default; a friend has instances (a machine and a working directory each), and a session belongs to one of them; a session runs on one of its friend's accounts, set by the person or rotated by the server at a usage limit; accounts.json and friends.json in a git repository of their own, edited through the person's AI with `nexus-server config check`, `reload`, `history`, `restore` and `remote`" :state :done
    :evidence ("models/Accounts.tla: ctest -L model tlc_accounts tlc_accounts_witness_*" "tests/accounts/accounts_walk.cpp: ctest -L model tlc_accounts_trace_*" "tests/accounts/accounts_test.cpp: ctest -L unit accounts_unit_*" "tests/accounts/config_repo_test.cpp: ctest -L functional accounts_functional_config_repo"))
   (:id "t-accounts-secret-dialog" :type :task :title "5b. Secret dialog: the window's own dialog for a credential, sent to the server and written 0600 under ~/.nexus/server/accounts/<name>/; never shown, logged, or seen by an AI" :state :done
@@ -178,6 +216,8 @@
   (:id "t-accounts-drivers" :type :task :title "5d. Drivers take the session's account (the environment each driver starts with) in place of the drivers file's --account, and tell their AI where the config lives and its verbs (configBrief); each driver reports a usage limit as the protocol's `usage-limit` error (the Claude driver now reports a rate limit as `harness`; its model, ClaudeDriver.tla, changes with it), so that the server rotates the session; a driver per provider; a switch the harness cannot resume, within or across providers, starts fresh seeded with a summary of the conversation so far" :state :todo)
   (:id "t-accounts-window" :type :task :title "5e. Window: Command-A selects a session's account from its friend's, or leaves the choice to the server's rotation; several accounts of one friend may run at once" :state :todo)
   (:id "t-accounts-remote-instance" :type :task :title "5f. A driver on the instance's machine: a session whose instance is on another machine than the server's gets its driver started there, in the instance's directory, over the fleet's ssh by the machine's name (today it gets a notice and no driver, and a session whose instance moves to another machine is told and its driver ends once no turn is open). Moving an instance within the server's machine is done: the driver restarts in the new directory, resuming there when it is the same directory, else starting afresh seeded with a summary of the conversation so far; on another machine the same, once the driver runs there" :state :todo)
+  (:id "t-accounts-friend-limit" :type :task :title "5g. A friend limited to its directory: friends.json's \"limit\" (true for a friend added, false only by an edit), accounts.json's \"billing\" (a friend on an API-billed account is always limited), decided by the server at every driver start and passed as --limit cwd; the Claude driver enforces it with Claude's sandbox, Claude's working-directory limit and the hook, and refuses a start it cannot limit" :state :done
+   :evidence ("models/Accounts.tla: ctest -L model tlc_accounts_limit tlc_accounts_witness_start_ignores_friend tlc_accounts_witness_start_ignores_billing tlc_accounts_witness_link_api_unlimited tlc_accounts_witness_add_friend_open tlc_accounts_witness_limit_silent" "tests/accounts/accounts_walk.cpp: ctest -L model tlc_accounts_trace_* (tlc_accounts_trace_faulty_limit_rejected)" "tests/accounts/accounts_test.cpp: ctest -L unit accounts_unit_limits" "tests/server/supervisor_test.cpp: ctest -L unit supervisor_unit_limit" "drivers/claude/test/unit: npm test (limitOf, the hook's limit, prepare's refusals, --limit)" "drivers/claude/test/functional/wall.test.ts: NEXUS_WALL_RUN=limited and limited-nohook, on macOS, Ubuntu and WSL2 in CI"))
   (:id "t-friends-window" :type :task :title "6. Window: a friend tab shows the conversation" :state :todo)
   ; Feedback for Prax's author (a gap nexus works around, AGENTS.md): no table renders it.
   (:id "prax-json-strict-utf8" :type :task :title "Prax feedback: a strict mode for lib/json and lib/core's UTF-8" :state :todo

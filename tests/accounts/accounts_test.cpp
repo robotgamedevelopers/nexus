@@ -57,10 +57,12 @@ void layout() {
     const std::string a = accounts::accountsText(r);
     const std::string f = accounts::friendsText(r);
     CHECK(a ==
-        "{\n  \"version\": 1,\n  \"accounts\": [\n    {\n      \"name\": \"work\",\n      \"provider\": \"claude\"\n"
-        "    },\n    {\n      \"name\": \"home\",\n      \"provider\": \"claude\"\n    },\n    {\n      \"name\": \"cx\",\n"
-        "      \"provider\": \"codex\"\n    }\n  ]\n}\n");
+        "{\n  \"version\": 2,\n  \"accounts\": [\n    {\n      \"name\": \"work\",\n      \"provider\": \"claude\",\n"
+        "      \"billing\": \"subscription\"\n    },\n    {\n      \"name\": \"home\",\n      \"provider\": \"claude\",\n"
+        "      \"billing\": \"subscription\"\n    },\n    {\n      \"name\": \"cx\",\n      \"provider\": \"codex\",\n"
+        "      \"billing\": \"subscription\"\n    }\n  ]\n}\n");
     CHECK(f.find("\"default\": null") != std::string::npos);
+    CHECK(f.find("    {\n      \"name\": \"ada\",\n      \"limit\": true,\n      \"accounts\": [") != std::string::npos);
     CHECK(f.back() == '\n');
     Registry back;
     CHECK(accounts::readAccounts(a, "accounts.json", &back).ok);
@@ -70,7 +72,7 @@ void layout() {
     CHECK(accounts::accountsText(back) == a);
     CHECK(accounts::friendsText(back) == f);
     Registry none;
-    CHECK(accounts::accountsText(none) == "{\n  \"version\": 1,\n  \"accounts\": []\n}\n");
+    CHECK(accounts::accountsText(none) == "{\n  \"version\": 2,\n  \"accounts\": []\n}\n");
     CHECK(accounts::readAccounts(accounts::accountsText(none), "a", &back).ok && back.accounts.empty());
     // A string with a quote and a backslash survives.
     Registry odd;
@@ -120,14 +122,17 @@ void refusals() {
 
 void versions() {
     Registry r;
-    // The version 1 fixture, written by hand, reads; it is the newest, so nothing upgrades.
+    // The version 1 fixture, written by hand, reads, and is upgraded: version 2 is the newest. Its accounts are a
+    // subscription's, as every account was then.
     accounts::Read rd = accounts::readAccounts(kAccountsV1, "a", &r);
-    CHECK(rd.ok && rd.version == 1 && !rd.upgraded);
+    CHECK(rd.ok && rd.version == 1 && rd.upgraded);
     CHECK(r.accounts.size() == 2 && r.accounts[0].name == "work" && r.accounts[1].provider == "codex");
-    // Written back in the one layout, in the person's order.
+    CHECK(r.accounts[0].billing == accounts::Billing::Subscription);
+    // Written back in the one layout, in the person's order, in version 2.
     CHECK(accounts::accountsText(r).find("\"name\": \"work\"") < accounts::accountsText(r).find("\"name\": \"cx\""));
-    rd = accounts::readAccounts("{\"version\": 2, \"accounts\": []}", "/h/accounts.json", &r);
-    CHECK(!rd.ok && has(rd.errors, "/h/accounts.json:1: \"version\" is 2, newer than this nexus-server reads (1)"));
+    CHECK(accounts::accountsText(r).find("\"version\": 2,") != std::string::npos);
+    rd = accounts::readAccounts("{\"version\": 3, \"accounts\": []}", "/h/accounts.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/accounts.json:1: \"version\" is 3, newer than this nexus-server reads (2)"));
     CHECK(has(rd.errors, "the file was left as it is"));
     rd = accounts::readAccounts("{\"version\": 1.5, \"accounts\": []}", "a", &r);
     CHECK(!rd.ok && has(rd.errors, "not a whole number"));
@@ -600,6 +605,176 @@ void hubInstances() {
     CHECK(has(report, "session 3 (ada): instance rocketnet -> none"));
 }
 
+// A friend's "limit" and an account's "billing" (docs/accounts.md): the defaults by version, the migration of a
+// version 1 file, the refusals with their line, the always-limited rule for an API-billed account, the decision at a
+// session's start (limitedFor), and the hub's reload of a limit, which tells the friend's sessions.
+void limits() {
+    Registry r;
+    // Version 2: a friend with no "limit" is limited; one may say false. An account with no "billing" is a
+    // subscription's.
+    accounts::Read rd = accounts::readFriends("{\"version\": 2, \"friends\": [{\"name\": \"ada\"}, "
+        "{\"name\": \"admin\", \"limit\": false}]}", "f", &r);
+    CHECK(rd.ok && !rd.upgraded && r.friends.size() == 2 && r.friends[0].limit && !r.friends[1].limit);
+    rd = accounts::readAccounts("{\"version\": 2, \"accounts\": [{\"name\": \"w\", \"provider\": \"claude\"}, "
+        "{\"name\": \"fleet\", \"provider\": \"claude\", \"billing\": \"api\"}]}", "a", &r);
+    CHECK(rd.ok && r.accounts[0].billing == accounts::Billing::Subscription &&
+          r.accounts[1].billing == accounts::Billing::Api);
+    // Version 1, from before the field: every friend reads as it ran then, unlimited, and is written explicitly from
+    // then on (the upgrade, or the next applied change), so nothing changes under the person silently.
+    rd = accounts::readFriends("{\"version\": 1, \"friends\": [{\"name\": \"ada\"}, {\"name\": \"bo\", \"limit\": "
+        "true}]}", "f", &r);
+    CHECK(rd.ok && rd.upgraded && !r.friends[0].limit && r.friends[1].limit);
+    const std::string written = accounts::friendsText(r);
+    CHECK(written.find("\"version\": 2,") != std::string::npos);
+    CHECK(written.find("\"name\": \"ada\",\n      \"limit\": false,") != std::string::npos);
+    Registry back;
+    CHECK(accounts::readFriends(written, "f", &back).ok && back.friends == r.friends);
+    // Refusals, with the file's line and the fix.
+    rd = accounts::readFriends("{\"version\": 2, \"friends\": [\n{\"name\": \"ada\", \"limit\": \"yes\"}]}",
+                               "/h/friends.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: the friend \"ada\"'s \"limit\" is a string, not true or false"));
+    CHECK(has(rd.errors, "write true or false, without quotes"));
+    rd = accounts::readAccounts("{\"version\": 2, \"accounts\": [\n{\"name\": \"w\", \"provider\": \"claude\", "
+        "\"billing\": \"API\"}]}", "/h/accounts.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/accounts.json:2: the account \"w\"'s \"billing\" is \"API\", which is not one of"));
+    rd = accounts::readAccounts("{\"version\": 2, \"accounts\": [{\"name\": \"w\", \"provider\": \"claude\", "
+        "\"billing\": 1}]}", "a", &r);
+    CHECK(!rd.ok && has(rd.errors, "\"billing\" is a number, not a string"));
+
+    // The fixture: an API-billed account, as a fleet worker's would be.
+    Registry fleet;
+    fleet.accounts = {{"work", "claude"}, {"fleet", "claude", accounts::Billing::Api}};
+    fleet.friends = {{"ada", {"work"}, "work"}, {"worker", {"fleet"}, "fleet"}};
+    fleet.friends[0].limit = false;
+    CHECK(accounts::problems(fleet).empty());
+    CHECK(accounts::accountsText(fleet).find("\"name\": \"fleet\",\n      \"provider\": \"claude\",\n      "
+                                             "\"billing\": \"api\"") != std::string::npos);
+    // Setting limit false for a friend on an API-billed account is refused, with the reason.
+    Registry bad = fleet;
+    bad.friends[1].limit = false;
+    CHECK(has(accounts::problems(bad), "the friend \"worker\" has \"limit\": false and links to the account \"fleet\", "
+                                       "which accounts.json bills at API rate"));
+    CHECK(has(accounts::problems(bad), "always limited"));
+    bad = fleet;
+    bad.friends[0].accounts.push_back("fleet");     // an unlimited friend linked to it: the same refusal
+    CHECK(has(accounts::problems(bad), "the friend \"ada\" has \"limit\": false"));
+    bad = fleet;
+    bad.accounts[0].billing = accounts::Billing::Api;   // an account an unlimited friend runs on, made API-billed
+    CHECK(has(accounts::problems(bad), "links to the account \"work\", which accounts.json bills at API rate"));
+
+    // The decision at a session's start.
+    CHECK(!accounts::limitedFor(&fleet, "ada", "work"));
+    CHECK(!accounts::limitedFor(&fleet, "ada", ""));
+    CHECK(accounts::limitedFor(&fleet, "worker", "fleet"));
+    CHECK(accounts::limitedFor(&fleet, "nobody", "work"));      // a friend nexus does not hold: limited
+    CHECK(accounts::limitedFor(nullptr, "ada", "work"));        // no accounts and friends held: limited
+    CHECK(accounts::limitedFor(&fleet, "ada", "gone"));        // an account the files do not hold: limited
+    // Even where the files' rule were bypassed, an API-billed account's session is limited (the rule at the start).
+    bad = fleet;
+    bad.friends[0].accounts.push_back("fleet");
+    CHECK(accounts::limitedFor(&bad, "ada", "fleet") && !accounts::limitedFor(&bad, "ada", "work"));
+    CHECK(has(accounts::changes(fleet, bad), "friend ada's accounts [work] -> [work, fleet]"));
+    Registry flipped = fleet;
+    flipped.friends[0].limit = true;
+    flipped.accounts[0].billing = accounts::Billing::Api;
+    CHECK(has(accounts::changes(fleet, flipped), "friend ada's limit false -> true"));
+    CHECK(has(accounts::changes(fleet, flipped), "account work's billing subscription -> api"));
+
+    // The hub: a friend made by a window is limited; linking an API-billed account to an unlimited friend is
+    // refused, changing nothing; a reload that sets limit false there is refused whole; a reload that changes a
+    // friend's limit tells each of its sessions.
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    CHECK(hub.useAccounts(fleet, &keeper).empty());
+    std::string why;
+    std::uint64_t n = 1;
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "cy", ""), &why, "w"));
+    CHECK(hub.accounts()->friendNamed("cy")->limit);
+    CHECK(has(keeper.messages, "friend cy set up, accounts [], default none, instances [], limit true"));
+    const Registry held = *hub.accounts();
+    CHECK(!hub.apply(act(n++, sync::ActionKind::LinkAccount, "ada", "fleet"), &why, "w"));
+    CHECK(has({why}, "fleet is billed at API rate") && has({why}, "ada has \"limit\": false"));
+    CHECK(*hub.accounts() == held);
+    CHECK(hub.apply(act(n++, sync::ActionKind::LinkAccount, "cy", "fleet"), &why, "w"));   // limited: fine
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "worker", "", ""}, &why, "w"));
+    std::vector<std::string> report;
+    Registry edit = *hub.accounts();
+    edit.friendNamed("worker")->limit = false;
+    const Registry before = *hub.accounts();
+    CHECK(!hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "the friend \"worker\" has \"limit\": false") && *hub.accounts() == before);
+    edit = *hub.accounts();
+    edit.friendNamed("ada")->limit = true;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "friend ada's limit false -> true") && has(report, "session 1 (ada): limit false -> true"));
+    CHECK(has({lastNotice(store, 1)}, "ada is now limited to its directory"));
+    CHECK(lastNotice(store, 2).empty());   // worker's session: its friend's limit did not change
+    CHECK(accounts::limitedFor(hub.accounts(), "ada", "work"));
+}
+
+// friends.json's "limit_keeps_out" (docs/accounts.md): absent is none; each entry an absolute directory other than the
+// root, there once, refused with its line otherwise; written back only when it holds one, after "version"; a change is
+// one report line, and a reload tells each limited session and no unlimited one.
+void keepsOut() {
+    Registry r;
+    accounts::Read rd = accounts::readFriends("{\"version\": 2, \"friends\": []}", "f", &r);
+    CHECK(rd.ok && r.keepsOut.empty());
+    CHECK(accounts::friendsText(r).find("limit_keeps_out") == std::string::npos);
+    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\"/data\", \"/mnt/net\"], \"friends\": "
+        "[{\"name\": \"ada\"}]}", "f", &r);
+    CHECK(rd.ok && (r.keepsOut == std::vector<std::string>{"/data", "/mnt/net"}));
+    const std::string written = accounts::friendsText(r);
+    CHECK(written.find("  \"version\": 2,\n  \"limit_keeps_out\": [\n    \"/data\",\n    \"/mnt/net\"\n  ],\n"
+                       "  \"friends\": [") != std::string::npos);
+    Registry back;
+    CHECK(accounts::readFriends(written, "f", &back).ok && back == r);
+    // Refusals, with the line and the fix.
+    rd = accounts::readFriends("{\"version\": 2,\n\"limit_keeps_out\": \"/data\", \"friends\": []}", "/h/friends.json",
+                               &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" is a string, not a list"));
+    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\n\"data\",\n\"/\",\n1,\n\"/d\",\n\"/d\"], "
+        "\"friends\": []}", "/h/friends.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" holds \"data\", which is not an absolute "
+                                   "directory other than \"/\""));
+    CHECK(has(rd.errors, "/h/friends.json:3: \"limit_keeps_out\" holds \"/\", which is not"));
+    CHECK(has(rd.errors, "/h/friends.json:4: \"limit_keeps_out\" holds a number, not a directory"));
+    CHECK(has(rd.errors, "/h/friends.json:6: \"limit_keeps_out\" holds \"/d\" twice"));
+    // The consistency check, for a registry not read from a file (the window's edits).
+    Registry bad;
+    bad.keepsOut = {"/", "rel", "/d", "/d"};
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"/\", which is not"));
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"rel\", which is not"));
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"/d\" twice"));
+    Registry fine;
+    fine.keepsOut = {"/data"};
+    CHECK(accounts::problems(fine).empty());
+    CHECK(has(accounts::changes(Registry{}, fine), "limit_keeps_out [] -> [/data]"));
+
+    // The hub: a reload that changes the list tells each limited session, and no unlimited one.
+    Registry fleet;
+    fleet.accounts = {{"work", "claude"}};
+    fleet.friends = {{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}};
+    fleet.friends[1].limit = false;
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    CHECK(hub.useAccounts(fleet, &keeper).empty());
+    std::string why;
+    std::uint64_t n = 1;
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "bo", "", ""}, &why, "w"));
+    Registry edit = *hub.accounts();
+    edit.keepsOut = {"/data"};
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "limit_keeps_out [] -> [/data]"));
+    CHECK(has({lastNotice(store, 1)}, "kept out of, on top of its own, are now /data"));
+    CHECK(lastNotice(store, 2).empty());
+    CHECK(hub.accounts()->keepsOut == std::vector<std::string>{"/data"});
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -618,6 +793,8 @@ const Group kGroups[] = {
     {"hub_probe", hubProbe},
     {"instances", instances},
     {"hub_instances", hubInstances},
+    {"limits", limits},
+    {"keeps_out", keepsOut},
 };
 
 } // namespace

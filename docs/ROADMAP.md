@@ -20,7 +20,7 @@
 | Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush. Today the order is held by tests/server/pass_test.cpp and link_e2e's flush run, not by a trace | ❌ |
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
 | Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer. (later) | ❌ |
-| Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates, using existing maintained tools: a microVM per run on the machine's own hypervisor (such as Cloud Hypervisor on KVM, with a minimal guest kernel and warm snapshots), or VMs or Kubernetes on GCP or AWS, with friends and workers spun up there. (later) | ❌ |
+| Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md "Real isolation: candidates": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day friends on a Mac stay on the process sandbox (GPU and Xcode natively). (later) | ❌ |
 | complete | 0% |
 
 [Source data](roadmap.sexp)
@@ -101,3 +101,27 @@
 [Source data](roadmap.sexp)
 
 <!-- nova-work:tab-kinds:end -->
+
+## Tailscale built in
+
+The layers of nexus's own Tailscale node (docs/tailscale.md), bottom up, each secured before the next starts.
+
+<!-- nova-work:tailscale:start -->
+
+| feature | done |
+|---|:---:|
+| 0. Build: the Go shim over tsnet (src/tailscale), pinned to tailscale.com v1.104.7 and Go 1.27.4, built by CMake as a c-archive (macOS arm64 and x86_64, Linux x86_64 and WSL2) and as a DLL with an MSVC import library (Windows), linked into a test program on each, the Windows one with the manifest that declares Windows 10; log uploads off, tsnet's log in a 0600 file, the state directory owner-only; CI on all three; the binary-size cost stated; the licences of every module listed (docs/tailscale.md) | ❌ |
+| Before any nexus binary that links the shim ships: the licence text of every module src/tailscale/NOTICES.md lists goes with it (embedded and shown in the app, or installed beside it), generated from the modules at their pins and checked by CI against NOTICES.md | ❌ |
+| 1. Shim API: start and close, a state watch (WatchIPNBus: needs login with its URL, running, expired), peers, WhoIs, TCP listen and dial, UDP listen and dial; a TLA+ model of the node's lifecycle bound to the code by a trace check | ❌ |
+| 2. Client sign-in: the client starts its node in ~/.nexus/client/tailscale, opens the sign-in URL in the system browser (in Prax once it has cookies and a system auth sheet), waits for running, and keeps the state; the first-run OS prompts (macOS Local Network, Windows Firewall) observed on a desktop session | ❌ |
+| 3. Server enrolment by path A, interactive only (the owner's choice): the server's node hands its sign-in URL to the client, which opens it in the browser already signed in, one Connect click per server; the local server's handoff over the pipe the client spawned it on (macOS, WSL2), and a remote server's first start | ❌ |
+| 4. Bootstrap over the tailnet: nexus-server as a per-user service whose tsnet node answers NEXUS CONNECT only to callers WhoIs names as the server's own login; the link model extended | ❌ |
+| 5. mosh over tsnet: mosh's transport unmodified, through an in-process loopback relay between its 127.0.0.1 socket and the shim's tailnet UDP; a layout model if the relay keeps rings; the added latency measured in milliseconds against the 8.3 ms frame | ❌ |
+| 6. Discovery: the client lists the peers named nexus-server-* and offers them as servers; --server takes a name from that list | ❌ |
+| 7. Expiry and recovery shown in the app (an untagged node expires after 180 days and is approved again); ssh retires once layers 4 to 6 are secured | ❌ |
+| Later, not built: use your own control server (headscale). An option for people who want to run their own server: they set headscale up themselves, they give its address, and our embedded nodes use it instead of Tailscale's hosted service | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:tailscale:end -->

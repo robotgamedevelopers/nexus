@@ -107,6 +107,7 @@ accounts::Registry accountsFromDrivers(const DriverTable& table, const std::stri
             continue;
         }
         accounts::Friend fr{name, {}, {}};
+        fr.limit = false;   // it ran unlimited before the field: nothing changes under the person (docs/accounts.md)
         auto a = accountOf.find(f.harness);
         if (a != accountOf.end() && r.account(a->second)->provider == f.harness) {
             fr.accounts = {a->second};

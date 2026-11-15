@@ -25,7 +25,7 @@ if(NEXUS_SERVER_PARTS)
 endif()
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
-              hub_adopt_defaults hub_probe instances hub_instances)
+              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -39,6 +39,10 @@ tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
+# MCAccountsLimit.cfg: one friend, two accounts of one provider, two sessions, every limit and billing, and drivers that
+# start and end: the limit's rules (docs/accounts.md, "limit") beside every other operation (29,175 distinct states,
+# 6 s on four workers on a loaded Mac, 2026-11-15).
+tlc_test(tlc_accounts_limit MCAccounts MCAccountsLimit.cfg pass WORKERS 4)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant
@@ -79,6 +83,16 @@ tlc_test(tlc_accounts_witness_add_instance_leaves_none WAccAddInstanceLeavesNone
          invariant PROPERTY InstanceHeld)
 tlc_test(tlc_accounts_witness_move_instance_silent WAccMoveInstanceSilent WAccMoveInstanceSilent.cfg action
          PROPERTY MovedInstanceIsTold)
+tlc_test(tlc_accounts_witness_start_ignores_friend WAccStartIgnoresFriend WAccStartIgnoresFriend.cfg invariant
+         PROPERTY NeverWeakerThanFriend)
+tlc_test(tlc_accounts_witness_start_ignores_billing WAccStartIgnoresBilling WAccStartIgnoresBilling.cfg invariant
+         PROPERTY ApiAlwaysLimited)
+tlc_test(tlc_accounts_witness_link_api_unlimited WAccLinkApiUnlimited WAccLinkApiUnlimited.cfg invariant
+         PROPERTY LimitSound)
+tlc_test(tlc_accounts_witness_add_friend_open    WAccAddFriendOpen     WAccAddFriendOpen.cfg     action
+         PROPERTY NewFriendLimited)
+tlc_test(tlc_accounts_witness_limit_silent       WAccLimitSilent       WAccLimitSilent.cfg       action
+         PROPERTY LimitChangeIsTold)
 
 # Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla. Each walk of 400
 # steps has the server move 6 to 20 sessions (settles and rotations) and takes TLC about two seconds.
@@ -87,13 +101,16 @@ foreach(seed 1 2 3 4)
 endforeach()
 
 # The binding can fail: a hub that leaves a session on an account no longer linked to its friend, on its old harness
-# when its account's provider changed, or on an instance its friend no longer has, must be rejected.
+# when its account's provider changed, or on an instance its friend no longer has, or a server that starts a limited
+# friend's driver open, must be rejected.
 tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY stay)
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
-         PROPERTY TraceMatches ACCWALK SEED 2 STEPS 400 FAULTY harness)
+         PROPERTY TraceMatches ACCWALK SEED 6 STEPS 400 FAULTY harness)
 tlc_test(tlc_accounts_trace_faulty_instance_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY instance)
+tlc_test(tlc_accounts_trace_faulty_limit_rejected AccountsTrace AccountsTrace.cfg invariant
+         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY limit)
 
 # The config repository (src/server/config_repo.h): real git in a directory of the test's own, with HOME there too and
 # a bare repository beside it as the remote, by path; no network. POSIX, like nexus-server.

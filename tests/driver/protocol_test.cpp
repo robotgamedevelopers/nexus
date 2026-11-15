@@ -68,6 +68,7 @@ std::vector<DriverMessage> driverMessages() {
     std::vector<DriverMessage> all = {
         Hello{1, "claude"},
         Hello{7, "a harness from the future"},
+        Hello{1, "claude", {"limit"}},
         Credential{Billing::Subscription, "max"},
         Credential{Billing::ApiKey, ""},
         Credential{Billing::None, ""},

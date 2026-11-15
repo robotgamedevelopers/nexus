@@ -36,7 +36,7 @@ ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
            "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
-           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "summary"}
+           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "summary", "lim", "dlim"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -65,6 +65,7 @@ Step(r) ==
       [] r.op = "place"    -> L!SetPlace(r.v, r.here)
       [] r.op = "configure" -> L!Reconfigure(r.v = "none")
       [] r.op = "signin"   -> L!SignIn
+      [] r.op = "limit"    -> L!SetLimit(r.v = "on")
       [] OTHER             -> FALSE
 
 traceVars == <<s, sent, restarts, switches, l>>
@@ -113,5 +114,8 @@ IdleWaitsForPerson == L!IdleWaitsForPerson
 NoDriverShowsDown == L!NoDriverShowsDown
 CrashShowsDown == L!CrashShowsDown
 DownLeavesByWork == L!DownLeavesByWork
+NeverWeaker == L!NeverWeaker
+NoSendWeaker == L!NoSendWeaker
+LooseningKeepsTurn == L!LooseningKeepsTurn
 
 =============================================================================

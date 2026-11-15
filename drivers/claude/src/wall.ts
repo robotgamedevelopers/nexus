@@ -21,10 +21,14 @@
 //      that resolves into it (spellings, links and case resolved first), a file of it under another name (a hard link), a write to a
 //      config file, or a URL that is not http or https. A backstop only: it reads text, and text can be spelled around.
 //
+// A friend limited to its directory (--limit cwd; limitOf, docs/secrets.md "A limited friend") gets, on top of these,
+// the sandbox's reads and writes kept to its directory, Claude's own working-directory limit on its file tools, deny
+// rules on ~/.ssh, and the hook's check that every path it opens is in its directory.
+//
 // Permissions stay bypassed: the sandbox allows every shell command in it without a prompt, and nothing asks.
 
 import { spawn } from 'node:child_process';
-import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -35,6 +39,147 @@ import type {
 
 import { accountsDir, type Account } from './account.js';
 import { kSandboxBinVariable } from './tools.js';
+
+/**
+ * Where people keep their files, by platform: the folders a limited friend's shell may not read (with HOME, wherever
+ * it is). Other projects, documents, keys and other friends' directories are under these on a usual machine; the
+ * system's own folders (/usr, /etc, /opt, /Library, /System, /Applications) stay readable, so programs run.
+ */
+export const kDataRoots: Readonly<Record<string, readonly string[]>> = {
+    darwin: ['/Users', '/Volumes', '/System/Volumes/Data/Users', '/System/Volumes/Data/Volumes'],
+    linux: ['/home', '/root', '/mnt', '/media', '/run/media', '/srv'],
+};
+
+/**
+ * Under HOME, what a limited friend's shell still reads (never writes): single named files, never a folder, that git
+ * and the shell read at every start, without which `git commit` and a login shell fail. Not ~/.config/git itself: it
+ * holds git's credential store. No file named as a credential store (kCredentialNames) is ever allowed. Shell start-up
+ * files are readable, and people do export tokens in them: docs/secrets.md lists that as open.
+ */
+export const kLimitedReadsUnderHome = ['.gitconfig', '.config/git/config', '.config/git/ignore', '.config/git/attributes',
+    '.profile', '.bash_profile', '.bash_login', '.bashrc', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc'] as const;
+
+/** File names that hold a credential store (git's, and the common ones): never in a limited friend's allowed reads. */
+export const kCredentialNames = ['credentials', '.git-credentials', '.netrc', '_netrc'] as const;
+
+/**
+ * Install prefixes a PATH folder's parent is allowed for, by platform: exactly these, the folder's parent only when it
+ * is one of them (Linuxbrew's bin is beside its Cellar and lib). None on macOS, where a PATH folder such as
+ * /Volumes/<disk>/bin would otherwise open the whole volume, or one in another user's home that home.
+ */
+export const kInstallPrefixes: Readonly<Record<string, readonly string[]>> = {
+    darwin: [],
+    linux: ['/home/linuxbrew/.linuxbrew'],
+};
+
+/** The folder Claude keeps a project's memory and transcripts in, under its state directory (its own naming). */
+export function projectStateOf(configDir: string, cwd: string): string {
+    return `${configDir}/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}`;
+}
+
+/** What limits a friend to its directory: the sandbox's paths and the file tools' (wallOptions with `limited`). */
+export interface Limit {
+    denyRead: string[];     // the shell reads none of these, but what allowRead names in them
+    allowRead: string[];    // the working directory, the session's own state, programs and the config in kLimitedReadsUnderHome
+    allowWrite: string[];   // the working directory and the temporary directories only
+    roots: string[];        // where the file tools may read and write: the working directory, both forms
+    reads: string[];        // where else the file tools may read: the project's own memory folder, both forms
+    ssh: string[];          // ~/.ssh, both forms: denied to the file tools by rule as well
+}
+
+/**
+ * The limit for a session working in `cwd` with HOME `home` and Claude's state in `configDir`, on `platform`. The
+ * shell reads none of HOME and the platform's data roots (kDataRoots) but the working directory, the parts of its own
+ * Claude state the shell uses (its shell snapshots and session environment, and the project's memory folder), the
+ * `programs` nexus runs (node, and its prefix only when that is not a denied root or a folder directly in one; the
+ * driver; the sandbox's tools; each PATH folder under a denied root as that folder only, and its parent only when the
+ * parent is one of kInstallPrefixes) and the files of kLimitedReadsUnderHome; it writes only the working directory and
+ * the temporary directories. Nothing allowed is ~/.ssh, ~/.nexus, a folder above either, or a file named as a
+ * credential store (deny-leaning: a path that is, is dropped). `cwd` is the working directory as resolved once by the
+ * caller (run.ts prepare), the same path limitRefusal checked and Claude works in: it is not resolved again.
+ * `keepsOut` are more denied roots, beside kDataRoots: the server's friends.json "limit_keeps_out", given as
+ * `--keep-out <dir>` (a machine whose people keep files elsewhere: a second volume, a network mount, a WSL2 automount
+ * root moved off /mnt). They only ever add denied roots; nexus reads none from the environment.
+ */
+export function limitOf(home: string, cwd: string, configDir: string, programs: readonly string[], platform: string,
+    env: Readonly<Record<string, string | undefined>>, execPath: string,
+    realpath: (p: string) => string = realpathSync, exists: (p: string) => boolean = existsSync,
+    keepsOut: readonly string[] = []): Limit {
+    // A data root that is not there holds nothing to read, and only root can make one: left out, since on Linux the
+    // sandbox holds a denied path that does not exist open in a way that fails a shell reading it (kClaudeSandboxProtects).
+    const extra = keepsOut.filter((r) => isAbsolute(r) && r !== '/');
+    const roots = [...[...(kDataRoots[platform] ?? []), ...extra].filter(exists), home];
+    const under = (p: string, r: string): boolean => p === r || p.startsWith(`${r}/`);
+    const denied = (p: string): boolean => roots.some((r) => under(p, r));
+    const guarded = [`${home}/.ssh`, `${home}/.nexus`];
+    const credential = (p: string): boolean => (kCredentialNames as readonly string[]).includes(p.slice(p.lastIndexOf('/') + 1));
+    const safe = (p: string): boolean => !guarded.some((g) => under(g, p) || under(p, g)) && p !== '/' && !credential(p);
+    // A denied root itself, or a folder directly in one (a volume, a user's home): never opened whole as a prefix.
+    const wide = (p: string): boolean => roots.some((r) => p === r || dirname(p) === r);
+    const project = [projectStateOf(configDir, cwd)];
+    const state = [`${configDir}/shell-snapshots`, `${configDir}/session-env`, ...project];
+    const tools: string[] = [...programs];
+    const nodeBin = dirname(execPath);
+    if (nodeBin.endsWith('/bin') && !wide(dirname(nodeBin))) {
+        tools.push(dirname(nodeBin));
+    }
+    const prefixes = kInstallPrefixes[platform] ?? [];
+    for (const d of (env['PATH'] ?? '').split(':')) {
+        if (!isAbsolute(d) || !denied(d)) {
+            continue;
+        }
+        tools.push(d);
+        const parent = dirname(d);
+        if (prefixes.includes(parent)) {
+            tools.push(parent);
+        }
+    }
+    const both = (ps: readonly string[]): string[] => [...new Set(ps.flatMap((p) => bothForms(p, realpath)))];
+    const tmps = both([env['TMPDIR'] ?? tmpdir(), '/tmp', '/private/tmp'].filter((t) => t !== ''));
+    return {
+        denyRead: both(roots),
+        allowRead: [cwd, ...both([...tools.filter(safe), ...kLimitedReadsUnderHome.map((f) => `${home}/${f}`)]).filter(safe)]
+            .concat(both(state)),
+        // The session's temporary directory (TMPDIR, Claude's own and its commands') and /tmp, but never one that holds
+        // HOME (deny-leaning: a test's HOME made in /tmp keeps the shell from /tmp).
+        allowWrite: [cwd].concat(tmps.filter((t) => !both([home]).some((h) => under(h, t)))),
+        roots: [cwd],
+        reads: both(project),
+        ssh: both([`${home}/.ssh`]),
+    };
+}
+
+/**
+ * Why a limited friend cannot start in `cwd` with HOME `home`, or undefined when it can: a directory that is HOME, the
+ * root, above ~/.nexus (where the logins and every session's state are) or in ~/.nexus or ~/.ssh would give the AI
+ * what the limit keeps from it. `cwd` as resolved once by the caller (run.ts prepare), the path limitOf is given and
+ * Claude works in; `home` as the file system resolves it.
+ */
+export function limitRefusal(cwd: string, home: string, realpath: (p: string) => string = realpathSync): string | undefined {
+    const real = (p: string): string => {
+        try {
+            return realpath(p);
+        } catch {
+            return p;
+        }
+    };
+    const c = cwd.replace(/\/+$/, '') || '/';
+    const h = real(home).replace(/\/+$/, '');
+    const under = (p: string, r: string): boolean => p === r || r === '/' || p.startsWith(`${r}/`);
+    if (c === '/') {
+        return `${cwd} is the root of the file system`;
+    }
+    if (c === h) {
+        return `${cwd} is the home directory`;
+    }
+    if (under(`${h}/.nexus`, c)) {
+        return `${cwd} holds ~/.nexus, where the logins and every session's state are`;
+    }
+    if (under(c, `${h}/.nexus`) || under(c, `${h}/.ssh`)) {
+        return `${cwd} is inside ${under(c, `${h}/.ssh`) ? '~/.ssh' : '~/.nexus'}`;
+    }
+    return undefined;
+}
 
 /** The descriptor Claude reads the token from. */
 export const kTokenDescriptor = 3;
@@ -200,7 +345,7 @@ export function wallOf(home: string, cwd: string, configDir: string, realpath: (
  * The local sockets tried are not reachable either. Claude's own sandbox also never lets a command write
  * .git/config or .git/hooks (what the person's git would run): git init, clone and config fail in it.
  */
-export function wallSandbox(wall: Wall, writable: readonly string[], egressPort: number) {
+export function wallSandbox(wall: Wall, writable: readonly string[], egressPort: number, limit?: Limit) {
     return {
         enabled: true,
         failIfUnavailable: true,
@@ -208,8 +353,12 @@ export function wallSandbox(wall: Wall, writable: readonly string[], egressPort:
         allowUnsandboxedCommands: false,
         network: { httpProxyPort: egressPort, socksProxyPort: egressPort },
         filesystem: {
-            allowWrite: [...writable],
-            denyRead: [...wall.secrets],
+            // A limited friend (limitOf): it writes only its directory and the temporary ones, and reads none of the
+            // data roots and HOME but what allowRead names (allowRead takes precedence over denyRead, never over the
+            // secrets, which no allowed folder holds).
+            allowWrite: limit === undefined ? [...writable] : [...limit.allowWrite],
+            ...(limit === undefined ? {} : { allowRead: [...limit.allowRead] }),
+            denyRead: [...wall.secrets, ...(limit === undefined ? [] : limit.denyRead)],
             denyWrite: [...wall.secrets,
                 ...wall.config.filter((p) => !kClaudeSandboxProtects.has(p.slice(p.lastIndexOf('/') + 1)))],
         },
@@ -260,9 +409,10 @@ export function isGitName(abs: string): boolean {
  * files (`//` starts an absolute path; Edit rules cover Write and NotebookEdit too). Deny rules hold in
  * bypassPermissions mode.
  */
-export function wallDenyRules(wall: Wall): string[] {
+export function wallDenyRules(wall: Wall, limit?: Pick<Limit, 'ssh'>): string[] {
     const rules: string[] = [...kGitNameRules];
-    for (const p of wall.secrets) {
+    // A limited friend's file tools are kept off ~/.ssh by rule too, beside Claude's working-directory limit.
+    for (const p of [...wall.secrets, ...(limit === undefined ? [] : limit.ssh)]) {
         for (const tool of ['Read', 'Edit']) {
             rules.push(`${tool}(/${p})`, `${tool}(/${p}/**)`);
         }
@@ -472,7 +622,7 @@ const kWriters = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
  * directory, `home` HOME (a `~` in a path is it).
  */
 export function toolRefusal(tool: string, input: Record<string, unknown>, wall: Wall, cwd: string, home: string,
-    fs: WallFs): string | undefined {
+    fs: WallFs, limit?: Pick<Limit, 'roots' | 'reads'>): string | undefined {
     const refused = 'nexus keeps every tool out of the accounts\' directory, where the logins are; a secret is asked for '
         + 'with the in-app secret dialog, never read';
     // A command, pattern, URL or path that names the directory by an absolute spelling. (Text that only mentions it,
@@ -507,6 +657,16 @@ export function toolRefusal(tool: string, input: Record<string, unknown>, wall: 
             return `nexus keeps the file tools from writing what makes a git directory (${raw}): the person's git runs `
                 + 'what its config names; use git itself in the shell';
         }
+        // A limited friend: every place the path is on disk must be in its directory (or, to read, its project's
+        // memory folder), by the path as resolved, links followed. Deny-leaning: another spelling of the directory
+        // (another case on a case-insensitive volume) is refused here, and Claude's own limit judges it too.
+        if (limit !== undefined) {
+            const places = kWriters.test(tool) ? limit.roots : [...limit.roots, ...limit.reads];
+            if (!reals.every((r) => places.some((p) => within(r, p)))) {
+                return `nexus limits this friend to its directory, ${limit.roots[0] ?? cwd}: ${raw} is outside it `
+                    + '(docs/accounts.md, "limit")';
+            }
+        }
         const id = fs.identity(reals[0] ?? raw);
         if (id === undefined) {
             continue;
@@ -530,8 +690,8 @@ export function toolRefusal(tool: string, input: Record<string, unknown>, wall: 
 }
 
 /** The PreToolUse hook: every tool, every call, refused with the reason when toolRefusal says so. */
-export function wallHooks(wall: Wall, cwd: string, home: string, fs: WallFs = realFs):
-Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+export function wallHooks(wall: Wall, cwd: string, home: string, fs: WallFs = realFs,
+    limit?: Pick<Limit, 'roots' | 'reads'>): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
     return {
         PreToolUse: [{
             hooks: [(input) => {
@@ -540,7 +700,7 @@ Partial<Record<HookEvent, HookCallbackMatcher[]>> {
                 }
                 const toolInput = typeof input.tool_input === 'object' && input.tool_input !== null
                     ? input.tool_input as Record<string, unknown> : {};
-                const why = toolRefusal(input.tool_name, toolInput, wall, input.cwd === '' ? cwd : input.cwd, home, fs);
+                const why = toolRefusal(input.tool_name, toolInput, wall, input.cwd === '' ? cwd : input.cwd, home, fs, limit);
                 if (why === undefined) {
                     return Promise.resolve({});
                 }
@@ -562,20 +722,30 @@ export const kDriverDir = resolve(dirname(fileURLToPath(import.meta.url)), '../.
 /**
  * The wall for `account`, for a session working in `cwd`, with HOME `home`, its commands' network through the driver's
  * proxy on `egressPort` (egress.ts), and `env` the driver's (its PATH and NEXUS_SANDBOX_BIN name the programs it
- * protects). `layers` leaves a layer out, for the functional test that shows the walls under it hold alone
- * (test/functional/wall.test.ts); the driver always builds all of them.
+ * protects). `limited` limits the friend to `cwd` (limitOf): the sandbox's reads and writes, Claude's own limit on its
+ * file tools to the working directory (blockReadsOutsideWorkingDirectories and blockWritesOutsideWorkingDirectories,
+ * which hold in every permission mode), deny rules on ~/.ssh, and the hook. `layers` leaves a layer out, for the
+ * functional test that shows the walls under it hold alone (test/functional/wall.test.ts); the driver always builds
+ * all of them.
  */
 export function wallOptions(account: Account, home: string, cwd: string, stderr: (data: string) => void,
     egressPort: number, env: Readonly<Record<string, string | undefined>>,
-    layers: { hook: boolean } = { hook: true }): WallOptions {
+    layers: { hook: boolean } = { hook: true }, limited = false, keepsOut: readonly string[] = []): WallOptions {
     const programs = programsOf(home, process.execPath, kDriverDir, env);
     const wall = wallOf(home, cwd, account.configDir, realpathSync, programs);
     const writable = [...new Set([home, cwd, tmpdir(), '/tmp', '/private/tmp', '/var/folders'])];
+    const limit = limited ? limitOf(home, cwd, account.configDir, programs, process.platform, env, process.execPath,
+        realpathSync, existsSync, keepsOut) : undefined;
+    const permissions = limit === undefined ? {} : {
+        blockReadsOutsideWorkingDirectories: true,
+        blockWritesOutsideWorkingDirectories: true,
+        blockReadsExemptPaths: [...limit.reads],
+    };
     return {
         spawnClaudeCodeProcess: spawnWithToken(account.token, stderr),
-        sandbox: wallSandbox(wall, writable, egressPort),
-        settings: { permissions: { deny: wallDenyRules(wall) }, ...kNoSettingsHooks },
-        hooks: layers.hook ? wallHooks(wall, cwd, home) : {},
+        sandbox: wallSandbox(wall, writable, egressPort, limit),
+        settings: { permissions: { deny: wallDenyRules(wall, limit), ...permissions }, ...kNoSettingsHooks },
+        hooks: layers.hook ? wallHooks(wall, cwd, home, realFs, limit) : {},
     };
 }
 

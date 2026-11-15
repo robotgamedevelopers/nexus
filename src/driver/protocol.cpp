@@ -202,7 +202,12 @@ struct ServerEncoder {
 
 struct DriverEncoder {
     Writer& w;
-    void operator()(const Hello& m) { w.str("kind", "hello").num("protocol", m.protocol).str("harness", m.harness); }
+    void operator()(const Hello& m) {
+        w.str("kind", "hello").num("protocol", m.protocol).str("harness", m.harness);
+        if (!m.features.empty()) {
+            w.strings("features", m.features);
+        }
+    }
     void operator()(const Credential& m) {
         w.str("kind", "credential").str("billing", billingName(m.billing));
         if (!m.plan.empty())
@@ -542,6 +547,7 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
         Hello m;
         m.protocol = int(f.integer("protocol", true, 1, 1u << 30).value_or(0));
         m.harness = f.str("harness", true, true);
+        m.features = f.strings("features", false);
         return result<DriverMessage>(std::move(m), f);
     }
     if (kind == "credential") {

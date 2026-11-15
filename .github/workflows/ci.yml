@@ -3,9 +3,10 @@
 # GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
 # TLA+ models with their trace checks (in parallel shards), and the code generated from
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
-# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; and the Windows build with its unit
-# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal). Every pull request runs it, whatever its base,
-# and so does every push to main.
+# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
+# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal); and the Tailscale shim
+# built and tested alone on macOS, Linux and Windows (tailscale, .github/workflows/tailscale.yml). Every pull
+# request runs it, whatever its base, and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
 # enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
@@ -280,9 +281,15 @@ jobs:
   # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
-  # nothing and reaches no outside service.
+  # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
+  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # short runs in one job: the setup is the cost).
   claude-driver-wall:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
     steps:
@@ -308,6 +315,7 @@ jobs:
         working-directory: drivers/claude
         env:
           NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
         # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
         # login back to this machine; a runner with no fleet login skips that probe.
         run: |
@@ -331,8 +339,9 @@ jobs:
       fail-fast: false
       matrix:
         where: [ubuntu, wsl2]
-        # Each of the test's two runs in a job of its own: on WSL2 under load one run took 52 s, both past the cap.
-        run: [whole-wall, without-the-hook]
+        # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
+        # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
             labels: [self-hosted, fleet, Linux, X64, tlc]
@@ -599,66 +608,82 @@ jobs:
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
+      # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
+      # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
+      # once, at most TEST_JOBS at a time, each in a directory of its own under walks/ holding its trace and its output.
+      # Any failure fails the step, with that walk's command and output.
       - name: Trace walks and their faults under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p walks
+          launched=0
+          running=0
+          walk() {
+            local dir="walks/$launched"
+            mkdir -p "$dir"
+            ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
+            launched=$((launched + 1))
+            running=$((running + 1))
+            if [ "$running" -ge "$TEST_JOBS" ]; then
+              wait -n
+              running=$((running - 1))
+            fi
+          }
           for seed in 1 2 3; do
-            build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
+            walk build/tests/model/overlay_walk "$seed" 1000
           done
           for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
-            build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
+            walk build/tests/model/overlay_walk 1 1000 "$fault"
           done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
-              build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
+              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
             done
-            build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
+            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
           done
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
-            build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
+            walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
           for windows in 1 2 3 4; do
             for seed in 1 2 3 4; do
-              build/tests/sync/link_walk "$seed" 1000 "$windows" walks/link.tla
+              walk build/tests/sync/link_walk "$seed" 1000 "$windows"
             done
           done
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
-            build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
+            walk build/tests/sync/link_walk 1 1000 2 "$fault"
           done
           # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
           for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
-            build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
+            walk build/tests/sync/secrets_walk "$seed" 2000
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
           done
           # the journal's walks
           for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
+            walk build/tests/store/journal_walk "$seed" 1000
           done
           for fault in accept-torn cut-too-far no-truncate no-sync; do
-            build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
+            walk build/tests/store/journal_walk 1 1000 --fault "$fault"
           done
-          # the store's lock and the start-up order: their walks and the faulty orders, all at once (each on real files,
-          # about 9 s under the sanitizers, each with its own trace and store directory; any failure fails the step)
-          lock_pids=()
+          # the store's lock and the start-up order: their walks and the faulty orders
           for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
+            walk build/tests/store/store_lock_walk "$seed" 2000
           done
           for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
-          done
-          for pid in "${lock_pids[@]}"; do
-            wait "$pid"
+            walk build/tests/store/store_lock_walk 1 2000 "$fault"
           done
           # the driver supervisor's walks and their faults
           for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/server/supervisor_walk "$seed" 1000 walks/supervisor.tla
+            walk build/tests/server/supervisor_walk "$seed" 1000
           done
           for fault in --faulty-turn --faulty-resume; do
-            build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
+            walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
+          while [ "$running" -gt 0 ]; do
+            wait -n
+            running=$((running - 1))
+          done
+          echo "$launched walks passed"
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
   # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
@@ -964,6 +989,23 @@ jobs:
         if: always()
         shell: bash
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
+
+  # The Tailscale shim built and tested alone on macOS, Linux and Windows (.github/workflows/tailscale.yml, which says
+  # how its caches are kept so that only a pin change is cold, and how a machine not yet primed hands this commit to
+  # tailscale-prime.yml). On a pull request it builds the head, not the merge commit, and each OS's verdict is the
+  # commit status tailscale-<os> on that head, which a lander waits for; statuses: write sets it, actions: write is
+  # for the hand-off's dispatch.
+  tailscale:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+      actions: write
+      statuses: write
+    with:
+      prime: false
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      status: true
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags), on captain's Windows runners: the native window's code and its unit tests, nothing else. On Windows only

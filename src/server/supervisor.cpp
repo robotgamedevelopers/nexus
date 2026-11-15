@@ -1,5 +1,6 @@
 #include "server/supervisor.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <numeric>
 #include <type_traits>
@@ -134,6 +135,53 @@ Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
     return finish();
 }
 
+// Tightened under an open turn on a driver started unlimited: that turn is stopped now, through the person's stop
+// (Stop, then the stop deadline and the kill), so no driver runs with a weaker limit than its friend's for longer than
+// the stop takes; once it is done the driver is ended (retire) and the next starts limited. Loosened: the open turn
+// finishes as it started. Models: models/Supervisor.tla SetLimit, NeverWeaker.
+Output Supervisor::setLimited(bool limited, Millis now) {
+    config_.limited = limited;
+    stopWeaker(now);
+    advance(now);
+    return finish();
+}
+
+// More kept out is a tightening, as setLimited(true) is; fewer, a loosening. Each limited start passes them all.
+Output Supervisor::setKeepsOut(std::vector<std::string> keepsOut, Millis now) {
+    config_.keepsOut = std::move(keepsOut);
+    stopWeaker(now);
+    advance(now);
+    return finish();
+}
+
+// The alive driver keeps less out than the session's limit says: started unlimited while the session is limited, or
+// limited without one of the directories the session's limit keeps out.
+bool Supervisor::weaker() const {
+    if (!config_.limited) {
+        return false;
+    }
+    if (!driverLimited_) {
+        return true;
+    }
+    return std::any_of(config_.keepsOut.begin(), config_.keepsOut.end(), [this](const std::string& d) {
+        return std::find(driverKeepsOut_.begin(), driverKeepsOut_.end(), d) == driverKeepsOut_.end();
+    });
+}
+
+// A turn open on a driver weaker than the session's limit is stopped now, as the person's stop does.
+void Supervisor::stopWeaker(Millis now) {
+    if (phase_ == Phase::Working && weaker()) {
+        effect(Effect::What::Notice, driverLimited_
+            ? config_.name + " is now kept out of more directories (limit_keeps_out), so the turn that was running "
+              "without them kept out was stopped; the next turn starts keeping them out."
+            : config_.name + " is now limited to its directory, so the turn that was running without the limit was "
+              "stopped; the next turn starts limited.");
+        command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
+        phase_ = Phase::Stopping;
+        deadline_ = now + config_.timing.stop;
+    }
+}
+
 Output Supervisor::setOptions(std::string model, std::string effort, Millis now) {
     config_.model = std::move(model);
     config_.effort = std::move(effort);
@@ -235,7 +283,14 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
     }
     if (phase_ == Phase::Starting) {
         const Hello* hello = std::get_if<Hello>(&message);
-        if (hello != nullptr && hello->protocol == kProtocolVersion) {
+        const bool canLimit = hello != nullptr &&
+            std::find(hello->features.begin(), hello->features.end(), "limit") != hello->features.end();
+        if (hello != nullptr && hello->protocol == kProtocolVersion && driverLimited_ && !canLimit) {
+            // Started limited, and it does not say it keeps to its directory: it is never trusted to.
+            end(config_.name + "'s driver does not support the limit to its directory (its hello lists no \"limit\" "
+                "feature), and " + config_.name + " is limited, so it was ended. Install a driver that supports it ("
+                + config_.configured + "), or set the friend's \"limit\" to false (docs/accounts.md).", now);
+        } else if (hello != nullptr && hello->protocol == kProtocolVersion) {
             phase_ = Phase::Idle;
             crashed_ = false;
             deadline_.reset();
@@ -373,6 +428,8 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     gathered_.clear();
     driverAccount_.clear();
     driverCwd_.clear();
+    driverLimited_ = false;
+    driverKeepsOut_.clear();
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;
@@ -524,6 +581,14 @@ void Supervisor::startDriver(Millis now) {
         if (!state_.session.empty()) {
             argv.insert(argv.end(), {"--resume", state_.session});
         }
+        // Limited to --cwd: a driver that cannot keep the limit refuses to start rather than run unlimited (an
+        // older one refuses the argument it does not know), so a limited session never runs without it.
+        if (config_.limited) {
+            argv.insert(argv.end(), {"--limit", "cwd"});
+            for (const std::string& d : config_.keepsOut) {
+                argv.insert(argv.end(), {"--keep-out", d});
+            }
+        }
     }
     command(Command::Kind::Start, std::move(argv));
     phase_ = Phase::Starting;
@@ -535,6 +600,8 @@ void Supervisor::startDriver(Millis now) {
     lastFix_.clear();
     driverAccount_ = config_.account;
     driverCwd_ = config_.cwd;
+    driverLimited_ = config_.limited;
+    driverKeepsOut_ = config_.limited ? config_.keepsOut : std::vector<std::string>{};
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;
@@ -597,14 +664,17 @@ void Supervisor::take() {
 
 // With no turn open, a driver started under an account that is no longer the session's is ended quietly: the next one
 // starts under the session's account. So is one started in a directory that is no longer the session's, or any while
-// the session's instance is on another machine. So is one told a model or effort the session has since put back to the
+// the session's instance is on another machine, or one started under another limit than the session's now (limited or
+// not, or limited keeping out other directories). So is one
+// told a model or effort the session has since put back to the
 // harness's default, which a settings line cannot say: the next one starts on the defaults. A turn open runs to its
 // end first.
 void Supervisor::retire(Millis now) {
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
     if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
-                                  cleared)) {
+                                  driverLimited_ != config_.limited ||
+                                  (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || cleared)) {
         retiring_ = true;
         endQuietly(now);
     }

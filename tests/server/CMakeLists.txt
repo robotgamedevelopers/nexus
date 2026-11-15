@@ -53,7 +53,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown
-              restart settings account place activity signin)
+              restart settings account place limit activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -87,7 +87,7 @@ endif()
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window unconfigured sign_in no_credential usage_limit no_account instance_dir
+                 stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account instance_dir
                  instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in
                  secret_leak_witness)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
@@ -103,6 +103,12 @@ tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8)
+# The limit's per-commit instance runs in the supervisor-rest shard on two workers, like the witnesses beside it:
+# 4,497 states, 4 s on an idle machine, so the 60 s cap leaves fifteen times that for a loaded runner. Its two-prompt
+# instance (69 s on two workers) and the wide one run nightly.
+tlc_test(tlc_supervisor_limit MCSupervisor MCSupervisorLimit.cfg pass)
+tlc_test(tlc_supervisor_limit_two MCSupervisor MCSupervisorLimitTwo.cfg pass WORKERS 8 NIGHTLY CAP 900)
+tlc_test(tlc_supervisor_limit_wide MCSupervisor MCSupervisorLimitWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
@@ -143,6 +149,10 @@ tlc_test(tlc_supervisor_witness_place_ignored WSupPlaceIgnored WSupPlaceIgnored.
 tlc_test(tlc_supervisor_witness_resume_elsewhere WSupResumeElsewhere WSupResumeElsewhere.cfg action
          PROPERTY ResumesItsDir)
 tlc_test(tlc_supervisor_witness_summary_lost WSupSummaryLost WSupSummaryLost.cfg action PROPERTY SummaryOwed)
+# The limit: a driver started without it is never kept for a limited session, and tightening stops an open turn.
+tlc_test(tlc_supervisor_witness_limit_not_retired WSupLimitNotRetired WSupLimitNotRetired.cfg invariant
+         PROPERTY NeverWeaker)
+tlc_test(tlc_supervisor_witness_limit_no_stop WSupLimitNoStop WSupLimitNoStop.cfg invariant PROPERTY NeverWeaker)
 # The state cursor's activity (ActivityOf): idle while a prompt waits, a crash shown as idle, and down that turns idle
 # when its driver is collected.
 tlc_test(tlc_supervisor_witness_idle_while_waiting WSupIdleWhileWaiting WSupIdleWhileWaiting.cfg invariant
@@ -168,15 +178,18 @@ foreach(fault turn resume)
 endforeach()
 # The setting's seed is one whose walk sets a model or effort before a restart.
 tlc_test(tlc_supervisor_trace_faulty_setting_rejected SupervisorTrace SupervisorTrace.cfg invariant
-         PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY setting)
+         PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY setting)
 tlc_test(tlc_supervisor_trace_faulty_queue_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 12 STEPS 600 FAULTY queue)
 # The account's seed is one whose walk sets an account before a restart.
 tlc_test(tlc_supervisor_trace_faulty_account_rejected SupervisorTrace SupervisorTrace.cfg invariant
-         PROPERTY TraceMatches SUPWALK SEED 10 STEPS 600 FAULTY account)
+         PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY account)
 # The directory's seed is one whose walk restarts with a harness session made in another directory than the session's.
 tlc_test(tlc_supervisor_trace_faulty_dir_rejected SupervisorTrace SupervisorTrace.cfg invariant
-         PROPERTY TraceMatches SUPWALK SEED 7 STEPS 600 FAULTY dir)
+         PROPERTY TraceMatches SUPWALK SEED 2 STEPS 600 FAULTY dir)
+# The limit's seed is one whose walk restarts while the session is limited.
+tlc_test(tlc_supervisor_trace_faulty_limit_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY limit)
 # The code's activity (the window's state cursor) is bound too: a walk whose recorded activity reads a crash as idle is
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
