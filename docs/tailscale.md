@@ -107,10 +107,28 @@ directory over kept caches, as a CI job after the first on a machine.
 | macOS arm64 (studio, both architectures, 4 jobs) | 34.5 s | 5.1 s (an edit to the shim rebuilt: both architectures relinked) |
 | Linux x86_64 (amd-1, 4 CPUs) | 63.0 s | 3.3 s |
 | Windows x64 (captain, 4 CPUs) | 233 s (plus a 64.7 s configure that fetched llvm-mingw) | 13.0 s (the test program only, shim cached) |
-| CI | CI_TIMES | |
 
-On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per pin and machine (CI keeps it in the key directory): 27 s on captain, inside the
-configure that measured, 64.7 s in the cold one above.
+On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per pin and machine (CI keeps it in the key
+directory): 27 s on captain, inside the configure that measured, 64.7 s in the cold one above.
+
+In CI, measured on 2026-11-15, as whole jobs (the build step in brackets). Cold is a new key directory (a pin change, or
+a machine's first build); warm is a kept key directory after a Go source changed; no-change is a kept key directory and
+the same sources.
+
+| OS | Cold | Warm | No-change |
+|---|---|---|---|
+| macOS (both architectures, both run) | 52 s [40 s] on studio, 40 s [29 s] on mini-m5 | 20 s [8 s] on studio | 20 s on studio |
+| Linux x86_64 | 84 s [77 s] on amd-3 alone; 111 s build on hulk; 183 s build on captain's WSL2 beside another | 14 s [7 s] on hulk | 16 s on hulk |
+| Windows x64 (captain) | 8 min 20 s in tailscale-prime: configure 58 s (llvm-mingw fetched), build 331 s (go vet, which compiles the whole dependency tree first, 210 s; the DLL's Go build and link 104 s; the test program 13 s), tests 2 s | see the note below | a rebuild in the same job: 11.5 to 12.8 s |
+
+A cold build fits a per-commit job's 2 minutes on macOS only, hence `tailscale-prime.yml`. On Windows the first build
+in a job over a full key directory (7,931 cache files, 1.2 GB) took 94 s in tailscale-prime (go vet 37 s, then the
+DLL's Go build and link 40 s, then the test program 11 s; two slots building at once on captain), against 12.8 s for a
+second build in the same job. What measured there: the cache was in use (GOCACHE and GOMODCACHE in the generated build
+are the key directory's), held every entry the cut-off per-commit attempts had written (so a cancelled job kept what
+Go had finished), and reading every cache file took 12.2 s the first time and 3.1 s the second, with Defender's
+real-time and on-access protection on and its exclusions not readable by the runner's account (it was not changed).
+MSBuild ran go vet before the DLL's build rather than beside it, as Make does.
 
 ### Tests
 
