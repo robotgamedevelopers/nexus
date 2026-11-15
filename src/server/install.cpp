@@ -1117,7 +1117,8 @@ int doctor(const Paths& p, const std::string& self) {
                         ok("the account " + account + " has its login");
                     } else {
                         say("note", "the account " + account + " has no login yet: the person signs it in in nexus's "
-                            "own dialog, which asks for it when its friend's driver first starts; no AI handles it");
+                            "own dialog, which asks for it when a session of its friend first starts the driver (SETUP.md, Not yet); "
+                            "no AI handles it");
                     }
                 }
             }

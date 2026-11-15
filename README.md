@@ -210,9 +210,10 @@ cmake --build build -j4
 open build/nexus.app
 ```
 
-The window and `nexus-server` need protobuf for mosh's transport (on macOS, `brew install protobuf`; zlib and the
-crypto come with macOS). Without it, configure with `-DNEXUS_LINK=OFF` for the window alone, without `--server`. A
-Homebrew protobuf is built for the macOS it was installed on, and so then are nexus and `nexus-server` (the build says
+The window and `nexus-server` need protobuf for mosh's transport: the system's when it has one (on macOS, `brew install
+protobuf`; zlib and the crypto come with macOS), else the build fetches and compiles it (`cmake/mosh.cmake`,
+`NEXUS_PROTOBUF`). `-DNEXUS_LINK=OFF` builds the window alone, without `--server` and without protobuf. A Homebrew
+protobuf is built for the macOS it was installed on, and so then are nexus and `nexus-server` (the build says
 so).
 
 Tests: `ctest --test-dir build -L unit`, `-L functional`, and `-L model` (needs Java and `TLA2TOOLS_JAR`; see

@@ -59,8 +59,9 @@ Then, for the remotes:
   `git remote add upstream https://github.com/robotgamedevelopers/nexus.git`.
 - There is an `upstream` already: leave the remotes as they are.
 
-And for the branch: if there is no branch `mine` yet, make it from where the clone is (`main`, or whatever branch the
-person pointed you at): `git switch -c mine`. If there is one, `git switch mine`.
+And for the branch: if there is no branch `mine` yet, make it from the branch the clone has checked out, whichever it
+is (a fresh clone of upstream is on `main`; a clone the person gave you is on the branch they want to start from):
+`git switch -c mine`. If there is one, `git switch mine`.
 
 Check: `git remote get-url upstream` prints the upstream URL, and `git branch --show-current` prints `mine`.
 
@@ -94,15 +95,19 @@ Check each; fix what is missing as it says. Nothing here needs the person.
   ```
 - Linux: with the compilers, below.
 
-**Node 20.19 or newer** (for the Claude driver): `node --version`. If it is missing or older, fetch it into
-`~/.nexus/node`, where `nexus-server` looks for it (no administrator needed):
+**Node** (for the Claude driver): `command -v node` and `node --version`. Use the node on PATH when it is 22.13 or
+newer (or 20.19 or newer in the 20 line) and lives where it stays: Homebrew's (`/opt/homebrew/bin`, `/usr/local/bin`),
+the system's (`/usr/bin`), or a version manager's in the home directory. Setup writes that node's full path into the
+drivers file, so a node inside a project, a build tree or a temporary directory is a poor choice. Otherwise (missing,
+older, or in such a place) fetch one into `~/.nexus/node`, where `nexus-server` looks for it (no administrator
+needed):
 ```sh
-mkdir -p ~/.nexus/node && curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-arm64.tar.gz | tar -xz --strip-components=1 -C ~/.nexus/node
-mkdir -p ~/.nexus/node && curl -fsSL https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C ~/.nexus/node
+mkdir -p ~/.nexus/node && curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-darwin-arm64.tar.gz | tar -xz --strip-components=1 -C ~/.nexus/node
+mkdir -p ~/.nexus/node && curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C ~/.nexus/node
 ```
 (the first on macOS on Apple silicon; `darwin-x64` on an Intel Mac; the second on Linux, `linux-arm64` on arm). Then
-put it first on PATH in each shell command that runs `npm`: `PATH="$HOME/.nexus/node/bin:$PATH"`. `nexus-server
-rebuild` does that by itself.
+put it first on PATH in each shell command that runs `npm` or `nexus-server setup`, so that both use it:
+`PATH="$HOME/.nexus/node/bin:$PATH"`. `nexus-server rebuild` does that by itself.
 
 **macOS: Xcode and its Metal toolchain** (the window's shaders): `xcode-select -p` names Xcode
 (`/Applications/Xcode.app/...`) and `xcrun -f metal` prints a path. Without the Metal toolchain:
@@ -173,9 +178,9 @@ ends with `setup: done`; a `FAIL` line says what failed and what to do. Running 
 `build/nexus-server help setup` has every step.
 
 Two things setup writes in full, as they are when it runs:
-- The drivers file names node by its full path (the one on PATH, else `~/.nexus/node/bin/node`). Prefer a node that
-  stays where it is (Homebrew's, the system's, or `~/.nexus/node`) to one inside a project or a temporary directory: if
-  that node later goes away, the friend's driver cannot start, and doctor says which line of the drivers file to change.
+- The drivers file names node by its full path: the first node 20.19 or newer on PATH, else `~/.nexus/node/bin/node`
+  (step 3 says which to put first). If that node later goes away, the friend's driver cannot start, and doctor says
+  which line of the drivers file to change.
 - The service runs the server with the PATH of the shell that ran setup.
 
 The service's name is printed by setup and by doctor: `com.robotgamedevelopers.nexus-server` (launchd) or
@@ -260,8 +265,9 @@ accounts and logins, and the fork holds their changes: never delete either unles
 What a fresh install does not do yet, so that you can say so plainly rather than work around it:
 
 - The window takes its friends from `nova-config friend list`, not from the server's `friends.json`, so on a machine
-  without nova-tools the window shows no friend tab yet; the server side of the one friend is in place
-  (`docs/roadmap.sexp`, `window-friends-from-server`).
+  without nova-tools the window shows no friend tab yet, and since no session then starts a driver, the sign-in dialog
+  does not show either; the server side of the one friend is in place (`docs/roadmap.sexp`,
+  `window-friends-from-server`). Terminal tabs (Command-T) work without it.
 - The sign-in dialog asks for the account's token, and today that token comes from `claude setup-token`, which the
   person runs themselves (a nexus terminal tab, Command-T, will do) and pastes into the dialog. That is the one place
   the person still runs a command; never run it for them, since it prints the token. The in-app sign-in that needs no
