@@ -1553,10 +1553,10 @@ void format4_read_caps() {
     // times (measured: 300,000 of them, 3,600,036 bytes, load into 14,400,064), so within kMaxDiffBytes the flows
     // stay within kMaxReadBytes: 300,000 read, as any diff under both caps does. 350,000 (4,200,036 bytes) are longer
     // than the link carries: refused before they are measured, and the window keeps its state.
-    const auto flowsOf = [](std::size_t n) {
+    const auto flowsOf = [](std::size_t count) {
         codec::SessionsChange flows;
-        flows.offers.resize(n);
-        for (std::size_t i = 0; i < n; ++i) {
+        flows.offers.resize(count);
+        for (std::size_t i = 0; i < count; ++i) {
             flows.offers[i].id = i + 1;
         }
         return codec::writeTables(flows, kSignInFormat);
@@ -1660,17 +1660,17 @@ void format4_read_fuzz() {
         // The sign-in flows (format 5): in half the seeds, one seen by every window and one held by this window, its
         // URL as bytes; so the fuzz reaches SessionsDiff.signins, its caps and its bytes field.
         if (seed % 3 != 0) {
-            SignInOffer other;
-            other.id = seed;
-            other.account = "acct";
-            other.provider = "claude";
-            other.opener = "*";
-            other.host = "studio";
-            SignInOffer held = other;
+            SignInOffer everyone;
+            everyone.id = seed;
+            everyone.account = "acct";
+            everyone.provider = "claude";
+            everyone.opener = "*";
+            everyone.host = "studio";
+            SignInOffer held = everyone;
             held.id = seed + 1;
             held.opener = "claim-test";
             held.url = SecretValue("https://sign-in.test/authorize?state=test-state");
-            to.setOffers({other, held});
+            to.setOffers({everyone, held});
         }
         const std::string diff = to.diff_from(from);
         Sessions check = from;
