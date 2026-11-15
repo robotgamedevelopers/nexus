@@ -7,8 +7,12 @@ $status = Join-Path $PSScriptRoot 'tailscale-status.ps1'
 $env:STATE = 'pending'
 $env:DESCRIPTION = "$env:COMPUTERNAME is not primed for these pins: tailscale-prime builds and tests this commit"
 $env:TARGET = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/workflows/tailscale-prime.yml"
+$global:LASTEXITCODE = 0
 & $status
-if ($LASTEXITCODE -ne 0) { exit 1 }
+if ($LASTEXITCODE -ne 0) {
+  "::error::setting tailscale-$env:OS to pending on $env:SHA was not taken, so nothing was dispatched: this commit is not built on $env:OS"
+  exit 1
+}
 $body = @{ ref = $env:REF; inputs = @{ os = $env:OS; sha = $env:SHA; status = 'true' } } | ConvertTo-Json -Compress
 $code = 0
 try {

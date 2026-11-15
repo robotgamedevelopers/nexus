@@ -147,7 +147,11 @@ and fails, since it built and tested nothing. The dispatched run is one slot, wh
 OS (runners carry no label per machine, so it cannot be sent to the one that asked): it sets the status to pending with
 a link to itself, builds and tests the commit with no time limit, primes the machine it ran on, and sets the status to
 its result. So after a pin change a pull request shows its tailscale jobs red and its statuses pending, then the
-statuses turn to the prime's result. A machine the prime did not reach hands off again at its next per-commit job. The
+statuses turn to the prime's result. Every hand-off ends in success or failure on the commit that asked: a dispatch
+GitHub does not take sets the status to error at once, and a prime that does not succeed and never reached its own
+status step (its runner lost) gets failure from the prime's `verdict` job. A status belongs to its commit only: when a
+pull request's head moves on, the new head gets its own statuses from its own jobs, and the old head's, pending or
+not, neither blocks nor passes it. A machine the prime did not reach hands off again at its next per-commit job. The
 nightly (main, every OS) runs a slot per runner so that GitHub may place one on every machine: a slot on a machine
 already primed marks its key directory used and builds nothing, and one on a new machine primes it; it sets no status.
 

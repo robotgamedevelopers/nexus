@@ -21,3 +21,6 @@ if ($code -ne 201) {
   exit 1
 }
 "tailscale-$env:OS on ${env:SHA}: $env:STATE ($description)"
+# Said explicitly: a caller that runs this in its own session (& .github/tailscale-status.ps1) reads $LASTEXITCODE,
+# which a script that ends without exit leaves as it was ($null in a new session, which is not 0).
+exit 0

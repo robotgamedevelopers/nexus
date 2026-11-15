@@ -177,7 +177,7 @@ jobs:
         shell: bash
         run: touch "${{ steps.caches.outputs.dir }}/primed"
       - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.caches.outcome == 'success' && steps.dispatch.outcome == 'skipped' }}
+        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
         shell: bash
         env:
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
@@ -267,7 +267,7 @@ jobs:
         shell: bash
         run: touch "${{ steps.caches.outputs.dir }}/primed"
       - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.caches.outcome == 'success' && steps.dispatch.outcome == 'skipped' }}
+        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
         shell: bash
         env:
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
@@ -417,7 +417,7 @@ jobs:
         if: ${{ steps.caches.outputs.build == 'true' && !(inputs.prime && inputs.cold) }}
         run: Set-Content -Path "${{ steps.caches.outputs.dir }}\primed" -Value ''
       - name: Status (the result of this job's build and tests)
-        if: ${{ always() && inputs.status && steps.caches.outcome == 'success' && steps.dispatch.outcome == 'skipped' }}
+        if: ${{ always() && inputs.status && steps.dispatch.outcome == 'skipped' }}
         env:
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
           DESCRIPTION: built and tested on ${{ runner.name }} (job ${{ job.status }})
