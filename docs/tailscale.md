@@ -22,13 +22,33 @@ node. The real API is layer 1. Nothing in nexus links the shim yet: the top-leve
 
 | What | Pin | Where it is held |
 |---|---|---|
-| tailscale.com | v1.104.1 | `src/tailscale/go.mod`, with every module's hash in `src/tailscale/go.sum`; builds use `-mod=readonly`, so nothing else is fetched |
-| Go toolchain | go1.27.1 | `go 1.27.1` in `go.mod`, and `GOTOOLCHAIN=go1.27.1` on every Go command the build runs (`src/tailscale/pins.cmake`, used by `cmake/tailscale.cmake`), so any Go from 1.21 on fetches exactly go1.27.1 into the module cache and verifies it against the checksum database; a newer local Go is not used |
+| tailscale.com | v1.104.7 | `src/tailscale/go.mod`, with every module's hash in `src/tailscale/go.sum`; builds use `-mod=readonly`, so nothing else is fetched |
+| Go toolchain | go1.27.4 | `go 1.27.4` in `go.mod`, and `GOTOOLCHAIN=go1.27.4` on every Go command the build runs (`src/tailscale/pins.cmake`, used by `cmake/tailscale.cmake`), so any Go from 1.21 on fetches exactly go1.27.4 into the module cache and verifies it against the checksum database; a newer local Go is not used |
 | llvm-mingw (Windows only) | 20261020 (LLVM 23.1.4), UCRT x86_64, sha256 `fd5462b7...ebd74cd` | `src/tailscale/pins.cmake`; cgo needs a gcc-style C compiler, which MSVC is not, so the DLL's C parts are compiled with it. Fetched and checked by the configure step, which keeps the archive's sha256 beside it and fetches again on a mismatch; never installed system-wide |
 
-Every Go command also runs with `GOENV=off` (no Go environment file is read) and `GOWORK=off`, and builds with
-`-trimpath -buildvcs=false`. `nts_version()` reports the pins from the build's own record (`runtime/debug`), and the
-unit test holds it to `tailscale.com v1.104.1 go1.27.1`.
+The pins moved on 2026-11-15 from tailscale.com v1.104.1 and go1.27.1 to the newest release of the 1.104 line, as
+Tailscale's changelog and security bulletins list it that day: v1.104.7 (2026-11-12). v1.104.7 requires go1.27.4
+(its `go.mod`), so the toolchain pin moved with it. What the line fixed after v1.104.1: v1.104.2, Go 1.27.3 for
+distrusted TLS intermediate certificates (TS-2026-013), and Windows and macOS app fixes; v1.104.3, internal only;
+v1.104.4, Tailscale SSH (TS-2026-014, TS-2026-015) and Serve (TS-2026-016, TS-2026-017) vulnerabilities, neither of
+which the shim uses; v1.104.5, connection stalls on lossy networks that affected tsnet among others, and a Windows
+installer privilege escalation; v1.104.6, a rare stall of dormant connections, and Windows and macOS fixes; v1.104.7,
+Go 1.27.4 for a TLS ClientHello problem with some middleboxes on control connections, and a Kubernetes operator fix
+(TS-2026-018). Modules that moved with it: wireguard-go and golang.org/x/crypto, net, sync, sys, term and text.
+
+Every Go command also runs with `GOENV=off` (no Go environment file is read) and `GOWORK=off`, and with where modules
+come from set rather than inherited: `GOPROXY=https://proxy.golang.org` (no `direct` fallback, so nothing is fetched
+from a VCS), `GOSUMDB=sum.golang.org`, and `GOPRIVATE`, `GONOPROXY`, `GONOSUMDB` and `GOINSECURE` empty (nothing
+exempt from the proxy or the checksum database), with `GOFLAGS=-mod=readonly`. Builds use `-trimpath -buildvcs=false`.
+`nts_version()` reports the pins from the build's own record (`runtime/debug`), and the unit test holds it to
+`tailscale.com v1.104.7 go1.27.4`.
+
+The features of tailscale.com that a tsnet node signing in interactively does not use are left out by its own build
+tags (`ts_omit_<feature>`, `tailscale.com/feature/featuretags`), listed in `src/tailscale/pins.cmake`
+(`NEXUS_TAILSCALE_OMIT`) and passed to every Go command: the web client (and with it the embedded web UI and its
+font), Taildrop, Taildrive, SSH, the CLI, client updates, AWS, Kubernetes, the system tray, capture, the relay server,
+app connectors, the Linux DNS and firewall managers (resolved, NetworkManager, iptables, D-Bus), and the rest of that
+list. Kept: netstack, the port mapper, DNS, logtail (uploads off), health and what tsnet itself needs.
 
 ### What holds from the first commit
 
@@ -36,19 +56,36 @@ unit test holds it to `tailscale.com v1.104.1 go1.27.1`.
   `TS_NO_LOGS_NO_SUPPORT=true` in the process's environment, and tsnet's log transport then sends nothing (read:
   `logpolicy`, `TransportOptions.New`). tsnet still buffers its own log in `<dir>/tailscaled.log*.txt`, inside the
   owner-only state directory.
-- **No log on stderr.** tsnet's user log (`UserLogf`, which carries the sign-in URL) goes to `<dir>/nexus-tailscale.log`,
-  opened for appending and made 0600. Go's `log` package writes to the newest running node's file, and to nowhere
-  while no node runs.
+- **Nothing on stdout or stderr.** tsnet's user log (`UserLogf`, which carries the sign-in URL) goes to
+  `<dir>/nexus-tailscale.log`, opened for appending and made 0600; past 1 MiB it moves to `nexus-tailscale.log.1`
+  (replacing an older one) and a new one begins, so it takes at most 2 MiB (1 MiB is a guess, not a measurement).
+  The two process-wide library loggers, Go's `log` package and gVisor's logger (which writes to stderr by default and
+  which tailscale never redirects), are pointed in `init` at the newest running node's log file, and at nowhere while
+  no node runs. tsnet's backend log goes to its own buffer, `<dir>/tailscaled.log1.txt` and `tailscaled.log2.txt`,
+  which tsnet caps at 50 MB together. Not stoppable from the shim: a Go fatal error (out of memory, a deadlock, a
+  concurrent map write) or a panic in one of tsnet's own goroutines prints to stderr and ends the whole process, as in
+  any Go program.
+- **A panic in a call is stopped there.** Every exported function recovers a Go panic in its own call: it returns its
+  failure value with the reason in the caller's buffer, gives back what it held (the state directory, the log), and
+  writes the panic's text and stack to the newest running node's log only.
 - **An owner-only state directory.** `nts_prepare` and `nts_start` create the state directory and its missing parents
   0700 (an existing one this user owns is made exactly 0700; one another user owns is refused). On Windows the
-  directory gets a protected ACL with one entry, full control for the current user, inherited by what is inside it.
-  It holds the node's keys (`tailscaled.state`).
+  directory, and each parent created on the way, gets a protected ACL with one entry, full control for the current
+  user, inherited by what is inside it; an existing directory's ACL is rewritten so whoever owns it, and refused only
+  when this user may not change it. It holds the node's keys (`tailscaled.state`).
+- **One node per state directory.** Two nodes on one directory would share its keys and state and corrupt both. A
+  start, or a prepare, is refused while a node holds the directory, before anything in it is opened: in this process
+  by a table of the directories held (by their cleaned path), and in any process by an OS lock on
+  `<dir>/nexus-tailscale.lock` (`flock` on macOS and Linux, `LockFileEx` on Windows), held for the node's life and
+  dropped by the OS if the process ends.
 - **Interactive sign-in only.** tsnet reads an auth key, an OAuth client, workload identity and another control server
   from the environment when its own fields are empty (`TS_AUTHKEY`, `TS_AUTH_KEY`, `TS_CLIENT_SECRET`, `TS_CLIENT_ID`,
   `TS_ID_TOKEN`, `TS_AUDIENCE`, `TS_CONTROL_URL`). `nts_start` refuses while any of them is set, as Go or the C
   library sees the environment, naming the variable and never its value.
-- **The sign-in URL is a secret**: anyone who opens it can claim the node. It is written only to the log file above:
-  never printed, never in CI's logs, never committed, never shown to an AI.
+- **Every file in the state directory is secret**: never shared, attached to a bug report, committed, printed in CI's
+  logs or shown to an AI. Besides the keys, the sign-in URL a node with no state asks for (anyone who opens it can
+  claim the node) is written to `nexus-tailscale.log` and to tsnet's `tailscaled.log*.txt` buffers; it goes nowhere
+  outside the directory.
 
 ### The C API (layer 0)
 
@@ -69,7 +106,11 @@ can be seen to reach "needs login" by hand, and is replaced by layer 1's state w
 
 A program links the shim with `nexus_link_tailscale(<target>)`, which on Windows also embeds
 `cmake/windows10.manifest`: it declares Windows 10, without which tsnet panics at start ("incoherent Windows
-version").
+version"). The shim is built twice: nexus's build (`nexus_tailscale`: `libnts.a`, or `nts.dll` and `nts.lib`) and the
+test program's (`nexus_tailscale_testhooks`: `libnts_test.a`, or `nts_test.dll` and `nts_test.lib`, linked with
+`nexus_link_tailscale(<target> TESTHOOKS)`), which adds the hooks of `src/tailscale/shim/hooks_on.go` behind the
+`nts_testhooks` build tag (an injected panic, an offline start, a line through the library loggers;
+`tests/tailscale/nts_test_hooks.h`). Nothing else differs, and nexus never links the test build.
 
 ```sh
 cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release        # add "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" on macOS, -A x64 on Windows
@@ -77,6 +118,7 @@ cmake --build build-tailscale --target tailscale_test
 ctest --test-dir build-tailscale -L tailscale                                  # -C Release on Windows
 cmake --build build-tailscale --target nexus_tailscale_vet                     # go vet
 cmake --build build-tailscale --target nexus_tailscale_notices_check           # src/tailscale/NOTICES.md is current
+cmake --build build-tailscale --target nexus_tailscale_notices                 # rewrite it
 ```
 
 Or from the top level: `cmake -S . -B build -DNEXUS_TAILSCALE=ON`. The caches are cache variables, so that CI keeps them
@@ -87,19 +129,32 @@ directory under the build tree.
 CI has one job per OS (`.github/workflows/tailscale.yml`, called by `ci.yml` for every pull request and push to main),
 beside the others and in parallel with them: `tailscale-macos` (arm64 and x86_64, the x86_64 slice run under Rosetta),
 `tailscale-linux` (with the licence check) and `tailscale-windows` (captain). Each configures `src/tailscale` alone,
-builds, vets and runs `ctest -L tailscale`.
+builds both builds of the shim and the test program, vets and runs `ctest -L tailscale`. On a pull request they check
+out the head commit, not the merge commit the other jobs build.
+
+**The verdict is a commit status.** Each OS's result is the status `tailscale-macos`, `tailscale-linux` or
+`tailscale-windows` on the exact commit built: a pull request's head, or the pushed commit. Only a job that built and
+tested that commit on that OS sets it, to success or failure (a cancelled or timed-out job sets failure). **A lander
+waits for all three statuses to be success on the head it lands**; a missing or pending one is not a pass, whatever
+the jobs show.
 
 The Go toolchain, the modules, Go's build cache and llvm-mingw live on the runner's machine in a directory keyed by the
 pins (`src/tailscale/pins.cmake`, `go.mod`, `go.sum`), which no other job cleans, so only a pin change is cold; each is
 checked against its pin when used. A cold build does not fit a per-commit job's 2 minutes (the times below), so that one
-case has its own workflow, `tailscale-prime.yml`: a per-commit job on a machine whose key directory is not yet primed
-builds nothing, dispatches it for the same commit and says so in a notice; it builds and tests that commit with no time
-limit on as many slots as the OS has runners, priming each machine. It also runs nightly on main, for new machines.
+case has its own workflow, `tailscale-prime.yml`. A per-commit job on a machine whose key directory is not yet primed
+sets its status to pending (linked to tailscale-prime's runs), dispatches tailscale-prime for the same commit and OS,
+and fails, since it built and tested nothing. The dispatched run is one slot, which GitHub places on any runner of that
+OS (runners carry no label per machine, so it cannot be sent to the one that asked): it sets the status to pending with
+a link to itself, builds and tests the commit with no time limit, primes the machine it ran on, and sets the status to
+its result. So after a pin change a pull request shows its tailscale jobs red and its statuses pending, then the
+statuses turn to the prime's result. A machine the prime did not reach hands off again at its next per-commit job. The
+nightly (main, every OS) runs a slot per runner so that GitHub may place one on every machine: a slot on a machine
+already primed marks its key directory used and builds nothing, and one on a new machine primes it; it sets no status.
 
 #### Build times
 
 The shim's Go build on its own (`cmake --build --target tailscale_test`, the step a job spends its time in), measured
-on 2026-11-15. Cold is empty Go caches (the toolchain and every module downloaded, tsnet compiled); warm is a fresh build
+on 2026-11-15 at v1.104.1 and go1.27.1, before the omit tags and the test-hooks build (which builds the shim twice). Cold is empty Go caches (the toolchain and every module downloaded, tsnet compiled); warm is a fresh build
 directory over kept caches, as a CI job after the first on a machine.
 
 | Where | Cold | Warm |
@@ -139,16 +194,36 @@ over 5 minutes there.
 
 - `tailscale_unit_version` (unit): the versions are the pins.
 - `tailscale_functional_state_dir`: on the real filesystem, in a directory of the test's own: the directory and its
-  missing parents created 0700 and the log file 0600 (on Windows: a protected ACL granting only this user, and the log
-  file inheriting it); an existing directory and log file open to others made owner-only; a second prepare keeps the
-  log.
+  missing parents created 0700 and the log file 0600 (on Windows: the directory and the parent created on the way with
+  a protected ACL granting only this user, and the log file inheriting it); an existing directory and log file open to
+  others made owner-only; a second prepare keeps the log.
 - `tailscale_functional_refusals`: a null, empty or relative path; a file in the way; a parent this user cannot write
-  to; a start while each of tsnet's sign-in variables is set (named, its value never shown); a start with no hostname;
-  a handle that is not a node; the reason cut to the caller's buffer.
+  to (only once the test has seen that this user really cannot create anything in it; root or an administrator can,
+  and then those checks are skipped with a line saying so, since a start there would reach tsnet); a start while each
+  of tsnet's sign-in variables is set (named, its value never shown; on a path under a file, which no user can
+  create); a start with no hostname; a handle that is not a node; the reason cut to the caller's buffer.
 - `tailscale_functional_refuses_inherited_key`: with `TS_AUTHKEY` in the environment from the process's start, a start
   refuses.
+- `tailscale_functional_lock`: a second start, and a prepare, on a directory a node of this process holds are refused
+  however the path is spelled (a trailing separator, `sub/..`), with nothing created; another directory is not held;
+  closing the node frees it.
+- `tailscale_functional_lock_two_process`: a child (`tailscale_test hold_lock`) holds a directory with a node; this
+  process's start and prepare on it are refused as another process's; once the child closes its node and exits, a
+  start succeeds.
+- `tailscale_functional_panics`: a panic injected into each export (`nts_prepare`, `nts_start`, `nts_backend_state`,
+  `nts_close`, `nts_version`, and a start after its directory is held and its log opened) is stopped: the call fails
+  with the reason, what it held is given back (the next start on the directory succeeds), and with a node running the
+  panic's text is in that node's log.
+- `tailscale_functional_log_cap`: 3 MB through the library loggers leaves `nexus-tailscale.log` and
+  `nexus-tailscale.log.1` each at most 1 MiB, both 0600, and no third file.
+- `tailscale_functional_quiet`: a child (`tailscale_test quiet_child`) with its stdout and stderr redirected to files
+  starts and closes a node, writes through Go's `log` and gVisor's logger before, during and after it, and runs the
+  panics group; both files stay empty, and the node's log holds the lines written while it ran and none of the others.
 
-No test uses a socket, the network or the clock, and nothing in CI starts a node, since a start contacts Tailscale's
+The version is a unit test. The lock, panics, log_cap and quiet groups start offline nodes
+(`nts_test_start_offline`): the control server is `http://127.0.0.1:9`, which refuses at once, and the port mapper is
+off, so a node opens sockets on this machine only (that refused connection, and magicsock's UDP socket) and reaches no
+other machine; lock_two_process waits on the clock for its child. Nothing in CI starts a node that reaches Tailscale's
 control server. That is `tailscale_test start_needs_login <scratch dir>`, by hand on a bench only: it starts a node,
 waits until it asks to sign in, prints the backend state (never the URL) and closes it. It ran once, on captain's
 Windows (the Windows 10 manifest in place), on 2026-11-15: `backend state NeedsLogin`; the scratch directory was then
@@ -156,30 +231,40 @@ removed, and nobody approved the URL.
 
 ### Binary size
 
-Measured on 2026-11-15, Release builds. "With the shim" links it whole, as layer 2 will (the probe forced
-`nts_start` in; Go has already dropped what the exports do not reach). Sizes in bytes; MB is 10^6 bytes.
+Measured on 2026-11-15, Release builds, at tailscale.com v1.104.7 and go1.27.4 with the omit tags. Sizes in bytes; MB
+is 10^6 bytes. The test program is the shim and a test of under 150 KB, and links the test-hooks build, which is the
+same size as nexus's to within a few KB (on Windows: nts.dll 21,554,176, nts_test.dll 21,557,760).
 
-| OS | Program | Without the shim | With the shim | Cost |
-|---|---|---|---|---|
-| macOS arm64 | nexus-server | 1,313,488 (stripped 1,136,000) | 24,935,680 (stripped 21,210,760) | +23.6 MB (stripped +20.1 MB) |
-| macOS arm64 | nexus (the client) | 10,818,008 (stripped 9,622,120) | 34,437,624 (stripped 29,694,304) | +23.6 MB (stripped +20.1 MB) |
-| macOS x86_64 | tailscale_test (the shim and a test of under 100 KB) | | 25,209,392 (stripped 21,649,616) | about +25.2 MB (stripped +21.6 MB) |
-| Linux x86_64 | tailscale_test | | 46,168,088 (stripped 24,991,176) | about +46.1 MB with Go's debug information, +25.0 MB stripped |
-| Windows x64 | tailscale_test.exe + nts.dll | | 99,840 + 22,434,304 | +22.4 MB (the DLL, built stripped) |
+| OS | Program | With the shim | Cost of the shim |
+|---|---|---|---|
+| macOS arm64 | tailscale_test | 22,781,776 (stripped 19,357,400) | about +22.7 MB (stripped +19.3 MB) |
+| macOS x86_64 | tailscale_test | 24,237,080 (stripped 20,802,112) | about +24.2 MB (stripped +20.7 MB) |
+| Linux x86_64 | tailscale_test | 43,895,952 (stripped 23,691,896) | about +43.8 MB with Go's debug information, +23.6 MB stripped |
+| Windows x64 | tailscale_test.exe + nts_test.dll | 136,704 + 21,557,760 | +21.6 MB (the DLL, built stripped) |
+
+Against the first measurement (v1.104.1, go1.27.1, no omit tags), the omit tags and the pin move together take 0.9 MB
+off the macOS arm64 slice and 1.0 MB off x86_64, 2.3 MB off Linux (1.3 MB stripped) and 0.9 MB off the Windows DLL. On
+macOS, measured apart, the omit tags took 1.0 MB off each slice and the pin move put back 0.06 MB.
 
 nexus-server and the client build only on macOS today (Linux has no window and, at Prax's pin, no window logic or
-link, so no nexus-server; Windows builds neither natively: CMakeLists.txt says why), so elsewhere the cost is the test
-program's. The macOS arm64 test program is 23,699,776 bytes, close to nexus-server's cost of 23,622,192, which bears that out. A
-universal macOS build carries both architectures, about twice the cost.
+link, so no nexus-server; Windows builds neither natively: CMakeLists.txt says why). Linked into them at v1.104.1 without
+the omit tags, the shim cost each +23.6 MB on macOS arm64 (stripped +20.1 MB: nexus-server 1,313,488 to 24,935,680,
+the client 10,818,008 to 34,437,624), close to that build's arm64 test program of 23,699,776, so the test program's
+size stands for the cost. A universal macOS build carries both architectures, about twice the cost.
 
 ### Licences
 
 `src/tailscale/NOTICES.md` lists every Go module the shim links on darwin/arm64, darwin/amd64, linux/amd64 and
-windows/amd64, with the licence its licence files state, measured by `go list -deps ./shim` per platform
-(`src/tailscale/notices`, which fails on a licence it cannot name or one nexus may not link). At these pins: 42 modules,
-BSD-3-Clause 19, MIT 12, Apache-2.0 5, BSD-2-Clause 3, ISC 1, and 2 whose licence file carries Apache-2.0, MIT and
-BSD-3-Clause together (klauspost/compress, gvisor); plus the Go standard library and runtime, BSD-3-Clause. Every one
-may be combined with nexus's AGPL-3.0. CI fails when the file differs from what the program writes.
+windows/amd64, with the licence its licence files state, measured by `go list -deps -tags <the omissions> ./shim` per
+platform (`src/tailscale/notices`, which fails on a licence it cannot name or one nexus may not link). At these pins
+and omissions: 37 modules, BSD-3-Clause 17, MIT 11, Apache-2.0 5, BSD-2-Clause 2, and 2 whose licence file carries
+Apache-2.0, MIT and BSD-3-Clause together (klauspost/compress, gvisor); plus the Go standard library and runtime,
+BSD-3-Clause. Every one may be combined with nexus's AGPL-3.0. The omissions took out five modules (coder/websocket,
+godbus/dbus, mitchellh/go-ps, golang.org/x/oauth2 and web-client-prebuilt, whose embedded web UI carried a font). CI
+fails when the file differs from what the program writes.
+
+These licences require their texts to go with any binary that links the shim, and nothing carries them yet: no nexus
+binary that links the shim ships until one does (`docs/roadmap.sexp`, `t-ts-licence-texts`).
 
 ### Not seen headless: the first-run OS prompts (a layer 2 check)
 
@@ -204,7 +289,7 @@ Both are layer 2's (client sign-in), where the client first starts a node on a p
 
 Bottom up, each secured before the next starts. **Sign-in is path A, interactive only: the owner's choice.**
 
-0. **Build.** The shim pinned to tailscale.com v1.104.1 and Go 1.27.1; CMake builds a c-archive (macOS arm64 and
+0. **Build.** The shim pinned to tailscale.com v1.104.7 and Go 1.27.4; CMake builds a c-archive (macOS arm64 and
    x86_64, Linux x86_64 and WSL2) and a DLL with an import library (Windows MSVC); the Windows program gets the
    manifest; CI builds it on all three; the binary-size cost is stated. *This page, above.*
 1. **Shim API.** Start and close, a state watch (`WatchIPNBus`: needs login with its URL, running, expired), peers,
@@ -224,3 +309,6 @@ Bottom up, each secured before the next starts. **Sign-in is path A, interactive
    frame.
 6. **Discovery** of nexus servers (`nexus-server-<host>`) among the tailnet's peers.
 7. **Expiry and recovery** shown in the app. ssh retires once layers 4 to 6 are secured.
+
+The layer 1 API carries the control server's address as a parameter of start (empty for Tailscale's hosted service),
+so the later roadmap row on using your own control server needs nothing redone.

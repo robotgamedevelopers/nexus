@@ -12,15 +12,16 @@ import "C"
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
 	"unsafe"
 
+	gvlog "gvisor.dev/gvisor/pkg/log"
 	"tailscale.com/envknob"
 	"tailscale.com/tsnet"
 )
@@ -42,15 +43,17 @@ func environmentHas(name string) bool {
 	return C.getenv(cname) != nil
 }
 
-// node is one started tsnet server and the log file it writes.
+// node is one started tsnet server, the state directory it holds and the log file it writes.
 type node struct {
 	server *tsnet.Server
-	log    *os.File
+	held   *dirLock
+	log    *cappedLog
 }
 
 var (
 	mu       sync.Mutex
 	nodes    = map[int]*node{}
+	order    []int // the running nodes' handles, oldest first: sink follows the last
 	lastNode = 0
 
 	// versionText is nts_version's answer, made once and never freed.
@@ -60,8 +63,11 @@ var (
 func init() {
 	// Nothing is ever uploaded to Tailscale's log service: set before any tsnet code runs.
 	envknob.SetNoLogsNoSupport()
-	// Go's log package writes to a node's log file while one runs (nts_start), and nowhere otherwise: never stderr.
-	log.SetOutput(io.Discard)
+	// The process-wide library loggers, Go's log package and gVisor's (which tailscale never redirects, and which
+	// writes to stderr by default), write to sink: the newest running node's log file, or nowhere.
+	log.SetOutput(sink)
+	log.SetFlags(log.LstdFlags | log.LUTC | log.Lmicroseconds)
+	gvlog.SetTarget(gvlog.GoogleEmitter{Writer: &gvlog.Writer{Next: sink}})
 	versionText = C.CString(versions())
 }
 
@@ -92,70 +98,115 @@ func write(out *C.char, size C.size_t, text string) {
 	buffer[n] = 0
 }
 
+// recoverTo is deferred first in every export: a panic in the call (not in a goroutine it started, which Go cannot
+// recover from another goroutine) is stopped here, its text and stack go to sink only, the caller's buffer says what
+// happened, and the export returns failed. Whatever the call had opened is released by its own defers first.
+func recoverTo(name string, errOut *C.char, errSize C.size_t, rc *C.int, failed C.int) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	fmt.Fprintf(sink, "%s: panic: %v\n%s", name, r, debug.Stack())
+	write(errOut, errSize, name+": stopped by an internal error (a Go panic); its text is in the newest running "+
+		"node's nexus-tailscale.log, or dropped when no node runs")
+	*rc = failed
+}
+
 //export nts_version
-func nts_version() *C.char {
+func nts_version() (v *C.char) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(sink, "nts_version: panic: %v\n%s", r, debug.Stack())
+			v = versionText
+		}
+	}()
+	testPanic("nts_version")
 	return versionText
 }
 
 //export nts_prepare
-func nts_prepare(dir *C.char, errOut *C.char, errSize C.size_t) C.int {
+func nts_prepare(dir *C.char, errOut *C.char, errSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_prepare", errOut, errSize, &rc, -1)
+	testPanic("nts_prepare")
 	if dir == nil {
 		write(errOut, errSize, "nts_prepare: no state directory given (a null path); pass an absolute directory")
 		return -1
 	}
-	f, err := prepare(C.GoString(dir))
+	held, logFile, err := prepare(cleanDir(C.GoString(dir)))
 	if err != nil {
 		write(errOut, errSize, err.Error())
 		return -1
 	}
-	f.Close()
+	logFile.Close()
+	held.release()
 	write(errOut, errSize, "")
 	return 0
 }
 
 //export nts_start
-func nts_start(dir, hostname *C.char, errOut *C.char, errSize C.size_t) C.int {
+func nts_start(dir, hostname *C.char, errOut *C.char, errSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_start", errOut, errSize, &rc, 0)
+	return startNode("nts_start", dir, hostname, "", errOut, errSize)
+}
+
+// startNode is nts_start, with controlURL for tsnet's ControlURL (empty: Tailscale's own). In order: the environment
+// refusals, the arguments, the state directory held (this process, then the OS lock), its log opened, tsnet started.
+// Everything it took is given back if it fails or panics.
+func startNode(name string, dir, hostname *C.char, controlURL string, errOut *C.char, errSize C.size_t) C.int {
+	testPanic(name)
 	// Checked before anything else, so that a start that would sign in by a key, or reach another control server,
 	// never begins.
-	for _, name := range refusedEnvironment {
-		if environmentHas(name) {
-			write(errOut, errSize, fmt.Sprintf("nts_start: %s is set in this process's environment, and tsnet would use "+
-				"it; nexus signs in interactively only (docs/tailscale.md), so unset %s and start again", name, name))
+	for _, variable := range refusedEnvironment {
+		if environmentHas(variable) {
+			write(errOut, errSize, fmt.Sprintf("%s: %s is set in this process's environment, and tsnet would use "+
+				"it; nexus signs in interactively only (docs/tailscale.md), so unset %s and start again", name,
+				variable, variable))
 			return 0
 		}
 	}
 	if dir == nil || hostname == nil || C.GoString(hostname) == "" {
-		write(errOut, errSize, "nts_start: a state directory and a hostname are both needed; pass an absolute "+
+		write(errOut, errSize, name+": a state directory and a hostname are both needed; pass an absolute "+
 			"directory and a non-empty name")
 		return 0
 	}
-	stateDir := C.GoString(dir)
-	logFile, err := prepare(stateDir)
+	stateDir := cleanDir(C.GoString(dir))
+	held, logFile, err := prepare(stateDir)
 	if err != nil {
 		write(errOut, errSize, err.Error())
 		return 0
 	}
-	// tsnet's own lines go to the file: never to stderr.
+	var server *tsnet.Server
+	started := false
+	defer func() {
+		if !started {
+			if server != nil {
+				server.Close()
+			}
+			logFile.Close()
+			held.release()
+		}
+	}()
+	// tsnet's user log goes to the file: never to stderr.
 	logger := log.New(logFile, "", log.LstdFlags|log.LUTC|log.Lmicroseconds)
-	server := &tsnet.Server{
-		Dir:      stateDir,
-		Hostname: C.GoString(hostname),
-		UserLogf: logger.Printf,
+	server = &tsnet.Server{
+		Dir:        stateDir,
+		Hostname:   C.GoString(hostname),
+		UserLogf:   logger.Printf,
+		ControlURL: controlURL,
 	}
+	testPanic(name + " after open")
 	if err := server.Start(); err != nil {
-		server.Close()
-		logFile.Close()
-		write(errOut, errSize, fmt.Sprintf("nts_start: tsnet did not start on %s: %v; see %s", stateDir, err,
-			logFile.Name()))
+		write(errOut, errSize, fmt.Sprintf("%s: tsnet did not start on %s: %v; see %s", name, stateDir, err,
+			filepath.Join(stateDir, logName)))
 		return 0
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	lastNode++
-	nodes[lastNode] = &node{server: server, log: logFile}
-	// Anything tsnet's packages print through Go's log package goes to the newest node's file too.
-	log.SetOutput(logFile)
-	log.SetFlags(log.LstdFlags | log.LUTC | log.Lmicroseconds)
+	nodes[lastNode] = &node{server: server, held: held, log: logFile}
+	order = append(order, lastNode)
+	sink.set(logFile)
+	started = true
 	write(errOut, errSize, "")
 	return C.int(lastNode)
 }
@@ -167,7 +218,9 @@ func find(handle C.int) *node {
 }
 
 //export nts_backend_state
-func nts_backend_state(handle C.int, out *C.char, outSize C.size_t) C.int {
+func nts_backend_state(handle C.int, out *C.char, outSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_backend_state", out, outSize, &rc, -1)
+	testPanic("nts_backend_state")
 	n := find(handle)
 	if n == nil {
 		write(out, outSize, fmt.Sprintf("nts_backend_state: %d is not a started node's handle", int(handle)))
@@ -190,17 +243,19 @@ func nts_backend_state(handle C.int, out *C.char, outSize C.size_t) C.int {
 }
 
 //export nts_close
-func nts_close(handle C.int, errOut *C.char, errSize C.size_t) C.int {
+func nts_close(handle C.int, errOut *C.char, errSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_close", errOut, errSize, &rc, -1)
+	testPanic("nts_close")
 	mu.Lock()
 	n := nodes[int(handle)]
-	delete(nodes, int(handle))
 	if n != nil {
-		quiet := io.Writer(io.Discard)
-		for _, other := range nodes {
-			quiet = other.log
-			break
+		delete(nodes, int(handle))
+		for i, h := range order {
+			if h == int(handle) {
+				order = append(order[:i], order[i+1:]...)
+				break
+			}
 		}
-		log.SetOutput(quiet)
 	}
 	mu.Unlock()
 	if n == nil {
@@ -209,7 +264,17 @@ func nts_close(handle C.int, errOut *C.char, errSize C.size_t) C.int {
 		return -1
 	}
 	err := n.server.Close()
+	// The library loggers move to the newest node still running (or nowhere) only once this node's server, which
+	// may log while it closes, is down.
+	mu.Lock()
+	if len(order) == 0 {
+		sink.set(nil)
+	} else {
+		sink.set(nodes[order[len(order)-1]].log)
+	}
+	mu.Unlock()
 	n.log.Close()
+	n.held.release()
 	if err != nil {
 		write(errOut, errSize, fmt.Sprintf("nts_close: %v", err))
 		return -1

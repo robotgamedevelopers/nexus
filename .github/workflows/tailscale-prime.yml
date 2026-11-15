@@ -1,14 +1,18 @@
-# Primes the Tailscale shim's caches (.github/workflows/tailscale.yml says what and where): the shim built and tested
-# with no time limit, on as many slots as the OS has runners, so that every machine of it ends up with a primed key
-# directory and its per-commit jobs fit 2 minutes. A slot that lands on a machine already primed is a warm build.
+# Primes the Tailscale shim's caches (.github/workflows/tailscale.yml says what and where, and what the commit statuses
+# mean): the shim built and tested with no time limit, so that a machine ends up with a primed key directory and its
+# per-commit jobs fit 2 minutes.
 #   dispatch  by a per-commit job that found its machine not primed (a pin change, or a new machine): that OS, that
-#             commit, which this run therefore builds and tests in the per-commit job's place
-#   nightly   main, every OS: new machines, and key directories refreshed before 7 unused days remove them
-#   by hand   gh workflow run tailscale-prime.yml --ref <branch> [-f os=linux] [-f sha=<commit>]
+#             commit, one slot (GitHub places it on any runner of the OS; there is no label per machine), and the
+#             commit status tailscale-<os> set to the result, since this run builds and tests the commit in that job's
+#             place
+#   nightly   main, every OS, a slot per runner, so that GitHub may place one on every machine: a slot on a machine
+#             already primed only marks its key directory used (so 7 unused days do not remove it) and builds
+#             nothing; one on a new machine primes it. Sets no status.
+#   by hand   gh workflow run tailscale-prime.yml --ref <branch> [-f os=linux] [-f sha=<commit>] [-f status=true]
 #   cold      -f os=windows -f cold=true: one Windows slot builds in a fresh key directory, removed after, and reports
 #             the cold times and the cache and antivirus measurements; it primes nothing
-# The slot counts are the fleet's runners of each OS at the time of writing (gh api orgs/robotgamedevelopers/actions/
-# runners): more slots than runners only queues; fewer leaves a machine to the next dispatch.
+# Slots per OS on the nightly are the fleet's runners at the time of writing (gh api orgs/robotgamedevelopers/actions/
+# runners): macOS 6 on 2 machines, Linux 20 on 7, Windows 2 on 1.
 
 name: tailscale-prime
 
@@ -26,6 +30,10 @@ on:
         description: the commit to build (empty for the branch's tip)
         type: string
         default: ""
+      status:
+        description: set the commit status tailscale-<os> on that commit to the result (a per-commit job's hand-off)
+        type: boolean
+        default: false
       cold:
         description: measure a cold Windows build (one slot, a fresh key directory removed after; primes nothing there)
         type: boolean
@@ -44,14 +52,16 @@ jobs:
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
-      actions: write
+      statuses: write
     with:
       prime: true
-      sha: ${{ inputs.sha || '' }}
+      sha: ${{ inputs.sha || github.sha }}
+      status: ${{ github.event_name == 'workflow_dispatch' && inputs.status == true }}
+      skip-primed: ${{ github.event_name == 'schedule' }}
       cold: ${{ inputs.cold == true }}
       macos: ${{ github.event_name == 'schedule' || inputs.os == 'all' || inputs.os == 'macos' }}
       linux: ${{ github.event_name == 'schedule' || inputs.os == 'all' || inputs.os == 'linux' }}
       windows: ${{ github.event_name == 'schedule' || inputs.os == 'all' || inputs.os == 'windows' }}
-      macos-slots: "[1, 2, 3, 4, 5, 6]"
-      linux-slots: "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]"
-      windows-slots: ${{ inputs.cold && '[1]' || '[1, 2]' }}
+      macos-slots: ${{ github.event_name == 'schedule' && '[1, 2, 3, 4, 5, 6]' || '[1]' }}
+      linux-slots: ${{ github.event_name == 'schedule' && '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]' || '[1]' }}
+      windows-slots: ${{ github.event_name == 'schedule' && '[1, 2]' || '[1]' }}

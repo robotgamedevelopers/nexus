@@ -22,15 +22,24 @@ func ownerOnly(dir string, info os.FileInfo) error {
 	return nil
 }
 
-// ownerOnlyFile makes the log file exactly 0600, whatever mode an older file had.
+// ownerOnlyCreated makes a parent directory that ensureDir created exactly 0700 (MkdirAll's mode, less the umask, is
+// no wider; this makes it exact).
+func ownerOnlyCreated(dir string) error {
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("cannot make the directory %s owner-only (0700): %v", dir, err)
+	}
+	return nil
+}
+
+// ownerOnlyFile makes a file in the state directory exactly 0600, whatever mode an older file had.
 func ownerOnlyFile(f *os.File) error {
 	info, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("cannot read the log file %s: %v", f.Name(), err)
+		return fmt.Errorf("cannot read %s: %v", f.Name(), err)
 	}
 	if info.Mode().Perm() != 0o600 {
 		if err := f.Chmod(0o600); err != nil {
-			return fmt.Errorf("cannot make the log file %s owner-only (0600): %v", f.Name(), err)
+			return fmt.Errorf("cannot make %s owner-only (0600): %v", f.Name(), err)
 		}
 	}
 	return nil

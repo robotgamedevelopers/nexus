@@ -6,46 +6,76 @@ import (
 	"path/filepath"
 )
 
-// logName is the file under the state directory that tsnet's log goes to (nts.h).
+// logName is the file under the state directory that the node's user log goes to (nts.h).
 const logName = "nexus-tailscale.log"
 
-// prepare makes dir a node's state directory: created with any missing parents, owner-only (ownerOnly, per OS), and
-// its log file opened for appending, owner-only too. It touches no network. The file is the caller's to close.
-func prepare(dir string) (*os.File, error) {
+// lockName is the file under the state directory that a running node holds an OS lock on (lockDir).
+const lockName = "nexus-tailscale.lock"
+
+// cleanDir is an absolute dir without its redundant parts ("..", ".", a trailing separator), so that one directory
+// has one spelling from here on; anything else is left as given, for ensureDir to refuse.
+func cleanDir(dir string) string {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Clean(dir)
+}
+
+// ensureDir makes dir a node's state directory: created with any missing parents, every directory it creates and dir
+// itself owner-only (ownerOnly, per OS). It touches no network and opens nothing in dir.
+func ensureDir(dir string) error {
 	if dir == "" {
-		return nil, fmt.Errorf("no state directory given (an empty path); pass an absolute directory")
+		return fmt.Errorf("no state directory given (an empty path); pass an absolute directory")
 	}
 	if !filepath.IsAbs(dir) {
-		return nil, fmt.Errorf("the state directory %q is not an absolute path; pass an absolute directory", dir)
+		return fmt.Errorf("the state directory %q is not an absolute path; pass an absolute directory", dir)
 	}
 	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
-		return nil, fmt.Errorf("the state directory %s is not a directory; remove what is there or give another path",
-			dir)
+		return fmt.Errorf("the state directory %s is not a directory; remove what is there or give another path", dir)
+	}
+	// The directories MkdirAll will create, outermost first, so each is made owner-only once it exists.
+	var created []string
+	for d := filepath.Clean(dir); ; {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		created = append([]string{d}, created...)
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("cannot create the state directory %s: %v; give a directory this user may create, "+
+		return fmt.Errorf("cannot create the state directory %s: %v; give a directory this user may create, "+
 			"or fix the permissions of its parent", dir, err)
+	}
+	for _, d := range created[:max(len(created)-1, 0)] {
+		if err := ownerOnlyCreated(d); err != nil {
+			return err
+		}
 	}
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read the state directory %s: %v", dir, err)
+		return fmt.Errorf("cannot read the state directory %s: %v", dir, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("the state directory %s is not a directory; remove what is there or give another path",
-			dir)
+		return fmt.Errorf("the state directory %s is not a directory; remove what is there or give another path", dir)
 	}
-	if err := ownerOnly(dir, info); err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, logName)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	return ownerOnly(dir, info)
+}
+
+// prepare holds dir (hold: refused while a node uses it), then opens its log file for appending, owner-only. Both are
+// the caller's to release and close.
+func prepare(dir string) (*dirLock, *cappedLog, error) {
+	held, err := hold(dir)
 	if err != nil {
-		return nil, fmt.Errorf("cannot write the log file %s: %v; the state directory must be writable by this user",
-			path, err)
+		return nil, nil, err
 	}
-	if err := ownerOnlyFile(f); err != nil {
-		f.Close()
-		return nil, err
+	logFile, err := openLog(filepath.Join(dir, logName))
+	if err != nil {
+		held.release()
+		return nil, nil, err
 	}
-	return f, nil
+	return held, logFile, nil
 }
