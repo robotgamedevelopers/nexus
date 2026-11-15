@@ -74,4 +74,12 @@ std::string accountsDir(const std::string& home) {
     return h + "/" + kAccountsUnderHome;
 }
 
+std::string sandboxBinOf(const std::string& self) {
+    const std::string::size_type slash = self.rfind('/');
+    if (self.empty() || self.front() != '/' || slash == std::string::npos || slash + 1 == self.size()) {
+        return std::string();
+    }
+    return self.substr(0, slash) + "/sandbox";
+}
+
 } // namespace nexus::server

@@ -76,6 +76,13 @@ void serverConfig() {
 
     // The logins: under HOME, whatever --dir says.
     CHECK(accountsDir("/h") == "/h/.nexus/server/accounts" && accountsDir("/h//") == "/h/.nexus/server/accounts");
+
+    // The sandbox's tools: beside the server, from its own path only; nothing from a path that is not absolute.
+    CHECK(sandboxBinOf("/opt/nexus/build/nexus-server") == "/opt/nexus/build/sandbox");
+    CHECK(sandboxBinOf("/nexus-server") == "/sandbox");
+    CHECK(sandboxBinOf("").empty() && sandboxBinOf("nexus-server").empty() && sandboxBinOf("build/nexus-server").empty());
+    CHECK(sandboxBinOf("/opt/nexus/build/").empty());
+    CHECK(std::string(kSandboxBinVariable) == "NEXUS_SANDBOX_BIN");
 }
 
 } // namespace

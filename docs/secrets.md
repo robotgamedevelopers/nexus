@@ -186,10 +186,9 @@ The driver gives its AI one tool, such as `nexus_ask_secret(account, what, why)`
 `stored` or `refused: <reason>` from the `secret` line. The server's side (the `server` line and both kinds) is in; the
 Claude driver's tool is on the roadmap (`claude-ask-secret-tool`). The AI then uses what the account can now do (its
 driver starts with the credential, or the server's sign-in goes on). The design is that the AI never reads the value,
-and that each driver keeps the harness's own file tools out of `~/.nexus/server/accounts/` (roadmap 5d, with the
-drivers taking the account). That is not true yet: the Claude driver passes the account's token to the harness in the
-harness's environment, where the AI's own tools can read it. The fix, keeping the token out of anything the AI's tools
-can reach, is its own pull request, in `drivers/claude`.
+and that each driver keeps the harness's own tools out of `~/.nexus/server/accounts/`. The Claude driver does: it hands
+the token to the harness on a descriptor, never in an environment, and walls the directory off from every tool its AI
+has ("The token wall", below).
 
 An `ask-secret` with an account or a `what` that is not a name, an account not set up, an account the asker's friend
 is not linked to, a `what` the account's provider does not document, or a `why` that is not one line of at most 200
@@ -269,3 +268,233 @@ the account's name), and each fake value is made up by the test:
   config; and every state the window held.
 - `tests/server/secrets_test files_disk` (functional): a wide or linked account directory refused, a link planted at
   the temporary file's name never written through, and the start's sweep.
+
+## The token wall
+
+What keeps a driver's AI from reading what this dialog stores, and the login it runs on. Built in the Claude driver
+(`drivers/claude/src/wall.ts`); `drivers/claude/test/functional/wall.test.ts` tries the routes below against it.
+
+**The wall is best effort** (the owner's ruling, 2026-11-15). It is built from what the machine already has (Claude's
+own sandbox, bubblewrap, socat, AppArmor) and closes the routes it has measured that it can close with those (on
+Ubuntu, one AppArmor profile loaded through passwordless sudo, below); it is not isolation. A person who needs real isolation runs the AI in a sandboxed VM or container, which is on the
+roadmap (`real-isolation`). What stays open is listed at the end of this section, per OS.
+
+**What it closes.** Against every route the functional test tries, the AI the Claude driver runs does not read its
+account's token or any file under `~/.nexus/server/accounts/`: not through its shell and what the shell runs, not
+through Read, Write, Edit, Glob, Grep or WebFetch, and NotebookEdit is refused there too (layer 4). It does not write
+there, does not reach this machine's own services by any of the spellings of this machine tried (so it does not log
+in to this machine directly and read the file outside the sandbox), and does not change the files tried that nexus or
+the person's programs run outside the sandbox. Permissions stay bypassed: no prompt, ever. The harness still
+authenticates with the token. The test runs on macOS, Linux and WSL2, with nothing installed for it (below). A claim
+marked *denied by rule, not tested* is what the wall's configuration says and no test has tried.
+
+**The layers, and which one stops what.**
+
+1. *The token is in no environment* (the wall for the variable). The driver hands the token to Claude on descriptor 3,
+   a socket it writes and closes; `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` names only the number. Claude reads it
+   to the newline, closes the descriptor and unsets the name before any tool runs: closing it is Claude's job, not
+   the driver's, and the test shows the pinned Claude does (descriptor 3 and every open descriptor are tried). A
+   Claude executable given in its place (the driver's `--claude <path>`) that does not close it leaves the token on a
+   descriptor its tools inherit. No process holds the token in its environment, so `printenv`, `env`,
+   `/proc/*/environ` and `ps -E` on Claude or the driver show nothing (tried).
+2. *The OS sandbox around every shell command* (the wall for the files, against the shell). Claude's sandbox
+   (Seatbelt on macOS, bubblewrap on Linux and WSL2) is on with no way out: `allowUnsandboxedCommands` is false, so
+   `dangerouslyDisableSandbox` does nothing (tried), and `failIfUnavailable` is true, so a machine that cannot sandbox
+   runs no command rather than an unsandboxed one (not a standing test; seen once in CI, 2026-11-15, when the sandbox
+   could not start: every command failed with "Sandbox is required but failed to initialize"). The accounts'
+   directory is denied to read and to write (`cat`, `cp`, `ln`, `grep -r`, a symbolic link and `node` tried), and the
+   login variables are unset. A local socket outside the sandbox is not reachable from it: nexus-server's
+   `server.sock` and an ssh agent's socket (`SSH_AUTH_SOCK`) are tried, each listening, and neither is connected to.
+3. *The way out is the driver's* (the wall against this machine's own services). A sandboxed command's only
+   connections leave through a proxy, and the proxy is the driver's (`drivers/claude/src/egress.ts`, HTTP and SOCKS5
+   on one port on 127.0.0.1, given to Claude as `httpProxyPort` and `socksProxyPort`). It resolves every name itself,
+   refuses when any address is this machine's (loopback, 0.0.0.0, `::`, any address of its interfaces, IPv4-mapped
+   forms included), and connects to the address it checked. A client that does not finish its handshake in 10 s is
+   dropped. Claude's own proxy refuses a name that resolves to this machine but connected to `127.0.0.1`, the LAN
+   address and the tailnet address given as numbers: a sandboxed `ssh 127.0.0.1` logged in as the person, outside the
+   sandbox (measured below). Every other machine is reachable: ssh (the driver's `bin/ssh`, first on Claude's PATH,
+   gives plain `ssh` the proxy command Claude gives git), git over ssh, http and https. So is this machine, by way of
+   another one (below, what stays open). When the proxy cannot listen, the driver refuses to start in one line.
+4. *Deny rules for the file tools* (the wall for the files, against Claude's own tools, which run in Claude's process,
+   not in the sandbox). `Read` and `Edit` rules on the accounts' directory, which hold in bypassPermissions mode, and
+   which Claude also checks through symbolic links. Edit rules cover Write and NotebookEdit; NotebookEdit into the
+   accounts' directory is refused before any rule, by Claude's own check that a notebook was read first (tried), so the
+   rule on it is denied by rule, not tested.
+5. *Nothing that runs outside the sandbox can be planted* (the wall around 2). Settings hooks are off
+   (`disableAllHooks`; the driver's own SDK hook still runs; a hook in the project's settings is tried, and does not
+   run). No tool may write the files on the wall's list of what runs outside the sandbox later (`wall.ts`
+   `configFiles`; a list, not complete: below, what stays open). Tried, and denied: the session's
+   `.claude/settings.json` and `.claude/settings.local.json` (by the shell and by Write), `.mcp.json` (Write, through
+   `..`); nexus-server's drivers file and config (by the shell and by Write); `~/.profile`, `~/.zshenv`, a systemd user
+   unit and a program in `~/bin` (by the shell); `~/.ssh`, `~/.config/git`, `~/.claude`, `~/Library/LaunchAgents`,
+   `~/.gitconfig` and `~/.bashrc` (by Write); the directories of node, of the driver (with the Claude executable) and,
+   on Linux, of the sandbox's bwrap and socat (by the shell and by Write); and renaming `~/.nexus` or `~/.nexus/server`
+   aside (by the shell). Denied by rule, not tested: Claude's `settings.json` and `.claude.json` in the state
+   directory, the other accounts' state under `~/.nexus`, every other PATH directory under HOME, the rest of what the
+   person's programs run on their own (`kRunsLaterUnderHome` in `wall.ts`: fish and the login environment, tmux, vim,
+   emacs, gh, docker, kubectl, aws, go and cargo config, direnv), and renaming a folder above the driver or the build
+   (`<build>/sandbox`). Claude's sandbox itself keeps commands off the bash and zsh startup files, `.profile`,
+   `.gitconfig`, `.npmrc`, `.envrc` and every `.git/config` and `.git/hooks`.
+6. *A PreToolUse hook* (a backstop, never the wall). It refuses a call whose command, pattern, URL or path names the
+   accounts' directory by an absolute spelling; a path that resolves into it or onto a file of layer 5, judged by
+   every spelling (doubled slashes and `..` normalised), where it is on disk (a file not made yet is judged by its
+   nearest folder that is, so a link to a protected folder with a new name is caught), and folder identity with names
+   compared after NFKC normalisation and case folding (`wall.ts` `folded`): another case of a protected name, or a
+   compatibility spelling of it such as the long s (U+017F), which macOS's case-insensitive volume takes for the plain
+   letter while Claude's deny rules do not. That refuses more than the volume would (a fullwidth letter; another case
+   on a case-sensitive volume), and never a look-alike of another script (a Cyrillic letter), which is another name on
+   every volume. The functional test writes a protected file not made yet under a long-s spelling, with the hook and
+   without it: Claude's rules let it through, the hook refuses it. The rest: the folder each Glob or Grep file pattern
+   starts in; one
+   of the directory's files under another name (a hard link); a write that makes a git directory (below); and a fetch
+   of anything but an http or https URL. It reads text, and text can be spelled around; the functional test runs once
+   without it to show layers 1 to 5 hold alone against the same routes.
+
+The logins' directory holds secrets only: Claude's own state is kept in `~/.nexus/server/harness/claude/<name>/`
+(its `CLAUDE_CONFIG_DIR`), so the AI keeps its memory, settings and shell snapshot, and the wall can take the logins
+whole, files the dialog stores later included. An older driver kept that state in the login's directory: the first
+start of this one copies only `settings.json`, `settings.local.json` and `CLAUDE.md` from there (`account.ts`
+`kClaudeStateFiles`), never the transcripts, memory, shell snapshots, history or `.claude.json`, which from before the
+wall may hold the token (the unit test plants a made-up token in each and finds it in nothing copied). Each of the
+three is read once, from a descriptor opened without following a link (a link is not taken), and copied only when it
+is a regular file of one name, at most 1 MiB, that does not hold the account's token (scanned in memory, never
+logged); a hard link, a larger file or one holding the token refuses the start in one line naming the file and the
+fix, and no directory is made (the unit test plants the token in each of the three and as a hard link). Those not
+copied stay where they were, under the wall; a session from before does not resume.
+
+**Linux and WSL2, with nothing installed.** The sandbox there needs bubblewrap and socat. nexus's build makes both
+from pinned release sources (`cmake/sandbox.cmake`: libcap 2.78 linked in statically, bubblewrap 0.13.1, socat 1.8.1.3,
+each by SHA-256) into `<build>/sandbox/`, with no root and no package; nexus-server names the directory to its drivers
+(`NEXUS_SANDBOX_BIN`) and the driver puts the programs first on Claude's PATH (`drivers/claude/src/tools.ts`).
+Ubuntu 24.04 and later restrict unprivileged user namespaces with AppArmor
+(`kernel.apparmor_restrict_unprivileged_userns = 1`): a program makes them only when a profile attached to its path
+allows it, so nexus's bwrap is refused (`setting up uid map: Permission denied`). The system's `/usr/bin/bwrap` is no
+way round it: its profile confines what it runs, and the sandbox's own seccomp step, which needs a user namespace inside
+the sandbox, then fails, so no command runs (measured on an Ubuntu 26.04 bench, 2026-11-15). So on such a kernel the
+driver loads an AppArmor profile for nexus's own bwrap, once per machine and build directory, automatically and with
+no prompt, through passwordless sudo: `/etc/apparmor.d/nexus-bwrap-<hash of the path>`, attached to that one path,
+allowing user namespaces and nothing else (`tools.ts` `appArmorProfile`, as Ubuntu's own profiles for Chrome and
+Electron apps do), loaded with `apparmor_parser -r` and then kept where AppArmor loads it at boot. The profile's text
+goes to both commands on standard input, never through a file (a file the driver wrote would be one the sandbox can
+write too; `tee` writes it, then `chmod`, and the driver checks the file holds the text), and `sudo`,
+`apparmor_parser`, `tee` and `chmod` are run by absolute path, never looked up on a PATH (the unit
+test checks no other path is ever handed to root). Before anything runs as root the driver checks that
+`/etc/apparmor.d` is a folder (not a link) owned by root that no one else can write (0755 or stricter), and refuses
+to start in one line otherwise (unit-tested). A load logs one line saying so. Claude's sandbox still refuses the AI's
+own commands a user namespace. Without passwordless sudo the driver refuses to start in one plain line naming what is
+missing; it never changes the sysctl, which would lift the restriction for every program. The profile trusts whatever
+program is at that path, which the person's own account can replace: it gives that path what the restriction takes
+from every unprivileged program, and nothing more. WSL2's kernel has no AppArmor: nexus's own bwrap runs there as it
+is (measured on captain).
+
+On Linux and WSL2 the sandbox also needs `~/.bashrc` and `~/.gitconfig` to exist: Claude's sandbox keeps commands from
+writing them, and one that is missing makes every bash or git command fail ("Permission denied"). The driver makes
+each one that is missing, empty, before Claude starts (`tools.ts` `sandboxHomeFiles`); bash and git read an empty one as
+none. One it cannot make refuses the start in one line naming it. And plain `ssh` in the sandbox goes through
+`bin/ssh-proxy`, which hands socat an IPv6 address in brackets, so that `ssh ::1` reaches the driver's proxy and is
+refused there, as every other spelling of this machine tried is.
+
+**What it costs the AI's shell.**
+- *git init and clone stay refused.* Claude's sandbox never lets a command write a `.git/config` or `.git/hooks`, so
+  `git init`, `git clone`, `git config` and `git push -u` fail in it (commit, branch, fetch, pull and push in a
+  repository that exists work). Letting the driver make repositories for the AI (an empty, read-only
+  `core.hooksPath` and the config sealed after creation) would not make this sound, because the danger is not the new
+  repository's own hooks: it is any git directory the AI controls that the person's git later reads, which a command
+  can make without init or clone (below, what stays open). Making repositories for the AI would only add more such
+  directories.
+- *ssh works to every other machine; mosh does not.* mosh's session is UDP straight to the server, and the sandbox
+  lets nothing out but TCP through the proxy (Seatbelt allows only the proxy's port; bubblewrap's network namespace
+  has no route), with no setting in Claude to open UDP; mosh itself has no proxy support. The AI's ssh is the same
+  login without the roaming.
+- *Writes* go to the home directory, the working directory and the temporary directories, less the files of layer 5.
+
+**Measured** (macOS, the pinned SDK's Claude 2.1.322, a fake token, `NEXUS_WALL_REPORT=1 npm run test:functional`;
+the same test runs in CI on Ubuntu 26.04 benches and in captain's WSL2, and the report gives each try's time). Before
+the wall, 15 of the 27 first tries read the token (and three wrote over it or planted a hook), and a sandboxed ssh to
+this machine logged in as the person; with it, none of the routes below does, with the hook and without it.
+
+| route | before | with the wall |
+|---|---|---|
+| shell: `printenv`, `env` | not read (Claude scrubs its children) | not read |
+| shell: the parent's environment (`ps -E`) | **read** | not read (layer 1) |
+| shell: descriptor 3 and every open descriptor | not read | not read (layer 1) |
+| shell: `cat`, through a glob, `grep -r ~`, `node` reading it | **read** | denied (layer 2) |
+| shell: a hard link, a copy, a symbolic link | **read** | denied (layer 2) |
+| shell: `dangerouslyDisableSandbox` | **read** | denied (layer 2) |
+| shell: overwrite the token | written | denied (layer 2) |
+| shell: connect to nexus-server's socket, an ssh agent's | not tried | denied (layer 2) |
+| ssh to this machine by `127.0.0.1`, `2130706433`, its tailnet address | **logged in** | refused (layer 3) |
+| ssh to this machine as `localhost`, `::1`, `127.1`, `0.0.0.0`, its name, its LAN address | its name refused; its LAN address reached sshd; the rest not tried | refused (layer 3) |
+| ssh to another machine (hulk), and from there back to this one | plain `ssh` failed; with Claude's proxy command, reached | plain `ssh` reached; back refused by the fleet (publickey) |
+| plant: nexus-server's drivers file and config, `~/.profile`, `~/.zshenv`, a PATH program | writable (HOME was) | denied (layer 5) |
+| Write: `~/.ssh`, `~/.config/git`, `~/.claude`, a login agent, `~/.gitconfig`, `~/.bashrc` | not tried | denied (layer 5) |
+| shell and Write: beside node, the driver, the sandbox's tools; rename `~/.nexus` aside | not tried | denied (layer 5) |
+| Read: the file, through a symbolic link | **read** | denied (layer 4; 6) |
+| Read: a hard link | **read** | never made (layer 2) |
+| Grep: under HOME, in the working directory | **read** | not found (layer 4; 6) |
+| Glob: under HOME | listed | not found (layer 4; 6) |
+| Write, Edit: the token; a new file there by a doubled slash | written, tried | denied (layer 4; 6) |
+| NotebookEdit: a notebook there | not tried | refused (Claude: not read first) |
+| WebFetch: a `file://` URL, a local URL | not read | refused (6); invalid URL |
+| a hook in the project's settings | **read** | never runs (layer 5) |
+| Write a hook into the local settings | written | denied (layer 5; 6) |
+| Write: a settings file or `~/.zshenv` not made yet, spelled with a long s | written (and without the hook) | refused (6) |
+| the harness authenticates with the token | yes | yes, from the descriptor |
+
+**Git directories, by name.** The file tools (Write, Edit, NotebookEdit) may not create or change a repository's
+`.git/config` or hooks, or a `commondir`, anywhere: deny rules (`wall.ts` `kGitNameRules`), which Claude also applies to
+every shell command on macOS. Nor a `.git` file or directory, anything in one, or a `HEAD`: the hook refuses those
+(`kGitNames`), because as deny rules they would reach the macOS sandbox too, and there they stop every commit (git
+writes `.git/index.lock` and `.git/logs/HEAD`; measured, 2026-11-15). The functional test writes each and is refused.
+What it costs:
+- *The file tools:* no Write or Edit of anything in a `.git`, or of a file named `HEAD` or `commondir`; the AI uses git
+  itself for those.
+- *The shell, on macOS:* no write of a `.git/config`, a hook or a `commondir`, so `git worktree add` fails there
+  (commit, branch, fetch, pull and push still work, as the test checks).
+
+**What stays open, per OS.**
+- *Every OS: this machine by way of another.* The sandbox can read `~/.ssh`, the person's keys among it, and reach
+  every other machine. A jump through a host that trusts the person's key (or a key there that this machine trusts)
+  reaches this machine's sshd as the person, outside the sandbox. The test's ssh-out probe sees the fleet refuse the
+  way back today; that is the fleet's configuration, not the wall. An option that closes it: deny the sandbox reading
+  the person's private keys in `~/.ssh` (a deny-read rule beside the accounts'). Its cost: the AI cannot ssh, or use git
+  over ssh, with the person's keys at all, only with keys of its own. Not done in this change.
+- *Every OS: descriptor 3 is Claude's to close* (layer 1). A substituted Claude executable that ignores it leaves the
+  token on a descriptor its tools inherit.
+- *Every OS: the hook is text-based* and can be spelled around (layers 1 to 5 hold without it against the routes the
+  test tries).
+- *Every OS: a planted git directory.* The shell can write a `.git` file or a `HEAD` wherever it may write, so a
+  command can make a directory the person's own git later reads as a repository and runs what its config names
+  (above, git init and clone). Not a read by any of the AI's tools: it needs the person to run git in that directory.
+  On macOS Claude applies the git deny rules to the shell too; it does not see a `.git` file pointing elsewhere.
+- *Linux and WSL2:* the planted-git-directory route through the shell stays open: closing it there needs root. Whether
+  the Linux sandbox applies the name rules above to shell commands is not measured; nothing here relies on it.
+- *WSL2: the Windows host.* The proxy refuses this machine's own addresses; the Windows host, at WSL2's gateway address
+  in its default (NAT) networking, is another machine to it, and reachable, with whatever it serves (an ssh server
+  there that trusts the person's key above all). Not measured; nor is mirrored networking, where the two share
+  addresses.
+- *Every OS: the hook checks a path, then Claude opens it.* A command run between the two can swap a link along the
+  path (a folder checked as harmless made a link into a protected one), and the tool then opens what the link names.
+  Layers 2 and 4 still stand behind the hook for the accounts' directory; for the files of layer 5 that Claude's rules
+  do not name by every spelling, the hook may be the only check, and this race goes round it (not tested).
+- *Every OS: the list of what runs outside the sandbox is not complete.* Layer 5 names the common shells' start-up
+  files, login agents, and the config of git, ssh, tmux, editors and the tools above; it does not name every file a
+  program the person runs later reads commands from. Not on it, for example: `~/.bash_aliases` and other files a
+  start-up file sources, window-manager and desktop config files whose lines run commands, and shell frameworks'
+  custom folders (such as oh-my-zsh's `custom/`). The shell and the file tools may write those.
+- *Linux with a restricting AppArmor:* the profile trusts the program at its path, which the person's account can
+  replace (above). The driver trusts root's `/etc/apparmor.d` once it has checked it is root's alone. A profile is
+  kept for each build path nexus ever ran from, and the old ones stay in `/etc/apparmor.d` until the person removes
+  them (for each old one, `sudo apparmor_parser -R <file>`, then `sudo rm <file>`).
+- *nexus's own CI:* the driver's packages and the sandbox tools are kept per runner under `~/.cache/nexus-ci`, and a
+  job on any branch can write them, so a branch's job can change what a later job of another branch runs. Not the
+  product; CI only.
+- *The driver's own memory.* nexus-server and the window set `RLIMIT_CORE` to 0 and, on Linux, mark themselves not
+  dumpable (`src/no_core.h`, above). The Claude driver is a Node process, and Node has no call for either, so it does
+  neither: from reading the token file until Claude has it, the token is in the driver's memory, and a core file of it
+  or a process of the same user allowed to trace it could hold or read it.
+
+Not a hole, a known fault: on Linux two Claude sandboxes at once, whose working directories share an ancestor a few
+levels up, now and then fail each other's commands (`bwrap: Can't find source path <ancestor>/.mcp.json`; measured in
+CI, 2026-11-15). The command fails closed. Only the tests avoid it (each CI job's runs go under a temporary directory
+of its runner's own, one run at a time); nexus does not yet.

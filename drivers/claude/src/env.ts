@@ -11,7 +11,8 @@ import type { Account } from './account.js';
  *   AWS_BEARER_TOKEN_BEDROCK, *_API_KEY of a provider (Bedrock, Vertex, Foundry)
  *   CLAUDECODE, CLAUDE_CODE_*  a parent Claude Code session's plumbing, and CLAUDE_CODE_OAUTH_TOKEN, a login's token
  *   CLAUDE_CONFIG_DIR      another login's directory
- * The account's own CLAUDE_CONFIG_DIR and CLAUDE_CODE_OAUTH_TOKEN come only from its directory under nexus's home.
+ * The account's own CLAUDE_CONFIG_DIR comes only from its directory under nexus's home; its token is in no environment
+ * at all (wall.ts: Claude reads it from a descriptor).
  */
 export function isApiKeyVariable(name: string): boolean {
     return name === 'CLAUDE_CONFIG_DIR'
@@ -39,7 +40,10 @@ export function scrub(env: Readonly<Record<string, string | undefined>>): { env:
     return { env: kept, removed: removed.sort() };
 }
 
-/** Claude's environment: `scrubbed` (from scrub) with the account's login, the only one Claude sees. */
+/**
+ * Claude's environment: `scrubbed` (from scrub) with the account's Claude state directory. Never the token: it goes to Claude on a
+ * descriptor (wall.ts spawnWithToken), so no tool Claude runs inherits it.
+ */
 export function harnessEnv(scrubbed: Readonly<Record<string, string>>, account: Account): Record<string, string> {
-    return { ...scrubbed, CLAUDE_CONFIG_DIR: account.dir, CLAUDE_CODE_OAUTH_TOKEN: account.token };
+    return { ...scrubbed, CLAUDE_CONFIG_DIR: account.configDir };
 }

@@ -26,4 +26,5 @@ runProcess((start) => {
         }
     };
     return h;
-}, [], (name) => ({ name, dir: '/nonexistent/accounts/' + name, token: 'conformance' }));
+}, [], (name) => ({ name, dir: '/nonexistent/accounts/' + name, configDir: '/nonexistent/harness/claude/' + name,
+    token: 'conformance' }), () => undefined);
