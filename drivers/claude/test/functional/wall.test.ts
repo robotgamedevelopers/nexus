@@ -285,6 +285,10 @@ class FakeApi {
             if (main) {
                 const now = Date.now();
                 this.took.set(step === 0 ? 'start' : `toolu_wall_${step - 1}`, now - (step === 0 ? this.born : this.sentAt));
+                if (process.env['NEXUS_WALL_REPORT'] === '1') {
+                    // As each answer comes, so that a run that stops shows where.
+                    process.stdout.write(`progress | ${step} of ${String(this.script.length)} answered | next: ${this.script[step]?.route ?? 'the end'}\n`);
+                }
                 this.sentAt = now;
             }
             const probe = main ? this.script[step] : undefined;
@@ -409,7 +413,9 @@ async function runWall(name: string, hook: boolean): Promise<Run> {
         return { s, ready: new Promise<void>((done) => { s.listen(path, done); }) };
     });
     await Promise.all(listening.map((l) => l.ready));
-
+    const closing: (() => void)[] = listening.map((l) => () => { l.s.close(); });
+    // Whatever fails from here, every server is closed, so the failure reports itself instead of the process hanging.
+    try {
     let port = 0;
     // @LOGIN@ is spelled so that no shell command names the accounts' directory in one piece: the hook cannot be what
     // stops it (the run without the hook shows the same).
@@ -419,9 +425,11 @@ async function runWall(name: string, hook: boolean): Promise<Run> {
         .replaceAll('@NODE_DIR@', dirname(process.execPath)).replaceAll('@DRIVER_DIR@', kDriverDir)
         .replaceAll('@SANDBOX_BIN@', kSandboxBin).replaceAll('@PORT@', String(port)));
     port = await api.listen();
+    closing.push(() => { api.close(); });
     // The AI's commands reach the network only through the driver's proxy (egress.ts), as the driver runs it.
     const egress = new Egress();
     const egressPort = await egress.listen();
+    closing.push(() => { egress.close(); });
     // The sandbox's bwrap and socat on Linux and WSL2 as the driver finds them (tools.ts): NEXUS_SANDBOX_BIN names the
     // build's (cmake/sandbox.cmake), as nexus-server does. On a kernel whose AppArmor restricts user namespaces this
     // loads nexus's profile for its bwrap through passwordless sudo, as the driver does (the real step: see
@@ -466,18 +474,14 @@ async function runWall(name: string, hook: boolean): Promise<Run> {
     });
     let replies = '';
     const seen = { tokenSource: '' };
-    try {
-        const info = await q.accountInfo();
-        seen.tokenSource = info.tokenSource ?? '';
-        for await (const m of q as AsyncIterable<SDKMessage>) {
-            replies += JSON.stringify(m);
-        }
-    } finally {
-        api.close();
-        egress.close();
-        for (const l of listening) {
-            l.s.close();
-        }
+    closing.push(() => { q.close(); });
+    const info = await q.accountInfo();
+    seen.tokenSource = info.tokenSource ?? '';
+    for await (const m of q as AsyncIterable<SDKMessage>) {
+        replies += JSON.stringify(m);
+    }
+    for (const c of closing.splice(0)) {
+        c();
     }
     assert.equal(scan.find(stderr), '', `${name}: Claude's standard error holds the token`);
     const scanFrom = Date.now();
@@ -491,6 +495,11 @@ async function runWall(name: string, hook: boolean): Promise<Run> {
         hookRan: existsSync(join(home, 'injected')),
         socketHits: sockets.hits,
     };
+    } finally {
+        for (const c of closing) {
+            c();
+        }
+    }
 }
 
 function check(name: string, run: Run, hook: boolean): void {
