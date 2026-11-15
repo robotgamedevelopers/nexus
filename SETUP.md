@@ -45,23 +45,31 @@ gh repo clone robotgamedevelopers/nexus ~/nexus
 (`git clone https://github.com/robotgamedevelopers/nexus.git ~/nexus` does the same without `gh`.)
 
 Then make it a fork: upstream is the remote `upstream`, and the person's work is on the branch `mine`. Run these in the
-fork (`cd ~/nexus`, or `git -C <fork>`):
+fork (`cd ~/nexus`, or `git -C <fork>`). First look:
 
 ```sh
 git remote -v
-git remote rename origin upstream          # when origin is robotgamedevelopers/nexus and there is no upstream yet
-git remote add upstream https://github.com/robotgamedevelopers/nexus.git   # when there is no upstream at all
-git switch -c mine                          # when on main; stay on the branch you are on otherwise
+git branch --show-current
 ```
 
-Check: `git remote get-url upstream` prints the upstream URL, and `git branch --show-current` is not `main`.
+Then, for the remotes:
+- `origin` is robotgamedevelopers/nexus and there is no `upstream`: `git remote rename origin upstream`.
+- There is no `upstream` and `origin` is anything else (the person's own fork on GitHub, a path on this machine, or
+  none): leave `origin` as it is and add upstream:
+  `git remote add upstream https://github.com/robotgamedevelopers/nexus.git`.
+- There is an `upstream` already: leave the remotes as they are.
+
+And for the branch: if there is no branch `mine` yet, make it from where the clone is (`main`, or whatever branch the
+person pointed you at): `git switch -c mine`. If there is one, `git switch mine`.
+
+Check: `git remote get-url upstream` prints the upstream URL, and `git branch --show-current` prints `mine`.
 
 If the person wants their fork on GitHub as well (a backup, or to share it), that makes a repository under their
 account: ask them first, then make it with their `gh` login and add it as `origin`. A fork that lives only on this
 machine is a whole fork; nothing below needs GitHub.
 
-**Updates from upstream**, whenever the person asks for them (and never on your own): fetch and merge, then rebuild
-(step 7, `nexus-server rebuild`):
+**Updates from upstream**, whenever the person asks for them (and never on your own): fetch and merge on `mine`,
+then rebuild (`~/.nexus/bin/nexus-server rebuild`, section "Changing nexus"):
 
 ```sh
 git fetch upstream
@@ -164,6 +172,16 @@ starts the server, or takes over from one already running (section "Takeover" be
 ends with `setup: done`; a `FAIL` line says what failed and what to do. Running it again changes nothing that is right.
 `build/nexus-server help setup` has every step.
 
+Two things setup writes in full, as they are when it runs:
+- The drivers file names node by its full path (the one on PATH, else `~/.nexus/node/bin/node`). Prefer a node that
+  stays where it is (Homebrew's, the system's, or `~/.nexus/node`) to one inside a project or a temporary directory: if
+  that node later goes away, the friend's driver cannot start, and doctor says which line of the drivers file to change.
+- The service runs the server with the PATH of the shell that ran setup.
+
+The service's name is printed by setup and by doctor: `com.robotgamedevelopers.nexus-server` (launchd) or
+`nexus-server` (systemd) for the person's own home; with HOME set to another directory, the name ends in a hash of it
+(`-1a2b3c4d`), so that a second install never replaces the first.
+
 On Linux without a systemd user manager (some WSL2 distributions, some containers), setup says so in a `note` and
 registers no service; the server is then started on demand by `nexus-server new`, which is what the window runs.
 
@@ -180,7 +198,7 @@ checks.
 ## 7. Tell the person
 
 Say, in your words: nexus is built from their fork and running. On macOS: open nexus (Spotlight: "nexus", or
-`~/Applications`); Command-backtick (the key left of 1) shows and hides it. The first time, nexus asks them to sign in
+`~/Applications`); Command-backtick (Command with the key left of 1, the one labelled ` and ~) shows and hides it. The first time, nexus asks them to sign in
 to their Claude subscription in its own small dialog; that is the one thing they do, and no AI sees it. From then on
 they change nexus by asking you (section "Changing nexus").
 
@@ -224,6 +242,19 @@ time, so a turn never runs on two. A rebuild asked from inside a friend's turn c
 ends, so rebuild waits only 5 seconds and says the server is draining; the handover then happens by itself.
 `nexus-server help takeover` says the same; the state machine is `models/Takeover.tla`.
 
+## Removing nexus
+
+Only when the person asks. Stop the service, with the name setup and doctor print:
+
+```sh
+launchctl bootout gui/$(id -u)/com.robotgamedevelopers.nexus-server       # macOS
+systemctl --user disable --now nexus-server.service                         # Linux
+```
+
+That stops the server and keeps it from starting again. Then `~/Applications/nexus.app`, `~/.nexus/bin`,
+`~/.nexus/drivers` and the link `~/.local/bin/nexus-server` can go. `~/.nexus/server` holds the person's sessions,
+accounts and logins, and the fork holds their changes: never delete either unless the person asks for exactly that.
+
 ## Not yet
 
 What a fresh install does not do yet, so that you can say so plainly rather than work around it:
@@ -231,8 +262,10 @@ What a fresh install does not do yet, so that you can say so plainly rather than
 - The window takes its friends from `nova-config friend list`, not from the server's `friends.json`, so on a machine
   without nova-tools the window shows no friend tab yet; the server side of the one friend is in place
   (`docs/roadmap.sexp`, `window-friends-from-server`).
-- The sign-in dialog asks for the account's token, which comes from `claude setup-token`; the in-app sign-in that needs
-  no token is roadmap 5c (`t-accounts-sign-in`).
+- The sign-in dialog asks for the account's token, and today that token comes from `claude setup-token`, which the
+  person runs themselves (a nexus terminal tab, Command-T, will do) and pastes into the dialog. That is the one place
+  the person still runs a command; never run it for them, since it prints the token. The in-app sign-in that needs no
+  token is roadmap 5c (`t-accounts-sign-in`).
 - After a takeover the window does not reconnect by itself; reopening it does (`window-reattach-takeover`).
 - On Linux only the server builds: Prax has no Linux window at its pin. The Windows window builds only at a later Prax
   pin; on Windows the server runs in WSL2 (`AGENTS.md`, platform targets).

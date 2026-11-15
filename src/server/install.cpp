@@ -1001,6 +1001,8 @@ int doctor(const Paths& p, const std::string& self) {
         const Ran branch = run({"git", "-C", source, "rev-parse", "--abbrev-ref", "HEAD"});
         if (trimmed(branch.out) == "main") {
             fix("your changes belong on your own branch, not main", "git -C " + source + " switch -c mine");
+        } else if (branch.status == 0) {
+            ok("your changes go on the branch " + trimmed(branch.out));
         }
     }
     // The tools a rebuild uses.
@@ -1098,7 +1100,7 @@ int doctor(const Paths& p, const std::string& self) {
             }
             if (access(program.c_str(), X_OK) != 0) {
                 fix("the drivers file runs " + harness + " under " + program + ", which is not there",
-                    "nexus-server setup (with node on PATH), or edit " + p.drivers);
+                    "in " + p.drivers + ", put the full path of a node 20.19 or newer (`command -v node`) in its place");
             } else if (!script.empty() && script[0] == '/' && !exists(script)) {
                 fix("the drivers file runs " + harness + " from " + script + ", which is not there",
                     "nexus-server rebuild");
