@@ -2,9 +2,9 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "window-features" "configuration" "tab-kinds"))
+ :page (:roadmaps ("layers" "window-features" "configuration" "tab-kinds" "tailscale"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "window-features" "configuration" "tab-kinds"))
+ ((:id "goal" :type :work-set :children ("layers" "window-features" "configuration" "tab-kinds" "tailscale"))
   (:id "layers" :type :roadmap :title "Layers"
    :rows (
      ("window" "1. Window: tabs, transcript and prompt draw and take input (in progress)")
@@ -97,6 +97,43 @@
      ("mail-tab" "done" "t-mail-tab")
      ("social-tab" "done" "t-social-tab")
      ))
+  (:id "tailscale" :type :roadmap :title "Tailscale built in"
+   :rows (
+     ("ts-build" "0. Build: the Go shim over tsnet (src/tailscale), pinned to tailscale.com v1.104.7 and Go 1.27.4, built by CMake as a c-archive (macOS arm64 and x86_64, Linux x86_64 and WSL2) and as a DLL with an MSVC import library (Windows), linked into a test program on each, the Windows one with the manifest that declares Windows 10; log uploads off, tsnet's log in a 0600 file, the state directory owner-only; CI on all three; the binary-size cost stated; the licences of every module listed (docs/tailscale.md)")
+     ("ts-licence-texts" "Before any nexus binary that links the shim ships: the licence text of every module src/tailscale/NOTICES.md lists goes with it (embedded and shown in the app, or installed beside it), generated from the modules at their pins and checked by CI against NOTICES.md")
+     ("ts-api" "1. Shim API: start and close, a state watch (WatchIPNBus: needs login with its URL, running, expired), peers, WhoIs, TCP listen and dial, UDP listen and dial; a TLA+ model of the node's lifecycle bound to the code by a trace check")
+     ("ts-client-sign-in" "2. Client sign-in: the client starts its node in ~/.nexus/client/tailscale, opens the sign-in URL in the system browser (in Prax once it has cookies and a system auth sheet), waits for running, and keeps the state; the first-run OS prompts (macOS Local Network, Windows Firewall) observed on a desktop session")
+     ("ts-server-enrolment" "3. Server enrolment by path A, interactive only (the owner's choice): the server's node hands its sign-in URL to the client, which opens it in the browser already signed in, one Connect click per server; the local server's handoff over the pipe the client spawned it on (macOS, WSL2), and a remote server's first start")
+     ("ts-bootstrap" "4. Bootstrap over the tailnet: nexus-server as a per-user service whose tsnet node answers NEXUS CONNECT only to callers WhoIs names as the server's own login; the link model extended")
+     ("ts-mosh" "5. mosh over tsnet: mosh's transport unmodified, through an in-process loopback relay between its 127.0.0.1 socket and the shim's tailnet UDP; a layout model if the relay keeps rings; the added latency measured in milliseconds against the 8.3 ms frame")
+     ("ts-discovery" "6. Discovery: the client lists the peers named nexus-server-* and offers them as servers; --server takes a name from that list")
+     ("ts-expiry" "7. Expiry and recovery shown in the app (an untagged node expires after 180 days and is approved again); ssh retires once layers 4 to 6 are secured")
+     ("ts-own-control" "Later, not built: use your own control server (headscale). An option for people who want to run their own server: they set headscale up themselves, they give its address, and our embedded nodes use it instead of Tailscale's hosted service")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("ts-build" "done" "t-ts-build")
+     ("ts-licence-texts" "done" "t-ts-licence-texts")
+     ("ts-api" "done" "t-ts-api")
+     ("ts-client-sign-in" "done" "t-ts-client-sign-in")
+     ("ts-server-enrolment" "done" "t-ts-server-enrolment")
+     ("ts-bootstrap" "done" "t-ts-bootstrap")
+     ("ts-mosh" "done" "t-ts-mosh")
+     ("ts-discovery" "done" "t-ts-discovery")
+     ("ts-expiry" "done" "t-ts-expiry")
+     ("ts-own-control" "done" "t-ts-own-control")
+     ))
+  (:id "t-ts-build" :type :task :title "Tailscale 0. Build: the pinned shim on macOS, Linux and Windows, in CI, sizes and licences stated" :state :doing
+   :evidence ("src/tailscale/shim, src/tailscale/nts.h, cmake/tailscale.cmake, cmake/windows10.manifest" "tests/tailscale/tailscale_test.cpp: ctest -L tailscale (tailscale_unit_version, tailscale_functional_state_dir, tailscale_functional_refusals, tailscale_functional_refuses_inherited_key, tailscale_functional_lock, tailscale_functional_lock_two_process, tailscale_functional_panics, tailscale_functional_log_cap, tailscale_functional_quiet)" ".github/workflows/tailscale.yml: tailscale-macos, tailscale-linux, tailscale-windows and the commit statuses tailscale-<os>" "src/tailscale/NOTICES.md: cmake --build <dir> --target nexus_tailscale_notices_check" "docs/tailscale.md"))
+  (:id "t-ts-own-control" :type :task :title "Tailscale, later: use your own control server (headscale), set up by the person, by its address" :state :todo)
+  (:id "t-ts-licence-texts" :type :task :title "Tailscale: the licence texts of the shim's modules carried by every binary that links it, before one ships" :state :todo)
+  (:id "t-ts-api" :type :task :title "Tailscale 1. Shim API: lifecycle, state watch, peers, WhoIs, TCP and UDP; a TLA+ model with a trace check" :state :todo)
+  (:id "t-ts-client-sign-in" :type :task :title "Tailscale 2. Client sign-in through the system browser; the first-run OS prompts observed on a desktop session" :state :todo)
+  (:id "t-ts-server-enrolment" :type :task :title "Tailscale 3. Server enrolment by path A: the server's URL opened by the client, one Connect click per server" :state :todo)
+  (:id "t-ts-bootstrap" :type :task :title "Tailscale 4. Bootstrap over the tailnet: a per-user service and a WhoIs-gated CONNECT" :state :todo)
+  (:id "t-ts-mosh" :type :task :title "Tailscale 5. mosh over tsnet through a loopback relay, its latency measured in ms" :state :todo)
+  (:id "t-ts-discovery" :type :task :title "Tailscale 6. Discovery of nexus servers among the tailnet's peers" :state :todo)
+  (:id "t-ts-expiry" :type :task :title "Tailscale 7. Expiry and recovery in the app; ssh retired once 4 to 6 are secured" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
   (:id "t-client-template" :type :task :title "Client-config template on the server: pending updates applied at each client's next connect" :state :todo)
   (:id "t-client-promote" :type :task :title "Promote one machine's client config to the template" :state :todo)

@@ -109,6 +109,14 @@ if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()
 
+# nexus's built-in Tailscale (docs/tailscale.md): the Go shim over tsnet (src/tailscale), built with the pinned Go
+# toolchain, and its tests. Layer 0 builds it and nothing links it yet, so it is off by default and needs Go when on;
+# src/tailscale/CMakeLists.txt builds it on its own, without Prax, as CI does.
+option(NEXUS_TAILSCALE "Build the Tailscale shim (src/tailscale) and its tests (needs Go)" OFF)
+if(NEXUS_TAILSCALE)
+    include(cmake/tailscale.cmake)
+endif()
+
 # What Claude's sandbox needs on Linux and WSL2, bubblewrap and socat, built from pinned sources so no machine installs
 # them (cmake/sandbox.cmake); nexus-server, whose drivers use them, depends on them. macOS's sandbox is the system's.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -341,4 +349,7 @@ endif()
 add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
+endif()
+if(NEXUS_TAILSCALE)
+    add_subdirectory(tests/tailscale)
 endif()

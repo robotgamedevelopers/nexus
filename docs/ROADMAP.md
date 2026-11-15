@@ -83,3 +83,27 @@
 [Source data](roadmap.sexp)
 
 <!-- nova-work:tab-kinds:end -->
+
+## Tailscale built in
+
+The layers of nexus's own Tailscale node (docs/tailscale.md), bottom up, each secured before the next starts.
+
+<!-- nova-work:tailscale:start -->
+
+| feature | done |
+|---|:---:|
+| 0. Build: the Go shim over tsnet (src/tailscale), pinned to tailscale.com v1.104.7 and Go 1.27.4, built by CMake as a c-archive (macOS arm64 and x86_64, Linux x86_64 and WSL2) and as a DLL with an MSVC import library (Windows), linked into a test program on each, the Windows one with the manifest that declares Windows 10; log uploads off, tsnet's log in a 0600 file, the state directory owner-only; CI on all three; the binary-size cost stated; the licences of every module listed (docs/tailscale.md) | ❌ |
+| Before any nexus binary that links the shim ships: the licence text of every module src/tailscale/NOTICES.md lists goes with it (embedded and shown in the app, or installed beside it), generated from the modules at their pins and checked by CI against NOTICES.md | ❌ |
+| 1. Shim API: start and close, a state watch (WatchIPNBus: needs login with its URL, running, expired), peers, WhoIs, TCP listen and dial, UDP listen and dial; a TLA+ model of the node's lifecycle bound to the code by a trace check | ❌ |
+| 2. Client sign-in: the client starts its node in ~/.nexus/client/tailscale, opens the sign-in URL in the system browser (in Prax once it has cookies and a system auth sheet), waits for running, and keeps the state; the first-run OS prompts (macOS Local Network, Windows Firewall) observed on a desktop session | ❌ |
+| 3. Server enrolment by path A, interactive only (the owner's choice): the server's node hands its sign-in URL to the client, which opens it in the browser already signed in, one Connect click per server; the local server's handoff over the pipe the client spawned it on (macOS, WSL2), and a remote server's first start | ❌ |
+| 4. Bootstrap over the tailnet: nexus-server as a per-user service whose tsnet node answers NEXUS CONNECT only to callers WhoIs names as the server's own login; the link model extended | ❌ |
+| 5. mosh over tsnet: mosh's transport unmodified, through an in-process loopback relay between its 127.0.0.1 socket and the shim's tailnet UDP; a layout model if the relay keeps rings; the added latency measured in milliseconds against the 8.3 ms frame | ❌ |
+| 6. Discovery: the client lists the peers named nexus-server-* and offers them as servers; --server takes a name from that list | ❌ |
+| 7. Expiry and recovery shown in the app (an untagged node expires after 180 days and is approved again); ssh retires once layers 4 to 6 are secured | ❌ |
+| Later, not built: use your own control server (headscale). An option for people who want to run their own server: they set headscale up themselves, they give its address, and our embedded nodes use it instead of Tailscale's hosted service | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:tailscale:end -->

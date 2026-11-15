@@ -3,9 +3,10 @@
 # GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
 # TLA+ models with their trace checks (in parallel shards), and the code generated from
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
-# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; and the Windows build with its unit
-# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal). Every pull request runs it, whatever its base,
-# and so does every push to main.
+# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
+# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal); and the Tailscale shim
+# built and tested alone on macOS, Linux and Windows (tailscale, .github/workflows/tailscale.yml). Every pull
+# request runs it, whatever its base, and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
 # enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
@@ -916,6 +917,23 @@ jobs:
         if: always()
         shell: bash
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
+
+  # The Tailscale shim built and tested alone on macOS, Linux and Windows (.github/workflows/tailscale.yml, which says
+  # how its caches are kept so that only a pin change is cold, and how a machine not yet primed hands this commit to
+  # tailscale-prime.yml). On a pull request it builds the head, not the merge commit, and each OS's verdict is the
+  # commit status tailscale-<os> on that head, which a lander waits for; statuses: write sets it, actions: write is
+  # for the hand-off's dispatch.
+  tailscale:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+      actions: write
+      statuses: write
+    with:
+      prime: false
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      status: true
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags), on captain's Windows runners: the native window's code and its unit tests, nothing else. On Windows only
