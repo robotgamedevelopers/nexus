@@ -714,6 +714,67 @@ void limits() {
     CHECK(accounts::limitedFor(hub.accounts(), "ada", "work"));
 }
 
+// friends.json's "limit_keeps_out" (docs/accounts.md): absent is none; each entry an absolute directory other than the
+// root, there once, refused with its line otherwise; written back only when it holds one, after "version"; a change is
+// one report line, and a reload tells each limited session and no unlimited one.
+void keepsOut() {
+    Registry r;
+    accounts::Read rd = accounts::readFriends("{\"version\": 2, \"friends\": []}", "f", &r);
+    CHECK(rd.ok && r.keepsOut.empty());
+    CHECK(accounts::friendsText(r).find("limit_keeps_out") == std::string::npos);
+    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\"/data\", \"/mnt/net\"], \"friends\": "
+        "[{\"name\": \"ada\"}]}", "f", &r);
+    CHECK(rd.ok && (r.keepsOut == std::vector<std::string>{"/data", "/mnt/net"}));
+    const std::string written = accounts::friendsText(r);
+    CHECK(written.find("  \"version\": 2,\n  \"limit_keeps_out\": [\n    \"/data\",\n    \"/mnt/net\"\n  ],\n"
+                       "  \"friends\": [") != std::string::npos);
+    Registry back;
+    CHECK(accounts::readFriends(written, "f", &back).ok && back == r);
+    // Refusals, with the line and the fix.
+    rd = accounts::readFriends("{\"version\": 2,\n\"limit_keeps_out\": \"/data\", \"friends\": []}", "/h/friends.json",
+                               &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" is a string, not a list"));
+    rd = accounts::readFriends("{\"version\": 2, \"limit_keeps_out\": [\n\"data\",\n\"/\",\n1,\n\"/d\",\n\"/d\"], "
+        "\"friends\": []}", "/h/friends.json", &r);
+    CHECK(!rd.ok && has(rd.errors, "/h/friends.json:2: \"limit_keeps_out\" holds \"data\", which is not an absolute "
+                                   "directory other than \"/\""));
+    CHECK(has(rd.errors, "/h/friends.json:3: \"limit_keeps_out\" holds \"/\", which is not"));
+    CHECK(has(rd.errors, "/h/friends.json:4: \"limit_keeps_out\" holds a number, not a directory"));
+    CHECK(has(rd.errors, "/h/friends.json:6: \"limit_keeps_out\" holds \"/d\" twice"));
+    // The consistency check, for a registry not read from a file (the window's edits).
+    Registry bad;
+    bad.keepsOut = {"/", "rel", "/d", "/d"};
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"/\", which is not"));
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"rel\", which is not"));
+    CHECK(has(accounts::problems(bad), "\"limit_keeps_out\" holds \"/d\" twice"));
+    Registry fine;
+    fine.keepsOut = {"/data"};
+    CHECK(accounts::problems(fine).empty());
+    CHECK(has(accounts::changes(Registry{}, fine), "limit_keeps_out [] -> [/data]"));
+
+    // The hub: a reload that changes the list tells each limited session, and no unlimited one.
+    Registry fleet;
+    fleet.accounts = {{"work", "claude"}};
+    fleet.friends = {{"ada", {"work"}, "work"}, {"bo", {"work"}, "work"}};
+    fleet.friends[1].limit = false;
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    CHECK(hub.useAccounts(fleet, &keeper).empty());
+    std::string why;
+    std::uint64_t n = 1;
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "bo", "", ""}, &why, "w"));
+    Registry edit = *hub.accounts();
+    edit.keepsOut = {"/data"};
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(has(report, "limit_keeps_out [] -> [/data]"));
+    CHECK(has({lastNotice(store, 1)}, "kept out of, on top of its own, are now /data"));
+    CHECK(lastNotice(store, 2).empty());
+    CHECK(hub.accounts()->keepsOut == std::vector<std::string>{"/data"});
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -733,6 +794,7 @@ const Group kGroups[] = {
     {"instances", instances},
     {"hub_instances", hubInstances},
     {"limits", limits},
+    {"keeps_out", keepsOut},
 };
 
 } // namespace

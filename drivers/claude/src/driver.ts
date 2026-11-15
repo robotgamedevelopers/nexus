@@ -18,6 +18,7 @@
 // model job checks the traces of the unit tests and of test/walk.ts against it (models/ClaudeDriverTrace.tla).
 
 import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 
 import type {
     AccountInfo,
@@ -62,6 +63,7 @@ export interface HarnessStart {
     settingSources: SettingSource[];
     claudePath?: string;
     limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
+    keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
 }
 
 /** Model and effort changes; an absent field is no change (in `inUse`, the value the driver was started with). */
@@ -122,18 +124,19 @@ export interface Arguments {
     settingSources: SettingSource[];
     claudePath?: string;
     limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
+    keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
-const kUsage = 'the arguments are --cwd <dir>, --resume <session id> and --limit cwd (from the server), and from the drivers file '
+const kUsage = 'the arguments are --cwd <dir>, --resume <session id>, --limit cwd and --keep-out <dir> (from the server), and from the drivers file '
     + '--account <name> (required), --model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
     + '--claude <path of a claude executable>';
 
 export function parseArguments(argv: readonly string[]): Arguments | { error: string } {
-    const a: Partial<Arguments> & { settingSources: SettingSource[] } = { settingSources: [] };
+    const a: Partial<Arguments> & { settingSources: SettingSource[]; keepsOut: string[] } = { settingSources: [], keepsOut: [] };
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -149,6 +152,13 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                     return { error: `--limit ${value} is not a limit this driver knows; the one it knows is --limit cwd` };
                 }
                 a.limit = value;
+                break;
+            case '--keep-out':
+                // One more directory a limited friend is kept out of: absolute and not the root, or refused.
+                if (!isAbsolute(value) || value === '/') {
+                    return { error: `--keep-out ${value} is not an absolute directory other than /` };
+                }
+                a.keepsOut.push(value);
                 break;
             case '--effort':
                 if (!isEffortLevel(value)) {
@@ -173,10 +183,14 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
+    if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
+        return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
+    }
     if (a.resume !== undefined && !isSessionId(a.resume)) {
         return { error: `--resume ${a.resume} is not a session id (1 to 256 printable ASCII characters, no spaces)` };
     }
-    return { ...a, cwd: a.cwd, account: a.account };
+    const { keepsOut, ...rest } = a;
+    return { ...rest, cwd: a.cwd, account: a.account, ...(keepsOut.length === 0 ? {} : { keepsOut }) };
 }
 
 /** The user messages pushed into the query, one per turn. */
@@ -413,7 +427,7 @@ export class Driver {
         this.prompts = new Prompts((m) => { this.took(m); });
         this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
-            limited: this.args.limit === 'cwd' };
+            limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])] };
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {

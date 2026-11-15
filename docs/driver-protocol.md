@@ -15,6 +15,7 @@ The server starts the driver with these arguments:
 | `--cwd <dir>` | the directory the harness works in; always given |
 | `--resume <session id>` | resume this harness session (an id the driver reported in a `session` message); absent for a new session |
 | `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that supports it lists `"limit"` in its hello's `features`; the server never relies on an unknown argument being refused, and ends a driver that does not list it. A driver that lists it but cannot enforce it here refuses to start with an `error` (code `other`), never runs unlimited |
+| `--keep-out <dir>` | with `--limit cwd` only, once per directory of friends.json's `"limit_keeps_out"` (`docs/accounts.md`, "limit"): one more absolute directory the limited AI is kept out of, on top of the ones the driver always keeps out. It only adds. A driver refuses it without `--limit cwd`, and refuses a directory that is not absolute or is `/`; an older driver refuses the argument it does not know, so it never runs weaker |
 
 The account the harness uses is chosen by the environment the server starts the driver with, never by the protocol.
 The driver's standard error is free text for logs; the server shows none of it as conversation.

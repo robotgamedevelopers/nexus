@@ -87,6 +87,9 @@ struct Config {
     // (accounts::limitedFor) and given at each start. Tightened, an open turn is stopped and the driver ended; loosened,
     // the driver is ended once no turn is open. Limited unless the server says otherwise: the safe direction.
     bool limited = true;
+    // More directories a limited driver keeps the AI out of (friends.json "limit_keeps_out", accounts::Registry
+    // keepsOut), given at each limited start as `--keep-out <dir>`, each once. Only ever more kept out.
+    std::vector<std::string> keepsOut{};
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
@@ -195,6 +198,10 @@ public:
     // ended quietly once no turn is open, like a change of place (an open turn runs to its end first); the next starts
     // under this one.
     Output setLimited(bool limited, Millis now);
+    // The directories a limited driver keeps out changed (friends.json "limit_keeps_out"): as a change of the limit. A
+    // limited driver not keeping out every one of them is weaker than the session's limit: a turn open on it is stopped
+    // now and the driver ended; one keeping out more than them is ended once no turn is open.
+    Output setKeepsOut(std::vector<std::string> keepsOut, Millis now);
 
     std::optional<Millis> deadline() const;     // when tick() next has something to do
     const sync::DriverState& state() const { return state_; }
@@ -245,6 +252,8 @@ private:
     void startDriver(Millis now);
     void writeNext();
     void retire(Millis now);
+    bool weaker() const;
+    void stopWeaker(Millis now);
     driver::Send sendOf(std::uint64_t turn, const std::string& prompt) const;
     void advance(Millis now);
     Output finish();
@@ -270,6 +279,7 @@ private:
     std::string driverAccount_;         // the account the driver alive was started under
     std::string driverCwd_;             // the directory it was started in
     bool driverLimited_ = false;        // whether it was started limited
+    std::vector<std::string> driverKeepsOut_;   // and, limited, the directories it was told to keep out
     std::string driverModel_;           // the model and effort it was told (empty: the harness's default)
     std::string driverEffort_;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)

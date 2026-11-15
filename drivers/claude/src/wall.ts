@@ -59,13 +59,6 @@ export const kDataRoots: Readonly<Record<string, readonly string[]>> = {
 export const kLimitedReadsUnderHome = ['.gitconfig', '.config/git/config', '.config/git/ignore', '.config/git/attributes',
     '.profile', '.bash_profile', '.bash_login', '.bashrc', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc'] as const;
 
-/**
- * The variable naming more folders a limited friend's shell may not read, colon-separated, beside kDataRoots: for a
- * machine whose people keep files elsewhere (a network mount, a WSL2 automount root moved off /mnt), and for the
- * functional test's volume. It only ever adds denied roots.
- */
-export const kExtraDenyRootsVariable = 'NEXUS_LIMIT_DENY_ROOTS';
-
 /** File names that hold a credential store (git's, and the common ones): never in a limited friend's allowed reads. */
 export const kCredentialNames = ['credentials', '.git-credentials', '.netrc', '_netrc'] as const;
 
@@ -104,14 +97,17 @@ export interface Limit {
  * the temporary directories. Nothing allowed is ~/.ssh, ~/.nexus, a folder above either, or a file named as a
  * credential store (deny-leaning: a path that is, is dropped). `cwd` is the working directory as resolved once by the
  * caller (run.ts prepare), the same path limitRefusal checked and Claude works in: it is not resolved again.
+ * `keepsOut` are more denied roots, beside kDataRoots: the server's friends.json "limit_keeps_out", given as
+ * `--keep-out <dir>` (a machine whose people keep files elsewhere: a second volume, a network mount, a WSL2 automount
+ * root moved off /mnt). They only ever add denied roots; nexus reads none from the environment.
  */
 export function limitOf(home: string, cwd: string, configDir: string, programs: readonly string[], platform: string,
     env: Readonly<Record<string, string | undefined>>, execPath: string,
-    realpath: (p: string) => string = realpathSync, exists: (p: string) => boolean = existsSync): Limit {
+    realpath: (p: string) => string = realpathSync, exists: (p: string) => boolean = existsSync,
+    keepsOut: readonly string[] = []): Limit {
     // A data root that is not there holds nothing to read, and only root can make one: left out, since on Linux the
     // sandbox holds a denied path that does not exist open in a way that fails a shell reading it (kClaudeSandboxProtects).
-    // More roots the driver's environment names (kExtraDenyRootsVariable): only ever more denied, never fewer.
-    const extra = (env[kExtraDenyRootsVariable] ?? '').split(':').filter((r) => isAbsolute(r) && r !== '/');
+    const extra = keepsOut.filter((r) => isAbsolute(r) && r !== '/');
     const roots = [...[...(kDataRoots[platform] ?? []), ...extra].filter(exists), home];
     const under = (p: string, r: string): boolean => p === r || p.startsWith(`${r}/`);
     const denied = (p: string): boolean => roots.some((r) => under(p, r));
@@ -734,12 +730,12 @@ export const kDriverDir = resolve(dirname(fileURLToPath(import.meta.url)), '../.
  */
 export function wallOptions(account: Account, home: string, cwd: string, stderr: (data: string) => void,
     egressPort: number, env: Readonly<Record<string, string | undefined>>,
-    layers: { hook: boolean } = { hook: true }, limited = false): WallOptions {
+    layers: { hook: boolean } = { hook: true }, limited = false, keepsOut: readonly string[] = []): WallOptions {
     const programs = programsOf(home, process.execPath, kDriverDir, env);
     const wall = wallOf(home, cwd, account.configDir, realpathSync, programs);
     const writable = [...new Set([home, cwd, tmpdir(), '/tmp', '/private/tmp', '/var/folders'])];
-    const limit = limited ? limitOf(home, cwd, account.configDir, programs, process.platform, env, process.execPath)
-        : undefined;
+    const limit = limited ? limitOf(home, cwd, account.configDir, programs, process.platform, env, process.execPath,
+        realpathSync, existsSync, keepsOut) : undefined;
     const permissions = limit === undefined ? {} : {
         blockReadsOutsideWorkingDirectories: true,
         blockWritesOutsideWorkingDirectories: true,

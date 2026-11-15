@@ -33,7 +33,7 @@ import {
     appArmorProfile, kAppArmorDir, kAppArmorParser, kRestrictUserns, kSandboxBinVariable, realToolsSystem, sandboxHomeFiles,
     sandboxTools,
 } from '../../src/tools.js';
-import { kDriverDir, kExtraDenyRootsVariable, wallOptions } from '../../src/wall.js';
+import { kDriverDir, wallOptions } from '../../src/wall.js';
 import { Egress, ownAddresses } from '../../src/egress.js';
 
 // Each run makes everything in one directory of its own under the system's temporary directory (runWall): not under
@@ -507,7 +507,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
         { mode: 0o600 });
     // For the limit's other spellings: the shell's history files, a folder named with an accent, a file in a PATH folder
     // inside HOME and a shell start-up file (both open, docs/secrets.md), and a volume-like root of its own beside HOME
-    // (named in the driver's NEXUS_LIMIT_DENY_ROOTS, as a person names another data root), with a PATH folder holding a
+    // (kept out by the driver's --keep-out, as friends.json's "limit_keeps_out" names another data root), with a PATH folder holding a
     // program and a file beside that folder. Its name has an accent, composed, for the look-alike spelling's probe.
     writeFileSync(join(home, '.bash_history'), `${kOutsideWord}\n`);
     writeFileSync(join(home, '.zsh_history'), `${kOutsideWord}\n`);
@@ -569,7 +569,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
     }
     const base: Record<string, string> = {
         PATH: `${kDriverDir}/bin:${home}/bin:${tools.path ?? process.env['PATH'] ?? '/usr/bin:/bin'}:${vol}/bin`, HOME: home,
-        TMPDIR: join(runRoot, 't'), LANG: 'C', [kExtraDenyRootsVariable]: vol,
+        TMPDIR: join(runRoot, 't'), LANG: 'C',
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
         DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         CLAUDE_AGENT_SDK_CLIENT_APP: 'nexus-claude-driver-wall-test/0',
@@ -596,7 +596,7 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
             // The wall from the environment the driver hands it (main.ts: the server's, scrubbed), which names the
             // sandbox's tools (NEXUS_SANDBOX_BIN) as programs to protect.
             ...wallOptions(account, home, cwd, (d) => { stderr += d; }, egressPort,
-                { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }, limited),
+                { ...base, ...(kSandboxBin === '' ? {} : { [kSandboxBinVariable]: kSandboxBin }) }, { hook }, limited, [vol]),
         },
     });
     let replies = '';

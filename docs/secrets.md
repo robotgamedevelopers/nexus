@@ -507,10 +507,10 @@ machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
 
 1. *The shell* (Claude's sandbox, as layer 2). Reads are denied in the home directory and the platform's data roots
    (macOS `/Users`, `/Volumes` and their `/System/Volumes/Data` forms; Linux and WSL2 `/home`, `/root`, `/mnt`,
-   `/media`, `/run/media`, `/srv`, those that exist, and any more the driver's `NEXUS_LIMIT_DENY_ROOTS` names,
-   colon-separated: a network mount, a WSL2 automount root moved off `/mnt`), and allowed again (`allowRead`) only for
-   the working directory; the parts of the account's Claude state the shell reads (its shell snapshots, its session
-   environment, and the project's memory folder, all inside `~/.nexus`); the programs nexus runs (node, with its
+   `/media`, `/run/media`, `/srv`, those that exist, and any more friends.json's `"limit_keeps_out"` names
+   (docs/accounts.md; the server gives each to the driver as `--keep-out <dir>`: a second volume, a network mount, a
+   WSL2 automount root moved off `/mnt`), and allowed again (`allowRead`) only for the working directory; the parts
+   of the account's Claude state the shell reads (its shell snapshots, its session environment, and the project's memory folder, all inside `~/.nexus`); the programs nexus runs (node, with its
    install prefix only when that is not a denied root or a folder directly in one; the driver; the sandbox's tools);
    each PATH folder under a denied root, as that folder alone, with its parent only for an exact list of install
    prefixes (`kInstallPrefixes`: Linuxbrew's `/home/linuxbrew/.linuxbrew` on Linux; none on macOS, where a PATH folder
@@ -554,7 +554,7 @@ the working directory:
 | shell: a hard link it makes in its directory to the other project's file, then `cat` | read | denied (1: `ln` refused) |
 | shell and Read: `..` out of its directory | read | denied (1), refused (3, and 2 without the hook) |
 | shell and Read: other letter case, of a folder in HOME, of the key, and of HOME itself | read | denied (1), refused (3, 2) |
-| shell and Read: another volume (a scratch root named in `NEXUS_LIMIT_DENY_ROOTS`), and the same by a look-alike spelling (its accented letter decomposed) | read | denied (1), refused (3, 2) |
+| shell and Read: another volume (a scratch root kept out by `--keep-out`, as `"limit_keeps_out"` gives it), and the same by a look-alike spelling (its accented letter decomposed) | read | denied (1), refused (3, 2) |
 | shell: a file beside a PATH folder on that volume | read | denied (1); a program in the PATH folder still runs |
 | shell and Read: the shell's history files | read | denied (1), refused (3, 2) |
 | shell: a file in a PATH folder inside HOME; a shell start-up file | read | **read** (open, below) |
@@ -578,7 +578,7 @@ person's, and a sandboxed VM or container (`real-isolation`, the roadmap; candid
 - Mounts outside the listed roots: on macOS a network share or disk image mounted somewhere other than `/Volumes`; on
   Linux an NFS or SMB mount, `/net`, `/data`, `/opt` or `/var` mounts, `/run/user/<id>` (the user's runtime folder: its
   `gvfs` mounts and sockets); on WSL2 an automount root moved off `/mnt` by `/etc/wsl.conf`, and the Windows drives
-  then wherever it says. Name each in the driver's `NEXUS_LIMIT_DENY_ROOTS` to close it.
+  then wherever it says. Name each in friends.json's `"limit_keeps_out"` to close it (docs/accounts.md).
 - A PATH folder inside HOME or inside another project (`~/.local/bin`, `~/go/bin`, a project's `node_modules/.bin`):
   readable, as that folder alone (measured above), so whatever is kept in it.
 - The shell start-up files (`.bashrc`, `.zshrc`, `.profile` and the rest above): readable, and people often export

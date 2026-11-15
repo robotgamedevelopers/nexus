@@ -140,14 +140,18 @@ bool onlyKeys(Reader& r, PrJsonValueIndex object, const std::vector<std::string>
     return ok;
 }
 
-// The top: an object of "version" and the one list `list`. Returns the list's index, or kPrJsonMissing.
-PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& example) {
+// The top: an object of "version", the one list `list`, and the optional fields `more`. Returns the list's index, or
+// kPrJsonMissing.
+PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& example,
+                     const std::vector<std::string>& more = {}) {
     if (prJsonKind(r.doc(), 0) != PrJsonKind_Object) {
         r.errorAt(0, "the file is " + std::string(kindName(prJsonKind(r.doc(), 0))) + ", not an object",
                   "make it an object of \"version\" and \"" + list + "\", as " + example);
         return kPrJsonMissing;
     }
-    bool ok = onlyKeys(r, 0, {"version", list}, "the file");
+    std::vector<std::string> keys = {"version", list};
+    keys.insert(keys.end(), more.begin(), more.end());
+    bool ok = onlyKeys(r, 0, keys, "the file");
     const PrJsonValueIndex v = prJsonMember(r.doc(), 0, pr("version"));
     if (v == kPrJsonMissing) {
         r.errorAt(0, "the file has no \"version\"", "add \"version\": " + std::to_string(kVersion) + " at its top");
@@ -237,6 +241,13 @@ const char* const kFriendsExample =
 bool contains(const std::vector<std::string>& v, std::string_view x) {
     return std::find(v.begin(), v.end(), x) != v.end();
 }
+
+// A "limit_keeps_out" directory: an absolute directory (isDir), never the root itself, which would keep a limited
+// friend out of its own directory too.
+bool isKeptOut(std::string_view dir) {
+    return isDir(dir) && dir != "/";
+}
+const char* const kKeptOutRule = "an absolute directory other than \"/\", printable, at most 4096 bytes, as \"/data\"";
 
 } // namespace
 
@@ -384,6 +395,16 @@ std::vector<std::string> problems(const Registry& r) {
             }
         }
     }
+    std::set<std::string> kept;
+    for (const std::string& d : r.keepsOut) {
+        if (!isKeptOut(d)) {
+            out.push_back("friends.json: \"limit_keeps_out\" holds \"" + d + "\", which is not " + kKeptOutRule +
+                          "; correct it, or take it out");
+        }
+        if (!kept.insert(d).second) {
+            out.push_back("friends.json: \"limit_keeps_out\" holds \"" + d + "\" twice; keep one");
+        }
+    }
     return out;
 }
 
@@ -399,7 +420,16 @@ std::string accountsText(const Registry& r) {
 }
 
 std::string friendsText(const Registry& r) {
-    std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n  \"friends\": [";
+    std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n";
+    // Written only when it holds a directory, so a file without the field is saved as it was.
+    if (!r.keepsOut.empty()) {
+        s += "  \"limit_keeps_out\": [";
+        for (std::size_t k = 0; k < r.keepsOut.size(); ++k) {
+            s += std::string(k == 0 ? "\n" : ",\n") + "    " + quoted(r.keepsOut[k]);
+        }
+        s += "\n  ],\n";
+    }
+    s += "  \"friends\": [";
     for (std::size_t i = 0; i < r.friends.size(); ++i) {
         const Friend& f = r.friends[i];
         s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(f.name) +
@@ -479,6 +509,7 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
 
 Read readFriends(std::string_view text, const std::string& path, Registry* registry, const Registry* committed) {
     registry->friends.clear();
+    registry->keepsOut.clear();
     Reader r(text, path);
     if (text.find_first_not_of(" \t\r\n") == std::string_view::npos) {
         r.read.ok = true;
@@ -488,9 +519,33 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
     if (!r.parse()) {
         return r.read;
     }
-    const PrJsonValueIndex list = top(r, "friends", kFriendsExample);
+    const PrJsonValueIndex list = top(r, "friends", kFriendsExample, {"limit_keeps_out"});
     if (list == kPrJsonMissing) {
         return r.read;
+    }
+    // "limit_keeps_out": absent is none. Each a directory a limited friend's AI is kept out of (isKeptOut).
+    const PrJsonValueIndex ko = prJsonMember(r.doc(), 0, pr("limit_keeps_out"));
+    if (ko != kPrJsonMissing && prJsonKind(r.doc(), ko) != PrJsonKind_Array) {
+        r.errorAt(ko, "\"limit_keeps_out\" is " + std::string(kindName(prJsonKind(r.doc(), ko))) + ", not a list",
+                  "make it a list of absolute directories, as [\"/data\"], or take it out for none");
+    } else if (ko != kPrJsonMissing) {
+        std::set<std::string> seen;
+        for (PrJsonValueIndex d = prJsonFirst(r.doc(), ko); d != kPrJsonMissing; d = prJsonAfter(r.doc(), ko, d)) {
+            if (prJsonKind(r.doc(), d) != PrJsonKind_String) {
+                r.errorAt(d, "\"limit_keeps_out\" holds " + std::string(kindName(prJsonKind(r.doc(), d))) +
+                          ", not a directory", "put each directory in double quotes, as \"/data\"");
+                continue;
+            }
+            std::string dir(view(prJsonString(r.doc(), d)));
+            if (!isKeptOut(dir)) {
+                r.errorAt(d, "\"limit_keeps_out\" holds \"" + dir + "\", which is not " + kKeptOutRule,
+                          "correct it, or take it out");
+            } else if (!seen.insert(dir).second) {
+                r.errorAt(d, "\"limit_keeps_out\" holds \"" + dir + "\" twice", "keep one");
+            } else {
+                registry->keepsOut.push_back(std::move(dir));
+            }
+        }
     }
     for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
         if (prJsonKind(r.doc(), e) != PrJsonKind_Object) {
@@ -707,6 +762,9 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
         if (after.friendNamed(f.name) == nullptr) {
             out.push_back("friend " + f.name + " removed");
         }
+    }
+    if (before.keepsOut != after.keepsOut) {
+        out.push_back("limit_keeps_out " + list(before.keepsOut) + " -> " + list(after.keepsOut));
     }
     return out;
 }

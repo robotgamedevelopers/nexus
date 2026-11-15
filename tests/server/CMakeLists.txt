@@ -103,7 +103,11 @@ tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 CAP 75)
 tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8)
-tlc_test(tlc_supervisor_limit MCSupervisor MCSupervisorLimit.cfg pass WORKERS 8 CAP 75)
+# The limit's per-commit instance runs in the supervisor-rest shard on two workers, like the witnesses beside it:
+# 4,497 states, 4 s on an idle machine, so the 60 s cap leaves fifteen times that for a loaded runner. Its two-prompt
+# instance (69 s on two workers) and the wide one run nightly.
+tlc_test(tlc_supervisor_limit MCSupervisor MCSupervisorLimit.cfg pass)
+tlc_test(tlc_supervisor_limit_two MCSupervisor MCSupervisorLimitTwo.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_limit_wide MCSupervisor MCSupervisorLimitWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)

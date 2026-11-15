@@ -841,6 +841,46 @@ void testLimit() {
         lo = us.message(Hello{1, "h"}, kStart + 1);
         CHECK(us.phase() == Phase::Working);
     }
+
+    // The directories kept out (friends.json "limit_keeps_out"): each given to a limited driver as --keep-out, never
+    // to an unlimited one. More kept out while a turn runs on a limited driver is a tightening (the turn is stopped
+    // now); fewer, a loosening (the turn finishes, then the driver is ended).
+    {
+        Config kc = config();
+        kc.limited = true;
+        kc.keepsOut = {"/data"};
+        Output ko;
+        Supervisor ks(kc, {}, kStart, &ko);
+        ko = ks.prompt("one", kStart);
+        CHECK(hasArgs(ko, {"--limit", "cwd", "--keep-out", "/data"}));
+        ks.message(Hello{1, "h", {"limit"}}, kStart + 1);
+        ko = ks.setKeepsOut({"/data", "/net"}, kStart + 2);
+        CHECK(ks.phase() == Phase::Stopping && ko.commands.size() == 1 &&
+              contains(ko.commands[0].line, "\"kind\":\"stop\"") &&
+              contains(ko.effects[0].text, "kept out of more directories"));
+        ko = ks.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(ks, ko));
+        ks.exited("exited with status 0", kStart + 4);
+        ko = ks.prompt("two", kStart + 5);
+        CHECK(hasArgs(ko, {"--keep-out", "/data", "--keep-out", "/net"}));
+        ks.message(Hello{1, "h", {"limit"}}, kStart + 6);
+        ko = ks.setKeepsOut({"/net"}, kStart + 7);
+        CHECK(ko.commands.empty() && ks.phase() == Phase::Working);
+        ko = ks.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 8);
+        CHECK(ended(ks, ko) && ks.retiring());
+
+        Config uc = config();
+        uc.keepsOut = {"/data"};
+        Output uo;
+        Supervisor us(uc, {}, kStart, &uo);
+        uo = us.prompt("one", kStart);
+        CHECK(kinds(uo) == std::vector<Kind>{Kind::Start});
+        CHECK(std::find(uo.commands[0].argv.begin(), uo.commands[0].argv.end(), "--keep-out") ==
+              uo.commands[0].argv.end());
+        us.message(Hello{1, "h"}, kStart + 1);
+        uo = us.setKeepsOut({"/data", "/net"}, kStart + 2);   // unlimited: nothing to tighten
+        CHECK(uo.commands.empty() && us.phase() == Phase::Working);
+    }
 }
 
 // ---- the credential, errors, the session ----

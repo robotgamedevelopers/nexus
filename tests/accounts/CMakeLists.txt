@@ -25,7 +25,7 @@ if(NEXUS_SERVER_PARTS)
 endif()
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
-              hub_adopt_defaults hub_probe instances hub_instances limits)
+              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()

@@ -519,6 +519,20 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause, con
                     (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
             }
         }
+        // The directories a limited friend is kept out of changed (friends.json "limit_keeps_out"): told in each limited
+        // session, whose driver restarts keeping out the new list (Supervisor::setKeepsOut): a turn open is stopped now
+        // when more are kept out, and finishes as it started when fewer are.
+        if (before != nullptr && before->keepsOut != accounts_->keepsOut &&
+            accounts::limitedFor(&*accounts_, info.friendName, info.account)) {
+            std::string dirs;
+            for (const std::string& d : accounts_->keepsOut) {
+                dirs += (dirs.empty() ? "" : ", ") + d;
+            }
+            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited friend is "
+                "kept out of, on top of its own, are now " + (dirs.empty() ? std::string("none") : dirs) + " (" + cause +
+                "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
+                "kept out, and otherwise finishes as it started.";
+        }
         if (info.account.empty()) {
             if (!instanceNotice.empty() && !moveTo(id, info, instanceNotice)) {
                 return false;

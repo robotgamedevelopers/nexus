@@ -654,12 +654,10 @@ jobs:
             run: '^tlc_supervisor_place$'
           - shard: supervisor-signin
             run: '^tlc_supervisor_signin$'
-          - shard: supervisor-limit
-            run: '^tlc_supervisor_limit$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch|place|signin|limit)$'
+            skip: '^tlc_supervisor_(switch|place|signin)$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
           - shard: link-one-window

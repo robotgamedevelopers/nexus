@@ -532,11 +532,15 @@ void test('a PATH folder under a denied root is allowed as that folder only; its
     assert.ok(!mac.allowRead.includes('/Volumes/disk'));
     const homeBin = limitOf('/Users/me', '/Users/me/w', '/Users/me/.nexus/c', [], 'darwin', {}, '/Users/me/bin/node', id, yes);
     assert.ok(!homeBin.allowRead.includes('/Users/me'));
-    // More denied roots from the environment: only absolute ones, never the root; a PATH folder on one is that folder.
+    // More denied roots from the server (--keep-out): only absolute ones, never the root; a PATH folder on one is that
+    // folder. The environment names none: a variable of the old name changes nothing.
     const more = limitOf('/home/me', '/home/me/w', '/home/me/.nexus/c', [], 'linux',
-        { NEXUS_LIMIT_DENY_ROOTS: '/data/x:relative:/', PATH: '/data/x/bin' }, '/usr/bin/node', id, yes);
+        { PATH: '/data/x/bin' }, '/usr/bin/node', id, yes, ['/data/x', 'relative', '/']);
     assert.ok(more.denyRead.includes('/data/x') && !more.denyRead.includes('relative') && !more.denyRead.includes('/'));
     assert.ok(more.allowRead.includes('/data/x/bin') && !more.allowRead.includes('/data/x'));
+    const fromEnv = limitOf('/home/me', '/home/me/w', '/home/me/.nexus/c', [], 'linux',
+        { NEXUS_LIMIT_DENY_ROOTS: '/data/x', PATH: '/data/x/bin' }, '/usr/bin/node', id, yes);
+    assert.ok(!fromEnv.denyRead.includes('/data/x'));
 });
 
 void test('a limited friend reads single named start-up files, never a folder and never a credential store', () => {

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // nexus-claude-driver: nexus-server's driver for Claude (docs/driver-protocol.md), on the Claude Agent SDK.
 //
-//   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--limit cwd] [--model <model>]
-//                         [--effort <level>] [--setting-sources <user,project,local>] [--claude <path>]
+//   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--limit cwd [--keep-out <dir>]...]
+//                         [--model <model>] [--effort <level>] [--setting-sources <user,project,local>] [--claude <path>]
 //
-// The server passes --cwd, --resume and --limit (a friend limited to its directory); the others come from the drivers
+// The server passes --cwd, --resume, --limit (a friend limited to its directory) and --keep-out (more directories it
+// is kept out of, friends.json "limit_keeps_out"); the others come from the drivers
 // file. The account is the directory
 // ~/.nexus/server/accounts/<name>/ and its token file (account.ts): Claude gets the directory as CLAUDE_CONFIG_DIR and
 // the token on a descriptor, never in an environment, and never the Keychain's login, the server's environment's or
@@ -83,7 +84,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             includePartialMessages: true,
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data), egressPort,
-                env, { hook: true }, start.limited),
+                env, { hook: true }, start.limited, start.keepsOut),
         },
     });
 }

@@ -110,6 +110,9 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 ```json
 {
   "version": 2,
+  "limit_keeps_out": [
+    "/data"
+  ],
   "friends": [
     {
       "name": "claude",
@@ -154,6 +157,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
 | `version` | top | yes | the whole number `2` (see Versions) |
+| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited friend's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited friend read more. Written back only when it holds one |
 | `friends` | top | yes | a list of friends; `[]` for none |
 | `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
 | `limit` | each friend | no (`true`) | `true` or `false`, without quotes: whether the friend's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for a friend that links an account with `"billing": "api"` |
@@ -203,6 +207,13 @@ the field existed: under the token wall (docs/secrets.md), but free to read the 
   other projects, documents, `~/.ssh`'s keys, other friends' directories and other accounts' state; and every write
   outside its directory and the temporary directories. What stays readable, and the costs, are in docs/secrets.md
   ("A limited friend").
+- **More places to keep out.** Where people keep files somewhere else too (a second volume such as `/data`, a network
+  mount, a WSL2 automount root moved off `/mnt`), name each directory in friends.json's top-level `"limit_keeps_out"`:
+  every limited friend is kept out of it as well, by the shell and the file tools alike. A directory that does not
+  exist on this machine is left out. It only adds: nothing in it lets a limited friend read more, and it changes
+  nothing for an unlimited friend. A reload that changes it tells each limited session; a directory added stops a
+  turn already running, as a tightening does (below), and one removed waits for the turn's end. nexus reads none of
+  this from the environment: the server passes each to the driver as `--keep-out <dir>` (docs/driver-protocol.md).
 - **Where it cannot start.** A limited session does not start, with one line saying why where a session's start
   refusals already show, when its directory does not exist, is the home directory or the root, holds `~/.nexus`, or is
   inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; or when the drivers file names another Claude

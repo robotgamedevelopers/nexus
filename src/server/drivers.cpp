@@ -309,6 +309,11 @@ bool Drivers::limitedOf(const sync::SessionInfo& info) const {
     return accounts::limitedFor(hub_ != nullptr ? hub_->accounts() : nullptr, info.friendName, info.account);
 }
 
+// The directories a limited driver keeps out on top of its own (friends.json "limit_keeps_out"); none without files.
+std::vector<std::string> Drivers::keepsOut() const {
+    return hub_ != nullptr && hub_->accounts() != nullptr ? hub_->accounts()->keepsOut : std::vector<std::string>{};
+}
+
 ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
     std::ifstream in(options_.table);
     std::string text;
@@ -346,6 +351,7 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     }
     c.command = driver.command;
     c.cwd = driver.cwd;
+    c.keepsOut = keepsOut();
     if (stored != nullptr) {
         const accounts::Instance* in = instanceOf(stored->info);
         c.here = in == nullptr || sameMachine(in->machine, options_.machine, options_.hostName);
@@ -496,6 +502,7 @@ void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
     Output out = it->second.sup.setOptions(info.model, info.effort, now);
     append(out, it->second.sup.setAccount(info.account, now));
     append(out, it->second.sup.setLimited(limitedOf(info), now));
+    append(out, it->second.sup.setKeepsOut(keepsOut(), now));
     if (const accounts::Instance* in = instanceOf(info)) {
         const bool here = sameMachine(in->machine, options_.machine, options_.hostName);
         append(out, it->second.sup.setPlace(in->dir, here, now));

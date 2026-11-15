@@ -306,8 +306,10 @@ void test('start values from the drivers file go to the query', async () => {
     assert.deepEqual(s.settingSources, ['user', 'project']);
     assert.equal(s.claudePath, '/bin/claude');
     assert.equal(s.limited, false);
-    const limited = await started({ limit: 'cwd' });
+    assert.deepEqual(s.keepsOut, []);
+    const limited = await started({ limit: 'cwd', keepsOut: ['/data'] });
     assert.equal(limited.host.harness.start.limited, true);
+    assert.deepEqual(limited.host.harness.start.keepsOut, ['/data']);
 });
 
 async function refusedLine(bytes: Uint8Array, opened = false): Promise<TestHost> {
@@ -685,6 +687,16 @@ void test('parseArguments', () => {
     // The server's --limit cwd: the one limit there is.
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd']),
         { account: 'a', cwd: '/w', limit: 'cwd', settingSources: [] });
+    // The server's --keep-out, one per directory of friends.json's "limit_keeps_out": only with --limit cwd, each
+    // absolute and not the root.
+    assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd', '--keep-out', '/data', '--keep-out', '/net']),
+        { account: 'a', cwd: '/w', limit: 'cwd', settingSources: [], keepsOut: ['/data', '/net'] });
+    const keepAlone = parseArguments(['--account', 'a', '--cwd', '/w', '--keep-out', '/data']);
+    assert.ok('error' in keepAlone && keepAlone.error.includes('comes with --limit cwd'));
+    for (const dir of ['data', '/']) {
+        const r = parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd', '--keep-out', dir]);
+        assert.ok('error' in r && r.error.includes('not an absolute directory'), dir);
+    }
     const unknownLimit = parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'home']);
     assert.ok('error' in unknownLimit && unknownLimit.error.includes('the one it knows is --limit cwd'));
     const noAccount = parseArguments(['--cwd', '/w']);
