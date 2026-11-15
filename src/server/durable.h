@@ -19,8 +19,10 @@ namespace nexus::server {
 
 class DurableStore : public sync::SessionStore {
 public:
-    // Opens (or makes) the store in `dir` on `fs`. False, with why, when the store cannot be opened.
+    // Opens (or makes) the store in `dir` on `fs`, its lock first (store::Store::open). False, with why, when the store
+    // cannot be opened; busy() then says whether that was another process holding its lock.
     bool open(store::Fs& fs, const std::string& dir, std::string* why, const store::StoreOptions& options = {});
+    bool busy() const { return busy_; }
 
     const sync::StoredSession* find(sync::SessionId id) const override;
     std::size_t size() const override { return sessions_.size(); }
@@ -42,6 +44,7 @@ public:
 private:
     std::unique_ptr<store::Store> store_;
     store::OpenReport report_;
+    bool busy_ = false;
     std::map<sync::SessionId, sync::StoredSession> sessions_;
 };
 

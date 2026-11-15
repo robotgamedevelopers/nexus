@@ -89,6 +89,9 @@ public:
         }
         return s;
     }
+    store::Status lock(const std::string& p, store::LockMode m, std::unique_ptr<store::FileLock>& o) override {
+        return inner_->lock(p, m, o);
+    }
     store::Status make_dir(const std::string& d) override { return inner_->make_dir(d); }
     store::Status list(const std::string& d, std::vector<std::string>& n) override { return inner_->list(d, n); }
     store::Status size(const std::string& p, std::uint64_t& o) override { return inner_->size(p, o); }

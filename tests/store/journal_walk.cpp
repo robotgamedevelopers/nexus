@@ -100,6 +100,10 @@ public:
         }
         return s;
     }
+    // Not the journal's: the store takes its lock (Store::open) before the journal opens.
+    Status lock(const std::string& p, nexus::store::LockMode m, std::unique_ptr<nexus::store::FileLock>& o) override {
+        return w_.mem.lock(p, m, o);
+    }
     Status make_dir(const std::string& d) override { return w_.mem.make_dir(d); }
     Status list(const std::string& d, std::vector<std::string>& n) override { return w_.mem.list(d, n); }
     Status size(const std::string& p, std::uint64_t& o) override { return w_.mem.size(p, o); }

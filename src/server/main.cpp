@@ -5,7 +5,12 @@
 //                                         --client, the window's id and the number of its first action in the session;
 //                                         NEXUS_STATE_FORMAT in its environment, the state format the window reads
 //                                         (sync/formats.h), which the line then states after the key
-//        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
+//        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs); exits 0, saying so, only
+//                                         when another server answers that it is serving; 3 when the store's lock is
+//                                         held for the whole wait by a server neither serving nor ending; 1 when it
+//                                         could not start (readers that did not let go among the reasons)
+//        nexus-server store check [--dir DIR]
+//                                         reads the store without changing it; refused while a server has it
 //        nexus-server stop [--dir DIR]    stops the running server
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
@@ -46,6 +51,7 @@ int usage() {
                          "       nexus-server serve|stop [--dir DIR]\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
+                         "       nexus-server store check [--dir DIR]\n"
                          "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
                          "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
                          "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
@@ -114,7 +120,7 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
-        } else if (command == "config") {
+        } else if (command == "config" || command == "store") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -167,6 +173,9 @@ int main(int argc, char** argv) {
         return nexus::server::stop(paths);
     if (command == "config") {
         return nexus::server::config(paths, configArgs);
+    }
+    if (command == "store") {
+        return nexus::server::storeCommand(paths, configArgs);
     }
     return usage();
 }

@@ -3,6 +3,8 @@
 
 #include "store/store.h"
 
+#include <chrono>
+
 namespace nexus::store {
 
 namespace {
@@ -167,8 +169,24 @@ Store::Store(Fs& fs, std::string dir, const StoreOptions& options)
 Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, std::unique_ptr<Store>& out,
                    OpenReport* report) {
     std::unique_ptr<Store> s(new Store(fs, dir, options));
+    // The lock, on the directory itself, before anything in it is read or written (the directory made first if it is
+    // not there: a make_dir changes nothing a store holds). From here on the directory is the hold's, not its name's.
+    Status st = fs.make_dir(dir);
+    if (!st.is_ok()) {
+        return st;
+    }
+    if (!options.test_unlocked) {
+        st = fs.lock(dir, LockMode::Exclusive, s->lock_);
+        if (st.code() == Status::Code::Busy) {
+            return Status::busy("store " + dir + " is open in another process, which holds its lock (on the directory "
+                                "itself): " + st.message());
+        }
+        if (!st.is_ok()) {
+            return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
+        }
+    }
     Journal::Recovery rec;
-    Status st = s->journal_.open(rec);
+    st = s->journal_.open(rec);
     if (!st.is_ok()) {
         return st;
     }
@@ -198,6 +216,91 @@ Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, 
     }
     out = std::move(s);
     return Status::ok();
+}
+
+Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report,
+                      const std::function<std::uint64_t()>& now_ms) {
+    std::function<std::uint64_t()> now = now_ms;
+    if (!now) {
+        now = [] {
+            return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        };
+    }
+    std::vector<std::string> names;
+    Status st = fs.list(dir, names);
+    if (st.code() == Status::Code::NotFound) {
+        return Status::not_found("no store in " + dir);
+    }
+    if (!st.is_ok()) {
+        return st;
+    }
+    {
+        std::unique_ptr<FileLock> lock;
+        st = fs.lock(dir, LockMode::Shared, lock);
+        if (st.code() == Status::Code::Busy) {
+            return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock; it is not "
+                                "read while a server writes it (`nexus-server stop` stops the server)");
+        }
+        if (st.code() == Status::Code::Refused) {
+            return Status::busy("store " + dir + " has a nexus-server starting on it (it waits for the store's lock, and "
+                                "a reader gives way to it), so it was not read; try again once the server serves, or "
+                                "after `nexus-server stop`");
+        }
+        if (!st.is_ok()) {
+            return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
+        }
+        const std::uint64_t start = now();
+        if (!(st = copy.make_dir(dir)).is_ok()) {
+            return st;
+        }
+        const Status late = Status::failed("store " + dir + ": its copy took longer than " +
+                                           std::to_string(kReaderCopyLimitMs) + " ms under its shared lock, so it was "
+                                           "given up and the lock let go, so that no starting server waits on this "
+                                           "reader; nothing was read (check the disk, then try again)");
+        // The journal's files, as they are under the lock (through the hold, so the directory locked is the one read);
+        // the temporaries of a compaction too, which open removes; nothing else. Each is read in chunks of
+        // kReaderChunkBytes with the clock asked between them, so one slow read cannot hold the lock past the limit by
+        // more than a chunk's read: a copy that outlasts it lets the lock go and fails this reader, never a server
+        // waiting to start.
+        for (const char* name : {"log", "snapshot", "snapshot.tmp", "log.new"}) {
+            const std::string path = dir + "/" + name;
+            std::uint64_t size = 0;
+            st = fs.size(path, size);
+            if (st.code() == Status::Code::NotFound) {
+                continue;
+            }
+            if (!st.is_ok() || !(st = copy.create(path)).is_ok()) {
+                return st;
+            }
+            for (std::uint64_t off = 0; off < size;) {
+                if (now() - start > kReaderCopyLimitMs) {
+                    return late;
+                }
+                Bytes bytes;
+                if (!(st = fs.read(path, off, kReaderChunkBytes, bytes)).is_ok()) {
+                    return st;
+                }
+                if (bytes.empty()) {
+                    break;      // the file is shorter than it was: a writer cut it, which no writer does under the lock
+                }
+                if (!(st = copy.append(path, bytes)).is_ok()) {
+                    return st;
+                }
+                off += bytes.size();
+            }
+            if (now() - start > kReaderCopyLimitMs) {
+                return late;
+            }
+            if (!(st = copy.sync(path)).is_ok()) {
+                return st;
+            }
+        }
+        if (!(st = copy.sync_dir(dir)).is_ok()) {
+            return st;
+        }
+    }
+    return open(copy, dir, StoreOptions{}, out, report);
 }
 
 const Session* Store::session(std::uint64_t id) const {
@@ -287,6 +390,9 @@ Status Store::commit(std::uint64_t session, std::span<const Change> changes, con
     }
     Status s = journal_.append(encode_record(session, changes, client, num));
     if (s.is_ok() && !batching_) {
+        s = held_alive();
+    }
+    if (s.is_ok() && !batching_) {
         s = journal_.sync();
     }
     if (!s.is_ok()) {
@@ -310,8 +416,12 @@ Status Store::flush() {
         return Status::failed("store " + dir_ + ": an earlier write or sync failed, so what is on disk is unknown; "
                               "restart the server to reopen the store from what is durable");
     }
-    // SyncFile("log") once, for every record the batch appended (a no-op when it appended none).
-    Status s = journal_.sync();
+    // The directory still named (one fstat per batch), then SyncFile("log") once, for every record the batch appended (a
+    // no-op when it appended none).
+    Status s = held_alive();
+    if (s.is_ok()) {
+        s = journal_.sync();
+    }
     if (!s.is_ok()) {
         failed_ = true;
         return s;

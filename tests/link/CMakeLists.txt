@@ -4,7 +4,7 @@
 #               `ssh localhost` to work without a password prompt (BatchMode), as it does on the studio's runners.
 #               NEXUS_E2E_TAILNET names a second way to reach this same machine (its tailnet address or name); when
 #               set, the round trip runs through it too. server_home_functional: nexus-server's own home under a
-#               HOME of the test's own, with no --dir.
+#               HOME of the test's own, with no --dir. server_lock_functional: the store's lock in the real server.
 
 set(warnings ${NEXUS_WARNINGS})
 set(NEXUS_E2E_TAILNET "" CACHE STRING "This machine's tailnet address or name, for the functional round trip over it")
@@ -63,3 +63,11 @@ target_compile_options(server_home PRIVATE ${warnings})
 add_dependencies(server_home nexus-server)
 add_test(NAME server_home_functional COMMAND server_home ${server} /tmp/nexus-home-${build_hash})
 set_tests_properties(server_home_functional PROPERTIES LABELS functional TIMEOUT 60)
+
+# The store's lock in the real nexus-server: servers raced on one store, `new` raced, the holder killed with SIGKILL,
+# and `store check` beside a running server (tests/link/server_lock.cpp). HOME is the test's own directory.
+add_executable(server_lock server_lock.cpp)
+target_compile_options(server_lock PRIVATE ${warnings})
+add_dependencies(server_lock nexus-server)
+add_test(NAME server_lock_functional COMMAND server_lock ${server} /tmp/nexus-lock-${build_hash})
+set_tests_properties(server_lock_functional PROPERTIES LABELS functional TIMEOUT 300)

@@ -289,6 +289,8 @@ GitResult runGit(const std::string& dir, const std::vector<std::string>& args, i
 
 ConfigRepo::ConfigRepo(std::string dir) : dir_(std::move(dir)) {}
 
+ConfigRepo::ConfigRepo(std::function<std::string()> dirNow) : dirNow_(std::move(dirNow)) {}
+
 ConfigRepo::~ConfigRepo() {
     if (push_.pid > 0) {
         ::kill(-push_.pid, SIGKILL);
@@ -298,24 +300,24 @@ ConfigRepo::~ConfigRepo() {
 
 bool ConfigRepo::open(std::string* why) {
     struct stat st{};
-    if (::stat(dir_.c_str(), &st) != 0) {
-        if (::mkdir(dir_.c_str(), 0700) != 0) {
-            *why = errnoText("cannot make " + dir_);
+    if (::stat(dir().c_str(), &st) != 0) {
+        if (::mkdir(dir().c_str(), 0700) != 0) {
+            *why = errnoText("cannot make " + dir());
             return false;
         }
     } else if (!S_ISDIR(st.st_mode)) {
-        *why = dir_ + " is not a directory; move it aside, and nexus-server makes its config repository there";
+        *why = dir() + " is not a directory; move it aside, and nexus-server makes its config repository there";
         return false;
     }
-    if (::stat((dir_ + "/.git").c_str(), &st) == 0) {
+    if (::stat((dir() + "/.git").c_str(), &st) == 0) {
         return true;
     }
-    GitResult g = runGit(dir_, {"init", "-q"});
+    GitResult g = runGit(dir(), {"init", "-q"});
     if (g.status != 0) {
-        *why = gitWhy("making the config repository in " + dir_, g);
+        *why = gitWhy("making the config repository in " + dir(), g);
         return false;
     }
-    if (!writeAtomic(dir_ + "/.gitignore", kIgnore, why)) {
+    if (!writeAtomic(dir() + "/.gitignore", kIgnore, why)) {
         return false;
     }
     std::vector<std::string> files = {".gitignore"};
@@ -336,7 +338,7 @@ bool ConfigRepo::open(std::string* why) {
     add.insert(add.end(), files.begin(), files.end());
     std::vector<std::string> commit = {"commit", "-q", "-m", "nexus-server made its config repository", "--"};
     commit.insert(commit.end(), files.begin(), files.end());
-    if ((g = runGit(dir_, add)).status != 0 || (g = runGit(dir_, commit)).status != 0) {
+    if ((g = runGit(dir(), add)).status != 0 || (g = runGit(dir(), commit)).status != 0) {
         *why = gitWhy("the config repository's first commit", g);
         return false;
     }
@@ -344,7 +346,7 @@ bool ConfigRepo::open(std::string* why) {
 }
 
 bool ConfigRepo::hasAccounts() {
-    return runGit(dir_, {"cat-file", "-e", "HEAD:accounts.json"}).status == 0;
+    return runGit(dir(), {"cat-file", "-e", "HEAD:accounts.json"}).status == 0;
 }
 
 bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::vector<std::string>* errors,
@@ -355,24 +357,24 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
     for (int i = 0; i < 2; ++i) {
         std::string why;
         if (rev.empty()) {
-            if (!readFile(dir_ + "/" + names[i], &texts[i], &why)) {
+            if (!readFile(dir() + "/" + names[i], &texts[i], &why)) {
                 errors->push_back(why);
                 return false;
             }
             continue;
         }
-        GitResult g = runGit(dir_, {"cat-file", "-e", rev + ":" + names[i]});
+        GitResult g = runGit(dir(), {"cat-file", "-e", rev + ":" + names[i]});
         if (g.status != 0) {
             continue;   // not in that commit: none
         }
-        g = runGit(dir_, {"show", rev + ":" + names[i]});
+        g = runGit(dir(), {"show", rev + ":" + names[i]});
         if (g.status != 0) {
             errors->push_back(gitWhy("reading " + std::string(names[i]) + " at " + rev, g));
             return false;
         }
         texts[i] = g.out;
     }
-    const std::string where = rev.empty() ? dir_ + "/" : rev + ":";
+    const std::string where = rev.empty() ? dir() + "/" : rev + ":";
     // The working files are read against what HEAD holds: a friend added by hand there, not yet committed, reads
     // limited even in a version 1 file (accounts::readFriends). HEAD unreadable: every friend reads as new.
     accounts::Registry head;
@@ -426,9 +428,9 @@ bool ConfigRepo::at(const std::string& commit, accounts::Registry* out, std::vec
         errors->push_back("\"" + commit + "\" is not a commit; `nexus-server config history` lists them");
         return false;
     }
-    const GitResult g = runGit(dir_, {"rev-parse", "--verify", "-q", commit + "^{commit}"});
+    const GitResult g = runGit(dir(), {"rev-parse", "--verify", "-q", commit + "^{commit}"});
     if (g.status != 0) {
-        errors->push_back("no commit " + commit + " in " + dir_ + "; `nexus-server config history` lists them");
+        errors->push_back("no commit " + commit + " in " + dir() + "; `nexus-server config history` lists them");
         return false;
     }
     return readAt(trimmed(g.out), out, errors, nullptr);
@@ -444,15 +446,15 @@ bool ConfigRepo::restoring(const std::string& commit, accounts::Registry* out, s
 }
 
 bool ConfigRepo::pending(std::string* why) {
-    const GitResult g = runGit(dir_, {"status", "--porcelain", "--", "accounts.json", "friends.json"});
+    const GitResult g = runGit(dir(), {"status", "--porcelain", "--", "accounts.json", "friends.json"});
     if (g.status != 0) {
         *why = gitWhy("reading the config repository's status", g);
         return true;
     }
     if (!trimmed(g.out).empty()) {
-        *why = "accounts.json or friends.json in " + dir_ + " holds hand edits not yet applied, so nothing was "
+        *why = "accounts.json or friends.json in " + dir() + " holds hand edits not yet applied, so nothing was "
             "written over them: run `nexus-server config check`, then `nexus-server config reload` to apply them (or "
-            "`git -C " + dir_ + " checkout -- .` to drop them)";
+            "`git -C " + dir() + " checkout -- .` to drop them)";
         return true;
     }
     return false;
@@ -481,7 +483,7 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
                 ::unlink(paths[i].c_str());
             }
         }
-        runGit(dir_, {"reset", "-q", "--", "accounts.json", "friends.json"});
+        runGit(dir(), {"reset", "-q", "--", "accounts.json", "friends.json"});
         *why = failed + "; the files and the index were put back as they were, and nothing was committed";
         return false;
     };
@@ -490,18 +492,18 @@ bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& mes
             !writeAtomic(paths[1], accounts::friendsText(registry), &failed)) {
         return undo(failed);
     }
-    GitResult g = runGit(dir_, {"add", "--", "accounts.json", "friends.json"});
+    GitResult g = runGit(dir(), {"add", "--", "accounts.json", "friends.json"});
     if (g.status != 0) {
         return undo(gitWhy("staging accounts.json and friends.json", g));
     }
-    g = runGit(dir_, {"diff", "--cached", "--quiet", "--", "accounts.json", "friends.json"});
+    g = runGit(dir(), {"diff", "--cached", "--quiet", "--", "accounts.json", "friends.json"});
     if (g.status == 0) {
         return true;    // the files already said this
     }
     if (g.status != 1) {
         return undo(gitWhy("comparing accounts.json and friends.json with HEAD", g));
     }
-    g = runGit(dir_, {"commit", "-q", "-m", message, "--", "accounts.json", "friends.json"});
+    g = runGit(dir(), {"commit", "-q", "-m", message, "--", "accounts.json", "friends.json"});
     if (g.status != 0) {
         return undo(gitWhy("committing accounts.json and friends.json", g));
     }
@@ -521,7 +523,7 @@ std::string adoptMark(const std::string& dir) {
 } // namespace
 
 bool ConfigRepo::keepSeed(const accounts::Registry& seed, const std::string& message, std::string* why) {
-    const std::string mark = adoptMark(dir_);
+    const std::string mark = adoptMark(dir());
     const int fd = ::open(mark.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0 || ::fsync(fd) != 0) {
         *why = "cannot write " + mark + ": " + std::strerror(errno);
@@ -539,12 +541,12 @@ bool ConfigRepo::keepSeed(const accounts::Registry& seed, const std::string& mes
 }
 
 bool ConfigRepo::adopting() const {
-    return ::access(adoptMark(dir_).c_str(), F_OK) == 0;
+    return ::access(adoptMark(dir()).c_str(), F_OK) == 0;
 }
 
 bool ConfigRepo::adopted(std::string* why) {
-    if (::unlink(adoptMark(dir_).c_str()) != 0 && errno != ENOENT) {
-        *why = "cannot remove " + adoptMark(dir_) + ": " + std::strerror(errno);
+    if (::unlink(adoptMark(dir()).c_str()) != 0 && errno != ENOENT) {
+        *why = "cannot remove " + adoptMark(dir()) + ": " + std::strerror(errno);
         return false;
     }
     return true;
@@ -554,9 +556,9 @@ bool ConfigRepo::onlyKnownHistory(std::string* why) {
     // Every path any commit touched, on every ref, merges included (each against each of its parents: a file added
     // while a merge was made by hand is in no other commit), and every path the index holds: a push publishes the
     // history.
-    const GitResult log = runGit(dir_, {"-c", "core.quotePath=true", "log", "--all", "--diff-merges=separate",
+    const GitResult log = runGit(dir(), {"-c", "core.quotePath=true", "log", "--all", "--diff-merges=separate",
                                         "--format=", "--name-only"});
-    const GitResult index = runGit(dir_, {"-c", "core.quotePath=true", "ls-files"});
+    const GitResult index = runGit(dir(), {"-c", "core.quotePath=true", "ls-files"});
     if (log.status != 0 || index.status != 0) {
         *why = gitWhy("listing every file in the config repository's history", log.status != 0 ? log : index);
         return false;
@@ -567,9 +569,9 @@ bool ConfigRepo::onlyKnownHistory(std::string* why) {
         if (line.empty() || std::find(kConfigFiles.begin(), kConfigFiles.end(), line) != kConfigFiles.end()) {
             continue;
         }
-        *why = "the history of " + dir_ + " holds " + line + ", which is not one of its files (.gitignore, "
+        *why = "the history of " + dir() + " holds " + line + ", which is not one of its files (.gitignore, "
             "accounts.json, friends.json), so nothing is pushed: a push would publish it, whatever the index says now. "
-            "Make a new repository (move " + dir_ + " aside, start nexus-server, which makes a new one, and copy "
+            "Make a new repository (move " + dir() + " aside, start nexus-server, which makes a new one, and copy "
             "accounts.json and friends.json into it, then `nexus-server config reload`), or rewrite this one's history "
             "so that no commit holds " + line + "; if it was a credential, replace that credential";
         return false;
@@ -596,7 +598,7 @@ bool ConfigRepo::pushStart(std::int64_t nowMs, std::string* why) {
         return false;
     }
     Child c;
-    if (!spawnGit(dir_, {"push", "-q", "origin", "HEAD:main"}, true, &c.pid, &c.out, &c.err, why)) {
+    if (!spawnGit(dir(), {"push", "-q", "origin", "HEAD:main"}, true, &c.pid, &c.out, &c.err, why)) {
         return false;
     }
     setNonBlocking(c.out);
@@ -690,7 +692,7 @@ bool ConfigRepo::pushServe(std::int64_t nowMs, std::string* result) {
 }
 
 bool ConfigRepo::history(std::vector<std::string>* lines, std::string* why) {
-    const GitResult g = runGit(dir_, {"log", "--date=iso-strict", "--format=%h %ad %s"});
+    const GitResult g = runGit(dir(), {"log", "--date=iso-strict", "--format=%h %ad %s"});
     if (g.status != 0) {
         *why = gitWhy("reading the config repository's history", g);
         return false;
@@ -767,7 +769,7 @@ bool ConfigRepo::remote(std::string* url, std::string* why) {
 }
 
 bool ConfigRepo::rawRemote(std::string* url, std::string* why) {
-    const GitResult g = runGit(dir_, {"config", "--get", "remote.origin.url"});
+    const GitResult g = runGit(dir(), {"config", "--get", "remote.origin.url"});
     if (g.status == 1) {
         url->clear();
         return true;
@@ -799,7 +801,7 @@ bool ConfigRepo::setRemote(const std::string& url, std::string* why) {
     if (!remote(&was, why)) {
         return false;
     }
-    const GitResult g = runGit(dir_, was.empty() ? std::vector<std::string>{"remote", "add", "origin", url}
+    const GitResult g = runGit(dir(), was.empty() ? std::vector<std::string>{"remote", "add", "origin", url}
                                                  : std::vector<std::string>{"remote", "set-url", "origin", url});
     if (g.status != 0) {
         *why = gitWhy("setting the remote", g);
@@ -816,7 +818,7 @@ bool ConfigRepo::clearRemote(std::string* why) {
     if (was.empty()) {
         return true;
     }
-    const GitResult g = runGit(dir_, {"remote", "remove", "origin"});
+    const GitResult g = runGit(dir(), {"remote", "remove", "origin"});
     if (g.status != 0) {
         *why = gitWhy("clearing the remote", g);
         return false;

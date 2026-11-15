@@ -76,8 +76,15 @@ std::string formatRefusalReply(const Client& client, const sync::Hello& server =
 bool paths(const std::string& dir, Paths* out, std::string* why);
 
 // The server: runs until `nexus-server stop`, SIGTERM or SIGINT, then ends every friend's driver and waits for them.
-// Returns the exit status.
+// Returns the exit status (server/start_order.h): 0 when another server answers that it is serving (it says so in one
+// line), and after a stop; 3 when a writer held the store's lock for the whole wait and no server served; 1 when it
+// could not start (readers that did not let go, a store that does not read, a socket that cannot be bound) or its store
+// failed while it ran.
 int serve(const Paths& p);
+// `nexus-server store check`: reads the store without changing it (store::Store::inspect, under its lock, shared) and
+// prints one line of what it holds and what a server's open would do. Refused, in one line and exit 1, while a server
+// has the store (it holds the lock): the store is not read under a writer.
+int storeCommand(const Paths& p, const std::vector<std::string>& args);
 // Asks the running server for a session, starting one (`self` serve) if none answers; prints its CONNECT line.
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.

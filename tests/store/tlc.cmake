@@ -3,12 +3,14 @@
 #
 #   WORK        a directory of its own for this run (emptied first); TLC runs on a copy of the models there
 #   MODELS      models/store of the checkout (its *.tla and *.cfg, and witnesses/*.cfg, are copied)
-#   MODULE      the module TLC checks (Journal, or JournalTrace)
+#   MODULE      the module TLC checks (Journal, JournalTrace, StoreLock, StoreLockTrace)
 #   CFG         the configuration file, relative to MODELS
-#   EXPECT      pass | invariant | deadlock
-#   PROPERTY    with invariant: the invariant whose violation is expected
-#   WALK        optional: the journal_walk program, run first with WALK_ARGS (comma-separated) and
-#               WORK/JournalTraceData.tla
+#   EXPECT      pass | invariant | deadlock | temporal | action
+#   PROPERTY    with invariant: the invariant whose violation is expected; with temporal: the configuration's one
+#               PROPERTY, whose violation is expected; with action: the action property ([][A]_v) expected violated
+#   WALK        optional: the walk program (journal_walk, store_lock_walk), run first with WALK_ARGS (comma-separated)
+#               and WORK/WALK_OUT
+#   WALK_OUT    optional: the trace module the walk writes, JournalTraceData.tla unless given
 #   WORKERS     optional: TLC's worker count, 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
 #
@@ -48,11 +50,14 @@ get_filename_component(cfg_name "${CFG}" NAME)
 
 if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     string(REPLACE "," ";" walk_args "${WALK_ARGS}")
-    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/JournalTraceData.tla"
+    if(NOT DEFINED WALK_OUT OR "${WALK_OUT}" STREQUAL "")
+        set(WALK_OUT JournalTraceData.tla)
+    endif()
+    execute_process(COMMAND "${WALK}" ${walk_args} "${WORK}/${WALK_OUT}"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
-        message(FATAL_ERROR "journal_walk failed (${walk_rc}): ${walk_out}")
+        message(FATAL_ERROR "${WALK} failed (${walk_rc}): ${walk_out}")
     endif()
 endif()
 
@@ -91,7 +96,16 @@ elseif(EXPECT STREQUAL "deadlock")
     if(NOT out MATCHES "Deadlock reached")
         message(FATAL_ERROR "expected a deadlock, TLC exit ${rc}:\n${out}")
     endif()
+elseif(EXPECT STREQUAL "temporal")
+    # The configuration checks one PROPERTY, so the violation TLC reports is that one.
+    if(NOT out MATCHES "Temporal properties were violated")
+        message(FATAL_ERROR "expected the temporal property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
+    endif()
+elseif(EXPECT STREQUAL "action")
+    if(NOT out MATCHES "Action property ${PROPERTY} is violated")
+        message(FATAL_ERROR "expected the action property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
+    endif()
 else()
-    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant or deadlock")
+    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, deadlock, temporal or action")
 endif()
 message("${MODULE} ${cfg_name}: as expected (${EXPECT} ${PROPERTY})")

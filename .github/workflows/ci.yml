@@ -210,6 +210,18 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
+          # the store's lock and the start-up order: their walks and the faulty orders, all at once (each on real files,
+          # about 9 s under the sanitizers, each with its own trace and store directory; any failure fails the step)
+          lock_pids=()
+          for seed in 1 2 3 4 5; do
+            build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
+          done
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
+            build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
+          done
+          for pid in "${lock_pids[@]}"; do
+            wait "$pid"
+          done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
           # the driver supervisor: every group, then its walks and their faults
@@ -535,7 +547,7 @@ jobs:
               supervisor_test wire_test nexus_versions_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk link_walk secrets_walk journal_walk supervisor_walk
+              overlay_walk trace_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -584,7 +596,8 @@ jobs:
           build/tests/sync/sync_test
           # the secret dialog: every unit group, the leak test among them
           build/tests/server/secrets_test
-          # the store: every unit group (MemFs, crashes at every write and sync), and the server's tabs on it
+          # the store: every unit group (MemFs, crashes at every write and sync, the lock, the start-up order), and
+          # the server's tabs on it
           build/tests/store/store_test
           build/tests/store/durable_test
           # the driver protocol: every group (the parser and the reader over every chunking)
@@ -595,9 +608,10 @@ jobs:
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
-      # Each walk drives its code in memory (MemFs where it has files) and writes only the trace it is given, so they
-      # are independent: they run at once, at most TEST_JOBS at a time, each in a directory of its own under walks/
-      # holding its trace and its output. Any failure fails the step, with that walk's command and output.
+      # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
+      # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
+      # once, at most TEST_JOBS at a time, each in a directory of its own under walks/ holding its trace and its output.
+      # Any failure fails the step, with that walk's command and output.
       - name: Trace walks and their faults under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
@@ -650,6 +664,13 @@ jobs:
           done
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             walk build/tests/store/journal_walk 1 1000 --fault "$fault"
+          done
+          # the store's lock and the start-up order: their walks and the faulty orders
+          for seed in 1 2 3 4 5; do
+            walk build/tests/store/store_lock_walk "$seed" 2000
+          done
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
+            walk build/tests/store/store_lock_walk 1 2000 "$fault"
           done
           # the driver supervisor's walks and their faults
           for seed in 1 2 3 4 5 6 7 8; do
@@ -716,6 +737,11 @@ jobs:
           - shard: journal
             run: '^tlc_journal'
             build: journal_walk
+          # The store's lock and the start-up order (models/store/StoreLock.tla): its instances, witnesses and the
+          # code's walks.
+          - shard: store-lock
+            run: '^tlc_store_lock'
+            build: store_lock_walk
           - shard: claude
             run: '^tlc_claude'
             node: true
@@ -734,7 +760,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk overlay_walk glide_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|claude|witness|secrets)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

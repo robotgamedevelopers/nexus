@@ -116,6 +116,139 @@ server's state is.
 - It is refused only when its reader byte names a format later than this build reads. The message names the store,
   the record and both formats, and says to run the newer nexus-server.
 
+### One writer: the store's lock
+
+The journal has one writer. Two writers would each number their next record from the same replay, so one number
+lands twice and the next open keeps only what comes before it, and each could start a driver for the same queued
+prompt. So at most one process ever has a store open for writing, and the operating system enforces it
+(`models/store/StoreLock.tla`):
+
+- The lock is the store's directory's own: an advisory lock (`flock`) on a descriptor of the directory itself
+  (`O_RDONLY | O_DIRECTORY | O_CLOEXEC`). Nothing is made for it: no lock file, no pid. A server takes it exclusive as
+  the first thing `Store::open` does, before anything in the directory is read or written, and holds it for the life
+  of the process. The operating system releases it when the process ends, however it ends (kill -9, a crash, an exit),
+  so there is never a stale lock to clean up. The descriptor is close-on-exec: no driver or other child holds it.
+- The directory is opened by its name once, following symbolic links, so every name it is reached by (a second server
+  directory whose `store` is a link to this one, a path through a linked parent) takes the one lock. From then on the
+  store is reached only through that descriptor: every open, read, rename, removal and directory sync is relative to
+  it (`openat`, `renameat`, `unlinkat`, `fstatat`). A directory moved aside or renamed while its server holds it is
+  still that server's store: its records and its compactions go on in the moved directory, never into a new directory
+  made at the old name, which is another store with its own lock.
+- The lock is checked where the store lives: right after it is taken, a second exclusive lock on another descriptor
+  of the same directory must be refused. A filesystem that grants it does not keep locks, whatever its type, and the
+  store is refused.
+- Where locks cannot be trusted the store is refused, never run unlocked: a network filesystem (on macOS any volume
+  without `MNT_LOCAL`; on Linux NFS, SMB, CIFS, AFS, Ceph, GPFS, Lustre, BeeGFS, Coda and NCP), and a filesystem
+  that hands locks to another program (FUSE, virtiofs, which reports FUSE's type, 9p, which is WSL2's view of Windows
+  drives, and VirtualBox's shared folders). The message names the filesystem (`DIR is on NFS, a network filesystem,
+  ...`) and says to keep the server's directory on a local disk. A filesystem that returns an error for `flock` is
+  refused the same way.
+- A reader that changes nothing (`nexus-server store check`, `Store::inspect`) takes the lock shared, copies the
+  journal's files into memory and lets go; it opens its copy in memory, never cuts a torn tail or writes a migration on
+  the disk, and makes nothing in the directory. While a server holds the lock it is refused in one line and reads
+  nothing. Its copy has a hard limit, 500 ms under the lock, checked before every 256 KiB it reads and after every
+  file, so one slow read of a large file cannot outlast it by more than one chunk: past it the reader gives up and
+  fails (the reader, never the writer).
+- Writers come before readers, by a gate: the file `gate` in the store's directory (empty; made by the first server of
+  this build that opens the store, opened through the directory's descriptor, `O_NOFOLLOW`). A server holds it
+  exclusive while it waits for the store's lock; a reader takes it shared, without waiting, only for the moment it
+  takes the store's lock, and when a server holds it gives way at once, in one line (`has a nexus-server starting on
+  it ... try again once the server serves`). So while a server waits, no new reader starts, and it waits only for the
+  readers already in, each of which gives up within its 500 ms. A second server finding the gate held finds a writer
+  opening the store: it waits as for a held lock (step 2 below).
+- A server that starts while only readers hold the lock tries again every 10 ms for at most 2 seconds; if they have not
+  let go by then it fails (exit 1), saying that readers hold the store and how to find them (`lsof DIR`). What stays
+  unbounded: a reader that is suspended (stopped with a signal, its machine asleep, a debugger) holds its shared lock
+  for as long as it is suspended, past its 500 ms; every server start in that time fails after its 2 seconds, and a
+  service manager's restarts may reach its start limit (below).
+- A store's directory removed while its server holds it (`rm -rf`, by hand) is found at the next commit (once per
+  group commit, before the journal's sync): on Linux by the directory's link count, which is 0 once it is removed; on
+  macOS, where a removed directory keeps its count, by its present path (`F_GETPATH`, which follows a rename), which no
+  longer names that directory. The store fails, loudly (`... was removed while this server held it`), nothing more is
+  acknowledged, and the server stops (exit 1); a directory moved aside is not removed, and its server goes on in it.
+
+`nexus-server serve` starts in this order (`src/server/start_order.h`, the one dispatch `take_step`):
+
+1. Ask the control socket whether a server is serving: the request `status`, and the reply `SERVING`, within 3 s (past
+   the 2 s one idle connection may hold a serving server in its read). A server answers it only from its serving loop,
+   so `SERVING` is true when said; a server that has accepted `stop` takes no more requests, and the connections still
+   queued on its socket are closed unanswered with it. A connection alone is not an answer: the kernel accepts one on
+   any bound socket, a stopping server's too. A server from before this question (which takes no store lock either)
+   refuses `status` as it refuses every request it does not know, `ERROR unknown request ...`, and gives that refusal
+   only from its serving loop: that reply counts as serving, and no other does. Serving: one line, exit 0. No reply,
+   the connection closed unanswered, `STOPPING` or any other line: not serving, and the start goes on.
+2. Take the store's lock and replay the journal. The lock held by a writer that does not say it serves is a server
+   starting (its replay) or stopping (from its stop's acceptance to its drivers' end): wait, asking the socket every
+   10 ms, and saying so once a second (`still waiting for the store's lock: N of 10000 ms`). A server says it serves:
+   exit 0. The lock comes free: take it and go on. Neither within 10 s: exit 3, saying that the lock's holder is
+   neither serving nor ending and how to find it. Only readers holding it past their wait: exit 1.
+3. Bind the control socket (a server says it serves on it: exit 0), recording the socket file it made (its device and
+   inode).
+4. Only then settle the sessions against the accounts and restore the friends' drivers, which may commit to the
+   journal and start a driver for a queued prompt.
+
+Nothing writes a record or starts a driver before the lock and the socket are both held. Exit 0 is a start refused
+because a live server says it serves, which a service manager does not restart (launchd's `KeepAlive` with
+`SuccessfulExit` false, systemd's `Restart=on-failure`); exit 3 (stuck) and exit 1 (anything else, readers that did
+not let go among them) are restarted. A start that fails after it bound removes its own socket file.
+
+`nexus-server new` waits on the same outcomes the start reports, not a fixed time: a reply from a serving server; or
+the exit of the server it started: 0 (another says it serves: asked again), anything else said as it is, with the log
+(`the server started exited with code 3 without serving; see DIR/server.log`). A request closed unanswered (a server
+that has accepted `stop`) is asked again, and once its socket is gone a server is started, which waits for the lock. A
+last-resort bound of 30 s, past the started server's whole wait, ends it only for a server neither serving nor exiting.
+
+For the supervision layer (a service manager running `nexus-server serve`):
+
+- What the start's liveness rests on (`models/store/README.md`, fairness): every non-zero exit is started again, for
+  as long as it takes. systemd's default start limit (`StartLimitBurst=5` in `StartLimitIntervalSec=10s`) breaks
+  that: five quick exits 1 (readers that did not let go, each start failing after its 2 s; a store that does not
+  read) put the unit in `failed` and nothing starts it again. A unit for nexus-server sets `StartLimitIntervalSec=0`,
+  or a `RestartSec=` long enough that five restarts span more than the interval (`RestartSec=3s`). launchd has no
+  start limit; it throttles a job that exits within 10 s of starting to one start per 10 s (`ThrottleInterval`).
+- A person who starts the server by hand is no service manager: nothing starts it again after exit 1 or 3. The line it
+  exits with says what held the store and how to find it.
+- A start waiting for the store's lock says so once, then once a second until it serves or gives up, so a person
+  watching it sees the wait go on.
+
+A server stops in this order: `stop` (or SIGTERM, SIGINT) accepted, after which its loop takes no request; the control
+socket closed and its file removed, only if the file of that name in the server's directory (held by descriptor) is
+still the socket this server bound (same device and inode); the drivers ended and their last records written, under
+the lock still held; then the process exits and the lock goes with it. Between the stop's acceptance and the socket's
+close a start can still connect, but it is not told `SERVING`, so it never takes a stopping server for a serving one:
+it finds the lock held and waits for it (step 2) rather than exiting 0 and leaving nothing serving
+(`models/store/StoreLock.tla` RefusedServes; its reversed witness `witnesses/LConnectProbe.cfg` is the probe that took
+a connection for an answer).
+
+The server's directory is held by descriptor too, from the start: the socket is bound in it (on Linux through the
+descriptor's `/proc/self/fd` path; on macOS, which has no bind relative to a directory, by changing into the directory
+for the call), and read back, changed and removed in it (`fstatat`, `fchmodat`, `unlinkat`); the config repository
+and the drivers file are found through it each time (its present path), so a directory moved aside while its server
+runs keeps everything that server does in one directory. What stays open: between the bind and the read-back, and
+between the identity check and the removal at the stop, another process of the same user could put a file of its own
+at the socket's name, inside the server's own directory (mode 0700); there is no call that removes a name only if it is
+a given file. The start's first question goes to the socket by its path, as `new` and `stop` do.
+
+What the lock covers: any number of servers and readers of this build on one store, by any name of its directory, the
+directory moved or renamed under its server, any of them killed at any point, and filesystems that do not keep locks
+(by type, or by the check). What it does not cover:
+
+- A server from before the lock takes none; only the socket keeps it out, and that leaves one window, open during the
+  upgrade only (while servers of both builds can start on one store): a server of this build, holding the lock, asks
+  the socket again before it binds, and removes a stale socket file before binding its own. A server from before the
+  lock that binds between that second ask and that removal has its socket file removed and keeps running unreachable,
+  beside this one. Such a server also opens the store and restores its drivers before it asks the socket at all, so
+  one started while a server of this build replays writes to the journal unlocked before it is refused. And the
+  commonest path of the upgrade itself: the older server is stopped, and its socket goes first while its drivers end,
+  with no lock on the store; a server of this build started then finds no socket and a free lock, takes it, and
+  replays while the older one's drivers still write their last records. Nothing is built around any of these: stop
+  the older server and wait for it to exit before starting this build (`nexus-server stop`, then its process gone);
+  once every server on the machine is of this build, the lock closes all three.
+- A process that writes the store's files without `Store::open` (by hand, or a tool reading the journal directly).
+- A store shared with another machine in a way no filesystem type shows and the check passes on (a sync tool copying
+  the directory, one disk mounted by two machines).
+- A copy of the directory: it is another store, with its own lock.
+
 ## The fixtures
 
 Today's main formats are fixed as bytes that main's own code wrote, not as bytes this build claims main would write:

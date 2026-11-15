@@ -3,6 +3,7 @@
 #include "store/status.h"
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -32,9 +33,61 @@ public:
     virtual Status sync() = 0;
 };
 
+// A directory held and locked, for as long as this object lives: on the real filesystem, a descriptor of the
+// directory itself, opened once, with flock on it. Destroying it releases the lock; so does the end of the process that
+// holds it, for any reason, which is why no lock is ever left behind to be cleaned up. While it lives, every call of
+// the Fs that made it on a name in that directory ("dir/name", and the directory itself) goes through that descriptor
+// (openat, renameat, unlinkat, fstatat), never through the directory's name again: what the lock is on and what is
+// read and written are one directory, wherever it is moved and whatever is put at its old name.
+class FileLock {
+public:
+    virtual ~FileLock() = default;
+    // Ok while the held directory still has a name; Failed, saying so, once it was removed while held (writes into it
+    // succeed and can never be found again). The store asks it at each durable write (Store::commit, Store::flush).
+    virtual Status alive() const { return Status::ok(); }
+};
+
+// The writers' gate: a file of this name in a store's directory, reached through its descriptor, locked exclusive by a
+// writer for as long as it waits for the store's lock, and shared by a reader for the moment of taking the store's lock
+// (never waiting). So a reader that comes while a writer waits gives way (Refused) instead of joining the readers the
+// writer waits for, and a stream of overlapping readers cannot keep a writer out: it waits only for those that held the
+// store when it began. A writer makes it; a reader never does (no gate: no writer of this build has waited there).
+constexpr const char* kGateName = "gate";
+
+// Exclusive: one holder and no other, the store's writer. Shared: any number of holders and no exclusive one, a
+// reader that changes nothing.
+enum class LockMode { Shared, Exclusive };
+
+// What an opener does when its exclusive lock is refused (Fs::lock, models/store/StoreLock.tla LockTry):
+// `exclusive_free` false, then `shared_free` whether a shared lock is to be had at that moment. A shared lock to be had
+// means only readers hold it (a reader holds it for the milliseconds of its copy, at most kReaderCopyMs in store.h), so
+// the opener tries again until `waited_ms` reaches `reader_wait_ms` and then gives up (Readers: a start that failed,
+// not another server); no shared lock means a writer holds it, and the opener is refused at once (Busy). Time is an
+// argument: the unit tests give it.
+enum class LockStep { Take, Wait, Busy, Readers };
+constexpr std::uint64_t kLockReaderWaitMs = 2000;
+constexpr std::uint64_t kLockRetryMs = 10;
+// The most a reader holds the shared lock for (Store::inspect's copy, which gives up past it and fails itself): well
+// inside kLockReaderWaitMs, so that a writer's wait outlasts every reader that had the lock when it began. A judgement
+// against the store's size (its log is compacted past 4 MiB, a copy of which takes milliseconds), not measured.
+constexpr std::uint64_t kReaderCopyLimitMs = 500;
+// The most a reader reads at once under the shared lock: between chunks it asks the clock against kReaderCopyLimitMs.
+constexpr std::uint64_t kReaderChunkBytes = 256 * 1024;
+LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms,
+                        std::uint64_t reader_wait_ms = kLockReaderWaitMs);
+
 class Fs {
 public:
     virtual ~Fs() = default;
+    // The directory `dir` held and locked (FileLock above), never waiting on a writer: Ok and `out` the hold; Busy when
+    // a writer holds it (for a shared lock, and for an exclusive one when no shared lock is to be had); Failed when only
+    // readers held it for all of an exclusive lock's wait (next_lock_step's Readers), saying so; Failed when locks
+    // cannot be trusted where the directory is (a network filesystem, one that passes locks to another program, or one
+    // where a second exclusive lock is granted beside this one), saying so, so that nothing runs unlocked. An exclusive
+    // lock takes the writers' gate (kGateName) first and holds it until it has the store's lock, Busy when another
+    // writer holds the gate; a shared lock is Refused when a writer holds the gate. Nothing is made but the gate, by a
+    // writer, and `dir` must exist.
+    virtual Status lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLock>& out) = 0;
     virtual Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) = 0;  // NotFound if missing
     virtual Status make_dir(const std::string& dir) = 0;   // with its parents; nothing if it is there
     // Its files and directories, by name. NotFound if missing.
@@ -63,7 +116,22 @@ public:
 
 // The real filesystem (POSIX). sync is F_FULLFSYNC on macOS, which flushes the drive's cache too (plain fsync there
 // does not survive a power cut); fsync elsewhere.
-std::unique_ptr<Fs> make_posix_fs();
+//
+// Its options are seams for the tests; the server passes none. `now_ms` and `sleep_ms` are the clock and the pause of
+// an exclusive lock's wait on readers (the steady clock and a real sleep when empty; the trace walk gives its own, so
+// that time is an argument), and `reader_wait_ms` its length. `test_fs_type` makes every directory look as if it were
+// on that filesystem (a Linux name: "nfs", "fuse", ...), and `test_locks_ignored` makes the check after a lock see its
+// second exclusive lock granted, as on a filesystem that takes no locks: the refusals' own tests. `test_no_gate` takes
+// no gate (kGateName), the build before it: only the trace walk's reversed fault (--faulty-no-gate) sets it.
+struct PosixOptions {
+    std::function<std::uint64_t()> now_ms;
+    std::function<void(std::uint64_t)> sleep_ms;
+    std::uint64_t reader_wait_ms = kLockReaderWaitMs;
+    std::string test_fs_type;
+    bool test_locks_ignored = false;
+    bool test_no_gate = false;
+};
+std::unique_ptr<Fs> make_posix_fs(PosixOptions options = {});
 
 std::string dir_of(const std::string& path);
 std::string name_of(const std::string& path);
@@ -116,10 +184,20 @@ public:
     };
 
     // A copy is the disk as it is now, for the tests to crash in different ways: the AppendFiles open on this one
-    // stay with it, and none is open on the copy.
+    // stay with it, and none is open on the copy; nor is any lock held on the copy.
     MemFs() = default;
     MemFs(const MemFs& other);
     MemFs& operator=(const MemFs&) = delete;
+
+    // Locks are on directories, kept apart from the files as flock keeps them apart from the bytes: nothing is made
+    // for one, and taking one is no mutating call (fail_at does not count it). Each process of a test on one MemFs
+    // holds its own FileLock: destroying it is that process ending; crash() ends every process, and every lock goes.
+    // MemFs has no clock to wait on: an exclusive lock refused while only shared ones are held fails at once, as
+    // PosixFs does when its wait runs out. MemFs keeps a directory by its name (it has no rename of directories), so
+    // the hold's descriptor is the name here; the real filesystem's is tested on the real one.
+    Status lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLock>& out) override;
+    // The holders of the lock on `dir` now: exclusive (0 or 1) and shared.
+    std::uint64_t lock_holders(const std::string& dir, LockMode mode) const;
 
     Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override;
     Status make_dir(const std::string& dir) override;
@@ -167,6 +245,11 @@ private:
         std::vector<DirOp> pending;
     };
     class Open;
+    class Held;
+    struct Locks {
+        std::uint64_t exclusive = 0;
+        std::uint64_t shared = 0;
+    };
     Status step(const char* what, const std::string& path);
     File* file(const std::string& path);
     const File* file(const std::string& path) const;
@@ -177,6 +260,7 @@ private:
     std::vector<File> files_;
     std::vector<bool> live_;
     std::map<int, int> opened_;     // inode: AppendFiles open on it (kept alive while any is)
+    std::map<std::string, Locks> locks_;    // path: the locks held on it, in this epoch
     std::uint64_t epoch_ = 0;       // crashes so far: an AppendFile from an earlier epoch refuses
     std::uint64_t calls_ = 0;
     std::uint64_t fail_at_ = 0;

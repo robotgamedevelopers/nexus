@@ -31,6 +31,7 @@
 #include <sys/types.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -58,15 +59,19 @@ GitResult runGit(const std::string& dir, const std::vector<std::string>& args, i
 
 class ConfigRepo : public sync::AccountsKeeper {
 public:
-    // The repository in `dir` (<server dir>/nexus-config).
+    // The repository in `dir` (<server dir>/nexus-config), by its name.
     explicit ConfigRepo(std::string dir);
+    // The repository wherever `dirNow` says it is now: the server's, which holds its server directory by descriptor
+    // and gives the directory's present path (server.cpp), so that a server directory moved aside while the server runs
+    // keeps its config with it and never reads or writes the one made at the old name.
+    explicit ConfigRepo(std::function<std::string()> dirNow);
     ~ConfigRepo() override;
     ConfigRepo(const ConfigRepo&) = delete;
     ConfigRepo& operator=(const ConfigRepo&) = delete;
 
-    const std::string& dir() const { return dir_; }
-    std::string accountsPath() const { return dir_ + "/accounts.json"; }
-    std::string friendsPath() const { return dir_ + "/friends.json"; }
+    std::string dir() const { return dirNow_ ? dirNow_() : dir_; }
+    std::string accountsPath() const { return dir() + "/accounts.json"; }
+    std::string friendsPath() const { return dir() + "/friends.json"; }
 
     // Makes the directory (0700) and the repository when they are missing, with its .gitignore and a first commit.
     // Files already there when the repository is made are committed in it only when they read and agree (else they
@@ -154,6 +159,7 @@ private:
     bool onlyKnownHistory(std::string* why);
     void endPush();
     std::string dir_;
+    std::function<std::string()> dirNow_;
     bool applying_ = false;
     bool pushWanted_ = false;
     std::vector<std::string> notes_;
