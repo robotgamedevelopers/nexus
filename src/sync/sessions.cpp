@@ -35,11 +35,14 @@ std::string named(SessionId id) {
 // One entry of the diff: its kind, closed flag, the length of text `had` holds of it (non-zero only for an entry `had`
 // holds open that only grew) and the rest of its text. In schema's tables (`tables`) an entry whose text is not a
 // table's text goes whole, offset 0: the window holds such text with U+FFFD in place of the bytes it could not carry
-// (codec::tableText), so an offset into it would not be where the server's is.
+// (codec::tableText), so an offset into it would not be where the server's is. Both texts are checked: the one held can
+// be cut inside a character that the new one completes ("ab\xC3" growing to "ab\xC3\xA9"), and the window holds the cut
+// text with U+FFFD, three bytes where the server's had one, so a growth from it would be refused on every later diff.
 codec::EntryChange entryChange(const SessionEntry& e, const EntryRef* had, bool tables) {
     std::size_t offset = 0;
     if (had != nullptr && !(*had)->closed && (*had)->kind == e.kind && (*had)->text.size() <= e.text.size() &&
-            e.text.compare(0, (*had)->text.size(), (*had)->text) == 0 && (!tables || codec::tableText(e.text))) {
+            e.text.compare(0, (*had)->text.size(), (*had)->text) == 0 &&
+            (!tables || (codec::tableText((*had)->text) && codec::tableText(e.text)))) {
         offset = (*had)->text.size();
     }
     return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset)};

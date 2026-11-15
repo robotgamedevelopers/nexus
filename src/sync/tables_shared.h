@@ -137,4 +137,15 @@ struct Region {
     }
 };
 
+// The region a read of `diff` loads into, by the generated LoadMeasure: BadDiff when the diff is longer than the link
+// carries (kMaxDiffBytes), when it does not measure, or when its region is past kMaxReadBytes (sync/codec.h), so a read
+// never allocates more than that.
+template <typename Measure>
+std::size_t readNeed(const std::string& diff, Measure measure, const char* what) {
+    checkDiffSize(diff.size(), what);
+    const int64_t need = measure(reinterpret_cast<const std::uint8_t*>(diff.data()), static_cast<int64_t>(diff.size()));
+    checkReadSize(diff.size(), need, what);
+    return static_cast<std::size_t>(need);
+}
+
 } // namespace nexus::sync::codec::shared

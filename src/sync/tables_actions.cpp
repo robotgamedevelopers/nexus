@@ -130,13 +130,12 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
 std::vector<Action> readActionsTables(const std::string& diff, int* unknown) {
     const auto* bytes = reinterpret_cast<const std::uint8_t*>(diff.data());
     const int64_t size = static_cast<int64_t>(diff.size());
-    const int64_t need = wire::ActionsDiffLoadMeasure(bytes, size);
-    if (need < 0) {
-        throw BadDiff("actions diff of " + std::to_string(diff.size()) + " bytes does not load as schema's "
-            "ActionsDiff (damaged, cut short, or a form this build does not read)");
-    }
+    const std::size_t space = readNeed(diff, [](const std::uint8_t* b, int64_t n) {
+        return wire::ActionsDiffLoadMeasure(b, n);
+    }, "actions diff");
+    const int64_t need = static_cast<int64_t>(space);
     Region region;
-    region.bytes.resize(static_cast<std::size_t>(need));
+    region.bytes.resize(space);
     wire::TableReport report;
     const wire::ActionsDiff* d = wire::ActionsDiffLoad(region.bytes.data(), need, bytes, size, &report);
     if (d == nullptr || report.damaged || report.refused) {

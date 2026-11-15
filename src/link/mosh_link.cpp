@@ -1,6 +1,5 @@
 #include "link/mosh_link.h"
 
-#include <cstdio>
 #include <exception>
 #include <stdexcept>
 
@@ -67,7 +66,6 @@ struct ServerSession::Impl {
     sync::Actions initialRemote;
     ServerTransport transport;
     sync::Applier applier;
-    int unknown = 0;    // what the last actions diff held that this server does not know, as last logged
     Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next, std::uint32_t f)
         : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(actionsIn(next, f)),
           transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
@@ -108,20 +106,14 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
     if (diff.empty())
         return fresh;
     std::vector<sync::Action> actions;
-    int unknown = 0;
-    const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format, &unknown); }, problem);
+    // No count of what a later window's actions held that this server does not know: these bytes are mosh's own,
+    // re-encoded from the actions it kept, where an unknown field is already gone and an unknown kind is Unknown,
+    // which the hub counts and refuses with its reason (Hub::apply). What a later end sends that this build does not
+    // know is counted and logged on the window's end only, for the state it receives.
+    const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format); }, problem);
     sync::wipeBytes(diff);  // it may hold a secret answer's value
     if (!parsed)
         return fresh;
-    // What a later window's actions held that this server skipped: logged when the count changes, never the text.
-    if (unknown != impl_->unknown) {
-        impl_->unknown = unknown;
-        if (unknown > 0) {
-            std::fprintf(stderr, "nexus-server: link on port %s: the window's actions hold %d field(s) or kind(s) this "
-                "server does not know (a later window): skipped; an action of a kind it does not know is counted and "
-                "not applied\n", port().c_str(), unknown);
-        }
-    }
     return impl_->applier.apply(actions, problem);
 }
 

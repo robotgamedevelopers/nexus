@@ -25,7 +25,7 @@ This page is the whole scheme. The code is `src/sync/formats.h` (the numbers, th
 | 1 | The first (main before formats): nothing framed, no activity, entry kinds Person 0, Friend 1, Notice 2. A reader of 1 reads exactly 1. |
 | 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
 | 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's friend, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
-| 4 | schema's variable tables (`schema/Nexus.schema`): the state is a `SessionsDiff` and the actions an `ActionsDiff`, written and read by the generated code. Every field, enum value and union arm rides under the hash of its name, so rules 1 to 3 hold by construction: a field a reader does not know is skipped, an enum value it does not know reads None, and both are counted (`TableReport.unknown`), which the window and the server log when the count changes. None reads as the plainest thing known: an entry kind as a Notice, an activity as Busy, an action kind as unknown (which the server refuses alone, never the link). It says the same as format 3. |
+| 4 | schema's variable tables (`schema/Nexus.schema`): the state is a `SessionsDiff` and the actions an `ActionsDiff`, written and read by the generated code. Every field, enum value and union arm rides under the hash of its name, so rules 1 to 3 hold by construction: a field a reader does not know is skipped, an enum value it does not know reads None, and both are counted (`TableReport.unknown`), which the window logs when the count changes, for the state it receives. The server logs no such count: mosh hands it the actions re-encoded from those it kept, where an unknown field is already gone, and it refuses an unknown action kind with its reason instead. None reads as the plainest thing known: an entry kind as a Notice, an activity as Busy, an action kind as unknown (which the server refuses alone, never the link). It says the same as format 3. |
 
 Fields appended to a format's frames do not change its number: a reader from before them skips them (rule 1), and
 nothing about them makes an older reader wrong. They are listed in the table in the order they were appended, and a
@@ -47,8 +47,16 @@ later field goes after them.
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
 what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so a friend's
 stray byte costs one character on screen, never the link. An entry whose text is not clean is sent whole each time,
-never as growth, so the window's copy is always the server's text as shown. A secret's value rides as bytes, never
-as text, and is never changed.
+never as growth, so the window's copy is always the server's text as shown; so is an entry whose earlier text the
+window holds was not clean (cut inside a character the growth completes), since the window holds that text with
+U+FFFD and a growth from the server's length would not be where the window's is. A secret's value rides as bytes,
+never as text, and is never changed.
+
+A format 4 read is bounded. A diff longer than 4,194,304 bytes (2048 * 2048, mosh's `Compressor::BUFFER_SIZE`, the
+most one instruction of the link decompresses into) never crossed the link and is refused before it is measured; and
+a diff whose loaded tables would take more than 16,777,216 bytes (four times that) is refused before anything is
+allocated (`sync/codec.h`: `kMaxDiffBytes`, `kMaxReadBytes`). A real diff loads into 1.05 to 2.1 times its bytes;
+bytes crafted as many tiny elements load into ten times or more, and those are what the second cap refuses.
 
 ### Agreeing on a format when the window connects: the Hello
 
@@ -120,8 +128,10 @@ Each generator says how to build it against a worktree of main at 50565c6. `sync
 `durable_unit_kinds` and `link_e2e_older_server` check the rules above; `sync_unit` `sessions_instance_appended` and
 `store_unit_instance` check the appended fields both ways. `wire_unit_nexus_sessions`, `wire_unit_nexus_actions` and
 `wire_unit_nexus_hello` check format 4 and the Hello both ways against a later version; `sync_unit` `hello_min_peer`,
-`sessions_unknown_kind_is_a_notice` and `sessions_text_not_utf8` check the refusal, the unknown kind and the text
-rule.
+`sessions_unknown_kind_is_a_notice`, `sessions_text_not_utf8` and `sessions_growth_across_a_split_character` check
+the refusal, the unknown kind and the text rule; `format4_read_caps` the two caps at their boundaries; and
+`format4_read_fuzz` thousands of damaged diffs (fixed seeds), each read taken or refused as BadDiff alone, a refused
+one leaving the state as it was, a taken one writing back out the same.
 
 ## Moving to schema
 

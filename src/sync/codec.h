@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -60,7 +61,25 @@ std::string writeActionsLegacy(std::uint64_t start, const std::vector<Action>& h
                                std::uint32_t format);
 std::vector<Action> readActionsLegacy(const std::string& diff, std::uint32_t format);
 
-// Format 4 on: schema's tables. Reading throws BadDiff when the bytes do not load (damaged, cut short, or refused);
+// The most one diff can be: mosh's link carries a diff inside one instruction, which its receiver decompresses into a
+// buffer of Compressor::BUFFER_SIZE bytes, 2048 * 2048 (mosh's src/network/compressor.h), and refuses past it. A diff
+// longer than that never crossed the link, so a format 4 read refuses it before measuring it.
+constexpr std::size_t kMaxDiffBytes = 2048 * 2048;
+
+// The most one format 4 read allocates for the loaded tables (the generated LoadMeasure's region), four times the
+// longest diff: 16 MiB. Measured, the region of a real diff is 1.05 times its bytes for a large sessions diff (280,752
+// for 267,496) and up to 2.1 times for a small one (840 for 404, 2,344 for 1,863 of actions); bytes crafted as many
+// tiny elements measure 32 to 37 times. Four times keeps every real diff of any length the link carries, and bounds a
+// crafted one at 16 MiB rather than about 150. A read past it throws BadDiff before it allocates.
+constexpr std::size_t kMaxReadBytes = 4 * kMaxDiffBytes;
+
+// The two refusals of those caps, as readTables and readActionsTables make them: BadDiff when a diff of `diffBytes` is
+// longer than kMaxDiffBytes, and when its region of `need` bytes is past kMaxReadBytes. `what` names the diff.
+void checkDiffSize(std::size_t diffBytes, const char* what);
+void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what);
+
+// Format 4 on: schema's tables. Reading throws BadDiff when the bytes do not load (damaged, cut short, or refused),
+// when the diff is longer than kMaxDiffBytes, or when loading it would allocate more than kMaxReadBytes;
 // what a later version adds is skipped and counted in `unknown` (fields, enum values: report.unknown), and an entry kind
 // this build does not know reads as a notice, an activity as busy and an action kind as Unknown.
 std::string writeTables(const SessionsChange& change);

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -21,6 +22,7 @@
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
+#include "sync/codec.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 #include "sync/sessions.h"
@@ -1419,6 +1421,241 @@ void sessions_text_not_utf8() {
     CHECK(k == g2);
 }
 
+// An open entry whose text ends inside a UTF-8 character, then grows to complete it. The window holds the cut text with
+// U+FFFD (three bytes where the server's has one), so the growth goes whole; before, it went as a growth from the
+// server's length, which the window refused on every diff from that state, and the window froze.
+void sessions_growth_across_a_split_character() {
+    const auto state = [](const std::string& text, bool closed) {
+        SessionView v = tailFor("ada", {entry(EntryKind::Friend, text, closed)}, {}, Tail{});
+        return Sessions({std::make_shared<const SessionView>(std::move(v))});
+    };
+    const Sessions s0;
+    const Sessions s1 = state("ab\xC3", false);
+    const Sessions s2 = state("ab\xC3\xA9", false);
+    const Sessions s3 = state("ab\xC3\xA9 and more", true);
+    Sessions window = s0;
+    window.apply_string(s1.diff_from(s0));
+    const SessionView* held = window.find(sid("ada"));
+    CHECK(held != nullptr && held->entries.size() == 1 && held->entries[0]->text == "ab\xEF\xBF\xBD");
+    // mosh diffs each newer state from the one the window acknowledged, s1, until the window acknowledges another.
+    for (const Sessions* next : {&s2, &s3}) {
+        Sessions w = window;
+        bool refused = false;
+        try {
+            w.apply_string(next->diff_from(s1));
+        } catch (const BadDiff&) {
+            refused = true;
+        }
+        CHECK(!refused);
+        CHECK(!refused && w == *next);
+    }
+    // And from s2, whose text is whole, the growth goes as its tail alone.
+    Sessions w = window;
+    w.apply_string(s2.diff_from(s1));
+    const std::string d = s3.diff_from(s2);
+    w.apply_string(d);
+    CHECK(w == s3);
+}
+
+bool refusedAsBadDiff(const std::function<void()>& f, const std::string& saying) {
+    try {
+        f();
+    } catch (const BadDiff& e) {
+        return std::string(e.what()).find(saying) != std::string::npos;
+    }
+    return false;
+}
+
+// The caps on a format 4 read (sync/codec.h): a diff of up to kMaxDiffBytes reads, one byte more is refused before it
+// is measured; a region of up to kMaxReadBytes is allocated, one byte more is refused before it is; and bytes crafted to
+// load into far more than they are (many tiny elements) are refused whole, the state left as it was.
+void format4_read_caps() {
+    const std::string longer = "longer than the link carries";
+    const std::string past = "one read allocates";
+    CHECK(!refusedAsBadDiff([] { codec::checkDiffSize(codec::kMaxDiffBytes, "diff"); }, longer));
+    CHECK(refusedAsBadDiff([] { codec::checkDiffSize(codec::kMaxDiffBytes + 1, "diff"); }, longer));
+    CHECK(!refusedAsBadDiff([] {
+        codec::checkReadSize(1000, static_cast<std::int64_t>(codec::kMaxReadBytes), "diff");
+    }, past));
+    CHECK(refusedAsBadDiff([] {
+        codec::checkReadSize(1000, static_cast<std::int64_t>(codec::kMaxReadBytes) + 1, "diff");
+    }, past));
+    CHECK(refusedAsBadDiff([] { codec::checkReadSize(1000, -1, "diff"); }, "does not load"));
+
+    // A real diff of exactly kMaxDiffBytes: one open entry, its text sized to make the diff that long.
+    const auto withText = [](std::size_t n) {
+        SessionView v = tailFor("ada", {entry(EntryKind::Friend, std::string(n, 't'), false)}, {}, Tail{});
+        return Sessions({std::make_shared<const SessionView>(std::move(v))});
+    };
+    std::size_t n = codec::kMaxDiffBytes - 4096;
+    std::string full = withText(n).init_diff();
+    for (int tries = 0; tries < 16 && full.size() != codec::kMaxDiffBytes; ++tries) {
+        n = n + codec::kMaxDiffBytes - full.size();
+        full = withText(n).init_diff();
+    }
+    CHECK(full.size() == codec::kMaxDiffBytes);
+    Sessions got;
+    got.apply_string(full);
+    CHECK(got == withText(n));
+    Sessions before = got;
+    CHECK(refusedAsBadDiff([&] { got.apply_string(full + "x"); }, longer));
+    CHECK(got == before);
+    CHECK(refusedAsBadDiff([&] { (void)Actions::parse(std::string(codec::kMaxDiffBytes + 1, 'a')); }, longer));
+
+    // Crafted: 300,000 sessions the window is told it holds unchanged, each an id alone: 3,600,036 bytes, under
+    // kMaxDiffBytes, that would load into 38,400,048 (128 bytes for each 12). Refused, and the window keeps its state.
+    codec::SessionsChange many;
+    many.sessions.resize(300000);
+    for (std::size_t i = 0; i < many.sessions.size(); ++i) {
+        many.sessions[i].id = i + 1;
+    }
+    const std::string crafted = codec::writeTables(many);
+    CHECK(crafted.size() <= codec::kMaxDiffBytes);
+    int unknown = 0;
+    CHECK(refusedAsBadDiff([&] { (void)codec::readTables(crafted, &unknown); }, past));
+    Sessions small = withText(10);
+    const Sessions kept = small;
+    CHECK(refusedAsBadDiff([&] { small.apply_string(crafted); }, past));
+    CHECK(small == kept);
+}
+
+// The format 4 read path under damage: fixed seeds, a few thousand mutated copies of real sessions diffs and actions
+// diffs (bits flipped, bytes changed, cut short, bytes added and removed, lengths overwritten). Every read either takes
+// the bytes or throws BadDiff and nothing else; a refused read leaves the state as it was; and a state or actions it
+// takes write back out and read again as the same.
+std::string mutated(const std::string& m, Rng& rng) {
+    std::string out = m;
+    const std::size_t rounds = 1 + rng.below(3);
+    for (std::size_t r = 0; r < rounds; ++r) {
+        if (out.empty()) {
+            out.push_back(static_cast<char>(rng.below(256)));
+            continue;
+        }
+        const std::size_t at = rng.below(out.size());
+        switch (rng.below(7)) {
+            case 0:
+                out[at] = static_cast<char>(out[at] ^ static_cast<char>(1u << rng.below(8)));
+                break;
+            case 1:
+                out[at] = static_cast<char>(rng.below(256));
+                break;
+            case 2:
+                out.resize(at);
+                break;
+            case 3:
+                out.insert(out.begin() + static_cast<std::ptrdiff_t>(at), static_cast<char>(rng.below(256)));
+                break;
+            case 4:
+                out.erase(at, 1);
+                break;
+            case 5:
+                for (std::size_t k = at; k < out.size() && k < at + 8; ++k) {
+                    out[k] = static_cast<char>(0xFF);
+                }
+                break;
+            default:
+                out.insert(at, out.substr(rng.below(out.size()), 1 + rng.below(16)));
+                break;
+        }
+    }
+    return out;
+}
+
+void format4_read_fuzz() {
+    int accepted = 0;
+    int refused = 0;
+    int other = 0;
+    // Sessions: pairs of states from random histories, the diff of the later from the earlier, with secret requests in
+    // some.
+    for (std::uint64_t seed = 1; seed <= 6; ++seed) {
+        Rng rng{seed};
+        History h;
+        std::vector<Sessions> states{Sessions()};
+        for (int i = 0; i < 30; ++i) {
+            h.step(rng);
+            states.push_back(h.state());
+        }
+        Sessions to = states.back();
+        if (seed % 2 == 0) {
+            SecretRequest q;
+            q.id = seed;
+            q.account = "acct";
+            q.what = "a token";
+            q.asker = 1;
+            q.askerName = "ada";
+            q.why = "to log in";
+            to.setRequests({q});
+        }
+        const Sessions& from = states[states.size() / 2];
+        const std::string diff = to.diff_from(from);
+        Sessions check = from;
+        check.apply_string(diff);
+        CHECK(check == to);
+        for (int k = 0; k < 500; ++k) {
+            const std::string m = mutated(diff, rng);
+            Sessions w = from;
+            try {
+                w.apply_string(m);
+                ++accepted;
+                Sessions again;
+                again.apply_string(w.init_diff());
+                CHECK(again == w);
+                Sessions step = from;
+                step.apply_string(w.diff_from(from));
+                CHECK(step == w);
+            } catch (const BadDiff&) {
+                ++refused;
+                CHECK(w == from);
+            } catch (const std::exception& e) {
+                ++other;
+                std::fprintf(stderr, "format4_read_fuzz: sessions seed %llu case %d threw %s\n",
+                    static_cast<unsigned long long>(seed), k, e.what());
+            }
+        }
+    }
+    // Actions: held actions of every kind, a secret's answer among them, as the window sends them.
+    for (std::uint64_t seed = 11; seed <= 14; ++seed) {
+        Rng rng{seed};
+        Actions held(1);
+        for (int i = 0; i < 12; ++i) {
+            Action a = act(static_cast<ActionKind>(1 + rng.below(16)), 1 + rng.below(3), randomText(rng),
+                kTabNames[rng.below(3)]);
+            a.account = rng.chance(2) ? "acct" : "";
+            a.request = rng.below(4);
+            if (a.kind == ActionKind::SecretAnswer) {
+                a.secret = SecretValue("hunter2");
+            }
+            held.add(std::move(a));
+        }
+        const std::string diff = held.diff_from(Actions(1));
+        for (int k = 0; k < 500; ++k) {
+            const std::string m = mutated(diff, rng);
+            Actions w(1);
+            try {
+                const std::vector<Action> got = Actions::parse(m);
+                CHECK(!got.empty() || m.empty());   // no bytes is no actions; any bytes hold at least one
+                if (!got.empty()) {
+                    int unknown = 0;
+                    const std::vector<Action> again =
+                        codec::readActionsTables(codec::writeActionsTables(got.front().num, got, 0), &unknown);
+                    CHECK(again == got);
+                }
+                w.apply_string(m);
+                ++accepted;
+            } catch (const BadDiff&) {
+                ++refused;
+                CHECK(w == Actions(1));
+            } catch (const std::exception& e) {
+                ++other;
+                std::fprintf(stderr, "format4_read_fuzz: actions seed %llu case %d threw %s\n",
+                    static_cast<unsigned long long>(seed), k, e.what());
+            }
+        }
+    }
+    CHECK(other == 0);
+    CHECK(accepted > 0 && refused > 0);
+}
+
 // A state file says its format and is read in it: this build's round trip; one of format 1 (main's bytes); one of a
 // later format read as this build reads a later server's; and refused, in one line, what is not a state file.
 void state_files() {
@@ -1838,6 +2075,9 @@ const Case kCases[] = {
     {"hello_min_peer", hello_min_peer},
     {"sessions_unknown_kind_is_a_notice", sessions_unknown_kind_is_a_notice},
     {"sessions_text_not_utf8", sessions_text_not_utf8},
+    {"sessions_growth_across_a_split_character", sessions_growth_across_a_split_character},
+    {"format4_read_caps", format4_read_caps},
+    {"format4_read_fuzz", format4_read_fuzz},
     {"state_files", state_files},
     {"cursor_from_the_servers_state", cursor_from_the_servers_state},
 };

@@ -35,7 +35,8 @@
 #               into WORK, the traces of every test that keeps to the model
 #   NODE        with DRIVERWALK or DRIVERTESTS: node (Node 20.19 or newer)
 #   SECWALK     optional, in place of WALK: tests/sync's secrets_walk; it is run first and writes
-#               SecretsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of store-late, echo
+#               SecretsTraceData.tla into WORK, with SEED and STEPS, FORMAT (3 or 4, the windows' and actions'
+#               format; 3 unless given), and FAULTY one of store-late, echo
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
@@ -131,6 +132,9 @@ elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not store-late or echo")
+    endif()
+    if(DEFINED FORMAT AND NOT FORMAT STREQUAL "")
+        list(APPEND walk_args "--format" "${FORMAT}")
     endif()
     execute_process(COMMAND "${SECWALK}" ${walk_args} "${WORK}/SecretsTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

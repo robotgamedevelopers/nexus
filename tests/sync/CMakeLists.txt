@@ -105,6 +105,15 @@ endforeach()
 foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000)
 endforeach()
+# The same walks in format 4, schema's tables: each value rides as table bytes, through the wiping allocator and the
+# wiped read region (src/sync/tables_actions.cpp), so that path is bound to the model too. The walks above stay in
+# format 3, the hand-written codec, which windows of format 3 still use.
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_secrets_trace_tables_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
+             FORMAT 4)
+endforeach()
+tlc_test(tlc_secrets_trace_tables_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
+         SECWALK SEED 1 STEPS 2000 FAULTY echo FORMAT 4)
 # Seed 9: a walk with late answers in it (two, both played); with the held values in the walk, seed 1 has none.
 tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
          SECWALK SEED 9 STEPS 2000 FAULTY store-late)

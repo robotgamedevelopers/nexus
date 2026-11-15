@@ -67,6 +67,24 @@ bool tableText(std::string_view text) {
     return wire::TableUtf8Valid(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
 }
 
+void checkDiffSize(std::size_t diffBytes, const char* what) {
+    if (diffBytes > kMaxDiffBytes) {
+        throw BadDiff(std::string(what) + " of " + std::to_string(diffBytes) + " bytes is longer than the link carries ("
+            + std::to_string(kMaxDiffBytes) + ")");
+    }
+}
+
+void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what) {
+    if (need < 0) {
+        throw BadDiff(std::string(what) + " of " + std::to_string(diffBytes) + " bytes does not load as schema's "
+            "tables (damaged, cut short, or a form this build does not read)");
+    }
+    if (static_cast<std::uint64_t>(need) > kMaxReadBytes) {
+        throw BadDiff(std::string(what) + " of " + std::to_string(diffBytes) + " bytes would load into " +
+            std::to_string(need) + " bytes, past the " + std::to_string(kMaxReadBytes) + " one read allocates");
+    }
+}
+
 std::string writeTables(const SessionsChange& change) {
     wire::SessionsDiffBuilder b;
     wire::SessionsDiff* d = b.GetRoot();
@@ -124,13 +142,12 @@ std::string writeTables(const SessionsChange& change) {
 SessionsChange readTables(const std::string& diff, int* unknown) {
     const auto* bytes = reinterpret_cast<const std::uint8_t*>(diff.data());
     const int64_t size = static_cast<int64_t>(diff.size());
-    const int64_t need = wire::SessionsDiffLoadMeasure(bytes, size);
-    if (need < 0) {
-        throw BadDiff("sessions diff of " + std::to_string(diff.size()) + " bytes does not load as schema's "
-            "SessionsDiff (damaged, cut short, or a form this build does not read)");
-    }
+    const std::size_t space = readNeed(diff, [](const std::uint8_t* b, int64_t n) {
+        return wire::SessionsDiffLoadMeasure(b, n);
+    }, "sessions diff");
+    const int64_t need = static_cast<int64_t>(space);
     Region region;
-    region.bytes.resize(static_cast<std::size_t>(need));
+    region.bytes.resize(space);
     wire::TableReport report;
     const wire::SessionsDiff* d = wire::SessionsDiffLoad(region.bytes.data(), need, bytes, size, &report);
     if (d == nullptr || report.damaged || report.refused) {
