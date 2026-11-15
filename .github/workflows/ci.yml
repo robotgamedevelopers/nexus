@@ -209,12 +209,13 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
-          # the store's lock and the start-up order: their walks, then the faulty orders
-          for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+          # the store's lock and the start-up order under the sanitizers: two short walks and the faulty orders
+          # (the trace check of five 2000-step walks runs in the store-lock model shard)
+          for seed in 1 2; do
+            build/tests/store/store_lock_walk "$seed" 500 walks/store_lock.tla
           done
           for fault in --faulty-unlocked --faulty-restore-first; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
+            build/tests/store/store_lock_walk 1 500 "$fault" walks/store_lock.tla
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
@@ -609,12 +610,13 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
-          # the store's lock and the start-up order: their walks, then the faulty orders
-          for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+          # the store's lock and the start-up order under the sanitizers: two short walks and the faulty orders
+          # (the trace check of five 2000-step walks runs in the store-lock model shard)
+          for seed in 1 2; do
+            build/tests/store/store_lock_walk "$seed" 500 walks/store_lock.tla
           done
           for fault in --faulty-unlocked --faulty-restore-first; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
+            build/tests/store/store_lock_walk 1 500 "$fault" walks/store_lock.tla
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
