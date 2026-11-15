@@ -1,7 +1,7 @@
-// The token wall: the AI a driver runs never reads its own login. The account's token (account.ts) reaches Claude's
+// The token wall, best effort: the AI a driver runs is kept from reading its own login. The account's token (account.ts) reaches Claude's
 // process on a socket, never in an environment or an argument, and every tool Claude runs is kept out of the accounts'
 // directory, which holds secrets only (Claude's own state is in harness/claude/<name>/). The layers (docs/secrets.md,
-// "The token wall"; test/functional/wall.test.ts tries every route against them):
+// "The token wall", which also lists what stays open; test/functional/wall.test.ts tries routes against them):
 //
 //   1. The token is in no environment. Claude reads it from descriptor 3, a socket the driver writes it to and closes
 //      (CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names the number only); Claude reads to the newline, closes the
@@ -9,16 +9,17 @@
 //   2. Every shell command runs in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux) with no way out of it
 //      (allowUnsandboxedCommands false, failIfUnavailable true): the accounts' directory can be neither read nor
 //      written, and the login variables are unset. The wall for the file, against the shell and all it runs.
-//   3. The sandbox's only way out to the network is the driver's proxy (egress.ts), which never connects to this
-//      machine: no command reaches its sshd, or any service of it, to run something outside the sandbox.
+//   3. The sandbox's only way out to the network is the driver's proxy (egress.ts), which refuses this machine's own
+//      addresses: a command does not reach its sshd, or another service of it, directly (another machine can still
+//      reach it).
 //   4. Read and Edit deny rules on the accounts' directory: Claude's own file tools (Read, Write, Edit, Glob, Grep,
 //      NotebookEdit) refuse it, in bypassPermissions mode too. The wall for the file, against the file tools.
 //   5. Nothing runs outside the sandbox but Claude itself: settings hooks are off, and no tool may write what runs
 //      outside it later (configFiles: the settings and MCP files Claude loads, nexus's own files and programs, and
 //      what the person's programs run on their own). The wall around 2.
 //   6. A PreToolUse hook (toolRefusal) refuses a call whose command, pattern, URL or path names the directory, a path
-//      that resolves into it, a file of it under another name (a hard link), a write to a config file, or a URL that
-//      is not http or https. A backstop only: it reads text, and text can be spelled around.
+//      that resolves into it (spellings, links and case resolved first), a file of it under another name (a hard link), a write to a
+//      config file, or a URL that is not http or https. A backstop only: it reads text, and text can be spelled around.
 //
 // Permissions stay bypassed: the sandbox allows every shell command in it without a prompt, and nothing asks.
 
@@ -193,9 +194,10 @@ export function wallOf(home: string, cwd: string, configDir: string, realpath: (
  * wherever it was (`writable`: the person's home, the working directory and the temporary directories), but for the
  * config files (`wall.config`: the settings Claude loads, nexus's own files and programs, and what the person's own
  * unsandboxed programs would run later). A command's only way out to the network is a proxy, and the proxy is the
- * driver's (`egressPort`, egress.ts): it connects anywhere but this machine, so ssh and git reach the fleet while no
- * local daemon (sshd above all, which would log the AI in as the person, outside the sandbox) can be reached by any
- * name or address. No local socket is reachable either. Claude's own sandbox also never lets a command write
+ * driver's (`egressPort`, egress.ts): it refuses this machine's own addresses, so ssh and git reach the fleet while a
+ * local daemon (sshd above all, which would log the AI in as the person, outside the sandbox) is not reached directly by
+ * the spellings of this machine the test tries; by way of another machine it is (docs/secrets.md, what stays open).
+ * The local sockets tried are not reachable either. Claude's own sandbox also never lets a command write
  * .git/config or .git/hooks (what the person's git would run): git init, clone and config fail in it.
  */
 export function wallSandbox(wall: Wall, writable: readonly string[], egressPort: number) {
@@ -340,6 +342,115 @@ function within(p: string, root: string): boolean {
     return p === root || p.startsWith(`${root}/`);
 }
 
+/** `p` joined to the directory `dir` as it is written, nothing normalised (the file system resolves `..` after a link). */
+function joined(dir: string, p: string): string {
+    return isAbsolute(p) ? p : `${dir}/${p}`;
+}
+
+/**
+ * Where `p` is on disk: its realpath, or for a path that does not exist yet (a file to write), the realpath of its
+ * nearest folder that does, with the rest of the path after it. A link to a protected folder with a new file name
+ * resolves into the folder. `p` as given when no part of it resolves.
+ */
+export function realOf(p: string, fs: Pick<WallFs, 'realpath'>): string {
+    let dir = p;
+    let rest = '';
+    for (;;) {
+        try {
+            const r = fs.realpath(dir);
+            return rest === '' ? r : resolve(r, rest);
+        } catch {
+            // Not there: one folder up.
+        }
+        const parent = dirname(dir);
+        if (parent === dir) {
+            return p;
+        }
+        const name = dir.slice(parent.length).replace(/^\/+/, '');
+        rest = rest === '' ? name : `${name}/${rest}`;
+        dir = parent;
+    }
+}
+
+/**
+ * Whether the real path `real` is one of `roots` or inside one, by folder identity (device and inode): on a
+ * case-insensitive volume one folder has many spellings, and a root that does not exist yet is matched by its nearest
+ * folder that does and the rest of its path, the rest compared without case (deny-leaning on a case-sensitive one).
+ */
+function insideByIdentity(real: string, roots: readonly string[], fs: Pick<WallFs, 'identity'>): boolean {
+    const index: { id: string; tail: string }[] = [];
+    for (const root of roots) {
+        let q = root;
+        let tail = '';
+        for (;;) {
+            const id = fs.identity(q);
+            if (id !== undefined) {
+                index.push({ id, tail: tail.toLowerCase() });
+                break;
+            }
+            const parent = dirname(q);
+            if (parent === q) {
+                break;
+            }
+            const name = q.slice(parent.length).replace(/^\/+/, '');
+            tail = tail === '' ? name : `${name}/${tail}`;
+            q = parent;
+        }
+    }
+    let a = real;
+    let rest = '';
+    for (;;) {
+        const id = fs.identity(a);
+        if (id !== undefined) {
+            const r = rest.toLowerCase();
+            if (index.some((e) => e.id === id && (e.tail === '' || r === e.tail || r.startsWith(`${e.tail}/`)))) {
+                return true;
+            }
+        }
+        const parent = dirname(a);
+        if (parent === a) {
+            return false;
+        }
+        const name = a.slice(parent.length).replace(/^\/+/, '');
+        rest = rest === '' ? name : `${name}/${rest}`;
+        a = parent;
+    }
+}
+
+/** The literal folder a glob pattern starts in (`base` for a relative pattern), up to its first segment with a wildcard. */
+function globBase(pattern: string, base: string): string {
+    const out: string[] = [];
+    for (const seg of joined(base, pattern).split('/')) {
+        if (/[*?[{]/.test(seg)) {
+            break;
+        }
+        out.push(seg);
+    }
+    return out.join('/') || '/';
+}
+
+/** The paths a call opens or searches: its path fields, and the folder each Glob or Grep file pattern starts in. */
+function openedOf(tool: string, input: Record<string, unknown>, cwd: string): string[] {
+    const out = pathsOf(input);
+    const base = typeof input['path'] === 'string' && input['path'] !== '' ? input['path'] : cwd;
+    if (/^Glob$/.test(tool) && typeof input['pattern'] === 'string') {
+        out.push(globBase(input['pattern'], base));
+    }
+    if (typeof input['glob'] === 'string') {
+        out.push(globBase(input['glob'], base));
+    }
+    return out;
+}
+
+/** Every form of the path argument `raw` the wall judges: as written, normalised, and where each is on disk. */
+function formsOf(raw: string, cwd: string, home: string, fs: WallFs): { forms: string[]; reals: string[] } {
+    const given = raw === '~' ? home : raw.startsWith('~/') ? `${home}/${raw.slice(2)}` : raw;
+    const written = joined(cwd, given);
+    const normal = resolve(cwd, given);
+    const reals = [...new Set([realOf(written, fs), realOf(normal, fs)])];
+    return { forms: [...new Set([written, normal, ...reals])], reals };
+}
+
 /** The tools that write a file at their path. */
 const kWriters = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
 
@@ -364,29 +475,26 @@ export function toolRefusal(tool: string, input: Record<string, unknown>, wall: 
     if (/fetch/i.test(tool) && typeof input['url'] === 'string' && !/^https?:\/\//i.test(input['url'])) {
         return `${tool} takes only http and https URLs here`;
     }
-    // A path a file tool would open: by where it resolves, and by what file it is (a hard link has another name).
+    // A path a file tool would open or search: by every spelling of it (doubled slashes, `..`, `~`), by where it
+    // resolves (a link, a file not made yet under a linked folder), by folder identity (another case on a
+    // case-insensitive volume), and by what file it is (a hard link has another name).
     let guarded: Set<string> | undefined;
-    for (const raw of pathsOf(input)) {
-        const given = raw.startsWith('~/') ? `${home}/${raw.slice(2)}` : raw;
-        const abs = isAbsolute(given) ? given : resolve(cwd, given);
-        let real = abs;
-        try {
-            real = fs.realpath(abs);
-        } catch {
-            // Not there (a file to write): judged by the given path.
-        }
-        if (wall.secrets.some((p) => within(abs, p) || within(real, p))) {
+    const inside = (forms: readonly string[], reals: readonly string[], roots: readonly string[]): boolean =>
+        forms.some((f) => roots.some((r) => within(f, r))) || reals.some((r) => insideByIdentity(r, roots, fs));
+    for (const raw of openedOf(tool, input, cwd)) {
+        const { forms, reals } = formsOf(raw, cwd, home, fs);
+        if (inside(forms, reals, wall.secrets)) {
             return refused;
         }
-        if (kWriters.test(tool) && wall.config.some((f) => within(abs, f) || within(real, f))) {
+        if (kWriters.test(tool) && inside(forms, reals, wall.config)) {
             return `nexus keeps tools from writing the settings and MCP files Claude loads (${raw}): what they run would `
                 + 'run outside the sandbox; the person edits them';
         }
-        if (kWriters.test(tool) && (isGitName(abs) || isGitName(real))) {
+        if (kWriters.test(tool) && forms.some(isGitName)) {
             return `nexus keeps the file tools from writing what makes a git directory (${raw}): the person's git runs `
                 + 'what its config names; use git itself in the shell';
         }
-        const id = fs.identity(real);
+        const id = fs.identity(reals[0] ?? raw);
         if (id === undefined) {
             continue;
         }

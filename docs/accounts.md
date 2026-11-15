@@ -57,11 +57,15 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
 the server's sign-in check and the drivers read the one path (`src/server/home.h`, `accountsDir`).
 
-The logins' directory holds secrets only, and the AI a driver runs cannot read it, or the token, by any tool: not its
-shell, its file tools or a fetch ([secrets.md](secrets.md), "The token wall", says what is guaranteed and by which
-layer). The Claude driver keeps Claude's own state (its settings, sessions, memory) apart, in
-`~/.nexus/server/harness/claude/<name>/`, which the AI can read and write; a driver from before this copies what it
-left in the login's directory there once, and never a secret. Editing `accounts.json` and `friends.json` stays open to
+The logins' directory holds secrets only, and the AI a driver runs is kept from reading it, or the token, best effort:
+its shell, its file tools and a fetch are walled off from it, and none of the routes the tests try reads it
+([secrets.md](secrets.md), "The token wall", says which layer stops which route, and what stays open). The Claude
+driver keeps Claude's own state (its settings, sessions, memory) apart, in `~/.nexus/server/harness/claude/<name>/`,
+which the AI can read and write. A driver from before this kept that state in the login's directory; the first start of
+this one copies only the person's `settings.json`, `settings.local.json` and `CLAUDE.md` from there, and nothing else:
+not the transcripts and memory (`projects/`), the shell snapshots, the history or `.claude.json`, which from before the
+wall may hold the token, and never a file the secret dialog stored. Those stay where they were, under the wall, and a
+session from before does not resume. Editing `accounts.json` and `friends.json` stays open to
 the AI: they hold no secret.
 
 ## accounts.json

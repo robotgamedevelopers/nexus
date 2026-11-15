@@ -1,5 +1,6 @@
 // The way out of the sandbox for the AI's commands: a proxy the driver runs, which Claude's sandbox uses in place of
-// its own (sandbox.network.httpProxyPort and socksProxyPort, wall.ts). It connects anywhere except this machine.
+// its own (sandbox.network.httpProxyPort and socksProxyPort, wall.ts). It connects anywhere but to this machine's own addresses
+// (best effort: another machine that can reach this one is reachable too; docs/secrets.md, what stays open).
 //
 // Why: the sandbox lets a command's connections leave only through the proxy, so the proxy decides what a command can
 // reach. Claude's own proxy refuses a name that resolves to one of this host's addresses, but connects to such an
@@ -7,7 +8,10 @@
 // machine's sshd, log in as the person, and read the token outside the sandbox (measured: docs/secrets.md). This one
 // resolves every name itself, refuses when any address it gets is this machine's (loopback, unspecified, or an address
 // of one of its interfaces, IPv4-mapped forms included), and connects to the address it checked, so no later lookup
-// can change the answer. Everything else is let through: ssh to the fleet (git over ssh too), http and https.
+// can change the answer. Everything else is let through: ssh to the fleet (git over ssh too), http and https. A client
+// that has not finished its handshake kHandshakeMs after it connected is dropped. The handshakes are parsed by pure
+// functions (socksGreeting, socksRequest, httpRequest), and a client is a seam (Client), so the unit tests drive them
+// with no socket.
 //
 // One listening port on 127.0.0.1 speaks both protocols: SOCKS5 (CONNECT only, no authentication) when the first byte
 // is 5, and HTTP otherwise (CONNECT, and plain requests with an absolute URL, one per connection).
@@ -120,16 +124,130 @@ export async function decide(host: string, resolve: Resolve = realResolve, own: 
     return { address: addresses[0] ?? '' };
 }
 
+
+/** A SOCKS5 greeting (RFC 1928): how many bytes it takes, or how many more are needed to know. */
+export function socksGreeting(buf: Buffer): { need: number } | { length: number } {
+    if (buf.length < 2) {
+        return { need: 2 };
+    }
+    const length = 2 + (buf[1] ?? 0);
+    return buf.length < length ? { need: length } : { length };
+}
+
+/**
+ * A SOCKS5 request after the greeting: where it asks to connect and the bytes after it, the reply code that refuses it
+ * (7: not a CONNECT; 8: an address type there is none of), or how many bytes are needed to know.
+ */
+export function socksRequest(buf: Buffer): { need: number } | { reply: number } | { host: string; port: number; rest: Buffer } {
+    if (buf.length < 5) {
+        return { need: 5 };
+    }
+    if (buf[1] !== 1) {
+        return { reply: 7 };
+    }
+    let host: string;
+    let at: number;
+    if (buf[3] === 1) {
+        if (buf.length < 10) {
+            return { need: 10 };
+        }
+        host = [...buf.subarray(4, 8)].join('.');
+        at = 8;
+    } else if (buf[3] === 3) {
+        const n = buf[4] ?? 0;
+        if (buf.length < 5 + n + 2) {
+            return { need: 5 + n + 2 };
+        }
+        host = buf.subarray(5, 5 + n).toString('latin1');
+        at = 5 + n;
+    } else if (buf[3] === 4) {
+        if (buf.length < 22) {
+            return { need: 22 };
+        }
+        const g: string[] = [];
+        for (let i = 0; i < 8; i++) {
+            g.push(buf.readUInt16BE(4 + i * 2).toString(16));
+        }
+        host = g.join(':');
+        at = 20;
+    } else {
+        return { reply: 8 };
+    }
+    return { host, port: buf.readUInt16BE(at), rest: buf.subarray(at + 2) };
+}
+
+/** The most an HTTP request's head may take before the proxy drops the connection. */
+export const kMaxHead = 65536;
+
+/**
+ * An HTTP proxy request's head: a CONNECT's target, a plain request to forward (its host, port and the request line and
+ * headers to send, proxy headers removed), why it is refused, or that more bytes are needed (`tooLong`: never enough).
+ */
+export function httpRequest(buf: Buffer):
+    | { need: true } | { tooLong: true } | { refuse: string }
+    | { connect: { host: string; port: number }; rest: Buffer }
+    | { forward: { host: string; port: number; request: string }; rest: Buffer } {
+    const end = buf.indexOf('\r\n\r\n');
+    if (end < 0) {
+        return buf.length > kMaxHead ? { tooLong: true } : { need: true };
+    }
+    const head = buf.subarray(0, end).toString('latin1').split('\r\n');
+    const rest = buf.subarray(end + 4);
+    const [method = '', target = '', version = 'HTTP/1.1'] = (head[0] ?? '').split(' ');
+    if (method === 'CONNECT') {
+        const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(target);
+        if (m?.[1] === undefined || m[2] === undefined) {
+            return { refuse: `bad CONNECT target ${target}` };
+        }
+        return { connect: { host: m[1], port: Number(m[2]) }, rest };
+    }
+    let url: URL;
+    try {
+        url = new URL(target);
+    } catch {
+        return { refuse: `not a proxy request: ${method} ${target}` };
+    }
+    if (url.protocol !== 'http:') {
+        return { refuse: `only http URLs are forwarded, not ${url.protocol}` };
+    }
+    const headers = head.slice(1).filter((h) => !/^(proxy-[a-z-]*|connection|keep-alive):/i.test(h));
+    const request = [`${method} ${url.pathname}${url.search} ${version}`, ...headers, 'connection: close', '', ''].join('\r\n');
+    return { forward: { host: url.hostname, port: Number(url.port === '' ? 80 : url.port), request }, rest };
+}
+
+/** Runs `fn` after `ms`; the returned function cancels it. A seam: the unit tests pass time by hand. */
+export type After = (ms: number, fn: () => void) => () => void;
+
+const realAfter: After = (ms, fn) => {
+    const t = setTimeout(fn, ms);
+    t.unref();
+    return () => { clearTimeout(t); };
+};
+
+/** How long a client has to finish its handshake (SOCKS or HTTP) before the proxy drops it. */
+export const kHandshakeMs = 10_000;
+
+/** The part of a socket the proxy uses: a seam, so that the unit tests drive it with a stream and no socket. */
+export type Client = Pick<Socket, 'on' | 'off' | 'once' | 'pause' | 'resume' | 'write' | 'end' | 'destroy' | 'pipe'>;
+
 /** The proxy, listening on 127.0.0.1; `port()` once listening. */
 export class Egress {
     private readonly server: Server;
 
-    constructor(private readonly resolve: Resolve = realResolve, private readonly own: () => readonly string[] = ownAddresses) {
+    constructor(private readonly resolve: Resolve = realResolve, private readonly own: () => readonly string[] = ownAddresses,
+        private readonly after: After = realAfter, private readonly handshakeMs = kHandshakeMs) {
         this.server = createServer((socket) => { this.accept(socket); });
     }
 
+    /** Listens on a free port of 127.0.0.1, or rejects with why it cannot. */
     async listen(): Promise<number> {
-        await new Promise<void>((done) => { this.server.listen(0, '127.0.0.1', done); });
+        await new Promise<void>((done, fail) => {
+            this.server.once('error', fail);
+            this.server.listen(0, '127.0.0.1', () => {
+                this.server.off('error', fail);
+                done();
+            });
+        });
         this.server.unref();
         return this.port();
     }
@@ -143,16 +261,62 @@ export class Egress {
         this.server.close();
     }
 
-    private accept(client: Socket): void {
+    /** One client: dropped if its handshake has not ended `handshakeMs` after it connected. */
+    accept(client: Client): void {
         client.on('error', () => { client.destroy(); });
-        client.once('data', (first: Buffer) => {
-            client.pause();
-            if (first[0] === 5) {
-                void this.socks(client, first);
-            } else {
-                this.http(client, first);
-            }
+        const cancel = this.after(this.handshakeMs, () => { client.destroy(); });
+        client.on('close', cancel);
+        let buf = Buffer.alloc(0);
+        let waiting: (() => void) | undefined;
+        let ended = false;
+        const onData = (d: Buffer): void => {
+            buf = Buffer.concat([buf, d]);
+            const w = waiting;
+            waiting = undefined;
+            w?.();
+        };
+        client.on('data', onData);
+        client.on('end', () => {
+            ended = true;
+            const w = waiting;
+            waiting = undefined;
+            w?.();
         });
+        // The bytes so far, after the next arrive; false when the client ended first.
+        const more = (): Promise<boolean> => new Promise<boolean>((done) => {
+            if (ended) {
+                done(false);
+                return;
+            }
+            waiting = () => { done(!ended || buf.length > 0); };
+        });
+        const take = (n: number): Buffer => {
+            const out = buf.subarray(0, n);
+            buf = buf.subarray(n);
+            return out;
+        };
+        // The handshake is over: what is left goes to the other side, and the stream is the pipe's from here.
+        const handOver = (): Buffer => {
+            cancel();
+            client.pause();
+            client.off('data', onData);
+            const rest = buf;
+            buf = Buffer.alloc(0);
+            return rest;
+        };
+        void (async () => {
+            while (buf.length === 0) {
+                if (!await more()) {
+                    client.destroy();
+                    return;
+                }
+            }
+            if (buf[0] === 5) {
+                await this.socks(client, more, take, handOver, () => buf);
+            } else {
+                await this.http(client, more, handOver, () => buf);
+            }
+        })();
     }
 
     private async open(host: string, port: number): Promise<Socket | string> {
@@ -170,7 +334,7 @@ export class Egress {
         });
     }
 
-    private static join(a: Socket, b: Socket, rest: Buffer): void {
+    private static join(a: Client, b: Socket, rest: Buffer): void {
         b.on('error', () => { a.destroy(); });
         a.on('error', () => { b.destroy(); });
         a.on('close', () => { b.destroy(); });
@@ -179,64 +343,38 @@ export class Egress {
             b.write(rest);
         }
         a.pipe(b);
-        b.pipe(a);
+        b.pipe(a as Socket);
         a.resume();
     }
 
     // SOCKS5 (RFC 1928): no authentication, CONNECT only.
-    private async socks(client: Socket, first: Buffer): Promise<void> {
-        let buf = first;
-        const need = async (n: number): Promise<boolean> => {
-            while (buf.length < n) {
-                const more = await new Promise<Buffer | undefined>((done) => {
-                    client.once('data', (d: Buffer) => { client.pause(); done(d); });
-                    client.once('end', () => { done(undefined); });
-                    client.resume();
-                });
-                if (more === undefined) {
-                    return false;
-                }
-                buf = Buffer.concat([buf, more]);
+    private async socks(client: Client, more: () => Promise<boolean>, take: (n: number) => Buffer, handOver: () => Buffer,
+        now: () => Buffer): Promise<void> {
+        for (let g = socksGreeting(now()); 'need' in g; g = socksGreeting(now())) {
+            if (!await more()) {
+                client.destroy();
+                return;
             }
-            return true;
-        };
-        if (!await need(2) || !await need(2 + (buf[1] ?? 0))) {
-            client.destroy();
-            return;
         }
-        buf = buf.subarray(2 + (buf[1] ?? 0));
+        const greeting = socksGreeting(now());
+        take('length' in greeting ? greeting.length : 0);
         client.write(Buffer.from([5, 0]));
-        if (!await need(5)) {
-            client.destroy();
-            return;
+        let r = socksRequest(now());
+        while ('need' in r) {
+            if (!await more()) {
+                client.destroy();
+                return;
+            }
+            r = socksRequest(now());
         }
         const reply = (code: number): void => { client.end(Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0])); };
-        if (buf[1] !== 1) {
-            reply(7);    // command not supported
+        if ('reply' in r) {
+            reply(r.reply);
             return;
         }
-        let host: string;
-        let at: number;
-        if (buf[3] === 1 && await need(10)) {
-            host = [...buf.subarray(4, 8)].join('.');
-            at = 8;
-        } else if (buf[3] === 3 && await need(5 + (buf[4] ?? 0) + 2)) {
-            host = buf.subarray(5, 5 + (buf[4] ?? 0)).toString('latin1');
-            at = 5 + (buf[4] ?? 0);
-        } else if (buf[3] === 4 && await need(22)) {
-            const g: string[] = [];
-            for (let i = 0; i < 8; i++) {
-                g.push(buf.readUInt16BE(4 + i * 2).toString(16));
-            }
-            host = g.join(':');
-            at = 20;
-        } else {
-            reply(8);    // address type not supported
-            return;
-        }
-        const port = buf.readUInt16BE(at);
-        const rest = buf.subarray(at + 2);
-        const target = await this.open(host, port);
+        take(now().length - r.rest.length);
+        const rest = handOver();
+        const target = await this.open(r.host, r.port);
         if (typeof target === 'string') {
             reply(target.includes('this machine') ? 2 : 5);    // not allowed by the ruleset; refused
             return;
@@ -246,64 +384,39 @@ export class Egress {
     }
 
     // HTTP: CONNECT host:port, or one request with an absolute http URL.
-    private http(client: Socket, first: Buffer): void {
-        let buf = first;
-        const go = (): void => {
-            const end = buf.indexOf('\r\n\r\n');
-            if (end < 0) {
-                if (buf.length > 65536) {
-                    client.destroy();
-                    return;
-                }
-                client.once('data', (d: Buffer) => { client.pause(); buf = Buffer.concat([buf, d]); go(); });
-                client.resume();
+    private async http(client: Client, more: () => Promise<boolean>, handOver: () => Buffer, now: () => Buffer): Promise<void> {
+        let r = httpRequest(now());
+        while ('need' in r) {
+            if (!await more()) {
+                client.destroy();
                 return;
             }
-            const head = buf.subarray(0, end).toString('latin1').split('\r\n');
-            const rest = buf.subarray(end + 4);
-            const [method = '', target = '', version = 'HTTP/1.1'] = (head[0] ?? '').split(' ');
-            const refuse = (why: string): void => {
-                const body = `nexus: ${why}\n`;
-                client.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\ncontent-length: ${String(Buffer.byteLength(body))}\r\nconnection: close\r\n\r\n${body}`);
-            };
-            if (method === 'CONNECT') {
-                const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(target);
-                if (m?.[1] === undefined || m[2] === undefined) {
-                    refuse(`bad CONNECT target ${target}`);
-                    return;
-                }
-                void this.open(m[1], Number(m[2])).then((s) => {
-                    if (typeof s === 'string') {
-                        refuse(s);
-                        return;
-                    }
-                    client.write('HTTP/1.1 200 Connection established\r\n\r\n');
-                    Egress.join(client, s, rest);
-                });
-                return;
-            }
-            let url: URL;
-            try {
-                url = new URL(target);
-            } catch {
-                refuse(`not a proxy request: ${method} ${target}`);
-                return;
-            }
-            if (url.protocol !== 'http:') {
-                refuse(`only http URLs are forwarded, not ${url.protocol}`);
-                return;
-            }
-            const headers = head.slice(1).filter((h) => !/^(proxy-[a-z-]*|connection|keep-alive):/i.test(h));
-            const request = [`${method} ${url.pathname}${url.search} ${version}`, ...headers, 'connection: close', '', ''].join('\r\n');
-            void this.open(url.hostname, Number(url.port === '' ? 80 : url.port)).then((s) => {
-                if (typeof s === 'string') {
-                    refuse(s);
-                    return;
-                }
-                s.write(request);
-                Egress.join(client, s, rest);
-            });
+            r = httpRequest(now());
+        }
+        const refuse = (why: string): void => {
+            const body = `nexus: ${why}\n`;
+            client.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\ncontent-length: ${String(Buffer.byteLength(body))}\r\nconnection: close\r\n\r\n${body}`);
         };
-        go();
+        if ('tooLong' in r) {
+            client.destroy();
+            return;
+        }
+        if ('refuse' in r) {
+            refuse(r.refuse);
+            return;
+        }
+        handOver();
+        const to = 'connect' in r ? r.connect : r.forward;
+        const s = await this.open(to.host, to.port);
+        if (typeof s === 'string') {
+            refuse(s);
+            return;
+        }
+        if ('connect' in r) {
+            client.write('HTTP/1.1 200 Connection established\r\n\r\n');
+        } else {
+            s.write(r.forward.request);
+        }
+        Egress.join(client, s, r.rest);
     }
 }

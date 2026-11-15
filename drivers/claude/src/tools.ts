@@ -22,9 +22,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, existsSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { closeSync, constants, existsSync, openSync, readFileSync, realpathSync } from 'node:fs';
 
 /** The variable nexus-server sets to its build's sandbox tools directory (src/server/main.cpp). */
 export const kSandboxBinVariable = 'NEXUS_SANDBOX_BIN';
@@ -34,6 +32,9 @@ export const kRestrictUserns = '/proc/sys/kernel/apparmor_restrict_unprivileged_
 export const kAppArmorDir = '/etc/apparmor.d';
 /** What loads a profile into the kernel. */
 export const kAppArmorParser = '/usr/sbin/apparmor_parser';
+/** sudo, and what copies the profile into place: by absolute path, never looked up on a PATH the AI could write. */
+export const kSudo = '/usr/bin/sudo';
+export const kInstall = '/usr/bin/install';
 
 /** What the driver needs of the machine to set up the sandbox: a seam for the unit tests. */
 export interface ToolsSystem {
@@ -42,11 +43,11 @@ export interface ToolsSystem {
     read(path: string): string | undefined;
     /** The path with every link resolved, or the path as given when it cannot be. */
     realpath(path: string): string;
-    /** Runs `sudo -n` with `args`, never prompting: undefined when it ran and succeeded, else what went wrong. */
-    sudo(args: readonly string[]): string | undefined;
-    /** Writes `text` to a new file that root can read, and returns its path; `done` removes it. */
-    temp(text: string): string;
-    done(path: string): void;
+    /**
+     * Runs kSudo -n with `args`, never prompting, with `input` on its standard input: undefined when it ran and
+     * succeeded, else what went wrong.
+     */
+    sudo(args: readonly string[], input?: string): string | undefined;
 }
 
 export const realToolsSystem: ToolsSystem = {
@@ -65,24 +66,15 @@ export const realToolsSystem: ToolsSystem = {
             return path;
         }
     },
-    sudo: (args) => {
+    sudo: (args, input) => {
         try {
-            execFileSync('sudo', ['-n', ...args], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 30_000 });
+            execFileSync(kSudo, ['-n', ...args], { input: input ?? '', stdio: ['pipe', 'ignore', 'pipe'], timeout: 30_000 });
             return undefined;
         } catch (e) {
             const err = e as { stderr?: Buffer; message?: string };
             const line = (err.stderr?.toString('utf8') ?? '').split('\n').find((l) => l.trim() !== '');
             return (line ?? err.message ?? 'it failed').trim();
         }
-    },
-    temp: (text) => {
-        const dir = mkdtempSync(join(tmpdir(), 'nexus-apparmor-'));
-        const file = join(dir, 'profile');
-        writeFileSync(file, text, { mode: 0o644 });
-        return file;
-    },
-    done: (path) => {
-        rmSync(join(path, '..'), { recursive: true, force: true });
     },
 };
 
@@ -167,16 +159,14 @@ function loadProfile(bwrap: string, sys: ToolsSystem): { did: string } | { cause
         return { cause: `${restricted}; nexus loads its own for ${bwrap}, once, through passwordless sudo, and sudo -n `
             + `here says: ${noSudo}`, fix: 'passwordless sudo for this user is what is missing' };
     }
-    const temp = sys.temp(text);
-    try {
-        // Loaded first, then kept where AppArmor loads it at boot: a profile file there is always one that loaded.
-        const failed = sys.sudo([kAppArmorParser, '-r', temp]) ?? sys.sudo(['/usr/bin/install', '-m', '0644', temp, file]);
-        if (failed !== undefined) {
-            return { cause: `${restricted}; loading nexus's profile for ${bwrap} through sudo failed: ${failed}`,
-                fix: `the profile is ${file}, from drivers/claude/src/tools.ts appArmorProfile` };
-        }
-    } finally {
-        sys.done(temp);
+    // Loaded first, then kept where AppArmor loads it at boot: a profile file there is always one that loaded. The text
+    // goes to root on standard input, never through a file: a file the driver wrote would be one the AI's sandbox can
+    // write too (the temporary directories are writable in it), and a session already running could change it between
+    // the two commands. Every path root is handed is a program's, by absolute path, or the profile's under kAppArmorDir.
+    const failed = sys.sudo([kAppArmorParser, '-r'], text) ?? sys.sudo([kInstall, '-m', '0644', '/dev/stdin', file], text);
+    if (failed !== undefined) {
+        return { cause: `${restricted}; loading nexus's profile for ${bwrap} through sudo failed: ${failed}`,
+            fix: `the profile is ${file}, from drivers/claude/src/tools.ts appArmorProfile` };
     }
     return { did: `loaded the AppArmor profile ${file}, which lets ${bwrap} make user namespaces` };
 }
@@ -203,17 +193,28 @@ export const realHomeFs: HomeFs = {
 /** The files under HOME that Claude's sandbox on Linux needs to exist, or every bash or git command in it fails. */
 export const kSandboxHomeFiles = ['.bashrc', '.gitconfig'] as const;
 
-/** Makes each of kSandboxHomeFiles under `home` that is missing (Linux only), and returns the ones it made. */
-export function sandboxHomeFiles(platform: NodeJS.Platform, home: string, fs: HomeFs = realHomeFs): string[] {
+/**
+ * Makes each of kSandboxHomeFiles under `home` that is missing (Linux only): the ones it made, or, when one is missing
+ * and cannot be made, the refusal that names it (the start is refused then, rather than every command failing later
+ * with "Permission denied").
+ */
+export function sandboxHomeFiles(platform: NodeJS.Platform, home: string, fs: HomeFs = realHomeFs):
+    { made: string[] } | { cause: string; fix: string } {
     if (platform !== 'linux' || home === '') {
-        return [];
+        return { made: [] };
     }
     const made: string[] = [];
     for (const name of kSandboxHomeFiles) {
         const path = `${home}/${name}`;
-        if (!fs.exists(path) && fs.createEmpty(path)) {
+        if (fs.exists(path)) {
+            continue;
+        }
+        if (fs.createEmpty(path)) {
             made.push(path);
+        } else if (!fs.exists(path)) {
+            return { cause: `${path} is missing and the driver cannot make it; Claude's sandbox on Linux needs it to exist, `
+                + 'or every bash and git command in it fails', fix: `make it, empty: touch ${path}` };
         }
     }
-    return made;
+    return { made };
 }

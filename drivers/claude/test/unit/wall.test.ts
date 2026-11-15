@@ -4,15 +4,16 @@
 // against the real Claude, is the functional test (test/functional/wall.test.ts).
 
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { configDirOf, openConfigDir } from '../../src/account.js';
 import {
-    bothForms, configFiles, kClaudeSandboxProtects, kGitNameRules, kLoginVariables, kNoSettingsHooks, nexusOutsideState, programsOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
+    bothForms, configFiles, kClaudeSandboxProtects, kGitNameRules, kLoginVariables, kNoSettingsHooks, nexusOutsideState, programsOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
     type Wall, type WallFs,
 } from '../../src/wall.js';
+import { LeakScan } from '../leak-scan.js';
 
 const scratch = mkdtempSync(join(process.cwd(), '.wall-unit-'));
 after(() => { rmSync(scratch, { recursive: true, force: true }); });
@@ -177,27 +178,43 @@ void test('the hook answers deny with the reason, and nothing for a call it lets
     assert.deepEqual(await hook({ ...base, tool_name: 'Read', tool_input: { file_path: 'notes.md' } }, 'u', { signal }), {});
 });
 
-void test('a new Claude state directory takes the state an older driver left in the login, never a secret', () => {
+void test('a new Claude state directory takes only the person\'s settings and instructions from the login, never a transcript', () => {
     const home = join(scratch, 'home');
     const login = join(home, '.nexus/server/accounts/main');
-    mkdirSync(join(login, 'projects', 'p'), { recursive: true, mode: 0o700 });
-    writeFileSync(join(login, 'oauth-token'), 'secret-token\n', { mode: 0o600 });
+    // A made-up token, of letters found in nothing else here, in every place an older driver's Claude may have put it.
+    const token = 'nexuswallMIGRATEqzxjkvwpTOKENbcdfghmnrst';
+    mkdirSync(join(login, 'projects', 'p', 'memory'), { recursive: true, mode: 0o700 });
+    mkdirSync(join(login, 'shell-snapshots'), { mode: 0o700 });
+    writeFileSync(join(login, 'oauth-token'), `${token}\n`, { mode: 0o600 });
     writeFileSync(join(login, 'api-key'), 'secret-key\n', { mode: 0o600 });
-    writeFileSync(join(login, '.claude.json'), '{}');
-    writeFileSync(join(login, 'projects', 'p', 'session.jsonl'), 'turns\n');
-    symlinkSync('/nonexistent', join(login, 'projects', 'link'));
+    writeFileSync(join(login, '.claude.json'), `{"projects":{"/w":{"history":[{"display":"use ${token}"}]}}}`);
+    writeFileSync(join(login, 'projects', 'p', 'session.jsonl'), `{"tool_result":"${token}"}\n`);
+    writeFileSync(join(login, 'projects', 'p', 'memory', 'notes.md'), `the token is ${token}\n`);
+    writeFileSync(join(login, 'shell-snapshots', 'snapshot-bash.sh'), `export CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
+    writeFileSync(join(login, 'history.jsonl'), `{"display":"${token}"}\n`);
+    writeFileSync(join(login, 'settings.json'), '{"model":"opus"}');
+    writeFileSync(join(login, 'CLAUDE.md'), 'be kind\n');
+    // A link named as a file that is taken, to the token: never followed.
+    symlinkSync(join(login, 'oauth-token'), join(login, 'settings.local.json'));
     const configDir = configDirOf(home, 'main');
     assert.equal(openConfigDir({ dir: login, configDir }), undefined);
-    assert.equal(readFileSync(join(configDir, 'projects', 'p', 'session.jsonl'), 'utf8'), 'turns\n');
-    assert.ok(existsSync(join(configDir, '.claude.json')));
-    assert.ok(!existsSync(join(configDir, 'oauth-token')), 'the token was copied');
-    assert.ok(!existsSync(join(configDir, 'api-key')), 'a secret was copied');
-    assert.ok(lstatSync(join(configDir, 'projects', 'link')).isSymbolicLink(), 'a link was followed');
+    assert.deepEqual(readdirSync(configDir).sort(), ['CLAUDE.md', 'settings.json']);
+    assert.equal(readFileSync(join(configDir, 'settings.json'), 'utf8'), '{"model":"opus"}');
+    assert.equal(readFileSync(join(configDir, 'CLAUDE.md'), 'utf8'), 'be kind\n');
+    const scan = new LeakScan(token, 'main');
+    for (const name of readdirSync(configDir, { recursive: true, encoding: 'utf8' })) {
+        const p = join(configDir, name);
+        if (lstatSync(p).isFile()) {
+            assert.equal(scan.find(readFileSync(p, 'utf8')), '', `${name} holds the token`);
+        }
+    }
+    // What is not taken stays where it was.
+    assert.ok(existsSync(join(login, 'projects', 'p', 'session.jsonl')));
     assert.equal(lstatSync(configDir).mode & 0o777, 0o700);
     // Once: a later start leaves it as it is.
-    writeFileSync(join(login, 'projects', 'p', 'later.jsonl'), 'x');
+    writeFileSync(join(login, 'CLAUDE.md'), 'changed\n');
     assert.equal(openConfigDir({ dir: login, configDir }), undefined);
-    assert.ok(!existsSync(join(configDir, 'projects', 'p', 'later.jsonl')));
+    assert.equal(readFileSync(join(configDir, 'CLAUDE.md'), 'utf8'), 'be kind\n');
     // A file where the directory should be is refused, with the fix.
     const other = configDirOf(home, 'other');
     writeFileSync(other, 'not a directory');
@@ -207,6 +224,11 @@ void test('a new Claude state directory takes the state an older driver left in 
     mkdirSync(fresh, { mode: 0o700 });
     assert.equal(openConfigDir({ dir: fresh, configDir: configDirOf(home, 'fresh') }), undefined);
     assert.ok(lstatSync(configDirOf(home, 'fresh')).isDirectory());
+});
+
+void test('the migration test\'s scan finds a token planted in the new directory (its witness)', () => {
+    const token = 'nexuswallWITNESSqzxjkvwpTOKENbcdfghmnrst';
+    assert.notEqual(new LeakScan(token, 'main').find(`{"tool_result":"${token}"}`), '');
 });
 
 void test('nothing under ~/.nexus is writable but the session\'s own Claude state', () => {
@@ -237,4 +259,89 @@ void test('the programs nexus runs: node, the driver, the sandbox tools, and the
     for (const p of [...got, '/h/.config/fish', '/h/.ssh', '/h/.config/systemd', '/h/.claude', '/h/.nexus/server/drivers']) {
         assert.ok(files.includes(p), p);
     }
+});
+
+/**
+ * A disk of folders and files, each with an identity (`dev:ino`), links resolved component by component, and on a
+ * case-insensitive volume (`caseless`) any spelling of a name finding it: a stand-in for realpath and stat.
+ */
+function diskFs(entries: Record<string, string>, links: Record<string, string>, caseless: boolean): WallFs {
+    const canon = (p: string): string | undefined => {
+        const parts = p.split('/').filter((s) => s !== '');
+        let at = '';
+        for (const part of parts) {
+            const next = `${at}/${part}`;
+            const link = Object.keys(links).find((l) => (caseless ? l.toLowerCase() === next.toLowerCase() : l === next));
+            if (link !== undefined) {
+                at = links[link] ?? '';
+                continue;
+            }
+            const hit = Object.keys(entries).find((e) => (caseless ? e.toLowerCase() === next.toLowerCase() : e === next));
+            if (hit === undefined) {
+                return undefined;
+            }
+            at = hit;
+        }
+        return at === '' ? '/' : at;
+    };
+    return {
+        realpath(p) {
+            const c = canon(p);
+            if (c === undefined) {
+                throw new Error('ENOENT');
+            }
+            return c;
+        },
+        identity: (p) => {
+            const c = canon(p);
+            return c === undefined ? undefined : entries[c] ?? (c === '/' ? '0:1' : undefined);
+        },
+        files: (root) => Object.keys(entries).filter((f) => f.startsWith(`${root}/`) && entries[f]?.startsWith('f') === true),
+    };
+}
+
+const kDisk: Record<string, string> = {
+    '/h': 'd:2', '/h/.nexus': 'd:3', '/h/.nexus/server': 'd:4', '/h/.nexus/server/accounts': 'd:5',
+    '/h/.nexus/server/accounts/main': 'd:6', '/h/.nexus/server/accounts/main/oauth-token': 'f:7',
+    '/h/.claude': 'd:8', '/h/.ssh': 'd:9', '/w': 'd:10', '/w/sub': 'd:11', '/w/notes.md': 'f:12',
+};
+const kDiskLinks = { '/w/lnk2': '/h/.nexus/server/accounts', '/w/lnk': '/h/.claude' };
+const diskWall: Wall = { secrets: ['/h/.nexus/server/accounts'], config: configFiles('/w', '/h/.nexus/server/harness/claude/main', '/h') };
+
+void test('the hook judges a path by every spelling of it, where it resolves, and folder identity', () => {
+    for (const caseless of [false, true]) {
+        const d = diskFs(kDisk, kDiskLinks, caseless);
+        const refuse = (tool: string, input: Record<string, unknown>): string | undefined => toolRefusal(tool, input, diskWall, '/w', '/h', d);
+        const why = `(${caseless ? 'case-insensitive' : 'case-sensitive'})`;
+        assert.match(refuse('Write', { file_path: '/h/.nexus//server/accounts/main/new-file', content: 'x' }) ?? '', /accounts' directory/, `doubled slash ${why}`);
+        assert.match(refuse('Write', { file_path: '/w/lnk2/main/new-file', content: 'x' }) ?? '', /accounts' directory/, `a link to the accounts, a new name ${why}`);
+        assert.match(refuse('Read', { file_path: 'lnk2/main/oauth-token' }) ?? '', /accounts' directory/, `a link, relative ${why}`);
+        assert.match(refuse('Write', { file_path: '/w/lnk/settings.json', content: '{}' }) ?? '', /outside the sandbox/, `a link to ~/.claude ${why}`);
+        assert.match(refuse('Write', { file_path: '/h//.ssh/config', content: '' }) ?? '', /outside the sandbox/, `doubled slash to ~/.ssh ${why}`);
+        assert.match(refuse('Write', { file_path: '/w/sub/../.mcp.json', content: '{}' }) ?? '', /outside the sandbox/, `.. to the MCP file ${why}`);
+        assert.match(refuse('Glob', { pattern: '.nexus/server/accounts/**', path: '/h' }) ?? '', /accounts' directory/, `Glob under HOME ${why}`);
+        assert.match(refuse('Grep', { pattern: 'x', path: '/w', glob: '../h/.nexus/server/accounts/**' }) ?? '', /accounts' directory/, `Grep's file glob ${why}`);
+        // What is not protected stays open: the working directory, a new file in it, a near name.
+        assert.equal(refuse('Write', { file_path: '/w/sub/new.md', content: 'x' }), undefined, why);
+        assert.equal(refuse('Read', { file_path: '/w//notes.md' }), undefined, why);
+        assert.equal(refuse('Glob', { pattern: '**/*.md', path: '/w' }), undefined, why);
+        assert.equal(refuse('Write', { file_path: '/h/.nexusx/new', content: 'x' }), undefined, why);
+    }
+    // Another case of the accounts' directory: the same folder on a case-insensitive volume, refused by its identity.
+    const caseless = diskFs(kDisk, kDiskLinks, true);
+    assert.match(toolRefusal('Grep', { pattern: 'x', path: '/h/.NEXUS/server/accounts' }, diskWall, '/w', '/h', caseless) ?? '',
+        /accounts' directory/);
+    assert.match(toolRefusal('Write', { file_path: '/h/.CLAUDE/settings.json', content: '{}' }, diskWall, '/w', '/h', caseless) ?? '',
+        /outside the sandbox/);
+    // On a case-sensitive one it is another folder, which may be read (writing under a protected name is still refused).
+    const other = diskFs({ ...kDisk, '/h/.NEXUS': 'd:20', '/h/.NEXUS/server': 'd:21', '/h/.NEXUS/server/accounts': 'd:22' }, kDiskLinks, false);
+    assert.equal(toolRefusal('Grep', { pattern: 'x', path: '/h/.NEXUS/server/accounts' }, diskWall, '/w', '/h', other), undefined);
+});
+
+void test('a file not made yet resolves through its nearest folder that is', () => {
+    const d = diskFs(kDisk, kDiskLinks, false);
+    assert.equal(realOf('/w/lnk2/main/new-file', d), '/h/.nexus/server/accounts/main/new-file');
+    assert.equal(realOf('/w/lnk2/new/deeper/file', d), '/h/.nexus/server/accounts/new/deeper/file');
+    assert.equal(realOf('/w/notes.md', d), '/w/notes.md');
+    assert.equal(realOf('/nowhere/at/all', { realpath: () => { throw new Error('ENOENT'); } }), '/nowhere/at/all');
 });

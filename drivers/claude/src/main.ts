@@ -36,14 +36,28 @@ if ('path' in tools && tools.path !== undefined) {
 if ('did' in tools) {
     process.stderr.write(`nexus-claude-driver: ${tools.did}\n`);
 }
+// Why the AI's sandbox cannot be set up here, if it cannot: the start is refused with it (run.ts prepare), in the
+// protocol's lines, never with a stack trace and never with the AI run unwalled.
+let setup: { cause: string; fix: string } | undefined = 'cause' in tools ? tools : undefined;
 // On Linux every bash and git command in the sandbox fails without ~/.bashrc and ~/.gitconfig: made empty if missing.
-for (const made of sandboxHomeFiles(process.platform, process.env['HOME'] ?? '')) {
-    process.stderr.write(`nexus-claude-driver: made ${made}, empty: the sandbox's shell and git need it to exist\n`);
+const home = sandboxHomeFiles(process.platform, process.env['HOME'] ?? '');
+if ('cause' in home) {
+    setup ??= home;
+} else {
+    for (const made of home.made) {
+        process.stderr.write(`nexus-claude-driver: made ${made}, empty: the sandbox's shell and git need it to exist\n`);
+    }
 }
 // ssh on Claude's PATH goes through the sandbox's proxy, so `ssh host` reaches the fleet (bin/ssh).
 env['PATH'] = `${kDriverDir}/bin:${env['PATH'] ?? '/usr/bin:/bin'}`;
-// The AI's commands reach the network only through this proxy, which never connects to this machine (egress.ts).
-const egressPort = await new Egress().listen();
+// The AI's commands reach the network only through this proxy, which refuses this machine's own addresses (egress.ts).
+let egressPort = 0;
+try {
+    egressPort = await new Egress().listen();
+} catch (e) {
+    setup ??= { cause: `the proxy for the AI's commands cannot listen on 127.0.0.1 (${e instanceof Error ? e.message : String(e)})`,
+        fix: 'free a port on 127.0.0.1 for this user (a firewall or a sandbox around nexus-server may forbid listening)' };
+}
 
 function startHarness(start: HarnessStart, account: Account): Harness {
     return query({
@@ -72,4 +86,4 @@ function startHarness(start: HarnessStart, account: Account): Harness {
     });
 }
 
-runProcess(startHarness, removed, undefined, undefined, 'cause' in tools ? tools : undefined);
+runProcess(startHarness, removed, undefined, undefined, setup);

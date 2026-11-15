@@ -137,6 +137,25 @@ void test('the start is refused with no-credential before any harness when the a
     assert.equal(ok.args.account, 'ready');
 });
 
+void test('the start is refused before any account is read when the AI\'s sandbox cannot be set up', () => {
+    let looked = false;
+    const findAny = (name: string): Account | AccountRefusal => {
+        looked = true;
+        return { name, dir: '/h/a', configDir: '/h/c', token: 't' };
+    };
+    const setup = { cause: 'the sandbox\'s /b/bwrap/bwrap is missing', fix: 'build nexus-server again' };
+    const r = prepare(['--account', 'ready', '--cwd', '/w'], () => true, findAny, () => undefined, setup);
+    assert.ok('refusal' in r);
+    assert.deepEqual(r.refusal.map((m) => m.kind), ['hello', 'error']);
+    const e = r.refusal[1];
+    assert.ok(e?.kind === 'error');
+    assert.equal(e.cause, 'no sandbox for the AI: the sandbox\'s /b/bwrap/bwrap is missing');
+    assert.equal(e.fix, 'build nexus-server again');
+    assert.equal(looked, false, 'no account is read for a session that cannot start');
+    // Without a refusal the same start goes on.
+    assert.ok('account' in prepare(['--account', 'ready', '--cwd', '/w'], () => true, findAny, () => undefined, undefined));
+});
+
 void test('Claude gets the account\'s directory, none it inherited, and its token in no environment', () => {
     const { env } = scrub({
         CLAUDE_CONFIG_DIR: '/Users/me/.claude', CLAUDE_CODE_OAUTH_TOKEN: 'inherited', ANTHROPIC_API_KEY: 'k',

@@ -152,16 +152,19 @@ export function configDirOf(home: string, name: string): string {
 }
 
 /**
- * What a login's directory held of Claude's own state before it moved to configDirOf: every directory (sessions,
- * projects, memory, snapshots...) and these files. Never anything else: a file the secret dialog stored there is a
- * secret and stays (docs/secrets.md).
+ * What a new Claude state directory takes from the login's directory, where an older driver kept Claude's state: the
+ * person's own settings and instructions, by name, and nothing else. Never a directory (projects/ holds the old
+ * transcripts and memory, shell-snapshots/ the old shells' environments: from before the wall, any of them may hold
+ * the token, and the new directory is one the AI reads), never .claude.json (Claude's record of each project, the
+ * prompts typed in it among them), and never a file the secret dialog stored (docs/secrets.md). What is not taken stays
+ * where it was, under the wall. The cost: a session from before the wall does not resume.
  */
-const kClaudeStateFiles = ['.claude.json', 'settings.json', 'settings.local.json', 'CLAUDE.md'];
+export const kClaudeStateFiles = ['settings.json', 'settings.local.json', 'CLAUDE.md'] as const;
 
 /**
- * Makes the account's CLAUDE_CONFIG_DIR (mode 0700) if it is missing. A new one takes a copy of the state an older
- * driver left in the login's directory (kClaudeStateFiles and every directory, links never followed), so that sessions
- * resume where they were; the copy is made once, and the login's directory is left as it was. Undefined, or why not.
+ * Makes the account's CLAUDE_CONFIG_DIR (mode 0700) if it is missing. A new one takes a copy of the person's settings and
+ * instructions an older driver left in the login's directory (kClaudeStateFiles: regular files only, links never
+ * followed); the copy is made once, and the login's directory is left as it was. Undefined, or why not.
  */
 export function openConfigDir(account: Pick<Account, 'dir' | 'configDir'>): string | undefined {
     if (existsSync(account.configDir)) {
@@ -177,9 +180,9 @@ export function openConfigDir(account: Pick<Account, 'dir' | 'configDir'>): stri
         rmSync(partial, { recursive: true, force: true });
         mkdirSync(partial, { mode: 0o700 });
         for (const entry of readdirSync(account.dir, { withFileTypes: true })) {
-            if (entry.isDirectory() || (entry.isFile() && kClaudeStateFiles.includes(entry.name))) {
+            if (entry.isFile() && (kClaudeStateFiles as readonly string[]).includes(entry.name)) {
                 cpSync(`${account.dir}/${entry.name}`, `${partial}/${entry.name}`,
-                    { recursive: true, dereference: false, preserveTimestamps: true, errorOnExist: true, force: false });
+                    { dereference: false, preserveTimestamps: true, errorOnExist: true, force: false });
             }
         }
         // Whole or not at all: a driver that dies mid-copy leaves only a .partial, made again by the next.
