@@ -7,8 +7,8 @@
 // argument.
 
 import {
-    closeSync, constants, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
-    renameSync, rmSync,
+    closeSync, constants, existsSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync, readFileSync,
+    renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -157,16 +157,67 @@ export function configDirOf(home: string, name: string): string {
  * transcripts and memory, shell-snapshots/ the old shells' environments: from before the wall, any of them may hold
  * the token, and the new directory is one the AI reads), never .claude.json (Claude's record of each project, the
  * prompts typed in it among them), and never a file the secret dialog stored (docs/secrets.md). What is not taken stays
- * where it was, under the wall. The cost: a session from before the wall does not resume.
+ * where it was, under the wall. Of these, one that holds the token, has another name (a hard link) or is larger than
+ * kMaxStateFileBytes is refused, and the directory is not made (stateFile). The cost: a session from before the wall
+ * does not resume.
  */
 export const kClaudeStateFiles = ['settings.json', 'settings.local.json', 'CLAUDE.md'] as const;
 
+/** The most of one file openConfigDir copies: settings and instructions are small, a transcript is not. */
+export const kMaxStateFileBytes = 1024 * 1024;
+
+/**
+ * One of kClaudeStateFiles from the login's directory, `path`, checked on the descriptor it is read from (so what is
+ * checked is what is copied): the text to copy, undefined when there is none or it is a link (never followed, never
+ * taken), or why it is refused: never a file with another name (a hard link: the same file may be one the AI must not read), never one larger than
+ * kMaxStateFileBytes, never one holding the account's `token` (scanned, never logged).
+ */
+function stateFile(path: string, token: string): { text: Buffer; atime: Date; mtime: Date } | undefined | string {
+    let fd: number;
+    try {
+        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (e) {
+        // Not there, or a link (never followed, and not taken: what it names may be anything).
+        if (codeOf(e) === 'ENOENT' || codeOf(e) === 'ELOOP') {
+            return undefined;
+        }
+        return `${path} cannot be read (${codeOf(e)}); move it aside, and the driver makes the Claude state directory again`;
+    }
+    try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) {
+            return `${path} is not a regular file; move it aside, and the driver makes the Claude state directory again`;
+        }
+        if (st.nlink > 1) {
+            return `${path} has ${st.nlink} names (a hard link); a new Claude state directory takes no file with another `
+                + 'name: copy it to a file of its own, and the driver makes the directory again';
+        }
+        if (st.size > kMaxStateFileBytes) {
+            return `${path} is larger than ${kMaxStateFileBytes} bytes, more than settings or instructions hold; move it `
+                + 'aside, and the driver makes the Claude state directory again';
+        }
+        const text = readFileSync(fd);
+        if (text.length > kMaxStateFileBytes) {
+            return `${path} grew past ${kMaxStateFileBytes} bytes while it was read; move it aside, and the driver makes `
+                + 'the Claude state directory again';
+        }
+        if (token !== '' && text.includes(token)) {
+            return `${path} holds the account's login token, and the new Claude state directory is one the AI reads; take `
+                + 'the token out of it (and make a new one: the AI may have read it before), and the driver makes the directory again';
+        }
+        return { text, atime: st.atime, mtime: st.mtime };
+    } finally {
+        closeSync(fd);
+    }
+}
+
 /**
  * Makes the account's CLAUDE_CONFIG_DIR (mode 0700) if it is missing. A new one takes a copy of the person's settings and
- * instructions an older driver left in the login's directory (kClaudeStateFiles: regular files only, links never
- * followed); the copy is made once, and the login's directory is left as it was. Undefined, or why not.
+ * instructions an older driver left in the login's directory (kClaudeStateFiles, each checked by stateFile, which
+ * refuses one it will not copy, with why); the copy is made once, and the login's directory is left as it was.
+ * Undefined, or why not.
  */
-export function openConfigDir(account: Pick<Account, 'dir' | 'configDir'>): string | undefined {
+export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'token'>): string | undefined {
     if (existsSync(account.configDir)) {
         const st = lstatSync(account.configDir);
         if (!st.isDirectory() || (uid() !== undefined && st.uid !== uid())) {
@@ -179,10 +230,21 @@ export function openConfigDir(account: Pick<Account, 'dir' | 'configDir'>): stri
         mkdirSync(dirname(account.configDir), { recursive: true, mode: 0o700 });
         rmSync(partial, { recursive: true, force: true });
         mkdirSync(partial, { mode: 0o700 });
-        for (const entry of readdirSync(account.dir, { withFileTypes: true })) {
-            if (entry.isFile() && (kClaudeStateFiles as readonly string[]).includes(entry.name)) {
-                cpSync(`${account.dir}/${entry.name}`, `${partial}/${entry.name}`,
-                    { dereference: false, preserveTimestamps: true, errorOnExist: true, force: false });
+        for (const name of kClaudeStateFiles) {
+            const got = stateFile(`${account.dir}/${name}`, account.token);
+            if (typeof got === 'string') {
+                rmSync(partial, { recursive: true, force: true });
+                return got;
+            }
+            if (got !== undefined) {
+                const out = `${partial}/${name}`;
+                writeFileSync(out, got.text, { mode: 0o600, flag: 'wx' });
+                const fd = openSync(out, constants.O_RDONLY);
+                try {
+                    futimesSync(fd, got.atime, got.mtime);
+                } finally {
+                    closeSync(fd);
+                }
             }
         }
         // Whole or not at all: a driver that dies mid-copy leaves only a .partial, made again by the next.

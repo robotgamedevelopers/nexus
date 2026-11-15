@@ -275,8 +275,8 @@ What keeps a driver's AI from reading what this dialog stores, and the login it 
 (`drivers/claude/src/wall.ts`); `drivers/claude/test/functional/wall.test.ts` tries the routes below against it.
 
 **The wall is best effort** (the owner's ruling, 2026-11-15). It is built from what the machine already has (Claude's
-own sandbox, bubblewrap, socat, AppArmor) and closes the routes it has measured that it can close without root; it
-is not isolation. A person who needs real isolation runs the AI in a sandboxed VM or container, which is on the
+own sandbox, bubblewrap, socat, AppArmor) and closes the routes it has measured that it can close with those (on
+Ubuntu, one AppArmor profile loaded through passwordless sudo, below); it is not isolation. A person who needs real isolation runs the AI in a sandboxed VM or container, which is on the
 roadmap (`real-isolation`). What stays open is listed at the end of this section, per OS.
 
 **What it closes.** Against every route the functional test tries, the AI the Claude driver runs does not read its
@@ -322,7 +322,8 @@ marked *denied by rule, not tested* is what the wall's configuration says and no
    rule on it is denied by rule, not tested.
 5. *Nothing that runs outside the sandbox can be planted* (the wall around 2). Settings hooks are off
    (`disableAllHooks`; the driver's own SDK hook still runs; a hook in the project's settings is tried, and does not
-   run). No tool may write what runs outside the sandbox later. Tried, and denied: the session's
+   run). No tool may write the files on the wall's list of what runs outside the sandbox later (`wall.ts`
+   `configFiles`; a list, not complete: below, what stays open). Tried, and denied: the session's
    `.claude/settings.json` and `.claude/settings.local.json` (by the shell and by Write), `.mcp.json` (Write, through
    `..`); nexus-server's drivers file and config (by the shell and by Write); `~/.profile`, `~/.zshenv`, a systemd user
    unit and a program in `~/bin` (by the shell); `~/.ssh`, `~/.config/git`, `~/.claude`, `~/Library/LaunchAgents`,
@@ -337,8 +338,14 @@ marked *denied by rule, not tested* is what the wall's configuration says and no
 6. *A PreToolUse hook* (a backstop, never the wall). It refuses a call whose command, pattern, URL or path names the
    accounts' directory by an absolute spelling; a path that resolves into it or onto a file of layer 5, judged by
    every spelling (doubled slashes and `..` normalised), where it is on disk (a file not made yet is judged by its
-   nearest folder that is, so a link to a protected folder with a new name is caught), and folder identity (another
-   case of a protected folder on a case-insensitive volume); the folder each Glob or Grep file pattern starts in; one
+   nearest folder that is, so a link to a protected folder with a new name is caught), and folder identity with names
+   compared after NFKC normalisation and case folding (`wall.ts` `folded`): another case of a protected name, or a
+   compatibility spelling of it such as the long s (U+017F), which macOS's case-insensitive volume takes for the plain
+   letter while Claude's deny rules do not. That refuses more than the volume would (a fullwidth letter; another case
+   on a case-sensitive volume), and never a look-alike of another script (a Cyrillic letter), which is another name on
+   every volume. The functional test writes a protected file not made yet under a long-s spelling, with the hook and
+   without it: Claude's rules let it through, the hook refuses it. The rest: the folder each Glob or Grep file pattern
+   starts in; one
    of the directory's files under another name (a hard link); a write that makes a git directory (below); and a fetch
    of anything but an http or https URL. It reads text, and text can be spelled around; the functional test runs once
    without it to show layers 1 to 5 hold alone against the same routes.
@@ -348,8 +355,12 @@ The logins' directory holds secrets only: Claude's own state is kept in `~/.nexu
 whole, files the dialog stores later included. An older driver kept that state in the login's directory: the first
 start of this one copies only `settings.json`, `settings.local.json` and `CLAUDE.md` from there (`account.ts`
 `kClaudeStateFiles`), never the transcripts, memory, shell snapshots, history or `.claude.json`, which from before the
-wall may hold the token (the unit test plants a made-up token in each and finds it in nothing copied). Those stay
-where they were, under the wall; a session from before does not resume.
+wall may hold the token (the unit test plants a made-up token in each and finds it in nothing copied). Each of the
+three is read once, from a descriptor opened without following a link (a link is not taken), and copied only when it
+is a regular file of one name, at most 1 MiB, that does not hold the account's token (scanned in memory, never
+logged); a hard link, a larger file or one holding the token refuses the start in one line naming the file and the
+fix, and no directory is made (the unit test plants the token in each of the three and as a hard link). Those not
+copied stay where they were, under the wall; a session from before does not resume.
 
 **Linux and WSL2, with nothing installed.** The sandbox there needs bubblewrap and socat. nexus's build makes both
 from pinned release sources (`cmake/sandbox.cmake`: libcap 2.78 linked in statically, bubblewrap 0.13.1, socat 1.8.1.3,
@@ -367,7 +378,9 @@ Electron apps do), loaded with `apparmor_parser -r` and then kept where AppArmor
 goes to both commands on standard input, never through a file (a file the driver wrote would be one the sandbox can
 write too; `tee` writes it, then `chmod`, and the driver checks the file holds the text), and `sudo`,
 `apparmor_parser`, `tee` and `chmod` are run by absolute path, never looked up on a PATH (the unit
-test checks no other path is ever handed to root). It logs one line saying so. Claude's sandbox still refuses the AI's
+test checks no other path is ever handed to root). Before anything runs as root the driver checks that
+`/etc/apparmor.d` is a folder (not a link) owned by root that no one else can write (0755 or stricter), and refuses
+to start in one line otherwise (unit-tested). A load logs one line saying so. Claude's sandbox still refuses the AI's
 own commands a user namespace. Without passwordless sudo the driver refuses to start in one plain line naming what is
 missing; it never changes the sysctl, which would lift the restriction for every program. The profile trusts whatever
 program is at that path, which the person's own account can replace: it gives that path what the restriction takes
@@ -425,6 +438,7 @@ this machine logged in as the person; with it, none of the routes below does, wi
 | WebFetch: a `file://` URL, a local URL | not read | refused (6); invalid URL |
 | a hook in the project's settings | **read** | never runs (layer 5) |
 | Write a hook into the local settings | written | denied (layer 5; 6) |
+| Write: a settings file or `~/.zshenv` not made yet, spelled with a long s | written (and without the hook) | refused (6) |
 | the harness authenticates with the token | yes | yes, from the descriptor |
 
 **Git directories, by name.** The file tools (Write, Edit, NotebookEdit) may not create or change a repository's
@@ -459,8 +473,22 @@ What it costs:
   in its default (NAT) networking, is another machine to it, and reachable, with whatever it serves (an ssh server
   there that trusts the person's key above all). Not measured; nor is mirrored networking, where the two share
   addresses.
+- *Every OS: the hook checks a path, then Claude opens it.* A command run between the two can swap a link along the
+  path (a folder checked as harmless made a link into a protected one), and the tool then opens what the link names.
+  Layers 2 and 4 still stand behind the hook for the accounts' directory; for the files of layer 5 that Claude's rules
+  do not name by every spelling, the hook may be the only check, and this race goes round it (not tested).
+- *Every OS: the list of what runs outside the sandbox is not complete.* Layer 5 names the common shells' start-up
+  files, login agents, and the config of git, ssh, tmux, editors and the tools above; it does not name every file a
+  program the person runs later reads commands from. Not on it, for example: `~/.bash_aliases` and other files a
+  start-up file sources, window-manager and desktop config files whose lines run commands, and shell frameworks'
+  custom folders (such as oh-my-zsh's `custom/`). The shell and the file tools may write those.
 - *Linux with a restricting AppArmor:* the profile trusts the program at its path, which the person's account can
-  replace (above).
+  replace (above). The driver trusts root's `/etc/apparmor.d` once it has checked it is root's alone. A profile is
+  kept for each build path nexus ever ran from, and the old ones stay in `/etc/apparmor.d` until the person removes
+  them (for each old one, `sudo apparmor_parser -R <file>`, then `sudo rm <file>`).
+- *nexus's own CI:* the driver's packages and the sandbox tools are kept per runner under `~/.cache/nexus-ci`, and a
+  job on any branch can write them, so a branch's job can change what a later job of another branch runs. Not the
+  product; CI only.
 - *The driver's own memory.* nexus-server and the window set `RLIMIT_CORE` to 0 and, on Linux, mark themselves not
   dumpable (`src/no_core.h`, above). The Claude driver is a Node process, and Node has no call for either, so it does
   neither: from reading the token file until Claude has it, the token is in the driver's memory, and a core file of it

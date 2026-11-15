@@ -10,13 +10,15 @@ import {
 } from '../../src/tools.js';
 
 /** A machine of `files`, where sudo -n works when `sudo` is true; every sudo call is recorded with what it was given. */
-function fakeSystem(files: Record<string, string>, sudo = true, failing?: string) {
+function fakeSystem(files: Record<string, string>, sudo = true, failing?: string,
+    profiles: { uid: number; mode: number } | null = { uid: 0, mode: 0o755 }) {
     const calls: string[][] = [];
     const inputs: (string | undefined)[] = [];
     const sys: ToolsSystem = {
         exists: (path) => path in files,
         read: (path) => files[path],
         realpath: (path) => path.replace('/link/', '/real/'),
+        folder: (path) => (path === kAppArmorDir && profiles !== null ? profiles : undefined),
         sudo: (args, input) => {
             calls.push([...args]);
             inputs.push(input);
@@ -118,6 +120,22 @@ void test('no passwordless sudo refuses in one plain line naming what is missing
     assert.equal(got.fix, 'passwordless sudo for this user is what is missing');
     assert.doesNotMatch(`${got.cause} ${got.fix}`, /sysctl -w|\n/);
     assert.deepEqual(m.calls, [['true']]);
+});
+
+void test('a profiles folder that is not root\'s alone refuses before anything runs as root', () => {
+    for (const [what, folder] of [['another owner', { uid: 1000, mode: 0o755 }], ['group-writable', { uid: 0, mode: 0o775 }],
+        ['world-writable', { uid: 0, mode: 0o777 }], ['not a folder (or a link)', null]] as const) {
+        const m = fakeSystem({ ...kRestricted }, true, undefined, folder);
+        const got = sandboxTools('linux', { NEXUS_SANDBOX_BIN: kBin, PATH: '/usr/bin' }, m.sys);
+        assert.ok('cause' in got, what);
+        assert.match(got.cause, /\/etc\/apparmor\.d.*not root's alone/, what);
+        assert.match(got.fix, /chmod 0755/, what);
+        assert.doesNotMatch(`${got.cause} ${got.fix}`, /\n/, what);
+        assert.deepEqual(m.calls, [], what);
+    }
+    // Stricter than 0755 is root's alone too.
+    const m = fakeSystem({ ...kRestricted }, true, undefined, { uid: 0, mode: 0o700 });
+    assert.ok('did' in sandboxTools('linux', { NEXUS_SANDBOX_BIN: kBin, PATH: '/usr/bin' }, m.sys));
 });
 
 void test('a load that fails refuses and keeps no profile file', () => {

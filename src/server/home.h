@@ -50,6 +50,15 @@ inline const char* const kAccountsUnderHome = ".nexus/server/accounts";
 // `home` (HOME, without a trailing '/') with kAccountsUnderHome: the directory of the account logins, one per name.
 std::string accountsDir(const std::string& home);
 
+// The variable the Claude driver finds the sandbox's bwrap and socat by on Linux (drivers/claude/src/tools.ts).
+inline const char* const kSandboxBinVariable = "NEXUS_SANDBOX_BIN";
+
+// Where the sandbox's bwrap and socat are for the nexus-server at the absolute path `self`: the folder `sandbox` the
+// build made beside it (cmake/sandbox.cmake). Only ever from the server's own path, never from the environment (the
+// driver loads an AppArmor profile for what is there, through sudo). Empty when `self` is not an absolute path to a
+// file: the server then unsets the variable rather than keep one it was started with.
+std::string sandboxBinOf(const std::string& self);
+
 // `home` (HOME) with .nexus/server added in `dir`, the ~/.nexus above it in `top`, and HOME itself, without a trailing
 // '/', in `resolved`: the one place the server resolves its home. False, with why, when `home` is null or empty.
 bool serverHome(const char* home, std::string* resolved, std::string* top, std::string* dir, std::string* why);

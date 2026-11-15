@@ -365,7 +365,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B "$SANDBOX_BUILD" -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF \
             -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_SANDBOX_TOOLS=ON > /dev/null
-          cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(nproc)"
+          cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(sh .github/job-cores.sh)"
           "$NEXUS_SANDBOX_BIN/bwrap/bwrap" --version
           "$NEXUS_SANDBOX_BIN/socat/socat" -V | head -2
       - name: Install the pinned packages, with the Claude executable

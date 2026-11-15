@@ -145,8 +145,8 @@ environment, and Claude keeps its own state in `~/.nexus/server/harness/claude/<
 `CLAUDE_CONFIG_DIR` or `CLAUDE_CODE_OAUTH_TOKEN` the server's environment carries is removed; the Keychain's login and
 `~/.claude` are never used. Keeping the token from the AI it runs is best effort, not isolation: its shell runs in the OS
 sandbox with the accounts' directory out of reach, its file tools are kept out of it, its network goes through a proxy
-that refuses this machine's own addresses, and writing the files nexus runs outside the sandbox is denied to it, by
-rule. None of the routes the tests try reads the token; some routes stay open, listed per OS in [docs/secrets.md](docs/secrets.md) ("The token
+that refuses this machine's own addresses, and writing the files on its list of what runs outside the sandbox is
+denied to it, by rule (a list, not complete). None of the routes the tests try reads the token; some routes stay open, listed per OS in [docs/secrets.md](docs/secrets.md) ("The token
 wall"), among them this machine reached by way of another one. On Linux and WSL2 that sandbox's bubblewrap and socat
 are built by nexus (`cmake/sandbox.cmake`), not installed. Without the directory, or with a token file that is missing,
 not one line, or readable by anyone but its owner,

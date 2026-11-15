@@ -233,12 +233,25 @@ export const kGitNameRules = [
     'Edit(//**/.git/config)', 'Edit(//**/.git/hooks)', 'Edit(//**/.git/hooks/**)', 'Edit(//**/commondir)',
 ] as const;
 
-/** The names the hook keeps the file tools from writing: a `.git` anywhere in the path, or a git directory's files. */
-const kGitNames = new Set(['HEAD', 'commondir']);
+/**
+ * A name as a case-insensitive volume compares it, or more strictly: compatibility forms folded to their plain letter
+ * (NFKC: the long s U+017F is s, the Kelvin sign is K), then case folded (upper then lower, so a final sigma and a
+ * sigma meet). Deny-leaning: some names this folds together (a fullwidth letter and its plain one) are two names on
+ * the volume, and the hook refuses both.
+ */
+export function folded(name: string): string {
+    return name.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC');
+}
 
-/** Whether `abs` is what makes a git directory, by name: in or at a `.git`, or a git directory's HEAD or commondir. */
+/** The names the hook keeps the file tools from writing, folded: a `.git` anywhere in the path, or a git directory's files. */
+const kGitNames = new Set(['head', 'commondir']);
+
+/**
+ * Whether `abs` is what makes a git directory, by name: in or at a `.git`, or a git directory's HEAD or commondir.
+ * Names compared folded, on every volume (deny-leaning: on a case-sensitive one a file named `head` is refused too).
+ */
 export function isGitName(abs: string): boolean {
-    const parts = abs.split('/');
+    const parts = abs.split('/').map(folded);
     return parts.includes('.git') || kGitNames.has(parts[parts.length - 1] ?? '');
 }
 
@@ -374,8 +387,9 @@ export function realOf(p: string, fs: Pick<WallFs, 'realpath'>): string {
 
 /**
  * Whether the real path `real` is one of `roots` or inside one, by folder identity (device and inode): on a
- * case-insensitive volume one folder has many spellings, and a root that does not exist yet is matched by its nearest
- * folder that does and the rest of its path, the rest compared without case (deny-leaning on a case-sensitive one).
+ * case-insensitive volume one folder has many spellings. A root is also matched by each folder above it that exists
+ * and the rest of its path, the rest compared folded, so a root not made yet and every folded spelling of a root are
+ * caught (deny-leaning: on a case-sensitive volume, and for a fullwidth letter, those are other names).
  */
 function insideByIdentity(real: string, roots: readonly string[], fs: Pick<WallFs, 'identity'>): boolean {
     const index: { id: string; tail: string }[] = [];
@@ -385,8 +399,7 @@ function insideByIdentity(real: string, roots: readonly string[], fs: Pick<WallF
         for (;;) {
             const id = fs.identity(q);
             if (id !== undefined) {
-                index.push({ id, tail: tail.toLowerCase() });
-                break;
+                index.push({ id, tail: folded(tail) });
             }
             const parent = dirname(q);
             if (parent === q) {
@@ -402,7 +415,7 @@ function insideByIdentity(real: string, roots: readonly string[], fs: Pick<WallF
     for (;;) {
         const id = fs.identity(a);
         if (id !== undefined) {
-            const r = rest.toLowerCase();
+            const r = folded(rest);
             if (index.some((e) => e.id === id && (e.tail === '' || r === e.tail || r.startsWith(`${e.tail}/`)))) {
                 return true;
             }

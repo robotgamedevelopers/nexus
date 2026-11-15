@@ -22,7 +22,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, existsSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 
 /** The variable nexus-server sets to its build's sandbox tools directory (src/server/main.cpp). */
 export const kSandboxBinVariable = 'NEXUS_SANDBOX_BIN';
@@ -48,6 +48,8 @@ export interface ToolsSystem {
     read(path: string): string | undefined;
     /** The path with every link resolved, or the path as given when it cannot be. */
     realpath(path: string): string;
+    /** The folder at `path` itself (a link is not followed): its owner and mode, or undefined when it is not a folder. */
+    folder(path: string): { uid: number; mode: number } | undefined;
     /**
      * Runs kSudo -n with `args`, never prompting, with `input` on its standard input: undefined when it ran and
      * succeeded, else what went wrong.
@@ -69,6 +71,14 @@ export const realToolsSystem: ToolsSystem = {
             return realpathSync(path);
         } catch {
             return path;
+        }
+    },
+    folder: (path) => {
+        try {
+            const st = lstatSync(path);
+            return st.isDirectory() ? { uid: st.uid, mode: st.mode & 0o7777 } : undefined;
+        } catch {
+            return undefined;
         }
     },
     sudo: (args, input) => {
@@ -158,6 +168,14 @@ function loadProfile(bwrap: string, sys: ToolsSystem): { did: string } | { cause
     if (!sys.exists(kAppArmorParser)) {
         return { cause: `${restricted}, and ${kAppArmorParser}, which loads one, is missing`,
             fix: `install AppArmor's parser (apparmor), which loads nexus's profile for ${bwrap}` };
+    }
+    // What root writes into must be root's alone: a folder another user could write (or a link to one) would let them
+    // swap the profile file between the write and the load at boot.
+    const dir = sys.folder(kAppArmorDir);
+    if (dir?.uid !== 0 || (dir.mode & 0o022) !== 0) {
+        return { cause: `${restricted}, and ${kAppArmorDir}, where nexus would keep its profile, is `
+            + (dir === undefined ? 'not a folder' : `owned by uid ${dir.uid} with mode 0${dir.mode.toString(8)}`)
+            + ', not root\'s alone', fix: `make it root's, mode 0755: sudo chown root:root ${kAppArmorDir} && sudo chmod 0755 ${kAppArmorDir}` };
     }
     const noSudo = sys.sudo(['true']);
     if (noSudo !== undefined) {

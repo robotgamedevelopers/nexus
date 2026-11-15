@@ -64,8 +64,10 @@ driver keeps Claude's own state (its settings, sessions, memory) apart, in `~/.n
 which the AI can read and write. A driver from before this kept that state in the login's directory; the first start of
 this one copies only the person's `settings.json`, `settings.local.json` and `CLAUDE.md` from there, and nothing else:
 not the transcripts and memory (`projects/`), the shell snapshots, the history or `.claude.json`, which from before the
-wall may hold the token, and never a file the secret dialog stored. Those stay where they were, under the wall, and a
-session from before does not resume. Editing `accounts.json` and `friends.json` stays open to
+wall may hold the token, and never a file the secret dialog stored. Each of the three is copied only when it is a
+regular file of one name (a hard link is refused), at most 1 MiB, and does not hold the account's token; otherwise the
+driver refuses to start in one line naming the file and the fix, and makes no directory. Those not copied stay where
+they were, under the wall, and a session from before does not resume. Editing `accounts.json` and `friends.json` stays open to
 the AI: they hold no secret.
 
 ## accounts.json

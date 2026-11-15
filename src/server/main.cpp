@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "no_core.h"
+#include "server/home.h"
 #include "server/server.h"
 #include "sync/formats.h"
 
@@ -140,15 +141,15 @@ int main(int argc, char** argv) {
         return nexus::server::newSession(paths, selfPath(), client);
     }
     if (command == "serve") {
-#if defined(__linux__)
-        // The sandbox's bwrap and socat that the build made beside this program (cmake/sandbox.cmake), for the Claude
-        // driver to find (drivers/claude/src/tools.ts); one already in the environment is kept.
-        const std::string self = selfPath();
-        const std::string::size_type slash = self.rfind('/');
-        if (slash != std::string::npos) {
-            setenv("NEXUS_SANDBOX_BIN", (self.substr(0, slash) + "/sandbox").c_str(), 0);
+        // The sandbox's bwrap and socat that the build made beside this program on Linux (cmake/sandbox.cmake), for
+        // the Claude driver to find (drivers/claude/src/tools.ts; on macOS it only keeps tools from writing there):
+        // from this program's own path only, over any value it was started with (server/home.h sandboxBinOf).
+        const std::string bin = nexus::server::sandboxBinOf(selfPath());
+        if (bin.empty()) {
+            unsetenv(nexus::server::kSandboxBinVariable);
+        } else {
+            setenv(nexus::server::kSandboxBinVariable, bin.c_str(), 1);
         }
-#endif
         return nexus::server::serve(paths);
     }
     if (command == "stop")

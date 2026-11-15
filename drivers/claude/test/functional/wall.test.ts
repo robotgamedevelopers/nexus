@@ -196,6 +196,12 @@ const kRoutes: Probe[] = [
         ['the driver\'s directory', `@DRIVER_DIR@/${kProgramProbe}`],
         ...(kSandboxBin === '' ? [] : [['the sandbox\'s bwrap and socat', `@SANDBOX_BIN@/${kProgramProbe}`]])] as const)
         .map(([what, path]) => ({ route: `Write: ${what}`, tool: 'Write', expect: ['denied', 'nexus keeps'], input: { file_path: path, content: 'x' } })),
+    // A protected name not made yet, spelled with the long s (U+017F), which macOS's volume takes for s: Claude's deny
+    // rules let it through, the hook refuses it by its folded name (and on a case-sensitive volume, deny-leaning).
+    ...([['the project\'s .claude/settings.local.json with a long s', '.claude/ſettings.local.json'],
+        ['the state directory\'s settings.json with a long s', '@CONFIG@/ſettings.json'],
+        ['~/.zshenv with a long s', '@HOME@/.zſhenv']] as const)
+        .map(([what, path]) => ({ route: `Write: ${what}`, tool: 'Write', expect: 'nexus keeps', hookOnly: true, input: { file_path: path, content: 'x' } })),
     { route: 'shell: write beside the programs nexus runs (node, the driver, the sandbox\'s tools)', tool: 'Bash', input: { command:
         `for d in "@NODE_DIR@" "@DRIVER_DIR@" ${kSandboxBin === '' ? '' : '"@SANDBOX_BIN@"'}; do echo x > "$d/${kProgramProbe}" 2>/dev/null && echo "LE""AK: wrote in $d"; done; echo tried; true` } },
     // A folder renamed aside, and a new one in its place, would plant what nexus-server runs.
@@ -530,9 +536,10 @@ function check(name: string, run: Run, hook: boolean): void {
 
 // NEXUS_WALL_RUN names one of the two runs to make alone: CI makes each in a job of its own where a run takes most of a
 // minute (WSL2: a shell command in the sandbox took 1 s there under load, 0.3 s on macOS; CI, 2026-11-15).
-// Under the CI job's 2 minutes, after its setup (up to 45 s on a loaded WSL2), so that a run too slow fails and says
-// so, rather than the job being cancelled with nothing reported. A run takes 10 to 25 s, and up to 60 s on WSL2 under load.
-const kRunMs = 70_000;
+// Under the CI job's 2 minutes with room to spare after its setup (up to 45 s on a loaded WSL2: 105 s at most), so that
+// a run too slow fails and says so, rather than the job being cancelled with nothing reported. A run takes 8 to 25 s,
+// and 47 to 53 s on WSL2 under load (CI, 2026-11-15).
+const kRunMs = 60_000;
 const kBoth = [['whole-wall', true], ['without-the-hook', false]] as const;
 const kOnly = process.env['NEXUS_WALL_RUN'];
 const kRuns = kTryFile !== undefined ? [['tried', true]] as const

@@ -4,13 +4,13 @@
 // against the real Claude, is the functional test (test/functional/wall.test.ts).
 
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { configDirOf, openConfigDir } from '../../src/account.js';
+import { configDirOf, kClaudeStateFiles, kMaxStateFileBytes, openConfigDir } from '../../src/account.js';
 import {
-    bothForms, configFiles, kClaudeSandboxProtects, kGitNameRules, kLoginVariables, kNoSettingsHooks, nexusOutsideState, programsOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
+    bothForms, configFiles, folded, kClaudeSandboxProtects, kGitNameRules, kLoginVariables, kNoSettingsHooks, nexusOutsideState, programsOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
     type Wall, type WallFs,
 } from '../../src/wall.js';
 import { LeakScan } from '../leak-scan.js';
@@ -197,7 +197,7 @@ void test('a new Claude state directory takes only the person\'s settings and in
     // A link named as a file that is taken, to the token: never followed.
     symlinkSync(join(login, 'oauth-token'), join(login, 'settings.local.json'));
     const configDir = configDirOf(home, 'main');
-    assert.equal(openConfigDir({ dir: login, configDir }), undefined);
+    assert.equal(openConfigDir({ dir: login, configDir, token }), undefined);
     assert.deepEqual(readdirSync(configDir).sort(), ['CLAUDE.md', 'settings.json']);
     assert.equal(readFileSync(join(configDir, 'settings.json'), 'utf8'), '{"model":"opus"}');
     assert.equal(readFileSync(join(configDir, 'CLAUDE.md'), 'utf8'), 'be kind\n');
@@ -213,17 +213,60 @@ void test('a new Claude state directory takes only the person\'s settings and in
     assert.equal(lstatSync(configDir).mode & 0o777, 0o700);
     // Once: a later start leaves it as it is.
     writeFileSync(join(login, 'CLAUDE.md'), 'changed\n');
-    assert.equal(openConfigDir({ dir: login, configDir }), undefined);
+    assert.equal(openConfigDir({ dir: login, configDir, token }), undefined);
     assert.equal(readFileSync(join(configDir, 'CLAUDE.md'), 'utf8'), 'be kind\n');
     // A file where the directory should be is refused, with the fix.
     const other = configDirOf(home, 'other');
     writeFileSync(other, 'not a directory');
-    assert.match(openConfigDir({ dir: login, configDir: other }) ?? '', /not a directory of this user's/);
+    assert.match(openConfigDir({ dir: login, configDir: other, token }) ?? '', /not a directory of this user's/);
     // A login with nothing in it makes an empty one.
     const fresh = join(home, '.nexus/server/accounts/fresh');
     mkdirSync(fresh, { mode: 0o700 });
-    assert.equal(openConfigDir({ dir: fresh, configDir: configDirOf(home, 'fresh') }), undefined);
+    assert.equal(openConfigDir({ dir: fresh, configDir: configDirOf(home, 'fresh'), token }), undefined);
     assert.ok(lstatSync(configDirOf(home, 'fresh')).isDirectory());
+});
+
+void test('a new Claude state directory refuses a taken file that holds the token, has another name, or is too large', () => {
+    const home = join(scratch, 'home-refuse');
+    const token = 'nexuswallREFUSEqzxjkvwpTOKENbcdfghmnrst';
+    const cases: [string, (login: string) => void, RegExp][] = [
+        ...kClaudeStateFiles.map((name): [string, (login: string) => void, RegExp] =>
+            [`the token in ${name}`, (login) => {
+                writeFileSync(join(login, name), `{"env":{"X":"${token}"}}\n`);
+            }, /holds the account's login token/]),
+        ...kClaudeStateFiles.map((name): [string, (login: string) => void, RegExp] =>
+            [`${name} a hard link to the token`, (login) => {
+                linkSync(join(login, 'oauth-token'), join(login, name));
+            }, /has 2 names \(a hard link\)/]),
+        ...kClaudeStateFiles.map((name): [string, (login: string) => void, RegExp] =>
+            [`${name} a hard link to a file elsewhere`, (login) => {
+                writeFileSync(join(login, '..', `elsewhere-${name}`), 'x');
+                linkSync(join(login, '..', `elsewhere-${name}`), join(login, name));
+            }, /has 2 names/]),
+        ['a CLAUDE.md larger than the cap', (login) => {
+            writeFileSync(join(login, 'CLAUDE.md'), 'x'.repeat(kMaxStateFileBytes + 1));
+        }, /larger than/],
+    ];
+    for (const [i, [what, plant, refusal]] of cases.entries()) {
+        const login = join(home, `.nexus/server/accounts/a${i}`);
+        mkdirSync(login, { recursive: true, mode: 0o700 });
+        writeFileSync(join(login, 'oauth-token'), `${token}\n`, { mode: 0o600 });
+        plant(login);
+        const configDir = configDirOf(home, `a${i}`);
+        const got = openConfigDir({ dir: login, configDir, token }) ?? '';
+        assert.match(got, refusal, what);
+        assert.ok(got.includes(login), `${what}: the refusal names the file`);
+        assert.ok(!got.includes(token), `${what}: the refusal holds the token`);
+        assert.ok(!existsSync(configDir), `${what}: the directory was made`);
+        assert.deepEqual(readdirSync(dirname(configDir)).filter((n) => n.includes('partial')), [], `${what}: a partial was left`);
+    }
+    // The witness: the same login with nothing planted is taken.
+    const login = join(home, '.nexus/server/accounts/plain');
+    mkdirSync(login, { recursive: true, mode: 0o700 });
+    writeFileSync(join(login, 'oauth-token'), `${token}\n`, { mode: 0o600 });
+    writeFileSync(join(login, 'CLAUDE.md'), 'x'.repeat(kMaxStateFileBytes));
+    assert.equal(openConfigDir({ dir: login, configDir: configDirOf(home, 'plain'), token }), undefined);
+    assert.deepEqual(readdirSync(configDirOf(home, 'plain')), ['CLAUDE.md']);
 });
 
 void test('the migration test\'s scan finds a token planted in the new directory (its witness)', () => {
@@ -262,21 +305,31 @@ void test('the programs nexus runs: node, the driver, the sandbox tools, and the
 });
 
 /**
+ * A name as a case-insensitive macOS volume compares it, written out by hand and not with the hook's `folded`: case
+ * folded, and the two compatibility letters it treats as their plain one (the long s, the Kelvin sign). A fullwidth
+ * letter and a Cyrillic look-alike are other names to it.
+ */
+function volumeName(name: string): string {
+    return name.replace(/ſ/g, 's').replace(/K/g, 'k').toLowerCase();
+}
+
+/**
  * A disk of folders and files, each with an identity (`dev:ino`), links resolved component by component, and on a
  * case-insensitive volume (`caseless`) any spelling of a name finding it: a stand-in for realpath and stat.
  */
 function diskFs(entries: Record<string, string>, links: Record<string, string>, caseless: boolean): WallFs {
+    const same = (a: string, b: string): boolean => (caseless ? volumeName(a) === volumeName(b) : a === b);
     const canon = (p: string): string | undefined => {
         const parts = p.split('/').filter((s) => s !== '');
         let at = '';
         for (const part of parts) {
             const next = `${at}/${part}`;
-            const link = Object.keys(links).find((l) => (caseless ? l.toLowerCase() === next.toLowerCase() : l === next));
+            const link = Object.keys(links).find((l) => same(l, next));
             if (link !== undefined) {
                 at = links[link] ?? '';
                 continue;
             }
-            const hit = Object.keys(entries).find((e) => (caseless ? e.toLowerCase() === next.toLowerCase() : e === next));
+            const hit = Object.keys(entries).find((e) => same(e, next));
             if (hit === undefined) {
                 return undefined;
             }
@@ -333,9 +386,73 @@ void test('the hook judges a path by every spelling of it, where it resolves, an
         /accounts' directory/);
     assert.match(toolRefusal('Write', { file_path: '/h/.CLAUDE/settings.json', content: '{}' }, diskWall, '/w', '/h', caseless) ?? '',
         /outside the sandbox/);
-    // On a case-sensitive one it is another folder, which may be read (writing under a protected name is still refused).
+    // On a case-sensitive one it is another folder, refused all the same (deny-leaning: the hook cannot tell the
+    // volumes apart); a look-alike folder is still another name and may be read.
     const other = diskFs({ ...kDisk, '/h/.NEXUS': 'd:20', '/h/.NEXUS/server': 'd:21', '/h/.NEXUS/server/accounts': 'd:22' }, kDiskLinks, false);
-    assert.equal(toolRefusal('Grep', { pattern: 'x', path: '/h/.NEXUS/server/accounts' }, diskWall, '/w', '/h', other), undefined);
+    assert.match(toolRefusal('Grep', { pattern: 'x', path: '/h/.NEXUS/server/accounts' }, diskWall, '/w', '/h', other) ?? '',
+        /accounts' directory/);
+    assert.equal(toolRefusal('Grep', { pattern: 'x', path: '/h/.nеxus/server/accounts' }, diskWall, '/w', '/h', other), undefined);
+});
+
+/** `name` with its letters spelled other ways: the long s, the Kelvin sign, a fullwidth first letter, mixed case. */
+function compatibilitySpellings(name: string): string[] {
+    const out: string[] = [];
+    if (name.includes('s')) {
+        out.push(name.replace(/s/g, 'ſ'));
+    }
+    if (name.includes('k')) {
+        out.push(name.replace(/k/g, 'K'));
+    }
+    const first = name.search(/[a-z]/);
+    if (first >= 0) {
+        out.push(name.slice(0, first) + String.fromCharCode(name.charCodeAt(first) - 0x61 + 0xff41) + name.slice(first + 1));
+    }
+    out.push(name.replace(/[a-z]/gi, (c: string, i: number) => (i % 2 === 0 ? c.toUpperCase() : c.toLowerCase())));
+    return out;
+}
+
+/** `name` with its first look-alike letter swapped for the Cyrillic one: another name on every volume, or undefined. */
+function lookAlike(name: string): string | undefined {
+    const cyrillic: Record<string, string> = { a: 'а', c: 'с', e: 'е', o: 'о', p: 'р', H: 'Н', i: 'і' };
+    const at = name.search(/[aceopHi]/);
+    return at < 0 ? undefined : name.slice(0, at) + (cyrillic[name[at] ?? ''] ?? '') + name.slice(at + 1);
+}
+
+void test('the hook refuses a protected name by every spelling the volume takes for it, and allows look-alikes', () => {
+    for (const caseless of [true, false]) {
+        const d = diskFs(kDisk, kDiskLinks, caseless);
+        const why = caseless ? 'case-insensitive' : 'case-sensitive';
+        for (const p of diskWall.config) {
+            const dir = dirname(p);
+            const name = p.slice(dir.length + 1);
+            for (const s of compatibilitySpellings(name)) {
+                assert.match(toolRefusal('Write', { file_path: `${dir}/${s}`, content: 'x' }, diskWall, '/w', '/h', d) ?? '',
+                    /outside the sandbox|accounts' directory/, `${dir}/${s} (${why})`);
+            }
+            const other = lookAlike(name);
+            if (other !== undefined && !diskWall.config.some((c) => `${dir}/${other}`.startsWith(`${c}/`))) {
+                assert.equal(toolRefusal('Write', { file_path: `${dir}/${other}`, content: 'x' }, diskWall, '/w', '/h', d),
+                    undefined, `${dir}/${other} (${why})`);
+            }
+        }
+        for (const p of ['/w/repo/.git/config', '/w/repo/.git', '/w/repo/HEAD', '/w/repo/commondir']) {
+            const dir = dirname(p);
+            const name = p.slice(dir.length + 1);
+            for (const s of compatibilitySpellings(name)) {
+                assert.match(toolRefusal('Write', { file_path: `${dir}/${s}`, content: 'x' }, diskWall, '/w', '/h', d) ?? '',
+                    /git directory/, `${dir}/${s} (${why})`);
+            }
+            const other = lookAlike(name);
+            if (other !== undefined && !dir.endsWith("/.git")) {
+                assert.equal(toolRefusal('Write', { file_path: `${dir}/${other}`, content: 'x' }, diskWall, '/w', '/h', d),
+                    undefined, `${dir}/${other} (${why})`);
+            }
+        }
+    }
+    // The protected names, plainly, to be sure the spellings above were of names the hook refuses.
+    assert.ok(diskWall.config.includes('/h/.bashrc') && diskWall.config.includes('/h/.claude'));
+    assert.equal(folded('ſettings.json'), 'settings.json');
+    assert.equal(folded('.Kube'), '.kube');
 });
 
 void test('a file not made yet resolves through its nearest folder that is', () => {
