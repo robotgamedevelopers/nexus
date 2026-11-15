@@ -44,7 +44,7 @@
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
-#   SPLIT       optional: only:<names> or rest:<names>, the named PROPERTIES of the cfg alone, or all but them (below)
+#   SPLIT       optional: rest:<name>, every property of the cfg but one, or as:<name>=<part>, a part of it alone (below)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
 
@@ -81,18 +81,26 @@ file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" 
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
 
-# SPLIT only:<names> or SPLIT rest:<names> (names joined by +): check the instance with only the named properties of its
-# cfg, or with every property but those; every invariant either way. tlc_test's SPLIT declares the pair, so between them
-# they check every property of the cfg on the same states, and the cfg stays the one place the instance is written. A
-# large instance's time is in its temporal property, not its states or action properties (MCSupervisorSwitch.cfg on
-# four cores of a loaded 16-thread host, 2026-11-15: invariants and its 20 action properties 7.8 s, the temporal
-# property Settles alone 67.9 s, all of them 122 s), so the pair runs side by side in CI shards of their own.
+# SPLIT rest:<name>: check the instance with every property of its cfg but <name>. SPLIT as:<name>=<part>: check it with
+# <part> in place of <name> and no other property. Every invariant either way. tlc_test's SPLIT declares the rest and
+# one test per part, and the spec defines the parts so that their conjunction is the property (Supervisor.tla,
+# SettlesOdd and SettlesEven), so between them the tests check every property of the cfg on the same states, and the
+# cfg stays the one place the instance is written. A large instance's time is in its temporal property, not its states
+# or action properties (MCSupervisorSwitch.cfg on four cores of a loaded 16-thread host, 2026-11-15: invariants and its
+# 20 action properties 7.8 s, the temporal property Settles alone 67.9 s, all of them 122 s), and in each part less than
+# half of it (one prompt's Settles 38.7 s, both 94.2 s), so the parts run side by side in CI shards of their own.
 if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
-    if(NOT SPLIT MATCHES "^(only|rest):([A-Za-z_][A-Za-z0-9_+]*)$")
-        message(FATAL_ERROR "tlc.cmake: SPLIT is ${SPLIT}, not only:<names> or rest:<names>")
+    set(split_part "")
+    if(SPLIT MATCHES "^rest:([A-Za-z_][A-Za-z0-9_]*)$")
+        set(split_mode rest)
+        set(split_names ${CMAKE_MATCH_1})
+    elseif(SPLIT MATCHES "^as:([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_]*)$")
+        set(split_mode only)
+        set(split_names ${CMAKE_MATCH_1})
+        set(split_part ${CMAKE_MATCH_2})
+    else()
+        message(FATAL_ERROR "tlc.cmake: SPLIT is ${SPLIT}, not rest:<name> or as:<name>=<part>")
     endif()
-    set(split_mode ${CMAKE_MATCH_1})
-    string(REPLACE "+" ";" split_names "${CMAKE_MATCH_2}")
     file(STRINGS "${WORK}/${cfg_name}" cfg_lines)
     set(in_properties FALSE)
     set(seen "")
@@ -114,7 +122,10 @@ if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
             if(NOT at EQUAL -1)
                 list(APPEND seen ${property})
             endif()
-            if((split_mode STREQUAL "only" AND NOT at EQUAL -1) OR (split_mode STREQUAL "rest" AND at EQUAL -1))
+            if(split_mode STREQUAL "only" AND NOT at EQUAL -1)
+                string(APPEND cfg_out "    ${split_part}\n")
+                list(APPEND kept "${split_part} (in place of ${property})")
+            elseif(split_mode STREQUAL "rest" AND at EQUAL -1)
                 string(APPEND cfg_out "${line}\n")
                 list(APPEND kept ${property})
             endif()
@@ -134,8 +145,8 @@ if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: SPLIT ${SPLIT} leaves ${cfg_name} with no property to check")
     endif()
     string(REPLACE ";" " " kept_text "${kept}")
-    message("${cfg_name}, SPLIT ${split_mode}: every invariant, and properties ${kept_text}")
-    set(cfg_name "${split_mode}-${cfg_name}")
+    message("${cfg_name}, SPLIT ${SPLIT}: every invariant, and properties ${kept_text}")
+    set(cfg_name "${split_mode}${split_part}-${cfg_name}")
     file(WRITE "${WORK}/${cfg_name}" "${cfg_out}")
 endif()
 

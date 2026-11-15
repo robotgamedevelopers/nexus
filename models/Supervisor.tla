@@ -716,9 +716,15 @@ DownLeavesByWork == [][DownLeavesByWorkStep(ActivityOf)]_vars
 \* held back (until the person's next prompt), while the friend has no driver configured (until it has one again),
 \* while the instance is on another machine (until it is here again), or while the server is stopping (the prompt is
 \* durable, for the next server).
-Settles ==
-    \A p \in 1 .. Prompts :
-        s.fate[p] \in {"queued", "waiting", "open"} ~>
-            (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ ~s.here \/ s.down)
+SettlesFor(p) ==
+    s.fate[p] \in {"queued", "waiting", "open"} ~>
+        (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ ~s.here \/ s.down)
+Settles == \A p \in 1 .. Prompts : SettlesFor(p)
+\* Settles in two halves, the odd prompts and the even: SettlesOdd /\ SettlesEven is Settles for any Prompts. TLC's
+\* liveness check of the halves, each alone, takes well under half the time of the whole (MCSupervisorSwitch.cfg, two
+\* prompts, on four cores of a loaded host: one prompt 38.7 s, both 94.2 s), so CI checks them in shards of their own
+\* (tests/server/CMakeLists.txt, SPLIT).
+SettlesOdd == \A p \in {q \in 1 .. Prompts : q % 2 = 1} : SettlesFor(p)
+SettlesEven == \A p \in {q \in 1 .. Prompts : q % 2 = 0} : SettlesFor(p)
 
 =============================================================================

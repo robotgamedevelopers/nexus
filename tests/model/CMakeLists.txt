@@ -52,9 +52,10 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
-#          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT names] [LABEL] [OVERLAY])
-# SPLIT a+b declares two tests, <name>_temporal with only the cfg's properties a and b and <name>_rest with every other,
-# each with every invariant, so a large instance's temporal properties run beside the rest (tlc.cmake says why).
+#          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT P=A+B] [LABEL] [OVERLAY])
+# SPLIT P=A+B declares <name>_rest, every property of the cfg but P, and <name>_temporal_1 and _2, A and B in P's place,
+# each with every invariant: the spec defines P as A /\ B, so a large instance's temporal property runs in parts beside
+# the rest (tlc.cmake says why).
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core; in CI a run takes no more workers than the runner's share of cores
 # (NEXUS_TLC_CORES, tlc-workers.cmake). SHARD marks an instance that has a CI model shard of its own and
@@ -86,15 +87,26 @@ function(tlc_test name module cfg expect)
     endif()
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS;SHARD"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
-    # SPLIT <names>: the pair of tests, <name>_temporal with only the named properties and <name>_rest with all the
-    # others, each with every invariant (tlc.cmake, SPLIT); between them every property of the cfg is checked.
+    # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
+    # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
+    # of the cfg is checked.
     if(T_SPLIT)
+        if(NOT T_SPLIT MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_+]*)$")
+            message(FATAL_ERROR "tlc_test(${name}): SPLIT is ${T_SPLIT}, not <property>=<part>+<part>")
+        endif()
+        set(split_property ${CMAKE_MATCH_1})
+        string(REPLACE "+" ";" split_parts "${CMAKE_MATCH_2}")
         set(args ${ARGN})
         list(FIND args SPLIT at)
         math(EXPR value_at "${at} + 1")
         list(REMOVE_AT args ${at} ${value_at})
-        tlc_test(${name}_temporal ${module} ${cfg} ${expect} ${args} SPLITMODE only:${T_SPLIT})
-        tlc_test(${name}_rest ${module} ${cfg} ${expect} ${args} SPLITMODE rest:${T_SPLIT})
+        tlc_test(${name}_rest ${module} ${cfg} ${expect} ${args} SPLITMODE rest:${split_property})
+        set(i 0)
+        foreach(split_part IN LISTS split_parts)
+            math(EXPR i "${i} + 1")
+            tlc_test(${name}_temporal_${i} ${module} ${cfg} ${expect} ${args}
+                SPLITMODE as:${split_property}=${split_part})
+        endforeach()
         return()
     endif()
     set(models_dir "${PROJECT_SOURCE_DIR}/models")

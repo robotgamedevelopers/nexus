@@ -712,20 +712,29 @@ jobs:
       max-parallel: 6
       matrix:
         include:
-          # The four supervisor instances' temporal property (Settles) each in a shard of its own; their invariants and
-          # action properties (`_rest`, seconds each) run in supervisor-rest (tests/server/CMakeLists.txt says why).
-          - shard: supervisor
-            run: '^tlc_supervisor_temporal$'
-          - shard: supervisor-switch
-            run: '^tlc_supervisor_switch_temporal$'
-          - shard: supervisor-place
-            run: '^tlc_supervisor_place_temporal$'
-          - shard: supervisor-signin
-            run: '^tlc_supervisor_signin_temporal$'
+          # The four supervisor instances' temporal property (Settles), in two halves, each half in a shard of its own;
+          # their invariants and action properties (`_rest`, seconds each) run in supervisor-rest
+          # (tests/server/CMakeLists.txt says why).
+          - shard: supervisor-1
+            run: '^tlc_supervisor_temporal_1$'
+          - shard: supervisor-2
+            run: '^tlc_supervisor_temporal_2$'
+          - shard: supervisor-switch-1
+            run: '^tlc_supervisor_switch_temporal_1$'
+          - shard: supervisor-switch-2
+            run: '^tlc_supervisor_switch_temporal_2$'
+          - shard: supervisor-place-1
+            run: '^tlc_supervisor_place_temporal_1$'
+          - shard: supervisor-place-2
+            run: '^tlc_supervisor_place_temporal_2$'
+          - shard: supervisor-signin-1
+            run: '^tlc_supervisor_signin_temporal_1$'
+          - shard: supervisor-signin-2
+            run: '^tlc_supervisor_signin_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_)?temporal$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_)?temporal_[0-9]+$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
           - shard: link-one-window
