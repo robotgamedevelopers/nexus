@@ -16,8 +16,9 @@
 // machine while its driver runs, and a session naming none, which takes its friend's default), window (busy with a
 // reply streaming after tool lines, idle, then down; with a state dir it writes each state there for `nexus --state`),
 // held (a prompt sent while the drivers are held for a batch is written only once they are released), secret_ask (a
-// driver's ask for a secret, refused with no window to take it, then pasted, stored and answered) and secret_sign_in
-// (an account with no login asked for by nexus itself, and the waiting prompt answered once it is pasted).
+// driver's ask for a secret, refused with no window to take it, then pasted, stored and answered), secret_sign_in
+// (an account with no login asked for by nexus itself, and the waiting prompt answered once it is pasted), and
+// secret_leak_witness (the reversed witness of the leak scan: the value set in this process's environment must be found).
 
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -1018,18 +1019,27 @@ void kept(const std::string& dir) {
     CHECK(fs::status(dir + "/accounts/a1", ec).permissions() == fs::perms::owner_all);
 }
 
-// `text` (the driver's recorded environment, one `NAME=value` a line) without the lines this test process itself was
-// started with: those came from the host (a CI runner's hashes and paths, where a length beside the short account name
-// a1 can occur by chance), never from the server, which never had the value before the test made it up.
-std::string withoutInherited(const std::string& text) {
-    std::set<std::string> inherited;
+// The environment this test process was started with, taken once at the start of main, before any server code runs:
+// what came from the host (a CI runner's hashes and paths, where a length beside the short account name a1 can occur
+// by chance). Never read again later, so that anything the server's code puts in the process's environment (which
+// every driver inherits) is not taken as the host's.
+std::set<std::string>& startEnvironment() {
+    static std::set<std::string> lines;
+    return lines;
+}
+
+void snapshotEnvironment() {
     for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
-        inherited.insert(*e);
+        startEnvironment().insert(*e);
     }
+}
+
+// `text` (the driver's recorded environment, one `NAME=value` a line) without the lines of the start environment.
+std::string withoutInherited(const std::string& text) {
     std::istringstream in(text);
     std::string out;
     for (std::string line; std::getline(in, line);) {
-        if (inherited.count(line) == 0) {
+        if (startEnvironment().count(line) == 0) {
             out += line + "\n";
         }
     }
@@ -1039,11 +1049,14 @@ std::string withoutInherited(const std::string& text) {
 // The value is nowhere but its file: no run, hex, base64 or length of it (tests/leak_scan.h) in any other file under
 // `dir` (the store's files, what the driver read, its environment less what this process inherited, the script, the
 // drivers file), the transcript, or the bytes the server's SecretLines gave the driver and the log.
-void nowhereElse(Server& s, const std::string& dir) {
+// With `expectLeak` (the reversed witness, secret_leak_witness), the scan must find the value in the driver's recorded
+// environment instead, and the other places are not checked.
+void nowhereElse(Server& s, const std::string& dir, bool expectLeak = false) {
     const test::LeakScan scan(kFakeToken, "a1");
     namespace fs = std::filesystem;
     const fs::path file = fs::path(dir) / "accounts" / "a1" / "oauth-token";
     int read = 0;
+    int leaks = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
         if (!entry.is_regular_file() || entry.path() == file) {
@@ -1053,11 +1066,21 @@ void nowhereElse(Server& s, const std::string& dir) {
         const std::string bytes = readFile(entry.path().string());
         const std::string found = scan.find(entry.path().filename() == "env" ? withoutInherited(bytes) : bytes);
         if (!found.empty()) {
-            std::fprintf(stderr, "  the value reached %s: %s\n", entry.path().string().c_str(), found.c_str());
-            CHECK(false);
+            ++leaks;
+            if (!expectLeak) {
+                std::fprintf(stderr, "  the value reached %s: %s\n", entry.path().string().c_str(), found.c_str());
+                CHECK(false);
+            }
         }
     }
     CHECK(read > 3);
+    if (expectLeak) {
+        if (leaks == 0) {
+            std::fprintf(stderr, "  the injected leak into the server's environment was not found by the scan\n");
+        }
+        CHECK(leaks > 0);
+        return;
+    }
     for (const std::string& line : s.transcript()) {
         CHECK(!scan.in(line));
     }
@@ -1069,7 +1092,7 @@ void nowhereElse(Server& s, const std::string& dir) {
 // A driver's ask for a secret, as docs/secrets.md defines it: with no window that can take one it is refused at once
 // (no-client); with one, a request opens for the window, a pasted value goes to its file, and the driver hears only
 // "stored". The value never reaches the driver, the store, the transcript or the log.
-void secretAsk(Server& s, const std::string& dir, const std::string& fake) {
+void secretAsk(Server& s, const std::string& dir, const std::string& fake, bool expectLeak = false) {
     const std::string heard = dir + "/heard";
     const auto ask = [](int n) {
         return "raw {\"kind\":\"ask-secret\",\"ask\":" + std::to_string(n) +
@@ -1103,7 +1126,16 @@ void secretAsk(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(readFile(dir + "/env"), "="));
     CHECK(signedIn(s, "a1"));
     kept(dir);
-    nowhereElse(s, dir);
+    nowhereElse(s, dir, expectLeak);
+}
+
+// The reversed witness of the scan: the value put into this process's environment after the start snapshot, as a
+// server bug that set it in its own environment would (every driver inherits it, src/server/drivers.cpp), must be
+// found in the driver's recorded environment. Test-only: nothing in the server does this.
+void secretLeakWitness(Server& s, const std::string& dir, const std::string& fake) {
+    ::setenv("NEXUS_TEST_INJECTED_LEAK", kFakeToken.c_str(), 1);
+    secretAsk(s, dir, fake, true);
+    ::unsetenv("NEXUS_TEST_INJECTED_LEAK");
 }
 
 // An account with no login: its driver says so (no-credential), nexus itself asks the window for it, and the pasted
@@ -1145,6 +1177,7 @@ void secretSignIn(Server& s, const std::string& dir, const std::string& fake) {
 } // namespace
 
 int main(int argc, char** argv) {
+    snapshotEnvironment();     // first, before any server code can change the environment
     if (argc != 4 && argc != 5) {
         std::fprintf(stderr, "usage: drivers_functional <nexus-fake-driver> <dir> <case> [<state dir>]\n");
         return 2;
@@ -1205,9 +1238,15 @@ int main(int argc, char** argv) {
             if (failures != 0) {
                 dump(s);
             }
-        } else if (name == "secret_ask" || name == "secret_sign_in") {
+        } else if (name == "secret_ask" || name == "secret_sign_in" || name == "secret_leak_witness") {
             Server s(dir, true);
-            (name == "secret_ask" ? secretAsk : secretSignIn)(s, dir, fake);
+            if (name == "secret_ask") {
+                secretAsk(s, dir, fake);
+            } else if (name == "secret_sign_in") {
+                secretSignIn(s, dir, fake);
+            } else {
+                secretLeakWitness(s, dir, fake);
+            }
             s.end();
             if (failures != 0) {
                 dump(s);
