@@ -46,6 +46,7 @@ Config config() {
     c.maxWaiting = 2;
     c.maxWaitingBytes = 64;
     c.maxEntryBytes = 10;
+    c.limited = false;      // the tests of the limit set it; a Config is limited by default (testLimit)
     return c;
 }
 
@@ -758,6 +759,130 @@ void testPlace() {
     CHECK(hasArgs(o, {"--cwd", "/v"}) && o.effects.size() == 1 && !w.state().summary);
 }
 
+// The session's limit (accounts::limitedFor, decided by the server): given to each driver as `--limit cwd` when it
+// starts; a driver started under the other limit is ended quietly once no turn is open, never a failed start.
+void testLimit() {
+    Config c = config();
+    c.limited = true;
+    Output o;
+    Supervisor s(c, {}, kStart, &o);
+    o = s.prompt("one", kStart);
+    CHECK(hasArgs(o, {"--cwd", "/w", "--limit", "cwd"}) && s.driverLimited());
+    s.message(Hello{1, "h", {"limit"}}, kStart + 1);
+    // Working: a change of limit waits for the turn's end; the turn finishes under the limit it started with.
+    o = s.setLimited(false, kStart + 2);
+    CHECK(o.commands.empty() && s.phase() == Phase::Working && s.driverLimited() && !s.limited());
+    o = s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    CHECK(ended(s, o) && s.retiring());
+    o = s.exited("exited with status 0", kStart + 4);
+    CHECK(s.phase() == Phase::None && s.failedStarts() == 0 && o.commands.empty());
+    // The next starts unlimited: no --limit at all.
+    o = s.prompt("two", kStart + 5);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && !s.driverLimited());
+    CHECK(std::find(o.commands[0].argv.begin(), o.commands[0].argv.end(), "--limit") == o.commands[0].argv.end());
+    s.message(Hello{1, "h"}, kStart + 6);
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 7);
+    // The same limit again: nothing changes. Limited again while idle: the driver is ended at once, the next limited.
+    o = s.setLimited(false, kStart + 8);
+    CHECK(o.commands.empty() && s.phase() == Phase::Idle);
+    o = s.setLimited(true, kStart + 9);
+    CHECK(ended(s, o));
+    s.exited("exited with status 0", kStart + 10);
+    o = s.prompt("three", kStart + 11);
+    CHECK(hasArgs(o, {"--limit", "cwd"}) && s.driverLimited() && s.failedStarts() == 0);
+
+    // A Config is limited unless the server says otherwise.
+    CHECK(Config{}.limited);
+
+    // Tightened while a turn runs unlimited: the turn is stopped now (the person's stop: Stop, then its deadline),
+    // the transcript says why, and once it is done the driver is ended and the next starts limited.
+    {
+        Output to;
+        Supervisor ts(config(), {}, kStart, &to);
+        ts.prompt("one", kStart);
+        ts.message(Hello{1, "h"}, kStart + 1);
+        CHECK(ts.phase() == Phase::Working && !ts.driverLimited());
+        to = ts.setLimited(true, kStart + 2);
+        CHECK(ts.phase() == Phase::Stopping && to.commands.size() == 1 &&
+              contains(to.commands[0].line, "\"kind\":\"stop\"") && whats(to) == std::vector<What>{What::Notice} &&
+              contains(to.effects[0].text, "the turn that was running without the limit was stopped"));
+        to = ts.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(ts, to) && ts.retiring());
+        ts.exited("exited with status 0", kStart + 4);
+        to = ts.prompt("two", kStart + 5);
+        CHECK(hasArgs(to, {"--limit", "cwd"}) && ts.driverLimited());
+        // A driver that ignores the stop is killed at the stop deadline, as for the person's stop.
+        Output ko;
+        Supervisor ks(config(), {}, kStart, &ko);
+        ks.prompt("one", kStart);
+        ks.message(Hello{1, "h"}, kStart + 1);
+        ks.setLimited(true, kStart + 2);
+        ko = ks.tick(kStart + 2 + config().timing.stop);
+        CHECK(ks.phase() == Phase::Ending);
+    }
+
+    // A driver that does not list "limit" in its hello is never trusted with a limited session: ended, with why. An
+    // unlimited session on it runs as before.
+    {
+        Config lc = config();
+        lc.limited = true;
+        Output lo;
+        Supervisor ls(lc, {}, kStart, &lo);
+        ls.prompt("one", kStart);
+        lo = ls.message(Hello{1, "h"}, kStart + 1);
+        CHECK(ended(ls, lo) && ls.phase() == Phase::Ending);
+        bool said = false;
+        for (const auto& e : lo.effects) {
+            said = said || contains(e.text, "does not support the limit to its directory");
+        }
+        CHECK(said);
+        Supervisor us(config(), {}, kStart, &lo);
+        us.prompt("one", kStart);
+        lo = us.message(Hello{1, "h"}, kStart + 1);
+        CHECK(us.phase() == Phase::Working);
+    }
+
+    // The directories kept out (friends.json "limit_keeps_out"): each given to a limited driver as --keep-out, never
+    // to an unlimited one. More kept out while a turn runs on a limited driver is a tightening (the turn is stopped
+    // now); fewer, a loosening (the turn finishes, then the driver is ended).
+    {
+        Config kc = config();
+        kc.limited = true;
+        kc.keepsOut = {"/data"};
+        Output ko;
+        Supervisor ks(kc, {}, kStart, &ko);
+        ko = ks.prompt("one", kStart);
+        CHECK(hasArgs(ko, {"--limit", "cwd", "--keep-out", "/data"}));
+        ks.message(Hello{1, "h", {"limit"}}, kStart + 1);
+        ko = ks.setKeepsOut({"/data", "/net"}, kStart + 2);
+        CHECK(ks.phase() == Phase::Stopping && ko.commands.size() == 1 &&
+              contains(ko.commands[0].line, "\"kind\":\"stop\"") &&
+              contains(ko.effects[0].text, "kept out of more directories"));
+        ko = ks.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(ks, ko));
+        ks.exited("exited with status 0", kStart + 4);
+        ko = ks.prompt("two", kStart + 5);
+        CHECK(hasArgs(ko, {"--keep-out", "/data", "--keep-out", "/net"}));
+        ks.message(Hello{1, "h", {"limit"}}, kStart + 6);
+        ko = ks.setKeepsOut({"/net"}, kStart + 7);
+        CHECK(ko.commands.empty() && ks.phase() == Phase::Working);
+        ko = ks.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 8);
+        CHECK(ended(ks, ko) && ks.retiring());
+
+        Config uc = config();
+        uc.keepsOut = {"/data"};
+        Output uo;
+        Supervisor us(uc, {}, kStart, &uo);
+        uo = us.prompt("one", kStart);
+        CHECK(kinds(uo) == std::vector<Kind>{Kind::Start});
+        CHECK(std::find(uo.commands[0].argv.begin(), uo.commands[0].argv.end(), "--keep-out") ==
+              uo.commands[0].argv.end());
+        us.message(Hello{1, "h"}, kStart + 1);
+        uo = us.setKeepsOut({"/data", "/net"}, kStart + 2);   // unlimited: nothing to tighten
+        CHECK(uo.commands.empty() && us.phase() == Phase::Working);
+    }
+}
+
 // ---- the credential, errors, the session ----
 
 void testCredentialAndErrors() {
@@ -1158,6 +1283,7 @@ const Group kGroups[] = {
     {"settings", testSettings},
     {"account", testAccount},
     {"place", testPlace},
+    {"limit", testLimit},
     {"activity", testActivity},
     {"signin", testSignIn},
 };

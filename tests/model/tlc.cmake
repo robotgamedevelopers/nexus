@@ -25,7 +25,7 @@
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
-#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue,
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue, limit,
 #               setting, account, activity, dir
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
@@ -38,7 +38,7 @@
 #               SecretsTraceData.tla into WORK, with SEED and STEPS, FORMAT (3 or 4, the windows' and actions'
 #               format; 3 unless given), and FAULTY one of store-late, echo
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
-#               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance
+#               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -115,10 +115,10 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
 elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness" OR FAULTY STREQUAL "instance")
+    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness" OR FAULTY STREQUAL "instance" OR FAULTY STREQUAL "limit")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay, harness or instance")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay, harness, instance or limit")
     endif()
     execute_process(COMMAND "${ACCWALK}" ${walk_args} "${WORK}/AccountsTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
@@ -145,10 +145,10 @@ elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue" OR FAULTY STREQUAL "setting" OR
-            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir")
+            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir" OR FAULTY STREQUAL "limit")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity or dir")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity, dir or limit")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

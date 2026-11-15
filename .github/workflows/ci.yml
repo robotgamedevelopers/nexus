@@ -269,9 +269,15 @@ jobs:
   # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
   # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
   # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
-  # nothing and reaches no outside service.
+  # nothing and reaches no outside service. The test's runs in three jobs (NEXUS_WALL_RUN): the whole
+  # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
+  # short runs in one job: the setup is the cost).
   claude-driver-wall:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
     steps:
@@ -297,6 +303,7 @@ jobs:
         working-directory: drivers/claude
         env:
           NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
         # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
         # login back to this machine; a runner with no fleet login skips that probe.
         run: |
@@ -320,8 +327,9 @@ jobs:
       fail-fast: false
       matrix:
         where: [ubuntu, wsl2]
-        # Each of the test's two runs in a job of its own: on WSL2 under load one run took 52 s, both past the cap.
-        run: [whole-wall, without-the-hook]
+        # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
+        # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
             labels: [self-hosted, fleet, Linux, X64, tlc]

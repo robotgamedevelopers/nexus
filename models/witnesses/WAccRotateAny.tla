@@ -10,7 +10,7 @@ BrokenRotate(s) ==
          THEN Refused("rotate", None, None, s, {s})
          ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]
               /\ Done("rotate", None, n, s, TRUE) /\ told' = {s}
-              /\ UNCHANGED <<insts, acct, prov, known, links, dflt, nextSes>>
+              /\ UNCHANGED <<lim, bill, run, insts, acct, prov, known, links, dflt, nextSes>>
     ELSE Refused("rotate", None, None, s, {})
 
 BrokenSpec == Init /\ [][NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, BrokenRotate, Create, ReloadDropLink, ReloadProvider)]_vars

@@ -373,8 +373,17 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
         texts[i] = g.out;
     }
     const std::string where = rev.empty() ? dir_ + "/" : rev + ":";
+    // The working files are read against what HEAD holds: a friend added by hand there, not yet committed, reads
+    // limited even in a version 1 file (accounts::readFriends). HEAD unreadable: every friend reads as new.
+    accounts::Registry head;
+    if (rev.empty()) {
+        std::vector<std::string> ignored;
+        if (!readAt("HEAD", &head, &ignored, nullptr)) {
+            head.friends.clear();
+        }
+    }
     accounts::Read ra = accounts::readAccounts(texts[0], where + names[0], out);
-    accounts::Read rf = accounts::readFriends(texts[1], where + names[1], out);
+    accounts::Read rf = accounts::readFriends(texts[1], where + names[1], out, rev.empty() ? &head : nullptr);
     errors->insert(errors->end(), ra.errors.begin(), ra.errors.end());
     errors->insert(errors->end(), rf.errors.begin(), rf.errors.end());
     if (ra.ok && rf.ok) {

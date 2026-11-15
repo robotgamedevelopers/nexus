@@ -92,11 +92,12 @@ void seed() {
     using nexus::accounts::Instance;
     const nexus::accounts::Registry r = accountsFromDrivers(t, "studio");
     CHECK((r.accounts == std::vector<nexus::accounts::Account>{{"work", "claude"}}));
+    // Each friend not limited, as it ran before accounts and friends (docs/accounts.md, "limit").
     CHECK((r.friends == std::vector<Friend>{
-        {"ada", {"work"}, "work", {Instance{"studio", "studio", "/h"}}},
-        {"bo", {"work"}, "work", {Instance{"studio", "studio", "/w/bo"}}},
-        {"cy", {}, "", {Instance{"studio", "studio", "/h"}}},
-        {"dee", {}, "", {Instance{"studio", "studio", "/h"}}}}));
+        {"ada", {"work"}, "work", {Instance{"studio", "studio", "/h"}}, false},
+        {"bo", {"work"}, "work", {Instance{"studio", "studio", "/w/bo"}}, false},
+        {"cy", {}, "", {Instance{"studio", "studio", "/h"}}, false},
+        {"dee", {}, "", {Instance{"studio", "studio", "/h"}}, false}}));
     CHECK(nexus::accounts::problems(r).empty());
     CHECK(accountsFromDrivers(parseDriverTable("", "/h"), "studio") == nexus::accounts::Registry{});
     // A host name that is not a machine's: no instances, the accounts as before.

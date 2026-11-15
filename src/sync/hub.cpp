@@ -507,6 +507,32 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause, con
                     wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
             }
         }
+        // Its friend's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
+        // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open.
+        if (fr != nullptr && frBefore != nullptr && fr->limit != frBefore->limit) {
+            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
+                (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
+                "): this session's driver restarts " + (fr->limit ? "limited; a turn already open is stopped now." :
+                "unlimited once no turn is open; a turn already open finishes as it started.");
+            if (report != nullptr) {
+                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
+                    (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
+            }
+        }
+        // The directories a limited friend is kept out of changed (friends.json "limit_keeps_out"): told in each limited
+        // session, whose driver restarts keeping out the new list (Supervisor::setKeepsOut): a turn open is stopped now
+        // when more are kept out, and finishes as it started when fewer are.
+        if (before != nullptr && before->keepsOut != accounts_->keepsOut &&
+            accounts::limitedFor(&*accounts_, info.friendName, info.account)) {
+            std::string dirs;
+            for (const std::string& d : accounts_->keepsOut) {
+                dirs += (dirs.empty() ? "" : ", ") + d;
+            }
+            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited friend is "
+                "kept out of, on top of its own, are now " + (dirs.empty() ? std::string("none") : dirs) + " (" + cause +
+                "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
+                "kept out, and otherwise finishes as it started.";
+        }
         if (info.account.empty()) {
             if (!instanceNotice.empty() && !moveTo(id, info, instanceNotice)) {
                 return false;
@@ -941,6 +967,9 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
                 refused = "no account " + a + " is set up";
             } else if (std::find(fr->accounts.begin(), fr->accounts.end(), a) != fr->accounts.end()) {
                 refused = f + " is already linked to " + a;
+            } else if (!fr->limit && next.account(a)->billing == accounts::Billing::Api) {
+                refused = a + " is billed at API rate, and a friend on an API-billed account is always limited, but " +
+                    f + " has \"limit\": false in friends.json; set it to true there first (docs/accounts.md)";
             } else {
                 fr->accounts.push_back(a);
             }

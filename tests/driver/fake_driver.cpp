@@ -1,7 +1,7 @@
 // A driver that speaks the protocol (src/driver/protocol.h) from a script instead of a harness: the stand-in the
 // server's functional tests start as a friend's driver.
 //
-//   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] --script <file>
+//   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] [--limit cwd] --script <file>
 //
 // The script is lines of text; blank lines and lines starting with # are skipped. The lines before the first `send`
 // run at start (they write the hello, so a script can also write a wrong one). Each `send` line starts the block that
@@ -23,7 +23,7 @@
 //   record <path> [VAR ...]
 //                        append to <path> the arguments it was started with and the directory it works in, as
 //                        `cwd=<--cwd>`, `dir=<working directory>` and `resume=<id>` (empty when not given), then
-//                        `account=<name>` (only when given), and each named environment variable as `VAR=<value>` or
+//                        `account=<name>` and `limit=<value>` (each only when given), and each named environment variable as `VAR=<value>` or
 //                        `VAR unset`
 //   record-env <path>    append to <path> its whole environment, one `NAME=value` a line, as it was started with it
 //   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
@@ -107,6 +107,7 @@ struct Arguments {
     std::string cwd;
     std::optional<std::string> resume;
     std::optional<std::string> account;
+    std::optional<std::string> limit;
     std::string script;
 };
 
@@ -440,6 +441,9 @@ private:
         if (arguments_.account) {
             out << "account=" << *arguments_.account << "\n";
         }
+        if (arguments_.limit) {
+            out << "limit=" << *arguments_.limit << "\n";
+        }
         while (!names.empty()) {
             auto [name, rest] = split(names);
             const char* value = std::getenv(name.c_str());
@@ -473,7 +477,8 @@ int main(int argc, char** argv) {
     Arguments arguments;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if ((a == "--cwd" || a == "--resume" || a == "--script" || a == "--account") && i + 1 < argc) {
+        if ((a == "--cwd" || a == "--resume" || a == "--script" || a == "--account" || a == "--limit") &&
+                i + 1 < argc) {
             const char* value = argv[++i];
             if (a == "--cwd") {
                 arguments.cwd = value;
@@ -481,12 +486,14 @@ int main(int argc, char** argv) {
                 arguments.resume = value;
             } else if (a == "--account") {
                 arguments.account = value;
+            } else if (a == "--limit") {
+                arguments.limit = value;
             } else {
                 arguments.script = value;
             }
         } else {
             scriptBug("unknown or incomplete argument " + std::string(a) + "; the arguments are --cwd <dir>, "
-                "--resume <session id>, --account <name> and --script <file>");
+                "--resume <session id>, --account <name>, --limit cwd and --script <file>");
         }
     }
     if (arguments.cwd.empty() || arguments.script.empty())

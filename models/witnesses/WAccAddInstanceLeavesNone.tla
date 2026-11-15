@@ -11,7 +11,7 @@ BrokenAddInstance(f, i) ==
                                   ELSE SettledI(links, dflt, prov, ni)[s]]
          /\ told' = {}
          /\ Done("reload", f, i, 0, TRUE)
-         /\ UNCHANGED <<acct, prov, known, links, dflt, nextSes>>
+         /\ UNCHANGED <<lim, bill, run, acct, prov, known, links, dflt, nextSes>>
     ELSE Refused("reload", f, i, 0, {})
 
 BrokenSpec == Init /\ [][NextWithIM(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, Rotate, Create,

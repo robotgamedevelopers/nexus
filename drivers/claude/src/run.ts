@@ -1,11 +1,58 @@
 // The driver as a process: its arguments, standard input and output, and its exit, around a way to start the harness.
 // main.ts gives it the Claude Agent SDK; the conformance test's fake-main.ts a scripted query.
 
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 
 import { isAccount, openConfigDir, readAccount, type Account, type AccountRefusal } from './account.js';
 import { Driver, newSessionId, parseArguments, type Arguments, type Harness, type HarnessStart, type Host } from './driver.js';
 import { encode, kProtocolVersion, type DriverMessage } from './protocol.js';
+import { kDataRoots, limitRefusal } from './wall.js';
+
+/** Where the driver runs, for a limited friend's checks: HOME, the platform, and how a path resolves. */
+export interface Place {
+    home: string;
+    platform: string;
+    realpath: (p: string) => string;
+}
+
+const kHere: Place = { home: process.env['HOME'] ?? '', platform: process.platform, realpath: (p) => realpathSync(p) };
+
+/**
+ * Why a limited friend (--limit cwd) cannot start here, or undefined: the limit is enforced or the session does not
+ * start (fail closed). Only on the platforms whose sandbox nexus has measured it on (kDataRoots), only on the Claude
+ * executable the driver ships (another's settings are not known to hold it), and never in a directory that would
+ * hold what the limit keeps out (limitRefusal).
+ */
+export function limitedStartRefusal(args: Arguments, place: Place): string | undefined {
+    if (args.limit === undefined) {
+        return undefined;
+    }
+    if (kDataRoots[place.platform] === undefined) {
+        return `this friend is limited to its directory, and nexus cannot limit it on ${place.platform}`;
+    }
+    if (args.claudePath !== undefined) {
+        return 'this friend is limited to its directory, which holds only on the Claude the driver ships, and the drivers '
+            + `file names another (--claude ${args.claudePath})`;
+    }
+    if (place.home === '') {
+        return 'this friend is limited to its directory, and HOME is not set, so the driver cannot tell what to keep it from';
+    }
+    const why = limitRefusal(args.cwd, place.home, place.realpath);
+    return why === undefined ? undefined : `this friend is limited to its directory, and ${why}`;
+}
+
+/**
+ * The working directory a limited friend works in: resolved once, here, and that one path is the one checked
+ * (limitRefusal), given to the sandbox and the file tools (limitOf) and given to Claude. Undefined when it does not
+ * resolve (a limited session then does not start).
+ */
+export function resolvedCwd(cwd: string, place: Place): string | undefined {
+    try {
+        return place.realpath(cwd);
+    } catch {
+        return undefined;
+    }
+}
 
 function isDirectory(path: string): boolean {
     try {
@@ -24,9 +71,9 @@ function isDirectory(path: string): boolean {
 export function prepare(argv: readonly string[], isDir: (path: string) => boolean,
     findAccount: (name: string) => Account | AccountRefusal,
     openConfig: (account: Account) => string | undefined = () => undefined,
-    tools?: { cause: string; fix: string }):
+    tools?: { cause: string; fix: string }, place: Place = kHere):
     { args: Arguments; account: Account } | { refusal: DriverMessage[] } {
-    const hello: DriverMessage = { kind: 'hello', protocol: kProtocolVersion, harness: 'claude' };
+    const hello: DriverMessage = { kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] };
     const args = parseArguments(argv);
     if ('error' in args) {
         return { refusal: [hello, { kind: 'error', cause: args.error, fix: 'fix the driver\'s line in nexus-server\'s drivers file', code: 'other' }] };
@@ -34,6 +81,20 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
     if (!isDir(args.cwd)) {
         return { refusal: [hello, { kind: 'error', cause: `cannot work in ${args.cwd}: it is not a directory`,
             fix: 'give the friend a working directory that exists, in nexus-server\'s drivers file', code: 'other' }] };
+    }
+    if (args.limit !== undefined) {
+        const resolved = resolvedCwd(args.cwd, place);
+        if (resolved === undefined) {
+            return { refusal: [hello, { kind: 'error', cause: `this friend is limited to its directory, and ${args.cwd} `
+                + 'does not resolve', fix: 'give this instance a working directory that exists, in friends.json (docs/accounts.md, "limit")', code: 'other' }] };
+        }
+        args.cwd = resolved;
+    }
+    const unlimitable = limitedStartRefusal(args, place);
+    if (unlimitable !== undefined) {
+        return { refusal: [hello, { kind: 'error', cause: unlimitable,
+            fix: 'give this instance a directory of its own in friends.json, or, for a friend on no API-billed account, '
+                + 'set its "limit" to false there (docs/accounts.md, "limit")', code: 'other' }] };
     }
     if (tools !== undefined) {
         return { refusal: [hello, { kind: 'error', cause: `no sandbox for the AI: ${tools.cause}`, fix: tools.fix,
