@@ -1,33 +1,56 @@
 // Tests of the Tailscale shim's C API (src/tailscale/nts.h), linked as nexus links it (cmake/tailscale.cmake): the
 // c-archive on macOS and Linux, the DLL through its MSVC import library on Windows, with the Windows 10 manifest. It
 // links the shim's test build, which adds the hooks of nts_test_hooks.h and is otherwise nexus's.
-// Groups:
-//   version      (unit) the versions the shim reports are the pins: tailscale.com v1.104.7 and go1.27.4
-//   state_dir    (functional) the state directory and its log file on the real filesystem, in a directory of the
-//                test's own: created owner-only (0700 and 0600; on Windows a protected ACL granting only this user), an
-//                existing one tightened
-//   refusals     (functional) every refusal that stops before any network: a null, empty or relative path, a file in
-//                the way, an unwritable parent (skipped, saying so, when this user can write to it anyway), a start
-//                while a tsnet sign-in variable is set, a handle that is not a node, and the reason cut to the caller's
-//                buffer
-//   refuses_inherited_key  (functional) with TS_AUTHKEY set from the process's start (ctest's ENVIRONMENT), a start
-//                refuses
-//   lock         (functional) a second start, or a prepare, on a state directory a node of this process holds is
-//                refused, before anything in it is opened; closing the node frees it
-//   lock_two_process  (functional) the same across processes: a child (hold_lock) holds the directory, and this
-//                process's start and prepare are refused until the child closes its node
-//   panics       (functional) a panic injected into each export is stopped there: the call fails with a reason, what
-//                it held is given back, and the panic's text goes to the running node's log
-//   log_cap      (functional) a node's log past 1 MiB moves to nexus-tailscale.log.1 and a new one begins
-//   quiet        (functional) a child (quiet_child) runs a node's start and close, the library loggers and the panics
-//                group with its stdout and stderr in files: both stay empty
-//   start_needs_login <dir>  by hand only, never from ctest or CI: starts a node on a scratch state directory, which
-//                contacts Tailscale's control server, waits until it asks to sign in, prints the backend state, and
-//                closes it. It never prints the sign-in URL, which goes only to the state directory.
-// lock, lock_two_process, panics, log_cap and quiet start offline nodes (nts_test_start_offline): sockets on this machine
-// only, a control server on 127.0.0.1 that refuses at once and magicsock's UDP socket, never another machine; they
-// wait on the clock only for the child of lock_two_process. Every other group uses no socket and no clock.
+//
+// Unit groups: no OS (no file, socket or thread of their own), no clock, no network.
+//   version      the versions the shim reports are the pins: tailscale.com v1.104.7 and go1.27.4
+//   names        nts_state_name and nts_reason_name for every state and reason, and "unknown" for others
+//   handles      every call that takes a handle refuses one never issued, a null out-pointer, and a bad port, with a
+//                reason; the reason is cut to the caller's buffer
+//   start_checks every refusal a start makes before it touches the state directory: no parameters, no directory or
+//                hostname, a control URL that is not https (or has a user, path, query or fragment, or names
+//                Tailscale's hosted service), an auth key with the hosted service, a tsnet sign-in variable set
+//                (named, never its value)
+//   panics_unit  a panic injected into each export is stopped there, with a reason
+// Functional groups: the real filesystem, in a directory of the test's own, and (where said) nodes on sockets on this
+// machine only. Offline nodes (nts_test_start_offline) use a control server on 127.0.0.1 that refuses at once; the
+// test control server (nts_test_control_start) is Tailscale's in-tree one, run in this process on 127.0.0.1 with its
+// own DERP relay and STUN server. No test reaches another machine, Tailscale's hosted service, or a real tailnet.
+//   state_dir    the state directory and its log file created owner-only (0700 and 0600; on Windows a protected ACL
+//                granting only this user), an existing one tightened
+//   refusals     the refusals that need the filesystem: a null, empty or relative path, a file in the way, an
+//                unwritable parent (skipped, saying so, when this user can write to it anyway), a directory that
+//                recorded another control server, a layer 0 directory (the hosted service's) given to another
+//   refuses_inherited_key  with TS_AUTHKEY set from the process's start (ctest's ENVIRONMENT), a start refuses
+//   lock         a second start, or a prepare, on a state directory a node of this process holds is refused, before
+//                anything in it is opened; closing the node frees it (offline nodes)
+//   lock_two_process  the same across processes: a child (hold_lock) holds the directory (offline nodes)
+//   panics       a panic in each export with a node running: the panic's text goes to its log (offline nodes)
+//   log_cap      a node's log past 1 MiB moves to nexus-tailscale.log.1 and a new one begins (offline nodes)
+//   quiet        a child (quiet_child) runs nodes, the library loggers, and the panics group with its stdout and
+//                stderr in files: both stay empty (offline nodes)
+//   unreachable  an offline node says starting, with reason control-unreachable and the logged error as its text
+//   certificate  a node whose control server's certificate no one trusts fails, with reason certificate
+//   watch        the state callback: called at once and on changes, never after nts_close returns, and nts_close from
+//                inside it (offline nodes)
+//   threads      the API from many threads at once on one node, closed under them (offline nodes)
+//   sign_in      the test control server: needs-login with the URL, approval, ready; the URL only in needs-login and
+//                never in the shim's log; the record of the control server
+//   tailnet      two nodes on the test control server: peers and tags, who-is (and "unknown"), TCP and UDP both ways
+//                by DNS name, the handle rules (double close, use after close, wrong kind, busy, a close from another
+//                thread ending a blocked read, a node's close closing its handles)
+//   restart      a signed-in node closed and started again on its state directory is ready with no sign-in
+//   expiry       a node's key expired by control: expired, a new login keeping its identity, ready again
+//   control_down control stopped and started: control-unreachable while down, connections kept, ready again
+//   auth_key     a control server that requires an auth key: a wrong one fails (auth-key), the right one is ready
+//                with no URL, and an ephemeral node
+// By hand only, never from ctest or CI: start_needs_login <dir> starts a node on a scratch state directory, which
+// contacts Tailscale's hosted control server, waits until it asks to sign in, prints the state, and closes it. It never
+// prints the sign-in URL.
+// The functional groups wait only on conditions (a state, a peer seen, a file written), each bounded generously; none
+// sleeps for a fixed time to let something happen.
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -35,10 +58,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include "nts.h"
 #include "nts_test_hooks.h"
@@ -55,6 +80,7 @@
 namespace {
 
 namespace fs = std::filesystem;
+using Clock = std::chrono::steady_clock;
 
 int failures = 0;
 
@@ -68,6 +94,10 @@ int failures = 0;
 
 // This program's own path (main), for the groups that run it as a child.
 std::string self;
+
+// How long a functional group waits for a condition before it fails: generous, since a loaded CI machine is slow, and
+// never spent unless something is wrong.
+constexpr auto kPatience = std::chrono::seconds(60);
 
 bool has(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
@@ -88,10 +118,22 @@ std::string command(const std::string& args) {
     return text;
 }
 
+nts_start_params params(const std::string& dir, const char* hostname, const char* control = nullptr,
+                        const char* key = nullptr) {
+    nts_start_params p{};
+    p.dir = dir.c_str();
+    p.hostname = hostname;
+    p.control_url = control;
+    p.auth_key = key;
+    return p;
+}
+
 // A start of an offline node (nts_test_start_offline); its handle, or 0 with the reason in why.
-int startOffline(const fs::path& dir, std::string& why) {
+int startOffline(const fs::path& dir, std::string& why, const char* hostname = "nexus-test") {
     char err[512];
-    int node = nts_test_start_offline(dir.string().c_str(), "nexus-test", err, sizeof err);
+    std::string path = dir.string();
+    nts_start_params p = params(path, hostname);
+    int node = nts_test_start_offline(&p, err, sizeof err);
     why = err;
     return node;
 }
@@ -256,6 +298,8 @@ void unlock(const fs::path& dir) {
 #endif
 }
 
+// ---- unit groups ----
+
 void version() {
     const char* v = nts_version();
     CHECK(v != nullptr);
@@ -267,6 +311,192 @@ void version() {
     // Static: the same pointer every call.
     CHECK(nts_version() == v);
 }
+
+void names() {
+    const char* states[] = {"not-started", "starting", "needs-login", "running",
+                            "ready",       "expired",  "stopped",     "failed"};
+    const int stateCodes[] = {NTS_STATE_NOT_STARTED, NTS_STATE_STARTING, NTS_STATE_NEEDS_LOGIN, NTS_STATE_RUNNING,
+                              NTS_STATE_READY,       NTS_STATE_EXPIRED,  NTS_STATE_STOPPED,     NTS_STATE_FAILED};
+    for (int i = 0; i < 8; ++i) {
+        CHECK(std::string(nts_state_name(stateCodes[i])) == states[i]);
+    }
+    const char* reasons[] = {"none",    "auth-key",           "tags",             "refused", "certificate",
+                             "logging", "control-unreachable", "machine-approval", "closed",  "control-stopped"};
+    const int reasonCodes[] = {NTS_REASON_NONE,
+                               NTS_REASON_AUTH_KEY,
+                               NTS_REASON_TAGS,
+                               NTS_REASON_REFUSED,
+                               NTS_REASON_CERTIFICATE,
+                               NTS_REASON_LOGGING,
+                               NTS_REASON_CONTROL_UNREACHABLE,
+                               NTS_REASON_MACHINE_APPROVAL,
+                               NTS_REASON_CLOSED,
+                               NTS_REASON_CONTROL_STOPPED};
+    for (int i = 0; i < 10; ++i) {
+        CHECK(std::string(nts_reason_name(reasonCodes[i])) == reasons[i]);
+    }
+    CHECK(std::string(nts_state_name(-1)) == "unknown" && std::string(nts_state_name(8)) == "unknown");
+    CHECK(std::string(nts_reason_name(-1)) == "unknown" && std::string(nts_reason_name(10)) == "unknown");
+    // Static: the same pointer every call.
+    CHECK(nts_state_name(NTS_STATE_READY) == nts_state_name(NTS_STATE_READY));
+}
+
+const char* const kNotIssued = "is not a handle this process was given";
+
+// Every call that takes a handle, with handles no call has issued (this group issues none).
+void handles() {
+    char err[512];
+    char text[64];
+    unsigned char buf[16] = {};
+    nts_status status{};
+    nts_peer peer{};
+    nts_whois who{};
+    for (int h : {0, -1, 7, 123456}) {
+        CHECK(nts_close(h, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_status_get(h, &status, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_status_wait(h, 0, 0, &status, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_login_url(h, text, sizeof text, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_watch(h, nullptr, nullptr, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_login(h, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_peers(h, &peer, 1, 0, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_peer_find(h, "a.example", &peer, 0, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_whois_addr(h, "192.0.2.1:1", &who, 0, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_listen_tcp(h, 80, err, sizeof err) == 0 && has(err, kNotIssued));
+        CHECK(nts_accept(h, 0, err, sizeof err) == NTS_ERROR && has(err, kNotIssued));
+        CHECK(nts_dial_tcp(h, "a:1", 0, err, sizeof err) == 0 && has(err, kNotIssued));
+        CHECK(nts_dial_udp(h, "a:1", 0, err, sizeof err) == 0 && has(err, kNotIssued));
+        CHECK(nts_listen_udp(h, 80, err, sizeof err) == 0 && has(err, kNotIssued));
+        CHECK(nts_read(h, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR && has(err, kNotIssued));
+        CHECK(nts_write(h, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR && has(err, kNotIssued));
+        CHECK(nts_recv_from(h, buf, sizeof buf, 0, text, sizeof text, err, sizeof err) == NTS_ERROR &&
+              has(err, kNotIssued));
+        CHECK(nts_send_to(h, buf, sizeof buf, "a:1", 0, err, sizeof err) == NTS_ERROR && has(err, kNotIssued));
+        CHECK(nts_local_addr(h, text, sizeof text, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_remote_addr(h, text, sizeof text, err, sizeof err) == -1 && has(err, kNotIssued));
+        CHECK(nts_handle_close(h, err, sizeof err) == -1 && has(err, kNotIssued));
+    }
+    // Null out-pointers and bad ports are refused before the handle is looked at.
+    CHECK(nts_status_get(1, nullptr, err, sizeof err) == -1 && has(err, "null"));
+    CHECK(nts_status_wait(1, 0, 0, nullptr, err, sizeof err) == -1 && has(err, "null"));
+    CHECK(nts_peers(1, nullptr, 3, 0, err, sizeof err) == -1 && has(err, "null"));
+    CHECK(nts_peers(1, &peer, -1, 0, err, sizeof err) == -1);
+    CHECK(nts_peer_find(1, nullptr, &peer, 0, err, sizeof err) == -1);
+    CHECK(nts_whois_addr(1, "not an address", &who, 0, err, sizeof err) == -1 && has(err, "not ip:port"));
+    for (int port : {0, -1, 65536}) {
+        CHECK(nts_listen_tcp(1, port, err, sizeof err) == 0 && has(err, "is not 1..65535"));
+        CHECK(nts_listen_udp(1, port, err, sizeof err) == 0 && has(err, "is not 1..65535"));
+    }
+    // The reason is cut to the caller's buffer and always ends; a null buffer or a size of 0 is allowed.
+    char tiny[8];
+    std::memset(tiny, 'x', sizeof tiny);
+    CHECK(nts_close(1, tiny, sizeof tiny) == -1 && std::strlen(tiny) == 7);
+    CHECK(nts_close(1, nullptr, 0) == -1);
+    tiny[0] = 'x';
+    CHECK(nts_close(1, tiny, 0) == -1 && tiny[0] == 'x');
+}
+
+// Refusals before a start touches its state directory: the directory named is never created.
+void startChecks() {
+    char err[512];
+    const std::string dir = (fs::current_path() / "start_checks_never_made").string();
+    auto refused = [&](const nts_start_params& p, const char* part) {
+        int node = nts_start(&p, err, sizeof err);
+        bool ok = node == 0 && has(err, part);
+        if (!ok) {
+            std::fprintf(stderr, "start_checks: expected a refusal with \"%s\", got %d \"%s\"\n", part, node, err);
+        }
+        return ok;
+    };
+    CHECK(nts_start(nullptr, err, sizeof err) == 0 && has(err, "no parameters"));
+    CHECK(refused(params("", "nexus-test"), "state directory"));
+    CHECK(refused(params(dir, ""), "hostname"));
+    CHECK(refused(params(dir, nullptr), "hostname"));
+    CHECK(refused(params(dir, "nexus-test", "http://control.example"), "not https"));
+    CHECK(refused(params(dir, "nexus-test", "ftp://control.example"), "not https"));
+    CHECK(refused(params(dir, "nexus-test", "control.example"), "not https"));
+    CHECK(refused(params(dir, "nexus-test", "https://user:a-password@control.example"), "user name or password"));
+    CHECK(!has(err, "a-password"));
+    CHECK(refused(params(dir, "nexus-test", "https://control.example/some/path"), "more than a host"));
+    CHECK(refused(params(dir, "nexus-test", "https://control.example?q=1"), "more than a host"));
+    CHECK(refused(params(dir, "nexus-test", "https://controlplane.tailscale.com"), "hosted service"));
+    CHECK(refused(params(dir, "nexus-test", "https://login.tailscale.com"), "hosted service"));
+    CHECK(refused(params(dir, "nexus-test", nullptr, "tskey-a-value-that-must-not-be-shown"), "auth key"));
+    nts_start_params p = params(dir, "nexus-test", nullptr, "tskey-a-value-that-must-not-be-shown");
+    CHECK(nts_start(&p, err, sizeof err) == 0 && !has(err, "must-not-be-shown"));
+    // A start refuses before anything else while a tsnet sign-in variable is set, naming it (never its value).
+    for (const char* name : {"TS_AUTHKEY", "TS_AUTH_KEY", "TS_CLIENT_SECRET", "TS_CLIENT_ID", "TS_ID_TOKEN",
+                             "TS_AUDIENCE", "TS_CONTROL_URL"}) {
+        setEnv(name, "a-value-that-must-not-be-shown");
+        p = params(dir, "nexus-test");
+        CHECK(nts_start(&p, err, sizeof err) == 0);
+        CHECK(has(err, name) && has(err, "only from nts_start's parameters") &&
+              !has(err, "a-value-that-must-not-be-shown"));
+        setEnv(name, nullptr);
+    }
+    CHECK(!fs::exists(dir));
+}
+
+const char* const kPanicReason = "stopped by an internal error (a Go panic)";
+
+// A panic injected into each export is stopped there (no node runs: the panic's text is dropped).
+void panicsUnit() {
+    char err[512];
+    char text[64];
+    unsigned char buf[4] = {};
+    nts_status status{};
+    nts_peer peer{};
+    nts_whois who{};
+    nts_start_params p = params("/never", "nexus-test");
+    struct Case {
+        const char* name;
+        std::function<bool()> call;
+    };
+    const Case cases[] = {
+        {"nts_prepare", [&] { return nts_prepare("/never", err, sizeof err) == -1; }},
+        {"nts_start", [&] { return nts_start(&p, err, sizeof err) == 0; }},
+        {"nts_test_start_offline", [&] { return nts_test_start_offline(&p, err, sizeof err) == 0; }},
+        {"nts_close", [&] { return nts_close(1, err, sizeof err) == -1; }},
+        {"nts_status_get", [&] { return nts_status_get(1, &status, err, sizeof err) == -1; }},
+        {"nts_status_wait", [&] { return nts_status_wait(1, 0, 0, &status, err, sizeof err) == -1; }},
+        {"nts_login_url", [&] { return nts_login_url(1, text, sizeof text, err, sizeof err) == -1; }},
+        {"nts_watch", [&] { return nts_watch(1, nullptr, nullptr, err, sizeof err) == -1; }},
+        {"nts_login", [&] { return nts_login(1, err, sizeof err) == -1; }},
+        {"nts_peers", [&] { return nts_peers(1, &peer, 1, 0, err, sizeof err) == -1; }},
+        {"nts_peer_find", [&] { return nts_peer_find(1, "a", &peer, 0, err, sizeof err) == -1; }},
+        {"nts_whois_addr", [&] { return nts_whois_addr(1, "192.0.2.1:1", &who, 0, err, sizeof err) == -1; }},
+        {"nts_listen_tcp", [&] { return nts_listen_tcp(1, 80, err, sizeof err) == 0; }},
+        {"nts_accept", [&] { return nts_accept(1, 0, err, sizeof err) == NTS_ERROR; }},
+        {"nts_dial_tcp", [&] { return nts_dial_tcp(1, "a:1", 0, err, sizeof err) == 0; }},
+        {"nts_dial_udp", [&] { return nts_dial_udp(1, "a:1", 0, err, sizeof err) == 0; }},
+        {"nts_listen_udp", [&] { return nts_listen_udp(1, 80, err, sizeof err) == 0; }},
+        {"nts_read", [&] { return nts_read(1, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR; }},
+        {"nts_write", [&] { return nts_write(1, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR; }},
+        {"nts_recv_from",
+         [&] { return nts_recv_from(1, buf, sizeof buf, 0, text, sizeof text, err, sizeof err) == NTS_ERROR; }},
+        {"nts_send_to", [&] { return nts_send_to(1, buf, sizeof buf, "a:1", 0, err, sizeof err) == NTS_ERROR; }},
+        {"nts_local_addr", [&] { return nts_local_addr(1, text, sizeof text, err, sizeof err) == -1; }},
+        {"nts_remote_addr", [&] { return nts_remote_addr(1, text, sizeof text, err, sizeof err) == -1; }},
+        {"nts_handle_close", [&] { return nts_handle_close(1, err, sizeof err) == -1; }},
+    };
+    for (const Case& c : cases) {
+        nts_test_inject_panic(c.name);
+        bool failed = c.call();
+        CHECK(failed && has(err, kPanicReason));
+        if (!failed || !has(err, kPanicReason)) {
+            std::fprintf(stderr, "panics_unit: %s: %s\n", c.name, err);
+        }
+    }
+    nts_test_inject_panic("nts_version");
+    CHECK(nts_version() != nullptr && std::string(nts_version()) == "tailscale.com v1.104.7 go1.27.4");
+    nts_test_inject_panic("nts_state_name");
+    CHECK(std::string(nts_state_name(NTS_STATE_READY)) == "unknown");
+    nts_test_inject_panic("nts_reason_name");
+    CHECK(std::string(nts_reason_name(NTS_REASON_NONE)) == "unknown");
+    nts_test_inject_panic(nullptr);
+    CHECK(std::string(nts_state_name(NTS_STATE_READY)) == "ready");
+}
+
+// ---- functional groups: the filesystem, offline nodes ----
 
 void stateDir() {
     fs::path work = fresh("state_dir");
@@ -316,6 +546,7 @@ void stateDir() {
 void refusals() {
     fs::path work = fresh("refusals");
     char err[512];
+    std::string why;
 
     // No path, an empty one, a relative one.
     CHECK(nts_prepare(nullptr, err, sizeof err) == -1 && has(err, "no state directory"));
@@ -328,14 +559,13 @@ void refusals() {
     {
         std::ofstream(file) << "in the way";
     }
-    std::string why = prepare(file);
+    why = prepare(file);
     CHECK(has(why, "is not a directory"));
     why = prepare(file / "state");
     CHECK(has(why, "cannot create the state directory"));
 
     // A parent this user cannot write to, once the test has seen that this user really cannot (root, or an
-    // administrator's backup privilege, writes anyway): otherwise skipped, saying so, since a start there would get as
-    // far as tsnet and the network.
+    // administrator's backup privilege, writes anyway): otherwise skipped, saying so.
     fs::path locked = work / "locked";
     fs::create_directories(locked);
     CHECK(lock(locked));
@@ -349,39 +579,38 @@ void refusals() {
         why = prepare(locked / "state");
         CHECK(has(why, "cannot create the state directory") && has(why, "fix the permissions of its parent"));
         CHECK(!fs::exists(locked / "state"));
-        // With no sign-in variable set, a start on an unwritable directory is refused by the state directory, before
-        // tsnet.
-        CHECK(nts_start((locked / "state").string().c_str(), "nexus-test", err, sizeof err) == 0);
-        CHECK(has(err, "cannot create the state directory"));
+        CHECK(startOffline(locked / "state", why) == 0 && has(why, "cannot create the state directory"));
     }
     unlock(locked);
 
-    // A start refuses before anything else while a tsnet sign-in variable is set, naming it (never its value). The
-    // directory is under a file, which no user can create a directory in, so that no start could get as far as the
-    // network.
-    for (const char* name : {"TS_AUTHKEY", "TS_AUTH_KEY", "TS_CLIENT_SECRET", "TS_CLIENT_ID", "TS_ID_TOKEN",
-                             "TS_AUDIENCE", "TS_CONTROL_URL"}) {
-        setEnv(name, "a-value-that-must-not-be-shown");
-        CHECK(nts_start((file / "state").string().c_str(), "nexus-test", err, sizeof err) == 0);
-        CHECK(has(err, name) && has(err, "interactively only") && !has(err, "a-value-that-must-not-be-shown"));
-        setEnv(name, nullptr);
+    // A directory that recorded another control server is refused, before tsnet starts on it.
+    fs::path other = work / "other_control";
+    fs::create_directories(other);
+    {
+        std::ofstream(other / "nexus-tailscale.control") << "https://control.example\n";
     }
-    CHECK(nts_start((work / "named").string().c_str(), "", err, sizeof err) == 0 && has(err, "hostname"));
-    CHECK(nts_start(nullptr, "nexus-test", err, sizeof err) == 0 && has(err, "state directory"));
-    CHECK(!fs::exists(work / "named"));
-
-    // Handles that are not nodes.
-    CHECK(nts_close(0, err, sizeof err) == -1 && has(err, "not a started node"));
-    CHECK(nts_close(12345, err, sizeof err) == -1 && has(err, "not a started node"));
-    CHECK(nts_backend_state(12345, err, sizeof err) == -1 && has(err, "not a started node"));
-
-    // The reason is cut to the caller's buffer and always ends; a null buffer or a size of 0 is allowed.
-    char tiny[8];
-    std::memset(tiny, 'x', sizeof tiny);
-    CHECK(nts_close(1, tiny, sizeof tiny) == -1 && std::strlen(tiny) == 7);
-    CHECK(nts_close(1, nullptr, 0) == -1);
-    tiny[0] = 'x';
-    CHECK(nts_close(1, tiny, 0) == -1 && tiny[0] == 'x');
+    CHECK(startOffline(other, why) == 0 && has(why, "the control server https://control.example's"));
+    CHECK(!fs::exists(other / "tailscaled.state"));
+    // A layer 0 directory (a node's state and no record: Tailscale's hosted service's) given to another.
+    fs::path layer0 = work / "layer0";
+    fs::create_directories(layer0);
+    {
+        std::ofstream(layer0 / "tailscaled.state") << "{}";
+    }
+    CHECK(startOffline(layer0, why) == 0 && has(why, "Tailscale's hosted service's"));
+    CHECK(readFile(layer0 / "tailscaled.state") == "{}");
+    // An offline start records its control server, and a second start there agrees with it.
+    fs::path recorded = work / "recorded";
+    int node = startOffline(recorded, why);
+    CHECK(node > 0);
+    CHECK(node <= 0 || closeNode(node));
+    CHECK(readFile(recorded / "nexus-tailscale.control") == "http://127.0.0.1:9\n");
+#if !defined(_WIN32)
+    CHECK(modeOf(recorded / "nexus-tailscale.control") == (fs::perms::owner_read | fs::perms::owner_write));
+#endif
+    node = startOffline(recorded, why);
+    CHECK(node > 0);
+    CHECK(node <= 0 || closeNode(node));
 }
 
 // Run with TS_AUTHKEY in the environment from the process's start (ctest sets it), as a key inherited from a shell would
@@ -390,18 +619,15 @@ void refusesInheritedKey() {
     fs::path work = fresh("inherited");
     char err[512];
     CHECK(std::getenv("TS_AUTHKEY") != nullptr);
-    // Under a file, as in refusals, so that no start could get as far as the network.
-    fs::path file = work / "file";
-    {
-        std::ofstream(file) << "in the way";
-    }
-    CHECK(nts_start((file / "state").string().c_str(), "nexus-test", err, sizeof err) == 0);
-    CHECK(has(err, "TS_AUTHKEY") && has(err, "interactively only") && !has(err, "a-value-that-must-not-be-shown"));
+    std::string dir = (work / "state").string();
+    nts_start_params p = params(dir, "nexus-test");
+    CHECK(nts_start(&p, err, sizeof err) == 0);
+    CHECK(has(err, "TS_AUTHKEY") && !has(err, "a-value-that-must-not-be-shown"));
+    CHECK(!fs::exists(work / "state"));
 }
 
 // A state directory is one node's: a second start or a prepare on it is refused while a node of this process holds
-// it, however the path is spelled, and allowed again once the node closes. Only offline starts: were the refusal
-// missing, nothing would reach the network.
+// it, however the path is spelled, and allowed again once the node closes.
 void lockInProcess() {
     fs::path work = fresh("lock");
     fs::path dir = work / "state";
@@ -464,8 +690,8 @@ void lockTwoProcess() {
     if (child == nullptr) {
         return;
     }
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-    while (!fs::exists(marker) && std::chrono::steady_clock::now() < deadline) {
+    auto deadline = Clock::now() + kPatience;
+    while (!fs::exists(marker) && Clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     std::string held = readFile(marker);
@@ -491,31 +717,16 @@ void lockTwoProcess() {
     CHECK(node <= 0 || closeNode(node));
 }
 
-const char* const kPanicReason = "stopped by an internal error (a Go panic)";
-
-// A panic injected into each export is stopped there.
+// A panic with a node running: the call fails, the node keeps running, and the panic's text goes to its log. A panic
+// after the directory is held and its log opened gives both back.
 void panics() {
     fs::path work = fresh("panics");
     fs::path dir = work / "state";
     std::string path = dir.string();
     char err[512];
-
-    nts_test_inject_panic("nts_prepare");
-    CHECK(nts_prepare(path.c_str(), err, sizeof err) == -1 && has(err, kPanicReason));
-    nts_test_inject_panic("nts_start");
-    CHECK(nts_start(path.c_str(), "nexus-test", err, sizeof err) == 0 && has(err, kPanicReason));
-    nts_test_inject_panic("nts_test_start_offline");
-    CHECK(nts_test_start_offline(path.c_str(), "nexus-test", err, sizeof err) == 0 && has(err, kPanicReason));
-    nts_test_inject_panic("nts_backend_state");
-    CHECK(nts_backend_state(1, err, sizeof err) == -1 && has(err, kPanicReason));
-    nts_test_inject_panic("nts_close");
-    CHECK(nts_close(1, err, sizeof err) == -1 && has(err, kPanicReason));
-    nts_test_inject_panic("nts_version");
-    CHECK(nts_version() != nullptr && std::string(nts_version()) == "tailscale.com v1.104.7 go1.27.4");
-
-    // A panic after the directory is held and its log opened gives both back.
+    nts_start_params p = params(path, "nexus-test");
     nts_test_inject_panic("nts_test_start_offline after open");
-    CHECK(nts_test_start_offline(path.c_str(), "nexus-test", err, sizeof err) == 0 && has(err, kPanicReason));
+    CHECK(nts_test_start_offline(&p, err, sizeof err) == 0 && has(err, kPanicReason));
     nts_test_inject_panic(nullptr);
     std::string why;
     int node = startOffline(dir, why);
@@ -524,14 +735,13 @@ void panics() {
         std::fprintf(stderr, "panics: %s\n", why.c_str());
         return;
     }
-    // With a node running, the panic's text goes to its log.
-    nts_test_inject_panic("nts_backend_state");
-    CHECK(nts_backend_state(node, err, sizeof err) == -1 && has(err, kPanicReason));
+    nts_status status{};
+    nts_test_inject_panic("nts_status_get");
+    CHECK(nts_status_get(node, &status, err, sizeof err) == -1 && has(err, kPanicReason));
     nts_test_inject_panic(nullptr);
-    char state[64];
-    CHECK(nts_backend_state(node, state, sizeof state) == 0);
+    CHECK(nts_status_get(node, &status, err, sizeof err) == 0);
     CHECK(closeNode(node));
-    CHECK(has(readFile(dir / "nexus-tailscale.log"), "nts test panic injected at nts_backend_state"));
+    CHECK(has(readFile(dir / "nexus-tailscale.log"), "nts test panic injected at nts_status_get"));
 }
 
 // A node's log is capped: past 1 MiB (logCap in src/tailscale/shim/output.go) nexus-tailscale.log moves to
@@ -564,8 +774,13 @@ void logCap() {
 #endif
 }
 
+void panicsAll() {
+    panicsUnit();
+    panics();
+}
+
 // The child of quiet, run with its stdout and stderr in files: a node's start and close, the library loggers before,
-// during and after it, and the panics group. It prints nothing unless a check fails.
+// during and after it, and both panics groups. It prints nothing unless a check fails.
 void quietChild() {
     fs::path work = fresh("quiet_child");
     fs::path dir = work / "state";
@@ -585,7 +800,7 @@ void quietChild() {
     CHECK(has(log, "gvisor warning: while a node runs"));
     CHECK(has(log, "gvisor info: while a node runs"));
     CHECK(!has(log, "before any node") && !has(log, "after the node closed"));
-    panics();
+    panicsAll();
 }
 
 void quiet() {
@@ -606,32 +821,669 @@ void quiet() {
     }
 }
 
-// By hand only (see the top of the file): a real start, which reaches Tailscale's control server.
+// Waits until the node's state satisfies want, at most kPatience, on its generations (nts_status_wait): never a
+// fixed sleep. The last state seen is left in st.
+bool waitFor(int node, const std::function<bool(const nts_status&)>& want, nts_status& st) {
+    char err[512];
+    if (nts_status_get(node, &st, err, sizeof err) != 0) {
+        std::fprintf(stderr, "waitFor: %s\n", err);
+        return false;
+    }
+    auto deadline = Clock::now() + kPatience;
+    while (!want(st)) {
+        auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        if (left <= 0) {
+            std::fprintf(stderr, "waitFor: timed out in %s (%s): %s\n", nts_state_name(st.state),
+                         nts_reason_name(st.reason), st.reason_text);
+            return false;
+        }
+        if (nts_status_wait(node, st.generation, static_cast<int>(left), &st, err, sizeof err) == -1) {
+            std::fprintf(stderr, "waitFor: %s\n", err);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool waitState(int node, int state, nts_status& st) {
+    return waitFor(node, [state](const nts_status& s) { return s.state == state; }, st);
+}
+
+// Waits on a condition outside the node's state (a peer seen, a callback run), looking every 20 ms, at most
+// kPatience.
+bool eventually(const std::function<bool()>& condition) {
+    auto deadline = Clock::now() + kPatience;
+    while (!condition()) {
+        if (Clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return true;
+}
+
+// An offline node: starting, or needing a sign-in that has no URL yet, with the control server's refusal (seen only in
+// tsnet's log) as its reason.
+void unreachable() {
+    fs::path work = fresh("unreachable");
+    std::string why;
+    int node = startOffline(work / "state", why);
+    CHECK(node > 0);
+    if (node <= 0) {
+        std::fprintf(stderr, "unreachable: %s\n", why.c_str());
+        return;
+    }
+    nts_status st{};
+    CHECK(waitFor(node, [](const nts_status& s) { return s.reason == NTS_REASON_CONTROL_UNREACHABLE; }, st));
+    CHECK(st.state == NTS_STATE_STARTING || st.state == NTS_STATE_NEEDS_LOGIN);
+    CHECK(st.reason_text[0] != 0);
+    char url[256];
+    char err[512];
+    CHECK(nts_login_url(node, url, sizeof url, err, sizeof err) == -1 && has(err, "no sign-in URL now"));
+    CHECK(closeNode(node));
+    char e[512];
+    CHECK(nts_status_get(node, &st, e, sizeof e) == -1 && has(e, "is closed"));
+    CHECK(nts_close(node, e, sizeof e) == -1 && has(e, "is closed"));
+}
+
+// The test control server, started for one group and stopped when it ends.
+struct Control {
+    std::string url;
+    bool ok = false;
+    explicit Control(bool requireAuth, const char* authKey = nullptr) {
+        char buffer[256];
+        char err[512];
+        ok = nts_test_control_start(requireAuth ? 1 : 0, authKey, buffer, sizeof buffer, err, sizeof err) == 0;
+        if (!ok) {
+            std::fprintf(stderr, "nts_test_control_start: %s\n", err);
+            return;
+        }
+        url = buffer;
+    }
+    ~Control() {
+        char err[512];
+        if (ok && nts_test_control_stop(err, sizeof err) != 0) {
+            std::fprintf(stderr, "nts_test_control_stop: %s\n", err);
+            ++failures;
+        }
+    }
+    Control(const Control&) = delete;
+    Control& operator=(const Control&) = delete;
+};
+
+int start(const fs::path& dir, const char* hostname, const std::string& control, const char* key = nullptr,
+          bool ephemeral = false) {
+    char err[512];
+    std::string path = dir.string();
+    nts_start_params p = params(path, hostname, control.c_str(), key);
+    p.ephemeral = ephemeral ? 1 : 0;
+    int node = nts_start(&p, err, sizeof err);
+    if (node == 0) {
+        std::fprintf(stderr, "nts_start: %s\n", err);
+    }
+    return node;
+}
+
+// The sign-in URL, once the node asks for one; empty if it never does.
+std::string loginUrl(int node) {
+    nts_status st{};
+    if (!waitFor(node, [](const nts_status& s) { return s.state == NTS_STATE_NEEDS_LOGIN && s.reason == 0; }, st)) {
+        return {};
+    }
+    char url[1024];
+    char err[512];
+    std::string found;
+    // needs-login comes with the URL, or just before it.
+    eventually([&] {
+        if (nts_login_url(node, url, sizeof url, err, sizeof err) == 0) {
+            found = url;
+            return true;
+        }
+        return false;
+    });
+    return found;
+}
+
+// A node started on the test control server and signed in: ready, or 0.
+int signedIn(const fs::path& dir, const char* hostname, const Control& control) {
+    int node = start(dir, hostname, control.url);
+    if (node == 0) {
+        return 0;
+    }
+    std::string url = loginUrl(node);
+    char err[512];
+    if (url.empty() || nts_test_control_approve(url.c_str(), err, sizeof err) != 0) {
+        std::fprintf(stderr, "signedIn: no sign-in to approve: %s\n", url.empty() ? "no URL" : err);
+        return 0;
+    }
+    nts_status st{};
+    if (!waitState(node, NTS_STATE_READY, st)) {
+        return 0;
+    }
+    return node;
+}
+
+void signIn() {
+    fs::path work = fresh("sign_in");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    fs::path dir = work / "state";
+    int node = start(dir, "nexus-sign-in", control.url);
+    CHECK(node > 0);
+    if (node <= 0) {
+        return;
+    }
+    std::string url = loginUrl(node);
+    CHECK(!url.empty() && has(url, control.url));
+    // Never cut: a buffer one byte short is refused.
+    char small[512];
+    char err[512];
+    if (url.size() < sizeof small) {
+        CHECK(nts_login_url(node, small, url.size(), err, sizeof err) == -1 && has(err, "never cut"));
+    }
+    nts_status st{};
+    CHECK(nts_status_get(node, &st, err, sizeof err) == 0 && st.state == NTS_STATE_NEEDS_LOGIN);
+    CHECK(nts_test_control_approve(url.c_str(), err, sizeof err) == 0);
+    CHECK(waitState(node, NTS_STATE_READY, st));
+    CHECK(st.reason == NTS_REASON_NONE);
+    // The URL is gone once the node is past needs-login.
+    char after[1024];
+    CHECK(nts_login_url(node, after, sizeof after, err, sizeof err) == -1 && has(err, "no sign-in URL now"));
+    CHECK(closeNode(node));
+    CHECK(nts_status_get(node, &st, err, sizeof err) == -1);
+    // The shim's log never holds the URL; the directory recorded its control server.
+    CHECK(!url.empty() && !has(readFile(dir / "nexus-tailscale.log"), url));
+    CHECK(readFile(dir / "nexus-tailscale.control") == control.url + "\n");
+}
+
+void* const kNoUser = nullptr;
+
+struct WatchCount {
+    std::atomic<int> calls{0};
+    std::atomic<unsigned long long> last{0};
+    std::atomic<int> target{0};
+    std::atomic<int> closed{-2};
+};
+
+void countCalls(void* user, int, unsigned long long generation) {
+    auto* w = static_cast<WatchCount*>(user);
+    w->last = generation;
+    ++w->calls;
+}
+
+void closeFromCallback(void* user, int node, unsigned long long) {
+    auto* w = static_cast<WatchCount*>(user);
+    ++w->calls;
+    if (w->target.exchange(0) == node) {
+        char err[512];
+        w->closed = nts_close(node, err, sizeof err);
+    }
+}
+
+void watch() {
+    fs::path work = fresh("watch");
+    std::string why;
+    int node = startOffline(work / "a", why);
+    CHECK(node > 0);
+    if (node <= 0) {
+        std::fprintf(stderr, "watch: %s\n", why.c_str());
+        return;
+    }
+    char err[512];
+    WatchCount count;
+    CHECK(nts_watch(node, countCalls, &count, err, sizeof err) == 0);
+    // Called once at once, then on each change: the offline node becomes control-unreachable.
+    CHECK(eventually([&] { return count.calls.load() >= 1; }));
+    nts_status st{};
+    CHECK(waitFor(node, [](const nts_status& s) { return s.reason == NTS_REASON_CONTROL_UNREACHABLE; }, st));
+    CHECK(eventually([&] { return count.last.load() >= st.generation; }));
+    CHECK(closeNode(node));
+    int calls = count.calls.load();
+    // nts_close has returned: no callback runs now, whatever else the process does.
+    std::string otherWhy;
+    int other = startOffline(work / "b", otherWhy);
+    CHECK(other > 0);
+    CHECK(other <= 0 || waitFor(other, [](const nts_status& s) { return s.reason != NTS_REASON_NONE; }, st));
+    CHECK(count.calls.load() == calls);
+    // Removing the callback: none is called.
+    WatchCount none;
+    CHECK(other <= 0 || nts_watch(other, countCalls, &none, err, sizeof err) == 0);
+    CHECK(eventually([&] { return none.calls.load() >= 1; }));
+    CHECK(other <= 0 || nts_watch(other, nullptr, kNoUser, err, sizeof err) == 0);
+    CHECK(other <= 0 || closeNode(other));
+    // nts_close from inside the callback.
+    int third = startOffline(work / "c", why);
+    CHECK(third > 0);
+    if (third > 0) {
+        WatchCount closing;
+        closing.target = third;
+        CHECK(nts_watch(third, closeFromCallback, &closing, err, sizeof err) == 0);
+        CHECK(eventually([&] { return closing.closed.load() != -2; }));
+        CHECK(closing.closed.load() == 0);
+        CHECK(nts_status_get(third, &st, err, sizeof err) == -1 && has(err, "is closed"));
+    }
+}
+
+// The API from many threads at once on one node, which another thread closes under them: every call answers (a
+// result, or an error with a reason), and nothing crashes.
+void threads() {
+    fs::path work = fresh("threads");
+    std::string why;
+    int node = startOffline(work / "state", why);
+    CHECK(node > 0);
+    if (node <= 0) {
+        std::fprintf(stderr, "threads: %s\n", why.c_str());
+        return;
+    }
+    std::atomic<bool> stop{false};
+    std::atomic<int> answered{0};
+    std::atomic<int> silent{0};
+    std::vector<std::thread> workers;
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&, t] {
+            while (!stop.load()) {
+                char err[512] = "unset";
+                nts_status st{};
+                nts_peer peer{};
+                int rc = 0;
+                switch (t % 4) {
+                case 0:
+                    rc = nts_status_get(node, &st, err, sizeof err);
+                    break;
+                case 1:
+                    rc = nts_status_wait(node, st.generation, 5, &st, err, sizeof err);
+                    break;
+                case 2:
+                    rc = nts_peers(node, &peer, 1, 50, err, sizeof err);
+                    break;
+                default:
+                    rc = nts_listen_tcp(node, 9000 + t, err, sizeof err);
+                    if (rc > 0) {
+                        nts_handle_close(rc, err, sizeof err);
+                    }
+                    break;
+                }
+                if (rc < 0 && rc != NTS_TIMEOUT && err[0] == 0) {
+                    ++silent;
+                }
+                ++answered;
+            }
+        });
+    }
+    CHECK(eventually([&] { return answered.load() > 200; }));
+    CHECK(closeNode(node));
+    // Calls after the close answer too, with an error.
+    int before = answered.load();
+    CHECK(eventually([&] { return answered.load() > before + 100; }));
+    stop = true;
+    for (std::thread& w : workers) {
+        w.join();
+    }
+    CHECK(silent.load() == 0);
+}
+
+// ---- functional groups: the test control server ----
+
+// Whether node sees a peer named dnsName (its DNS name) online.
+bool seesPeer(int node, const std::string& dnsName, nts_peer& out) {
+    char err[512];
+    return nts_peer_find(node, dnsName.c_str(), &out, 1000, err, sizeof err) == 1 && out.online != 0;
+}
+
+std::string dnsOf(const char* hostname) {
+    return std::string(hostname) + ".tailnet.example";
+}
+
+// A byte round trip on two connected handles: a writes, b reads it all.
+bool carries(int a, int b, const std::string& text) {
+    char err[512];
+    if (nts_write(a, text.data(), text.size(), 10000, err, sizeof err) != static_cast<long long>(text.size())) {
+        std::fprintf(stderr, "carries: write: %s\n", err);
+        return false;
+    }
+    std::string got;
+    auto deadline = Clock::now() + kPatience;
+    while (got.size() < text.size() && Clock::now() < deadline) {
+        char buf[256];
+        long long n = nts_read(b, buf, sizeof buf, 1000, err, sizeof err);
+        if (n > 0) {
+            got.append(buf, static_cast<size_t>(n));
+        } else if (n != NTS_TIMEOUT) {
+            std::fprintf(stderr, "carries: read: %lld %s\n", n, err);
+            return false;
+        }
+    }
+    return got == text;
+}
+
+void tailnet() {
+    fs::path work = fresh("tailnet");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    int a = signedIn(work / "a", "nexus-a", control);
+    int b = signedIn(work / "b", "nexus-b", control);
+    CHECK(a > 0 && b > 0);
+    if (a <= 0 || b <= 0) {
+        return;
+    }
+    char err[512];
+    // Peers, matched by DNS name (letter case and a trailing dot ignored), with tags an admin gives.
+    nts_peer peer{};
+    CHECK(eventually([&] { return seesPeer(a, dnsOf("nexus-b"), peer); }));
+    CHECK(std::string(peer.host_name) == "nexus-b");
+    CHECK(std::string(peer.addresses).rfind("100.", 0) == 0);
+    CHECK(nts_peer_find(a, "NEXUS-B.tailnet.example.", &peer, 1000, err, sizeof err) == 1);
+    CHECK(nts_peer_find(a, "nexus-nobody.tailnet.example", &peer, 1000, err, sizeof err) == 0);
+    CHECK(nts_peers(a, nullptr, 0, 1000, err, sizeof err) == 1);
+    nts_peer list[4] = {};
+    CHECK(nts_peers(a, list, 4, 1000, err, sizeof err) == 1 && std::string(list[0].dns_name) == dnsOf("nexus-b"));
+    CHECK(nts_test_control_set_tags("nexus-b", "tag:server tag:test", err, sizeof err) == 0);
+    CHECK(eventually([&] { return seesPeer(a, dnsOf("nexus-b"), peer) && has(peer.tags, "tag:server"); }));
+    CHECK(std::string(peer.tags) == "tag:server tag:test");
+
+    // TCP by DNS name, both ways, and who-is for the remote address.
+    int listener = nts_listen_tcp(b, 7000, err, sizeof err);
+    CHECK(listener > 0);
+    int dialed = nts_dial_tcp(a, (dnsOf("nexus-b") + ":7000").c_str(), 30000, err, sizeof err);
+    CHECK(dialed > 0);
+    if (dialed <= 0) {
+        std::fprintf(stderr, "tailnet: dial: %s\n", err);
+    }
+    int accepted = nts_accept(listener, 30000, err, sizeof err);
+    CHECK(accepted > 0);
+    if (dialed > 0 && accepted > 0) {
+        CHECK(carries(dialed, accepted, "hello over the tailnet"));
+        CHECK(carries(accepted, dialed, "and back"));
+        char remote[128];
+        CHECK(nts_remote_addr(accepted, remote, sizeof remote, err, sizeof err) == 0);
+        nts_whois who{};
+        CHECK(nts_whois_addr(b, remote, &who, 5000, err, sizeof err) == 1);
+        CHECK(std::string(who.node_name) == dnsOf("nexus-a"));
+        CHECK(who.login[0] != 0);
+        char local[128];
+        CHECK(nts_local_addr(dialed, local, sizeof local, err, sizeof err) == 0 && std::string(local) == remote);
+        // Who-is for an address that is no node: "unknown", an answer and not an error.
+        CHECK(nts_whois_addr(b, "100.64.99.99:1", &who, 5000, err, sizeof err) == 0);
+
+        // A read with nothing to read times out; the timeout 0 does not wait.
+        char buf[16];
+        CHECK(nts_read(accepted, buf, sizeof buf, 0, err, sizeof err) == NTS_TIMEOUT);
+        // One read at a time: a second while one waits is refused as busy; a close from another thread ends the
+        // waiting one with an error.
+        std::atomic<long long> blocked{1};
+        std::thread reader([&] {
+            char e[512];
+            char data[16];
+            // Until this read is the one that waits (the main thread's probes below may hold the read side a moment).
+            do {
+                blocked = nts_read(accepted, data, sizeof data, -1, e, sizeof e);
+            } while (blocked.load() == NTS_ERROR && has(e, "busy"));
+        });
+        CHECK(eventually([&] {
+            char e[512];
+            long long n = nts_read(accepted, buf, sizeof buf, 0, e, sizeof e);
+            return n == NTS_ERROR && has(e, "busy");
+        }));
+        CHECK(nts_handle_close(accepted, err, sizeof err) == 0);
+        reader.join();
+        CHECK(blocked.load() == NTS_ERROR);
+        // Double close and use after close are errors.
+        CHECK(nts_handle_close(accepted, err, sizeof err) == -1 && has(err, "is closed"));
+        CHECK(nts_read(accepted, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR && has(err, "is closed"));
+        // The far end sees the stream end.
+        long long end = 1;
+        CHECK(eventually([&] {
+            end = nts_read(dialed, buf, sizeof buf, 100, err, sizeof err);
+            return end != NTS_TIMEOUT;
+        }));
+        CHECK(end == 0 || end == NTS_ERROR);
+    }
+    // Wrong kinds.
+    char buf[16];
+    CHECK(nts_read(listener, buf, sizeof buf, 0, err, sizeof err) == NTS_ERROR && has(err, "not a connection"));
+    CHECK(nts_accept(a, 0, err, sizeof err) == NTS_ERROR && has(err, "node's handle"));
+    CHECK(nts_handle_close(a, err, sizeof err) == -1 && has(err, "nts_close"));
+    CHECK(nts_accept(listener, 0, err, sizeof err) == NTS_TIMEOUT);
+
+    // UDP: a socket on b, a connected one from a by DNS name, and replies by address and by name.
+    int sockB = nts_listen_udp(b, 7001, err, sizeof err);
+    CHECK(sockB > 0);
+    int udpA = nts_dial_udp(a, (dnsOf("nexus-b") + ":7001").c_str(), 30000, err, sizeof err);
+    CHECK(udpA > 0);
+    if (sockB > 0 && udpA > 0) {
+        std::string from;
+        std::string got;
+        // UDP may drop the first datagrams while the path forms: send until one arrives.
+        CHECK(eventually([&] {
+            char e[512];
+            nts_write(udpA, "ping", 4, 1000, e, sizeof e);
+            char data[64];
+            char sender[128];
+            long long n = nts_recv_from(sockB, data, sizeof data, 200, sender, sizeof sender, e, sizeof e);
+            if (n > 0) {
+                got.assign(data, static_cast<size_t>(n));
+                from = sender;
+                return true;
+            }
+            return false;
+        }));
+        CHECK(got == "ping");
+        CHECK(nts_send_to(sockB, "pong", 4, from.c_str(), 5000, err, sizeof err) == 4);
+        char data[64];
+        long long n = nts_read(udpA, data, sizeof data, 30000, err, sizeof err);
+        CHECK(n == 4 && std::string(data, 4) == "pong");
+        int sockA = nts_listen_udp(a, 7002, err, sizeof err);
+        CHECK(sockA > 0);
+        if (sockA > 0) {
+            CHECK(eventually([&] {
+                char e[512];
+                nts_send_to(sockB, "by name", 7, (dnsOf("nexus-a") + ":7002").c_str(), 1000, e, sizeof e);
+                char d[64];
+                char sender[128];
+                long long m = nts_recv_from(sockA, d, sizeof d, 200, sender, sizeof sender, e, sizeof e);
+                return m == 7 && std::string(d, 7) == "by name";
+            }));
+        }
+        CHECK(nts_send_to(sockB, "x", 1, "nexus-nobody:1", 1000, err, sizeof err) == NTS_ERROR &&
+              has(err, "no peer"));
+    }
+    // A node's close closes its handles.
+    CHECK(closeNode(a));
+    CHECK(dialed <= 0 || (nts_write(dialed, "x", 1, 0, err, sizeof err) == NTS_ERROR && has(err, "is closed")));
+    CHECK(udpA <= 0 || nts_handle_close(udpA, err, sizeof err) == -1);
+    CHECK(closeNode(b));
+    CHECK(nts_handle_close(listener, err, sizeof err) == -1 && has(err, "is closed"));
+}
+
+void restart() {
+    fs::path work = fresh("restart");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    fs::path dir = work / "state";
+    int node = signedIn(dir, "nexus-restart", control);
+    CHECK(node > 0);
+    if (node <= 0) {
+        return;
+    }
+    CHECK(closeNode(node));
+    node = start(dir, "nexus-restart", control.url);
+    CHECK(node > 0);
+    if (node <= 0) {
+        return;
+    }
+    // Ready with no sign-in: never a sign-in URL on the way.
+    char err[512];
+    nts_status st{};
+    bool askedToSignIn = false;
+    CHECK(waitFor(node,
+                  [&](const nts_status& s) {
+                      char url[1024];
+                      char e[512];
+                      if (nts_login_url(node, url, sizeof url, e, sizeof e) == 0) {
+                          askedToSignIn = true;
+                      }
+                      return s.state == NTS_STATE_READY;
+                  },
+                  st));
+    CHECK(!askedToSignIn);
+    CHECK(nts_status_get(node, &st, err, sizeof err) == 0 && st.state == NTS_STATE_READY);
+    CHECK(closeNode(node));
+}
+
+void expiry() {
+    fs::path work = fresh("expiry");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    int a = signedIn(work / "a", "nexus-expiring", control);
+    int b = signedIn(work / "b", "nexus-watcher", control);
+    CHECK(a > 0 && b > 0);
+    if (a <= 0 || b <= 0) {
+        return;
+    }
+    nts_peer before{};
+    CHECK(eventually([&] { return seesPeer(b, dnsOf("nexus-expiring"), before); }));
+    char err[512];
+    CHECK(nts_test_control_expire("nexus-expiring", err, sizeof err) == 0);
+    nts_status st{};
+    CHECK(waitState(a, NTS_STATE_EXPIRED, st));
+    CHECK(st.key_expiry > 0);
+    char url[1024];
+    CHECK(nts_login_url(a, url, sizeof url, err, sizeof err) == -1);
+    // A new login: a new URL, approved, and ready again with the same identity.
+    CHECK(nts_login(a, err, sizeof err) == 0);
+    std::string again = loginUrl(a);
+    CHECK(!again.empty());
+    CHECK(nts_test_control_approve(again.c_str(), err, sizeof err) == 0);
+    CHECK(waitState(a, NTS_STATE_READY, st));
+    nts_peer after{};
+    CHECK(eventually([&] {
+        return seesPeer(b, dnsOf("nexus-expiring"), after) && std::string(after.addresses) == before.addresses;
+    }));
+    CHECK(std::string(after.dns_name) == before.dns_name);
+    CHECK(closeNode(a));
+    CHECK(closeNode(b));
+}
+
+void controlDown() {
+    fs::path work = fresh("control_down");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    int a = signedIn(work / "a", "nexus-a", control);
+    int b = signedIn(work / "b", "nexus-b", control);
+    CHECK(a > 0 && b > 0);
+    if (a <= 0 || b <= 0) {
+        return;
+    }
+    char err[512];
+    nts_peer peer{};
+    CHECK(eventually([&] { return seesPeer(a, dnsOf("nexus-b"), peer); }));
+    int listener = nts_listen_tcp(b, 7100, err, sizeof err);
+    int dialed = nts_dial_tcp(a, (dnsOf("nexus-b") + ":7100").c_str(), 30000, err, sizeof err);
+    int accepted = nts_accept(listener, 30000, err, sizeof err);
+    CHECK(listener > 0 && dialed > 0 && accepted > 0);
+    CHECK(nts_test_control_down(err, sizeof err) == 0);
+    nts_status st{};
+    CHECK(waitFor(a, [](const nts_status& s) { return s.reason == NTS_REASON_CONTROL_UNREACHABLE; }, st));
+    CHECK(st.state == NTS_STATE_READY);
+    // The tailnet keeps working without control.
+    CHECK(dialed > 0 && accepted > 0 && carries(dialed, accepted, "while control is down"));
+    CHECK(nts_test_control_up(err, sizeof err) == 0);
+    CHECK(waitFor(a, [](const nts_status& s) { return s.state == NTS_STATE_READY && s.reason == 0; }, st));
+    CHECK(dialed > 0 && accepted > 0 && carries(accepted, dialed, "control is back"));
+    CHECK(closeNode(a));
+    CHECK(closeNode(b));
+}
+
+void authKey() {
+    fs::path work = fresh("auth_key");
+    Control control(false, "tskey-test-only-key");
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    nts_status st{};
+    int wrong = start(work / "wrong", "nexus-wrong-key", control.url, "tskey-not-the-key");
+    CHECK(wrong > 0);
+    if (wrong > 0) {
+        CHECK(waitState(wrong, NTS_STATE_FAILED, st));
+        CHECK(st.reason == NTS_REASON_AUTH_KEY && has(st.reason_text, "invalid authkey"));
+        CHECK(!has(st.reason_text, "tskey-not-the-key"));
+        CHECK(closeNode(wrong));
+    }
+    int right = start(work / "right", "nexus-right-key", control.url, "tskey-test-only-key", true);
+    CHECK(right > 0);
+    if (right > 0) {
+        bool askedToSignIn = false;
+        CHECK(waitFor(right,
+                      [&](const nts_status& s) {
+                          char url[1024];
+                          char e[512];
+                          if (nts_login_url(right, url, sizeof url, e, sizeof e) == 0) {
+                              askedToSignIn = true;
+                          }
+                          return s.state == NTS_STATE_READY;
+                      },
+                      st));
+        CHECK(!askedToSignIn);
+        CHECK(!has(readFile(work / "right" / "nexus-tailscale.log"), "tskey-test-only-key"));
+        CHECK(closeNode(right));
+    }
+}
+
+void certificate() {
+    fs::path work = fresh("certificate");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    char url[256];
+    char err[512];
+    CHECK(nts_test_control_untrusted_url(url, sizeof url, err, sizeof err) == 0);
+    int node = start(work / "state", "nexus-cert", url);
+    CHECK(node > 0);
+    if (node <= 0) {
+        return;
+    }
+    nts_status st{};
+    CHECK(waitState(node, NTS_STATE_FAILED, st));
+    CHECK(st.reason == NTS_REASON_CERTIFICATE);
+    CHECK(closeNode(node));
+}
+
+// By hand only (see the top of the file): a real start, which reaches Tailscale's hosted control server.
 int startNeedsLogin(const char* dir) {
     char err[1024];
-    int node = nts_start(dir, "nexus-layer0-check", err, sizeof err);
+    nts_start_params p = params(dir, "nexus-layer1-check");
+    int node = nts_start(&p, err, sizeof err);
     if (node == 0) {
         std::fprintf(stderr, "start_needs_login: %s\n", err);
         return 1;
     }
-    std::string state;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-    while (std::chrono::steady_clock::now() < deadline) {
-        char out[256];
-        if (nts_backend_state(node, out, sizeof out) == 0) {
-            state = out;
-            if (state == "NeedsLogin" || state == "Running") {
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }
-    std::printf("start_needs_login: backend state %s\n", state.empty() ? "(none)" : state.c_str());
+    nts_status st{};
+    bool asked = waitFor(
+        node, [](const nts_status& s) { return s.state == NTS_STATE_NEEDS_LOGIN || s.state == NTS_STATE_READY; }, st);
+    std::printf("start_needs_login: %s (%s)\n", nts_state_name(st.state), nts_reason_name(st.reason));
     if (nts_close(node, err, sizeof err) != 0) {
         std::fprintf(stderr, "start_needs_login: %s\n", err);
         return 1;
     }
-    return state == "NeedsLogin" || state == "Running" ? 0 : 1;
+    return asked ? 0 : 1;
 }
 
 struct Group {
@@ -641,6 +1493,10 @@ struct Group {
 
 const Group kGroups[] = {
     {"version", version},
+    {"names", names},
+    {"handles", handles},
+    {"start_checks", startChecks},
+    {"panics_unit", panicsUnit},
     {"state_dir", stateDir},
     {"refusals", refusals},
     {"refuses_inherited_key", refusesInheritedKey},
@@ -649,6 +1505,16 @@ const Group kGroups[] = {
     {"panics", panics},
     {"log_cap", logCap},
     {"quiet", quiet},
+    {"unreachable", unreachable},
+    {"certificate", certificate},
+    {"watch", watch},
+    {"threads", threads},
+    {"sign_in", signIn},
+    {"tailnet", tailnet},
+    {"restart", restart},
+    {"expiry", expiry},
+    {"control_down", controlDown},
+    {"auth_key", authKey},
 };
 
 }  // namespace
@@ -666,8 +1532,11 @@ int main(int argc, char** argv) {
         return failures == 0 ? 0 : 1;
     }
     if (argc != 2) {
-        std::fprintf(stderr, "usage: tailscale_test <version|state_dir|refusals|refuses_inherited_key|lock|"
-                             "lock_two_process|panics|log_cap|quiet> | start_needs_login <dir>\n");
+        std::fprintf(stderr, "usage: tailscale_test <group> | start_needs_login <dir>; the groups:");
+        for (const Group& g : kGroups) {
+            std::fprintf(stderr, " %s", g.name);
+        }
+        std::fprintf(stderr, "\n");
         return 2;
     }
     bool ran = false;

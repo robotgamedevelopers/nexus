@@ -7,6 +7,8 @@ package main
 
 /*
 #include <stddef.h>
+#define NTS_TYPES_ONLY
+#include "../nts.h"
 */
 import "C"
 
@@ -52,14 +54,21 @@ func nts_test_inject_panic(where *C.char) {
 // with it never reaches Tailscale or any other machine.
 const offlineControl = "http://127.0.0.1:9"
 
-// nts_test_start_offline is nts_start, every check and refusal the same, with the control server offlineControl and the
-// port mapper off (TS_DISABLE_PORTMAPPER), so that the node touches nothing off this machine.
+// nts_test_start_offline is nts_start, every check and refusal the same, with the control server offlineControl (the
+// params' control_url is ignored) and the port mapper off (TS_DISABLE_PORTMAPPER), so that the node touches nothing
+// off this machine.
 //
 //export nts_test_start_offline
-func nts_test_start_offline(dir, hostname *C.char, errOut *C.char, errSize C.size_t) (rc C.int) {
+func nts_test_start_offline(params *C.nts_start_params, errOut *C.char, errSize C.size_t) (rc C.int) {
 	defer recoverTo("nts_test_start_offline", errOut, errSize, &rc, 0)
+	if params == nil {
+		write(errOut, errSize, "nts_test_start_offline: no parameters given (a null pointer)")
+		return 0
+	}
 	envknob.Setenv("TS_DISABLE_PORTMAPPER", "true")
-	return startNode("nts_test_start_offline", dir, hostname, offlineControl, errOut, errSize)
+	p := startParams{dir: goString(params.dir), hostname: goString(params.hostname), control: offlineControl,
+		authKey: goString(params.auth_key), ephemeral: params.ephemeral != 0}
+	return startNode("nts_test_start_offline", p, offlineControl, errOut, errSize)
 }
 
 // nts_test_log_libraries writes text through each process-wide library logger the shim redirects: Go's log package

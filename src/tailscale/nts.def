@@ -3,7 +3,28 @@
 LIBRARY nts
 EXPORTS
     nts_version
+    nts_state_name
+    nts_reason_name
     nts_prepare
     nts_start
-    nts_backend_state
     nts_close
+    nts_status_get
+    nts_status_wait
+    nts_login_url
+    nts_watch
+    nts_login
+    nts_peers
+    nts_peer_find
+    nts_whois_addr
+    nts_listen_tcp
+    nts_accept
+    nts_dial_tcp
+    nts_dial_udp
+    nts_listen_udp
+    nts_read
+    nts_write
+    nts_recv_from
+    nts_send_to
+    nts_local_addr
+    nts_remote_addr
+    nts_handle_close

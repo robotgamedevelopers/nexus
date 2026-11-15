@@ -63,9 +63,9 @@ set(nexus_ts_tags_nts_test ${nexus_ts_tags},nts_testhooks)
 set(nexus_ts_target_nts nexus_tailscale)
 set(nexus_ts_target_nts_test nexus_tailscale_testhooks)
 set(nexus_go_build ${NEXUS_GO} build -trimpath -buildvcs=false)
-file(GLOB nexus_ts_go_sources CONFIGURE_DEPENDS ${nexus_ts_source}/shim/*.go)
+file(GLOB nexus_ts_go_sources CONFIGURE_DEPENDS ${nexus_ts_source}/shim/*.go ${nexus_ts_source}/lifecycle/*.go)
 set(nexus_ts_depends ${nexus_ts_go_sources} ${nexus_ts_source}/go.mod ${nexus_ts_source}/go.sum
-    ${nexus_ts_source}/pins.cmake)
+    ${nexus_ts_source}/lifecycle/go.mod ${nexus_ts_source}/nts.h ${nexus_ts_source}/pins.cmake)
 
 if(WIN32)
     # A fetched llvm-mingw holds the sha256 of the archive it came from (nexus-zip.sha256, written before the rename
@@ -127,7 +127,10 @@ if(WIN32)
     # Written only when its text changes, so a configure does not relink the DLL.
     file(READ ${nexus_ts_source}/nts.def nexus_ts_def_text)
     string(REPLACE "LIBRARY nts" "LIBRARY nts_test" nexus_ts_def_text "${nexus_ts_def_text}")
-    string(APPEND nexus_ts_def_text "    nts_test_inject_panic\n    nts_test_start_offline\n    nts_test_log_libraries\n")
+    foreach(hook inject_panic start_offline log_libraries control_start control_approve control_expire
+            control_set_tags control_down control_up control_untrusted_url control_stop)
+        string(APPEND nexus_ts_def_text "    nts_test_${hook}\n")
+    endforeach()
     file(CONFIGURE OUTPUT ${nexus_ts_out}/nts_test.def CONTENT "${nexus_ts_def_text}" @ONLY)
     set(nexus_ts_def_nts ${nexus_ts_source}/nts.def)
     set(nexus_ts_def_nts_test ${nexus_ts_out}/nts_test.def)
@@ -228,6 +231,8 @@ add_custom_target(nexus_tailscale_vet
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${nexus_ts_host_env} ${NEXUS_GO} vet -tags=${nexus_ts_tags} ./...
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${nexus_ts_host_env} ${NEXUS_GO} vet
         -tags=${nexus_ts_tags_nts_test} ./shim
+    COMMAND ${CMAKE_COMMAND} -E chdir ${nexus_ts_source}/lifecycle ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO}
+        vet ./...
     WORKING_DIRECTORY ${nexus_ts_source}
     COMMENT "go vet of the Tailscale shim with go${NEXUS_TAILSCALE_GO}"
     VERBATIM)
