@@ -223,8 +223,9 @@ func main() {
 		os.Exit(1)
 	}
 	if *check {
+		// A Windows checkout may hold the file with CRLF line ends (core.autocrlf); the text is the same.
 		have, err := os.ReadFile("NOTICES.md")
-		if err != nil || string(have) != text {
+		if err != nil || strings.ReplaceAll(string(have), "\r\n", "\n") != text {
 			fmt.Fprintln(os.Stderr, "notices: src/tailscale/NOTICES.md is not what `go run ./notices` writes at these "+
 				"pins; run it in src/tailscale with GOTOOLCHAIN=go1.27.1 and commit the file")
 			os.Exit(1)
