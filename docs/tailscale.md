@@ -23,8 +23,8 @@ node. The real API is layer 1. Nothing in nexus links the shim yet: the top-leve
 | What | Pin | Where it is held |
 |---|---|---|
 | tailscale.com | v1.104.1 | `src/tailscale/go.mod`, with every module's hash in `src/tailscale/go.sum`; builds use `-mod=readonly`, so nothing else is fetched |
-| Go toolchain | go1.27.1 | `go 1.27.1` in `go.mod`, and `GOTOOLCHAIN=go1.27.1` on every Go command the build runs (`cmake/tailscale.cmake`), so any Go from 1.21 on fetches exactly go1.27.1 into the module cache and verifies it against the checksum database; a newer local Go is not used |
-| llvm-mingw (Windows only) | 20261020 (LLVM 23.1.4), UCRT x86_64, sha256 `fd5462b7...ebd74cd` | `cmake/tailscale.cmake`; cgo needs a gcc-style C compiler, which MSVC is not, so the DLL's C parts are compiled with it. Fetched and checked by the configure step, never installed system-wide |
+| Go toolchain | go1.27.1 | `go 1.27.1` in `go.mod`, and `GOTOOLCHAIN=go1.27.1` on every Go command the build runs (`src/tailscale/pins.cmake`, used by `cmake/tailscale.cmake`), so any Go from 1.21 on fetches exactly go1.27.1 into the module cache and verifies it against the checksum database; a newer local Go is not used |
+| llvm-mingw (Windows only) | 20261020 (LLVM 23.1.4), UCRT x86_64, sha256 `fd5462b7...ebd74cd` | `src/tailscale/pins.cmake`; cgo needs a gcc-style C compiler, which MSVC is not, so the DLL's C parts are compiled with it. Fetched and checked by the configure step, which keeps the archive's sha256 beside it and fetches again on a mismatch; never installed system-wide |
 
 Every Go command also runs with `GOENV=off` (no Go environment file is read) and `GOWORK=off`, and builds with
 `-trimpath -buildvcs=false`. `nts_version()` reports the pins from the build's own record (`runtime/debug`), and the
@@ -84,10 +84,17 @@ outside its workspace: `NEXUS_GO_MODCACHE` (modules and the toolchain), `NEXUS_G
 on Windows, `NEXUS_TAILSCALE_DOWNLOADS` (llvm-mingw) or `NEXUS_LLVM_MINGW` (an unpacked one). Each defaults to a
 directory under the build tree.
 
-CI (`.github/workflows/ci.yml`) has one job per OS, beside the others and in parallel with them: `tailscale-macos`
-(arm64 and x86_64, the x86_64 slice run under Rosetta), `tailscale-linux` (with the licence check) and
-`tailscale-windows` (captain). Each configures `src/tailscale` alone, builds, vets and runs `ctest -L tailscale`. Go's
-caches are the machine's, shared by its runners (Go locks both).
+CI has one job per OS (`.github/workflows/tailscale.yml`, called by `ci.yml` for every pull request and push to main),
+beside the others and in parallel with them: `tailscale-macos` (arm64 and x86_64, the x86_64 slice run under Rosetta),
+`tailscale-linux` (with the licence check) and `tailscale-windows` (captain). Each configures `src/tailscale` alone,
+builds, vets and runs `ctest -L tailscale`.
+
+The Go toolchain, the modules, Go's build cache and llvm-mingw live on the runner's machine in a directory keyed by the
+pins (`src/tailscale/pins.cmake`, `go.mod`, `go.sum`), which no other job cleans, so only a pin change is cold; each is
+checked against its pin when used. A cold build does not fit a per-commit job's 2 minutes (the times below), so that one
+case has its own workflow, `tailscale-prime.yml`: a per-commit job on a machine whose key directory is not yet primed
+builds nothing, dispatches it for the same commit and says so in a notice; it builds and tests that commit with no time
+limit on as many slots as the OS has runners, priming each machine. It also runs nightly on main, for new machines.
 
 #### Build times
 
@@ -102,7 +109,7 @@ directory over kept caches, as a CI job after the first on a machine.
 | Windows x64 (captain, 4 CPUs) | 233 s (plus a 64.7 s configure that fetched llvm-mingw) | 13.0 s (the test program only, shim cached) |
 | CI | CI_TIMES | |
 
-On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per machine (CI keeps it in `%LOCALAPPDATA%\nexus-ci\tailscale\downloads`): 27 s on captain, inside the
+On Windows the configure step fetches and unpacks llvm-mingw (190 MB) once per pin and machine (CI keeps it in the key directory): 27 s on captain, inside the
 configure that measured, 64.7 s in the cold one above.
 
 ### Tests

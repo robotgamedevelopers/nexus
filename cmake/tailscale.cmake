@@ -3,7 +3,7 @@
 #                  joined by lipo); the host's architecture when it is empty
 #   Linux          a c-archive, libnts.a (x86_64, inside WSL2 too)
 #   Windows        a DLL, nts.dll, with an MSVC import library, nts.lib, made from src/tailscale/nts.def by MSVC's lib;
-#                  cgo needs a gcc-style compiler, so the DLL's C parts are compiled by llvm-mingw (pinned below,
+#                  cgo needs a gcc-style compiler, so the DLL's C parts are compiled by llvm-mingw (pinned in src/tailscale/pins.cmake,
 #                  fetched into NEXUS_TAILSCALE_DOWNLOADS unless NEXUS_LLVM_MINGW names one)
 # and the imported target nexus_tailscale over it. A program links it with nexus_link_tailscale(<target>), which on
 # Windows also embeds the manifest that declares Windows 10 (cmake/windows10.manifest: without it tsnet panics at start)
@@ -17,14 +17,8 @@
 #   NEXUS_GO_BUILDCACHE      Go's build cache (default: <build>/go/build)
 #   NEXUS_TAILSCALE_DOWNLOADS  llvm-mingw on Windows (default: <build>/go/downloads)
 
-set(NEXUS_TAILSCALE_GO 1.27.1)
-set(NEXUS_TAILSCALE_MODULE_VERSION v1.104.1)
-# llvm-mingw, UCRT, x86_64 (github.com/mstorsjo/llvm-mingw, release 20261020, LLVM 23.1.4).
-set(NEXUS_LLVM_MINGW_RELEASE 20261020)
-set(NEXUS_LLVM_MINGW_NAME llvm-mingw-${NEXUS_LLVM_MINGW_RELEASE}-ucrt-x86_64)
-set(NEXUS_LLVM_MINGW_SHA256 fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74cd)
-
 get_filename_component(nexus_ts_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+include(${nexus_ts_root}/src/tailscale/pins.cmake)
 set(nexus_ts_source ${nexus_ts_root}/src/tailscale)
 set(nexus_ts_out ${CMAKE_BINARY_DIR}/tailscale)
 file(MAKE_DIRECTORY ${nexus_ts_out})
@@ -61,11 +55,29 @@ file(GLOB nexus_ts_go_sources CONFIGURE_DEPENDS ${nexus_ts_source}/shim/*.go)
 set(nexus_ts_depends ${nexus_ts_go_sources} ${nexus_ts_source}/go.mod ${nexus_ts_source}/go.sum)
 
 if(WIN32)
+    # A fetched llvm-mingw holds the sha256 of the archive it came from (nexus-zip.sha256, written before the rename
+    # that puts it in place); one whose stamp is not the pin's is fetched again. One named by NEXUS_LLVM_MINGW is used
+    # as it is.
+    set(nexus_ts_fetch FALSE)
     if(NOT NEXUS_LLVM_MINGW)
+        set(nexus_ts_fetch TRUE)
         set(NEXUS_LLVM_MINGW "${NEXUS_TAILSCALE_DOWNLOADS}/${NEXUS_LLVM_MINGW_NAME}")
     endif()
     set(nexus_ts_cc "${NEXUS_LLVM_MINGW}/bin/x86_64-w64-mingw32-clang.exe")
-    if(NOT EXISTS "${nexus_ts_cc}")
+    set(nexus_ts_stamp "${NEXUS_LLVM_MINGW}/nexus-zip.sha256")
+    if(nexus_ts_fetch AND EXISTS "${NEXUS_LLVM_MINGW}")
+        set(stamped "")
+        if(EXISTS "${nexus_ts_stamp}")
+            file(READ "${nexus_ts_stamp}" stamped)
+            string(STRIP "${stamped}" stamped)
+        endif()
+        if(NOT stamped STREQUAL NEXUS_LLVM_MINGW_SHA256 OR NOT EXISTS "${nexus_ts_cc}")
+            message(STATUS "nexus: ${NEXUS_LLVM_MINGW} is not the pinned ${NEXUS_LLVM_MINGW_NAME}.zip: fetching it again")
+            file(REMOVE_RECURSE "${NEXUS_LLVM_MINGW}")
+        endif()
+    endif()
+    set(renamed "")
+    if(nexus_ts_fetch AND NOT EXISTS "${nexus_ts_cc}")
         # Downloaded and unpacked beside its final place under a name of this configure's own, checked, then renamed
         # into it, so that a fetch cut short leaves nothing half made, and configures sharing NEXUS_TAILSCALE_DOWNLOADS
         # (CI's runners on one machine) may fetch at once: the first rename wins, and the others find it in place.
@@ -85,6 +97,7 @@ if(WIN32)
         endif()
         file(REMOVE_RECURSE "${partial}")
         file(ARCHIVE_EXTRACT INPUT "${zip}" DESTINATION "${partial}")
+        file(WRITE "${partial}/${NEXUS_LLVM_MINGW_NAME}/nexus-zip.sha256" "${NEXUS_LLVM_MINGW_SHA256}\n")
         file(RENAME "${partial}/${NEXUS_LLVM_MINGW_NAME}" "${NEXUS_LLVM_MINGW}" RESULT renamed)
         file(REMOVE_RECURSE "${partial}")
         file(REMOVE "${zip}")

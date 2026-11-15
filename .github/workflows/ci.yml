@@ -5,7 +5,7 @@
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
 # captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
 # tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal); and the Tailscale shim
-# built and tested alone on macOS, Linux and Windows (tailscale-macos, tailscale-linux, tailscale-windows). Every pull
+# built and tested alone on macOS, Linux and Windows (tailscale, .github/workflows/tailscale.yml). Every pull
 # request runs it, whatever its base, and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -770,121 +770,17 @@ jobs:
         shell: bash
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
-  # The Tailscale shim (docs/tailscale.md, layer 0) on each OS, in jobs of its own: src/tailscale/CMakeLists.txt builds
-  # it alone, without Prax, so a job is the shim's Go build, its test program and `ctest -L tailscale` (no test here
-  # reaches the network). Go comes from the runner's machine (PATH, or ~/sdk/bin as the fleet installs it) and fetches
-  # the pinned go1.27.1 itself. Go's module and build caches live outside the workspace and are shared by the machine's
-  # runners (Go locks both, so concurrent jobs are safe): a cold job downloads the toolchain and modules and compiles
-  # tsnet; a warm one relinks. macOS builds arm64 and x86_64 (joined by lipo) and runs both, the second under Rosetta.
-  tailscale-macos:
+  # The Tailscale shim built and tested alone on macOS, Linux and Windows (.github/workflows/tailscale.yml, which says
+  # how its caches are kept so that only a pin change is cold, and how a machine not yet primed hands this commit to
+  # tailscale-prime.yml); actions: write is for that dispatch.
+  tailscale:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Go's caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/Library/Caches/nexus-ci/go"
-          mkdir -p "$caches/mod" "$caches/build"
-          echo "NEXUS_GO_CACHES=$caches" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
-      - name: Configure (Release, arm64 and x86_64)
-        run: >-
-          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
-          "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
-      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
-      - name: Build the shim and its test program, go vet, and the licence notices
-        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
-      - name: Tests (arm64)
-        run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
-      - name: Tests (x86_64, under Rosetta)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-            echo "::error::Rosetta is not installed on $(hostname -s), so the shim's x86_64 slice cannot run here: install it (softwareupdate --install-rosetta --agree-to-license) through the fleet play"
-            exit 1
-          fi
-          test=build-tailscale/tests/tailscale/tailscale_test
-          arch -x86_64 "$test" version
-          for group in state_dir refusals; do
-            (cd "build-tailscale/tests/tailscale/work_$group" && arch -x86_64 ../tailscale_test "$group")
-          done
-          (cd build-tailscale/tests/tailscale/work_refuses_inherited_key &&
-            TS_AUTHKEY=a-value-that-must-not-be-shown arch -x86_64 ../tailscale_test refuses_inherited_key)
-
-  # On the fleet's Linux runners with clang and lld, as build-and-unit-linux; also the licence notices
-  # (src/tailscale/NOTICES.md) against the modules the shim links on every platform.
-  tailscale-linux:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
-    timeout-minutes: 2
-    env:
-      CC: clang
-      CXX: clang++
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Go's caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/.cache/nexus-ci/go"
-          mkdir -p "$caches/mod" "$caches/build"
-          echo "NEXUS_GO_CACHES=$caches" >> "$GITHUB_ENV"
-          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
-      - name: Configure (Release)
-        run: >-
-          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release -DCMAKE_LINKER_TYPE=LLD
-          "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
-      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
-      - name: Build the shim and its test program, go vet, and the licence notices
-        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
-      - name: Tests
-        run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
-
-  # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles, fetched once per machine into
-  # %LOCALAPPDATA%\nexus-ci\tailscale\downloads, beside nothing the windows job keeps; runners fetching at once is safe,
-  # cmake/tailscale.cmake), its import library, and the test program with the Windows 10 manifest. Go's caches are the
-  # machine's, under %LOCALAPPDATA%\nexus-ci\tailscale\go.
-  tailscale-windows:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Windows, X64, captain]
-    timeout-minutes: 2
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Caches outside the workspace
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:LOCALAPPDATA "nexus-ci\tailscale"
-          $downloads = "$root\downloads"
-          New-Item -ItemType Directory -Force -Path "$root\go\mod", "$root\go\build", $downloads | Out-Null
-          "NEXUS_GO_CACHES=$root\go" >> $env:GITHUB_ENV
-          "NEXUS_TAILSCALE_DOWNLOADS=$downloads" >> $env:GITHUB_ENV
-          "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
-      - name: Configure (Release, MSVC x64)
-        run: |
-          cmake -S src/tailscale -B build-tailscale -A x64 "-DNEXUS_GO_MODCACHE=$env:NEXUS_GO_CACHES\mod" "-DNEXUS_GO_BUILDCACHE=$env:NEXUS_GO_CACHES\build" "-DNEXUS_TAILSCALE_DOWNLOADS=$env:NEXUS_TAILSCALE_DOWNLOADS"
-          if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
-      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
-      - name: Build the shim and its test program, go vet, and the licence notices
-        run: |
-          cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_checks
-          if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
-      - name: Tests
-        run: |
-          ctest --test-dir build-tailscale -C Release -L tailscale -j $env:JOBS --output-on-failure --no-tests=error
-          if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      prime: false
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags), on captain's Windows runners: the native window's code and its unit tests, nothing else. On Windows only
