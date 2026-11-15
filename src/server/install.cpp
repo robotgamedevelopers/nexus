@@ -660,16 +660,17 @@ std::string verbHelp(const std::string& topic) {
                "Exit: 0 nothing to fix; 1 something to fix.\n";
     }
     if (topic == "rebuild") {
-        return "usage: nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+        return "usage: nexus-server rebuild [--no-tests] [--jobs <n>] [--no-service] [--wait <seconds>] [--dir DIR]\n"
                "\n"
                "Builds the fork this program was built from and makes the new build the running server. The loop for\n"
                "changing nexus: edit the fork, commit, `nexus-server rebuild` (it works from inside a nexus\n"
                "conversation: the server hands over once that turn ends).\n"
                "\n"
-               "  1. cmake --build <build> on every core (it configures again by itself when CMakeLists.txt changed).\n"
+               "  1. cmake --build <build> on every core, or on <n> with --jobs, which the unit tests use too (it\n"
+               "     configures again by itself when CMakeLists.txt changed).\n"
                "  2. In <fork>/drivers/claude: npm ci when node_modules is missing or older than package-lock.json\n"
                "     (an upstream merge that changed dependencies), then npm run build. ~/.nexus/node/bin goes first\n"
-               "     on PATH when it holds npm.\n"
+               "     on PATH when it holds npm and PATH does not hold it yet.\n"
                "  3. Unless --no-tests: ctest -L unit, and the Claude driver's npm test.\n"
                "  4. The new build's own setup: <build>/nexus-server setup --dir DIR --wait 5, with --no-service and\n"
                "     --wait passed on. It waits only 5 s by default, since a rebuild asked from inside a friend's turn\n"
@@ -1153,6 +1154,7 @@ int rebuild(const Paths& p, const std::string& self, const std::vector<std::stri
     signal(SIGPIPE, SIG_IGN);
     bool tests = true;
     std::vector<std::string> setupArgs;
+    unsigned jobCount = std::max(1u, std::thread::hardware_concurrency());
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--no-tests") {
             tests = false;
@@ -1161,21 +1163,26 @@ int rebuild(const Paths& p, const std::string& self, const std::vector<std::stri
         } else if (args[i] == "--wait" && i + 1 < args.size()) {
             setupArgs.push_back(args[i]);
             setupArgs.push_back(args[++i]);
+        } else if (args[i] == "--jobs" && i + 1 < args.size() && std::atoi(args[i + 1].c_str()) > 0) {
+            jobCount = static_cast<unsigned>(std::atoi(args[++i].c_str()));
         } else {
-            std::fprintf(stderr, "usage: nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] "
-                "[--dir DIR]\n");
+            std::fprintf(stderr, "usage: nexus-server rebuild [--no-tests] [--jobs <n>] [--no-service] "
+                "[--wait <seconds>] [--dir DIR]\n");
             return 2;
         }
     }
     const std::string source = NEXUS_SOURCE_DIR;
     const std::string build = NEXUS_BUILD_DIR;
-    const std::string jobs = std::to_string(std::max(1u, std::thread::hardware_concurrency()));
+    const std::string jobs = std::to_string(jobCount);
     // A node the AI fetched to ~/.nexus/node (SETUP.md, Prerequisites) comes first on PATH, so npm is found from inside
     // a friend's turn too, where the driver's PATH may not hold it.
     const std::string nodeBin = placement(p.home, userHome()).top + "/node/bin";
-    if (access((nodeBin + "/npm").c_str(), X_OK) == 0) {
-        const char* path = std::getenv("PATH");
-        const std::string joined = nodeBin + (path != nullptr && *path != 0 ? ":" + std::string(path) : std::string());
+    // Only once: a PATH that already holds it is left as it is, so that setup writes the same service file each time.
+    const char* path = std::getenv("PATH");
+    const std::string pathNow = path != nullptr ? path : "";
+    if (access((nodeBin + "/npm").c_str(), X_OK) == 0 && (":" + pathNow + ":").find(":" + nodeBin + ":") ==
+            std::string::npos) {
+        const std::string joined = nodeBin + (pathNow.empty() ? std::string() : ":" + pathNow);
         setenv("PATH", joined.c_str(), 1);
     }
     say("build", "your fork " + source + ", in " + build);

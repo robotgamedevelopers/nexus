@@ -181,7 +181,9 @@ Two things setup writes in full, as they are when it runs:
 - The drivers file names node by its full path: the first node 20.19 or newer on PATH, else `~/.nexus/node/bin/node`
   (step 3 says which to put first). If that node later goes away, the friend's driver cannot start, and doctor says
   which line of the drivers file to change.
-- The service runs the server with the PATH of the shell that ran setup.
+- The service runs the server with the PATH of the shell that ran setup, and the drivers inherit it. Run setup with
+  a plain PATH (the system's directories, Homebrew's, and the node you chose), not one holding `.` or another project's
+  directories.
 
 The service's name is printed by setup and by doctor: `com.robotgamedevelopers.nexus-server` (launchd) or
 `nexus-server` (systemd) for the person's own home; with HOME set to another directory, the name ends in a hash of it
@@ -203,9 +205,10 @@ checks.
 ## 7. Tell the person
 
 Say, in your words: nexus is built from their fork and running. On macOS: open nexus (Spotlight: "nexus", or
-`~/Applications`); Command-backtick (Command with the key left of 1, the one labelled ` and ~) shows and hides it. The first time, nexus asks them to sign in
-to their Claude subscription in its own small dialog; that is the one thing they do, and no AI sees it. From then on
-they change nexus by asking you (section "Changing nexus").
+`~/Applications`); Command-backtick (Command with the key left of 1, the one labelled ` and ~) shows and hides it.
+nexus asks them to sign in to their Claude subscription in its own small dialog; that is the one thing they do, and no
+AI sees it. From then on they change nexus by asking you (section "Changing nexus"). Then tell them, plainly, which
+items of "Not yet" below still apply to them.
 
 Do not open the window yourself.
 
@@ -223,12 +226,14 @@ The person asks for a change; you make it in their fork and rebuild. This works 
 
 1. Edit the source in the fork, on `mine`, following `AGENTS.md` (the rules for any change to nexus).
 2. Commit it. If git has no identity there, give the fork one of its own, never a global one:
-   `git config user.name "<the person's name or yours>"` and `git config user.email "<an address they give, or a noreply one>"`.
+   `git config user.name "<the person's name or yours>"` and `git config user.email "<an address they give>"`; without
+   one, a noreply address such as `nexus@localhost` will do for a fork that lives only on this machine.
 3. Rebuild:
    ```sh
    ~/.nexus/bin/nexus-server rebuild
    ```
-   It builds the fork (and the Claude driver), runs the fast tests, and only when they pass places the new build and
+   (`--jobs <n>` keeps it to n cores on a machine others share.) It builds the fork (and the Claude driver), runs the
+   fast tests, and only when they pass places the new build and
    hands over to it. A build or test that fails stops there with `FAIL`, and what runs is not changed: fix it and run
    rebuild again. `nexus-server help rebuild` has the steps.
 4. When the change is in the window, the person quits nexus and opens it again to get the new one (Command-Q, then

@@ -10,7 +10,7 @@
 //        nexus-server setup [--no-service] [--wait S] [--dir DIR]
 //                                         places this build and keeps it running (server/install.h, SETUP.md)
 //        nexus-server doctor [--dir DIR]  what is missing, one line each, with the command that fixes it
-//        nexus-server rebuild [--no-tests] [--no-service] [--wait S] [--dir DIR]
+//        nexus-server rebuild [--no-tests] [--jobs N] [--no-service] [--wait S] [--dir DIR]
 //                                         builds the fork this was built from, runs the fast tests, then setup
 //        nexus-server help [setup|doctor|rebuild|takeover]
 //                                         each verb's help (server/install.h verbHelp); a verb with --help says it too
@@ -54,7 +54,7 @@ const char* const kUsage =
     "       nexus-server serve|stop [--dir DIR]\n"
     "       nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
     "       nexus-server doctor [--dir DIR]\n"
-    "       nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server rebuild [--no-tests] [--jobs <n>] [--no-service] [--wait <seconds>] [--dir DIR]\n"
     "       nexus-server config path|check|reload|history [--dir DIR]\n"
     "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
     "       nexus-server help [setup|doctor|rebuild|takeover]\n"
