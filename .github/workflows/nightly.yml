@@ -62,11 +62,12 @@ jobs:
           downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF
       - name: Build the model checks
         run: cmake --build build --parallel "$JOBS" --target model_checks
       - name: The largest instances
-        run: ctest --test-dir build -L '^model_nightly$' -j "$JOBS" --output-on-failure
+        run: ctest --test-dir build -L '^model_nightly$' -j "$TEST_JOBS" --output-on-failure
