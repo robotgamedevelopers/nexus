@@ -14,11 +14,15 @@ add_executable(accounts_test accounts_test.cpp)
 target_link_libraries(accounts_test PRIVATE nexus_sync)
 target_compile_options(accounts_test PRIVATE ${warnings})
 
-add_executable(accounts_walk accounts_walk.cpp)
-target_link_libraries(accounts_walk PRIVATE nexus_sync)
-target_compile_options(accounts_walk PRIVATE ${warnings})
+add_dependencies(model_checks accounts_test)
 
-add_dependencies(model_checks accounts_test accounts_walk)
+# The walk TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
+if(NEXUS_SERVER_PARTS)
+    add_executable(accounts_walk accounts_walk.cpp)
+    target_link_libraries(accounts_walk PRIVATE nexus_sync)
+    target_compile_options(accounts_walk PRIVATE ${warnings})
+    add_dependencies(model_checks accounts_walk)
+endif()
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
               hub_adopt_defaults hub_probe instances hub_instances)

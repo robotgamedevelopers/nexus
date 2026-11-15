@@ -1,5 +1,6 @@
 # nexus: one person and several AIs in one window. The window runs on macOS; on 64-bit Windows it builds against Prax's
-# Win32 backend where Prax allows (NEXUS_WINDOW below); on Linux the parts without a window build and test.
+# Win32 backend where Prax allows (NEXUS_WINDOW below), and a native Windows build holds the window's code alone
+# (NEXUS_SERVER_PARTS below); on Linux the parts without a window build and test.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
@@ -82,6 +83,18 @@ if(WIN32)
     message(STATUS "nexus: Windows builds the window only; nexus-server, the mosh link and the store's POSIX "
         "filesystem run as the Linux build inside WSL2, and are not built here")
 endif()
+# nexus-server's own parts (the store, the server's tabs on it, the driver protocol and the driver supervisor) and
+# their tests are built where nexus-server runs: macOS and Linux, and so inside WSL2 on Windows. A native Windows build
+# leaves them out, and keeps every library the window links (the model, the link's states with the accounts, the
+# settings files, the hitch detector, the board's scroller, the terminal tab's launch line), the formats' tables the
+# window and the server will share (nexus_wire, docs/formats.md), their unit tests and the WSL2 terminal test
+# (tests/window wsl2_terminal). The model checks' walks are left out there too: TLC runs them on
+# Linux and macOS (tests/model tlc_test).
+if(WIN32)
+    set(NEXUS_SERVER_PARTS OFF)
+else()
+    set(NEXUS_SERVER_PARTS ON)
+endif()
 if(NEXUS_LINK AND NOT NEXUS_WINDOW_LOGIC)
     message(FATAL_ERROR "nexus: the link (nexus-server and the window's --server) uses the window's logic, which is off "
         "(NEXUS_WINDOW_LOGIC: Prax's lib/process does not link on this platform at this pin). Configure with "
@@ -112,45 +125,41 @@ target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
 
-# nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
-# filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files.
-add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/store.cpp)
-# The real filesystem (make_posix_fs) is POSIX: nexus-server runs on macOS and Linux, inside WSL2 on Windows, and native
-# Windows builds only the window, which never opens the store (NEXUS_LINK above). The store's unit tests (MemFs) build
-# everywhere.
-if(NOT WIN32)
-    target_sources(nexus_store PRIVATE src/store/posix_fs.cpp)
-endif()
-target_include_directories(nexus_store PUBLIC src)
-target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
+if(NEXUS_SERVER_PARTS)
+    # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
+    # filesystem seam (src/store/fs.h) so that its tests run in memory. No Prax, no OS beyond the files. The real
+    # filesystem (make_posix_fs) is POSIX, as nexus-server is.
+    add_library(nexus_store STATIC src/store/codec.cpp src/store/journal.cpp src/store/mem_fs.cpp src/store/store.cpp
+        src/store/posix_fs.cpp)
+    target_include_directories(nexus_store PUBLIC src)
+    target_compile_options(nexus_store PRIVATE ${NEXUS_WARNINGS})
 
-# nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the link),
-# the secret dialog's account files over the same filesystem seam (src/server/secret_files.h), and where its answers and
-# log lines go (src/server/secret_lines.h, which writes the driver protocol's `secret` line).
-add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp src/server/secret_lines.cpp
-            src/server/login_life.cpp)
-target_include_directories(nexus_durable PUBLIC src)
-target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store nexus_driver)
+    # nexus-server's tabs on the store: the Hub's TabStore over src/store (no mosh, so its tests build without the
+    # link), the secret dialog's account files over the same filesystem seam (src/server/secret_files.h), and where its
+    # answers and log lines go (src/server/secret_lines.h, which writes the driver protocol's `secret` line).
+    add_library(nexus_durable STATIC src/server/durable.cpp src/server/secret_files.cpp src/server/secret_lines.cpp
+                src/server/login_life.cpp)
+    target_include_directories(nexus_durable PUBLIC src)
+    target_compile_options(nexus_durable PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_durable PUBLIC nexus_sync nexus_store nexus_driver)
 
-# The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange, their
-# encoding and decoding, and a reader that cuts a stream into them. No OS, no time, no processes.
-add_library(nexus_driver STATIC src/driver/protocol.cpp)
-target_include_directories(nexus_driver PUBLIC src)
-target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
+    # The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange,
+    # their encoding and decoding, and a reader that cuts a stream into them. No OS, no time, no processes.
+    add_library(nexus_driver STATIC src/driver/protocol.cpp)
+    target_include_directories(nexus_driver PUBLIC src)
+    target_compile_options(nexus_driver PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_driver PUBLIC prax::json prax::core)
 
-# The driver supervisor (src/server/supervisor.h): what nexus-server does with one session's driver, as a pure
-# state machine; the drivers file (src/server/driver_table.h); and the server's home and config (src/server/home.h).
-# No OS, no time, no processes.
-add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp)
-target_include_directories(nexus_supervisor PUBLIC src)
-target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver nexus_config)
+    # The driver supervisor (src/server/supervisor.h): what nexus-server does with one session's driver, as a pure
+    # state machine; the drivers file (src/server/driver_table.h); and the server's home and config
+    # (src/server/home.h). No OS, no time, no processes.
+    add_library(nexus_supervisor STATIC src/server/supervisor.cpp src/server/driver_table.cpp src/server/home.cpp)
+    target_include_directories(nexus_supervisor PUBLIC src)
+    target_compile_options(nexus_supervisor PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_supervisor PUBLIC nexus_sync nexus_driver nexus_config)
 
-# The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX (poll,
-# process ids), like the rest of nexus-server: not built natively on Windows, where nexus-server runs inside WSL2.
-if(NOT WIN32)
+    # The friends' driver processes in nexus-server's poll loop (src/server/drivers.h), over the supervisor. POSIX
+    # (poll, process ids), like the rest of nexus-server.
     add_library(nexus_drivers STATIC src/server/drivers.cpp)
     target_include_directories(nexus_drivers PUBLIC src)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
@@ -297,9 +306,11 @@ add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
 add_subdirectory(tests/accounts)
 add_subdirectory(tests/window)
-add_subdirectory(tests/store)
-add_subdirectory(tests/driver)
-add_subdirectory(tests/server)
+if(NEXUS_SERVER_PARTS)
+    add_subdirectory(tests/store)
+    add_subdirectory(tests/driver)
+    add_subdirectory(tests/server)
+endif()
 add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)

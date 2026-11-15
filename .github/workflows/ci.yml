@@ -756,12 +756,20 @@ jobs:
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
-  # the flags), on captain's Windows runners: everything that builds there today, and its unit tests. Not the window
-  # (Prax's Win32 backend of lib/app does not compile at its pin) and not the link (mosh's network layer is POSIX).
+  # the flags), on captain's Windows runners: the native window's code and its unit tests, nothing else. On Windows only
+  # the overlay window is native; nexus-server, its store, the driver protocol and supervisor, the link and every test
+  # of them build and run as the Linux build inside WSL2 (wsl2-functional) and on Linux (build-and-unit-linux), so a
+  # native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them,
+  # which TLC runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the
+  # link's states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's
+  # launch line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal test,
+  # which wsl2-terminal runs. Not the window itself (Prax's Win32 backend of lib/app does not compile at its pin).
   #
   # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
   # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
   # runner is cold. Prax's download cache sits beside it (PR_DOWNLOAD_DIR), one per runner for the reason given above.
+  # The repository has no submodules, so the checkout does not look for them (its submodule sync, update and foreach
+  # cost about 2.5 s here, where each git command takes most of a second).
   windows:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, Windows, X64, captain]
@@ -773,7 +781,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-          submodules: recursive
       # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
       - name: Build directory and caches outside the workspace
         run: |
@@ -794,7 +801,8 @@ jobs:
           # off (or failed) mid-configure or mid-build: it is resumed, since a cold build outlasts one run's 2 minutes,
           # but at most 3 times (build-x64.unfinished counts them); the 4th start without a finished build starts from
           # nothing, so a directory a cut left broken does not stay.
-          if (Test-Path "$build.ok") {
+          $finished = Test-Path "$build.ok"
+          if ($finished) {
             Remove-Item -Force -ErrorAction SilentlyContinue "$build.unfinished"
           } elseif (Test-Path $build) {
             $starts = 1
@@ -809,6 +817,7 @@ jobs:
             Set-Content -Path "$build.unfinished" -Value $starts
           }
           Remove-Item -Force -ErrorAction SilentlyContinue "$build.ok"
+          "NEXUS_BUILD_FINISHED=$finished" >> $env:GITHUB_ENV
           New-Item -ItemType Directory -Force -Path $build, "$caches\prax-downloads" | Out-Null
           "PRAX_PIN=$pin" >> $env:GITHUB_ENV
           "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
@@ -872,10 +881,36 @@ jobs:
           }
       # Every NEXUS_* option is given, so a kept CMakeCache.txt never decides what is built. The window, its logic and
       # the link are off on Windows (CMakeLists.txt says why for each); src/platform_win.cpp is compiled on its own.
+      # A configure here regenerates every project file (Prax's included), about 6 s. It is skipped when the kept build
+      # directory finished its last build and was configured with these same arguments by this same cmake (the stamp
+      # nexus-ci-configured.txt inside it, so it goes with the directory): `cmake --build` then re-runs the configure
+      # itself (the solution's ZERO_CHECK project) whenever a CMakeLists.txt or an included .cmake file has changed
+      # since, so a skip never builds a stale project.
       - name: Configure (Release, MSVC x64)
         run: |
-          cmake -S . -B "$env:NEXUS_BUILD" -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
+          $configure = @('-S', '.', '-B', $env:NEXUS_BUILD, '-A', 'x64', "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE",
+                         '-DNEXUS_WINDOW=OFF', '-DNEXUS_WINDOW_LOGIC=OFF', '-DNEXUS_LINK=OFF')
+          # All of its output, then the first line: Select-Object -First would stop cmake mid-write and fail it.
+          $versionText = @(cmake --version)
+          if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
+          $version = $versionText[0]
+          $stamp = "$version`n$($configure -join "`n")"
+          $stampFile = Join-Path $env:NEXUS_BUILD 'nexus-ci-configured.txt'
+          $kept = if (Test-Path $stampFile) { [string](Get-Content -Raw $stampFile) } else { '' }
+          if ($env:NEXUS_BUILD_FINISHED -ne 'True') {
+            Write-Output "configuring: the kept build directory has no finished build"
+          } elseif (-not (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt")) {
+            Write-Output "configuring: the kept build directory has no CMakeCache.txt"
+          } elseif ($kept.TrimEnd() -ne $stamp) {
+            Write-Output "configuring: the kept build directory was configured otherwise (stamp '$($kept.TrimEnd())', now '$stamp')"
+          } else {
+            Write-Output "configured already with these arguments by $version; cmake --build re-runs it if a CMake file changed"
+            exit 0
+          }
+          Remove-Item -Force -ErrorAction SilentlyContinue $stampFile
+          cmake @configure
           if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
+          Set-Content -NoNewline -Path $stampFile -Value $stamp
       - name: Build
         run: |
           cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
