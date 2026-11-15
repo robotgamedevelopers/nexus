@@ -209,12 +209,17 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
-          # the store's lock and the start-up order: their walks, then the faulty orders
+          # the store's lock and the start-up order: their walks and the faulty orders, all at once (each on real files,
+          # about 9 s under the sanitizers, each with its own trace and store directory; any failure fails the step)
+          lock_pids=()
           for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+            build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
           done
           for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
+            build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
+          done
+          for pid in "${lock_pids[@]}"; do
+            wait "$pid"
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
@@ -635,12 +640,17 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
-          # the store's lock and the start-up order: their walks, then the faulty orders
+          # the store's lock and the start-up order: their walks and the faulty orders, all at once (each on real files,
+          # about 9 s under the sanitizers, each with its own trace and store directory; any failure fails the step)
+          lock_pids=()
           for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+            build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
           done
           for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
+            build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
+          done
+          for pid in "${lock_pids[@]}"; do
+            wait "$pid"
           done
           # the driver supervisor's walks and their faults
           for seed in 1 2 3 4 5 6 7 8; do
