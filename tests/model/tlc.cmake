@@ -44,6 +44,7 @@
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
+#   SPLIT       optional: only:<names> or rest:<names>, the named PROPERTIES of the cfg alone, or all but them (below)
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
 
@@ -79,6 +80,64 @@ file(MAKE_DIRECTORY "${WORK}/tmp")
 file(GLOB specs "${MODELS}/*.tla" "${MODELS}/*.cfg" "${MODELS}/witnesses/*.tla" "${MODELS}/witnesses/*.cfg")
 file(COPY ${specs} DESTINATION "${WORK}")
 get_filename_component(cfg_name "${CFG}" NAME)
+
+# SPLIT only:<names> or SPLIT rest:<names> (names joined by +): check the instance with only the named properties of its
+# cfg, or with every property but those; every invariant either way. tlc_test's SPLIT declares the pair, so between them
+# they check every property of the cfg on the same states, and the cfg stays the one place the instance is written. A
+# large instance's time is in its temporal property, not its states or action properties (MCSupervisorSwitch.cfg on
+# four cores of a loaded 16-thread host, 2026-11-15: invariants and its 20 action properties 7.8 s, the temporal
+# property Settles alone 67.9 s, all of them 122 s), so the pair runs side by side in CI shards of their own.
+if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
+    if(NOT SPLIT MATCHES "^(only|rest):([A-Za-z_][A-Za-z0-9_+]*)$")
+        message(FATAL_ERROR "tlc.cmake: SPLIT is ${SPLIT}, not only:<names> or rest:<names>")
+    endif()
+    set(split_mode ${CMAKE_MATCH_1})
+    string(REPLACE "+" ";" split_names "${CMAKE_MATCH_2}")
+    file(STRINGS "${WORK}/${cfg_name}" cfg_lines)
+    set(in_properties FALSE)
+    set(seen "")
+    set(kept "")
+    set(cfg_out "")
+    foreach(line IN LISTS cfg_lines)
+        if(line MATCHES "^[A-Z]")
+            if(line MATCHES "^PROPERT(Y|IES)[ \t]*$")
+                set(in_properties TRUE)
+            elseif(line MATCHES "^PROPERT")
+                message(FATAL_ERROR "tlc.cmake: SPLIT needs ${cfg_name}'s properties one to a line under PROPERTIES")
+            else()
+                set(in_properties FALSE)
+            endif()
+            string(APPEND cfg_out "${line}\n")
+        elseif(in_properties AND line MATCHES "^[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*$")
+            set(property ${CMAKE_MATCH_1})
+            list(FIND split_names ${property} at)
+            if(NOT at EQUAL -1)
+                list(APPEND seen ${property})
+            endif()
+            if((split_mode STREQUAL "only" AND NOT at EQUAL -1) OR (split_mode STREQUAL "rest" AND at EQUAL -1))
+                string(APPEND cfg_out "${line}\n")
+                list(APPEND kept ${property})
+            endif()
+        elseif(in_properties AND line MATCHES "^[ \t]+[^ \t\\\\]")
+            message(FATAL_ERROR "tlc.cmake: SPLIT needs ${cfg_name}'s properties one to a line; this one is not: ${line}")
+        else()
+            string(APPEND cfg_out "${line}\n")
+        endif()
+    endforeach()
+    foreach(name IN LISTS split_names)
+        list(FIND seen ${name} at)
+        if(at EQUAL -1)
+            message(FATAL_ERROR "tlc.cmake: SPLIT names ${name}, which is not among ${cfg_name}'s PROPERTIES")
+        endif()
+    endforeach()
+    if(kept STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: SPLIT ${SPLIT} leaves ${cfg_name} with no property to check")
+    endif()
+    string(REPLACE ";" " " kept_text "${kept}")
+    message("${cfg_name}, SPLIT ${split_mode}: every invariant, and properties ${kept_text}")
+    set(cfg_name "${split_mode}-${cfg_name}")
+    file(WRITE "${WORK}/${cfg_name}" "${cfg_out}")
+endif()
 
 if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTESTS AND NOT "${DRIVERTESTS}" STREQUAL ""))
     if(NOT DEFINED NODE OR "${NODE}" STREQUAL "" OR NODE MATCHES "NOTFOUND$")

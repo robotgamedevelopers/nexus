@@ -105,10 +105,14 @@ endif()
 # than the runner's share of cores: tests/model/tlc-workers.cmake). Over 50 CI runs
 # (pass p50/p90): plain 25/39 s, switch 46/64, place 42/55, sign-in 27/41; the timeouts were runs starved by other
 # jobs on the host (sign-in generated 3,633 of its states in 55 s), not instances grown past their cap.
-tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD)
-tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4 SHARD)
-tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 SHARD)
-tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8 SHARD)
+# Each is split (SPLIT Settles): Settles, the one temporal property, is where the time goes (switch on four cores of a
+# loaded host: every invariant and the 20 action properties 7.8 s, Settles alone 67.9 s, all together 122 s), so
+# <name>_temporal checks it in the instance's own shard and <name>_rest every invariant and the other properties, a
+# few seconds each, in the supervisor-rest shard. Between them every property is checked on the same instance.
+tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD SPLIT Settles)
+tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4 SHARD SPLIT Settles)
+tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 SHARD SPLIT Settles)
+tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8 SHARD SPLIT Settles)
 # The limit's per-commit instance runs in the supervisor-rest shard on two workers, like the witnesses beside it:
 # 4,497 states, 4 s on an idle machine, so the 60 s cap leaves fifteen times that for a loaded runner. Its two-prompt
 # instance (69 s on two workers) and the wide one run nightly.

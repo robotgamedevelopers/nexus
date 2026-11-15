@@ -52,7 +52,9 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
-#          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [LABEL] [OVERLAY])
+#          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT names] [LABEL] [OVERLAY])
+# SPLIT a+b declares two tests, <name>_temporal with only the cfg's properties a and b and <name>_rest with every other,
+# each with every invariant, so a large instance's temporal properties run beside the rest (tlc.cmake says why).
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
 # `ctest -j <cores>` keeps one TLC worker per core; in CI a run takes no more workers than the runner's share of cores
 # (NEXUS_TLC_CORES, tlc-workers.cmake). SHARD marks an instance that has a CI model shard of its own and
@@ -83,7 +85,18 @@ function(tlc_test name module cfg expect)
         return()
     endif()
     cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS;SHARD"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP" "" ${ARGN})
+        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
+    # SPLIT <names>: the pair of tests, <name>_temporal with only the named properties and <name>_rest with all the
+    # others, each with every invariant (tlc.cmake, SPLIT); between them every property of the cfg is checked.
+    if(T_SPLIT)
+        set(args ${ARGN})
+        list(FIND args SPLIT at)
+        math(EXPR value_at "${at} + 1")
+        list(REMOVE_AT args ${at} ${value_at})
+        tlc_test(${name}_temporal ${module} ${cfg} ${expect} ${args} SPLITMODE only:${T_SPLIT})
+        tlc_test(${name}_rest ${module} ${cfg} ${expect} ${args} SPLITMODE rest:${T_SPLIT})
+        return()
+    endif()
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
     if(NOT T_WORKERS)
@@ -110,6 +123,9 @@ function(tlc_test name module cfg expect)
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
+    endif()
+    if(T_SPLITMODE)
+        list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
     if(T_DRIVERWALK)
