@@ -50,7 +50,7 @@ if(NOT WIN32)
     add_dependencies(drivers_functional nexus_fake_driver)
 endif()
 
-add_dependencies(model_checks supervisor_walk supervisor_test secrets_test)
+add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
               hub_friend_removed queue shutdown restart settings account place limit activity signin)
@@ -81,6 +81,38 @@ if(NOT WIN32)
     add_test(NAME secrets_functional_login_files COMMAND secrets_test login_files
              WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/secrets_work)
     set_tests_properties(secrets_functional_login_files PROPERTIES LABELS functional TIMEOUT 30)
+endif()
+
+# In-app sign-in (docs/secrets.md "Sign-in"): the URL and callback parsing, the desk, the window's opener, the one-shot
+# gate's logic, the token scanner, the codecs, the hub over the server's store with the runner's hooks recorded, and the
+# leak test over every output. All unit: no time, no sockets, no processes, no files (MemFs).
+add_executable(signin_test signin_test.cpp)
+target_link_libraries(signin_test PRIVATE nexus_durable)
+target_compile_options(signin_test PRIVATE ${warnings})
+target_include_directories(signin_test PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+foreach(group urls desk opener gate scanner codecs hub hub_late hub_older leak leak_scan)
+    add_test(NAME signin_unit_${group} COMMAND signin_test ${group})
+    set_tests_properties(signin_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+# Sign-in's processes for real, functional: the runner starting a FAKE `claude` (fake_claude.cpp: a made-up URL, a
+# listener on loopback, a made-up token) under a pty, the helper, the window's gate on loopback, the replay; the test
+# plays the browser. Each case in a directory of its own under the build tree. POSIX, as the runner is.
+if(NOT WIN32)
+    add_executable(nexus_fake_claude fake_claude.cpp)
+    target_compile_options(nexus_fake_claude PRIVATE ${warnings})
+    add_executable(signin_functional signin_functional.cpp)
+    target_link_libraries(signin_functional PRIVATE nexus_signin_runner nexus_signin_gate)
+    target_compile_options(signin_functional PRIVATE ${warnings})
+    target_include_directories(signin_functional PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+    add_dependencies(signin_functional nexus_fake_claude nexus-signin-open)
+    foreach(case same_machine printed_url forwarded declined api_key stopped unguarded gate_in_use gate_v6_in_use late crashed)
+        file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/signin-${case})
+        add_test(NAME signin_functional_${case}
+                 COMMAND signin_functional $<TARGET_FILE:nexus_fake_claude> $<TARGET_FILE:nexus-signin-open> ${case}
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/signin-${case})
+        set_tests_properties(signin_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
+    endforeach()
 endif()
 
 # Each case in a directory of its own under the build tree.

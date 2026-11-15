@@ -95,8 +95,8 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK DRIVERWALK DRIVERTESTS
-        STRIPWALK SHARD TSWALK NODEADLOCK)
+    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK SIGNWALK DRIVERWALK
+        DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -159,6 +159,8 @@ function(tlc_test name module cfg expect)
     elseif(T_TSWALK)
         list(APPEND defs -DTSWALK=${PROJECT_SOURCE_DIR}/src/tailscale/lifecycle -DGO=${NEXUS_GO_LOCAL} -DSEED=${T_SEED}
              -DSTEPS=${T_STEPS})
+    elseif(T_SIGNWALK)
+        list(APPEND defs -DSIGNWALK=$<TARGET_FILE:signin_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
     elseif(T_ACCWALK)
@@ -445,6 +447,9 @@ tlc_test(tlc_secrets_witness_store_twice    WSecStoreTwice    WSecStoreTwice.cfg
 tlc_test(tlc_secrets_witness_late_stored    WSecLateStored    WSecLateStored.cfg    action    PROPERTY ClosedStaysClosed)
 tlc_test(tlc_secrets_witness_ids_reused     WSecIdsReused     WSecIdsReused.cfg     action    PROPERTY ClosedStaysClosed)
 tlc_test(tlc_secrets_witness_two_open       WSecTwoOpen       WSecTwoOpen.cfg       invariant PROPERTY OneOpenPerAccount)
+# Two requests and a failing disk, per commit: an ask beside a held value must be refused busy (541 states).
+tlc_test(tlc_secrets_witness_busy_ignores_held WSecBusyIgnoresHeld WSecBusyIgnoresHeld.cfg invariant
+         PROPERTY OneOpenPerAccount)
 tlc_test(tlc_secrets_witness_reply_twice    WSecReplyTwice    WSecReplyTwice.cfg    invariant PROPERTY AnsweredOnce)
 tlc_test(tlc_secrets_witness_no_client_opens WSecNoClientOpens WSecNoClientOpens.cfg action   PROPERTY AskNeedsTaker)
 tlc_test(tlc_secrets_witness_no_timeout     WSecNoTimeout     WSecNoTimeout.cfg     liveness)
@@ -492,3 +497,31 @@ foreach(fault ready url close table down)
     tlc_test(tlc_tailscale_trace_faulty_${fault}_rejected TailscaleTrace TailscaleTrace.cfg deadlock SEED 1 STEPS 1000
              TSWALK FAULTY ${fault})
 endforeach()
+
+# In-app sign-in (docs/secrets.md "Sign-in"): SignIn.tla on three small instances, distinct states measured on a
+# bench with four workers (MCSignInOne.cfg, one window on another machine, every property: 2,321 states, 1 s;
+# MCSignInTwo.cfg, one window on each machine, its safety: 250,670 states, 4 s, and its liveness nightly as
+# MCSignInTwoLive.cfg, 45 s; MCSignInGate.cfg, one window on another machine with two flows, its safety: 327,571
+# states, 5 s), and its reversed witnesses, each rejected by the rule it breaks (WSignInStrayHostile.cfg passes: a gate
+# that sends anything up is still met by the server's own check). MCSignIn.cfg (two flows, a restart, a lost login) is
+# a bench run, not a test: an earlier form of the model was past 14 million states in 30 minutes on four workers,
+# unfinished. Bound to the code by trace checks: tests/sync's signin_walk, tlc_signin_trace_*.
+tlc_test(tlc_signin_spec_one MCSignIn MCSignInOne.cfg pass)
+tlc_test(tlc_signin_spec_two MCSignIn MCSignInTwo.cfg pass WORKERS 4)
+tlc_test(tlc_signin_spec_two_live MCSignIn MCSignInTwoLive.cfg pass WORKERS 4 NIGHTLY)
+tlc_test(tlc_signin_spec_gate MCSignIn MCSignInGate.cfg pass WORKERS 4)
+tlc_test(tlc_signin_witness_gate_taken WSignInGateTaken WSignInGateTaken.cfg invariant PROPERTY GateForEveryPage)
+tlc_test(tlc_signin_witness_late_dropped WSignInLateDropped WSignInLateDropped.cfg invariant PROPERTY EveryPrintTaken)
+tlc_test(tlc_signin_witness_claim_starts WSignInClaimStarts WSignInClaimStarts.cfg invariant
+         PROPERTY OneProcessPerAccount)
+tlc_test(tlc_signin_witness_stray_forwards WSignInStrayForwards WSignInStrayForwards.cfg invariant
+         PROPERTY GateForwardsOnlyMatching)
+tlc_test(tlc_signin_witness_stray_hostile WSignInStrayForwards WSignInStrayHostile.cfg pass WORKERS 4)
+tlc_test(tlc_signin_witness_replay_any WSignInStrayForwards WSignInReplayAny.cfg invariant
+         PROPERTY CallbackOnlyMatching)
+tlc_test(tlc_signin_witness_drop_token WSignInDropToken WSignInDropToken.cfg invariant PROPERTY TokenNeverDropped)
+tlc_test(tlc_signin_witness_token_in_log WSignInTokenInLog WSignInTokenInLog.cfg invariant PROPERTY NoTokenInLog)
+tlc_test(tlc_signin_witness_no_timeout WSignInNoTimeout WSignInNoTimeout.cfg liveness)
+tlc_test(tlc_signin_witness_need_twice WSignInNeedTwice WSignInNeedTwice.cfg invariant PROPERTY OneFlowPerAccount)
+tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeeps.cfg invariant
+         PROPERTY ProcessHasItsFlow)

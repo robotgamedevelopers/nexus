@@ -34,6 +34,11 @@
 //       a fresh server under a HOME of its own in <dir> with one friend, ada, on the fake driver: a window that knows no
 //       friend shows ada's tab alone, from the server's list, and a prompt typed there starts ada's session and comes
 //       back answered; a friend added to friends.json and reloaded appears in the open window, and goes once taken out
+//   link_e2e <nexus-server> <dir> signin <fake claude> [leaky]
+//       in-app sign-in through the real server with the FAKE claude and two windows: which link gets the URL, the
+//       flow let go of when its window's link ends and taken over by the other, the forwarded callback replayed, the
+//       token in a1's file, `config sign-in`, and every file and the other window's states searched for the values;
+//       `leaky`, with nexus-server-leaky: the search must find the leak that build writes to server.log
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -998,7 +1003,9 @@ std::vector<std::string> leaksUnder(const std::string& dir, const std::string& e
     std::vector<std::string> found;
     std::error_code ec;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file() || entry.path() == std::filesystem::path(except)) {
+        // A link is not a file the run wrote (the signin run's bin/claude-helper is a link to the fake program, whose
+        // own made-up values are in it).
+        if (entry.is_symlink() || !entry.is_regular_file() || entry.path() == std::filesystem::path(except)) {
             continue;
         }
         ++*read;
@@ -1309,6 +1316,206 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
+// ---- signin: in-app sign-in through the real server and the real link, with the FAKE claude ----
+
+// The fake's values (tests/server/fake_claude.h), repeated here so that this file needs nothing of the server's tests.
+const char* const kFakeState = "fakeStateQm8vTrXw4kGdHbN2pL7cJ9sZ1aE6";
+const char* const kFakeCode = "fakeCodePw3kGdHbX5rT8yU2iO4mN7qW1eR9";
+const char* const kFakeToken = "sk-ant-oat01-FAKEtokenZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iUyTrEwQaSdFgHjKlZxCvBnM-AA";
+
+const sync::SignInOffer* offerOf(const sync::Sessions& s, std::uint64_t id) {
+    for (const sync::SignInOffer& o : s.offers()) {
+        if (o.id == id) {
+            return &o;
+        }
+    }
+    return nullptr;
+}
+
+sync::Action signInAction(sync::ActionKind kind, std::uint64_t id, const std::string& token,
+                          const std::string& query = std::string()) {
+    sync::Action a;
+    a.kind = kind;
+    a.request = id;
+    a.text = token;
+    if (!query.empty()) {
+        a.secret = sync::SecretValue(query);
+    }
+    return a;
+}
+
+// The real nexus-server (started by the test under a HOME of its own in <dir>; its config names the FAKE claude,
+// tests/server/fake_claude.cpp, as `claude`) with account a1 and no login, and two windows over the real link (ssh,
+// mosh's transport): the flow is offered to both; the first claims it and its state alone carries the URL, the other
+// sees it held; the first window's link ends and the flow is let go of; the second takes it over, and its state now
+// carries the URL; it sends the callback up as a window on another machine would, the server replays it to the fake's
+// listener, and the fake's token lands in a1's file. An AI's `config sign-in a1`, asked while the flow waits, answers
+// `signed in` once it does; one for an account not set up is refused. Then, the server stopped, every file the run
+// left (server.log first) and every state the second window held before it held the flow is searched for the URL's
+// state, the code and the token.
+//
+// `leaky`: the server is nexus-server-leaky (CMakeLists.txt), which writes the forwarded query to its log; the run
+// passes only when the search finds it there (the search's reversed witness).
+int signin(const std::string& binary, const std::string& dir, const std::string& fakeClaude, bool leaky) {
+    Server server(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    const std::string abs = std::filesystem::absolute(dir).string();
+    const std::string home = dir + "/home";
+    const std::string accounts = home + "/.nexus/server/accounts";
+    const std::string file = accounts + "/a1/oauth-token";
+    std::error_code ec;
+    std::filesystem::create_directories(accounts + "/a1", ec);
+    for (const std::string& d : {home, home + "/.nexus", home + "/.nexus/server", accounts, accounts + "/a1"}) {
+        CHECK(::chmod(d.c_str(), 0700) == 0);
+    }
+    std::filesystem::create_directories(dir + "/bin", ec);
+    std::filesystem::create_symlink(fakeClaude, dir + "/bin/claude-helper", ec);
+    CHECK(!ec);
+    CHECK(writeFile(dir + "/config", "claude " + abs + "/bin/claude-helper\n"));
+    // a1 from the drivers file's --account (the first start takes the accounts from it); no session is made, so no
+    // driver starts.
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account a1\nfriend ada claude " + abs + "\n"));
+    pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+
+    Window w1;
+    Window w2;
+    for (Window* w : {&w1, &w2}) {
+        link::Connect connect;
+        if (!openWindow(server, "localhost", "127.0.0.1", nullptr, w, &connect)) {
+            return 1;
+        }
+        CHECK(connect.format >= sync::kSignInFormat);
+    }
+    std::vector<Window*> ws{&w1, &w2};
+    std::vector<std::string> otherStates;      // every state w2 held before it held the flow
+    auto settle = [&](const std::function<bool()>& done) {
+        return whileProgressing(done, [&] {
+            std::uint64_t p = 0;
+            for (Window* w : ws) {
+                p = p * 1000003 + w->session->stateNum() * 2 + (w->session->allAcknowledged() ? 1 : 0);
+            }
+            return p;
+        }, [&] { step(ws, nullptr, 20); });
+    };
+    const std::string tok1 = "tokE2eWindowOne1";
+    const std::string tok2 = "tokE2eWindowTwo2";
+
+    // Offered to both: flow 1, a1's, held by no window.
+    CHECK(settle([&] {
+        const sync::SignInOffer* a = offerOf(w1.session->state(), 1);
+        const sync::SignInOffer* b = offerOf(w2.session->state(), 1);
+        return a != nullptr && b != nullptr && a->opener.empty() && b->opener.empty();
+    }));
+    // The AI's ask, while the flow waits: it answers once the account is signed in.
+    CommandResult asked;
+    std::thread ai([&] {
+        asked = runCommand(Command{binary, {"config", "sign-in", "a1", "--dir", dir}, "nexus-server config sign-in a1"},
+                           120);
+    });
+    const CommandResult nobody = runCommand(Command{binary, {"config", "sign-in", "nobody", "--dir", dir},
+                                                    "nexus-server config sign-in nobody"}, 20);
+    CHECK(nobody.end == CommandResult::End::Exited && nobody.code == 1 &&
+          nobody.out.find("refused: no account nobody") == 0);
+
+    // Which link gets the URL: the claiming window's alone.
+    w1.session->add(signInAction(sync::ActionKind::SignInClaim, 1, tok1));
+    CHECK(settle([&] {
+        const sync::SignInOffer* a = offerOf(w1.session->state(), 1);
+        const sync::SignInOffer* b = offerOf(w2.session->state(), 1);
+        otherStates.push_back(w2.session->state().init_diff());
+        return a != nullptr && !a->url.empty() && b != nullptr && b->opener == sync::kSignInHeldBy;
+    }));
+    sync::SignInTarget target;
+    if (const sync::SignInOffer* a = offerOf(w1.session->state(), 1)) {
+        CHECK(a->opener == tok1 && sync::parseSignInUrl("claude", a->url.bytes(), &target));
+        CHECK(target.state == kFakeState);
+    }
+    if (const sync::SignInOffer* b = offerOf(w2.session->state(), 1)) {
+        CHECK(b->url.empty());
+    }
+
+    // The first window's link ends: the flow is let go of, for another window to take over.
+    w1.session->shutdown();
+    const auto end1 = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end1 && !w1.session->shutdownDone()) {
+        step(ws, nullptr, 20);
+    }
+    ws = {&w2};
+    CHECK(settle([&] {
+        const sync::SignInOffer* b = offerOf(w2.session->state(), 1);
+        otherStates.push_back(w2.session->state().init_diff());
+        return b != nullptr && b->opener.empty();
+    }));
+
+    // The second window takes it over: its state carries the URL now. It opens it, and the person's browser on its
+    // machine is sent to the redirect, which its gate takes; it sends the query up.
+    w2.session->add(signInAction(sync::ActionKind::SignInClaim, 1, tok2));
+    CHECK(settle([&] {
+        const sync::SignInOffer* b = offerOf(w2.session->state(), 1);
+        return b != nullptr && b->opener == tok2 && !b->url.empty();
+    }));
+    w2.session->add(signInAction(sync::ActionKind::SignInOpened, 1, tok2));
+    w2.session->add(signInAction(sync::ActionKind::SignInCallback, 1, tok2,
+                                 std::string("code=") + kFakeCode + "&state=" + kFakeState));
+    CHECK(settle([&] {
+        return w2.session->allAcknowledged() && offerOf(w2.session->state(), 1) == nullptr &&
+            readFile(file) == kFakeToken;
+    }));
+    ai.join();
+    CHECK(asked.end == CommandResult::End::Exited && asked.code == 0 && asked.out == "signed in\n");
+    struct stat st{};
+    CHECK(::stat(file.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+    CHECK(!std::filesystem::exists(accounts + "/a1/.signin"));
+
+    w2.session->shutdown();
+    const auto end2 = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end2 && !w2.session->shutdownDone()) {
+        step(ws, nullptr, 20);
+    }
+    const CommandResult stopped = runCommand(Command{binary, {"stop", "--dir", dir}, binary + " stop --dir " + dir}, 10);
+    CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    const std::string log = readFile(dir + "/server.log");
+    CHECK(log.find("sign-in 1: a1: captured") != std::string::npos);
+    int read = 0;
+    bool logLeaks = false;
+    bool otherLeaks = false;
+    for (const char* v : {kFakeState, kFakeCode, kFakeToken}) {
+        const test::LeakScan scan(v);
+        logLeaks = logLeaks || scan.in(log);
+        for (const std::string& where : leaksUnder(dir, file, scan, &read)) {
+            if (where.rfind(dir + "/server.log", 0) != 0) {
+                std::fprintf(stderr, "link_e2e: a value reached %s\n", where.c_str());
+                otherLeaks = true;
+            }
+        }
+        for (const std::string& s : otherStates) {
+            otherLeaks = otherLeaks || scan.in(s);
+        }
+        for (const CommandResult* r : {static_cast<const CommandResult*>(&asked), &nobody, &stopped}) {
+            otherLeaks = otherLeaks || scan.in(r->out) || scan.in(r->err);
+        }
+    }
+    CHECK(!otherLeaks);
+    CHECK(read > 3);
+    if (leaky) {
+        // The reversed witness: the leaky build's log line is found, so the search's silence below means something.
+        CHECK(logLeaks);
+        // Its log line is the leak: blanked, so that the Server's printing of server.log shows none of it.
+        std::ofstream(dir + "/server.log", std::ios::trunc).flush();
+    } else {
+        CHECK(!logLeaks);
+    }
+    std::printf("signin%s: %d files searched, %zu bytes of server.log, %zu states of the other window; %s\n",
+                leaky ? " (leaky witness)" : "", read / 3, log.size(), otherStates.size(),
+                failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
+}
+
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
 // A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
@@ -1386,9 +1593,12 @@ int main(int argc, char** argv) {
     if (argc == 5 && std::strcmp(argv[3], "friends") == 0) {
         return friendsFromServer(argv[1], argv[2], argv[4]);
     }
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
+        return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
+    }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
-                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver>\n"
+                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | signin <fake claude> [leaky]\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

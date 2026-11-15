@@ -32,6 +32,9 @@ const UnitViewInfo * UnitView()
         { 14, "SetDefault", 0xd9292b9837d05494ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 15, "SecretAnswer", 0xb4e56199e0ae32c3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 16, "SecretCancel", 0x9f781e34e9b7c12full, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 17, "SignInClaim", 0x7439c20e4947e3b5ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 18, "SignInOpened", 0xa65506e3bb15f846ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 19, "SignInCallback", 0x5c16b9e2e6fb5e04ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -58,7 +61,7 @@ const UnitViewInfo * UnitView()
         { 5, "set_info", 0x5d21aec9380ade68ull, "SessionInfo", SessionInfoTableType(), NULL, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "Nexus.schema", 16, 8, 17, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "Nexus.schema", 19, 8, 20, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "Nexus.schema", 3, 8, 4, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "Nexus.schema", 4, 8, 5, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
@@ -78,13 +81,14 @@ const UnitViewInfo * UnitView()
         { "SessionChange", "Nexus.schema", true, SessionChangeTableType(), TableDocNone, 0, NULL },
         { "SessionInfo", "Nexus.schema", true, SessionInfoTableType(), TableDocNone, 0, NULL },
         { "SessionsDiff", "Nexus.schema", true, SessionsDiffTableType(), TableDocNone, 0, NULL },
+        { "SignInOffer", "Nexus.schema", true, SignInOfferTableType(), TableDocNone, 0, NULL },
         { "Snapshot", "Nexus.schema", true, SnapshotTableType(), TableDocNone, 0, NULL },
         { "StoreEntry", "Nexus.schema", true, StoreEntryTableType(), TableDocNone, 0, NULL },
         { "StoreSession", "Nexus.schema", true, StoreSessionTableType(), TableDocNone, 0, NULL },
     };
     static const UnitViewInfo info = { "nexuswire", 0xcb24df40c7376c7dull,
         0, NULL,
-        15, tables,
+        16, tables,
         3, enums,
         0, NULL,
         1, unions,

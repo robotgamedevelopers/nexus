@@ -35,6 +35,7 @@
 #include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
+#include "server/signin_runner.h"
 #include "server/start_order.h"
 #include "store/fs.h"
 #include "store/store.h"
@@ -320,6 +321,7 @@ struct Link {
     std::uint64_t id;
     std::string client;     // empty: a session that did not name its client
     std::unique_ptr<link::ServerSession> link;
+    std::string signIn;     // the claim token its window claims sign-ins by (sync/signin.h): its state carries their URLs
 };
 
 // A test seam, set only by tests/link/server_lock.cpp: the start's wait for a lock held by a writer that does not
@@ -393,6 +395,10 @@ private:
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
     std::unique_ptr<ConfigRepo> config_;
+    // In-app sign-in's processes (server/signin_runner.h): `claude setup-token` per flow a window claims.
+    std::unique_ptr<SignInRunner> signIns_;
+    void openSignIn(const std::string& host);
+    void signInRequest(int fd, const std::string& account);
     ServerSettings settings_;
     std::vector<Link> links_;
     std::uint64_t nextId_ = 1;
@@ -548,6 +554,8 @@ bool Server::restoreAll(std::string* why) {
             registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
             config_->dir().c_str());
     }
+    // In-app sign-in, once the accounts are held: each claude account with no login is offered for a browser sign-in.
+    openSignIn(host);
     if (!drivers_->start(nowMs())) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;
@@ -600,6 +608,72 @@ void Server::unlinkOwnSocket() {
     if (fstatat(dirFd_, kSocketName, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
             st.st_dev == socketDev_ && st.st_ino == socketIno_) {
         unlinkat(dirFd_, kSocketName, 0);
+    }
+}
+
+void Server::openSignIn(const std::string& host) {
+    const std::string self = paths_.self;
+    const std::string helper = self.empty() ? std::string() :
+        self.substr(0, self.rfind('/') == std::string::npos ? 0 : self.rfind('/')) + "/nexus-signin-open";
+    if (helper.empty() || access(helper.c_str(), X_OK) != 0) {
+        std::fprintf(stderr, "nexus-server: sign-in: no nexus-signin-open beside this program, so accounts are signed "
+            "in by a paste in the window\n");
+        return;
+    }
+    SignInRunner::Options o;
+    o.claude = settings_.claude;
+    o.helper = helper;
+    o.accounts = paths_.accounts;
+    o.dir = paths_.dir;
+    o.home = paths_.home;
+    if (const char* path = std::getenv("PATH")) {
+        o.path = path;
+    }
+    if (o.path.empty()) {
+        o.path = "/usr/bin:/bin";
+    }
+    o.now = [] { return static_cast<std::uint64_t>(nowMs()); };
+    SignInRunner::Events e;
+    e.url = [this](const std::string& account, std::uint64_t id, const sync::SecretValue& url) {
+        hub_->signInUrl(account, id, url);
+    };
+    e.printed = [this](const std::string& account, const sync::SecretValue& token) {
+        hub_->signInPrinted(account, token);
+    };
+    e.exited = [this](const std::string& account, std::uint64_t id, const std::string& why) {
+        hub_->signInExited(account, id, why);
+    };
+    e.log = [](const std::string& line) { std::fprintf(stderr, "nexus-server: %s\n", line.c_str()); };
+    signIns_ = std::make_unique<SignInRunner>(std::move(o), std::move(e));
+    std::string why;
+    if (!signIns_->open(&why)) {
+        std::fprintf(stderr, "nexus-server: sign-in: %s; accounts are signed in by a paste in the window\n",
+            why.c_str());
+        signIns_.reset();
+        return;
+    }
+    sync::SignInHooks hooks;
+    hooks.start = [this](std::uint64_t id, const std::string& account) { signIns_->start(id, account); };
+    hooks.stop = [this](const std::string& account) { signIns_->stop(account); };
+    hooks.replay = [this](std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
+                          const sync::SecretValue& query) { signIns_->replay(id, account, target, query); };
+    // A window acts on a sign-in when its link is of format 5 or later, the older of the two Hellos' protos
+    // (sync/formats.h takesSignIn): that alone.
+    hooks.takers = [this] {
+        return std::any_of(links_.begin(), links_.end(),
+                           [](const Link& l) { return sync::takesSignIn(l.link->format()); });
+    };
+    hub_->signInWith(std::move(hooks), host);
+}
+
+// `config sign-in <account>`: one line back, never anything of the flow: "OK signed in", "OK needs sign-in: ...", or
+// "ERROR <why>". The CLI asks again until the first or the last.
+void Server::signInRequest(int fd, const std::string& account) {
+    std::string said;
+    const bool ok = hub_->requestSignIn(account, &said);
+    writeAll(fd, (ok ? "OK " : "ERROR ") + said + "\n");
+    for (Link& s : links_) {
+        s.link->setState(hub_->stateFor(s.signIn));
     }
 }
 
@@ -679,11 +753,16 @@ void Server::control(int fd) {
         configApply(fd, request);
         return;
     }
+    if (request.rfind("config sign-in ", 0) == 0) {
+        signInRequest(fd, request.substr(std::string("config sign-in ").size()));
+        return;
+    }
     Client client;
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>` and then ` hello <hello>`, `status`, `stop`, `config reload` and `config restore <commit>`\n");
+            "` format <n>` and then ` hello <hello>`, `status`, `stop`, `config reload`, `config restore <commit>` and "
+            "`config sign-in <account>`\n");
         return;
     }
     // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
@@ -697,6 +776,11 @@ void Server::control(int fd) {
     }
     // A client's new session ends its earlier one: the window has left it.
     if (!client.id.empty()) {
+        for (const Link& s : links_) {
+            if (s.client == client.id) {
+                hub_->signInWindowGone(s.signIn);
+            }
+        }
         links_.erase(std::remove_if(links_.begin(), links_.end(),
             [&](const Link& s) { return s.client == client.id; }), links_.end());
     }
@@ -718,7 +802,7 @@ void Server::control(int fd) {
         // window that stated one.
         const std::uint32_t format = sync::linkFormat(helloOf(client).proto, sync::kStateFormat);
         Link s{nextId_++, client.id,
-            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format)};
+            std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format), std::string()};
         const std::string line = link::connectLine(s.link->port(), s.link->key(),
             client.format == 0 && !client.hasHello ? 0 : format,
             client.hasHello ? sync::helloText(sync::kHello) : std::string());
@@ -732,6 +816,11 @@ void Server::control(int fd) {
             static_cast<unsigned long long>(s.id), s.link->port().c_str(), s.client.empty() ? "" : ", client ",
             s.client.c_str(), static_cast<unsigned long long>(client.next), static_cast<unsigned long long>(applied));
         links_.push_back(std::move(s));
+        // A window from before sign-ins, and none newer: the accounts waiting on a sign-in are asked for by a paste.
+        hub_->signInWindowsChanged();
+        for (Link& l : links_) {
+            l.link->setState(hub_->stateFor(l.signIn));
+        }
     } catch (const std::exception& e) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
         std::fprintf(stderr, "nexus-server: %s\n", e.what());
@@ -765,7 +854,7 @@ void Server::configApply(int fd, const std::string& request) {
             lines.push_back(n);
         }
         for (Link& s : links_) {
-            s.link->setState(hub_->state());
+            s.link->setState(hub_->stateFor(s.signIn));
         }
     }
     if (ok && lines.empty()) {
@@ -903,13 +992,23 @@ int Server::run() {
                 std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
                     why.c_str());
         }
+        bool linksEnded = false;
         for (auto it = links_.begin(); it != links_.end();) {
             if (it->link->ended()) {
                 std::fprintf(stderr, "nexus-server: link %llu ended by its client after %llu actions\n",
                     static_cast<unsigned long long>(it->id), static_cast<unsigned long long>(it->link->applied()));
+                // The sign-ins its window held are let go of, for another window (or it, back) to take over.
+                hub_->signInWindowGone(it->signIn);
                 it = links_.erase(it);
+                linksEnded = true;
             } else {
                 ++it;
+            }
+        }
+        if (linksEnded) {
+            hub_->signInWindowsChanged();   // only older windows left: a paste instead of a sign-in
+            for (Link& s : links_) {
+                s.link->setState(hub_->stateFor(s.signIn));
             }
         }
         // A commit to the config repository asked for a push: it runs as a child the loop watches, never here.
@@ -929,6 +1028,13 @@ int Server::run() {
         if (config_ && config_->pushRunning()) {
             wait = std::min(wait, config_->pushWaitMs(nowMs()));
         }
+        if (const std::optional<std::uint64_t> due = hub_->signInDeadline()) {
+            const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
+            wait = std::min(wait, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
+        }
+        if (signIns_ && signIns_->waitMs() >= 0) {
+            wait = std::min(wait, signIns_->waitMs());
+        }
         for (std::size_t i = 0; i < links_.size(); ++i) {
             wait = std::min(wait, std::max(0, links_[i].link->waitMs()));
             for (int fd : links_[i].link->fds()) {
@@ -943,6 +1049,12 @@ int Server::run() {
         if (config_) {
             for (int fd : config_->pushFds()) {
                 fds.push_back(pollfd{fd, POLLIN, 0});
+            }
+        }
+        // Sign-in's processes, helper and replays: serve() below looks at all of them.
+        if (signIns_) {
+            for (const pollfd& p : signIns_->fds()) {
+                fds.push_back(p);
             }
         }
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
@@ -983,6 +1095,16 @@ int Server::run() {
         if (hub_->reaskPending() && hub_->reaskSecrets()) {
             changed = true;
         }
+        // Sign-in: the processes' URLs, tokens and ends, the helper's lines, the replays; and the flows past their
+        // deadline. A token goes straight into the one-chance store in this pass's batch.
+        if (signIns_ && signIns_->serve()) {
+            changed = true;
+        }
+        if (const std::optional<std::uint64_t> due = hub_->signInDeadline();
+                due && *due <= static_cast<std::uint64_t>(nowMs())) {
+            hub_->expireSignIns();
+            changed = true;
+        }
         // The stored logins' ends: notices ahead of one that cannot be renewed, and a new one asked for on its day.
         if (nowMs() >= nextLoginCheck_) {
             checkLogins();
@@ -1003,7 +1125,28 @@ int Server::run() {
             // acknowledge it.
             for (const sync::Action& a : s.link->take(&problem)) {
                 std::string refused;
-                hub_->apply(a, &refused, s.client);
+#ifdef NEXUS_LEAKY_SIGNIN_WITNESS
+                // The test-only leaky build alone (nexus-server-leaky, CMakeLists.txt): the leak link_e2e_signin's
+                // search of server.log must find. Never in nexus-server.
+                if (a.kind == sync::ActionKind::SignInCallback) {
+                    std::fprintf(stderr, "nexus-server: leaky witness build: callback %s\n", a.secret.bytes().c_str());
+                }
+#endif
+                // The claim token a window claims by names its link: that link's state carries the URLs it holds.
+                if (a.kind == sync::ActionKind::SignInClaim && sync::isClaimToken(a.text) && s.signIn != a.text) {
+                    hub_->signInWindowGone(s.signIn);
+                    s.signIn = a.text;
+                }
+                // An opened or a callback counts only from the link that claimed by its token: no other window speaks
+                // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
+                if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
+                        a.text != s.signIn) {
+                    sync::Action named = a;
+                    named.text = s.signIn;
+                    hub_->apply(named, &refused, s.client);
+                } else {
+                    hub_->apply(a, &refused, s.client);
+                }
                 changed = true;
                 if (!refused.empty())
                     std::fprintf(stderr, "nexus-server: link %llu, action %llu: %s\n",
@@ -1031,7 +1174,7 @@ int Server::run() {
             [&] { drivers_->release(nowMs()); },
             [&] {
                 for (Link& s : links_) {
-                    s.link->setState(hub_->state());
+                    s.link->setState(hub_->stateFor(s.signIn));
                 }
             }};
         if (!endPass(end, changed, &why)) {
@@ -1060,6 +1203,9 @@ int Server::run() {
     unlinkOwnSocket();
     // Every open secret request ends unanswered with the server (its asker ends with it), each logged.
     hub_->dropSecrets();
+    // Every sign-in is dropped and its process ended.
+    hub_->dropSignIns();
+    signIns_.reset();
     // After the control socket closes, so no window sends a prompt to a driver being ended.
     if (!endDrivers() && status == 0) {
         std::fprintf(stderr, "nexus-server: the store failed while the drivers were ended; their turns are cut when "
@@ -1247,6 +1393,41 @@ int config(const Paths& p, const std::vector<std::string>& args) {
         std::printf("%s\n%s\n%s\n", repo.dir().c_str(), repo.accountsPath().c_str(), repo.friendsPath().c_str());
         return 0;
     }
+    if (verb == "sign-in" && args.size() == 2) {
+        // Asks the running server once a second until the account is signed in or cannot be: one line out, `signed
+        // in` or `refused: <why>`, and nothing of the sign-in itself. An AI asks this; the person signs in in the
+        // browser from nexus's window. It gives up a minute past a sign-in's deadline.
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(sync::kSignInDeadlineMs) +
+            std::chrono::minutes(1);
+        for (;;) {
+            const int fd = connectControl(p.socket);
+            if (fd < 0) {
+                std::printf("refused: no server answers on %s; `nexus-server new` starts it\n", p.socket.c_str());
+                return 1;
+            }
+            std::string line;
+            const bool asked = writeAll(fd, "config sign-in " + args[1] + "\n") && readLine(fd, &line, 30000);
+            close(fd);
+            if (!asked) {
+                std::printf("refused: the server did not answer\n");
+                return 1;
+            }
+            if (line == "OK signed in") {
+                std::printf("signed in\n");
+                return 0;
+            }
+            if (line.rfind("OK ", 0) != 0) {
+                std::printf("refused: %s\n", line.rfind("ERROR ", 0) == 0 ? line.c_str() + 6 : line.c_str());
+                return 1;
+            }
+            if (std::chrono::steady_clock::now() >= until) {
+                std::printf("refused: %s was not signed in within %llu minutes\n", args[1].c_str(),
+                    static_cast<unsigned long long>(sync::kSignInDeadlineMs / 60000 + 1));
+                return 1;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
     if (verb != "reload" && verb != "restore" && access((repo.dir() + "/.git").c_str(), F_OK) != 0) {
         return fail(repo.dir() + " is not made yet: nexus-server makes it when it starts (`nexus-server new` starts "
             "it); write accounts.json and friends.json there (docs/accounts.md), and the first start takes them");
@@ -1329,6 +1510,7 @@ int config(const Paths& p, const std::vector<std::string>& args) {
     std::fprintf(stderr, "usage: nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> [--dir DIR]\n"
                          "       nexus-server config remote [<url> | --clear] [--dir DIR]\n"
+                         "       nexus-server config sign-in <account> [--dir DIR]\n"
                          "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
                          "(docs/accounts.md)\n");
     return 2;

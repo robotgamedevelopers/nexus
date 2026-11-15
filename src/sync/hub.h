@@ -184,6 +184,21 @@ public:
     virtual void logged(const SecretLog& line) = 0;
     // Every note, whether or not its asker's session is held (the walk reads them).
     virtual void noted(const SecretNote& note) { (void)note; }
+    // A line of in-app sign-in's (sync/signin.h) for server.log: never a URL, a code or a token.
+    virtual void signInLogged(const std::string& line) { (void)line; }
+};
+
+// What in-app sign-in does outside the hub (server/signin_runner.h): start the account's `claude setup-token` for flow
+// `id`, end it, and replay a window's callback to its listener on the server's loopback.
+struct SignInHooks {
+    std::function<void(std::uint64_t id, const std::string& account)> start;
+    std::function<void(const std::string& account)> stop;
+    std::function<void(std::uint64_t id, const std::string& account, const SignInTarget& target,
+                       const SecretValue& query)> replay;
+    // Whether any linked window reads sign-ins (its link of format kSignInFormat or later). Unset: taken as yes. When
+    // windows that take a paste are linked but none of them reads sign-ins (each from a build before them), an
+    // account is asked for by a paste instead (Hub::signInWindowsChanged).
+    std::function<bool()> takers;
 };
 
 // Where the accounts and friends are kept between runs: nexus-server's config repository (server/config_repo.h), the
@@ -345,7 +360,48 @@ public:
     // The walk's faulty run alone: SecretDesk::injectEchoFault.
     void injectSecretEchoFault() { desk_.injectEchoFault(); }
 
+    // In-app sign-in (sync/signin.h, docs/secrets.md "Sign-in", models/SignIn.tla). Once signInWith() is given (after
+    // secretsWith()), an account of a provider with in-app sign-in (hasSignIn) that has no login is signed in in the
+    // browser instead of by a paste: at the start for each with no login (probeSignInWith), at a driver's no-credential,
+    // at a login's end, and at an AI's ask (requestSignIn). `host` is the server's host name, for the windows' check
+    // of whether they run on its machine.
+    void signInWith(SignInHooks hooks, std::string host);
+    bool signsIn(const std::string& account) const;
+    // An AI's `config sign-in <account>`: what it is told, one line, never anything of the flow: "signed in", or
+    // "needs sign-in: ...", which starts a flow when none is live; false with why when it cannot be signed in so.
+    bool requestSignIn(const std::string& account, std::string* said);
+    // The account's process handed over its URL; printed its token; ended with no token (`why`, one line).
+    void signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url);
+    void signInPrinted(const std::string& account, const SecretValue& token);
+    void signInExited(const std::string& account, std::uint64_t id, const std::string& why);
+    // A window's link ended: the flows it held (by its claim token) are let go of.
+    void signInWindowGone(const std::string& opener);
+    // A window linked or its link ended. When the linked windows take a paste but none reads sign-ins (an older
+    // window, a newer server), every needed flow ends and its account is asked for its login by a paste, as before
+    // sign-ins (SignInDesk::fallBack); a flow a window holds already goes on.
+    void signInWindowsChanged();
+    // Every running flow past its deadline expires; when that is next due.
+    void expireSignIns();
+    std::optional<std::uint64_t> signInDeadline() const { return signIns_.deadline(); }
+    // The server is ending: every flow is dropped and its process ended.
+    void dropSignIns();
+    // The state for the link of the window whose claim token is `opener`: state() with the URL of each flow that
+    // window holds. state() itself carries no URL.
+    Sessions stateFor(const std::string& opener) const;
+    const SignInDesk& signIns() const { return signIns_; }
+    // The walk's faulty runs alone: SignInDesk's seams.
+    void injectSignInClaimFault() { signIns_.injectClaimFault(); }
+    void injectSignInCallbackFault() { signIns_.injectCallbackFault(); }
+
 private:
+    void needSignIn(const std::string& account);
+    void needAll();
+    // Windows that take a paste are linked, and none reads sign-ins: a paste is asked for instead of a sign-in.
+    bool pasteInstead() const;
+    void askPasteLogin(const std::string& account);
+    void noteAccount(const std::string& account, const std::string& text);  // a notice in each session on it
+    void signInEffects(const SignInEffects& effects);
+    bool signInAction(const Action& action, std::string* why, const std::string& client);
     void secretEffects(const SecretEffects& effects);
     bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
@@ -384,6 +440,8 @@ private:
     std::map<SessionId, std::deque<std::uint64_t>> askTimes_;   // each asker's asks in the last kSecretAskWindowMs
     std::function<LoginAsk(const accounts::Account&)> loginAsk_;
     std::deque<std::pair<std::string, std::string>> reask_;     // nexus's own asks to make again: account, what
+    SignInDesk signIns_;
+    std::optional<SignInHooks> signInHooks_;
 };
 
 } // namespace nexus::sync

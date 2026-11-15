@@ -27,7 +27,8 @@ namespace nexus::sync {
 // reads an action of a kind it does not know as Unknown (counted, never applied). From format 4 they are schema's
 // ActionsDiff table (schema/Nexus.schema), with the same rules by the table's own. The secret dialog's two kinds come
 // with format 3 (sync/secrets.h); a window sends them only for a request it received, which only a server of format 3
-// or later sends.
+// or later sends. The sign-in's three come with format 5 (sync/signin.h): a window sends them only for a flow it
+// received, which a server sends only on a link of 5 or later; formats 1 to 4 carry none.
 enum class ActionKind : std::uint8_t {
     Unknown = 0,    // read, never written: a kind from a later window, which the server counts and does not apply
     Send = 1,       // a prompt sent in a session: it goes in the transcript
@@ -50,10 +51,16 @@ enum class ActionKind : std::uint8_t {
     // The secret dialog (sync/secrets.h), from format 3:
     SecretAnswer = 15,  // the value the person pasted (`secret`) for request `request`
     SecretCancel = 16,  // the person cancelled request `request` (Escape)
+    // In-app sign-in (sync/signin.h), from format 5 (schema's ActionKind SignInClaim, SignInOpened, SignInCallback); a
+    // server of 4 reads each as Unknown and counts it, a link below 5 carries none, and the account stays needing
+    // sign-in:
+    SignInClaim = 17,   // the window claims sign-in flow `request`, by its claim token (`text`)
+    SignInOpened = 18,  // the window holding flow `request` (`text`, its claim token) opened its URL in the browser
+    SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::SecretCancel;
+constexpr ActionKind kLastActionKind = ActionKind::SignInCallback;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused

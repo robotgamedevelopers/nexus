@@ -60,6 +60,7 @@
 #include <vector>
 
 #include "pr/app_data.h"
+#include "pr/app_shell.h"
 #include "pr/compress.h"
 #include "pr/draw_list.h"
 #include "pr/draw_renderer.h"
@@ -90,6 +91,7 @@
 #include "style.h"
 #include "tab_order.h"
 #include "terminals.h"
+#include "url_opener.h"
 #include "view.h"
 
 #if NEXUS_LINK
@@ -130,6 +132,8 @@ struct App {
     std::unique_ptr<PraxTerminals> terminals;   // over the window's kit, from open() to close()
     std::vector<Machine> machines;  // the fleet's machines, which name a terminal tab in ssh to one (remote.h)
     std::unique_ptr<PraxBoard> board;           // the sprint tab's page, over the window's kit, from open() to close()
+    // The sign-in page and the board's links, opened in the system's browser off the frame thread, open() to close().
+    std::unique_ptr<UrlOpener> urls;
     std::function<SprintBoardAddress()> findBoard; // the board's address; unset, the sprint's (board.h)
     unsigned bench = 0;     // with --bench, frames to draw back to back before stopping
     FrameStats stats;
@@ -195,6 +199,8 @@ void carryOut(App& a, OverlayAct act) {
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
     prAppWindowFocus(window);
     prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
+    // Shown: the window may claim one account's sign-in (frame_host.h LinkSignIn), and opens its page in the browser.
+    a.host.signIn.shown();
 }
 
 bool overlayVisible(const App& a) {
@@ -251,11 +257,13 @@ bool open(void* context, PrStudioWindow* window) {
         }
     }
     a.reopen.clear();
+    a.urls = std::make_unique<UrlOpener>(systemBrowser(prStudioWindowApp(window)));
     PraxBoard::Desc board;
     board.kit = prStudioWindowKit(window);
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
     board.window = prStudioWindowAppWindow(window);
+    board.open = a.urls->handle();
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
     a.board = std::make_unique<PraxBoard>(board);
@@ -269,6 +277,13 @@ bool open(void* context, PrStudioWindow* window) {
             prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
         }
     };
+    // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
+    // the system cannot open is the flow's to end at its deadline, and is never printed. A window that is not an overlay
+    // shows from the start, so it may claim now.
+    a.host.signIn.openUrl = a.urls->handle();
+    if (!a.overlay) {
+        a.host.signIn.shown();
+    }
     setBudget(a, prStudioWindowApp(window));
     a.wakeApp = prStudioWindowApp(window);
     prAppWake(prStudioWindowApp(window));   // a link that changed before the window opened
@@ -291,11 +306,13 @@ void closeWindow(void* context, PrStudioWindow*) {
     a.wakeApp = nullptr;
     a.window = nullptr;
     a.view.paste = nullptr;
+    a.host.signIn.openUrl = nullptr;
     a.host.ui = nullptr;
     a.host.board = nullptr;
     a.host.terminals = nullptr;
     a.view.board = nullptr;
     a.board.reset();
+    a.urls.reset();
     a.view.terminals = nullptr;
     a.terminals.reset();
 }

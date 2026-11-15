@@ -63,6 +63,7 @@
 #include "style.h"
 #include "tab_order.h"
 #include "terminals.h"
+#include "url_opener.h"
 #include "view.h"
 
 namespace {
@@ -973,6 +974,64 @@ void secretDialog(Window& w) {
     w.frames(30);
 }
 
+// In-app sign-in (docs/secrets.md "Sign-in") over a friend's tab with a long history, the server on another machine
+// ("server.test"): a flow is offered and the overlay shown, so the window claims it; the state then gives this window
+// the URL, so it binds its gate (the real one, on its own thread) and opens it through the window's own path, a
+// UrlOpener (url_opener.h) as main.cpp gives it, over a stub browser that takes 300 ms to answer, as a slow Launch
+// Services or ShellExecute may: no frame waits on it. It says it opened it; the flow then leaves the state and the
+// gate closes. The URL is made up, and no node of the window holds it.
+void signIn(Window& w) {
+    std::atomic<int> browsed{0};
+    UrlOpener urls([&browsed](const std::string&) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        ++browsed;
+    });
+    w.host.signIn.openUrl = urls.handle();
+    history(w.model, 1, 3000);
+    sync::Sessions state = stateOf(w.model, sync::Activity::Down);
+    w.link.set(connected(state));
+    w.frames(5);
+    const std::string url = "https://claude.com/cai/oauth/authorize?code=true&client_id=fake-frame-client"
+                            "&redirect_uri=http%3A%2F%2Flocalhost%3A54611%2Fcallback&state=fakeStFrameQz8";
+    sync::SignInOffer offer;
+    offer.id = 4;
+    offer.account = "claude-main";
+    offer.provider = "claude";
+    offer.host = "server.test";
+    state.setOffers({offer});
+    w.link.set(connected(state));
+    w.host.signIn.shown();
+    const std::size_t sent = w.link.sent.size();
+    w.frames(5);
+    CHECK(w.link.sent.size() == sent + 1);
+    if (w.link.sent.size() == sent + 1) {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInClaim && w.link.sent.back().request == 4);
+    }
+    offer.opener = w.host.signIn.opener.token();
+    offer.url = sync::SecretValue(url);
+    state.setOffers({offer});
+    w.link.set(connected(state));
+    w.frames(5);
+    CHECK(w.link.sent.size() == sent + 2);
+    if (w.link.sent.size() == sent + 2) {
+        CHECK(w.link.sent.back().kind == sync::ActionKind::SignInOpened && w.link.sent.back().request == 4);
+    }
+    CHECK(!w.holdsText("claude.com/cai") && !w.holdsText("fakeStFrameQz8"));
+    w.type("typed while the sign-in waits");
+    w.frames(10);
+    state.setOffers({});
+    w.link.set(connected(state));
+    w.frames(10);
+    CHECK(!w.host.signIn.gateOpen());
+    w.frames(10);
+    // The stub browser was handed the page once, on the opener's thread.
+    for (int i = 0; i < 200 && browsed.load() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(browsed.load() == 1 && urls.opened() == 1);
+    w.host.signIn.openUrl = nullptr;
+}
+
 // The real link over an ssh that hangs for seconds before it fails: the link's thread waits, never the window.
 void slowSshLink(Window& w) {
     link::ClientLink::Options options;
@@ -1050,6 +1109,7 @@ const Case kCases[] = {
         "needs one (Prax text_font.cpp matchFallback); nexus loads the faces ahead (font_prefetch.h), Prax has no way "
         "to match a kit's text fonts ahead or off the frame thread", 145},
     {"secret_dialog", secretDialog},
+    {"sign_in", signIn},
     {"slow_ssh_link", slowSshLink},
 };
 

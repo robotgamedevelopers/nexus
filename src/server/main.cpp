@@ -19,7 +19,9 @@
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
-//                                         remote [<url> | --clear]
+//                                         remote [<url> | --clear]; and sign-in <account>, which waits while the
+//                                         person signs the account in in the browser from nexus's window, and prints
+//                                         `signed in` or `refused: <why>` (docs/secrets.md "Sign-in")
 //
 // DIR is $HOME/.nexus/server unless given (server/home.h): the settings file config, the control socket server.sock,
 // the log server.log and the store store/ live there, and the file drivers, which names each friend's driver
@@ -57,6 +59,7 @@ int usage() {
                          "       nexus-server builds <verb> ... [--dir DIR]   (`nexus-server builds help`)\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
+                         "       nexus-server config sign-in <account> [--dir DIR]\n"
                          "       nexus-server store check [--dir DIR]\n"
                          "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
                          "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
@@ -176,12 +179,14 @@ int main(int argc, char** argv) {
         // The build this program is in, held for the server's life so that no prune removes it while it runs; one
         // being removed as this starts refuses the start.
         nexus::server::builds::BuildHold hold;
-        const nexus::store::Status held = nexus::server::builds::holdBuild(selfPath(), hold);
+        const std::string self = selfPath();
+        const nexus::store::Status held = nexus::server::builds::holdBuild(self, hold);
         if (!held.is_ok()) {
             std::fprintf(stderr, "nexus-server: %s\n", held.message().c_str());
             return 1;
         }
         paths.build = hold.hash();
+        paths.self = self;
         return nexus::server::serve(paths);
     }
     if (command == "stop") {

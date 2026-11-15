@@ -177,6 +177,15 @@ if(NEXUS_WINDOW)
             PASS_REGULAR_EXPRESSION "HITCH in every run: frame 20, phase keep")
     endif()
 
+    # The window's side of in-app sign-in (src/frame_host.h LinkSignIn) over a recording port: the claim once shown, the
+    # open with no gate on one machine and with one across two, nothing for a flow another window holds. The browser and
+    # the gate are the test's seams (no URL opened, no socket): unit.
+    add_executable(nexus_signin_host_tests test_signin_host.cpp)
+    target_compile_options(nexus_signin_host_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_signin_host_tests PRIVATE nexus_frame)
+    add_test(NAME window_unit_signin COMMAND nexus_signin_host_tests)
+    set_tests_properties(window_unit_signin PROPERTIES LABELS unit TIMEOUT 30)
+
     # `nexus --state` against a fixture state (fixtures/busy.state, written by tests/server's friends_functional_window
     # from the fake driver), with HOME an empty directory: it draws from the file alone (state_screenshot.cmake).
     if(NEXUS_LINK AND TARGET nexus)

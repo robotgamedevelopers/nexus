@@ -37,7 +37,14 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(secrets_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     target_compile_options(secrets_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks link_walk secrets_walk)
+    # In-app sign-in's walk (src/sync/signin.h through the hub, and the windows' openers and gates), for
+    # SignInTrace.tla.
+    add_executable(signin_walk signin_walk.cpp)
+    target_link_libraries(signin_walk PRIVATE nexus_sync)
+    target_include_directories(signin_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+    target_compile_options(signin_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks link_walk secrets_walk signin_walk)
 endif()
 
 add_test(NAME sync_unit COMMAND sync_test)
@@ -123,3 +130,18 @@ tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.
 # code-side invariant names it.
 tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
          SECWALK SEED 1 STEPS 2000 FAULTY echo)
+
+# Trace binding of in-app sign-in (models/SignInTrace.tla): the code's random walks (signin_walk), each a behaviour of
+# SignIn.tla with every safety property, the windows' views never holding a login and no log line any value. The
+# faulty walks (a takeover that starts a second process, a callback replayed twice, a gate that takes a stray request)
+# must each be rejected by the rule they break, on the code's own record. The claim fault runs on seed 2: seed 1's walk
+# takes no takeover since the walk gained the late print and the fallback, so its fault is never played.
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_signin_trace_seed_${seed} SignInTrace SignInTrace.cfg pass SIGNWALK SEED ${seed} STEPS 6000)
+endforeach()
+tlc_test(tlc_signin_trace_faulty_claim_rejected SignInTrace SignInTrace.cfg invariant
+         PROPERTY CodeOneProcessPerAccount SIGNWALK SEED 2 STEPS 6000 FAULTY claim)
+tlc_test(tlc_signin_trace_faulty_callback_rejected SignInTrace SignInTrace.cfg invariant
+         PROPERTY CodeOneCallbackPerFlow SIGNWALK SEED 1 STEPS 6000 FAULTY callback)
+tlc_test(tlc_signin_trace_faulty_stray_rejected SignInTrace SignInTrace.cfg invariant
+         PROPERTY CodeGateForwardsOnlyMatching SIGNWALK SEED 1 STEPS 6000 FAULTY stray)

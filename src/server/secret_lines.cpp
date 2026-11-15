@@ -27,4 +27,10 @@ void SecretLines::logged(const sync::SecretLog& line) {
     }
 }
 
+void SecretLines::signInLogged(const std::string& line) {
+    if (toLog_) {
+        toLog_("nexus-server: " + line);
+    }
+}
+
 } // namespace nexus::server

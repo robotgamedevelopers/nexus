@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -124,6 +126,64 @@ std::string saved(const Builder& b, Measure measure, Save save, const char* what
             std::to_string(need) + " bytes");
     }
     return out;
+}
+
+// A builder's memory, every byte overwritten when it is freed: for a diff that holds a secret's value (an action's) or
+// a sign-in's URL (an offer's), which the builder copied into its arena (sync/secrets.h: where a value may be). Each
+// block keeps its size in front of it.
+constexpr std::size_t kWipeHeader = 16;
+
+inline void* wipingAlloc(void*, int64_t bytes) {
+    if (bytes <= 0) {
+        return nullptr;
+    }
+    const std::size_t size = static_cast<std::size_t>(bytes);
+    auto* block = static_cast<unsigned char*>(std::calloc(1, size + kWipeHeader));
+    if (block == nullptr) {
+        return nullptr;
+    }
+    std::memcpy(block, &size, sizeof size);
+    return block + kWipeHeader;
+}
+
+inline void wipingFree(void*, void* pointer) {
+    if (pointer == nullptr) {
+        return;
+    }
+    unsigned char* block = static_cast<unsigned char*>(pointer) - kWipeHeader;
+    std::size_t size = 0;
+    std::memcpy(&size, block, sizeof size);
+    volatile unsigned char* bytes = block;
+    for (std::size_t i = 0; i < size + kWipeHeader; ++i) {
+        bytes[i] = 0;
+    }
+    std::free(block);
+}
+
+inline wire::TableAllocator wiping() {
+    return wire::TableAllocator{wipingAlloc, wipingFree, nullptr};
+}
+
+// `value` as a *bytes field: absent when empty, else its bytes as they are, never changed (a secret's value, a
+// sign-in's URL). Never text: putText would rewrite a malformed byte.
+inline void putBytes(wire::TableWorker& worker, wire::TableRef& slot, const std::string& value) {
+    if (value.empty()) {
+        return;
+    }
+    std::uint8_t* to = wire::TableBytesEmplace(worker, slot, static_cast<int64_t>(value.size()));
+    if (to == nullptr) {
+        throw std::bad_alloc();
+    }
+    std::memcpy(to, value.data(), value.size());
+}
+
+// A *bytes field read back as a value; empty when absent.
+inline SecretValue bytesOf(const wire::TableRef& ref) {
+    const wire::TableBytesView v = wire::TableBytesAt(ref);
+    if (v.data == nullptr || v.length <= 0) {
+        return SecretValue();
+    }
+    return SecretValue(std::string_view(reinterpret_cast<const char*>(v.data), static_cast<std::size_t>(v.length)));
 }
 
 // The region a load reads into, wiped when it goes: it may hold a secret's value.

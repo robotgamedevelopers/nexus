@@ -197,6 +197,10 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (action.kind == ActionKind::SecretAnswer || action.kind == ActionKind::SecretCancel) {
         return secretAction(action, why, client);
     }
+    if (action.kind == ActionKind::SignInClaim || action.kind == ActionKind::SignInOpened ||
+            action.kind == ActionKind::SignInCallback) {
+        return signInAction(action, why, client);
+    }
     if (action.kind == ActionKind::Unknown) {
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
@@ -668,6 +672,14 @@ void Hub::take(accounts::Registry next) {
             signedIn_.insert(a.name);
         }
     }
+    // A flow for an account removed, or now of another provider, ends with it.
+    for (const SignInOffer& o : signIns_.offers()) {
+        const accounts::Account* a = accounts_->account(o.account);
+        if (a == nullptr || a->provider != o.provider) {
+            signInEffects(signIns_.signedIn(o.account));
+        }
+    }
+    needAll();
 }
 
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {
@@ -676,9 +688,19 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     if (signedIn) {
         signedIn_.insert(account);
+        // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
+        if (signIns_.live(account)) {
+            signInEffects(signIns_.signedIn(account));
+        }
         return;
     }
     signedIn_.erase(account);
+    // An account whose provider signs in in the app: a flow, one browser sign-in, unless one is live or a login for it
+    // is held already.
+    if (signsIn(account)) {
+        needSignIn(account);
+        return;
+    }
     // An account with no login it can use: nexus itself asks for it in the window (docs/secrets.md), one paste, unless
     // a request for it is open, or its value held, already. With no window that can take one, the ask is refused at
     // once and logged.
@@ -700,9 +722,288 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
         return;
     }
     signedIn_.erase(account);
+    if (signsIn(account)) {
+        needSignIn(account);
+        return;
+    }
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
     if (secretKeeper_ != nullptr && a != nullptr && !loginFile(a->provider).empty() && !desk_.busy(account)) {
         askSecret(SecretAsker{}, account, loginFile(a->provider), why);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// In-app sign-in
+
+void Hub::signInWith(SignInHooks hooks, std::string host) {
+    signInHooks_ = std::move(hooks);
+    signIns_.setHost(std::move(host));
+    needAll();
+}
+
+bool Hub::signsIn(const std::string& account) const {
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    return signInHooks_.has_value() && secretKeeper_ != nullptr && a != nullptr && hasSignIn(a->provider);
+}
+
+// Every account that signs in in the app and has no login: a flow each (none for one live or held already).
+void Hub::needAll() {
+    if (!signInHooks_ || !accounts_) {
+        return;
+    }
+    for (const accounts::Account& a : accounts_->accounts) {
+        if (signedIn_.count(a.name) == 0 && signsIn(a.name)) {
+            needSignIn(a.name);
+        }
+    }
+}
+
+bool Hub::pasteInstead() const {
+    return signInHooks_ && signInHooks_->takers && takers_ && takers_() && !signInHooks_->takers();
+}
+
+void Hub::askPasteLogin(const std::string& account) {
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr || signedIn_.count(account) != 0 || loginFile(a->provider).empty() || desk_.busy(account)) {
+        return;
+    }
+    // At most 64 + 95 bytes, inside kSecretWhyBytes.
+    askSecret(SecretAsker{}, account, loginFile(a->provider), account + " has no login, and this nexus window is too "
+              "old to sign in in the browser: paste its " + loginFile(a->provider));
+}
+
+void Hub::needSignIn(const std::string& account) {
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr || signedIn_.count(account) != 0 || signIns_.live(account) || desk_.busy(account)) {
+        return;
+    }
+    if (pasteInstead()) {
+        askPasteLogin(account);
+        return;
+    }
+    // The id first, durable, so that it is never minted again, across restarts.
+    const std::uint64_t id = store_.applied(kSignInIdsClient) + 1;
+    std::string failed;
+    if (!store_.commit(0, {}, kSignInIdsClient, id, &failed)) {
+        if (secretEvents_ != nullptr) {
+            secretEvents_->signInLogged(account + ": a sign-in was not started: its id was not kept: " + failed);
+        }
+        return;
+    }
+    signInEffects(signIns_.need(id, account, a->provider));
+}
+
+bool Hub::requestSignIn(const std::string& account, std::string* said) {
+    if (!accounts::isName(account)) {
+        *said = "an account is a name (letters, digits, '-', '_' and '.', at most 64)";
+        return false;
+    }
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr) {
+        *said = "no account " + account + " is set up in accounts.json (docs/accounts.md)";
+        return false;
+    }
+    if (!hasSignIn(a->provider)) {
+        *said = account + "'s provider, " + a->provider + ", does not sign in in nexus's window";
+        return false;
+    }
+    if (!signsIn(account)) {
+        *said = "this server does not sign accounts in in the window";
+        return false;
+    }
+    if (signedIn_.count(account) != 0) {
+        *said = "signed in";
+        return true;
+    }
+    const bool before = desk_.busy(account);
+    needSignIn(account);
+    *said = before ? "needs sign-in: its login is being stored, or asked for by a paste" :
+        signIns_.live(account) ? "needs sign-in: the person signs it in in the browser from nexus's window" :
+        desk_.busy(account) ? "needs sign-in: the person pastes its login in nexus's window, which is too old to "
+                              "sign in in the browser" :
+        "needs sign-in: it could not be asked for now (server.log says why)";
+    return true;
+}
+
+void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url) {
+    signInEffects(signIns_.url(account, id, url));
+}
+
+void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
+    const auto flow = signIns_.flowOf(account);
+    const bool running = flow && signInRunning(flow->second);
+    // The re-check: a subscription's login, not an API key (nor anything else the process printed).
+    if (!isSubscriptionToken(token)) {
+        if (!running) {
+            if (secretEvents_ != nullptr) {
+                secretEvents_->signInLogged(account + ": a sign-in's process printed, after its sign-in ended, a "
+                                            "login that is not a subscription's: dropped");
+            }
+            return;
+        }
+        SignInEffects e = signIns_.exited(account, flow->first, "it printed a login that is not a subscription's");
+        signInEffects(e);
+        if (signInHooks_ && signInHooks_->stop) {
+            signInHooks_->stop(account);
+        }
+        return;
+    }
+    // In time, the flow is captured; late (its deadline passed while the browser was sent back, or in the grace after
+    // its process was told to end), the login is stored all the same and the account signed in: the person signed in,
+    // and asking again would be the bug (models/SignIn.tla Print, EveryPrintTaken).
+    SignInEffects e;
+    signIns_.printed(account, &e);
+    signInEffects(e);
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a == nullptr || secretKeeper_ == nullptr) {
+        return;
+    }
+    // Straight into the one-chance store, as a request of nexus's own (never in any window's state): stored when
+    // durable, else held and written again; never dropped.
+    const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
+    std::string failed;
+    if (!store_.commit(0, {}, kSecretIdsClient, id, &failed)) {
+        // The store has failed (and the server stops): the login is written all the same, never dropped. Its id names
+        // it in this server's memory alone.
+        if (secretEvents_ != nullptr) {
+            secretEvents_->signInLogged(account + ": the login's request id was not kept (" + failed +
+                                        "); it is written all the same");
+        }
+    }
+    secretEffects(desk_.capture(id, account, loginFile(a->provider), token, *secretKeeper_, clock_ ? clock_() : 0));
+    // Refused as not of the login's shape: the account needs a fresh sign-in.
+    if (signedIn_.count(account) == 0 && !desk_.busy(account)) {
+        needSignIn(account);
+    }
+}
+
+void Hub::signInExited(const std::string& account, std::uint64_t id, const std::string& why) {
+    signInEffects(signIns_.exited(account, id, why));
+}
+
+void Hub::signInWindowsChanged() {
+    if (!pasteInstead()) {
+        return;
+    }
+    SignInEffects out;
+    const std::vector<std::string> accounts = signIns_.fallBack(&out);
+    signInEffects(out);
+    for (const std::string& account : accounts) {
+        askPasteLogin(account);
+    }
+}
+
+void Hub::signInWindowGone(const std::string& opener) {
+    signInEffects(signIns_.windowGone(opener));
+}
+
+void Hub::expireSignIns() {
+    if (clock_) {
+        signInEffects(signIns_.expire(clock_()));
+    }
+}
+
+void Hub::dropSignIns() {
+    signInEffects(signIns_.drop());
+}
+
+Sessions Hub::stateFor(const std::string& opener) const {
+    if (opener.empty() || state_.offers().empty()) {
+        return state_;
+    }
+    Sessions s = state_;
+    std::vector<SignInOffer> offers = signIns_.offers();
+    for (SignInOffer& o : offers) {
+        if (o.opener != opener) {
+            o.url.clear();
+            if (!o.opener.empty()) {
+                o.opener = kSignInHeldBy;
+            }
+        }
+    }
+    s.setOffers(std::move(offers));
+    return s;
+}
+
+bool Hub::signInAction(const Action& action, std::string* why, const std::string& client) {
+    if (!count(action, why, client)) {
+        return false;
+    }
+    if (!signInHooks_) {
+        if (why != nullptr) {
+            *why = describe(action) + " dropped: this server signs nothing in in the window";
+        }
+        return false;
+    }
+    switch (action.kind) {
+        case ActionKind::SignInClaim:
+            signInEffects(signIns_.claim(action.request, action.text, clock_ ? clock_() : 0));
+            break;
+        case ActionKind::SignInOpened:
+            signInEffects(signIns_.opened(action.request, action.text));
+            break;
+        default:
+            signInEffects(signIns_.callback(action.request, action.text, action.secret));
+            break;
+    }
+    return true;
+}
+
+void Hub::noteAccount(const std::string& account, const std::string& text) {
+    for (SessionId id : store_.ids()) {
+        const StoredSession* s = store_.find(id);
+        if (s == nullptr || s->info.account != account) {
+            continue;
+        }
+        std::string failed;
+        if (store_.commit(id, {SessionChange{entry(EntryKind::Notice, text), {}}}, std::string(), 0, &failed)) {
+            refresh(id);
+        }
+    }
+}
+
+void Hub::signInEffects(const SignInEffects& effects) {
+    for (const SignInEffects::Note& n : effects.notes) {
+        noteAccount(n.account, n.text);
+    }
+    if (secretEvents_ != nullptr) {
+        for (const std::string& l : effects.log) {
+            secretEvents_->signInLogged(l);
+        }
+    }
+    if (effects.changed) {
+        std::vector<SignInOffer> offers = signIns_.offers();
+        for (SignInOffer& o : offers) {
+            o.url.clear();
+            if (!o.opener.empty()) {
+                o.opener = kSignInHeldBy;
+            }
+        }
+        state_.setOffers(std::move(offers));
+    }
+    if (signInHooks_) {
+        for (const std::string& account : effects.stop) {
+            if (signInHooks_->stop) {
+                signInHooks_->stop(account);
+            }
+        }
+        for (const SignInEffects::Start& s : effects.start) {
+            if (signInHooks_->start) {
+                signInHooks_->start(s.id, s.account);
+            }
+        }
+        for (const SignInEffects::Replay& r : effects.replays) {
+            if (signInHooks_->replay) {
+                signInHooks_->replay(r.id, r.account, r.target, r.query);
+            }
+        }
+    }
+    // A flow that ended unsigned leaves its account needing a fresh one, which a window claims at the person's next
+    // show of the overlay: nothing starts without the person there.
+    for (const std::string& account : effects.needAgain) {
+        if (signedIn_.count(account) == 0 && signsIn(account)) {
+            needSignIn(account);
+        }
     }
 }
 
@@ -868,6 +1169,9 @@ void Hub::secretEffects(const SecretEffects& effects) {
                               &failed)) {
                 refresh(n.asker);
             }
+        }
+        if (n.toAccount) {
+            noteAccount(n.account, n.text);
         }
     }
     if (effects.changed) {

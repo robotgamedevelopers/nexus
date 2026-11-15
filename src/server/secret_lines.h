@@ -25,6 +25,7 @@ public:
     // driver. An answer that cannot be written as a line is logged, without it.
     void answered(const sync::SecretReply& reply) override;
     void logged(const sync::SecretLog& line) override;
+    void signInLogged(const std::string& line) override;
 
 private:
     ToDriver toDriver_;

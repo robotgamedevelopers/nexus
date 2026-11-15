@@ -77,9 +77,9 @@ public:
         void* clockContext = nullptr;
         // True while the window is on screen (the overlay is shown); unset, always.
         std::function<bool()> visible;
-        // Shows a link that would take the tab off the board (sprint.h linkLeavesBoard): unset, the system's handler
-        // for it, the default browser for a web address (pr/app_shell.h prAppOpenUrl over `app`). A test's opener
-        // records it.
+        // Shows a link that would take the tab off the board (sprint.h linkLeavesBoard): the window gives its
+        // UrlOpener's (url_opener.h), which opens it off the frame thread; unset, the system's handler for it on this
+        // thread (pr/app_shell.h prAppOpenUrl over `app`). A test's opener records it.
         std::function<void(const std::string& url)> open;
     };
 

@@ -31,13 +31,26 @@ foreach(group roundtrip versions)
     set_tests_properties(wire_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()
 
-# nexus's own wire code (sync::Sessions, sync::Actions, the Hello) against the later version's generated code, both
-# ways: nexus_versions_test.cpp includes only nexus's headers.
+# The earlier version, state format 4 (prev/NexusPrev.schema, generated into prev/gen, test only: nexus before the
+# in-app sign-in), the same way: its generated code and its side (wire_prev.cpp), each in its own library.
+set(prev_sources prev/gen/NexusPrevTable.cpp prev/gen/NexuswireprevView.cpp)
+add_library(nexus_wire_prev STATIC ${prev_sources})
+target_include_directories(nexus_wire_prev PUBLIC prev/gen)
+target_compile_options(nexus_wire_prev PRIVATE ${NEXUS_WARNINGS})
+if(MSVC)
+    set_source_files_properties(${prev_sources} PROPERTIES COMPILE_OPTIONS /wd4305)
+endif()
+add_library(nexus_wire_prev_side STATIC wire_prev.cpp)
+target_link_libraries(nexus_wire_prev_side PUBLIC nexus_wire_prev)
+target_compile_options(nexus_wire_prev_side PRIVATE ${NEXUS_WARNINGS})
+
+# nexus's own wire code (sync::Sessions, sync::Actions, the Hello) against the later version's generated code and the
+# earlier one's (format 4), both ways: nexus_versions_test.cpp includes only nexus's headers.
 add_executable(nexus_versions_test nexus_versions_test.cpp)
-target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next_side)
+target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next_side nexus_wire_prev_side)
 target_compile_options(nexus_versions_test PRIVATE ${NEXUS_WARNINGS})
 
-foreach(group sessions actions hello)
+foreach(group sessions actions hello signin)
     add_test(NAME wire_unit_nexus_${group} COMMAND nexus_versions_test ${group})
     set_tests_properties(wire_unit_nexus_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

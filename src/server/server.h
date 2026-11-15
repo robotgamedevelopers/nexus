@@ -42,6 +42,7 @@ struct Paths {
                             // (server/home.h accountsDir)
     std::string build;      // serve: the placed build this program runs from (server/builds.h holdBuild), learnt from
                             // its own resolved path; empty for a program outside one (a build tree)
+    std::string self;       // this program's path (serve): in-app sign-in's helper, nexus-signin-open, is beside it
 };
 
 // Who asks for a session: a client id (empty: none), the number of its first action in the session, the state format

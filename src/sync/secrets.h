@@ -155,6 +155,7 @@ struct SecretNote {
     std::string what;
     std::string account;
     std::string text;
+    bool toAccount = false;     // a login nexus captured itself: the note goes in every session on the account
 };
 
 // A line of server.log: the request id, the account, what happened (one word: "asked", "stored", "holding", "late",
@@ -240,6 +241,11 @@ public:
     // The oldest held value whose retry time is at or before `now` is written again: stored when durable (the asker,
     // if not yet answered, hears "stored"), else held, its next retry twice as far off (at most kSecretRetryMaxMs).
     SecretEffects retry(std::uint64_t now, SecretKeeper& keeper);
+    // A login nexus captured itself (sync/signin.h: the browser sign-in's token), as request `id` (minted like an
+    // ask's, never in any window's state) from nexus: under the one-chance rule like an answer, stored when durable,
+    // else held and written again by retry(); never dropped, and never in any effect. Nobody is answered.
+    SecretEffects capture(std::uint64_t id, const std::string& account, const std::string& what,
+                          const SecretValue& value, SecretKeeper& keeper, std::uint64_t now);
     // The server is ending: every open request is dropped, unanswered (its asker ends with the server), and every held
     // value is lost, logged "lost" (the one way a value that arrived is not stored). Expired requests are forgotten.
     SecretEffects drop();
@@ -283,6 +289,7 @@ private:
     std::map<std::uint64_t, std::uint64_t> due_;    // each open request's deadline
     std::map<std::uint64_t, Held> held_;            // each held value, by its request's id
     std::map<std::uint64_t, Ended> ended_;          // the most recent requests ended, by id
+    std::set<std::uint64_t> captured_;              // the held values nexus captured itself (capture())
     bool echoFault_ = false;
 };
 

@@ -211,6 +211,12 @@ jobs:
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
             build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
+          # in-app sign-in: every unit group (the leak test among them), then its walks, each failing if a log line
+          # holds a URL, a state, a code or a login
+          build/tests/server/signin_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/sync/signin_walk "$seed" 6000 walks/signin.tla
+          done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
           build/tests/store/store_test
@@ -552,11 +558,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          changed=$(git status --porcelain -- schema tests/wire/next)
+          changed=$(git status --porcelain -- schema tests/wire/next tests/wire/prev)
           if [ -n "$changed" ]; then
             echo "$changed"
-            git --no-pager diff --stat -- schema tests/wire/next
-            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen and tests/wire/next/gen"
+            git --no-pager diff --stat -- schema tests/wire/next tests/wire/prev
+            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen, tests/wire/next/gen and tests/wire/prev/gen"
             exit 1
           fi
 
@@ -575,12 +581,12 @@ jobs:
         include:
           - part: units
             targets: >-
-              model_test overlay_test sync_test secrets_test store_test durable_test driver_protocol_test
+              model_test overlay_test sync_test secrets_test signin_test store_test durable_test driver_protocol_test
               supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk strip_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
-              builds_walk
+              overlay_walk trace_walk strip_walk link_walk secrets_walk signin_walk journal_walk store_lock_walk
+              supervisor_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -629,6 +635,8 @@ jobs:
           build/tests/sync/sync_test
           # the secret dialog: every unit group, the leak test among them
           build/tests/server/secrets_test
+          # in-app sign-in: every unit group, the leak test among them
+          build/tests/server/signin_test
           # the store: every unit group (MemFs, crashes at every write and sync, the lock, the start-up order), and
           # the server's tabs on it
           build/tests/store/store_test
@@ -703,6 +711,10 @@ jobs:
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/sync/secrets_walk "$seed" 2000
             walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+          done
+          # in-app sign-in's walks, each failing if a log line holds a URL, a state, a code or a login
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/signin_walk "$seed" 6000
           done
           # the journal's walks
           for seed in 1 2 3 4 5 6 7 8; do
@@ -873,12 +885,20 @@ jobs:
             run: '^tlc_(strip_|spec_strip)'
             skip: '^tlc_spec_strip_shared$'
             build: strip_walk
+          # In-app sign-in (models/SignIn.tla): its instances and witnesses, then its code's walks against
+          # SignInTrace.tla (about 400 to 800 records each, 6 to 8 s on two workers) and their faults.
+          - shard: signin
+            run: '^tlc_signin_'
+            skip: '^tlc_signin_trace_'
+          - shard: signin-trace
+            run: '^tlc_signin_trace_'
+            build: signin_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$|signin)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

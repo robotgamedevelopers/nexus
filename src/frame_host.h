@@ -14,6 +14,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -31,7 +32,9 @@
 #include "sync/friend_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
+#include "signin_gate.h"
 #include "sync/sessions.h"
+#include "sync/signin.h"
 #include "tab_order.h"
 #include "view.h"
 
@@ -82,6 +85,37 @@ private:
     SecretAsk shown_;
 };
 
+// In-app sign-in over the link (docs/secrets.md "Sign-in"): the server offers each account that needs signing in, and a
+// window that is shown claims one (sync/signin.h SignInOpener); the server then hands that window alone the process's
+// URL, which it opens in the browser (`openUrl`, main.cpp: Prax's prAppOpenUrl). When the server runs on another
+// machine, the window first opens its gate (signin_gate.h) on the redirect's port, and sends up the one callback it
+// takes. The URL and the callback's query pass only through here, the gate and the actions that carry them: nothing is
+// logged, drawn or kept. One step a frame; nothing waits.
+class LinkSignIn {
+public:
+    LinkPort* port = nullptr;
+    sync::SignInOpener opener;          // its claim token, random per launch (connect)
+    std::string serverArg;              // where the window reaches the server (--server)
+    std::string local;                  // this machine's host name, for sync::sameMachine
+    std::function<void(const std::string& url)> openUrl;    // empty: nothing is opened (the frame test)
+    // Where the gate comes from: a test seam; empty: a SignInGate.
+    std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
+    std::string problem;                // the last gate's failure, for the view's problem line; cleared when shown
+
+    // The state's offers as the link last brought them, or the link lost.
+    void received(const sync::Sessions& state) { opener.received(state.offers()); }
+    void lost();
+    // The overlay was shown: the window may claim one flow.
+    void shown() { opener.shown(); }
+    // One step: the gate's callback up, a gate gone with its flow closed, then the opener's next claim or open.
+    void step();
+    bool gateOpen() const { return gate_ != nullptr; }
+
+private:
+    std::unique_ptr<SignInGate> gate_;
+    std::uint64_t gateFlow_ = 0;
+};
+
 struct FrameHost {
     Model* model = nullptr;
     View* view = nullptr;
@@ -116,6 +150,7 @@ struct FrameHost {
     sync::LinkPhase phase = sync::LinkPhase::Connecting;
     std::uint64_t heardMsAgo = 0;
     LinkSecrets secrets;                // the secret dialog, from connect()
+    LinkSignIn signIn;                  // in-app sign-in, from connect(); main.cpp sets its openUrl
 
     // Shows the server's sessions through `port`: the prompt waits for the server, Enter and Command-Enter send and
     // queue to the session the tab shows, Command-Escape stops it, the friend tabs follow the server's friends, a

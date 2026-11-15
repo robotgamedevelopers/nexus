@@ -341,7 +341,7 @@ void roundtripActions() {
     }
     CHECK(d->start == 9);
     const int kinds = static_cast<int>(ActionKind::Max);
-    CHECK(kinds == 16);
+    CHECK(kinds == 19);     // through SecretCancel (16), then the sign-in's three (format 5)
     CHECK(d->actions.size() == kinds);
     for (int32_t i = 0; i < d->actions.size(); ++i) {
         const int k = i + 1;

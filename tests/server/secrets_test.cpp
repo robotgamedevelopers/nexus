@@ -570,6 +570,15 @@ void hub() {
         // The account's own sign-in asks nothing while its value is held.
         s.hub->reportSignedIn("a1", false);
         CHECK(s.hub->state().requests().empty() && s.store.applied(sync::kSecretIdsClient) == 1);
+        // The friend whose value is held asks again: refused busy at once, with id 0, no id minted, nothing opened,
+        // and the held value untouched.
+        s.events.replies.clear();
+        CHECK(s.hub->askSecret(asker(1, 2), "a1", kToken, "", &why));
+        CHECK(s.events.replies.size() == 1 && s.events.replies[0].id == 0 && s.events.replies[0].asker == asker(1, 2) &&
+              s.events.replies[0].reason == sync::reason::kBusy && !s.events.replies[0].stored);
+        CHECK(s.store.applied(sync::kSecretIdsClient) == 1 && s.hub->state().requests().empty());
+        CHECK(s.hub->secrets().holding().size() == 1 && s.hub->secretRetryAt() == s.now + sync::kSecretRetryFirstMs);
+        s.events.replies.clear();
         k2.fail = false;
         s.now += sync::kSecretRetryFirstMs;
         s.hub->retrySecrets();
