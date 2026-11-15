@@ -41,6 +41,7 @@ Prax goes to Prax's author as a request, never a fork.
   - `~/.nexus/client/` (`src/client_home.h`): `config` (`nova-config <path>`, `sprint-url <url>`), the window's saved preferences, and on Windows `nexus.log`.
   - Each side resolves its home in one function (`serverHome`, `clientHome`: HOME, or USERPROFILE for the native Windows window) and reads nothing nexus-specific from the environment. On Windows the native window's `%USERPROFILE%\.nexus\client` and the WSL2 server's `$HOME/.nexus/server` are different directories on purpose.
 
+- Setting nexus up from a person's fork and changing it from there is `SETUP.md`, which an AI follows cold: `nexus-server setup`, `doctor` and `rebuild` (`src/server/install.h`, each with `nexus-server help <verb>`) and the takeover of the running server by a new build (`src/server/takeover.h`, `models/Takeover.tla`). `SETUP.md` and the verbs' help change in the same pull request as those files, every command in `SETUP.md` is one that was run, and nothing in either asks the person to do anything but sign in, in nexus's own dialog.
 - Use Prax fully: take the highest Prax layer that does the job, and never rewrite what Prax already has.
 - mosh's transport is used unmodified (fetched at mosh-1.4.0) for the link between the window and `nexus-server`.
 - An AI working here never launches the app's window, takes screenshots of it, or kills a running nexus process; the person running nexus does that.
@@ -132,7 +133,7 @@ Display
 Each of these moves into the locked rules above, with its test or model, in the pull request that builds it. Until then it is the design to build, not a thing to redecide.
 
 Installing
-- There is no installer. nexus is installed through an AI: a person, in their own AI on their own subscription, points it at this repository, and the AI builds nexus from source by the README and sets it up. The README is the installer; every step says how to check it worked and what to do when it did not, and it is proven by a cold run on a clean Mac by an AI with no other context.
+- There is no installer. nexus is installed through an AI: a person, in their own AI on their own subscription, points it at this repository, and the AI builds nexus from source by the README and sets it up. The README is the installer (its steps are `SETUP.md`, which it points to); every step says how to check it worked and what to do when it did not, and it is proven by a cold run on a clean Mac by an AI with no other context.
 - A default install has one friend: the installing AI's own harness and account, so the person talks to that harness through nexus. No sprint tab and no fleet. Friends are configured in nexus itself; the fleet's friend list is an extra source, not a requirement.
 - The first experience is: talk with my AI, and a quake-style terminal overlay. Nothing about sprints, fleets or boards shows until the person asks for it.
 - Once the one friend works, the AI teaches the next steps, in this order and each only when the person wants it: running terminals in the overlay; adding more friends (more subscriptions); setting up a fleet over Tailscale; and last, a sprint, for API-rate work or going really wide.

@@ -18,7 +18,7 @@
      ("writer-thread" "Writer thread: the store's write and flush run off the server loop's thread, and the loop keeps sending state to the windows while a flush runs, holding back only the acknowledgement until it is durable. mosh cannot hold that back: unmodified, it sends as ack_num the newest remote state it has received, on any tick, so the acknowledgement is bound to received state, and modifying mosh is out (AGENTS.md). So the acknowledgement moves up into nexus: the server's state carries each window's durable applied counter (the number the store has flushed), and the window trims its held actions by that counter, not by mosh's ack, and sends them again after a reconnect as it does now; the state shown is the durable state, or marks what is not yet durable. Changes the Link model (the window's held list, ExactlyOnce across a crash), the Applier, the window's trimming, and their trace binding")
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush. Today the order is held by tests/server/pass_test.cpp and link_e2e's flush run, not by a trace")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
-     ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer." :later t)
+     ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source, from the person's own fork, by SETUP.md, installs nexus-server as a per-user service, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. SETUP.md is the installer and is proven by a cold run on a clean Mac. After the friends layer." :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -43,7 +43,10 @@
      ("upload-store" "The upload's storage on the server: each file a blob in the store by its content hash, sent in chunks that resume after a cut, and placed in the AI's incoming/ in one atomic step; waits for the upload design (an earlier draft is in the git history of src/store)" :later t)
      ("model-effort-keys" "Hotkeys to choose a friend's model and effort, in place of the model name that stood under the prompt" :later t)
      ("hdr" "HDR and wide gamut: the window asks Prax for its HDR swap chain (half floats, extended sRGB, EDR, gamut-mapped to the display) once Prax's display pass keeps alpha for a see-through window, and once nexus draws colours past sRGB or brighter than SDR white" :later t)
-     ("windows-wsl2" "Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile, and nexus-server in WSL2 needs Prax's lib/process to link on Linux" :later t)
+     ("windows-wsl2" "Windows: the native overlay window reaches nexus-server inside WSL2 over a local socket, with a functional test across that boundary in CI (wsl2-functional on captain drives the native window through WSL interop); its terminal tabs are WSL2 shells in the WSL2 home directory, never cmd or PowerShell. Waits on Prax: the window needs Prax's Win32 lib/app to compile at the pin (nexus-server itself builds on Linux and in WSL2 with -DNEXUS_LINK=ON, SETUP.md)" :later t)
+     ("window-friends-from-server" "The window's friend tabs come from the server's friends.json (the friends of the sessions it sends), not from nova-config, so a first install's one friend (SETUP.md: friend claude on the account main) shows as a tab on a machine without nova-tools; nova-config's friend list stays an extra source")
+     ("window-reattach-takeover" "The window reconnects by itself to the server that took over (nexus-server setup or rebuild, SETUP.md Takeover): today it says it has had no contact until it is reopened; the server side (the store, the session ids, a window's --client and --next) is there")
+     ("linux-window" "The window on Linux (Wayland, wlr-layer-shell; an ordinary window on GNOME): waits on Prax's Linux backend of lib/app and system fonts in lib/font; until then Linux builds nexus-server only (SETUP.md)" :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -54,6 +57,9 @@
      ("model-effort-keys" "done" "t-model-effort-keys")
      ("hdr" "done" "t-hdr")
      ("windows-wsl2" "done" "t-windows-wsl2")
+     ("window-friends-from-server" "done" "t-window-friends-from-server")
+     ("window-reattach-takeover" "done" "t-window-reattach-takeover")
+     ("linux-window" "done" "t-linux-window")
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
@@ -111,6 +117,9 @@
   (:id "t-social-tab" :type :task :title "Social tab" :state :todo)
   (:id "t-windows-wsl2" :type :task :title "Windows: native overlay window to nexus-server in WSL2 over a local socket, tested across the boundary in CI; terminal tabs are WSL2 shells" :state :todo
    :note "Terminal tabs done on 2026-11-15: src/terminal_launch.h starts the default WSL2 distribution's login bash in the WSL2 home (terminal_launch_unit everywhere; wsl2_terminal, the launch line on a real Windows pseudoconsole, in CI's wsl2-terminal on captain); a missing WSL2 is one line in the tab. nexus's own terminals (src/terminals.cpp) still build only with the window, so on Windows they wait on (1). Missing on 2026-11-14: (1) the native window: NEXUS_WINDOW is off on Windows because Prax's lib/app Win32 backend does not compile at the pin; (2) nexus-server inside WSL2: NEXUS_WINDOW_LOGIC and NEXUS_LINK are off on Linux because Prax's lib/process POSIX backend does not link there (environ declared inside its namespace); (3) the local socket itself: the window reaches nexus-server only through the mosh link with its ssh bootstrap, whose network layer is POSIX and is not built natively on Windows, and nexus-server's own socket is a Unix socket inside WSL2's filesystem, which WSL2 does not share with Windows processes; no transport for the native window to WSL2 exists yet; (4) terminal tabs: src/terminals.cpp left the program empty, so on Windows Prax started COMSPEC or cmd.exe (lib/studio/terminal terminal.cpp) in the Windows home directory (fixed 2026-11-15, above).")
+  (:id "t-window-friends-from-server" :type :task :title "Window: friend tabs from the server's friends.json, so a first install's one friend shows without nova-tools" :state :todo)
+  (:id "t-window-reattach-takeover" :type :task :title "Window: reconnect by itself to the server that took over" :state :todo)
+  (:id "t-linux-window" :type :task :title "The window on Linux, once Prax has a Linux lib/app backend and system fonts" :state :todo)
   (:id "t-terminal-tabs" :type :task :title "Terminal tabs: a shell per tab after the friends" :state :done
    :evidence ("tests/window/test_terminal.cpp" "tests/model: tlc_witness_add_before_friend, tlc_trace_faulty_close_rejected"))
   (:id "t-sprint-tab" :type :task :title "Sprint tab: nova-sprint's board, first and Cmd-1, pinned" :state :doing)
@@ -173,4 +182,4 @@
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
   (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)
   (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)
-  (:id "t-install-through-ai" :type :task :title "Install through AI: README as the installer, one friend (the installing AI), proven by a cold run on a clean Mac" :state :todo)))
+  (:id "t-install-through-ai" :type :task :title "Install through AI: SETUP.md as the installer, one friend (the installing AI), proven by a cold run on a clean Mac" :state :todo)))

@@ -47,6 +47,10 @@
 #include "server/secret_lines.h"
 #include "store/fs.h"
 
+// The process's environment, which withoutInherited() takes from a recorded one (POSIX declares it; not every header
+// does).
+extern char** environ;
+
 namespace {
 
 using namespace nexus;
@@ -1014,9 +1018,27 @@ void kept(const std::string& dir) {
     CHECK(fs::status(dir + "/accounts/a1", ec).permissions() == fs::perms::owner_all);
 }
 
+// `text` (the driver's recorded environment, one `NAME=value` a line) without the lines this test process itself was
+// started with: those came from the host (a CI runner's hashes and paths, where a length beside the short account name
+// a1 can occur by chance), never from the server, which never had the value before the test made it up.
+std::string withoutInherited(const std::string& text) {
+    std::set<std::string> inherited;
+    for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+        inherited.insert(*e);
+    }
+    std::istringstream in(text);
+    std::string out;
+    for (std::string line; std::getline(in, line);) {
+        if (inherited.count(line) == 0) {
+            out += line + "\n";
+        }
+    }
+    return out;
+}
+
 // The value is nowhere but its file: no run, hex, base64 or length of it (tests/leak_scan.h) in any other file under
-// `dir` (the store's files, what the driver read, its environment, the script, the drivers file), the transcript, or
-// the bytes the server's SecretLines gave the driver and the log.
+// `dir` (the store's files, what the driver read, its environment less what this process inherited, the script, the
+// drivers file), the transcript, or the bytes the server's SecretLines gave the driver and the log.
 void nowhereElse(Server& s, const std::string& dir) {
     const test::LeakScan scan(kFakeToken, "a1");
     namespace fs = std::filesystem;
@@ -1028,7 +1050,8 @@ void nowhereElse(Server& s, const std::string& dir) {
             continue;
         }
         ++read;
-        const std::string found = scan.find(readFile(entry.path().string()));
+        const std::string bytes = readFile(entry.path().string());
+        const std::string found = scan.find(entry.path().filename() == "env" ? withoutInherited(bytes) : bytes);
         if (!found.empty()) {
             std::fprintf(stderr, "  the value reached %s: %s\n", entry.path().string().c_str(), found.c_str());
             CHECK(false);

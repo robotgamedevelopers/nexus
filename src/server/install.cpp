@@ -455,8 +455,23 @@ bool copyTree(const std::string& from, const std::string& to, std::string* why) 
     return true;
 }
 
+// Whether the trees `a` and `b` hold the same files with the same bytes.
+bool sameTree(const std::string& a, const std::string& b) {
+    return isDir(a) && isDir(b) && run({"diff", "-rq", a, b}).status == 0;
+}
+
 // Puts a copy of the tree `from` at `to` in one rename: the new tree beside it, the old moved aside, then removed.
-bool placeTree(const std::string& from, const std::string& to, std::string* why) {
+// `*copied` says whether it copied; a tree already the same is left as it is.
+bool placeTree(const std::string& from, const std::string& to, std::string* why, bool* copied = nullptr) {
+    if (copied != nullptr) {
+        *copied = false;
+    }
+    if (sameTree(from, to)) {
+        return true;
+    }
+    if (copied != nullptr) {
+        *copied = true;
+    }
     const std::string fresh = to + ".new";
     const std::string old = to + ".old";
     run({"rm", "-rf", fresh, old});
@@ -580,7 +595,10 @@ std::string withLocalServer(const std::string& text) {
 std::string firstDriversFile(const std::string& node, const std::string& driverMain) {
     return "# Which program drives which friend (src/server/driver_table.h, drivers/claude/drivers.example). Written by\n"
            "# `nexus-server setup`; yours to change. The Claude driver runs placed, never from the fork being built.\n"
-           "driver claude " + node + " " + driverMain + " --account main\n";
+           "driver claude " + node + " " + driverMain + " --account main\n"
+           "# The one friend of a first install: Claude, on the account main, in the home directory. The server takes\n"
+           "# its first accounts.json and friends.json from these lines once; after that those files are the record.\n"
+           "friend claude claude\n";
 }
 
 std::string movedDriverPaths(const std::string& text, const std::string& source, const std::string& placed) {
@@ -591,6 +609,92 @@ std::string movedDriverPaths(const std::string& text, const std::string& source,
         out.replace(at, from.size(), to);
     }
     return out;
+}
+
+// ---- help ---------------------------------------------------------------------------------------------------------
+
+std::string verbHelp(const std::string& topic) {
+    if (topic == "setup") {
+        return "usage: nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
+               "\n"
+               "Places this build where it runs from and makes it the running server. Run it as <build>/nexus-server\n"
+               "setup from your fork's build directory; `rebuild` runs it for you. Each step looks first, so a second\n"
+               "run changes nothing that is already right. Nothing asks the person anything or needs an administrator.\n"
+               "\n"
+               "  1. ~/.nexus and DIR (default ~/.nexus/server) made 0700; the logins' directories, accounts/*, narrowed\n"
+               "     to 0700. A server of the layout before ~/.nexus/server is stopped and its sessions adopted.\n"
+               "  2. The server copied to ~/.nexus/bin/nexus-server, and ~/.local/bin/nexus-server linked to it (an\n"
+               "     older file there is moved to nexus-server.before-setup).\n"
+               "  3. The Claude driver copied from <fork>/drivers/claude (built first: npm ci && npm run build there) to\n"
+               "     ~/.nexus/drivers/claude, so no friend ever runs from the fork while it is rebuilt.\n"
+               "  4. With no DIR/drivers, a first one: the Claude driver under node 20.19 or newer (PATH, else\n"
+               "     ~/.nexus/node/bin/node) on the account main, and the one friend claude. A drivers file that is\n"
+               "     there is kept; only paths into the fork move to the placed driver (the old file is kept beside it).\n"
+               "  5. macOS: the window copied to ~/Applications/nexus.app, and `server local` in ~/.nexus/client/config.\n"
+               "  6. Unless --no-service, a per-user service that runs `serve` at login and again after a takeover: a\n"
+               "     launchd agent (macOS) or a systemd user unit with lingering on (Linux). Without a user manager it\n"
+               "     says so (a note) and `nexus-server new` starts the server on demand.\n"
+               "  7. The takeover (nexus-server help takeover): the placed build becomes the running one.\n"
+               "  8. DIR/nexus-config, the accounts and friends (docs/accounts.md), made by the server when it starts.\n"
+               "\n"
+               "--wait: how long step 7 waits for the placed build to answer (default 30 s). A server still draining\n"
+               "then is a note, not a failure: it hands over by itself when its open turns end.\n"
+               "--no-service: register no service; the server is started detached instead.\n"
+               "\n"
+               "Prints one line per step: `ok` (already right), `done`, `fixed`, `moved`, `start`, `drain`, `stop`,\n"
+               "`note`, or `FAIL` with the reason; then `setup: done` or `setup: done, with the problems above`.\n"
+               "Exit: 0 no FAIL; 1 a FAIL; 2 a usage error.\n";
+    }
+    if (topic == "doctor") {
+        return "usage: nexus-server doctor [--dir DIR]\n"
+               "\n"
+               "Looks, changes nothing, and prints one line per check: `ok`, `note` (needs only the person: the\n"
+               "sign-in), or `fix <what is wrong>: <the command that fixes it>`. Then `doctor: nothing to fix` or\n"
+               "`doctor: N to fix`. It checks: the fork this program was built from, its remote `upstream`, and that\n"
+               "your changes are on a branch of your own rather than main; cmake, ctest and node 20.19 or newer; on\n"
+               "macOS the Metal toolchain; ~/.nexus at 0700 and the accounts directory not open to others; the placed\n"
+               "server, that it is the build in the build directory, and that it is the one running; no server of the\n"
+               "older layout still running; the service; on Linux lingering; DIR/nexus-config; each driver line's\n"
+               "program and script, placed rather than in the fork, and its account's login; on macOS the placed\n"
+               "window, without a quarantine flag, and its config naming its server.\n"
+               "Exit: 0 nothing to fix; 1 something to fix.\n";
+    }
+    if (topic == "rebuild") {
+        return "usage: nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+               "\n"
+               "Builds the fork this program was built from and makes the new build the running server. The loop for\n"
+               "changing nexus: edit the fork, commit, `nexus-server rebuild` (it works from inside a nexus\n"
+               "conversation: the server hands over once that turn ends).\n"
+               "\n"
+               "  1. cmake --build <build> on every core (it configures again by itself when CMakeLists.txt changed).\n"
+               "  2. In <fork>/drivers/claude: npm ci when node_modules is missing or older than package-lock.json\n"
+               "     (an upstream merge that changed dependencies), then npm run build. ~/.nexus/node/bin goes first\n"
+               "     on PATH when it holds npm.\n"
+               "  3. Unless --no-tests: ctest -L unit, and the Claude driver's npm test.\n"
+               "  4. The new build's own setup: <build>/nexus-server setup --dir DIR --wait 5, with --no-service and\n"
+               "     --wait passed on. It waits only 5 s by default, since a rebuild asked from inside a friend's turn\n"
+               "     cannot see the handover until that turn ends.\n"
+               "\n"
+               "A build or test that fails stops it there with `FAIL`, and nothing that runs is changed.\n"
+               "Exit: 0 the build is placed and set up; 1 a step failed; 2 a usage error.\n";
+    }
+    if (topic == "takeover") {
+        return "How a new build takes over from the running nexus-server (server/takeover.h, models/Takeover.tla).\n"
+               "\n"
+               "setup asks the server on its control socket, DIR/server.sock, `build`; it answers `BUILD <hash>`, the\n"
+               "hash of its program's bytes, with ` draining` while it drains. Then one step at a time:\n"
+               "  nothing answers                    start the placed program (the service, else `serve` detached)\n"
+               "  the placed build answers           done\n"
+               "  another build answers              ask it `takeover`: it drains\n"
+               "  it does not know `build`           it is from before takeover: ask it `stop`\n"
+               "  it is draining                     wait\n"
+               "A draining server stops as soon as no friend's turn is open, so no turn is cut; after 10 minutes it\n"
+               "stops anyway and each turn still open is cut with a notice. It exits 75, and the service starts the\n"
+               "placed program on the same store, which keeps every session. One server holds the socket and the\n"
+               "store at a time, so a turn never runs on two. `nexus-server stop` exits 0, and the service leaves the\n"
+               "server stopped until the next login or setup.\n";
+    }
+    return std::string();
 }
 
 // ---- setup --------------------------------------------------------------------------------------------------------
@@ -714,15 +818,23 @@ int setup(const Paths& p, const std::string& self, const std::vector<std::string
         readFile(fork + "/package-lock.json", &lockNew);
         readFile(at.driver + "/package-lock.json", &lockOld);
         bool ok = makeDirs(at.driver, 0700, &why);
+        bool copiedModules = false;
+        bool copiedDist = false;
         if (ok && (lockNew != lockOld || !isDir(at.driver + "/node_modules"))) {
-            ok = placeTree(fork + "/node_modules", at.driver + "/node_modules", &why);
+            ok = placeTree(fork + "/node_modules", at.driver + "/node_modules", &why, &copiedModules);
         }
-        ok = ok && placeTree(fork + "/dist", at.driver + "/dist", &why);
+        ok = ok && placeTree(fork + "/dist", at.driver + "/dist", &why, &copiedDist);
         std::string pkg;
-        ok = ok && readFile(fork + "/package.json", &pkg) && writeFile(at.driver + "/package.json", pkg, 0644, &why) &&
-            writeFile(at.driver + "/package-lock.json", lockNew, 0644, &why);
-        if (ok) {
+        std::string pkgOld;
+        readFile(at.driver + "/package.json", &pkgOld);
+        ok = ok && readFile(fork + "/package.json", &pkg);
+        const bool copiedFiles = pkg != pkgOld || lockNew != lockOld;
+        ok = ok && (!copiedFiles || (writeFile(at.driver + "/package.json", pkg, 0644, &why) &&
+            writeFile(at.driver + "/package-lock.json", lockNew, 0644, &why)));
+        if (ok && (copiedModules || copiedDist || copiedFiles)) {
             say("done", "the Claude driver is placed: " + at.driver);
+        } else if (ok) {
+            say("ok", "the Claude driver is placed: " + at.driver);
         } else {
             fail("the Claude driver was not placed: " + why);
         }
@@ -761,13 +873,15 @@ int setup(const Paths& p, const std::string& self, const std::vector<std::string
     // 5. The window, placed as an app the person opens, and told to open on this machine's server.
     const std::string builtApp = std::string(NEXUS_BUILD_DIR) + "/nexus.app";
     if (access((builtApp + "/Contents/MacOS/nexus").c_str(), X_OK) == 0) {
-        if (makeDirs(at.home + "/Applications", 0755, &why) && placeTree(builtApp, at.app, &why)) {
+        bool copied = false;
+        if (makeDirs(at.home + "/Applications", 0755, &why) && placeTree(builtApp, at.app, &why, &copied)) {
             // A local build carries no quarantine flag; one copied in from elsewhere would make Gatekeeper ask.
             if (run({"/usr/bin/xattr", "-p", "com.apple.quarantine", at.app}).status == 0) {
                 run({"/usr/bin/xattr", "-dr", "com.apple.quarantine", at.app});
                 say("fixed", at.app + " carried a quarantine flag; it is removed");
             }
-            say("done", "the window is placed: " + at.app + " (the person opens it: Spotlight, Finder or Launchpad)");
+            say(copied ? "done" : "ok", "the window is placed: " + at.app + " (the person opens it: Spotlight, Finder "
+                "or Launchpad)");
         } else {
             fail("the window was not placed: " + why);
         }
@@ -994,6 +1108,17 @@ int doctor(const Paths& p, const std::string& self) {
             } else {
                 ok("driver " + harness + ": " + program + " " + script);
             }
+            // Its account's login: only the person gives it, in nexus's own dialog (docs/secrets.md), never an AI.
+            for (std::string word, account; words >> word;) {
+                if (word == "--account" && words >> account) {
+                    if (exists(p.accounts + "/" + account + "/oauth-token")) {
+                        ok("the account " + account + " has its login");
+                    } else {
+                        say("note", "the account " + account + " has no login yet: the person signs it in in nexus's "
+                            "own dialog, which asks for it when its friend's driver first starts; no AI handles it");
+                    }
+                }
+            }
         }
     }
 #if defined(__APPLE__)
@@ -1042,6 +1167,14 @@ int rebuild(const Paths& p, const std::string& self, const std::vector<std::stri
     const std::string source = NEXUS_SOURCE_DIR;
     const std::string build = NEXUS_BUILD_DIR;
     const std::string jobs = std::to_string(std::max(1u, std::thread::hardware_concurrency()));
+    // A node the AI fetched to ~/.nexus/node (SETUP.md, Prerequisites) comes first on PATH, so npm is found from inside
+    // a friend's turn too, where the driver's PATH may not hold it.
+    const std::string nodeBin = placement(p.home, userHome()).top + "/node/bin";
+    if (access((nodeBin + "/npm").c_str(), X_OK) == 0) {
+        const char* path = std::getenv("PATH");
+        const std::string joined = nodeBin + (path != nullptr && *path != 0 ? ":" + std::string(path) : std::string());
+        setenv("PATH", joined.c_str(), 1);
+    }
     say("build", "your fork " + source + ", in " + build);
     if (run({NEXUS_CMAKE, "--build", build, "-j", jobs}, false).status != 0) {
         say("FAIL", "the build failed (its errors are above); nothing that runs was changed");

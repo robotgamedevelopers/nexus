@@ -12,6 +12,14 @@ client is closed. The client syncs to the server's latest state over a tailnet w
 Synchronization Protocol: over UDP, surviving sleep and network changes. The first of it is built: see
 [The server](#the-server).
 
+## Setting it up
+
+Tell the AI you already use (Claude Code, Codex, ...) "set up nexus" and point it at this repository. It follows
+[SETUP.md](SETUP.md): it makes your own fork of nexus, builds it from source on your machine, places it and keeps it
+running, with one friend: that AI's own harness and account. You run no command and install nothing; you sign in once,
+in nexus's own dialog. After that you change nexus by asking that AI: it edits your fork and runs
+`nexus-server rebuild`, and the new build takes over from the running one.
+
 ## A day with nexus
 
 The day it is made for: about an hour of talking with the AIs and dealing out work, then away, then back later for another hour,
@@ -30,7 +38,7 @@ Heads-down mode is planned, not built.
 
 ## Status
 
-Early, and not yet usable. macOS only. nexus is built in layers, one secured before the next starts: layer 1
+Early, and not yet usable. The window is macOS only; `nexus-server` also runs on Linux and in WSL2. nexus is built in layers, one secured before the next starts: layer 1
 (the window: tabs, transcript and prompt draw and take input) and layer 2 (the server, and the window syncing to it)
 are in progress. The layers are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -193,6 +201,8 @@ side of it is there); the friends' AIs answering (layer 3); the plus button's up
   no AI models itself.
 
 ## Build
+
+To build and set nexus up as it runs day to day, follow [SETUP.md](SETUP.md). For working on nexus itself:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

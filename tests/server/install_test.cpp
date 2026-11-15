@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 
+#include "server/driver_table.h"
 #include "server/install.h"
 
 namespace {
@@ -89,6 +90,14 @@ void clientConfig() {
 void drivers() {
     const std::string first = firstDriversFile("/usr/bin/node", "/h/.nexus/drivers/claude/dist/src/main.js");
     CHECK(has(first, "\ndriver claude /usr/bin/node /h/.nexus/drivers/claude/dist/src/main.js --account main\n"));
+    // A first install's one friend: claude, on the account main, in the home directory, as the server first reads it.
+    CHECK(has(first, "\nfriend claude claude\n"));
+    const DriverTable parsed = parseDriverTable(first, "/h");
+    CHECK(parsed.errors.empty());
+    CHECK(parsed.friends.size() == 1 && parsed.friends.count("claude") == 1 && parsed.friends.at("claude").cwd == "/h");
+    const nexus::accounts::Registry seed = accountsFromDrivers(parsed, "box");
+    CHECK(seed.accounts.size() == 1 && seed.accounts[0].name == "main" && seed.accounts[0].provider == "claude");
+    CHECK(seed.friends.size() == 1 && seed.friends[0].name == "claude" && seed.friends[0].preferred == "main");
     const std::string table = "driver claude /n /src/nexus/drivers/claude/dist/src/main.js --account main\n"
                               "friend a claude\n"
                               "driver other /n /src/nexus/drivers/claude/dist/src/main.js\n";

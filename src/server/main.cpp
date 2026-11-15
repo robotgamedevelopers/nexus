@@ -12,6 +12,8 @@
 //        nexus-server doctor [--dir DIR]  what is missing, one line each, with the command that fixes it
 //        nexus-server rebuild [--no-tests] [--no-service] [--wait S] [--dir DIR]
 //                                         builds the fork this was built from, runs the fast tests, then setup
+//        nexus-server help [setup|doctor|rebuild|takeover]
+//                                         each verb's help (server/install.h verbHelp); a verb with --help says it too
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
@@ -47,20 +49,37 @@
 
 namespace {
 
+const char* const kUsage =
+    "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
+    "       nexus-server serve|stop [--dir DIR]\n"
+    "       nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server doctor [--dir DIR]\n"
+    "       nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server config path|check|reload|history [--dir DIR]\n"
+    "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
+    "       nexus-server help [setup|doctor|rebuild|takeover]\n"
+    "  setup places this build and makes it the running server; doctor says what is missing, each with its fix;\n"
+    "  rebuild builds your fork, tests it, then sets it up (SETUP.md; `nexus-server help <verb>` for each)\n"
+    "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
+    "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
+    "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
+    "  driver <harness> <program> [<argument>...]    and    friend <name> <harness> [<directory>]\n";
+
 int usage() {
-    std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
-                         "       nexus-server serve|stop|doctor [--dir DIR]\n"
-                         "       nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
-                         "       nexus-server rebuild [--no-tests] [--no-service] [--wait <seconds>] [--dir DIR]\n"
-                         "  setup places this build and keeps it running; rebuild builds your fork, tests it, then sets\n"
-                         "  it up; doctor says what is missing (SETUP.md)\n"
-                         "       nexus-server config path|check|reload|history [--dir DIR]\n"
-                         "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
-                         "  accounts and friends: DIR/nexus-config/accounts.json, friends.json (docs/accounts.md)\n"
-                         "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
-                         "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
-                         "  driver <harness> <program> [<argument>...]    and    friend <name> <harness> [<directory>]\n");
+    std::fputs(kUsage, stderr);
     return 2;
+}
+
+// `nexus-server help [<topic>]`, or a verb with --help or -h: the help on standard output, exit 0.
+int help(const std::string& topic) {
+    const std::string text = nexus::server::verbHelp(topic);
+    if (!topic.empty() && text.empty()) {
+        std::fprintf(stderr, "nexus-server: no help on \"%s\"; the topics are setup, doctor, rebuild and takeover\n",
+                     topic.c_str());
+        return 2;
+    }
+    std::fputs(text.empty() ? kUsage : text.c_str(), stdout);
+    return 0;
 }
 
 // This program's own path, to start the server with.
@@ -109,6 +128,15 @@ int main(int argc, char** argv) {
     if (argc < 2)
         return usage();
     const std::string command = argv[1];
+    if (command == "help" || command == "--help" || command == "-h") {
+        return help(argc > 2 ? argv[2] : "");
+    }
+    for (int i = 2; i < argc; ++i) {
+        if ((std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) &&
+                !nexus::server::verbHelp(command).empty()) {
+            return help(command);
+        }
+    }
     std::string dir;
     nexus::server::Client client;
     bool haveNext = false;
@@ -164,12 +192,15 @@ int main(int argc, char** argv) {
         }
         return nexus::server::serve(paths, build);
     }
-    if (command == "setup")
+    if (command == "setup") {
         return nexus::server::setup(paths, selfPath(), configArgs);
-    if (command == "doctor")
+    }
+    if (command == "doctor") {
         return nexus::server::doctor(paths, selfPath());
-    if (command == "rebuild")
+    }
+    if (command == "rebuild") {
         return nexus::server::rebuild(paths, selfPath(), configArgs);
+    }
     if (command == "stop")
         return nexus::server::stop(paths);
     if (command == "config") {

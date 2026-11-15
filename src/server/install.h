@@ -61,6 +61,11 @@ std::string firstDriversFile(const std::string& node, const std::string& driverM
 // (`<placed>/dist/`), so that no friend runs from the fork while it is being built; unchanged when there is none.
 std::string movedDriverPaths(const std::string& text, const std::string& source, const std::string& placed);
 
+// The help of `setup`, `doctor`, `rebuild` and `takeover` (`nexus-server help <topic>`, or the verb with --help): what
+// it does, step by step, its options, what it prints and its exit statuses, for an AI reading it cold. Empty for any
+// other topic. SETUP.md says the same at more length.
+std::string verbHelp(const std::string& topic);
+
 // `nexus-server setup [--no-service] [--wait <seconds>]`, `doctor`, and `rebuild [--no-tests]`: their exit statuses.
 // `self` is this program's own path.
 int setup(const Paths& p, const std::string& self, const std::vector<std::string>& args);

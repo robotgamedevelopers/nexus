@@ -255,9 +255,9 @@ jobs:
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
-  # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the
-  # window's logic, so it is off too (NEXUS_LINK=OFF); it also needs protobuf, which the Linux runners do not have yet.
-  # On the fleet's Linux runners, with clang and lld, warnings as errors as on macOS. Caches live under
+  # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). nexus-server and its link are built
+  # (NEXUS_LINK=ON), without the window's end of the link, as SETUP.md builds them; protobuf is the runners' own
+  # (libprotobuf-dev and protobuf-compiler are installed on them), so it is not built here. On the fleet's Linux runners, with clang and lld, warnings as errors as on macOS. Caches live under
   # ~/.cache/nexus-ci on the runner's machine, laid out as the macOS jobs' (the linker's ThinLTO cache is lld's).
   build-and-unit-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
