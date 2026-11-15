@@ -21,6 +21,11 @@
 // one to end, using it no more. What must be asked of a terminal on its own thread, the directory its shell works in
 // (prTerminalWorkingDirectory, a process call), is read on the frame thread once a second, one terminal a frame. A
 // new text scale is applied to a terminal when it shows, not to every terminal at once.
+//
+// What each shell is comes from terminal_launch.h: the login shell on macOS and Linux, and on Windows the default WSL2
+// distribution's login bash in the WSL2 home directory, never cmd.exe or PowerShell. On Windows the start thread first
+// probes WSL2 (a wsl.exe child, which may wait while WSL2's machine starts); without WSL2 the tab shows one plain line
+// saying what is missing (problem) and stays until Command-W, with no other shell in its place.
 
 #pragma once
 
@@ -55,7 +60,7 @@ public:
     PraxTerminals(const PraxTerminals&) = delete;
     PraxTerminals& operator=(const PraxTerminals&) = delete;
 
-    // What a new terminal runs, and where: empty runs the person's login shell in their home directory.
+    // What a new terminal runs, and where: empty runs the platform's shell (terminal_launch.h) in the home directory.
     std::string program;
     std::string directory;
     // The fleet's machines, which name a terminal's tab while its shell runs ssh to one of them (remote.h).
@@ -70,6 +75,7 @@ public:
     void show(std::size_t id, PrLayoutNode parent) override;
     void update(std::size_t id) override;
     bool ended(std::size_t id) override;
+    std::string problem(std::size_t id) override;
     // The tab's label (remote.h TabLabel): while ssh runs in the foreground, the fleet machine it reaches or its host;
     // otherwise the title the shell set, or the one from before a session that ended.
     std::string title(std::size_t id) override;
@@ -119,13 +125,15 @@ private:
         std::string remote;
         std::chrono::steady_clock::time_point at{};
     };
-    // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found).
+    // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
+    // line its tab shows if no shell can run here at all (problem).
     struct Started {
         std::size_t id;
         PrTerminal* terminal;
         int shell;
         float scale;
         std::string dir;
+        std::string problem;
     };
 
     PrTerminal* find(std::size_t id);
@@ -152,6 +160,7 @@ private:
     std::map<std::size_t, std::string> titles_; // each terminal's title at the label's last observation
     std::map<std::size_t, std::string> asked_;  // shells asked for and not yet taken, with the directory asked for
     std::set<std::size_t> failed_;              // shells that could not start, until their tab closes
+    std::map<std::size_t, std::string> problems_; // tabs whose shell cannot run here, with their line, until closed
     std::map<std::size_t, std::string> dirs_;   // each terminal's directory as last read
     std::map<std::size_t, float> scales_;       // the text scale each terminal's font is at
     std::map<std::size_t, std::vector<Held>> held_; // input typed before each screen had the focus (hold)

@@ -53,6 +53,14 @@ its shell was last in (the home directory if that is gone); what a terminal show
 not come back. On a terminal tab every key that is not a Command chord, Escape included, goes to the shell. The
 window opens on the tab that was selected when it quit, a terminal tab included.
 
+On Windows a terminal tab is a WSL2 shell, never cmd.exe or PowerShell: the default WSL2 distribution's login bash in
+its home directory (`wsl.exe --cd ~ --exec /usr/bin/env TERM=xterm-256color /bin/bash --login -i`), with the prompt its
+own `.bashrc` sets. A restored tab starts in the directory its shell was last in when that is a Linux directory still
+there, and in the WSL2 home otherwise. Without WSL2, or with no Linux distribution it can start, the tab shows one line
+saying what is missing and how to install it (`wsl --install` in PowerShell); close it with Cmd-W and open a new one
+once WSL2 runs. `wsl --status` in PowerShell says what WSL2 lacks, and `wsl --list --verbose` which distribution is the
+default.
+
 A terminal tab shows the title its program sets. While its shell runs ssh, the tab shows where ssh goes instead: the
 fleet machine's name from `nova-config machine list` when the destination is the machine's name,
 `<name>.<tailnet>.ts.net`, its address or any of those after `user@`, and otherwise the host as typed. A program on the

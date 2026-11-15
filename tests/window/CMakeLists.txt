@@ -48,6 +48,27 @@ if(NEXUS_WINDOW_LOGIC)
     set_tests_properties(tab_order_file PROPERTIES LABELS functional TIMEOUT 30)
 endif()
 
+# What a terminal tab's shell is (src/terminal_launch.h): the login shell, or on Windows a WSL2 bash, and what the probe
+# of WSL2 means, from made-up results. Pure logic, on every platform.
+add_executable(nexus_terminal_launch_tests test_terminal_launch.cpp)
+target_compile_options(nexus_terminal_launch_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_terminal_launch_tests PRIVATE nexus_terminal_launch)
+add_test(NAME terminal_launch_unit COMMAND nexus_terminal_launch_tests)
+set_tests_properties(terminal_launch_unit PROPERTIES LABELS unit)
+
+# A Windows terminal tab's shell for real: the probe through wsl.exe and the launch line on a Windows pseudoconsole
+# through Prax's lib/process, in the default WSL2 distribution of the user who runs it. A functional test (processes,
+# WSL2, real time), Windows only, labelled wsl2_terminal as well: Windows services (such as CI runners under NETWORK
+# SERVICE) have no WSL2 distribution, so CI runs it from inside captain's WSL2 through interop instead, as the user
+# whose distribution that is (.github/workflows/ci.yml, wsl2-terminal).
+if(WIN32)
+    add_executable(nexus_wsl2_terminal_tests test_wsl2_terminal.cpp)
+    target_compile_options(nexus_wsl2_terminal_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_wsl2_terminal_tests PRIVATE nexus_terminal_launch prax::process prax::core)
+    add_test(NAME wsl2_terminal COMMAND nexus_wsl2_terminal_tests)
+    set_tests_properties(wsl2_terminal PROPERTIES LABELS "functional;wsl2_terminal" TIMEOUT 120)
+endif()
+
 # The hitch detector (src/hitch.h): the budget, phases, the ring and the log on a fake clock. Pure logic.
 add_executable(nexus_hitch_tests test_hitch.cpp)
 target_compile_options(nexus_hitch_tests PRIVATE ${NEXUS_WARNINGS})
