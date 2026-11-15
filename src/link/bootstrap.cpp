@@ -55,8 +55,10 @@ std::string ended(const CommandResult& r) {
 
 } // namespace
 
-std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format) {
-    return kConnect + port + " " + key + (format == 0 ? std::string() : " format " + std::to_string(format));
+std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format,
+                        const std::string& hello) {
+    return kConnect + port + " " + key + (format == 0 ? std::string() : " format " + std::to_string(format)) +
+        (hello.empty() ? std::string() : " hello " + hello);
 }
 
 bool parseConnect(const std::string& line, Connect* out) {
@@ -69,20 +71,37 @@ bool parseConnect(const std::string& line, Connect* out) {
     const std::string port = rest.substr(0, space);
     std::string key = rest.substr(space + 1);
     std::uint32_t format = 1;
+    sync::Hello hello = sync::statedFormat(1);
+    bool helloStated = false;
     const std::size_t stated = key.find(' ');
     if (stated != std::string::npos) {
-        const std::string tail = key.substr(stated + 1);
+        std::string tail = key.substr(stated + 1);
         key.resize(stated);
         const char kFormat[] = "format ";
         if (tail.compare(0, sizeof(kFormat) - 1, kFormat) != 0) {
             return false;
         }
-        const std::string number = tail.substr(sizeof(kFormat) - 1);
+        std::string number = tail.substr(sizeof(kFormat) - 1);
+        const std::size_t after = number.find(' ');
+        if (after != std::string::npos) {
+            const std::string more = number.substr(after + 1);
+            number.resize(after);
+            const char kHelloWord[] = "hello ";
+            std::string why;
+            if (more.compare(0, sizeof(kHelloWord) - 1, kHelloWord) != 0 ||
+                    !sync::readHello(more.substr(sizeof(kHelloWord) - 1), &hello, &why)) {
+                return false;
+            }
+            helloStated = true;
+        }
         if (number.empty() || number.size() > 9 || number[0] == '0' ||
                 number.find_first_not_of("0123456789") != std::string::npos) {
             return false;
         }
         format = static_cast<std::uint32_t>(std::stoul(number));
+    }
+    if (!helloStated) {
+        hello = sync::statedFormat(format);
     }
     if (port.empty() || port.size() > 5 || port[0] == '0')
         return false;
@@ -99,7 +118,15 @@ bool parseConnect(const std::string& line, Connect* out) {
             return false;
     }
     if (out != nullptr)
-        *out = Connect{port, key, format};
+        *out = Connect{port, key, format, hello};
+    return true;
+}
+
+bool statesHello(const Bootstrap& b, sync::Hello* out) {
+    if (b.stateFormat < sync::kTablesFormat) {
+        return false;
+    }
+    *out = sync::Hello{b.stateFormat, sync::kMinPeer};
     return true;
 }
 
@@ -114,6 +141,10 @@ Command bootstrapCommand(const Bootstrap& b) {
     std::vector<std::string> command;
     if (b.stateFormat != 0) {
         command = {"env", std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat)};
+    }
+    sync::Hello hello;
+    if (statesHello(b, &hello)) {
+        command.push_back(std::string(sync::kHelloVariable) + "=" + sync::helloText(hello));
     }
     command.insert(command.end(), b.command.begin(), b.command.end());
     const std::string line = remoteLine(command);

@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "sync/formats.h"
+
 namespace nexus::server {
 
 struct Paths {
@@ -40,26 +42,34 @@ struct Paths {
                             // (server/home.h accountsDir)
 };
 
-// Who asks for a session: a client id (empty: none), the number of its first action in the session, and the state
-// format the window reads (sync/formats.h; 0: it stated none, as a window before formats, which reads format 1).
+// Who asks for a session: a client id (empty: none), the number of its first action in the session, the state format
+// the window reads (sync/formats.h; 0: it stated none, as a window before formats, which reads format 1), and its
+// Hello, when it stated one (a window from before Hello states only the format).
 struct Client {
     std::string id;
     std::uint64_t next = 1;
     std::uint32_t format = 0;
+    bool hasHello = false;
+    sync::Hello hello;
 };
+
+// The window's Hello: the one it stated, else that of a window from before Hello, which speaks its stated format.
+sync::Hello helloOf(const Client& client);
 
 // An id of 1 to 64 bytes, each a letter, digit, '-' or '_'.
 bool validClientId(const std::string& id);
 
 // The control socket's request for a session: "new", or "new <client> <next>", then " format <n>" when the window
-// stated one. A server from before formats refuses a request with a format; `new` then asks again without it, and
-// prints that server's line, which states no format, so the window reads format 1 from it.
+// stated one, then " hello <hello>" (sync::helloText) when it stated a Hello. A server from before formats or before
+// Hello refuses a request with a word it does not know; `new` then asks again without the Hello, then without the
+// format, and prints that server's line, which states what that server speaks.
 std::string newRequest(const Client& client);
 // Reads a request newRequest makes; false for any other line.
 bool parseNewRequest(const std::string& request, Client* out);
-// The reply to a request for a session, before the link is made: empty when the window can be served, else the ERROR
-// line that says, in one plain sentence, that its format is too old (the server also logs it).
-std::string formatRefusalReply(const Client& client);
+// The reply to a request for a session, before the link is made, decided on the window's Hello against the server's
+// (sync::refusalOfWindow): empty when the window can be served, else the ERROR line that says, in one plain sentence,
+// which end is too old (the server also logs it).
+std::string formatRefusalReply(const Client& client, const sync::Hello& server = sync::kHello);
 
 // The paths under `dir` (empty: $HOME/.nexus/server). False, with why, when there is no HOME (needed with --dir too) or
 // the socket's path is longer than a Unix socket's address holds.

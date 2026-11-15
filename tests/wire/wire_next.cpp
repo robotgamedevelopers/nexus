@@ -61,6 +61,14 @@ Bytes nextSessions() {
     addEntry(b.main, *s, EntryKind::Tool, "ls");
     s->queue_changed = true;
     SessionChangeQueueAppend(b.main, *s, "later");
+    SessionChange* waiting = SessionsDiffSessionsAdd(b.main, b.GetRoot()->sessions);
+    waiting->id = 8;
+    waiting->changed = true;
+    setText(b.main, waiting->info.friend_name, "stella");
+    setText(b.main, waiting->info.harness, "claude");
+    waiting->activity = Activity::Waiting;
+    addEntry(b.main, *waiting, EntryKind::Person, "yo");
+    waiting->queue_changed = true;      // a session new to the state sends its queue, here empty
     if (!b.Lock()) {
         return Bytes();
     }
@@ -150,6 +158,104 @@ Read nextReadRecord(const Bytes& bytes) {
     }
     for (const Change& c : r->changes) {
         out.changes.push_back(EnumName(c.type));
+    }
+    return out;
+}
+
+Bytes nextActions() {
+    ActionsDiffBuilder b;
+    ActionsDiff* d = b.GetRoot();
+    d->start = 5;
+    Action* send = ActionsDiffActionsAdd(b.main, d->actions);
+    send->kind = ActionKind::Send;
+    send->session = 7;
+    setText(b.main, send->text, "hi");
+    Action* rename = ActionsDiffActionsAdd(b.main, d->actions);
+    rename->kind = ActionKind::Rename;
+    rename->session = 7;
+    setText(b.main, rename->text, "new name");
+    setText(b.main, rename->note, "typed in the tab");
+    Action* answer = ActionsDiffActionsAdd(b.main, d->actions);
+    answer->kind = ActionKind::SecretAnswer;
+    answer->request = 3;
+    const char value[] = "test-value";
+    std::uint8_t* at = TableBytesEmplace(b.main, answer->secret, static_cast<int64_t>(sizeof value - 1));
+    if (at != nullptr) {
+        std::memcpy(at, value, sizeof value - 1);
+    }
+    Action* stop = ActionsDiffActionsAdd(b.main, d->actions);
+    stop->kind = ActionKind::Stop;
+    stop->session = 7;
+    if (!b.Lock()) {
+        return Bytes();
+    }
+    Bytes out(static_cast<std::size_t>(ActionsDiffMeasure(b)));
+    const int64_t wrote = ActionsDiffSave(b, out.data(), static_cast<int64_t>(out.size()));
+    out.resize(wrote < 0 ? 0 : static_cast<std::size_t>(wrote));
+    return out;
+}
+
+ReadActions nextReadActions(const Bytes& bytes) {
+    ReadActions out;
+    const int64_t need = ActionsDiffLoadMeasure(bytes.data(), static_cast<int64_t>(bytes.size()));
+    if (need < 0) {
+        out.refused = true;
+        return out;
+    }
+    std::vector<std::uint8_t> region(static_cast<std::size_t>(need));
+    TableReport report;
+    const ActionsDiff* d = ActionsDiffLoad(region.data(), need, bytes.data(), static_cast<int64_t>(bytes.size()),
+        &report);
+    out.loaded = d != nullptr;
+    out.unknown = report.unknown;
+    out.damaged = report.damaged;
+    out.refused = report.refused;
+    if (d == nullptr) {
+        return out;
+    }
+    out.start = d->start;
+    for (const Action& a : d->actions) {
+        out.kinds.push_back(EnumName(a.kind));
+        out.sessions.push_back(a.session);
+        out.friends.push_back(textOf(a.friend_name));
+        out.texts.push_back(textOf(a.text));
+        out.requests.push_back(a.request);
+        const TableBytesView secret = TableBytesAt(a.secret);
+        out.secrets.push_back(secret.data == nullptr ? std::string() :
+            std::string(reinterpret_cast<const char*>(secret.data), static_cast<std::size_t>(secret.length)));
+    }
+    return out;
+}
+
+Bytes nextHello(std::uint32_t proto, std::uint32_t minPeer) {
+    HelloBuilder b;
+    b.GetRoot()->proto = proto;
+    b.GetRoot()->min_peer = minPeer;
+    setText(b.main, b.GetRoot()->build, "next-build");
+    if (!b.Lock()) {
+        return Bytes();
+    }
+    Bytes out(static_cast<std::size_t>(HelloMeasure(b)));
+    const int64_t wrote = HelloSave(b, out.data(), static_cast<int64_t>(out.size()));
+    out.resize(wrote < 0 ? 0 : static_cast<std::size_t>(wrote));
+    return out;
+}
+
+ReadHello nextReadHello(const Bytes& bytes) {
+    ReadHello out;
+    const int64_t need = HelloLoadMeasure(bytes.data(), static_cast<int64_t>(bytes.size()));
+    if (need < 0) {
+        return out;
+    }
+    std::vector<std::uint8_t> region(static_cast<std::size_t>(need));
+    TableReport report;
+    const Hello* h = HelloLoad(region.data(), need, bytes.data(), static_cast<int64_t>(bytes.size()), &report);
+    out.loaded = h != nullptr && !report.damaged && !report.refused;
+    out.unknown = report.unknown;
+    if (h != nullptr) {
+        out.proto = h->proto;
+        out.minPeer = h->min_peer;
+        out.buildPresent = TableStringAt(h->build).data != nullptr;
     }
     return out;
 }

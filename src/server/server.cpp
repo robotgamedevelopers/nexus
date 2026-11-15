@@ -465,11 +465,12 @@ void Server::control(int fd) {
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>`, `stop`, `config reload` and `config restore <commit>`\n");
+            "` format <n>` and then ` hello <hello>`, `stop`, `config reload` and `config restore <commit>`\n");
         return;
     }
-    // A window whose state format this server no longer sends: refused in one plain line, which the window shows and
-    // the log keeps.
+    // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
+    // below the window's, is refused in one plain line, which the window shows and the log keeps. Every other pairing
+    // of versions works.
     const std::string refused = formatRefusalReply(client);
     if (!refused.empty()) {
         writeAll(fd, refused + "\n");
@@ -494,13 +495,17 @@ void Server::control(int fd) {
         return;
     }
     try {
-        // The link's format: the newer one both ends read. A window that stated none reads format 1, and its CONNECT
-        // line states none, as it expects.
-        const std::uint32_t format = sync::linkFormat(client.format == 0 ? 1 : client.format, sync::kStateFormat);
+        // The link's format: the newer one both ends read, the older of the two protos. A window that stated none
+        // reads format 1, and its CONNECT line states none, as it expects; the server's Hello goes back only to a
+        // window that stated one.
+        const std::uint32_t format = sync::linkFormat(helloOf(client).proto, sync::kStateFormat);
         Link s{nextId_++, client.id,
             std::make_unique<link::ServerSession>(hub_->state(), applied, client.next, format)};
+        const std::string line = link::connectLine(s.link->port(), s.link->key(),
+            client.format == 0 && !client.hasHello ? 0 : format,
+            client.hasHello ? sync::helloText(sync::kHello) : std::string());
         // The key goes on this one line to `nexus-server new`, and nowhere else.
-        if (!writeAll(fd, link::connectLine(s.link->port(), s.link->key(), client.format == 0 ? 0 : format) + "\n")) {
+        if (!writeAll(fd, line + "\n")) {
             std::fprintf(stderr, "nexus-server: link %llu: the CONNECT line could not be written; dropped\n",
                 static_cast<unsigned long long>(s.id));
             return;
@@ -1002,11 +1007,18 @@ int config(const Paths& p, const std::vector<std::string>& args) {
     return 2;
 }
 
+sync::Hello helloOf(const Client& client) {
+    return client.hasHello ? client.hello : sync::statedFormat(client.format);
+}
+
 std::string newRequest(const Client& client) {
     std::string request = client.id.empty() ? std::string("new") :
         "new " + client.id + " " + std::to_string(client.next);
     if (client.format != 0) {
         request += " format " + std::to_string(client.format);
+    }
+    if (client.hasHello) {
+        request += " hello " + sync::helloText(client.hello);
     }
     return request;
 }
@@ -1022,6 +1034,14 @@ bool parseNewRequest(const std::string& request, Client* out) {
     }
     Client c;
     std::uint64_t number = 0;
+    if (words.size() >= 2 && words[words.size() - 2] == "hello") {
+        std::string why;
+        if (!sync::readHello(words.back(), &c.hello, &why)) {
+            return false;
+        }
+        c.hasHello = true;
+        words.resize(words.size() - 2);
+    }
     if (words.size() >= 2 && words[words.size() - 2] == "format") {
         if (!positive(words.back(), 9, &number)) {
             return false;
@@ -1043,8 +1063,8 @@ bool parseNewRequest(const std::string& request, Client* out) {
     return true;
 }
 
-std::string formatRefusalReply(const Client& client) {
-    const std::string why = sync::windowRefusal(client.format == 0 ? 1 : client.format);
+std::string formatRefusalReply(const Client& client, const sync::Hello& server) {
+    const std::string why = sync::refusalOfWindow(helloOf(client), server);
     return why.empty() ? std::string() : "ERROR " + why;
 }
 
@@ -1057,11 +1077,16 @@ int newSession(const Paths& p, const std::string& self, const Client& client) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
-    // A running server from before formats refuses a request that states one: ask it again without, and its line,
-    // which states no format, tells the window to read format 1.
-    if (client.format != 0 && reply.compare(0, 22, "ERROR unknown request;") == 0) {
-        Client unstated = client;
-        unstated.format = 0;
+    // A running server from before Hello refuses a request that states one, and one from before formats a request
+    // that states a format: ask it again without the Hello, then without the format. Its line states what it speaks
+    // (no format: format 1).
+    Client unstated = client;
+    while (reply.compare(0, 22, "ERROR unknown request;") == 0 && (unstated.hasHello || unstated.format != 0)) {
+        if (unstated.hasHello) {
+            unstated.hasHello = false;
+        } else {
+            unstated.format = 0;
+        }
         if (!ask(p, newRequest(unstated), self, &reply, &why)) {
             std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
             return 1;

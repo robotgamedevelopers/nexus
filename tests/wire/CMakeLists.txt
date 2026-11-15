@@ -3,6 +3,8 @@
 #               into next/gen, test only) reading each other's bytes both ways. In memory: no time, no sockets, no
 #               files. One ctest entry per group, so they run in parallel. The sanitizer jobs build it beside the model
 #               checks (--target model_checks wire_test) and run it.
+#   nexus_versions_test
+#               the same both ways through nexus's real wire code: the sessions diff, the actions and the Hello.
 
 # The later version's generated code, a library of its own so that its translation units never meet this version's.
 # MSVC's C4305 is off in its generated sources, as in this version's (src/wire/tables.h says why).
@@ -14,13 +16,28 @@ if(MSVC)
     set_source_files_properties(${next_sources} PROPERTIES COMPILE_OPTIONS /wd4305)
 endif()
 
-# wire_test.cpp includes only this version's headers (src/wire/tables.h), wire_next.cpp only the later one's
-# (NexusNextTable.h); each version's code is in its own namespace.
-add_executable(wire_test wire_test.cpp wire_next.cpp)
-target_link_libraries(wire_test PRIVATE nexus_wire nexus_wire_next)
+# The later version's side of both tests (versions.h), compiled once: wire_next.cpp includes only the later version's
+# headers (NexusNextTable.h), and the tests only this version's; each version's code is in its own namespace.
+add_library(nexus_wire_next_side STATIC wire_next.cpp)
+target_link_libraries(nexus_wire_next_side PUBLIC nexus_wire_next)
+target_compile_options(nexus_wire_next_side PRIVATE ${NEXUS_WARNINGS})
+
+add_executable(wire_test wire_test.cpp)
+target_link_libraries(wire_test PRIVATE nexus_wire nexus_wire_next_side)
 target_compile_options(wire_test PRIVATE ${NEXUS_WARNINGS})
 
 foreach(group roundtrip versions)
     add_test(NAME wire_unit_${group} COMMAND wire_test ${group})
     set_tests_properties(wire_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
+endforeach()
+
+# nexus's own wire code (sync::Sessions, sync::Actions, the Hello) against the later version's generated code, both
+# ways: nexus_versions_test.cpp includes only nexus's headers.
+add_executable(nexus_versions_test nexus_versions_test.cpp)
+target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next_side)
+target_compile_options(nexus_versions_test PRIVATE ${NEXUS_WARNINGS})
+
+foreach(group sessions actions hello)
+    add_test(NAME wire_unit_nexus_${group} COMMAND nexus_versions_test ${group})
+    set_tests_properties(wire_unit_nexus_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

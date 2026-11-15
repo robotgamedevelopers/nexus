@@ -1,5 +1,7 @@
-// The byte encoding of nexus's diffs: unsigned varints (LEB128) and length-prefixed byte strings. mosh's transport
-// carries a diff as an opaque string (it compresses, encrypts and fragments it); this is what is inside.
+// The byte encoding of nexus's diffs in state formats 1 to 3 (sync/codec.h): unsigned varints (LEB128) and
+// length-prefixed byte strings. mosh's transport carries a diff as an opaque string (it compresses, encrypts and
+// fragments it); this is what is inside a diff of those formats. From format 4 a diff is schema's tables instead, and
+// nothing new is written with these. BadDiff is every format's.
 
 #pragma once
 

@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "sync/codec.h"
 #include "sync/wire.h"
 
 namespace nexus::sync {
@@ -12,55 +13,13 @@ bool isSecret(ActionKind kind) {
     return kind == ActionKind::SecretAnswer || kind == ActionKind::SecretCancel;
 }
 
-// One action in format 3: its kind, then its fields framed by their length (its session, friend, text, account,
-// request and value), so that a later format appends fields and a reader skips what it does not know.
-void encodeFramed(Writer& w, const Action& a) {
-    Writer frame;
-    frame.u64(a.session);
-    frame.str(a.friendName);
-    frame.str(a.text);
-    frame.str(a.account);
-    frame.u64(a.request);
-    frame.str(a.secret.bytes());
-    w.byte(static_cast<std::uint8_t>(a.kind));
-    std::string bytes = frame.take();
-    w.str(bytes);
-    wipeBytes(bytes);   // the frame's copy of a value is wiped as it goes
-}
-
-// One action up to format 2: unframed. A secret's action, which these formats cannot carry, goes as a stop naming
-// session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never leaves.
-void encodeUnframed(Writer& w, const Action& a) {
-    if (isSecret(a.kind)) {
-        w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
-        w.u64(0);
-        w.str(std::string());
-        w.str(std::string());
-        return;
-    }
-    w.byte(static_cast<std::uint8_t>(a.kind));
-    w.u64(a.session);
-    w.str(a.friendName);
-    w.str(a.text);
-    if (a.kind >= ActionKind::AddAccount) {
-        w.str(a.account);    // only the account actions carry it, so the older kinds' bytes are as they were
-    }
-}
-
-// A diff: the number of its first action, how many follow, and each action, in the link's format. The numbers of the
-// rest follow from the first, so a diff is always one unbroken run.
+// A diff: the number of its first action and the actions from there, one unbroken run, in the link's format
+// (sync/codec.h).
 std::string encode(std::uint64_t start, const std::vector<Action>& held, std::size_t from, std::uint32_t format) {
-    Writer w;
-    w.u64(start);
-    w.u64(held.size() - from);
-    for (std::size_t i = from; i < held.size(); ++i) {
-        if (format >= 3) {
-            encodeFramed(w, held[i]);
-        } else {
-            encodeUnframed(w, held[i]);
-        }
+    if (format >= kTablesFormat) {
+        return codec::writeActionsTables(start, held, from);
     }
-    return w.take();
+    return codec::writeActionsLegacy(start, held, from, format);
 }
 
 const char* kindName(ActionKind kind) {
@@ -125,64 +84,21 @@ std::string Actions::init_diff() const {
     return held_->empty() ? std::string() : encode(first_, *held_, 0, format_);
 }
 
-std::vector<Action> Actions::parse(const std::string& diff, std::uint32_t format) {
-    std::vector<Action> out;
-    if (diff.empty())
-        return out;
-    Reader r(diff);
-    const std::uint64_t start = r.u64();
-    const std::uint64_t count = r.u64();
-    if (start == 0)
-        throw BadDiff("actions diff starts at number 0; numbers start at 1");
-    if (count == 0 || count > diff.size())
-        throw BadDiff("actions diff says it holds " + std::to_string(count) + " actions in " +
-            std::to_string(diff.size()) + " bytes");
-    if (start + count < start)
-        throw BadDiff("actions diff numbers run past 64 bits");
-    out.reserve(static_cast<std::size_t>(count));
-    for (std::uint64_t i = 0; i < count; ++i) {
-        Action a;
-        a.num = start + i;
-        const std::uint8_t kind = r.byte();
-        if (format >= 3) {
-            // Framed: a kind this build does not know is read as Unknown, its fields skipped with its frame.
-            std::string frame = r.str();
-            if (kind == 0 || kind > static_cast<std::uint8_t>(kLastActionKind)) {
-                a.kind = ActionKind::Unknown;
-                wipeBytes(frame);
-                out.push_back(std::move(a));
-                continue;
-            }
-            a.kind = static_cast<ActionKind>(kind);
-            Reader f(frame);
-            a.session = f.u64();
-            a.friendName = f.str();
-            a.text = f.str();
-            a.account = f.str();
-            a.request = f.u64();
-            std::string value = f.str();
-            a.secret = SecretValue(value);
-            wipeBytes(value);
-            wipeBytes(frame);
-            out.push_back(std::move(a));
-            continue;
-        }
-        if (kind < static_cast<std::uint8_t>(ActionKind::Send) ||
-                kind > static_cast<std::uint8_t>(ActionKind::SetDefault)) {
-            throw BadDiff("actions diff holds action kind " + std::to_string(kind) + ", none of send (1) to set "
-                "default (14)");
-        }
-        a.kind = static_cast<ActionKind>(kind);
-        a.session = r.u64();
-        a.friendName = r.str();
-        a.text = r.str();
-        if (a.kind >= ActionKind::AddAccount) {
-            a.account = r.str();
-        }
-        out.push_back(std::move(a));
+std::vector<Action> Actions::parse(const std::string& diff, std::uint32_t format, int* unknown) {
+    if (unknown != nullptr) {
+        *unknown = 0;
     }
-    r.end();
-    return out;
+    if (diff.empty())
+        return std::vector<Action>();
+    if (format >= kTablesFormat) {
+        int skipped = 0;
+        std::vector<Action> out = codec::readActionsTables(diff, &skipped);
+        if (unknown != nullptr) {
+            *unknown = skipped;
+        }
+        return out;
+    }
+    return codec::readActionsLegacy(diff, format);
 }
 
 void Actions::apply_string(const std::string& diff) {
