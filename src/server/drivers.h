@@ -111,6 +111,10 @@ public:
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
+    // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
+    // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
+    // sent is refused with a notice, and what is queued stays queued; put back, what waits goes on.
+    void present(sync::SessionId id, bool present) override;
 
     // The secret dialog (docs/secrets.md): a driver's ask-secret goes to the hub once every slot is served (serve());
     // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its friend, a file its
@@ -164,6 +168,7 @@ private:
     };
 
     std::string friendOf(sync::SessionId id) const;
+    bool listed(sync::SessionId id) const;     // its friend is in friends.json (false while the hub holds no registry)
     ResolvedDriver resolve(sync::SessionId id) const;
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
     bool limitedOf(const sync::SessionInfo& info) const;

@@ -138,11 +138,31 @@ const std::shared_ptr<const std::vector<SecretRequest>>& noRequests() {
     return none;
 }
 
+const std::shared_ptr<const std::vector<ServerFriend>>& noFriends() {
+    static const auto none = std::make_shared<const std::vector<ServerFriend>>();
+    return none;
+}
+
 } // namespace
 
 void Sessions::setRequests(std::vector<SecretRequest> requests) {
     requests_ = requests.empty() ? noRequests() :
         std::make_shared<const std::vector<SecretRequest>>(std::move(requests));
+}
+
+void Sessions::setFriends(std::vector<ServerFriend> friends) {
+    friends_ = friends.empty() ? noFriends() : std::make_shared<const std::vector<ServerFriend>>(std::move(friends));
+    friendsKnown_ = true;
+}
+
+void Sessions::clearFriends() {
+    friends_ = noFriends();
+    friendsKnown_ = false;
+}
+
+void Sessions::shareFriends(const Sessions& from) {
+    friends_ = from.friends_;
+    friendsKnown_ = from.friendsKnown_;
 }
 
 bool SessionView::operator==(const SessionView& x) const {
@@ -188,9 +208,10 @@ SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& 
     return t;
 }
 
-Sessions::Sessions() : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()) {}
+Sessions::Sessions() : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()),
+    friends_(noFriends()) {}
 
-Sessions::Sessions(std::vector<SessionRef> sessions) : requests_(noRequests()) {
+Sessions::Sessions(std::vector<SessionRef> sessions) : requests_(noRequests()), friends_(noFriends()) {
     for (std::size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i]->id == 0) {
             throw std::logic_error("Sessions: a session with id 0");
@@ -219,7 +240,8 @@ const SessionView* Sessions::first(const std::string& friendName) const {
 
 // A diff: for each session in id order, its id and whether `existing` holds it as it is; if not, the session
 // (sessionChange). A session `existing` holds and this state lacks is not named, which removes it. Then the open secret
-// requests. Written in this state's format (sync/codec.h).
+// requests, and the server's friends when it set them (a format before 4 carries none). Written in this state's format
+// (sync/codec.h).
 std::string Sessions::diff_from(const Sessions& existing) const {
     if (*this == existing) {
         return std::string();
@@ -238,6 +260,15 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         change.sessions.push_back(sessionChange(*b, a, tables));
     }
     change.requests = *requests_;
+    // The friends only when they changed: the reader keeps the list it holds otherwise, so an unchanged list costs no
+    // bytes however long it is. The hub shares one list between its states until a reload sets another, so the
+    // comparison is of one pointer in the usual case.
+    if (friendsKnown_ != existing.friendsKnown_ ||
+            (friends_ != existing.friends_ && *friends_ != *existing.friends_)) {
+        change.friendsSent = true;
+        change.friendsKnown = friendsKnown_;
+        change.friends = *friends_;
+    }
     return tables ? codec::writeTables(change) : codec::writeLegacy(change, format_);
 }
 
@@ -281,11 +312,19 @@ void Sessions::apply_string(const std::string& diff) {
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
     setRequests(std::move(change.requests));
+    if (change.friendsSent && change.friendsKnown) {
+        setFriends(std::move(change.friends));
+    } else if (change.friendsSent) {
+        clearFriends();
+    }
     unknown_ = unknown;
 }
 
 bool Sessions::operator==(const Sessions& x) const {
     if (requests_ != x.requests_ && *requests_ != *x.requests_) {
+        return false;
+    }
+    if (friendsKnown_ != x.friendsKnown_ || (friends_ != x.friends_ && *friends_ != *x.friends_)) {
         return false;
     }
     if (sessions_ == x.sessions_) {

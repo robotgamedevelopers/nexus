@@ -7,9 +7,11 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "model.h"
@@ -21,8 +23,8 @@ namespace nexus {
 std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, const std::vector<std::string>& saved);
 
 // The names of the friend tabs, in the order they stand. Terminal tabs are skipped: they are never saved. A saved
-// order is applied to the friend list before the model is built (applyTabOrder), so it only ever reorders friends,
-// inside the friend zone; terminals are added after.
+// order only ever orders friends, inside the friend zone: the server's friends are added to the model in it as they
+// arrive (sync/client.h applyFriends), after any terminals were opened.
 std::vector<std::string> friendTabNames(const Model& model);
 
 // The file's text: a header line, then one name per line, UTF-8. Pure.
@@ -49,8 +51,12 @@ TabOrderStore fileTabOrderStore();
 // The store in a file at `path`, written atomically (Prax's prFileWrite: a file beside it, then a rename).
 TabOrderStore fileTabOrderStore(std::string path);
 
-// `loaded` in the saved order. On an unreadable or malformed file, `loaded` as it is, and `warning` gets one line naming
-// the file, what was wrong and that deleting it resets the order.
+// The names the store saved, in order: none if nothing is saved, and on an unreadable or malformed file, with `warning`
+// one line naming the file, what was wrong and that deleting it resets the order. The window reads them before it
+// shows and orders the server's friends by them as they arrive (sync/client.h applyFriends).
+std::vector<std::string> loadTabOrderNames(const TabOrderStore& store, std::string* warning);
+
+// `loaded` in the saved order: applyTabOrder over loadTabOrderNames.
 std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
     std::string* warning);
 
@@ -82,8 +88,12 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved);
 // The store in a file, selected-tab.txt beside tab-order.txt. `where` is empty if there is no home.
 TabOrderStore fileSelectedTabStore();
 
-// The position to select at launch (savedTabPosition): position 0 if nothing is saved, and on an unreadable or malformed
-// file, with `warning` one line naming the file, what was wrong and that deleting it resets the selection.
+// The tab the store saved: the sprint tab's SavedTab{} if nothing is saved, and on an unreadable or malformed file,
+// with `warning` one line naming the file, what was wrong and that deleting it resets the selection. A saved friend is
+// selected once the server's friends have arrived (frame_host.h).
+SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning);
+
+// The position to select at launch: savedTabPosition of loadSavedTab.
 std::size_t loadSelectedTab(const TabOrderStore& store, const Model& model, std::string* warning);
 
 // Saves the model's active tab. Returns false, with one line in `error` naming the file and the cause.
@@ -141,6 +151,73 @@ std::vector<std::string> loadTerminals(const TabOrderStore& store, std::string* 
 // Saves the terminal tabs' directories. Returns false, with one line in `error` naming the file and the cause.
 bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& directories, std::string* error);
 
+// The drafts kept for friends without a tab (sync/client.h KeptDrafts), kept across launches beside the order: what
+// the person typed to a friend the server's list left out, until a friend of that name on the same server has a tab
+// again. One file serves every window on this machine, each linked to its own server, so a draft is kept by server and
+// friend name: the server is the window's link target, the host `--server` names as given (an alias and an address of
+// one machine are two servers to it). A window with no server keeps none. The window never deletes a draft but the
+// one it gives back; deleting the file deletes them all.
+//
+// The file is changed only by a change (KeptChange), read, merged and written whole under an OS lock on a file beside
+// it (kept-drafts.lock), never by writing a window's own drafts over it: so two windows, each keeping or giving back
+// drafts, never lose each other's (models/FriendStrip.tla FileKeepsOthers). It is written 0600, by a rename.
+using KeptFile = std::map<std::pair<std::string, std::string>, std::string>;    // (server, friend) -> draft
+
+// A window's change of the file, for its server: the drafts it keeps (`put`, each friend's name and draft) and those it
+// gave back to a friend's new tab (`taken`, the same). A draft put where the file holds another for that server and
+// friend (another window's) is joined to it, kKeptJoin between, so that neither is lost; one given back leaves the file
+// only while the file still holds exactly what was given (another window may have joined one to it since).
+struct KeptChange {
+    std::string server;
+    std::vector<std::pair<std::string, std::string>> put;
+    std::vector<std::pair<std::string, std::string>> taken;
+};
+constexpr std::string_view kKeptJoin = "\n\n";
+
+// `change` applied to `file`, as above. Pure.
+void applyKeptChange(KeptFile* file, const KeptChange& change);
+
+// Whether `server` can key a kept draft: 1 to 255 bytes, none a space, a control character or DEL (a host as ssh takes
+// it, user@ and all). A window whose server cannot keeps no draft across launches. Pure.
+bool keptServer(std::string_view server);
+
+// The drafts `file` keeps for `server`, by friend name. Pure.
+std::map<std::string, std::string> keptFor(const KeptFile& file, const std::string& server);
+
+// The file's text: a header line, then for each draft, in (server, friend) order, a line "draft <server> <friend>
+// <bytes>", then that many bytes of the draft as typed (any bytes, newlines too), then a line feed. Pure.
+std::string formatKeptDrafts(const KeptFile& file);
+
+// Reads the file's text into `file`. Returns false, with `error` saying what is wrong, for text that is not a kept
+// drafts file. Pure.
+bool parseKeptDrafts(std::string_view text, KeptFile* file, std::string* error);
+
+// Where the kept drafts are: the seam that tests fill with an in-memory fake.
+struct KeptDraftsStore {
+    std::string where;          // the file's path, for messages
+    // The file as it is: true with `file` (empty when there is none yet), or false with `error` saying why it could
+    // not be read or parsed.
+    std::function<bool(KeptFile* file, std::string* error)> read;
+    // Applies `change` under the lock: read, merge (applyKeptChange), write. Returns false, with `error` saying why,
+    // and changes nothing, when the file cannot be locked, read, parsed or written.
+    std::function<bool(const KeptChange& change, std::string* error)> update;
+};
+
+// The store in kept-drafts.txt beside tab-order.txt, locked by kept-drafts.lock there. `where` is empty if there is no
+// home, and both calls fail saying so. Not on Windows, where the window has no server link: both calls fail there.
+KeptDraftsStore fileKeptDraftsStore();
+// The store in the file at `path`, locked by `path` with ".lock" in place of its ".txt" (or after it).
+KeptDraftsStore fileKeptDraftsStore(std::string path);
+
+// The drafts kept for `server`: none if nothing is saved, and on an unreadable or malformed file none, `readable`
+// false and `warning` one line naming the file, what was wrong and that it is left as it is: the window then keeps
+// this run's drafts in memory only and never changes the file.
+std::map<std::string, std::string> loadKeptDrafts(const KeptDraftsStore& store, const std::string& server,
+    bool* readable, std::string* warning);
+
+// Applies a change to the file. Returns false, with one line in `error` naming the file and the cause.
+bool saveKeptChange(const KeptDraftsStore& store, const KeptChange& change, std::string* error);
+
 // The writer of the window's kept files: a thread of its own, so that a write to a slow or stalled disk never holds
 // up a frame. A store it wraps hands each write to the thread and returns at once; of the writes to one store waiting
 // at a time only the newest is made, since each replaces the whole file. A write that fails is logged on stderr with
@@ -155,6 +232,9 @@ public:
     // `store` with its write handed to this thread. Reads stay where they are: they happen once, at launch, before
     // the window shows. The writer must outlive the store it returns.
     TabOrderStore wrap(TabOrderStore store);
+    // `store` with its update handed to this thread: every change is made, in the order given, none dropped for a
+    // newer one (each is a change, not the whole file). A change that fails is logged on stderr with its cause.
+    KeptDraftsStore wrap(KeptDraftsStore store);
     // Waits until every write handed over so far is made.
     void flush();
 

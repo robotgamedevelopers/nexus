@@ -7,13 +7,14 @@
 (* hold.                                                                   *)
 (*                                                                         *)
 (* A tab is the sprint tab, a friend's or a terminal's. Each tab has an   *)
-(* id that never changes and is never reused: a friend's is its place in  *)
-(* the constructor's list, from 0; the sprint tab's is N, the number of   *)
-(* friends (SprintId); a terminal's is `nextId` when it is added, and     *)
-(* `nextId` then grows. The sprint tab exists when the constant Sprint is *)
-(* TRUE, as it always is in the window (main.cpp); FALSE is the model's   *)
-(* form without it, which its tests and the older witnesses use. The      *)
-(* sprint tab and the friend tabs are made at the start and never closed; *)
+(* id that never changes and is never reused: a friend's at the start is  *)
+(* its place in the constructor's list, from 0; the sprint tab's is N,    *)
+(* the number of those friends (SprintId); a terminal's, and a friend's   *)
+(* added later, is `nextId` when it is added, and `nextId` then grows.    *)
+(* The sprint tab exists when the constant Sprint is TRUE, as it always   *)
+(* does in the window (main.cpp); FALSE is the model's form without it,   *)
+(* which its tests and the older witnesses use. The sprint tab is made at *)
+(* the start and never closed;                                             *)
 (* terminal tabs are added at the end and closed by position. The sprint  *)
 (* tab and a terminal have no transcript, draft or queue: the per-friend  *)
 (* state is indexed by friend, so it moves with the tab.                   *)
@@ -41,8 +42,25 @@
 (* in it already), and close takes the closed tab's id out. Closing the    *)
 (* active tab makes the last id left in it active: the tab selected before *)
 (* it, of those still open. With none left, the rule before it: the tab   *)
-(* now at the closed one's position, or the last. History is per run: the *)
-(* code saves none of it.                                                  *)
+(* now at the closed one's position, or the last. A close (or a friend's   *)
+(* removal) that leaves the history empty with tabs still open enters the *)
+(* tab that then shows (ClosedHistory), so the history always ends at the *)
+(* active tab (HistoryEndsActive): a friend arriving unselected can leave *)
+(* a terminal the history's only id. History is per run: the code saves   *)
+(* none of it.                                                             *)
+(*                                                                         *)
+(* Friends come and go with the server's friend list (src/sync/client.h   *)
+(* applyFriends): `friends` maps each friend tab's id to the friend there, *)
+(* and Ids is its domain, the friend tabs that stand. add_friend puts a   *)
+(* friend's tab, with the next id, at the end of the friends' zone, empty, *)
+(* refused for an empty name or one a tab already has; the active tab     *)
+(* stays the active tab, and the history is untouched unless the strip    *)
+(* was empty. remove_friend takes a friend's tab out by position, as      *)
+(* close_tab takes a terminal's: its id leaves the history, the tab       *)
+(* selected before it shows if it was active, and its transcript, draft   *)
+(* and queue go with it (the session stays on the server; a friend added  *)
+(* again is a new tab with a new id). Spec has neither; SpecFriendsWith   *)
+(* adds both, with the friends add_friend is tried with.                   *)
 (*                                                                         *)
 (* `last` is not model state. It is a history variable: the operation     *)
 (* just performed, its arguments and the value it returned. It lets the   *)
@@ -67,7 +85,7 @@ model == <<friends, order, active, transcript, draft, queue, nextId, history>>
 vars == <<friends, order, active, transcript, draft, queue, nextId, history, last>>
 
 N == Len(FriendList)
-Ids == 0 .. (N - 1)         \* friends, by their place in FriendList
+Ids == DOMAIN friends       \* the friend tabs that stand, by id: at the start their places in FriendList
 SprintId == N               \* the sprint tab's id, when there is one: the first after the friends'
 Pinned == IF Sprint THEN 1 ELSE 0   \* the tabs before the friends at the start
 Tabs == DOMAIN order        \* positions in the strip
@@ -76,7 +94,9 @@ Kinds == {"Person", "Friend", "Notice", "Tool"}
 Texts == Drafts \cup {e.text : e \in AppendEntries}
 Entry == [kind : Kinds, text : Texts]
 NoEntry == [kind |-> "None", text |-> ""]
-Ops == {"init", "select", "set_draft", "send", "queue", "take", "append", "move", "add", "close"}
+NoFriend == [name |-> "", model |-> ""]
+Ops == {"init", "select", "set_draft", "send", "queue", "take", "append", "move", "add", "close", "add_friend",
+        "remove_friend"}
 
 \* a tab's kind, by its id: the friends' ids are theirs, SprintId the sprint tab's if there is one, every later id a
 \* terminal's
@@ -85,9 +105,15 @@ TabKind(id) == IF id \in Ids THEN "Friend" ELSE IF Sprint /\ id = SprintId THEN 
 \* the zone a tab stands in, by its id: the sprint tab 0, friends 1, terminals 2
 Zone(id) == CASE TabKind(id) = "Sprint" -> 0 [] TabKind(id) = "Friend" -> 1 [] OTHER -> 2
 
-Did(op, i, t, e, ok) == [op |-> op, i |-> i, j |-> 0, text |-> t, entry |-> e, ok |-> ok, id |-> 0]
-DidMove(from, to, ok) == [op |-> "move", i |-> from, j |-> to, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> 0]
-DidAdd(id) == [op |-> "add", i |-> 0, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> TRUE, id |-> id]
+Did(op, i, t, e, ok) == [op |-> op, i |-> i, j |-> 0, text |-> t, entry |-> e, ok |-> ok, id |-> 0,
+                         friend |-> NoFriend]
+DidMove(from, to, ok) == [op |-> "move", i |-> from, j |-> to, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> 0,
+                          friend |-> NoFriend]
+DidAdd(id) == [op |-> "add", i |-> 0, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> TRUE, id |-> id,
+               friend |-> NoFriend]
+\* add_friend (i 0) and remove_friend (i the position): the friend, and the tab's id when it returned true
+DidFriend(op, i, f, ok, id) == [op |-> op, i |-> i, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> id,
+                                friend |-> f]
 
 \* the id of the tab that stands at position i
 At(i) == order[i]
@@ -137,17 +163,34 @@ PosOf(o, f) == CHOOSE p \in DOMAIN o : o[p] = f
 ClosedActive(a, i, o, h) ==
     IF a = i /\ h /= <<>> THEN PosOf(Removed(o, i), h[Len(h)]) ELSE ClosedIndex(a, i, Cardinality(DOMAIN o))
 
+\* The history after the tab at i of the order o is closed, with the history h that is left once its id is forgotten:
+\* h, but for an empty h with tabs left, where the tab that is now active (ClosedActive) is the history. A tab nobody
+\* selected, such as a friend's that arrived while a terminal was active, is then the one that shows, and it is entered
+\* so that the history still ends at the active tab. The code's remove_at.
+ClosedHistory(a, i, o, h) ==
+    IF h = <<>> /\ Cardinality(DOMAIN o) > 1 THEN <<Removed(o, i)[ClosedActive(a, i, o, h)]>> ELSE h
+
+\* A friend standing has the name.
+Standing(name) == \E g \in Ids : friends[g].name = name
+
+\* The position just past the friends' zone in the order o: the sprint tab's and the friends' tabs stand before it.
+FriendEnd(o) == Cardinality({p \in DOMAIN o : Zone(o[p]) <= 1})
+
+\* The function f on the ids `keep` only, or with id n mapped to v as well.
+Keep(f, keep) == [g \in keep |-> f[g]]
+With(f, n, v) == [g \in DOMAIN f \cup {n} |-> IF g = n THEN v ELSE f[g]]
+
 -----------------------------------------------------------------------------
 
 \* The sprint tab first if there is one, then the friends in their order; the first tab active, and the first entry of
 \* the selection history.
 Init ==
-    /\ friends = FriendList
+    /\ friends = [f \in 0 .. (N - 1) |-> FriendList[f + 1]]
     /\ order = [p \in 0 .. (N + Pinned - 1) |-> IF Sprint /\ p = 0 THEN SprintId ELSE p - Pinned]
     /\ active = 0
-    /\ transcript = [f \in Ids |-> <<>>]
-    /\ draft = [f \in Ids |-> ""]
-    /\ queue = [f \in Ids |-> <<>>]
+    /\ transcript = [f \in 0 .. (N - 1) |-> <<>>]
+    /\ draft = [f \in 0 .. (N - 1) |-> ""]
+    /\ queue = [f \in 0 .. (N - 1) |-> <<>>]
     /\ nextId = N + Pinned
     /\ history = IF Sprint THEN <<SprintId>> ELSE IF N > 0 THEN <<0>> ELSE <<>>
     /\ last = Did("init", 0, "", NoEntry, TRUE)
@@ -234,11 +277,48 @@ AddTerminal ==
 CloseTab(i) ==
     IF i \in Tabs /\ TabKind(At(i)) = "Terminal"
     THEN /\ order' = Removed(order, i)
-         /\ history' = Forget(history, At(i))
+         /\ history' = ClosedHistory(active, i, order, Forget(history, At(i)))
          /\ active' = ClosedActive(active, i, order, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
          /\ UNCHANGED <<friends, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
+         /\ UNCHANGED model
+
+\* add_friend(f): a tab for friend f, with the next id, at the end of the friends' zone (before every terminal), empty.
+\* The active tab stays the active tab, wherever it now stands; the history is untouched, but for an empty strip, where
+\* the new tab is the active one and so its id is the history. Refused for an empty name, or a name a friend's tab
+\* already has.
+AddFriend(f) ==
+    IF f.name /= "" /\ ~Standing(f.name)
+    THEN LET at == FriendEnd(order) IN
+         /\ order' = [p \in 0 .. Count |-> IF p < at THEN order[p] ELSE IF p = at THEN nextId ELSE order[p - 1]]
+         /\ active' = IF Count > 0 /\ active >= at THEN active + 1 ELSE active
+         /\ friends' = With(friends, nextId, f)
+         /\ transcript' = With(transcript, nextId, <<>>)
+         /\ draft' = With(draft, nextId, "")
+         /\ queue' = With(queue, nextId, <<>>)
+         /\ nextId' = nextId + 1
+         /\ history' = IF Count = 0 THEN <<nextId>> ELSE history
+         /\ last' = DidFriend("add_friend", 0, f, TRUE, nextId)
+    ELSE /\ last' = DidFriend("add_friend", 0, f, FALSE, 0)
+         /\ UNCHANGED model
+
+\* remove_friend(i): only a friend's tab is removed this way, as close_tab removes a terminal's: its id leaves the
+\* history, and if it was active the tab selected before it is (ClosedActive). Its transcript, draft and queue go with
+\* it.
+RemoveFriend(i) ==
+    IF FriendTab(i)
+    THEN LET f == At(i) IN
+         /\ order' = Removed(order, i)
+         /\ history' = ClosedHistory(active, i, order, Forget(history, f))
+         /\ active' = ClosedActive(active, i, order, Forget(history, f))
+         /\ friends' = Keep(friends, Ids \ {f})
+         /\ transcript' = Keep(transcript, Ids \ {f})
+         /\ draft' = Keep(draft, Ids \ {f})
+         /\ queue' = Keep(queue, Ids \ {f})
+         /\ last' = DidFriend("remove_friend", i, friends[f], TRUE, f)
+         /\ UNCHANGED nextId
+    ELSE /\ last' = DidFriend("remove_friend", i, NoFriend, FALSE, 0)
          /\ UNCHANGED model
 
 \* The next-state relation over any set of the eight actions. The witnesses (witnesses/*.tla) pass a broken action in
@@ -269,11 +349,23 @@ Next == NextTake(TakeQueued)
 
 Spec == Init /\ [][Next]_vars
 
+\* With the friends coming and going: add_friend tried with each friend of `Arrivals`, remove_friend at every position.
+\* The witnesses of the two pass a broken one in place of either.
+NextFriendOps(AddF(_), RemF(_), Arrivals) ==
+    \/ Next
+    \/ \E f \in Arrivals : AddF(f)
+    \/ \E i \in Idx : RemF(i)
+
+NextFriendsWith(Arrivals) == NextFriendOps(AddFriend, RemoveFriend, Arrivals)
+
+SpecFriendsWith(Arrivals) == Init /\ [][NextFriendsWith(Arrivals)]_vars
+
 -----------------------------------------------------------------------------
 (* State invariants *)
 
 TypeOK ==
-    /\ friends = FriendList
+    /\ friends \in [Ids -> [name : STRING, model : STRING]]
+    /\ Ids \subseteq 0 .. (nextId - 1)
     /\ nextId \in Int /\ nextId >= N + Pinned
     /\ Tabs = 0 .. (Count - 1)
     /\ \A p \in Tabs : order[p] \in Int
@@ -289,12 +381,16 @@ TypeOK ==
     /\ last.entry \in AppendEntries \cup {NoEntry}
     /\ last.ok \in BOOLEAN
     /\ last.id \in Int
+    /\ last.friend \in [name : STRING, model : STRING]
 
 \* active is always a tab, or 0 when there are no tabs
 ActiveValid == IF Count = 0 THEN active = 0 ELSE active \in Tabs
 
 \* every friend has a tab: no reordering or close loses one
 NoTabLost == \A f \in Ids : \E p \in Tabs : order[p] = f
+
+\* no two friend tabs are of one friend: add_friend never makes a second tab for a name that has one
+NamesOnce == \A f, g \in Ids : f /= g => friends[f].name /= friends[g].name
 
 \* no id stands twice: no reordering duplicates a tab, and no add reuses an id that stands
 NoTabDuplicated == \A p, q \in Tabs : p /= q => order[p] /= order[q]
@@ -376,9 +472,10 @@ QueueAppendsOne ==
 QueueLeavesTranscripts ==
     [][last'.op = "queue" => UNCHANGED transcript]_vars
 
-\* only queue and take change a queue: send, select, set_draft, append, move, add and close never do
+\* only queue and take change a queue: send, select, set_draft, append, move, add and close never do (add_friend and
+\* remove_friend add or take out a friend's whole queue: FriendOpsKeepOthers)
 OnlyQueueTouchesQueues ==
-    [][last'.op \notin {"queue", "take"} => UNCHANGED queue]_vars
+    [][last'.op \notin {"queue", "take", "add_friend", "remove_friend"} => UNCHANGED queue]_vars
 
 \* take returns true exactly when i is a friend's tab with a queued prompt; then exactly that queue's oldest prompt
 \* leaves it, and nothing else changes
@@ -426,13 +523,14 @@ MovePlaces ==
 MoveKeepsTabs ==
     [][last'.op = "move" => UNCHANGED <<friends, transcript, draft, queue, nextId>>]_vars
 
-\* only move reorders the tabs, add puts one at the end and close takes one out: no other operation changes the order
+\* only move reorders the tabs, add puts one at the end, add_friend one at the friends' end, and close and remove_friend
+\* take one out: no other operation changes the order
 OnlyMoveReorders ==
-    [][last'.op \notin {"move", "add", "close"} => UNCHANGED order]_vars
+    [][last'.op \notin {"move", "add", "close", "add_friend", "remove_friend"} => UNCHANGED order]_vars
 
-\* every operation but select, add and close keeps the same tab active, wherever it now stands
+\* every operation but select, add, close and remove_friend keeps the same tab active, wherever it now stands
 ActiveFriendKept ==
-    [][(Count > 0 /\ last'.op \notin {"select", "add", "close"}) => order'[active'] = order[active]]_vars
+    [][(Count > 0 /\ last'.op \notin {"select", "add", "close", "remove_friend"}) => order'[active'] = order[active]]_vars
 
 \* add always succeeds: one terminal's tab, with the id it returns, at the end, active; every other tab where it was,
 \* and no friend's state touched
@@ -489,9 +587,12 @@ SelectMovesToEnd ==
         /\ history'[Len(history')] = f
         /\ SubSeq(history', 1, Len(history') - 1) = Forget(history, f)]_vars
 
-\* a close that returns true takes the closed tab's id out of the history, and nothing else
+\* a close that returns true takes the closed tab's id out of the history, and nothing else; but when that leaves the
+\* history empty with tabs still open, the history is the tab now active, alone
+LeftHistory(h) ==
+    IF h = <<>> /\ Cardinality(DOMAIN order') > 0 THEN <<order'[active']>> ELSE h
 CloseForgets ==
-    [][(last'.op = "close" /\ last'.ok) => history' = Forget(history, order[last'.i])]_vars
+    [][(last'.op = "close" /\ last'.ok) => history' = LeftHistory(Forget(history, order[last'.i]))]_vars
 
 \* an operation that returns false changes no model state
 RefusedChangesNothing ==
@@ -500,15 +601,66 @@ RefusedChangesNothing ==
 \* s' extends s: its entries are s's, in s's order, then any new ones
 Extends(s2, s1) == Len(s2) >= Len(s1) /\ SubSeq(s2, 1, Len(s1)) = s1
 
-\* transcripts only grow by appending: existing entries never change, move or go
+\* transcripts only grow by appending: existing entries never change, move or go, for as long as their tab stands
 TranscriptsOnlyGrow ==
-    [][\A f \in Ids : Extends(transcript'[f], transcript[f])]_vars
+    [][\A f \in Ids \cap Ids' : Extends(transcript'[f], transcript[f])]_vars
 
 \* queues only grow by appending, but for take: queued prompts never change or move, and go only from the front
 QueuesOnlyGrow ==
-    [][last'.op /= "take" => \A f \in Ids : Extends(queue'[f], queue[f])]_vars
+    [][last'.op /= "take" => \A f \in Ids \cap Ids' : Extends(queue'[f], queue[f])]_vars
 
-\* the friends never change
-FriendsFixed == [][UNCHANGED friends]_vars
+\* the friends change only by add_friend and remove_friend: no other operation renames, adds or drops one
+FriendsFixed == [][last'.op \notin {"add_friend", "remove_friend"} => UNCHANGED friends]_vars
+
+\* add_friend returns true exactly when the friend's name is not empty and no friend's tab has it. Then its tab, with
+\* the id it returns (never handed out before), stands at the end of the friends' zone, holding nothing; every other tab
+\* keeps its place relative to the rest; and the tab that was active is active still
+AddFriendExact ==
+    [][last'.op = "add_friend" =>
+        /\ last'.ok = (last'.friend.name /= "" /\ ~Standing(last'.friend.name))
+        /\ last'.ok =>
+            /\ last'.id = nextId /\ nextId' = nextId + 1
+            /\ Ids' = Ids \cup {last'.id}
+            /\ friends'[last'.id] = last'.friend
+            /\ order'[FriendEnd(order)] = last'.id
+            /\ Without(order', last'.id) = Without(order, last'.id)
+            /\ transcript'[last'.id] = <<>> /\ draft'[last'.id] = "" /\ queue'[last'.id] = <<>>
+            /\ Count > 0 => (order'[active'] = order[active] /\ history' = history)]_vars
+
+\* remove_friend returns true exactly when i is a friend's tab; then exactly that tab is gone, the tabs after it shift
+\* left by one, and that friend is gone with it
+RemoveFriendExact ==
+    [][last'.op = "remove_friend" =>
+        /\ last'.ok = FriendTab(last'.i)
+        /\ last'.ok =>
+            /\ last'.id = order[last'.i]
+            /\ Ids' = Ids \ {last'.id}
+            /\ DOMAIN order' = 0 .. (Count - 2)
+            /\ \A p \in DOMAIN order' : order'[p] = IF p < last'.i THEN order[p] ELSE order[p + 1]
+            /\ UNCHANGED nextId]_vars
+
+\* add_friend and remove_friend change no other friend: its name, transcript, draft and queue are as they were
+FriendOpsKeepOthers ==
+    [][last'.op \in {"add_friend", "remove_friend"} =>
+        \A f \in Ids \cap Ids' :
+            friends'[f] = friends[f] /\ transcript'[f] = transcript[f] /\ draft'[f] = draft[f] /\ queue'[f] = queue[f]]_vars
+
+\* a removed friend's tab leaves the history, and nothing else does; as for close, a history left empty with tabs open
+\* is the tab now active, alone
+RemoveForgets ==
+    [][(last'.op = "remove_friend" /\ last'.ok) => history' = LeftHistory(Forget(history, order[last'.i]))]_vars
+
+\* after a remove_friend, the same tab is active if another was; if the removed tab was active, the tab selected most
+\* recently before it, of those still open; with none there, the tab now at its position, or the last tab if it was
+\* the last, or none (0) if no tabs remain: the rule of close
+RemoveActiveRule ==
+    [][(last'.op = "remove_friend" /\ last'.ok) =>
+        LET n == Cardinality(DOMAIN order')
+            h == Forget(history, order[last'.i]) IN
+        IF active /= last'.i
+        THEN order'[active'] = order[active]
+        ELSE IF h /= <<>>
+        THEN order'[active'] = h[Len(h)]
+        ELSE active' = (IF n = 0 THEN 0 ELSE IF last'.i < n THEN last'.i ELSE n - 1)]_vars
 
 =============================================================================

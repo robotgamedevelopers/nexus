@@ -37,10 +37,11 @@ add_test(NAME link_e2e_restart COMMAND link_e2e ${server} ${e2e_dir}-restart res
 add_test(NAME link_e2e_older_server COMMAND link_e2e ${server} ${e2e_dir}-older older_server)
 add_test(NAME link_e2e_flush COMMAND link_e2e ${server} ${e2e_dir}-flush flush $<TARGET_FILE:nexus_fake_driver>)
 add_test(NAME link_e2e_secret COMMAND link_e2e ${server} ${e2e_dir}-secret secret $<TARGET_FILE:nexus_fake_driver>)
+add_test(NAME link_e2e_friends COMMAND link_e2e ${server} ${e2e_dir}-friends friends $<TARGET_FILE:nexus_fake_driver>)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret)
+    link_e2e_secret link_e2e_friends)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends)
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

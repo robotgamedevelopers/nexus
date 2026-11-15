@@ -8,7 +8,7 @@ BrokenAddInstance(f, i) ==
     IF ConsistentI(acct, known, links, dflt, ni)
     THEN /\ insts' = ni
          /\ ses' = [s \in Ids |-> IF ses[s].made /\ ses[s].inst = None THEN ses[s]
-                                  ELSE SettledI(links, dflt, prov, ni)[s]]
+                                  ELSE SettledI(links, dflt, prov, ni, known)[s]]
          /\ told' = {}
          /\ Done("reload", f, i, 0, TRUE)
          /\ UNCHANGED <<lim, bill, run, acct, prov, known, links, dflt, nextSes>>

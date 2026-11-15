@@ -1,6 +1,6 @@
-// The window's state without drawing: the sprint tab, one tab per friend, then the terminal tabs that come and go, the
-// active tab, and
-// each friend's transcript, unsent draft and queue of prompts held for later.
+// The window's state without drawing: the sprint tab, one tab per friend (friends come and go with the server's friend
+// list), then the terminal tabs that come and go, the active tab, and each friend's transcript, unsent draft and queue
+// of prompts held for later.
 // Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
 // tests/model/trace_walk.cpp checks that this code's behaviours are behaviours of that spec.
 
@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <unordered_set>
 #include <utility>
 
 namespace nexus {
@@ -158,6 +160,139 @@ std::size_t Model::add_terminal() {
 bool Model::close_tab(std::size_t i) {
     if (i >= tabs_.size() || tabs_[i].kind != TabKind::Terminal)
         return false;
+    remove_at(i);
+    return true;
+}
+
+// Window.tla's AddFriend: the tab goes at FriendEnd, the first position past the sprint tab and the friends; active_
+// moves with the tab it names when that stood at or past it.
+bool Model::add_friend(FriendInfo f) {
+    if (f.name.empty()) {
+        return false;
+    }
+    for (const Tab& t : tabs_) {
+        if (t.kind == TabKind::Friend && t.name == f.name) {
+            return false;
+        }
+    }
+    std::size_t at = 0;
+    while (at < tabs_.size() && zone(tabs_[at].kind) <= zone(TabKind::Friend)) {
+        ++at;
+    }
+    const std::size_t id = next_id_++;
+    const bool empty = tabs_.empty();
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at),
+                 Tab{id, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend});
+    if (empty) {
+        history_.push_back(id);
+    } else if (active_ >= at) {
+        ++active_;
+    }
+    return true;
+}
+
+bool Model::remove_friend(std::size_t i) {
+    if (!friend_tab(i)) {
+        return false;
+    }
+    remove_at(i);
+    return true;
+}
+
+// add_friend of each in turn: every tab goes at the friends' zone's end, so the new tabs stand together there in the
+// order given, and the active tab moves past them when it stood at or past that end. A model with no tabs makes the first
+// of them active and its id the history, and add_friend of the rest leaves both as they are.
+std::vector<std::string> Model::add_friends(std::vector<FriendInfo> friends, std::size_t* atOut) {
+    std::unordered_set<std::string> named;
+    for (const Tab& t : tabs_) {
+        if (t.kind == TabKind::Friend) {
+            named.insert(t.name);
+        }
+    }
+    std::size_t at = tabs_.size();
+    while (at > 0 && zone(tabs_[at - 1].kind) > zone(TabKind::Friend)) {
+        --at;
+    }
+    if (atOut != nullptr) {
+        *atOut = at;
+    }
+    std::vector<Tab> fresh;
+    std::vector<std::string> added;
+    for (FriendInfo& f : friends) {
+        if (f.name.empty() || !named.insert(f.name).second) {
+            continue;
+        }
+        added.push_back(f.name);
+        fresh.push_back(Tab{next_id_++, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend});
+    }
+    if (fresh.empty()) {
+        return added;
+    }
+    const bool empty = tabs_.empty();
+    const std::size_t count = fresh.size();
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at), std::make_move_iterator(fresh.begin()),
+                 std::make_move_iterator(fresh.end()));
+    if (empty) {
+        history_.push_back(tabs_[0].id);
+    } else if (active_ >= at) {
+        active_ += count;
+    }
+    return added;
+}
+
+// remove_friend of each, last first. A tab that is not active leaves only its place and its id in the history. When
+// the active tab goes, remove_friend makes the tab of the history's last id active, and when that one goes too the
+// next: so, while any id of the history stays, the tab of the last id that stays is active at the end. When every id of
+// the history goes, remove_friend's fallback (the tab at the removed one's place) decides, step by step, and so the
+// loop itself is run.
+std::vector<std::size_t> Model::remove_friends(const std::function<bool(const Tab&)>& gone) {
+    std::vector<std::size_t> removed;
+    std::vector<char> drop(tabs_.size(), 0);
+    std::unordered_set<std::size_t> ids;
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        if (tabs_[i].kind == TabKind::Friend && gone(tabs_[i])) {
+            drop[i] = 1;
+            ids.insert(tabs_[i].id);
+            removed.push_back(tabs_[i].id);
+        }
+    }
+    if (removed.empty()) {
+        return removed;
+    }
+    const bool historyStays = std::any_of(history_.begin(), history_.end(),
+        [&ids](std::size_t id) { return ids.count(id) == 0; });
+    if (!historyStays) {
+        for (std::size_t i = tabs_.size(); i-- > 0;) {
+            if (drop[i] != 0) {
+                remove_at(i);
+            }
+        }
+        return removed;
+    }
+    const std::size_t activeId = tabs_[active_].id;
+    history_.erase(std::remove_if(history_.begin(), history_.end(),
+        [&ids](std::size_t id) { return ids.count(id) != 0; }), history_.end());
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        if (drop[i] == 0) {
+            if (kept != i) {
+                tabs_[kept] = std::move(tabs_[i]);
+            }
+            ++kept;
+        }
+    }
+    tabs_.resize(kept);
+    const std::size_t shows = ids.count(activeId) != 0 ? history_.back() : activeId;
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        if (tabs_[i].id == shows) {
+            active_ = i;
+            break;
+        }
+    }
+    return removed;
+}
+
+void Model::remove_at(std::size_t i) {
     const std::size_t id = tabs_[i].id;
     tabs_.erase(tabs_.begin() + static_cast<std::ptrdiff_t>(i));
     history_.erase(std::remove(history_.begin(), history_.end(), id), history_.end());
@@ -170,7 +305,12 @@ bool Model::close_tab(std::size_t i) {
     } else if (active_ == i && active_ == tabs_.size()) {
         active_ = tabs_.empty() ? 0 : tabs_.size() - 1;
     }
-    return true;
+    // A history left empty with tabs open (the closed tab was the only one ever selected, and the rest arrived without
+    // a selection, as a friend's tab does) holds the tab that now shows, so that it still ends at the active tab
+    // (Window.tla, ClosedHistory).
+    if (history_.empty() && !tabs_.empty()) {
+        history_.push_back(tabs_[active_].id);
+    }
 }
 
 } // namespace nexus

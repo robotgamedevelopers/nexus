@@ -67,6 +67,25 @@
 (* the directory it was made in (sdir), and a start in another one drops   *)
 (* it and starts afresh, owing (summary, durable) the conversation's       *)
 (* summary to the first send, which carries it (each send's sum).          *)
+(*                                                                         *)
+(* The session's friend may be taken out of friends.json by a reload       *)
+(* (RemoveFriend) and put back (AddBack); absent says it is out. Taken     *)
+(* out, what runs is stopped as the person's stop stops it (a stop written *)
+(* for the open turn, which ends at its done or is cut at the stop's       *)
+(* deadline) and the driver is ended: a starting one at once, quietly, an  *)
+(* idle one by Retire, a stopping one once its turn ends. While it is out  *)
+(* no driver starts, no prompt is sent (the server refuses it first) and   *)
+(* nothing queued is taken: the waiting prompts and the queue are kept,    *)
+(* across restarts too, and go on once it is back. rm counts the removals  *)
+(* (MaxRemovals bounds them) and the ghost removing marks the step.         *)
+(*                                                                         *)
+(* A server may also start holding no friends list at all: its committed  *)
+(* files do not read (RestartUnknown). Then whether the friend is in it is *)
+(* unknown (known is FALSE), and unknown reads as out: absent, so nothing  *)
+(* runs, nothing is sent and nothing queued is taken, and the prompts are  *)
+(* kept. The first list applied after that (Learn) says, from itself      *)
+(* alone, whether the friend is in or out: it is never diffed against an  *)
+(* empty list that would read as "it was out, and is back".                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -80,7 +99,8 @@ CONSTANTS
     Efforts,          \* the efforts the person may choose, besides ""
     Accounts,         \* the accounts the person may choose ("" is the default)
     Dirs,             \* the directories the session's instance may move to ("" is where it starts)
-    MaxSwitches       \* how many times the person changes the setting, the account or the place, in all
+    MaxSwitches,      \* how many times the person changes the setting, the account or the place, in all
+    MaxRemovals       \* how many times the session's friend is taken out of friends.json
 
 ASSUME MaxWaiting >= 1 /\ MaxFailedStarts >= 1
 
@@ -114,7 +134,7 @@ Init ==
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE, signin |-> FALSE,
             setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
             unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE,
-            lim |-> FALSE, dlim |-> FALSE]
+            lim |-> FALSE, dlim |-> FALSE, absent |-> FALSE, rm |-> 0, removing |-> FALSE, known |-> TRUE]
 
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
@@ -168,7 +188,7 @@ Drop(x) ==
                                                                  !.summary = @ \/ x.next > 1]
     ELSE x
 StartDriverWith(D(_), x) ==
-    IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down /\ x.here
+    IF x.phase = "none" /\ x.waiting # <<>> /\ ~x.blocked /\ ~x.down /\ x.here /\ ~x.absent
     THEN LET y == D(x) IN
          [y EXCEPT !.phase = "starting", !.procs = @ + 1, !.finished = FALSE, !.nocred = FALSE,
                    !.resumed = IF y.unconf THEN "" ELSE y.session, !.drv = y.account, !.told = Default,
@@ -178,22 +198,23 @@ StartDriver(x) == StartDriverWith(Drop, x)
 
 \* With no turn open, a driver started under an account that is no longer the session's, or in a directory that is no
 \* longer the session's, or any while the instance is elsewhere, or one told a field the session has put back to the
-\* default, is ended quietly: the next one starts on the defaults under the session's account, in its directory.
+\* default, is ended quietly: the next one starts on the defaults under the session's account, in its directory. So is
+\* any while the friend is out of friends.json.
 Cleared(x) == (x.told.m # "" /\ x.setting.m = "") \/ (x.told.e # "" /\ x.setting.e = "")
 Moved(x) == x.ddir # x.dir \/ ~x.here
 \* A driver started under another limit than the session's (Supervisor::retire's driverLimited_ check).
 OtherLimit(x) == x.dlim # x.lim
 RetireAll(C(_), L(_), x) ==
-    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x) \/ Moved(x) \/ L(x)) THEN [QuietEnd(x) EXCEPT !.retiring = TRUE]
-    ELSE x
+    IF x.phase = "idle" /\ (x.drv # x.account \/ C(x) \/ Moved(x) \/ L(x) \/ x.absent)
+    THEN [QuietEnd(x) EXCEPT !.retiring = TRUE] ELSE x
 RetireWith(C(_), x) == RetireAll(C, OtherLimit, x)
 Retire(x) == RetireWith(Cleared, x)
 
-\* When a driver is configured, no turn is open, no prompt waits and starting is not held back: the oldest queued
-\* prompt joins the waiting prompts, shown as the person's entry. One per turn: it waits, or is written as the turn
-\* that opens.
+\* When a driver is configured, the friend is in friends.json, no turn is open, no prompt waits and starting is not
+\* held back: the oldest queued prompt joins the waiting prompts, shown as the person's entry. One per turn: it waits,
+\* or is written as the turn that opens.
 Take(x) ==
-    IF ~x.unconf /\ x.here /\ x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
+    IF ~x.unconf /\ x.here /\ ~x.absent /\ x.open = 0 /\ x.waiting = <<>> /\ ~x.blocked /\ ~x.down /\ x.queue # <<>>
     THEN LET p == Head(x.queue) IN
          [Fx(x, E("P", 0, p)) EXCEPT !.queue = Tail(@), !.waiting = <<p>>, !.fate[p] = "waiting"]
     ELSE x
@@ -203,8 +224,8 @@ AdvanceAll(Tk(_), Rt(_), Wn(_), x) == Wn(StartDriver(Rt(Tk(x))))
 AdvanceWith(Tk(_), x) == AdvanceAll(Tk, Retire, WriteNext, x)
 Advance(x) == AdvanceWith(Take, x)
 
-\* Every step starts with no effects, and is not a stop or a sign-in until it says so.
-Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE, !.signin = FALSE]
+\* Every step starts with no effects, and is not a stop, a sign-in or a removal until it says so.
+Fresh == [s EXCEPT !.fx = <<>>, !.asked = FALSE, !.signin = FALSE, !.removing = FALSE]
 
 \* The driver is gone: a failed start is one that finished no turn (and was not ended for an account change).
 ExitedWith(x) ==
@@ -266,10 +287,12 @@ Keep == UNCHANGED <<sent, restarts, switches>>
 
 \* The person sends prompt p: refused with a notice past the bound; otherwise it shows, waits, and goes out when it can.
 \* A prompt also lifts the hold that failed starts put on starting drivers. With no driver configured the server
-\* refuses it before it reaches the supervisor (Drivers::send): no step here.
+\* refuses it before it reaches the supervisor (Drivers::send): no step here; so it does while the friend is out of
+\* friends.json.
 PromptWith(Adv(_)) ==
     /\ ~s.down
     /\ ~s.unconf
+    /\ ~s.absent
     /\ sent < Prompts
     /\ sent' = sent + 1
     /\ UNCHANGED <<restarts, switches>>
@@ -297,10 +320,12 @@ QueuePrompt == QueuePromptWith(Advance)
 
 \* The person stops the friend's work: a stop for the open turn, if one is open and no stop is out; while the driver
 \* starts, the turn about to begin is cancelled (C). It never waits: it acts in the step it is given, or not at all.
+\* The stop of the open turn, written once (Supervisor::stopOpen).
+StopOpen(x) == [x EXCEPT !.phase = "stopping", !.stops = Append(@, x.open)]
 StopWith(Ok(_), C(_)) ==
     /\ Keep
     /\ s' = LET x == [Fresh EXCEPT !.asked = TRUE] IN
-            CASE Ok(x)                                     -> [x EXCEPT !.phase = "stopping", !.stops = Append(@, x.open)]
+            CASE Ok(x)                                     -> StopOpen(x)
               [] x.phase = "starting" /\ x.waiting # <<>> -> C(x)
               [] OTHER                                     -> x
 Working(x) == x.phase = "working"
@@ -355,12 +380,14 @@ Shutdown ==
               [] x.open # 0                     -> End(x)
               [] OTHER                          -> QuietEnd(x)
 
-\* The server starts again from what is durable. A turn left open is cut; waiting prompts go to a new driver.
+\* The server starts again from what is durable. A turn left open is cut; waiting prompts go to a new driver. It reads
+\* its committed friends list: the friend is in it or out as before, but after a start that held none (known FALSE),
+\* when the list may say either (v).
 RestartA(R(_), A(_)) ==
     /\ restarts < MaxRestarts
     /\ restarts' = restarts + 1
     /\ UNCHANGED <<sent, switches>>
-    /\ s' = A(R(Fresh))
+    /\ \E v \in BOOLEAN : s' = A(R([Fresh EXCEPT !.known = TRUE, !.absent = IF s.known THEN @ ELSE v]))
 RestartWith(R(_)) == RestartA(R, Advance)
 Restarted(x) ==
     LET y == IF x.open # 0 THEN CutOpen(x) ELSE x IN
@@ -368,6 +395,25 @@ Restarted(x) ==
               !.blocked = FALSE, !.nocred = FALSE, !.down = FALSE, !.procs = 0, !.drv = "", !.told = Default,
               !.retiring = FALSE, !.crashed = FALSE, !.ddir = "", !.dlim = FALSE]
 Restart == RestartWith(Restarted)
+
+\* The server starts again and its committed friends list does not read (server.cpp restoreAll: Hub::keepWith), so it
+\* holds none: the friend is not known to be in it, and reads out (Drivers::listed is false with no list) until one is
+\* applied. Ab is what it reads as: TRUE, out; the witness passes FALSE. Only where the friend may be taken out at all
+\* (MaxRemovals > 0), so that the other instances keep their state spaces.
+RestartUnknownWith(Ab) ==
+    /\ MaxRemovals > 0
+    /\ restarts < MaxRestarts
+    /\ restarts' = restarts + 1
+    /\ UNCHANGED <<sent, switches>>
+    /\ s' = Advance(Restarted([Fresh EXCEPT !.known = FALSE, !.absent = Ab]))
+RestartUnknown == RestartUnknownWith(TRUE)
+
+\* The first friends list applied after a start that held none (Hub::applyAccounts from no registry): the friend is in
+\* it (v) or not, from that list alone, and the supervisor is told so (Drivers::present); what waits goes on if it is in.
+Learn(v) ==
+    /\ ~s.known
+    /\ Keep
+    /\ s' = Advance([Fresh EXCEPT !.known = TRUE, !.absent = ~v])
 
 \* The person sets the session's model and effort (v): the next send is written with it, and an idle driver told a
 \* field v clears is ended (Retire; with a turn open, the Advance at its end does it). Nothing else happens.
@@ -442,8 +488,36 @@ LimitSet(x, v) ==
             ELSE y)
 SetLimit(v) == SetLimitWith(LimitSet, v)
 
-\* Every step but the change of limit, for the limit's witnesses to give their own.
-NextCore(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
+\* The session's friend is taken out of friends.json (a reload; Supervisor::setPresent). Rm stops what runs: the open
+\* turn gets the person's stop (StopOpen), and a starting driver, with no turn open, is ended at once, never counted as
+\* a failed start; then what follows every step, whose Retire ends an idle driver and whose Take and StartDriver do
+\* nothing while the friend is out. The waiting prompts and the queue are kept. The limit is a change of its own
+\* (SetLimit): a friend out of the files reads limited (registry.h limitedFor), and one put back gets its record's.
+RemoveFriendA(Rm(_), A(_)) ==
+    /\ s.known
+    /\ ~s.absent
+    /\ s.rm < MaxRemovals
+    /\ Keep
+    /\ s' = A(Rm([Fresh EXCEPT !.absent = TRUE, !.rm = @ + 1, !.removing = TRUE]))
+Removed(x) ==
+    CASE Working(x)              -> StopOpen(x)
+      [] x.phase = "starting"    -> [QuietEnd(x) EXCEPT !.retiring = TRUE]
+      [] OTHER                   -> x
+RemoveFriendWith(Rm(_)) == RemoveFriendA(Rm, Advance)
+RemoveFriend == RemoveFriendWith(Removed)
+
+\* The friend is put back in friends.json: what waits goes on (the oldest queued prompt is taken, a driver started). A
+\* list applied while none is held is Learn's, not this.
+AddBackA(A(_)) ==
+    /\ s.known
+    /\ s.absent
+    /\ Keep
+    /\ s' = A([Fresh EXCEPT !.absent = FALSE])
+AddBack == AddBackA(Advance)
+
+\* Every step but the change of limit, with Rf and Ab for the removal and the return: the removal's witness gives its
+\* own removal through this.
+NextFriend(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _), Rf, Ab) ==
     \/ P
     \/ SignIn
     \/ \E c \in BOOLEAN : Reconfigure(c)
@@ -458,6 +532,14 @@ NextCore(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     \/ \E v \in Settings : Se(v)
     \/ \E a \in Accounts \cup {""} : Ac(a)
     \/ \E d \in Dirs \cup {""}, h \in BOOLEAN : Pl(d, h)
+    \/ Rf
+    \/ Ab
+    \/ RestartUnknown
+    \/ \E v \in BOOLEAN : Learn(v)
+
+\* Every step but the change of limit, for the limit's witnesses to give their own.
+NextCore(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
+    NextFriend(P, Q, St, M, Ex, T, R, Se, Ac, Pl, RemoveFriend, AddBack)
 
 NextWithPlace(P, Q, St, M(_), Ex, T, R, Se(_), Ac(_), Pl(_, _)) ==
     NextCore(P, Q, St, M, Ex, T, R, Se, Ac, Pl) \/ \E v \in BOOLEAN : SetLimit(v)
@@ -471,10 +553,16 @@ NextWith(P, M(_), Ex, T, R) == NextWithAll(P, QueuePrompt, Stop, M, Ex, T, R)
 \* Every step with A in place of Advance: the witnesses of the take, the setting, the account and the place break it
 \* through this.
 NextAdvance(A(_)) ==
-    NextWithPlace(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
-                  TimeoutA(End, End, A), RestartA(Restarted, A), SetSetting,
-                  LAMBDA a : SetAccountWith(LAMBDA x, b : A([x EXCEPT !.account = b]), a),
-                  LAMBDA d, h : SetPlaceWith(LAMBDA x, e, g : A([x EXCEPT !.dir = e, !.here = g]), d, h)) \/ BrokenA(A)
+    NextFriend(PromptWith(A), QueuePromptWith(A), Stop, LAMBDA m : MessageA(m, Gather, A), ExitA(ExitedWith, A),
+               TimeoutA(End, End, A), RestartA(Restarted, A), SetSetting,
+               LAMBDA a : SetAccountWith(LAMBDA x, b : A([x EXCEPT !.account = b]), a),
+               LAMBDA d, h : SetPlaceWith(LAMBDA x, e, g : A([x EXCEPT !.dir = e, !.here = g]), d, h),
+               RemoveFriendA(Removed, A), AddBackA(A)) \/ (\E v \in BOOLEAN : SetLimit(v)) \/ BrokenA(A)
+
+\* Every step with Rm in place of Removed: the removal's witness breaks it through this.
+NextRemove(Rm(_)) ==
+    NextFriend(Prompt, QueuePrompt, Stop, Message, Exit, Timeout, Restart, SetSetting, SetAccount, SetPlace,
+               RemoveFriendWith(Rm), AddBack) \/ \E v \in BOOLEAN : SetLimit(v)
 
 \* Every step with Tk in place of Take: the take's witnesses break it through this.
 NextTake(Tk(_)) == NextAdvance(LAMBDA x : AdvanceWith(Tk, x))
@@ -517,6 +605,10 @@ TypeOK ==
     /\ s.summary \in BOOLEAN
     /\ (s.procs = 0) => s.ddir = ""
     /\ (s.session = "") => s.sdir = ""
+    /\ s.absent \in BOOLEAN
+    /\ s.rm \in 0 .. MaxRemovals
+    /\ s.removing \in BOOLEAN
+    /\ s.known \in BOOLEAN
 
 \* At most one driver process alive.
 OneDriver == s.procs <= 1 /\ (s.procs = 1) = (s.phase # "none")
@@ -587,19 +679,19 @@ CancelledBy(x, y) == {p \in DOMAIN x.fate : x.fate[p] = "waiting" /\ y.fate[p] =
 StopEndsWhatRuns ==
     [][s'.asked =>
          CASE s.phase = "working"
-              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE, !.phase = "stopping",
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE, !.removing = FALSE, !.phase = "stopping",
                                 !.stops = Append(@, s.open)]
            [] s.phase = "starting" /\ s.waiting # <<>>
-              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.signin = FALSE, !.waiting = Tail(@),
+              -> s' = [s EXCEPT !.fx = <<E("K", 0, 0)>>, !.asked = TRUE, !.signin = FALSE, !.removing = FALSE, !.waiting = Tail(@),
                                 !.fate[Head(s.waiting)] = "cut"]
            [] OTHER
-              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE]]_vars
+              -> s' = [s EXCEPT !.fx = <<>>, !.asked = TRUE, !.signin = FALSE, !.removing = FALSE]]_vars
 
 \* No stop is kept for later: a stop is written, or a turn cancelled, only in the step of the person's stop that
-\* found it running, or in the step that tightened the limit under it (SetLimit). So a stop that found nothing never
-\* touches a turn that begins after it.
+\* found it running, or in the step that tightened the limit under it (SetLimit), or in the step that took the friend
+\* out of friends.json, for the turn open then. So a stop that found nothing never touches a turn that begins after it.
 NoLatchedStop ==
-    [][/\ Len(s'.stops) > Len(s.stops) => s'.asked \/ (s'.lim /\ ~s.lim)
+    [][/\ Len(s'.stops) > Len(s.stops) => s'.asked \/ (s'.lim /\ ~s.lim) \/ s'.removing
        /\ CancelledBy(s, s') # {} => s'.asked]_vars
 
 \* A turn ends only by its done or by a cut with its notice.
@@ -667,13 +759,14 @@ SummaryCarried ==
 ----------------------------------------------------------------------------
 \* What the friend is doing, as the window's state cursor shows it (Supervisor::activity; sync/sessions.h Activity):
 \* "down" while starting is held back; else "busy" while a turn is open or about to begin (a prompt waits with the
-\* instance here, or a driver starts); else "down" when no driver is configured, or the instance is on another machine,
-\* or when the last driver failed and none has said hello since, unless the server is stopping; else "idle". The trace
+\* instance here and the friend in friends.json, or a driver starts); else "down" when no driver is configured, or the
+\* instance is on another machine, or the friend is out of friends.json, or when the last driver failed and none has
+\* said hello since, unless the server is stopping; else "idle". The trace
 \* binds the code's to this one at every step (SupervisorTrace.tla).
 ActivityOf(x) ==
     IF x.blocked THEN "down"
-    ELSE IF x.open # 0 \/ (x.waiting # <<>> /\ x.here) \/ x.phase = "starting" THEN "busy"
-    ELSE IF x.unconf \/ ~x.here \/ (x.crashed /\ ~x.down) THEN "down"
+    ELSE IF x.open # 0 \/ (x.waiting # <<>> /\ x.here /\ ~x.absent) \/ x.phase = "starting" THEN "busy"
+    ELSE IF x.unconf \/ ~x.here \/ x.absent \/ (x.crashed /\ ~x.down) THEN "down"
     ELSE "idle"
 
 \* Idle (steady dark blue) is "waiting for the person": nothing runs, nothing waits, and nothing queued will be taken
@@ -701,24 +794,25 @@ CrashShowsDown == [][CrashShowsDownStep(ActivityOf)]_vars
 
 \* Down (red) never quietly turns into idle: it leaves only for busy (the person's prompt, a queued one, a start), when
 \* a driver says hello, when the friend's driver is configured again, when its instance is on this machine again, when
-\* its account signs in, or by a restart or the server stopping.
+\* its account signs in, when its friend is back in friends.json, or by a restart or the server stopping.
 DownLeavesByWorkStep(A(_)) ==
     A(s) = "down" /\ A(s') = "idle" =>
         \/ s.phase = "starting" /\ s'.phase = "idle"
         \/ s'.signin
         \/ s.unconf /\ ~s'.unconf
         \/ ~s.here /\ s'.here
+        \/ s.absent /\ ~s'.absent
         \/ restarts' > restarts
         \/ s'.down
 DownLeavesByWork == [][DownLeavesByWorkStep(ActivityOf)]_vars
 
 \* Liveness: every prompt accepted (sent or queued) is eventually answered or cut, or waits while starting drivers is
 \* held back (until the person's next prompt), while the friend has no driver configured (until it has one again),
-\* while the instance is on another machine (until it is here again), or while the server is stopping (the prompt is
-\* durable, for the next server).
+\* while the instance is on another machine (until it is here again), while the friend is out of friends.json (until it
+\* is back), or while the server is stopping (the prompt is durable, for the next server).
 SettlesFor(p) ==
     s.fate[p] \in {"queued", "waiting", "open"} ~>
-        (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ ~s.here \/ s.down)
+        (s.fate[p] \in {"answered", "cut"} \/ s.blocked \/ s.unconf \/ ~s.here \/ s.absent \/ s.down)
 Settles == \A p \in 1 .. Prompts : SettlesFor(p)
 \* Settles in two halves, the odd prompts and the even: SettlesOdd /\ SettlesEven is Settles for any Prompts. TLC's
 \* liveness check of the halves, each alone, takes well under half the time of the whole (MCSupervisorSwitch.cfg, two
@@ -726,5 +820,38 @@ Settles == \A p \in 1 .. Prompts : SettlesFor(p)
 \* (tests/server/CMakeLists.txt, SPLIT).
 SettlesOdd == \A p \in {q \in 1 .. Prompts : q % 2 = 1} : SettlesFor(p)
 SettlesEven == \A p \in {q \in 1 .. Prompts : q % 2 = 0} : SettlesFor(p)
+
+----------------------------------------------------------------------------
+\* The friend out of friends.json.
+
+\* While the friend is out nothing runs for it: no driver starts, idles or works; a turn still open is the one being
+\* stopped, its stop written.
+AbsentRunsNothing ==
+    s.absent => /\ s.phase \in {"none", "stopping", "ending"}
+                /\ s.open # 0 => s.stops # <<>> /\ s.stops[Len(s.stops)] = s.open
+
+\* While the friend is out no driver starts and no prompt is written to one.
+AbsentStartsNothing == [][s'.absent => s'.procs <= s.procs /\ Len(s'.written) = Len(s.written)]_vars
+
+\* While the friend is out (and in the step that takes it out) nothing leaves the queue, no prompt becomes waiting (not
+\* even one queued and taken in the same step), and no waiting prompt is cancelled: the person's prompts are kept for
+\* its return.
+AbsentKeepsPrompts ==
+    [][s'.absent => /\ TakenBy(s, s') = {} /\ CancelledBy(s, s') = {}
+                    /\ \A p \in DOMAIN s'.fate : s'.fate[p] = "waiting" => s.fate[p] = "waiting"]_vars
+
+\* Once the friend is out, its driver is in time gone (its stopped turn ended, by its done or the stop's deadline), or
+\* the friend is back.
+AbsentEnds == s.absent ~> (~s.absent \/ s.phase = "none")
+
+----------------------------------------------------------------------------
+\* No friends list held.
+
+\* A friend not known to be in the list never has a prompt written to its driver: none is written while the server
+\* holds no list, nor in the step that applies one, unless that list has the friend.
+NoSendUnknown == [][Len(s'.written) > Len(s.written) => s.known /\ s'.known /\ ~s'.absent]_vars
+
+\* While no list is held the friend reads out, and nothing runs for it.
+UnknownRunsNothing == ~s.known => s.absent /\ s.procs = 0 /\ s.open = 0
 
 =============================================================================

@@ -33,6 +33,11 @@
 (* the instance of the session it copies when that is the same friend's    *)
 (* and still one of its instances, else the friend's default instance.     *)
 (*                                                                         *)
+(* A friend dropped by an edit keeps its sessions exactly as they are      *)
+(* (account, harness, instance), and each is told; they are settled like   *)
+(* the rest once the friend is set up again (`Live`). What the drop does   *)
+(* to a session's turn and driver is Supervisor.tla's (`RemoveFriend`).    *)
+(*                                                                         *)
 (* Every change of the accounts and friends, by an action or an edit,      *)
 (* ends in `Settled`: each session on an account no longer linked to its   *)
 (* friend moves, in the same step, to the friend's default when that is    *)
@@ -138,20 +143,26 @@ Landing(nl, nd, f) == IF nd[f] /= None /\ Up(nd[f]) THEN nd[f] ELSE FirstUp(nl[f
 StrayInst(ni, s) == ses[s].made /\ IF ses[s].inst = None THEN ni[ses[s].friend] /= << >>
                                    ELSE ses[s].inst \notin Range(ni[ses[s].friend])
 InstOf(ni, s) == IF StrayInst(ni, s) THEN FirstOr(ni[ses[s].friend]) ELSE ses[s].inst
-SettledI(nl, nd, np, ni) ==
-    [s \in Ids |-> IF Stray(nl, s)
+\* A session whose friend is not set up (after friends kn) is left as it is, its account, harness and instance kept, and
+\* settled like the rest once its friend is set up again. One whose friend the step took out is told (its work is
+\* stopped: Supervisor.tla RemoveFriend).
+Out(kn, s) == ses[s].friend \notin kn
+SettledI(nl, nd, np, ni, kn) ==
+    [s \in Ids |-> IF Out(kn, s) THEN ses[s]
+                   ELSE IF Stray(nl, s)
                    THEN LET n == Landing(nl, nd, ses[s].friend) IN
                         [ses[s] EXCEPT !.acct = n, !.harness = HarnessFor(n, np, @), !.inst = InstOf(ni, s)]
                    ELSE IF ses[s].made /\ ses[s].acct /= None
                    THEN [ses[s] EXCEPT !.harness = np[ses[s].acct], !.inst = InstOf(ni, s)]
                    ELSE [ses[s] EXCEPT !.inst = InstOf(ni, s)]]
-SettledToldI(nl, np, ni) ==
-    {s \in Ids : Stray(nl, s) \/ StrayInst(ni, s)
-                 \/ (ses[s].made /\ ses[s].acct /= None /\ np[ses[s].acct] /= ses[s].harness)}
+SettledToldI(nl, np, ni, kn) ==
+    {s \in Ids : ~Out(kn, s) /\ (Stray(nl, s) \/ StrayInst(ni, s)
+                                 \/ (ses[s].made /\ ses[s].acct /= None /\ np[ses[s].acct] /= ses[s].harness))}
+    \cup {s \in Ids : ses[s].made /\ ses[s].friend \in known \ kn}
 \* A friend not set up has no instances.
 InstsFor(kn) == [f \in Friends |-> IF f \in kn THEN insts[f] ELSE << >>]
-Settled(nl, nd, np) == SettledI(nl, nd, np, insts)
-SettledTold(nl, np) == SettledToldI(nl, np, insts)
+Settled(nl, nd, np) == SettledI(nl, nd, np, insts, known)
+SettledTold(nl, np) == SettledToldI(nl, np, insts, known)
 
 Done(op, f, a, s, ok) == last' = [op |-> op, f |-> f, a |-> a, s |-> s, ok |-> ok]
 Refused(op, f, a, s, notice) ==
@@ -163,8 +174,8 @@ Refused(op, f, a, s, notice) ==
 \* instances moved in place (<<friend, instance>>: another machine or directory), whose sessions are told too.
 BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, mv) ==
     /\ acct' = ac /\ prov' = np /\ known' = kn /\ links' = nl /\ dflt' = nd /\ insts' = ni
-    /\ ses' = SettledI(nl, nd, np, ni)
-    /\ told' = SettledToldI(nl, np, ni) \cup {s \in Ids : ses[s].made /\ <<ses[s].friend, ses[s].inst>> \in mv}
+    /\ ses' = SettledI(nl, nd, np, ni, kn)
+    /\ told' = SettledToldI(nl, np, ni, kn) \cup {s \in Ids : ses[s].made /\ <<ses[s].friend, ses[s].inst>> \in mv}
     /\ Done(op, f, a, 0, TRUE)
     \* A friend kept keeps its limit; one set up anew, or not set up, is limited. An account not set up bills "sub".
     /\ lim' = [g \in Friends |-> IF g \in kn /\ g \in known THEN lim[g] ELSE TRUE]
@@ -420,19 +431,23 @@ LinksSound ==
 \* A friend's default is one of its linked accounts, or none.
 DefaultLinked == \A f \in Friends : dflt[f] = None \/ dflt[f] \in Range(links[f])
 
+\* A session of a friend set up: one made whose friend is in the friends file. A session whose friend was taken out is
+\* kept as it was, and held to these again once its friend is set up again (the step that sets it up settles it).
+Live(s) == ses[s].made /\ ses[s].friend \in known
+
 \* A session runs on an account linked to its friend, or on none: never on one unlinked or removed.
 SessionLinked ==
-    \A s \in Ids : ses[s].made => (ses[s].acct = None \/ ses[s].acct \in Range(links[ses[s].friend]))
+    \A s \in Ids : Live(s) => (ses[s].acct = None \/ ses[s].acct \in Range(links[ses[s].friend]))
 
 \* A session belongs to one of its friend's instances, or to none when its friend has none; instances only of friends
 \* set up, each named once.
 InstanceHeld ==
-    /\ \A s \in Ids : ses[s].made => IF insts[ses[s].friend] = << >> THEN ses[s].inst = None
-                                     ELSE ses[s].inst \in Range(insts[ses[s].friend])
+    /\ \A s \in Ids : Live(s) => IF insts[ses[s].friend] = << >> THEN ses[s].inst = None
+                                 ELSE ses[s].inst \in Range(insts[ses[s].friend])
     /\ \A f \in Friends : Len(insts[f]) = Cardinality(Range(insts[f])) /\ (f \notin known => insts[f] = << >>)
 
 \* A session on an account runs its provider's harness.
-HarnessMatches == \A s \in Ids : ses[s].made /\ ses[s].acct /= None => ses[s].harness = prov[ses[s].acct]
+HarnessMatches == \A s \in Ids : Live(s) /\ ses[s].acct /= None => ses[s].harness = prov[ses[s].acct]
 
 \* The sessions made are exactly the ids below the next.
 IdsDense == \A s \in Ids : ses[s].made <=> s < nextSes
@@ -495,5 +510,12 @@ LimitChangeIsTold ==
 
 \* An operation refused changes nothing.
 RefusedChangesNothing == [][~last'.ok => UNCHANGED model]_vars
+
+\* A session whose friend is out of the friends file after the step is left exactly as it was by every change of the
+\* accounts and friends (the person's own set aside); one whose friend the step took out is told.
+OutLeftAlone ==
+    [][last'.op /= "set" =>
+         \A s \in Ids : ses[s].made /\ ses[s].friend \notin known' => ses'[s] = ses[s]]_vars
+OutIsTold == [][\A s \in Ids : ses[s].made /\ ses[s].friend \in known \ known' => s \in told']_vars
 
 =============================================================================

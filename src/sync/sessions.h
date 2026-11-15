@@ -62,6 +62,14 @@ struct SessionEntry {
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
 
+// A friend the server holds (accounts/registry.h, its friends.json): what a window needs to show the friend's tab and
+// to start a session with it (an ensure naming it). The server is the authority on who the friends are; the window
+// shows them. A later version adds fields here and in schema/Nexus.schema's Friend.
+struct ServerFriend {
+    std::string name;
+    bool operator==(const ServerFriend&) const = default;
+};
+
 // What the friend of a session is doing, as the server holds it now (server/supervisor.h Supervisor::activity): Busy
 // while a turn is open or about to begin (a prompt waits, the driver starts, a stop is out); Idle when nothing runs and
 // nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
@@ -105,6 +113,21 @@ public:
     // value. A window of an older format receives none.
     const std::vector<SecretRequest>& requests() const { return *requests_; }
     void setRequests(std::vector<SecretRequest> requests);
+    // The server's friends, in its friends file's order, after the requests: from format 4 on the wire (schema's
+    // SessionsDiff.friends), whole in each diff where they changed and in no other. friendsKnown() is false until the
+    // server sets them: in a state from a server before them (or of an older format), and from a server that holds no
+    // friends file it could read; a window then shows the friends of the sessions it holds (sync/client.h friendsOf).
+    // Empty and known: the server has none.
+    const std::vector<ServerFriend>& friends() const { return *friends_; }
+    // The list itself, shared by every copy of the state and every state a diff that does not carry the friends is
+    // applied to: one pointer until setFriends or clearFriends sets another, so that a window tells a new list from the
+    // one it holds without comparing them (sync/friend_strip.h).
+    const std::shared_ptr<const std::vector<ServerFriend>>& friendsList() const { return friends_; }
+    bool friendsKnown() const { return friendsKnown_; }
+    void setFriends(std::vector<ServerFriend> friends);
+    void clearFriends();
+    // The friends of `from`, known or not, its list shared and not copied.
+    void shareFriends(const Sessions& from);
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -134,6 +157,8 @@ public:
 private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
+    std::shared_ptr<const std::vector<ServerFriend>> friends_;
+    bool friendsKnown_ = false;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
 };

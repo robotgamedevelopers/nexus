@@ -16,17 +16,22 @@
 #               four, send-trim the one whose send strips trailing spaces, send-dedup the one whose send of the
 #               text just sent appends nothing, close the one whose close_tab removes a friend, sprint-move the one
 #               whose move_tab puts the sprint tab among the friends, sprint-close the one whose close_tab removes the
-#               sprint tab, close-fallback the one whose close of the active tab ignores the selection history;
+#               sprint tab, close-fallback the one whose close of the active tab ignores the selection history,
+#               remove-friend (with CHURN) the one whose remove_friend leaves the tab's id in the history;
 #               for label_walk, before the one that takes the label to return to at a session's first observation
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
+#   CHURN       with WALK: ON walks the friends coming and going (trace_walk --friends-churn)
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
+#   STRIPWALK   optional, in place of WALK: strip_walk; it is run first and writes FriendStripTraceData.tla into WORK,
+#               with SEED, STEPS and FRIENDS (2 or 3), and FAULTY one of forget, wait
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
-#               SupervisorTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of turn, resume, queue, limit,
-#               setting, account, activity, dir
+#               SupervisorTraceData.tla into WORK, with SEED and STEPS, FAULTY one of turn, resume, queue,
+#               limit, setting, account, activity, dir, remove or unknown (both with CHURN), and CHURN ON for the
+#               friend taken out of friends.json and put back (supervisor_walk --friends-churn)
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
 #               one of settings, refusal, latch
@@ -243,16 +248,34 @@ elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
     if(FAULTY STREQUAL "turn" OR FAULTY STREQUAL "resume" OR FAULTY STREQUAL "queue" OR FAULTY STREQUAL "setting" OR
-            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir" OR FAULTY STREQUAL "limit")
+            FAULTY STREQUAL "account" OR FAULTY STREQUAL "activity" OR FAULTY STREQUAL "dir" OR
+            FAULTY STREQUAL "limit" OR FAULTY STREQUAL "remove" OR FAULTY STREQUAL "unknown")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity, dir or limit")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not turn, resume, queue, setting, account, activity, dir, "
+            "limit, remove or unknown")
+    endif()
+    if(CHURN)
+        list(APPEND walk_args "--friends-churn")
     endif()
     execute_process(COMMAND "${SUPWALK}" ${walk_args} "${WORK}/SupervisorTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "supervisor_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED STRIPWALK AND NOT "${STRIPWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}" "${FRIENDS}")
+    if(FAULTY STREQUAL "forget" OR FAULTY STREQUAL "wait")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not forget or wait")
+    endif()
+    execute_process(COMMAND "${STRIPWALK}" ${walk_args} "${WORK}/FriendStripTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "strip_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED GLIDEWALK AND NOT "${GLIDEWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
@@ -316,14 +339,19 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-sprint-close)
     elseif(FAULTY STREQUAL "close-fallback")
         list(APPEND walk_args --faulty-close-fallback)
+    elseif(FAULTY STREQUAL "remove-friend")
+        list(APPEND walk_args --faulty-remove-friend)
     elseif(FAULTY STREQUAL "before")
         list(APPEND walk_args --faulty-before)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move, sprint-close, close-fallback or before")
+            "close, sprint-move, sprint-close, close-fallback, remove-friend or before")
     endif()
     if(NOSPRINT)
         list(APPEND walk_args --no-sprint)
+    endif()
+    if(CHURN)
+        list(APPEND walk_args --friends-churn)
     endif()
     if(NOT DEFINED DATA OR "${DATA}" STREQUAL "")
         set(DATA WindowTraceData)

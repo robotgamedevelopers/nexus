@@ -461,111 +461,152 @@ bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notic
 }
 
 // Every session on an account no longer linked to its friend moves off it; every session whose account's provider
-// changed takes its harness. Each is told. False when the store did not take a step.
+// changed takes its harness. Each is told. A session whose friend is not in the registry is left as it is until its
+// friend is back; one whose friend this change took out is told, once, and its responder stops what runs in it. False
+// when the store did not take a step.
 bool Hub::settle(std::vector<std::string>* report, const std::string& cause, const accounts::Registry* before) {
-    auto where = [](const accounts::Instance& in) { return "on " + in.machine + " in " + in.dir; };
     for (SessionId id : store_.ids()) {
-        const StoredSession* s = store_.find(id);
-        SessionInfo info = s->info;
-        // A session belongs to one of its friend's instances, or to none when the friend has none. An instance the
-        // friend no longer has: the session moves to the friend's default instance (its first), or none, told. No
-        // instance while the friend has some: the default. Its instance moved in place (the same name, another
-        // machine or directory): told, and its driver follows (Drivers::configured).
-        const accounts::Friend* fr = accounts_->friendNamed(info.friendName);
-        const accounts::Instance* in = fr == nullptr || info.instance.empty() ? nullptr : fr->instance(info.instance);
-        const accounts::Friend* frBefore = before == nullptr ? nullptr : before->friendNamed(info.friendName);
-        const accounts::Instance* inBefore = frBefore == nullptr || in == nullptr ? nullptr :
-            frBefore->instance(info.instance);
-        std::string instanceNotice;
-        if (info.instance.empty() && fr != nullptr && !fr->instances.empty()) {
-            const accounts::Instance& first = fr->instances.front();
-            info.instance = first.name;
-            instanceNotice = "This session now belongs to " + info.friendName + "'s default instance, " + first.name +
-                " (" + where(first) + "): a session belongs to one of its friend's instances (" + cause + ").";
-            if (report != nullptr) {
-                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance none -> " +
-                    info.instance);
-            }
-        } else if (inBefore != nullptr && (inBefore->machine != in->machine || inBefore->dir != in->dir)) {
-            instanceNotice = info.friendName + "'s instance " + in->name + " moved (" + cause + "): it was " +
-                where(*inBefore) + " and is now " + where(*in) + ". This session's driver restarts there once no "
-                "turn is open: in the same directory it resumes the conversation; in another it starts afresh, given "
-                "a summary of the conversation so far.";
-            if (report != nullptr) {
-                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
-                    in->name + " moved, " + where(*inBefore) + " -> " + where(*in));
-            }
-        } else if (!info.instance.empty() && in == nullptr) {
-            const std::string wasInstance = info.instance;
-            info.instance = fr == nullptr || fr->instances.empty() ? std::string() : fr->instances.front().name;
-            instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.friendName + "'s (" +
-                cause + "), so this session now belongs to " + (info.instance.empty() ? std::string("none of its "
-                "instances") : "its instance " + info.instance) + ". Add an instance to " + info.friendName +
-                " in friends.json to choose another.";
-            if (report != nullptr) {
-                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
-                    wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
-            }
-        }
-        // Its friend's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
-        // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open.
-        if (fr != nullptr && frBefore != nullptr && fr->limit != frBefore->limit) {
-            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
-                (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
-                "): this session's driver restarts " + (fr->limit ? "limited; a turn already open is stopped now." :
-                "unlimited once no turn is open; a turn already open finishes as it started.");
-            if (report != nullptr) {
-                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
-                    (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
-            }
-        }
-        // The directories a limited friend is kept out of changed (friends.json "limit_keeps_out"): told in each limited
-        // session, whose driver restarts keeping out the new list (Supervisor::setKeepsOut): a turn open is stopped now
-        // when more are kept out, and finishes as it started when fewer are.
-        if (before != nullptr && before->keepsOut != accounts_->keepsOut &&
-            accounts::limitedFor(&*accounts_, info.friendName, info.account)) {
-            std::string dirs;
-            for (const std::string& d : accounts_->keepsOut) {
-                dirs += (dirs.empty() ? "" : ", ") + d;
-            }
-            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited friend is "
-                "kept out of, on top of its own, are now " + (dirs.empty() ? std::string("none") : dirs) + " (" + cause +
-                "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
-                "kept out, and otherwise finishes as it started.";
-        }
-        if (info.account.empty()) {
-            if (!instanceNotice.empty() && !moveTo(id, info, instanceNotice)) {
+        const std::string friendName = store_.find(id)->info.friendName;
+        const bool was = before != nullptr && before->friendNamed(friendName) != nullptr;
+        if (accounts_->friendNamed(friendName) == nullptr) {
+            if (was && !removed(id, friendName, cause, report)) {
                 return false;
             }
             continue;
         }
-        const std::string was = info.account;
-        std::string notice;
-        if (!accounts_->linked(info.friendName, was)) {
-            info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
-            info.harness = harnessOf(info.account, info.harness);
-            notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
-                "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
-                "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
-                "friends.json to choose another.";
-        } else if (info.harness != harnessOf(was, info.harness)) {
-            info.harness = harnessOf(was, info.harness);
-            notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
-                "now runs " + info.harness + ".";
-        } else if (instanceNotice.empty()) {
-            continue;
-        }
-        if (!moveTo(id, info, instanceNotice.empty() ? notice : notice.empty() ? instanceNotice :
-                    instanceNotice + " " + notice)) {
+        if (!settleOne(id, report, cause, before)) {
             return false;
         }
-        if (notice.empty()) {
-            continue;   // its instance alone moved: said above
+        if (before != nullptr && !was && responder_ != nullptr) {
+            responder_->present(id, true);    // its friend is back: what waits goes on
         }
+    }
+    return true;
+}
+
+// A session whose friend a change took out of friends.json: one notice, then its responder stops what runs in it. Its
+// account, instance, transcript and queue are kept as they are.
+bool Hub::removed(SessionId id, const std::string& friendName, const std::string& cause,
+                  std::vector<std::string>* report) {
+    const std::string notice = friendName + " was taken out of friends.json (" + cause + "), so nexus-server stopped "
+        "any work running in this session and ended its driver. This session, its transcript and its queued prompts "
+        "are kept, and the queued prompts go on if " + friendName + " is added to friends.json again.";
+    std::string failed;
+    if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
+        return false;
+    }
+    refresh(id);
+    if (report != nullptr) {
+        report->push_back("session " + std::to_string(id) + " (" + friendName + "): its friend was removed, so its work "
+            "was stopped; the session is kept");
+    }
+    if (responder_ != nullptr) {
+        responder_->present(id, false);
+    }
+    return true;
+}
+
+// One session whose friend is in the registry, settled against it.
+bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::string& cause,
+                    const accounts::Registry* before) {
+    auto where = [](const accounts::Instance& in) { return "on " + in.machine + " in " + in.dir; };
+    SessionInfo info = store_.find(id)->info;
+    // A session belongs to one of its friend's instances, or to none when the friend has none. An instance the
+    // friend no longer has: the session moves to the friend's default instance (its first), or none, told. No
+    // instance while the friend has some: the default. Its instance moved in place (the same name, another
+    // machine or directory): told, and its driver follows (Drivers::configured).
+    const accounts::Friend* fr = accounts_->friendNamed(info.friendName);   // in the registry: settle() saw to it
+    const accounts::Instance* in = info.instance.empty() ? nullptr : fr->instance(info.instance);
+    const accounts::Friend* frBefore = before == nullptr ? nullptr : before->friendNamed(info.friendName);
+    const accounts::Instance* inBefore = frBefore == nullptr || in == nullptr ? nullptr :
+        frBefore->instance(info.instance);
+    std::string instanceNotice;
+    if (info.instance.empty() && !fr->instances.empty()) {
+        const accounts::Instance& first = fr->instances.front();
+        info.instance = first.name;
+        instanceNotice = "This session now belongs to " + info.friendName + "'s default instance, " + first.name +
+            " (" + where(first) + "): a session belongs to one of its friend's instances (" + cause + ").";
         if (report != nullptr) {
-            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): account " + was + " -> " +
-                (info.account.empty() ? std::string("none") : info.account) + ", harness " + info.harness);
+            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance none -> " +
+                info.instance);
         }
+    } else if (inBefore != nullptr && (inBefore->machine != in->machine || inBefore->dir != in->dir)) {
+        instanceNotice = info.friendName + "'s instance " + in->name + " moved (" + cause + "): it was " +
+            where(*inBefore) + " and is now " + where(*in) + ". This session's driver restarts there once no "
+            "turn is open: in the same directory it resumes the conversation; in another it starts afresh, given "
+            "a summary of the conversation so far.";
+        if (report != nullptr) {
+            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+                in->name + " moved, " + where(*inBefore) + " -> " + where(*in));
+        }
+    } else if (!info.instance.empty() && in == nullptr) {
+        const std::string wasInstance = info.instance;
+        info.instance = fr->instances.empty() ? std::string() : fr->instances.front().name;
+        instanceNotice = "The instance " + wasInstance + " is no longer one of " + info.friendName + "'s (" +
+            cause + "), so this session now belongs to " + (info.instance.empty() ? std::string("none of its "
+            "instances") : "its instance " + info.instance) + ". Add an instance to " + info.friendName +
+            " in friends.json to choose another.";
+        if (report != nullptr) {
+            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): instance " +
+                wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
+        }
+    }
+    // Its friend's "limit" changed (a reload): told. Tightened, an open turn is stopped now and the driver restarts
+    // limited (Supervisor::setLimited); loosened, the driver restarts unlimited once no turn is open. A friend put back
+    // in friends.json (frBefore null) takes its record's limit through Drivers::configured like any other start.
+    if (frBefore != nullptr && fr->limit != frBefore->limit) {
+        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
+            (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
+            "): this session's driver restarts " + (fr->limit ? "limited; a turn already open is stopped now." :
+            "unlimited once no turn is open; a turn already open finishes as it started.");
+        if (report != nullptr) {
+            report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
+                (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
+        }
+    }
+    // The directories a limited friend is kept out of changed (friends.json "limit_keeps_out"): told in each limited
+    // session, whose driver restarts keeping out the new list (Supervisor::setKeepsOut): a turn open is stopped now
+    // when more are kept out, and finishes as it started when fewer are.
+    if (before != nullptr && before->keepsOut != accounts_->keepsOut &&
+        accounts::limitedFor(&*accounts_, info.friendName, info.account)) {
+        std::string dirs;
+        for (const std::string& d : accounts_->keepsOut) {
+            dirs += (dirs.empty() ? "" : ", ") + d;
+        }
+        instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + "The directories a limited friend is "
+            "kept out of, on top of its own, are now " + (dirs.empty() ? std::string("none") : dirs) + " (" + cause +
+            "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
+            "kept out, and otherwise finishes as it started.";
+    }
+    if (info.account.empty()) {
+        return instanceNotice.empty() || moveTo(id, info, instanceNotice);
+    }
+    const std::string was = info.account;
+    std::string notice;
+    if (!accounts_->linked(info.friendName, was)) {
+        info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
+        info.harness = harnessOf(info.account, info.harness);
+        notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
+            "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
+            "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
+            "friends.json to choose another.";
+    } else if (info.harness != harnessOf(was, info.harness)) {
+        info.harness = harnessOf(was, info.harness);
+        notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
+            "now runs " + info.harness + ".";
+    } else if (instanceNotice.empty()) {
+        return true;
+    }
+    if (!moveTo(id, info, instanceNotice.empty() ? notice : notice.empty() ? instanceNotice :
+                instanceNotice + " " + notice)) {
+        return false;
+    }
+    if (notice.empty()) {
+        return true;    // its instance alone moved: said above
+    }
+    if (report != nullptr) {
+        report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): account " + was + " -> " +
+            (info.account.empty() ? std::string("none") : info.account) + ", harness " + info.harness);
     }
     return true;
 }
@@ -590,12 +631,21 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
         }
         return false;
     }
+    // With none held before (the committed files did not read at the start), no friend was known to be in or out: the
+    // sessions are settled as at a start, and then each is told, from `next` alone, whether its friend is in it. It is
+    // never diffed against an empty registry, which would read every friend as put back (models/Supervisor.tla Learn).
+    const bool unknown = !accounts_;
     const accounts::Registry before = accounts_ ? *accounts_ : accounts::Registry{};
     lines = accounts::changes(before, next);
     take(next);
-    if (!settle(&lines, "the accounts and friends were changed: " + message, &before)) {
+    const std::string cause = "the accounts and friends were changed: " + message;
+    if (!settle(&lines, cause, unknown ? nullptr : &before)) {
         lines.push_back("the store failed while the sessions were moved, so the server stops; at its next start it "
             "moves them, against what was committed");
+    } else if (unknown && responder_ != nullptr) {
+        for (SessionId id : store_.ids()) {
+            responder_->present(id, accounts_->friendNamed(store_.find(id)->info.friendName) != nullptr);
+        }
     }
     if (report != nullptr) {
         *report = std::move(lines);
@@ -608,6 +658,7 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
+    stateFriends();
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
         it = accounts_->account(*it) == nullptr ? signedIn_.erase(it) : std::next(it);
     }
@@ -956,6 +1007,9 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
                     f + "\" is not";
             } else if (fr != nullptr) {
                 refused = "the friend " + f + " is already set up";
+            } else if (next.friends.size() >= accounts::kMaxFriends) {
+                refused = "friends.json holds " + std::to_string(next.friends.size()) + " friends, the most it may "
+                    "(" + std::to_string(accounts::kMaxFriends) + "); take one out to add " + f;
             } else {
                 next.friends.push_back(accounts::Friend{f, {}, {}});
             }
@@ -1007,9 +1061,10 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     if (keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
         return counted(action, "the accounts were not changed: " + failed, why, client);
     }
+    const accounts::Registry before = *accounts_;
     take(std::move(next));
     // Committed and taken: a store that fails now stops the server, which settles the sessions at its next start.
-    if (!count(action, why, client) || !settle(nullptr, message)) {
+    if (!count(action, why, client) || !settle(nullptr, message, &before)) {
         if (why != nullptr) {
             *why = "the accounts were changed and committed (" + message + "), but the store failed while the "
                 "action was counted or the sessions moved; the server stops, and moves them at its next start";
@@ -1054,8 +1109,24 @@ void Hub::refresh(SessionId id) {
     } else {
         sessions.insert(it, fresh);
     }
-    state_ = Sessions(std::move(sessions));
-    state_.setRequests(desk_.open());
+    // The friends as they were: one list, shared by every state until the registry's friends change (stateFriends).
+    Sessions next(std::move(sessions));
+    next.setRequests(desk_.open());
+    next.shareFriends(state_);
+    state_ = std::move(next);
+}
+
+// The friends of the registry the hub holds, in its order, into the state the windows receive: who the friends are is
+// the server's, and a window shows a tab for each (sync/client.h applyFriends).
+void Hub::stateFriends() {
+    std::vector<ServerFriend> friends;
+    friends.reserve(accounts_->friends.size());
+    for (const accounts::Friend& f : accounts_->friends) {
+        friends.push_back(ServerFriend{f.name});
+    }
+    if (!state_.friendsKnown() || state_.friends() != friends) {
+        state_.setFriends(std::move(friends));
+    }
 }
 
 } // namespace nexus::sync

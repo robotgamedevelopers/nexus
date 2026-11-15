@@ -47,14 +47,20 @@ struct SessionChange {
     std::vector<std::string> queue;
 };
 
-// A sessions diff: every session of the state, in id order, then the open secret requests.
+// A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends
+// when this diff carries them (friendsSent: they changed from the state diffed from), and then whether it holds a list
+// (friendsKnown) and the list.
 struct SessionsChange {
     std::vector<SessionChange> sessions;
     std::vector<SecretRequest> requests;
+    bool friendsSent = false;
+    bool friendsKnown = false;
+    std::vector<ServerFriend> friends;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the
-// requests before 3), and writes a Tool entry as Friend in format 1. Reading throws BadDiff on malformed bytes.
+// requests before 3, the friends in every one of them: read, friendsKnown is false), and writes a Tool entry as Friend
+// in format 1. Reading throws BadDiff on malformed bytes.
 std::string writeLegacy(const SessionsChange& change, std::uint32_t format);
 SessionsChange readLegacy(const std::string& diff, std::uint32_t format);
 std::string writeActionsLegacy(std::uint64_t start, const std::vector<Action>& held, std::size_t from,

@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include "friends.h"
+#include "command.h"
 
 namespace nexus {
 
@@ -32,6 +32,9 @@ MachineList parseMachineList(std::string_view json);
 
 // The command that lists the machines: novaConfigCommand with `machine list --json`.
 Command machineListCommand(const char* override, const char* shell);
+
+// How long loadMachines waits for the command. It runs before the window opens.
+constexpr int kMachineListTimeoutSeconds = 5;
 
 // Runs `command` with `run` and parses what it prints. Every error names the command, what happened and what to do.
 MachineList loadMachines(const Command& command, const CommandRunner& run);

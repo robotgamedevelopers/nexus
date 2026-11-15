@@ -6,7 +6,7 @@ EXTENDS MCWindow
 BrokenAppend(i, e) ==
     IF i \in Tabs
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, e)]
-         /\ friends' = [friends EXCEPT ![At(i) + 1].model = ""]
+         /\ friends' = [friends EXCEPT ![At(i)].model = ""]
          /\ last' = Did("append", i, "", e, TRUE)
          /\ UNCHANGED <<order, active, draft, queue>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)

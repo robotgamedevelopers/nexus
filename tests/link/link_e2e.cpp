@@ -30,6 +30,10 @@
 //       answers the request it sees with a fake value over the real link, the value lands in its file (0600) and,
 //       the server stopped, no run, hex, base64 or length of it is in any other file the run left (server.log with
 //       the server's and the driver's standard error, the driver's environment, the store) or the window's state
+//   link_e2e <nexus-server> <dir> friends <nexus-fake-driver>
+//       a fresh server under a HOME of its own in <dir> with one friend, ada, on the fake driver: a window that knows no
+//       friend shows ada's tab alone, from the server's list, and a prompt typed there starts ada's session and comes
+//       back answered; a friend added to friends.json and reloaded appears in the open window, and goes once taken out
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -61,12 +65,14 @@
 #include <vector>
 
 #include "fake_mosh.h"
-#include "friends.h"
+#include "command.h"
 #include "leak_scan.h"
 #include "link/bootstrap.h"
 #include "link/client.h"
 #include "link/mosh_link.h"
 #include "model.h"
+#include "sync/client.h"
+#include "sync/friend_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 
@@ -1128,6 +1134,181 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
+// ---- friends: the strip built from the server's list of friends ----
+
+// One headless window as the app opens it on a fresh install: no friend compiled in or read from any outside tool, no
+// sprint board, every friend tab built from the list the server sends by the window's own code (sync/friend_strip.h
+// takeFriends, which FrameHost::takeFriends calls): an ensure sent for each friend whose tab is added, and the mirror
+// told of each tab removed.
+struct ServerWindow {
+    std::unique_ptr<link::ClientSession> session;
+    Model model{{}, false};
+    sync::Mirror mirror;
+    sync::FriendStrip strip;
+    std::uint64_t mirroredNum = ~std::uint64_t(0);
+    void after() {
+        if (session->stateNum() == mirroredNum) {
+            return;
+        }
+        mirroredNum = session->stateNum();
+        const sync::Sessions& state = session->state();
+        sync::takeFriends(strip, model, mirror, state, [this](sync::Action a) { session->add(a); });
+        mirror.apply(model, state);
+    }
+};
+
+// The friend tabs' names, in the strip's order.
+std::vector<std::string> friendTabs(const Model& m) {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < m.tab_count(); ++i) {
+        if (m.tab(i).kind == TabKind::Friend) {
+            out.push_back(m.tab(i).name);
+        }
+    }
+    return out;
+}
+
+// A fresh server under a HOME of its own in <dir>, with one friend, ada, on the fake driver (its drivers file seeds
+// friends.json at the first start). A window that knows no friend connects: its strip shows ada's tab alone, a prompt
+// typed there starts ada's session on the server and its driver, and the reply comes back. Then friends.json is
+// edited as a person would and `nexus-server config reload` run: bo's tab appears in the open window, and once bo is
+// taken out again and the config reloaded, bo's tab goes, ada's staying as it was.
+int friendsFromServer(const std::string& binary, const std::string& dir, const std::string& fake) {
+    Server server(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    const std::string home = dir + "/home";
+    std::error_code ec;
+    std::filesystem::create_directories(home, ec);
+    const std::string reply = "send\nemit {\"kind\":\"session\",\"id\":\"s-1\"}\n"
+        "emit {\"kind\":\"text\",\"delta\":\"hello back\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    CHECK(writeFile(dir + "/ada.script", "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n" + reply));
+    CHECK(writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script\nfriend ada fake " + dir +
+        "\n"));
+    pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+
+    ServerWindow w;
+    {
+        const link::Bootstrap b = server.bootstrap("localhost");
+        link::Connect connect;
+        std::string why;
+        if (!link::bootstrap(b, runCommand, &connect, &why)) {
+            std::fprintf(stderr, "link_e2e: %s\n", why.c_str());
+            return 1;
+        }
+        w.session = std::make_unique<link::ClientSession>(connect.key, "127.0.0.1", connect.port, 1, connect.format);
+    }
+    // One round, as step() does for the other runs' windows: tick, poll for up to 20 ms, read, then take the state.
+    auto stepOnce = [&] {
+        link::freezeClock();
+        std::string why;
+        w.session->tick(&why);
+        std::vector<pollfd> fds;
+        for (int fd : w.session->fds()) {
+            fds.push_back(pollfd{fd, POLLIN, 0});
+        }
+        ::poll(fds.data(), static_cast<nfds_t>(fds.size()), std::min(20, std::max(0, w.session->waitMs())));
+        link::freezeClock();
+        for (const pollfd& p : fds) {
+            if (p.revents & POLLIN) {
+                w.session->receive(&why);
+            }
+        }
+        w.after();
+    };
+    // Progress is a change in what the server holds or in what it has acknowledged; a new state number alone is not
+    // (the server's state numbers move on without anything in it changing), so a wait for a tab that never comes
+    // fails kStallSeconds after the last change rather than at ctest's backstop.
+    auto settle = [&](const std::function<bool()>& done) {
+        return whileProgressing(done, [&] {
+                return std::hash<std::string>{}(w.session->state().init_diff()) * 2 +
+                    (w.session->allAcknowledged() ? 1 : 0);
+            }, stepOnce);
+    };
+
+    // The fresh window shows ada's tab alone, from the server's list, and its ensure starts ada's session.
+    CHECK(friendTabs(w.model).empty());
+    CHECK(settle([&] { return w.session->state().friendsKnown() && w.session->state().first("ada") != nullptr; }));
+    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada"}));
+    CHECK(w.model.tab_count() == 1);
+    const std::size_t ada = tabOf(w.model, "ada");
+    const std::size_t adaId = w.model.tab(ada).id;
+    const sync::SessionView* v = w.session->state().first("ada");
+    CHECK(v != nullptr);
+    const sync::SessionId adaSession = v != nullptr ? v->id : 0;
+
+    // A prompt typed in it reaches ada's driver, and its reply comes back to the tab.
+    w.session->add(act(sync::ActionKind::Send, adaSession, "hello"));
+    CHECK(settle([&] {
+        const sync::SessionView* s = w.session->state().find(adaSession);
+        return w.session->allAcknowledged() && s != nullptr && s->activity == sync::Activity::Idle &&
+            w.model.tab(tabOf(w.model, "ada")).transcript.size() == 2;
+    }));
+    const std::vector<Entry>& t = w.model.tab(tabOf(w.model, "ada")).transcript;
+    CHECK(t.size() == 2 && t[0].text == "hello" && t[1].text == "hello back");
+
+    // bo added to friends.json and the config reloaded: bo's tab appears in the open window, after ada's.
+    const std::string friendsJson = dir + "/nexus-config/friends.json";
+    const std::string seeded = readFile(friendsJson);
+    const std::string list = "\"friends\": [";
+    const std::size_t at = seeded.find(list);
+    CHECK(at != std::string::npos);
+    const std::string withBo = at == std::string::npos ? seeded : seeded.substr(0, at + list.size()) +
+        "\n    {\"name\": \"bo\", \"accounts\": [], \"default\": null, \"instances\": []}," +
+        seeded.substr(at + list.size());
+    const Command reload{"/usr/bin/env", {"HOME=" + home, binary, "config", "reload", "--dir", dir},
+        "nexus-server config reload"};
+    CHECK(writeFile(friendsJson, withBo));
+    CommandResult r = runCommand(reload, 20);
+    if (r.end != CommandResult::End::Exited || r.code != 0) {
+        std::fprintf(stderr, "link_e2e: reload with bo: %s%s\n", r.out.c_str(), r.err.c_str());
+        CHECK(false);
+    }
+    CHECK(settle([&] { return friendTabs(w.model).size() == 2; }));
+    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
+
+    // bo taken out and the config reloaded: bo's tab goes, what the person typed to bo kept by name; ada's tab is the
+    // same tab, its transcript kept.
+    CHECK(w.model.set_draft(tabOf(w.model, "bo"), "half a prompt for bo"));
+    CHECK(writeFile(friendsJson, seeded));
+    r = runCommand(reload, 20);
+    if (r.end != CommandResult::End::Exited || r.code != 0) {
+        std::fprintf(stderr, "link_e2e: reload without bo: %s%s\n", r.out.c_str(), r.err.c_str());
+        CHECK(false);
+    }
+    CHECK(settle([&] { return friendTabs(w.model).size() == 1; }));
+    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada"}));
+    CHECK(w.model.tab(tabOf(w.model, "ada")).id == adaId);
+    CHECK(w.model.tab(tabOf(w.model, "ada")).transcript.size() == 2);
+    CHECK(w.strip.kept().count("bo") == 1 && w.strip.kept().at("bo") == "half a prompt for bo");
+
+    // bo back in friends.json: a new tab for bo, with the draft the person left in the old one.
+    CHECK(writeFile(friendsJson, withBo));
+    r = runCommand(reload, 20);
+    if (r.end != CommandResult::End::Exited || r.code != 0) {
+        std::fprintf(stderr, "link_e2e: reload with bo again: %s%s\n", r.out.c_str(), r.err.c_str());
+        CHECK(false);
+    }
+    CHECK(settle([&] { return friendTabs(w.model).size() == 2; }));
+    CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
+    CHECK(w.model.tab(tabOf(w.model, "bo")).draft == "half a prompt for bo" && w.strip.kept().empty());
+
+    w.session->shutdown();
+    const auto end = Clock::now() + std::chrono::seconds(3);
+    while (Clock::now() < end && !w.session->shutdownDone()) {
+        stepOnce();
+    }
+    const CommandResult stopped = runCommand(Command{binary, {"stop", "--dir", dir}, binary + " stop --dir " + dir}, 10);
+    CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    std::printf("friends: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
+}
+
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
 // A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
@@ -1202,9 +1383,12 @@ int main(int argc, char** argv) {
     if (argc == 5 && std::strcmp(argv[3], "secret") == 0) {
         return secret(argv[1], argv[2], argv[4]);
     }
+    if (argc == 5 && std::strcmp(argv[3], "friends") == 0) {
+        return friendsFromServer(argv[1], argv[2], argv[4]);
+    }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
-                         "       secret <nexus-fake-driver>\n"
+                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver>\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

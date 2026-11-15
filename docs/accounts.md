@@ -28,8 +28,13 @@ with the commands below.
   switch harness.
 - When a session's account reaches its usage limit, the server moves it to the friend's next signed-in linked account,
   in link order, and tells the session. If there is none, the session is told that too, and stays.
-- When a change leaves a session on an account that is no longer linked to its friend (an unlink, an account removed,
-  a friend removed), the server moves it at once to the friend's default if that is signed in, else to its first
+- When a change takes a friend out of friends.json, the server stops the work running in each of its sessions (the
+  turn open gets the person's stop; its driver is ended) and tells each session once. The sessions are kept as they
+  are (account, harness, instance, transcript and queued prompts); while the friend is out nothing starts in them and
+  a prompt sent is refused, and they read as limited. When the friend is added again, its sessions are settled like any
+  other, take the limit its entry says, and what is queued goes on.
+- When a change leaves a session on an account that is no longer linked to its friend (an unlink, an account
+  removed), the server moves it at once to the friend's default if that is signed in, else to its first
   signed-in linked account, else to none, and tells the session. When an account's provider changes, its sessions take
   the new harness and are told. A default that is unlinked or removed becomes none.
 - Which accounts are signed in is the server's own state; it is not in these files. When the server starts, and when an
@@ -158,7 +163,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 |---|---|---|---|
 | `version` | top | yes | the whole number `2` (see Versions) |
 | `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited friend's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited friend read more. Written back only when it holds one |
-| `friends` | top | yes | a list of friends; `[]` for none |
+| `friends` | top | yes | a list of friends, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
 | `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
 | `limit` | each friend | no (`true`) | `true` or `false`, without quotes: whether the friend's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for a friend that links an account with `"billing": "api"` |
 | `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the order is the order a rotation at a usage limit goes through them |
@@ -167,6 +172,12 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 | `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its friend's instances (two friends may use the same name) |
 | `machine` | each instance | yes | the machine it runs on, by its name in the fleet, as `studio` (1 to 253 letters, digits, `-` or `.`, not starting with `-` or `.`; never a user, a port or an address with them); this server's own when it equals, ignoring case, the server's machine (below) |
 | `dir` | each instance | yes | the absolute path, on that machine, of the directory it works in (starting with `/`, printable, at most 4096 bytes) |
+
+A friend is known by its `name`, everywhere: the window's tab, the saved tab order, a kept draft. Renaming a friend in
+the file is a remove of the old name and an add of the new: the old name's tab goes (its draft kept under the old name)
+and the new name gets a new tab, and the old name's sessions stay with the old name, which is out of the file. Rename as
+one change, which would carry the sessions, the tab and its draft to the new name, is not built (`docs/roadmap.sexp`
+`friend-rename`).
 
 The two files must agree: every account a friend links to is set up in accounts.json, and every default is one of its
 friend's accounts. Moving an instance (its `machine` or `dir`) is an edit like any other, and every session of it is
@@ -177,6 +188,16 @@ instance moved to another machine starts no driver here until a driver on anothe
 session that names no instance while its friend has some belongs to the friend's default instance, and is told. A
 session whose friend has no instances (every one removed, say) works here, in the directory of its friend's line in the
 drivers file. A file that is empty or missing means none.
+
+The limit of 256 friends is worked out from the largest change the server sends a window (4 MiB): 256 names of at most
+64 bytes are about 20 KiB with their framing, well inside it. It is not a measured number.
+
+Taking a friend out of the file (and running `nexus-server config reload`) stops its work in every one of its sessions,
+as a stop in the window would: a turn running is stopped, and then its driver is ended. Each such session gets one
+notice saying so. The sessions themselves, with their transcripts, account, instance and queued prompts, are kept on
+the server as they were. While the friend is out, no driver starts for them, nothing is taken from their queues, and a
+prompt sent to one is refused with a notice. Put the friend back in the file and reload, and its sessions are settled
+like any others (an account no longer linked moves, and so on), and their queued prompts go on.
 
 The server's machine is the name the `machine` fields are compared with. It is the server's short host name (the
 `hostname` up to its first `.`), unless the server's config, `~/.nexus/server/config` (one `key value` per line,

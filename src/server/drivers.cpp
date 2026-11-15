@@ -225,6 +225,13 @@ std::string Drivers::friendOf(sync::SessionId id) const {
     return stored == nullptr ? std::string() : stored->info.friendName;
 }
 
+// With no registry held (the committed files did not read at the start) no friend is known to be in friends.json, so
+// none is listed: the deny direction, as limitedFor reads no registry as limited (models/Supervisor.tla NoSendUnknown).
+bool Drivers::listed(sync::SessionId id) const {
+    const accounts::Registry* registry = hub_ != nullptr ? hub_->accounts() : nullptr;
+    return registry != nullptr && registry->friendNamed(friendOf(id)) != nullptr;
+}
+
 // The session's driver: its friend's line of the drivers file, with the session's account in place of the value its
 // command passes after `--account` (the Claude driver's: part 4 of the sign-in work gives every driver its account,
 // docs/roadmap.sexp). A command that takes an account starts for a session with one only: a session on no account (one
@@ -359,6 +366,7 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     } else {
         c.limited = true;   // a session the store does not hold: limited, the safe direction
     }
+    c.present = listed(id);
     c.summarize = [this, id, name = c.name](const std::string& prompt) {
         const sync::StoredSession* s = store_.find(id);
         return s == nullptr ? std::string() : summaryOf(name, s->transcript, prompt);
@@ -376,9 +384,10 @@ bool Drivers::start(Millis now) {
         const sync::StoredSession* stored = store_.find(id);
         sync::DriverState state = stored->driver;
         const ResolvedDriver r = resolve(id);
-        if (state.openTurn == 0 && state.waiting.empty() && (stored->queue.empty() || !r.problem.empty())) {
+        if (state.openTurn == 0 && state.waiting.empty() &&
+            (stored->queue.empty() || !r.problem.empty() || !listed(id))) {
             // Nothing to run, or only queued prompts and no driver to give them (they stay queued, as they are): the
-            // session shows idle, or down when its friend has no driver configured.
+            // session shows idle, or down when its friend has no driver configured or is not in friends.json.
             showResolved(id, r);
             continue;
         }
@@ -426,10 +435,23 @@ std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::st
     const Millis now = options_.clock();
     pendingSup_.reset();
     pendingOut_ = Output{};
+    // A friend with no driver gets that notice first (what to fix in the drivers file); one with a driver but out of
+    // friends.json gets the notice that says how to put it back.
     const ResolvedDriver r = resolve(id);
     if (!r.problem.empty()) {
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
             r.problem), {}}};
+    }
+    if (!listed(id)) {
+        const std::string name = friendOf(id);
+        const bool none = hub_ == nullptr || hub_->accounts() == nullptr;
+        return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
+            none ? "nexus-server holds no friends list (its committed accounts.json and friends.json did not read "
+                "when it started; server.log says why), so it does not know whether " + name + " is in it, and the "
+                "prompt was not sent. Fix the files and run `nexus-server config reload` (docs/accounts.md); this "
+                "session and its queued prompts are kept." :
+            name + " is not in friends.json, so the prompt was not sent. Add " + name + " to friends.json and run "
+            "`nexus-server config reload` (docs/accounts.md); this session and its queued prompts are kept."), {}}};
     }
     Supervisor& sup = pending(id, r, now);
     append(pendingOut_, sup.prompt(prompt, now));
@@ -443,8 +465,8 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
     pendingOut_ = Output{};
     std::vector<sync::SessionChange> out = {sync::SessionChange{nullptr, prompt}};
     const ResolvedDriver r = resolve(id);
-    if (!r.problem.empty() && slots_.find(id) == slots_.end()) {
-        return out;     // no driver to give it to: it stays queued until the id has one
+    if ((!r.problem.empty() || !listed(id)) && slots_.find(id) == slots_.end()) {
+        return out;     // no driver to give it to, or its friend not in friends.json: it stays queued until then
     }
     Supervisor& sup = pending(id, r, now);
     append(pendingOut_, sup.queued(prompt, now));
@@ -531,6 +553,33 @@ void Drivers::signedIn(const std::string& account) {
     }
 }
 
+// The hub has committed the notice of a friend taken out, or settled a session whose friend is back: its supervisor is
+// told (stopping what runs, or letting what waits go on). Put back, it first takes the limit and the directories kept
+// out that the friend's record says now (accounts::limitedFor), which may differ from those it held when the friend was
+// taken out, so that the next driver starts under them. With none, a session put back with prompts queued gets one,
+// which reads them as it starts and takes the oldest; otherwise only what it shows changes.
+void Drivers::present(sync::SessionId id, bool present) {
+    auto it = slots_.find(id);
+    if (it == slots_.end()) {
+        showResolved(id, resolve(id));
+        return;
+    }
+    const Millis now = options_.clock();
+    if (it->second.sup.present() != present) {
+        log(id, present ? "its friend is in friends.json again: what waits goes on" :
+            "its friend was taken out of friends.json: what runs is stopped and its driver ended");
+    }
+    Output out;
+    if (present) {
+        if (const sync::StoredSession* s = store_.find(id)) {
+            out = it->second.sup.setLimited(limitedOf(s->info), now);
+            append(out, it->second.sup.setKeepsOut(keepsOut(), now));
+        }
+    }
+    append(out, it->second.sup.setPresent(present, now));
+    run(id, std::move(out), now, false);
+}
+
 void Drivers::tellSecret(sync::SessionId id, const std::string& line) {
     auto it = slots_.find(id);
     if (id == 0 || it == slots_.end() || !it->second.proc) {
@@ -557,8 +606,9 @@ bool Drivers::showResolved(sync::SessionId id, const ResolvedDriver& driver) {
     const Millis now = options_.clock();
     if (it == slots_.end()) {
         const sync::StoredSession* stored = store_.find(id);
-        if (!driver.problem.empty() || stored == nullptr || stored->queue.empty()) {
-            hub_->setActivity(id, driver.problem.empty() ? sync::Activity::Idle : sync::Activity::Down);
+        const bool listedNow = listed(id);
+        if (!driver.problem.empty() || !listedNow || stored == nullptr || stored->queue.empty()) {
+            hub_->setActivity(id, driver.problem.empty() && listedNow ? sync::Activity::Idle : sync::Activity::Down);
             return true;
         }
         // A driver at last for the prompts queued without one: a supervisor for the session, which takes the oldest.

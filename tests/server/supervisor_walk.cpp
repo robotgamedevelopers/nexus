@@ -3,8 +3,9 @@
 // processes, no clock: the walk plays the driver and the person, keeps the time itself, and commits each step's
 // durable state as the server's store does, so that a restart starts from exactly what was committed.
 //
-//   supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | --faulty-queue | --faulty-setting |
-//                                   --faulty-account | --faulty-activity | --faulty-dir | --faulty-limit] <out.tla>
+//   supervisor_walk <seed> <steps> [--friends-churn] [--faulty-turn | --faulty-resume | --faulty-queue |
+//                                   --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir |
+//                                   --faulty-limit | --faulty-remove | --faulty-unknown] <out.tla>
 //
 // The steps it records, each with the supervisor's whole state after it, the sends it wrote so far, and the entries
 // the step appended to the tab:
@@ -25,6 +26,13 @@
 //             the person changes the model and effort, or the account; an edit moves the session's instance
 //             (/work, the model's "", or /work/d, its "d"; on this machine or another); the drivers file loses the
 //             friend's driver, or gives it back; the session's limit is tightened or loosened ("on", "off")
+//   remove, back
+//             with --friends-churn only: the friend is taken out of friends.json, and put back (a reload,
+//             Supervisor::setPresent); while it is out the person sends nothing (the server refuses a send first)
+//   restart-unknown, learn
+//             with --friends-churn only: a restart whose committed friends list does not read, so the server holds
+//             none and the friend reads out (Drivers::listed); then the first list applied, with the friend in it
+//             ("in") or not ("out")
 //
 // The faults, for the tests that show the check can fail:
 //   --faulty-turn    a restart finds the next turn number as 1, as if the store had not kept it
@@ -35,6 +43,10 @@
 //   --faulty-activity the activity it records reads a crashed driver as idle, as a cursor that forgot the crash would
 //   --faulty-dir     a restart finds no directory for the harness session, as if the store had not kept it
 //   --faulty-limit   a restart starts the session unlimited, as if the limit were not decided at the start
+//   --faulty-remove  (with --friends-churn) the supervisor is never told the friend was taken out, so a turn open
+//                    runs on, as a server that only moved the session to no account would leave it
+//   --faulty-unknown (with --friends-churn) a restart holding no list starts the supervisor with its friend in it, as
+//                    Drivers::listed did when it read no registry as every friend listed
 
 #include <algorithm>
 #include <cstdint>
@@ -61,8 +73,9 @@ constexpr std::size_t kMaxWaiting = 2;
 constexpr int kMaxFailed = 2;
 constexpr std::size_t kMaxRestarts = 3;
 constexpr std::size_t kMaxSwitches = 12;
+constexpr std::size_t kMaxRemovals = 12;
 
-enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity, Dir, Limit };
+enum class Fault { None, Turn, Resume, Queue, Setting, Account, Activity, Dir, Limit, Remove, Unknown };
 
 // The walk's directories: /work (where the session starts, the model's "") and /work/d (its "d").
 const char* const kWork = "/work";
@@ -154,7 +167,7 @@ Config config() {
 
 class Walk {
 public:
-    explicit Walk(Fault fault) : fault_(fault) {
+    Walk(Fault fault, bool churn) : fault_(fault), churn_(churn) {
         Output out;
         sup_.emplace(configured(), committed_, now_, &out);
         carryOut(out);
@@ -166,10 +179,15 @@ public:
         const bool alive = procs_ > 0 && s.phase() != Phase::None;
         const bool ending = s.phase() == Phase::Ending;
         const std::size_t r = rng.below(1000);
+        // The friend taken out of friends.json, or put back: drawn from the top of the range, which no other step
+        // below takes first, so a walk without churn draws as it did.
+        if (churn_ && r >= 960 && (absent_ || removals_ < kMaxRemovals)) {
+            return friendChurn(rng);
+        }
         if (s.deadline() && (r < 30 || (ending && r < 300))) {
             return timeout();
         }
-        if (r < 100 && sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
+        if (r < 100 && sent_ < kPrompts && !s.shuttingDown() && !unconfigured_ && !absent_) {
             return prompt();
         }
         if (r < 130 && sent_ < kPrompts && !s.shuttingDown() && s.queue().size() < kMaxWaiting) {
@@ -191,7 +209,7 @@ public:
             return take("shutdown", "", 0, "", s.shutdown(now_));
         }
         if ((r < 194 || (s.shuttingDown() && !alive)) && restarts_ < kMaxRestarts) {
-            return restart();
+            return restart(rng);
         }
         if (r < 215 && switches_ < kMaxSwitches) {
             const std::size_t which = rng.below(5);
@@ -205,16 +223,19 @@ public:
         if (alive) {
             return message(rng);
         }
-        if (sent_ < kPrompts && !s.shuttingDown() && !unconfigured_) {
+        if (sent_ < kPrompts && !s.shuttingDown() && !unconfigured_ && !absent_) {
             return prompt();
         }
         if (unconfigured_ && switches_ < kMaxSwitches) {
             return configure();
         }
+        if (absent_) {
+            return friendChurn(rng);
+        }
         if (s.deadline()) {
             return timeout();
         }
-        return restarts_ < kMaxRestarts && restart();
+        return restarts_ < kMaxRestarts && restart(rng);
     }
 
     const std::vector<std::string>& records() const { return records_; }
@@ -225,6 +246,8 @@ public:
     std::size_t restarts() const { return restarts_; }
     std::size_t written() const { return written_.size(); }
     std::size_t count(Effect::What w) const { return counts_[static_cast<int>(w)]; }
+    std::size_t removals() const { return removals_; }
+    std::size_t unknowns() const { return unknowns_; }
 
 private:
     // The session's model and effort, and its account, as the store keeps them: a restart starts from them.
@@ -236,10 +259,32 @@ private:
         c.cwd = dir_;
         c.here = here_;
         c.limited = limited_;
+        c.present = !absent_;   // friends.json, which a restart reads again
         if (unconfigured_) {
             c.command.clear();
         }
         return c;
+    }
+
+    // The friend taken out of friends.json, or put back (Drivers::present, from the hub's settle). With the remove
+    // fault the supervisor is never told. While the server holds no list, the first one applied instead (learn): the
+    // friend in it ("in") or not ("out"), from that list alone.
+    bool friendChurn(Rng& rng) {
+        if (!known_) {
+            known_ = true;
+            const bool in = rng.chance(2);
+            absent_ = !in;
+            return take("learn", "", 0, in ? "in" : "out", sup_->setPresent(in, now_));
+        }
+        absent_ = !absent_;
+        if (absent_) {
+            ++removals_;
+        }
+        const char* op = absent_ ? "remove" : "back";
+        if (fault_ == Fault::Remove) {
+            return take(op, "", 0, "", Output{});
+        }
+        return take(op, "", 0, "", sup_->setPresent(!absent_, now_));
     }
 
     // The drivers file loses the friend's driver, or gives it back (the server's Drivers::showResolved): no prompt
@@ -323,7 +368,19 @@ private:
         return take("exit", "", 0, "", std::move(out));
     }
 
-    bool restart() {
+    // With --friends-churn, one restart in three finds the committed friends list unreadable (restart-unknown): the
+    // server holds none, and the friend reads out (Drivers::listed) until one is applied. A restart that reads the list
+    // after one that did not may find the friend in it or not.
+    bool restart(Rng& rng) {
+        const bool unread = churn_ && rng.chance(3);
+        if (unread) {
+            known_ = false;
+            absent_ = true;
+            ++unknowns_;
+        } else if (!known_) {
+            known_ = true;
+            absent_ = rng.chance(2);
+        }
         ++restarts_;
         procs_ = 0;     // the old server's driver reads the end of its input and exits
         toldModel_.clear();
@@ -353,9 +410,12 @@ private:
         if (fault_ == Fault::Dir) {
             state.sessionDir.clear();
         }
+        if (fault_ == Fault::Unknown && unread) {
+            c.present = true;   // no list held read as "every friend is in it"
+        }
         Output out;
         sup_.emplace(std::move(c), state, now_, &out, std::move(queue));
-        return take("restart", "", 0, "", std::move(out));
+        return take(unread ? "restart-unknown" : "restart", "", 0, "", std::move(out));
     }
 
     // The turns a driver may name here (the model's Turns): about the open one, and the last and next written.
@@ -570,6 +630,7 @@ private:
           << (s.retiring() ? "TRUE" : "FALSE") << ", crashed |-> " << (s.crashed() ? "TRUE" : "FALSE")
           << ", unconf |-> " << (s.unconfigured() ? "TRUE" : "FALSE")
           << ", activity |-> " << str(activityName(activity())) << ", dir |-> " << str(dirName(s.cwd()))
+          << ", absent |-> " << ((fault_ == Fault::Remove ? absent_ : !s.present()) ? "TRUE" : "FALSE")
           << ", here |-> " << (s.here() ? "TRUE" : "FALSE") << ", ddir |-> " << str(dirName(s.driverCwd())) << ", sdir |-> "
           << str(dirName(s.state().sessionDir)) << ", summary |-> " << (s.state().summary ? "TRUE" : "FALSE")
           << ", lim |-> " << (s.limited() ? "TRUE" : "FALSE") << ", dlim |-> " << (s.driverLimited() ? "TRUE" : "FALSE")
@@ -587,6 +648,11 @@ private:
     }
 
     Fault fault_;
+    bool churn_ = false;        // the friend is taken out of friends.json and put back
+    bool absent_ = false;       // it is out now (always while no list is held)
+    bool known_ = true;         // the server holds a friends list (false after a restart that could not read it)
+    std::size_t removals_ = 0;
+    std::size_t unknowns_ = 0;  // restarts that held no list
     Millis now_ = 1000;
     sync::DriverState committed_;
     std::optional<Supervisor> sup_;
@@ -625,9 +691,9 @@ bool parse(const char* s, std::uint64_t& v) {
     return end != s && *end == '\0';
 }
 
-int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path) {
+int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, bool churn, const char* path) {
     Rng rng{seed};
-    Walk w(fault);
+    Walk w(fault, churn);
     for (std::uint64_t i = 0; i < steps && w.step(rng); ++i) {
     }
     std::ofstream out(path);
@@ -636,10 +702,11 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
         return 1;
     }
     const char* faults[] = {"", ", faulty turn", ", faulty resume", ", faulty queue", ", faulty setting",
-                            ", faulty account", ", faulty activity", ", faulty dir", ", faulty limit"};
+                            ", faulty account", ", faulty activity", ", faulty dir", ", faulty limit",
+                            ", faulty remove", ", faulty unknown"};
     out << "---- MODULE SupervisorTraceData ----\n";
     out << "\\* Written by tests/server/supervisor_walk: seed " << seed << ", " << steps << " steps"
-        << faults[static_cast<int>(fault)] << ".\n";
+        << (churn ? ", friends churn" : "") << faults[static_cast<int>(fault)] << ".\n";
     out << "TracePrompts == " << w.sent() << "\n";
     out << "TraceMaxWaiting == " << kMaxWaiting << "\n";
     out << "TraceMaxFailedStarts == " << kMaxFailed << "\n";
@@ -650,6 +717,7 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
     out << "TraceAccounts == {\"x\", \"y\"}\n";
     out << "TraceDirs == {\"d\"}\n";
     out << "TraceMaxSwitches == " << kMaxSwitches << "\n";
+    out << "TraceMaxRemovals == " << kMaxRemovals << "\n";
     out << "Trace == <<\n";
     const auto& records = w.records();
     for (std::size_t k = 0; k < records.size(); ++k) {
@@ -663,12 +731,20 @@ int walk(std::uint64_t seed, std::uint64_t steps, Fault fault, const char* path)
     }
     std::printf("supervisor_walk: seed %llu, %llu steps%s: %zu records, %zu prompts (%zu queued, %zu taken), "
                 "%zu written, %zu stops, %zu replies, "
-                "%zu tools, %zu stopped, %zu cut, %zu notices, %zu restarts -> %s\n",
+                "%zu tools, %zu stopped, %zu cut, %zu notices, %zu restarts, %zu removals -> %s\n",
                 static_cast<unsigned long long>(seed), static_cast<unsigned long long>(steps),
                 faults[static_cast<int>(fault)], records.size(), w.sent(), w.queued(), w.taken(), w.written(), w.stops(),
                 w.count(Effect::What::Reply),
                 w.count(Effect::What::Tool), w.count(Effect::What::Stopped), w.count(Effect::What::Cut),
-                w.count(Effect::What::Notice), w.restarts(), path);
+                w.count(Effect::What::Notice), w.restarts(), w.removals(), path);
+    if (fault == Fault::Remove && w.removals() == 0) {
+        std::fprintf(stderr, "supervisor_walk: the faulty walk never took the friend out; try more steps\n");
+        return 1;
+    }
+    if (fault == Fault::Unknown && w.unknowns() == 0) {
+        std::fprintf(stderr, "supervisor_walk: the faulty walk never restarted holding no list; try another seed\n");
+        return 1;
+    }
     return 0;
 }
 
@@ -678,9 +754,18 @@ int main(int argc, char** argv) {
     std::vector<std::string> rest;
     Fault fault = Fault::None;
     int faults = 0;
+    bool churn = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--faulty-turn") {
+        if (a == "--friends-churn") {
+            churn = true;
+        } else if (a == "--faulty-remove") {
+            fault = Fault::Remove;
+            ++faults;
+        } else if (a == "--faulty-unknown") {
+            fault = Fault::Unknown;
+            ++faults;
+        } else if (a == "--faulty-turn") {
             fault = Fault::Turn;
             ++faults;
         } else if (a == "--faulty-resume") {
@@ -709,11 +794,13 @@ int main(int argc, char** argv) {
         }
     }
     std::uint64_t seed = 0, steps = 0;
-    if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1) {
-        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--faulty-turn | --faulty-resume | "
-                     "--faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | --faulty-dir | --faulty-limit] "
+    if (rest.size() != 3 || !parse(rest[0].c_str(), seed) || !parse(rest[1].c_str(), steps) || faults > 1 ||
+        ((fault == Fault::Remove || fault == Fault::Unknown) && !churn)) {
+        std::fprintf(stderr, "usage: supervisor_walk <seed> <steps> [--friends-churn] [--faulty-turn | "
+                     "--faulty-resume | --faulty-queue | --faulty-setting | --faulty-account | --faulty-activity | "
+                     "--faulty-dir | --faulty-limit | --faulty-remove | --faulty-unknown (both with --friends-churn)] "
                      "<out.tla>\n");
         return 2;
     }
-    return walk(seed, steps, fault, rest[2].c_str());
+    return walk(seed, steps, fault, churn, rest[2].c_str());
 }

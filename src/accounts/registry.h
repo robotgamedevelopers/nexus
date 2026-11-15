@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -29,6 +30,11 @@ constexpr int kVersion = 2;
 // How an account's sessions are paid for: a subscription's included usage, or the provider's API rate. A session on an
 // API-billed account is always limited (Friend::limit), whatever its friend says (docs/accounts.md, "limit").
 enum class Billing { Subscription, Api };
+
+// The most friends friends.json may hold: a file with more is refused whole. Derived, not measured: the friends go to
+// every window in the state, each a name of at most 64 bytes, so 256 of them are at most about 20 KiB of it with their
+// framing, under 1% of the 4 MiB a diff may be (sync/codec.h kMaxDiffBytes), leaving the rest for the sessions.
+constexpr std::size_t kMaxFriends = 256;
 
 struct Account {
     std::string name;
@@ -109,7 +115,8 @@ struct Read {
 // registry->friends (and its "limit_keeps_out" into registry->keepsOut). An empty or missing file (text empty) reads
 // as none. Refused, with every error found: text that
 // is not JSON (with the line where reading stopped), a version newer than kVersion or not a whole number, a field
-// unknown or of the wrong kind, a name or provider malformed. Consistency across the two files is problems()'s.
+// unknown or of the wrong kind, a name or provider malformed, more than kMaxFriends friends (in any version).
+// Consistency across the two files is problems()'s.
 // In a version 1 friends file, a friend without "limit" reads unlimited (it ran so) only when `committed` is null (the
 // committed files themselves are being read) or names it; a friend `committed` does not hold, such as one added by
 // hand while the file is still version 1, reads limited.

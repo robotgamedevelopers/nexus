@@ -8,7 +8,8 @@
 (* SupervisorTraceData.tla beside this module. It defines the instance     *)
 (* (TracePrompts, TraceMaxWaiting, TraceMaxFailedStarts, TraceMaxRestarts, *)
 (* TraceModels, TraceEfforts, TraceAccounts, TraceDirs, TraceMaxSwitches, *)
-(* TraceSessions) and Trace: one record per step. Trace[1] is the start    *)
+(* TraceMaxRemovals, TraceSessions) and Trace: one record per step.        *)
+(* Trace[1] is the start                                                   *)
 (* (op "init"); each later record is the event the code was given (op,    *)
 (* and for a message its kind, turn and value), and after it the code's    *)
 (* whole state, every send and stop it has written, the entries the step  *)
@@ -30,13 +31,14 @@ L == INSTANCE Supervisor WITH Prompts <- TracePrompts, MaxWaiting <- TraceMaxWai
                               MaxFailedStarts <- TraceMaxFailedStarts, MaxRestarts <- TraceMaxRestarts,
                               Sessions <- TraceSessions, Models <- TraceModels, Efforts <- TraceEfforts,
                               Accounts <- TraceAccounts, Dirs <- TraceDirs,
-                              MaxSwitches <- TraceMaxSwitches
+                              MaxSwitches <- TraceMaxSwitches, MaxRemovals <- TraceMaxRemovals
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
 Fields == {"phase", "stage", "open", "prompt", "next", "waiting", "queue", "session", "gathered", "finished",
            "failed", "blocked", "nocred", "down", "procs", "written", "stops", "fx", "resumed", "setting", "told",
-           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "summary", "lim", "dlim"}
+           "account", "drv", "retiring", "crashed", "unconf", "dir", "here", "ddir", "sdir", "summary", "lim", "dlim",
+           "absent"}
 
 Matches(k) ==
     LET r == Trace[k] IN
@@ -66,6 +68,10 @@ Step(r) ==
       [] r.op = "configure" -> L!Reconfigure(r.v = "none")
       [] r.op = "signin"   -> L!SignIn
       [] r.op = "limit"    -> L!SetLimit(r.v = "on")
+      [] r.op = "remove"   -> L!RemoveFriend
+      [] r.op = "back"     -> L!AddBack
+      [] r.op = "restart-unknown" -> L!RestartUnknown
+      [] r.op = "learn"    -> L!Learn(r.v = "in")
       [] OTHER             -> FALSE
 
 traceVars == <<s, sent, restarts, switches, l>>
@@ -117,5 +123,8 @@ DownLeavesByWork == L!DownLeavesByWork
 NeverWeaker == L!NeverWeaker
 NoSendWeaker == L!NoSendWeaker
 LooseningKeepsTurn == L!LooseningKeepsTurn
+AbsentRunsNothing == L!AbsentRunsNothing
+AbsentStartsNothing == L!AbsentStartsNothing
+AbsentKeepsPrompts == L!AbsentKeepsPrompts
 
 =============================================================================

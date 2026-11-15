@@ -732,6 +732,91 @@ void sprint_tab_alone_without_friends() {
     CHECK(!m.close_tab(0) && !m.set_draft(0, "x") && m.select_tab(0));
 }
 
+// ---- Friends from the server's list (Window.tla AddFriend, RemoveFriend) ----
+
+// A friend's tab goes at the end of the friends' zone, before every terminal, with a new id, holding nothing; the
+// active tab stays active and the history is untouched.
+void add_friend_goes_to_the_end_of_the_friends() {
+    Model m({{"ada", "m1"}}, true);
+    CHECK(m.add_terminal() == 2);
+    CHECK(history(m) == "1 2" && m.active() == 2);
+    CHECK(m.add_friend({"bo", ""}));
+    CHECK(ids(m) == "1 0 3 2");
+    CHECK(m.tab(2).name == "bo" && m.tab(2).kind == TabKind::Friend && m.tab(2).transcript.empty());
+    CHECK(m.tab(2).draft.empty() && m.tab(2).queue.empty());
+    CHECK(m.active() == 3 && m.tab(3).id == 2);   // the terminal, shifted right
+    CHECK(history(m) == "1 2");
+    CHECK(m.add_terminal() == 4);   // the ids go on after the friend's
+}
+
+// The first tab in an empty strip is active, and the history.
+void add_friend_to_an_empty_strip_selects_it() {
+    Model m({});
+    CHECK(m.add_friend({"ada", ""}));
+    CHECK(m.tab_count() == 1 && m.active() == 0 && m.tab(0).id == 0 && history(m) == "0");
+    CHECK(m.add_friend({"bo", ""}));
+    CHECK(ids(m) == "0 1" && m.active() == 0 && history(m) == "0");
+}
+
+void add_friend_refuses_an_empty_or_standing_name() {
+    Model m(three());
+    const Model before = m;
+    CHECK(!m.add_friend({"", "m"}));
+    CHECK(!m.add_friend({"bo", "other"}));
+    CHECK(same(m, before));
+}
+
+// Removing a friend's tab takes its transcript, draft and queue with it; the tabs after it shift left.
+void remove_friend_removes_exactly_that_tab() {
+    Model m(three(), true);
+    CHECK(m.append(2, Entry{EntryKind::Friend, "said"}));
+    CHECK(m.set_draft(2, "unsent"));
+    CHECK(m.remove_friend(2));
+    CHECK(ids(m) == "3 0 2" && names(m) == " ada cy" && m.active() == 0);
+    CHECK(history(m) == "3");
+    CHECK(m.add_friend({"bo", ""}));   // back: a new tab, empty, with a new id
+    CHECK(ids(m) == "3 0 2 4" && m.tab(3).transcript.empty() && m.tab(3).draft.empty());
+}
+
+// An active friend's tab removed: the tab selected before it shows, by close's rule.
+void remove_active_friend_goes_back_to_the_tab_selected_before() {
+    Model m(three(), true);
+    CHECK(m.select_tab(3) && m.select_tab(2));
+    CHECK(history(m) == "3 2 1");
+    CHECK(m.remove_friend(2));
+    CHECK(m.tab(m.active()).id == 2 && history(m) == "3 2");
+}
+
+// With no tab left in the history, the tab now at its place shows and is the history: a friend's tab that arrived
+// while a terminal was active, and was never selected, once the terminal closes (the counterexample TLC found in
+// MCWindowFriendsEmpty.cfg before Window.tla's ClosedHistory).
+void close_with_an_empty_history_enters_the_tab_that_shows() {
+    Model m({});
+    CHECK(m.add_terminal() == 0);
+    CHECK(m.add_friend({"ada", ""}));
+    CHECK(ids(m) == "1 0" && m.active() == 1 && history(m) == "0");
+    CHECK(m.close_tab(1));
+    CHECK(ids(m) == "1" && m.active() == 0 && history(m) == "1");
+    CHECK(m.tab(m.active()).id == m.selection_history().back());
+    Model n({});
+    CHECK(n.add_friend({"ada", ""}) && n.add_friend({"bo", ""}));
+    CHECK(n.remove_friend(0));
+    CHECK(ids(n) == "1" && n.active() == 0 && history(n) == "1");
+    CHECK(n.remove_friend(0));
+    CHECK(n.tab_count() == 0 && n.active() == 0 && history(n).empty());
+}
+
+void remove_friend_refuses_every_other_tab() {
+    Model m(three(), true);
+    CHECK(m.add_terminal() == 4);
+    const Model before = m;
+    CHECK(!m.remove_friend(0));   // the sprint tab
+    CHECK(!m.remove_friend(4));   // a terminal
+    CHECK(!m.remove_friend(5));
+    CHECK(!m.remove_friend(kHuge));
+    CHECK(same(m, before));
+}
+
 // The busy cursor's breathe, with time as an argument: dimmest at the start of each breath, brightest halfway, once
 // every kBreathSeconds, rising then falling; a time before 0 counts as 0.
 void cursor_breathes_once_a_breath() {
@@ -831,6 +916,14 @@ const Case kCases[] = {
     {"sprint_tab_never_moves", sprint_tab_never_moves},
     {"sprint_tab_never_closes", sprint_tab_never_closes},
     {"sprint_tab_alone_without_friends", sprint_tab_alone_without_friends},
+    {"add_friend_goes_to_the_end_of_the_friends", add_friend_goes_to_the_end_of_the_friends},
+    {"add_friend_to_an_empty_strip_selects_it", add_friend_to_an_empty_strip_selects_it},
+    {"add_friend_refuses_an_empty_or_standing_name", add_friend_refuses_an_empty_or_standing_name},
+    {"remove_friend_removes_exactly_that_tab", remove_friend_removes_exactly_that_tab},
+    {"remove_active_friend_goes_back_to_the_tab_selected_before",
+        remove_active_friend_goes_back_to_the_tab_selected_before},
+    {"close_with_an_empty_history_enters_the_tab_that_shows", close_with_an_empty_history_enters_the_tab_that_shows},
+    {"remove_friend_refuses_every_other_tab", remove_friend_refuses_every_other_tab},
     {"cursor_breathes_once_a_breath", cursor_breathes_once_a_breath},
     {"cursor_colours", cursor_colours},
 };

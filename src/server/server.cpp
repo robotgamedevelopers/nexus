@@ -484,7 +484,8 @@ bool Server::restoreAll(std::string* why) {
     std::vector<std::string> report;
     const bool opened = config_->open(&configWhy);
     if (!opened) {
-        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts\n", configWhy.c_str());
+        std::fprintf(stderr, "nexus-server: config: %s; the server holds no accounts and no friends list, so no "
+            "friend's driver starts and no prompt is sent; queued prompts are kept\n", configWhy.c_str());
     } else if (!config_->hasAccounts() && !config_->pending(&configWhy)) {
         // A server from before accounts: its accounts are what the drivers file passed with --account, so that no
         // session moves (server/driver_table.h accountsFromDrivers), committed as an upgrade.
@@ -516,7 +517,8 @@ bool Server::restoreAll(std::string* why) {
             std::fprintf(stderr, "nexus-server: config: %s\n", l.c_str());
         }
         std::fprintf(stderr, "nexus-server: config: the committed accounts and friends do not read, so the server "
-            "holds none until `nexus-server config reload` applies good ones\n");
+            "holds none until `nexus-server config reload` applies good ones; until then no friend's driver starts "
+            "and no prompt is sent, and queued prompts are kept\n");
         hub_->keepWith(config_.get());
     } else {
         for (const std::string& l : report) {

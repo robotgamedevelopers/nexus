@@ -165,6 +165,14 @@ public:
     // The login of `account` just arrived (the secret dialog stored it): it counts as signed in from now, without a
     // restart, and each of its sessions held back for want of it goes on.
     virtual void signedIn(const std::string& account) { (void)account; }
+    // Session `id`'s friend was just taken out of friends.json (`present` false), its notice durable, or put back
+    // (true), its session settled: taken out, what runs in it is stopped and its driver ended, its prompts kept; put
+    // back, they go on (models/Supervisor.tla RemoveFriend, AddBack). Also, for every session, once the first registry
+    // is applied after none was held: whether its friend is in it (Learn).
+    virtual void present(SessionId id, bool present) {
+        (void)id;
+        (void)present;
+    }
 };
 
 // Where the secret dialog's effects go besides the sessions (sync/secrets.h): each asker's one answer, and the log's
@@ -221,6 +229,8 @@ public:
     // only, Idle until set. A session the store does not hold has none (false). Returns true when the state changed.
     bool setActivity(SessionId id, Activity activity);
 
+    // The state every window receives: the sessions, the open secret requests and, once the hub holds a registry
+    // (useAccounts(), applyAccounts()), its friends in order (Sessions::friends); with no registry, none known.
     const Sessions& state() const { return state_; }
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }
@@ -236,11 +246,19 @@ public:
     //  - after every change of the registry, and at useAccounts(), the sessions are settled: each on an account no
     //    longer linked to its friend moves to the friend's default when signed in, else its first signed-in linked
     //    account, else none, and each whose account's provider changed takes its harness; each one changed is told,
-    //    with a notice in its transcript, and its responder is told the session's new settings.
+    //    with a notice in its transcript, and its responder is told the session's new settings;
+    //  - a session whose friend is not in the registry is left as it is (its account, harness and instance), and
+    //    settled like the rest once its friend is back. A change that takes its friend out tells it, in one notice,
+    //    and tells the responder (Responder::present), which stops what runs in it and keeps its prompts; one that
+    //    puts its friend back settles it, then tells the responder, and what waits goes on.
     // Returns the lines that say what settling did (empty: nothing).
     std::vector<std::string> useAccounts(accounts::Registry registry, AccountsKeeper* keeper);
     // The keeper alone, when the registry the server last applied could not be read: the hub holds no accounts until
-    // applyAccounts() gives it some.
+    // applyAccounts() gives it some. While it holds none no friend is known to be in friends.json, so the responder
+    // lists none (server/drivers.h: nothing is sent and no driver starts; prompts are kept); the first registry
+    // applied then tells the responder, for every session, whether its friend is in it (Responder::present), judged
+    // from that registry alone. useAccounts() tells it nothing: it comes before any driver starts, and the drivers read
+    // the registry as they start.
     void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
     const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
 
@@ -336,9 +354,15 @@ private:
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
     // `before`: the registry the hub held before this change, to find instances moved in place (null: none known).
+    // A friend in `before` and not in the registry now was taken out by this change; one not in it was put back.
     bool settle(std::vector<std::string>* report, const std::string& cause,
                 const accounts::Registry* before = nullptr);
+    bool settleOne(SessionId id, std::vector<std::string>* report, const std::string& cause,
+                   const accounts::Registry* before);
+    bool removed(SessionId id, const std::string& friendName, const std::string& cause,
+                 std::vector<std::string>* report);
     void take(accounts::Registry next);
+    void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
     void refresh(SessionId id);

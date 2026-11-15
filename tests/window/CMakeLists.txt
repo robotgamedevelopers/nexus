@@ -5,7 +5,7 @@ if(NEXUS_WINDOW_LOGIC)
     # The window's unit tests: pure logic only (no OS, no clock, no window, no network).
     add_executable(nexus_window_tests test_window.cpp)
     target_compile_options(nexus_window_tests PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_window_tests PRIVATE nexus_window_logic)
+    target_link_libraries(nexus_window_tests PRIVATE nexus_window_logic nexus_sync)
     add_test(NAME window_unit COMMAND nexus_window_tests)
     set_tests_properties(window_unit PROPERTIES LABELS unit)
 
@@ -32,7 +32,7 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME client_home_unit COMMAND nexus_client_home_tests)
     set_tests_properties(client_home_unit PROPERTIES LABELS unit)
 
-    # Running a command (src/friends.h runCommand): real child processes and a real clock.
+    # Running a command (src/command.h runCommand): real child processes and a real clock.
     add_executable(nexus_command_tests test_command.cpp)
     target_compile_options(nexus_command_tests PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_command_tests PRIVATE nexus_window_logic)
@@ -47,6 +47,19 @@ if(NEXUS_WINDOW_LOGIC)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/tab_order_file)
     add_test(NAME tab_order_file COMMAND nexus_tab_order_file_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/tab_order_file)
     set_tests_properties(tab_order_file PROPERTIES LABELS functional TIMEOUT 30)
+
+    # The kept drafts' file and its lock (tab_order.h KeptDraftsStore): real files in a directory of the test's own,
+    # two windows of one server, two servers, and processes changing the file at once. Not on Windows, which keeps none.
+    if(NOT WIN32)
+        add_executable(nexus_kept_drafts_functional kept_drafts_functional.cpp)
+        target_compile_options(nexus_kept_drafts_functional PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(nexus_kept_drafts_functional PRIVATE nexus_window_logic nexus_sync)
+        foreach(case two_windows two_servers racing)
+            add_test(NAME window_functional_kept_drafts_${case} COMMAND nexus_kept_drafts_functional
+                     ${CMAKE_CURRENT_BINARY_DIR}/kept-drafts-${case} ${case})
+            set_tests_properties(window_functional_kept_drafts_${case} PROPERTIES LABELS functional TIMEOUT 30)
+        endforeach()
+    endif()
 endif()
 
 # What a terminal tab's shell is (src/terminal_launch.h): the login shell, or on Windows a WSL2 bash, and what the probe
@@ -127,6 +140,13 @@ if(NEXUS_WINDOW)
     add_test(NAME window_terminal COMMAND nexus_terminal_tests $<TARGET_FILE_DIR:nexus_fake_ssh>
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/terminal_work)
     set_tests_properties(window_terminal PROPERTIES LABELS functional TIMEOUT 60)
+
+    # The window's frame code around the friend tabs (test_frame_host.cpp): FrameHost over a fake link, no window.
+    add_executable(nexus_frame_host_tests test_frame_host.cpp)
+    target_compile_options(nexus_frame_host_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_frame_host_tests PRIVATE nexus_frame)
+    add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
+    set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
 
     # The frame budget (test_frames.cpp): the window's real frame code (src/frame_host.h) driven against slow fakes, each
     # frame's main-thread work measured by the hitch detector on the real clock against 8.3 ms (120 Hz). Real shells,

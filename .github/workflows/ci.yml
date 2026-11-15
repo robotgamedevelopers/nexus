@@ -184,6 +184,17 @@ jobs:
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
           done
+          # the friends coming and going, and the friend strip's walks and faults
+          build/tests/model/trace_walk 10 1000 3 --friends-churn walks/walk.tla
+          build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn walks/walk.tla
+          build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend walks/walk.tla
+          for seed in 1 2 3; do
+            build/tests/model/strip_walk "$seed" 400 2 walks/strip.tla
+          done
+          build/tests/model/strip_walk 4 400 3 walks/strip.tla
+          for fault in --faulty-forget --faulty-wait; do
+            build/tests/model/strip_walk 1 400 2 "$fault" walks/strip.tla
+          done
           build/tests/sync/sync_test
           for windows in 1 2 3 4; do
             for seed in 1 2 3 4; do
@@ -232,6 +243,12 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          for seed in 13 14 15; do
+            build/tests/server/supervisor_walk "$seed" 600 --friends-churn walks/supervisor.tla
+          done
+          build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove walks/supervisor.tla
+          build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown walks/supervisor.tla
           # placement: every unit group, then its walks on real files and their faults, all at once (each about 2 s,
           # bound by the syncs, each in a directory of its own; any failure fails the step)
           build/tests/server/builds_test
@@ -562,7 +579,8 @@ jobs:
               supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk builds_walk
+              overlay_walk trace_walk strip_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
+              builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -662,6 +680,17 @@ jobs:
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
+          # the friends coming and going, and the friend strip's walks and faults
+          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
+          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          for seed in 1 2 3; do
+            walk build/tests/model/strip_walk "$seed" 400 2
+          done
+          walk build/tests/model/strip_walk 4 400 3
+          for fault in --faulty-forget --faulty-wait; do
+            walk build/tests/model/strip_walk 1 400 2 "$fault"
+          done
           for windows in 1 2 3 4; do
             for seed in 1 2 3 4; do
               walk build/tests/sync/link_walk "$seed" 1000 "$windows"
@@ -696,6 +725,12 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
           done
+          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
           # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
           # trace checks use (tests/server/CMakeLists.txt)
           for seed in 1 2 3; do
@@ -737,7 +772,7 @@ jobs:
       max-parallel: 6
       matrix:
         include:
-          # The four supervisor instances' temporal property (Settles), in two halves, each half in a shard of its own;
+          # The five supervisor instances' temporal property (Settles), in two halves, each half in a shard of its own;
           # their invariants and action properties (`_rest`, seconds each) run in supervisor-rest
           # (tests/server/CMakeLists.txt says why).
           - shard: supervisor-1
@@ -756,10 +791,14 @@ jobs:
             run: '^tlc_supervisor_signin_temporal_1$'
           - shard: supervisor-signin-2
             run: '^tlc_supervisor_signin_temporal_2$'
+          - shard: supervisor-friend-1
+            run: '^tlc_supervisor_friend_temporal_1$'
+          - shard: supervisor-friend-2
+            run: '^tlc_supervisor_friend_temporal_2$'
           - shard: supervisor-rest
             run: '^tlc_supervisor_'
             build: supervisor_walk
-            skip: '^tlc_supervisor_(switch_|place_|signin_)?temporal_[0-9]+$'
+            skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
           - shard: link-ensure
             run: '^tlc_link_ensure$'
           - shard: link-one-window
@@ -822,12 +861,20 @@ jobs:
           - shard: tailscale-rest
             run: '^tlc_tailscale_'
             skip: '^tlc_tailscale_spec(_keys|_certs)?$'
+          # The window's friends from the server's list (MCWindowFriends, 39,465 states on four workers), alone: in the
+          # window shard it ran past its 60 s.
+          - shard: window-friends
+            run: '^tlc_spec_friends$'
+          # The friend strip's specs and its code's walks against FriendStripTrace.tla, and their faults.
+          - shard: strip
+            run: '^tlc_(strip_|spec_strip)'
+            build: strip_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

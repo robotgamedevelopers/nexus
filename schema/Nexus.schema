@@ -93,13 +93,27 @@ table SecretRequest
     why        *string
 }
 
+// A friend the server holds (its friends.json, docs/accounts.md): what a window needs to show the friend's tab and to
+// start a session with it, which it does with an ensure naming the friend.
+table Friend
+{
+    name *string
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
 // holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
-// every diff (a few short lines).
+// every diff (a few short lines). Then the server's friends, only in a diff where they changed from the state diffed
+// from: friends_sent says this diff carries them, and then friends_known whether the server holds a list (false: a
+// server holding no friends file it could read, and the window shows the friends of the sessions it holds) and
+// friends the list, whole, in its friends.json's order. Absent friends_sent (no change, or a server from before the
+// list) reads false: the reader keeps the friends it held.
 table SessionsDiff
 {
-    sessions []SessionChange
-    requests []SecretRequest
+    sessions      []SessionChange
+    requests      []SecretRequest
+    friends_known bool
+    friends       []Friend
+    friends_sent  bool
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----

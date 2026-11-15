@@ -52,7 +52,7 @@ endif()
 # Win32 backend, which does not compile at this pin (lib/app/backends/win32/src/app_win32.cpp), so it is off there too. Off, everything else still builds and tests:
 # the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
 option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
-# The window's logic (src/friends.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
+# The window's logic (src/command.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
 # their tests) starts processes through Prax's lib/process. On by default on macOS only: at this Prax pin, lib/process's
 # POSIX backend does not link on Linux (process_posix.cpp declares `environ` inside its own namespace, so the symbol is
 # never defined), so off macOS those parts are left out until Prax fixes it.
@@ -152,7 +152,7 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 # From state format 4 the bytes are schema's tables (nexus_wire, cmake/schema.cmake); before it the hand-written codecs.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
     src/sync/legacy_codec.cpp src/sync/tables_codec.cpp src/sync/tables_actions.cpp
-    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/secrets.cpp)
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/friend_strip.cpp src/sync/secrets.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire)
@@ -243,11 +243,11 @@ if(NEXUS_WINDOW_LOGIC)
     # The window's logic that runs without a window: the friend and machine lists' parsing (and the command that prints
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
     # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
-    add_library(nexus_window_logic STATIC src/friends.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
+    add_library(nexus_window_logic STATIC src/command.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
         src/client_home.cpp)
     target_include_directories(nexus_window_logic PUBLIC src)
     target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_window_logic PUBLIC nexus_config nexus_model nexus_scroll prax::app prax::json prax::process prax::core_cpp)
+    target_link_libraries(nexus_window_logic PUBLIC nexus_config nexus_model nexus_accounts nexus_scroll prax::app prax::json prax::process prax::core_cpp)
 endif()
 
 if(NEXUS_WINDOW)

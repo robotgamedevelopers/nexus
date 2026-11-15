@@ -76,6 +76,7 @@ const UnitViewInfo * UnitView()
         { "ClientCounter", "NexusNext.schema", true, ClientCounterTableType(), TableDocNone, 0, NULL },
         { "Driver", "NexusNext.schema", true, DriverTableType(), TableDocNone, 0, NULL },
         { "EntryChange", "NexusNext.schema", true, EntryChangeTableType(), TableDocNone, 0, NULL },
+        { "Friend", "NexusNext.schema", true, FriendTableType(), TableDocNone, 0, NULL },
         { "Hello", "NexusNext.schema", true, HelloTableType(), TableDocNone, 0, NULL },
         { "Record", "NexusNext.schema", true, RecordTableType(), TableDocNone, 0, NULL },
         { "SecretRequest", "NexusNext.schema", true, SecretRequestTableType(), TableDocNone, 0, NULL },
@@ -88,7 +89,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswirenext", 0x2f2450356481543cull,
         0, NULL,
-        14, tables,
+        15, tables,
         3, enums,
         0, NULL,
         1, unions,

@@ -6,6 +6,8 @@
 //   config            the window's settings (config.h): `nova-config <path>` and `sprint-url <url>`
 //   tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
 //                     its saved preferences (tab_order.h)
+//   kept-drafts.txt   the drafts of friends with no tab, by server and friend name (tab_order.h KeptDraftsStore),
+//   kept-drafts.lock  and the lock each window's change of them takes
 //   nexus.log         on Windows only, its error lines (platform.h startErrorLog)
 //
 // ~/.nexus is made mode 0700 by whichever of the window and the server starts first; the window makes ~/.nexus/client,
@@ -32,7 +34,8 @@ bool makeClientHome(const std::string& dir, std::string* why);
 // The window's settings, read from its config file.
 struct ClientConfig {
     std::string path;               // the file read, for messages; empty when there is no home
-    std::string novaConfig;         // `nova-config <path>`: the full path of nova-config; empty: found on the PATH
+    std::string novaConfig;         // `nova-config <path>`: the full path of nova-config, for the fleet's machine list
+                                    // (remote.h); empty: found on the PATH
     std::string sprintUrl;          // `sprint-url <url>`: the sprint board's address; empty: from the sprint's record
     std::vector<std::string> problems;  // one line each: the errors, then the warnings
 };

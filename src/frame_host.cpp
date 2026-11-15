@@ -1,6 +1,8 @@
 #include "frame_host.h"
 
 #include <cstdio>
+#include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -11,8 +13,30 @@ static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt hol
 
 namespace nexus {
 
+std::string loggable(std::string_view text) {
+    static const char* const kHex = "0123456789abcdef";
+    constexpr std::size_t kMost = 80;
+    std::string out;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        const bool escaped = c < 0x20 || c >= 0x7f || c == '\\';
+        if (out.size() + (escaped ? 4 : 1) > kMost) {
+            out += "...";   // cut between two characters of the line, never inside an escape
+            break;
+        }
+        if (escaped) {
+            out += "\\x";
+            out += kHex[c >> 4];
+            out += kHex[c & 0xf];
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
 void FrameHost::keepSelection() {
-    if (!keep || selectionStore == nullptr)
+    if (!keep || selectionStore == nullptr || strip.pending())
         return;
     std::string text = formatSelectedTab(*model);
     if (text == savedSelection)
@@ -39,10 +63,60 @@ void FrameHost::keepTerminals() {
     keepSelection();
 }
 
+void FrameHost::personSelected() {
+    strip.personSelected();
+    keepSelection();
+}
+
+void FrameHost::takeFriends(const sync::Sessions& state) {
+    std::function<void(sync::Action)> ensure;
+    if (link != nullptr) {
+        ensure = [this](sync::Action a) { link->send(std::move(a)); };
+    }
+    sync::StripTake changes = sync::takeFriends(strip, *model, mirror, state, ensure);
+    if (!changes.ran) {
+        return;
+    }
+    // A tab the friends selected (the saved one arriving, or another after the one that showed went) is no choice of
+    // the person's: the view's next round must not take it for one (view.h selected), so it is neither saved nor ends
+    // the saved tab's wait.
+    if (view != nullptr && model->tab_count() != 0) {
+        view->selectedId = model->tab(model->active()).id;
+    }
+    for (const std::string& name : changes.dropped) {
+        std::fprintf(stderr, "nexus: %s sent the friend \"%s\", which is not a friend's name (1 to 64 letters, digits, "
+            "'-', '_' or '.', not starting with '.' or '-'): it has no tab\n", host.c_str(), loggable(name).c_str());
+    }
+    if (changes.past != 0) {
+        std::fprintf(stderr, "nexus: %s sent %zu friends past the %zu a window shows (the most friends.json holds): "
+            "they have no tab\n", host.c_str(), changes.past, sync::kMaxFriendTabs);
+    }
+    if (changes.keptChanged && keep && keptStore != nullptr && keptServer(host)) {
+        std::string error;
+        if (!saveKeptChange(*keptStore, KeptChange{host, std::move(changes.put), std::move(changes.taken)}, &error)) {
+            std::fprintf(stderr, "nexus: %s\n", error.c_str());
+        }
+    }
+    const bool friends = strip.hasFriends();
+    if (friends) {
+        view->notice.clear();
+    } else if (state.friendsKnown()) {
+        view->notice = host + " holds no friends: add one to ~/.nexus/server/nexus-config/friends.json there "
+            "(docs/accounts.md), then run `nexus-server config reload`.";
+    } else {
+        view->notice = host + " sends no list of friends (a nexus-server before it), and holds no session to show a "
+            "friend by: update nexus-server there.";
+    }
+}
+
 void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
+    // The friends first, so that a friend's new tab shows its session in this same state.
+    if (s.phase == sync::LinkPhase::Connected) {
+        takeFriends(s.sessions);
+    }
     mirror.apply(*model, s.sessions);
     if (s.phase == sync::LinkPhase::Connected)
         view->promptOpen = true;
@@ -105,7 +179,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         std::string text;
         std::string why;
         // The session the tab shows, the window's own choice; none until the server's state has one of the friend's
-        // (the window ensured one at launch), and then the draft stays.
+        // (the window ensured one as the tab was added), and until then the draft stays.
         const sync::SessionId session = sync::sessionOf(*model, i, mirror);
         if (session == 0 && i < model->tab_count() && model->tab(i).kind == TabKind::Friend) {
             why = "No session with " + model->tab(i).name + " yet: the prompt is kept.";
@@ -133,17 +207,13 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             link->send(std::move(action));
         }
     };
-    // A session with each friend the window shows: the server makes one only for a friend that has none.
-    for (const std::string& name : sync::friendsToEnsure(*model)) {
-        sync::Action ensure;
-        ensure.kind = sync::ActionKind::Ensure;
-        ensure.friendName = name;
-        link->send(std::move(ensure));
-    }
+    // The friend tabs, and a session with each, come with the server's state (takeFriends).
+    view->notice.clear();
     wire();
 }
 
 void FrameHost::showState(const sync::Sessions& state, bool lost) {
+    takeFriends(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
     heardMsAgo = lost ? sync::kQuietMs : 0;

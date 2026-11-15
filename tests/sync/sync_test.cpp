@@ -23,6 +23,7 @@
 #include "sync/actions.h"
 #include "sync/client.h"
 #include "sync/codec.h"
+#include "sync/friend_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 #include "sync/sessions.h"
@@ -767,6 +768,35 @@ void hub_shares_untouched_sessions() {
     hub.apply(Action{3, ActionKind::Send, sid("bo"), "", "c", {}});
     CHECK(before.find(sid("ada")) == hub.state().find(sid("ada")));
     CHECK(before.find(sid("bo")) != hub.state().find(sid("bo")));
+}
+
+// The hub's states share one list of friends: a session's change copies none of it, an applied registry whose friends
+// are the same keeps it, and only a change of the friends sets another (Hub::refresh, stateFriends).
+void hub_keeps_one_friends_list() {
+    MemoryStore store;
+    Hub hub(store);
+    accounts::Registry r;
+    r.accounts = {{"work", "fake"}};
+    r.friends = {{"ada", {"work"}, ""}, {"bo", {"work"}, ""}};
+    CHECK(hub.useAccounts(r, nullptr).empty());
+    withSessions(hub, {"ada", "bo"});
+    const auto list = hub.state().friendsList();
+    CHECK(hub.state().friendsKnown() && list->size() == 2);
+    hub.apply(Action{1, ActionKind::Send, sid("ada"), "", "a", {}});
+    hub.apply(Action{2, ActionKind::Queue, sid("bo"), "", "b", {}});
+    CHECK(hub.state().friendsList() == list);
+    accounts::Registry more = r;
+    more.accounts.push_back({"home", "fake"});
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(more, "an account added", &report));
+    CHECK(hub.state().friendsList() == list);
+    accounts::Registry fewer = more;
+    fewer.friends.pop_back();
+    CHECK(hub.applyAccounts(fewer, "bo taken out", &report));
+    CHECK(hub.state().friendsList() != list && hub.state().friends().size() == 1);
+    const auto after = hub.state().friendsList();
+    hub.apply(Action{3, ActionKind::Send, sid("ada"), "", "c", {}});
+    CHECK(hub.state().friendsList() == after);
 }
 
 // A responder that records what reaches it: a send gives the prompt and the placeholder reply, a queue the prompt at
@@ -1566,7 +1596,8 @@ void format4_read_fuzz() {
     int refused = 0;
     int other = 0;
     // Sessions: pairs of states from random histories, the diff of the later from the earlier, with secret requests in
-    // some.
+    // some, and the server's list of friends in every form: none known, known and empty, a list arriving, and a list
+    // that changes (a name that is not ASCII, and a long one, among them).
     for (std::uint64_t seed = 1; seed <= 6; ++seed) {
         Rng rng{seed};
         History h;
@@ -1586,7 +1617,24 @@ void format4_read_fuzz() {
             q.why = "to log in";
             to.setRequests({q});
         }
-        const Sessions& from = states[states.size() / 2];
+        Sessions from = states[states.size() / 2];
+        const std::vector<ServerFriend> before = {{"ada"}, {"bo"}};
+        const std::vector<ServerFriend> after = {{"bo"}, {"zhi y\xc7\x8e w\xc3\xa9n"}, {std::string(200, 'c')}};
+        switch (seed % 4) {
+            case 0:
+                break;                      // no list on either side, as from a server before it
+            case 1:
+                to.setFriends(after);       // a list arriving
+                break;
+            case 2:
+                from.setFriends(before);    // a list that changes
+                to.setFriends(after);
+                break;
+            default:
+                from.setFriends(before);    // known, then known and empty
+                to.setFriends({});
+                break;
+        }
         const std::string diff = to.diff_from(from);
         Sessions check = from;
         check.apply_string(diff);
@@ -1957,6 +2005,405 @@ void ensure_each_friend() {
     CHECK(friendsToEnsure(Model({}, true)).empty());
 }
 
+// ---- the friends: the server's list over the wire, and the window's tabs from it ----
+
+std::string tabNames(const Model& m) {
+    std::string out;
+    for (std::size_t i = 0; i < m.tab_count(); ++i) {
+        const Tab& t = m.tab(i);
+        out += (i != 0 ? " " : "") + (t.kind == TabKind::Sprint ? std::string("[sprint]")
+            : t.kind == TabKind::Terminal ? std::string("[term]") : t.name);
+    }
+    return out;
+}
+
+std::vector<FriendInfo> listOf(std::initializer_list<const char*> names) {
+    std::vector<FriendInfo> out;
+    for (const char* n : names) {
+        out.push_back(FriendInfo{n, {}});
+    }
+    return out;
+}
+
+// The server's list crosses format 4 whole in each diff that changes it: set, changed, emptied (known, none) and
+// unset (a server that holds no friends file). A diff carries it only when the state changed.
+void friends_cross_the_wire() {
+    Sessions empty;
+    Sessions two({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
+    two.setFriends({ServerFriend{"ada"}, ServerFriend{"bo"}});
+    Sessions read;
+    read.apply_string(two.diff_from(empty));
+    CHECK(read == two && read.friendsKnown() && read.unknown() == 0);
+    CHECK((read.friends() == std::vector<ServerFriend>{{"ada"}, {"bo"}}));
+    Sessions one = two;
+    one.setFriends({ServerFriend{"bo"}});
+    CHECK(!one.diff_from(two).empty());
+    read.apply_string(one.diff_from(two));
+    CHECK(read == one && (read.friends() == std::vector<ServerFriend>{{"bo"}}));
+    Sessions none = one;
+    none.setFriends({});
+    read.apply_string(none.diff_from(one));
+    CHECK(read == none && read.friendsKnown() && read.friends().empty());
+    Sessions unset = none;
+    unset.clearFriends();
+    read.apply_string(unset.diff_from(none));
+    CHECK(read == unset && !read.friendsKnown());
+    CHECK(two.diff_from(two).empty());
+}
+
+// A diff carries the list only when it changed from the state diffed from: a state whose sessions changed and whose
+// list did not (the same list, or an equal one set apart) sends no friends, and the reader keeps the list it held.
+void friends_sent_only_when_changed() {
+    std::vector<ServerFriend> many;
+    for (int i = 0; i < 2000; ++i) {
+        many.push_back(ServerFriend{"friend-" + std::to_string(i)});
+    }
+    Sessions before({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
+    before.setFriends(many);
+    Sessions read;
+    read.apply_string(before.diff_from(Sessions()));
+    CHECK(read == before && read.friends().size() == 2000);
+    Sessions plain({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{})),
+                    std::make_shared<const SessionView>(tailOf(2, infoOf("bo"), {}, {}, Tail{}))});
+    plain.setFriends(many);
+    Sessions after = plain;              // shares the list with plain
+    Sessions apart = plain;
+    apart.setFriends(many);              // an equal list, set apart
+    Sessions noList({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
+    Sessions noListAfter({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{})),
+                          std::make_shared<const SessionView>(tailOf(2, infoOf("bo"), {}, {}, Tail{}))});
+    const std::size_t bare = noListAfter.diff_from(noList).size();
+    CHECK(after.diff_from(before).size() == bare);
+    CHECK(apart.diff_from(before).size() == bare);
+    read.apply_string(after.diff_from(before));
+    CHECK(read == after && read.friends().size() == 2000 && read.friendsKnown());
+}
+
+// The list of friends under the read caps (sync/codec.h): 10,000 friends of 64-byte names, far more than a person sets
+// up, make a diff well inside kMaxDiffBytes that reads back whole; and a diff that claims a list too long for the
+// bytes that carry it is refused, the window keeping the list it had.
+void friends_within_the_caps() {
+    std::vector<ServerFriend> many;
+    for (int i = 0; i < 10000; ++i) {
+        std::string name = "friend-" + std::to_string(i);
+        name.resize(64, 'x');
+        many.push_back(ServerFriend{name});
+    }
+    Sessions big;
+    big.setFriends(many);
+    const std::string diff = big.diff_from(Sessions());
+    CHECK(diff.size() < codec::kMaxDiffBytes / 4);
+    Sessions read;
+    read.apply_string(diff);
+    CHECK(read == big && read.friends().size() == 10000);
+    // The same bytes cut short: refused, and the state is the one before.
+    Sessions small;
+    small.setFriends({ServerFriend{"ada"}});
+    Sessions held;
+    held.apply_string(small.diff_from(Sessions()));
+    const Sessions kept = held;
+    CHECK(refusedAsBadDiff([&] { held.apply_string(diff.substr(0, diff.size() / 2)); }, ""));
+    CHECK(held == kept);
+}
+
+// The formats before 4 (a window of an older build) carry no list: the server's diff to such a window is byte for
+// byte the one without it, and a state read from it holds none.
+void friends_not_in_older_formats() {
+    for (std::uint32_t format : {std::uint32_t(1), std::uint32_t(2), kSecretsFormat}) {
+        Sessions plain({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
+        plain.setFormat(format);
+        Sessions with = plain;
+        with.setFriends({ServerFriend{"ada"}});
+        Sessions empty;
+        empty.setFormat(format);
+        CHECK(with.diff_from(empty) == plain.diff_from(empty));
+        Sessions read;
+        read.setFormat(format);
+        read.apply_string(with.diff_from(empty));
+        CHECK(!read.friendsKnown() && read.friends().empty() && read.sessions().size() == 1);
+    }
+}
+
+// The friends a window shows: the server's list when the state has one, in its order, each once; otherwise the friends
+// of the state's sessions, in session order, each once, with the model the session names.
+void friends_of_a_state() {
+    auto view = [](SessionId id, const std::string& name) {
+        SessionInfo info = infoOf(name);
+        info.model = "m-" + name;
+        return std::make_shared<const SessionView>(tailOf(id, info, {}, {}, Tail{}));
+    };
+    Sessions state({view(1, "bo"), view(2, "ada"), view(3, "bo")});
+    std::vector<FriendInfo> f = friendsOf(state);
+    CHECK(f.size() == 2 && f[0].name == "bo" && f[0].model == "m-bo" && f[1].name == "ada");
+    state.setFriends({ServerFriend{"cy"}, ServerFriend{"ada"}, ServerFriend{"cy"}, ServerFriend{""}});
+    f = friendsOf(state);
+    CHECK(f.size() == 2 && f[0].name == "cy" && f[1].name == "ada" && f[0].model.empty());
+    state.setFriends({});
+    CHECK(friendsOf(state).empty());
+}
+
+// The strip follows the server's list: each friend gets a tab at the end of the friends' zone, in the saved order then
+// the list's; a friend that leaves the list loses its tab, with what it held; the tabs standing keep their order.
+void apply_friends_follows_the_list() {
+    Model m({}, true);
+    m.add_terminal();
+    FriendChanges c = applyFriends(m, listOf({"ada", "bo", "cy"}), true, {"cy", "gone", "ada"});
+    CHECK(tabNames(m) == "[sprint] cy ada bo [term]");
+    CHECK((c.added == std::vector<std::string>{"cy", "ada", "bo"}) && c.removed.empty());
+    CHECK(m.tab(m.active()).kind == TabKind::Terminal);     // the active tab stays active
+    // The same list again changes nothing.
+    c = applyFriends(m, listOf({"ada", "bo", "cy"}), true, {});
+    CHECK(c.added.empty() && c.removed.empty() && tabNames(m) == "[sprint] cy ada bo [term]");
+    // The person's order is kept; a new friend goes at the end of the friends.
+    CHECK(m.move_tab(3, 1));
+    c = applyFriends(m, listOf({"ada", "bo", "cy", "di"}), true, {"di"});
+    CHECK(tabNames(m) == "[sprint] bo cy ada di [term]" && (c.added == std::vector<std::string>{"di"}));
+    // ada leaves: her tab goes, with its transcript and draft, and its id is reported.
+    const std::size_t adaId = m.tab(3).id;
+    CHECK(m.append(3, Entry{EntryKind::Friend, "said"}) && m.set_draft(3, "unsent"));
+    CHECK(m.select_tab(4) && m.select_tab(3));
+    c = applyFriends(m, listOf({"bo", "cy", "di"}), true, {});
+    CHECK(tabNames(m) == "[sprint] bo cy di [term]");
+    CHECK(c.added.empty() && (c.removed == std::vector<std::size_t>{adaId}));
+    CHECK(m.tab(m.active()).name == "di");     // she was active: the tab selected before her shows
+    // She comes back: a new tab, empty, with a new id.
+    c = applyFriends(m, listOf({"bo", "cy", "di", "ada"}), true, {});
+    CHECK(tabNames(m) == "[sprint] bo cy di ada [term]" && m.tab(4).id != adaId);
+    CHECK(m.tab(4).transcript.empty() && m.tab(4).draft.empty());
+    // An empty list empties the friends' zone.
+    c = applyFriends(m, {}, true, {});
+    CHECK(tabNames(m) == "[sprint] [term]" && c.removed.size() == 4);
+}
+
+// From an older server (no list), the friends of its sessions are added and none is removed: a friend whose sessions
+// are gone keeps its tab, as the window always did.
+void apply_friends_without_a_list_only_adds() {
+    Model m({});
+    FriendChanges c = applyFriends(m, listOf({"ada"}), false, {});
+    CHECK(tabNames(m) == "ada" && m.active() == 0 && c.added.size() == 1);
+    c = applyFriends(m, listOf({"bo"}), false, {});
+    CHECK(tabNames(m) == "ada bo" && c.removed.empty());
+    c = applyFriends(m, {}, false, {});
+    CHECK(tabNames(m) == "ada bo" && c.added.empty() && c.removed.empty());
+}
+
+// A state holding the server's list `names`.
+Sessions listState(std::initializer_list<const char*> names) {
+    Sessions s;
+    std::vector<ServerFriend> list;
+    for (const char* n : names) {
+        list.push_back(ServerFriend{n});
+    }
+    s.setFriends(std::move(list));
+    return s;
+}
+
+// Model::add_friends and Model::remove_friends are the loops of add_friend and remove_friend (last first) in one pass:
+// over random strips, selections and histories, the same tabs, ids, active tab and history.
+void batch_friends_are_the_loops() {
+    Rng rng{20261115};
+    for (int round = 0; round < 3000; ++round) {
+        Model a({}, rng.chance(2));
+        const int steps = static_cast<int>(rng.below(12));
+        for (int s = 0; s < steps; ++s) {
+            switch (rng.below(4)) {
+                case 0: a.add_friend(FriendInfo{"f" + std::to_string(rng.below(8)), {}}); break;
+                case 1: a.add_terminal(); break;
+                case 2: if (a.tab_count() != 0) { a.select_tab(rng.below(a.tab_count())); } break;
+                default: if (a.tab_count() != 0) { a.remove_friend(rng.below(a.tab_count())); } break;
+            }
+        }
+        Model b = a;
+        const auto same = [](const Model& x, const Model& y) {
+            if (x.tab_count() != y.tab_count() || x.active() != y.active() ||
+                    x.selection_history() != y.selection_history()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < x.tab_count(); ++i) {
+                if (x.tab(i).id != y.tab(i).id || x.tab(i).name != y.tab(i).name) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Remove a random set: the loop, last first, against the one pass.
+        std::vector<char> gone(64, 0);
+        for (char& g : gone) {
+            g = rng.chance(2) ? 1 : 0;
+        }
+        std::vector<std::size_t> loopRemoved;
+        for (std::size_t i = a.tab_count(); i-- > 0;) {
+            if (a.tab(i).kind == TabKind::Friend && gone[a.tab(i).id % gone.size()] != 0) {
+                loopRemoved.insert(loopRemoved.begin(), a.tab(i).id);
+                a.remove_friend(i);
+            }
+        }
+        const std::vector<std::size_t> passRemoved = b.remove_friends(
+            [&gone](const Tab& t) { return gone[t.id % gone.size()] != 0; });
+        CHECK(same(a, b) && loopRemoved == passRemoved);
+        // Add a random list, names repeated and empty among them.
+        std::vector<FriendInfo> more;
+        const std::size_t count = rng.below(6);
+        for (std::size_t k = 0; k < count; ++k) {
+            more.push_back(FriendInfo{rng.chance(6) ? std::string() : "f" + std::to_string(rng.below(10)), {}});
+        }
+        std::vector<std::string> loopAdded;
+        for (const FriendInfo& f : more) {
+            if (a.add_friend(f)) {
+                loopAdded.push_back(f.name);
+            }
+        }
+        const std::vector<std::string> passAdded = b.add_friends(more);
+        CHECK(same(a, b) && loopAdded == passAdded);
+    }
+}
+
+// A friend's name the window shows is the server's rule for one: a name that breaks it gets no tab and is reported
+// once, the rest of the list kept in order.
+void friend_names_are_checked() {
+    CHECK(friendNameShown("ada") && friendNameShown("a.b-c_9") && friendNameShown(std::string(64, 'x')));
+    CHECK(!friendNameShown("") && !friendNameShown(std::string(65, 'x')) && !friendNameShown("a\nb"));
+    CHECK(!friendNameShown("tab\there") && !friendNameShown(".hidden") && !friendNameShown("-dash") &&
+          !friendNameShown("two words") && !friendNameShown("ünï"));
+    Sessions s = listState({"ada", "bad\nname", "bo", "bad\nname", "", "cy"});
+    std::vector<std::string> dropped;
+    const std::vector<FriendInfo> f = friendsOf(s, &dropped);
+    CHECK(f.size() == 3 && f[0].name == "ada" && f[1].name == "bo" && f[2].name == "cy");
+    CHECK(dropped.size() == 2 && dropped[0] == "bad\nname" && dropped[1].empty());
+    Sessions old({std::make_shared<const SessionView>(tailOf(1, infoOf("ok"), {}, {}, Tail{})),
+                  std::make_shared<const SessionView>(tailOf(2, infoOf("no\x01"), {}, {}, Tail{}))});
+    dropped.clear();
+    CHECK(friendsOf(old, &dropped).size() == 1 && dropped.size() == 1);
+    // The strip takes the same rule: no tab for the bad name, and the take reports it.
+    Model m({});
+    FriendStrip strip;
+    const StripTake t = strip.take(m, s);
+    CHECK(tabNames(m) == "ada bo cy" && t.dropped.size() == 2 && t.past == 0);
+    // Past kMaxFriendTabs (the most a friends.json holds) the rest have no tab, and are counted; a repeat counts once.
+    Sessions many;
+    std::vector<ServerFriend> list;
+    for (std::size_t i = 0; i < kMaxFriendTabs + 44; ++i) {
+        list.push_back(ServerFriend{"f" + std::to_string(i)});
+    }
+    list.push_back(ServerFriend{"f299"});
+    many.setFriends(list);
+    std::size_t past = 0;
+    const std::vector<FriendInfo> shown = friendsOf(many, nullptr, &past);
+    CHECK(shown.size() == kMaxFriendTabs && past == 44 && shown.back().name == "f255");
+    Model big({});
+    FriendStrip bigStrip;
+    CHECK(bigStrip.take(big, many).past == 44 && big.tab_count() == kMaxFriendTabs);
+}
+
+// What the person typed to a friend the server's list leaves out is kept by name and given back with a new tab for a
+// friend of that name: one friend removed and back; every friend gone (an empty list) and the list back; an empty
+// draft is not kept. Nothing kept is lost: a kept draft for a friend that never returns stays.
+void drafts_outlive_their_tabs() {
+    Model m({});
+    FriendStrip strip;
+    strip.take(m, listState({"ada", "bo", "cy"}));
+    CHECK(m.set_draft(0, "to ada") && m.set_draft(1, "to bo"));
+    StripTake t = strip.take(m, listState({"ada", "cy"}));
+    CHECK(tabNames(m) == "ada cy" && t.keptChanged && strip.kept().size() == 1 && strip.kept().at("bo") == "to bo");
+    t = strip.take(m, listState({"ada", "bo", "cy"}));
+    CHECK(tabNames(m) == "ada cy bo" && t.keptChanged && strip.kept().empty());
+    CHECK(m.tab(2).draft == "to bo" && m.tab(0).draft == "to ada");
+    // Every friend gone, then back: every draft back, the empty one not kept.
+    t = strip.take(m, listState({}));
+    CHECK(tabNames(m).empty() && t.keptChanged && strip.kept().size() == 2);
+    t = strip.take(m, listState({"cy", "bo", "ada"}));
+    CHECK(tabNames(m) == "cy bo ada" && strip.kept().empty());
+    CHECK(m.tab(1).draft == "to bo" && m.tab(2).draft == "to ada" && m.tab(0).draft.empty());
+    // A friend that never comes back keeps its draft, whatever else comes and goes.
+    m.set_draft(0, "to cy");
+    strip.take(m, listState({"bo", "ada"}));
+    strip.take(m, listState({"bo"}));
+    strip.take(m, listState({"bo", "dee"}));
+    CHECK(strip.kept().size() == 2 && strip.kept().at("cy") == "to cy" && strip.kept().at("ada") == "to ada");
+    // Drafts kept from before (a launch) are given back as their friends arrive.
+    Model again({});
+    FriendStrip relaunched({}, std::string(), strip.kept());
+    relaunched.take(again, listState({"cy"}));
+    CHECK(again.tab(0).draft == "to cy" && relaunched.kept().size() == 1);
+}
+
+// A state whose friends are the ones last taken costs nothing: the same list (by pointer) or, from an older server,
+// the same sessions' friends, takes no step. A new list with the same names runs and changes nothing.
+void strip_takes_only_a_change() {
+    Model m({});
+    FriendStrip strip;
+    Sessions s = listState({"ada", "bo"});
+    CHECK(strip.take(m, s).ran);
+    Sessions copy = s;
+    CHECK(!strip.take(m, s).ran && !strip.take(m, copy).ran);
+    Sessions equal = listState({"ada", "bo"});
+    const StripTake t = strip.take(m, equal);
+    CHECK(t.ran && t.added.empty() && t.removed.empty() && tabNames(m) == "ada bo");
+    Sessions unknown;
+    CHECK(strip.take(m, unknown).ran && !strip.take(m, unknown).ran);
+    Sessions older({std::make_shared<const SessionView>(tailOf(1, infoOf("cy"), {}, {}, Tail{}))});
+    CHECK(strip.take(m, older).ran && tabNames(m) == "ada bo cy");
+    Sessions grown({std::make_shared<const SessionView>(tailOf(1, infoOf("cy"), {}, {}, Tail{}))});
+    CHECK(!strip.take(m, grown).ran);
+}
+
+// The tab saved as selected waits for its friend: selected when the friend's tab arrives, unless the person chose a
+// tab first; a list from the server that does not name it ends the wait, the selection as it was.
+void saved_tab_waits_for_its_friend() {
+    Model m({}, true);
+    FriendStrip strip({"bo", "ada"}, "ada", {});
+    CHECK(strip.pending());
+    strip.take(m, Sessions());                                  // a first state with nothing in it
+    CHECK(strip.pending() && m.active() == 0);
+    strip.take(m, listState({"ada", "bo"}));
+    CHECK(!strip.pending() && tabNames(m) == "[sprint] bo ada" && m.active() == 2);
+    // The person chose first: the saved tab is not selected.
+    Model n({}, true);
+    FriendStrip chose({}, "ada", {});
+    chose.personSelected();
+    chose.take(n, listState({"ada"}));
+    CHECK(n.active() == 0 && !chose.pending());
+    // The server's list without the saved friend: the wait ends, the selection stays.
+    Model o({}, true);
+    FriendStrip absent({}, "zed", {});
+    absent.take(o, listState({"ada"}));
+    CHECK(!absent.pending() && o.active() == 0 && absent.taken());
+    // An older server's sessions without it: the wait goes on, since its friend may yet have a session.
+    Model p({}, true);
+    FriendStrip waiting({}, "zed", {});
+    waiting.take(p, Sessions({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))}));
+    CHECK(waiting.pending() && p.active() == 0);
+}
+
+// `nexus --server H --tab N` past the tabs at launch waits for the server's friends, bounded, before it judges N.
+void tab_given_waits_for_the_friends() {
+    CHECK(tabWaitsForFriends(true, true, 3, 1));        // tab 3 of the sprint tab alone: wait
+    CHECK(!tabWaitsForFriends(true, true, 1, 1));       // there already
+    CHECK(!tabWaitsForFriends(true, false, 3, 1));      // no server: no friends will come, judged at once
+    CHECK(!tabWaitsForFriends(false, true, 3, 1));      // no --tab
+    Model m({}, true);
+    FriendStrip strip;
+    CHECK(tabWaitGoesOn(strip, false, 1000, 21000));    // nothing heard yet
+    strip.take(m, Sessions());                          // a state with no list and no session: still waiting
+    CHECK(tabWaitGoesOn(strip, false, 1500, 21000));
+    CHECK(!tabWaitGoesOn(strip, true, 1500, 21000));    // the link failed: judged now
+    CHECK(!tabWaitGoesOn(strip, false, 21000, 21000));  // out of time: judged now
+    strip.take(m, listState({"ada", "bo"}));            // the friends came: tab 3 is bo's
+    CHECK(!tabWaitGoesOn(strip, false, 2000, 21000));
+    CHECK(m.select_tab(2) && m.tab(2).name == "bo");
+}
+
+// A removed friend's tab is forgotten by the mirror: nothing of its session is held for its id.
+void mirror_forgets_a_removed_tab() {
+    Model m(friends2(), false);
+    Mirror mirror;
+    const std::size_t ada = m.tab(0).id;
+    CHECK(mirror.apply(m, stateOf("ada", {entry(EntryKind::Person, "x")}, {})));
+    CHECK(mirror.session(ada) != 0 && mirror.seen(ada).next == 1);
+    mirror.forget(ada);
+    CHECK(mirror.session(ada) == 0 && mirror.seen(ada).next == 0 && mirror.activity(ada) == nullptr);
+}
+
 void stop_target_rules() {
     Model m(friends2(), true);
     Mirror mirror;
@@ -2063,6 +2510,21 @@ const Case kCases[] = {
     {"mirror_holds_open_entry_apart", mirror_holds_open_entry_apart},
     {"mirror_queue_follows_the_servers", mirror_queue_follows_the_servers},
     {"ensure_each_friend", ensure_each_friend},
+    {"friends_cross_the_wire", friends_cross_the_wire},
+    {"friends_sent_only_when_changed", friends_sent_only_when_changed},
+    {"hub_keeps_one_friends_list", hub_keeps_one_friends_list},
+    {"friends_within_the_caps", friends_within_the_caps},
+    {"friends_not_in_older_formats", friends_not_in_older_formats},
+    {"friends_of_a_state", friends_of_a_state},
+    {"apply_friends_follows_the_list", apply_friends_follows_the_list},
+    {"apply_friends_without_a_list_only_adds", apply_friends_without_a_list_only_adds},
+    {"batch_friends_are_the_loops", batch_friends_are_the_loops},
+    {"friend_names_are_checked", friend_names_are_checked},
+    {"drafts_outlive_their_tabs", drafts_outlive_their_tabs},
+    {"strip_takes_only_a_change", strip_takes_only_a_change},
+    {"saved_tab_waits_for_its_friend", saved_tab_waits_for_its_friend},
+    {"tab_given_waits_for_the_friends", tab_given_waits_for_the_friends},
+    {"mirror_forgets_a_removed_tab", mirror_forgets_a_removed_tab},
     {"stop_target_rules", stop_target_rules},
     {"stop_never_filtered_by_the_window", stop_never_filtered_by_the_window},
     {"sessions_activity_and_tool_lines", sessions_activity_and_tool_lines},

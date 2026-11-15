@@ -547,6 +547,16 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
             }
         }
     }
+    std::size_t count = 0;
+    for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
+        ++count;
+    }
+    if (count > kMaxFriends) {
+        r.errorAt(list, "\"friends\" holds " + std::to_string(count) + " friends, and nexus-server takes at most " +
+                  std::to_string(kMaxFriends), "take friends out until it holds " + std::to_string(kMaxFriends) +
+                  " or fewer; nothing was changed");
+        return r.read;
+    }
     for (PrJsonValueIndex e = prJsonFirst(r.doc(), list); e != kPrJsonMissing; e = prJsonAfter(r.doc(), list, e)) {
         if (prJsonKind(r.doc(), e) != PrJsonKind_Object) {
             r.errorAt(e, "a friend is " + std::string(kindName(prJsonKind(r.doc(), e))) + ", not an object",

@@ -102,9 +102,9 @@ Command machineListCommand(const char* override, const char* shell) {
 }
 
 MachineList loadMachines(const Command& command, const CommandRunner& run) {
-    CommandResult r = run(command, kFriendListTimeoutSeconds);
+    CommandResult r = run(command, kMachineListTimeoutSeconds);
     MachineList list;
-    list.error = commandProblem(command, r, kFriendListTimeoutSeconds);
+    list.error = commandProblem(command, r, kMachineListTimeoutSeconds);
     if (!list.error.empty()) {
         list.error += "; until then a terminal tab in ssh shows the host as typed, not the fleet machine's name";
         return list;

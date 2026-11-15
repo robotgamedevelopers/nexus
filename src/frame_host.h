@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "pr/app.h"
 #include "pr/font_set.h"
@@ -26,6 +28,7 @@
 #include "model.h"
 #include "sync/actions.h"
 #include "sync/client.h"
+#include "sync/friend_strip.h"
 #include "sync/hub.h"
 #include "sync/mirror.h"
 #include "sync/sessions.h"
@@ -36,6 +39,11 @@ namespace nexus {
 
 class PraxTerminals;
 class PraxBoard;
+
+// Text from outside (a name the server sent that is not a friend's, the host given), as a log line can hold it: every
+// byte below 0x20, 0x7f and above, and the backslash as \xNN, the rest as it is; at most 80 bytes, cut between two
+// characters, never inside an escape, then "...".
+std::string loggable(std::string_view text);
 
 // The link to nexus-server as the window's frame sees it: the latest state, read without waiting, and actions handed
 // over without waiting. link/client_port.h is the one over the link's thread (link/client.h).
@@ -89,6 +97,18 @@ struct FrameHost {
     std::string savedTerminals;         // the text last handed to each store, so that only a change is written
     std::string savedSelection;
 
+    // The friend tabs are the server's (AGENTS.md "Friend tabs"): each state the link brings while connected whose
+    // friends changed sets them (sync/friend_strip.h), new ones in the saved order, and a session is ensured with each
+    // friend as its tab is added. A saved friend's tab is selected when it arrives, unless the person chose a tab first
+    // (personSelected); the selection is not saved while it waits, nor the friends' order before the friends arrive.
+    // A removed friend's draft is kept by name, and given back when a friend of that name has a tab again; each such
+    // change is made in `keptStore` for this window's server, `host` (with `keep`, and unless its file did not read or
+    // the host cannot key a draft: tab_order.h KeptChange, keptServer).
+    sync::FriendStrip strip;
+    const KeptDraftsStore* keptStore = nullptr;
+    // A tab chosen by the person (view.h selected): the saved selection no longer waits for the friends.
+    void personSelected();
+
     // With a server (main.cpp --server, or a state file).
     LinkPort* link = nullptr;
     std::string host;
@@ -98,8 +118,8 @@ struct FrameHost {
     LinkSecrets secrets;                // the secret dialog, from connect()
 
     // Shows the server's sessions through `port`: the prompt waits for the server, Enter and Command-Enter send and
-    // queue to the session the tab shows, Command-Escape stops it, a session is ensured with each friend, and the
-    // server's secret requests are asked in the secret dialog.
+    // queue to the session the tab shows, Command-Escape stops it, the friend tabs follow the server's friends, a
+    // session is ensured with each, and the server's secret requests are asked in the secret dialog.
     void connect(LinkPort* port, const std::string& serverHost);
     // Shows `state` as the window holds it once the server is heard, or with `lost` once it has lost the server.
     void showState(const sync::Sessions& state, bool lost);
@@ -119,9 +139,17 @@ struct FrameHost {
     void keepTerminals();
     void keepSelection();
 
-private:
+    // The link's latest state into the window, as each frame's start takes it: the friend tabs, the transcripts, the
+    // secret requests and the status line. Never waits. main.cpp calls it before the first frame too, while a --tab
+    // waits for the server's friends.
     void pollLink();
+
+private:
     void wire();
+    // The friend tabs from `state` (FriendStrip::take): when its friends changed, the mirror's record of each removed
+    // tab forgotten, a session ensured for each added one when there is a link, each name the server sent that is not
+    // a friend's logged, the kept drafts saved when they changed, and the notice for a strip without friends.
+    void takeFriends(const sync::Sessions& state);
 };
 
 } // namespace nexus
