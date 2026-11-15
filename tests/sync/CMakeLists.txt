@@ -19,8 +19,9 @@ target_compile_options(sync_test PRIVATE ${warnings})
 add_dependencies(model_checks sync_test)
 
 # A measurement, not a test: encode and decode times of the sessions diff and the actions in each format
-# (wire_bench.cpp says which messages). Run by hand; it reads the clock.
-add_executable(wire_bench wire_bench.cpp)
+# (wire_bench.cpp says which messages). Run by hand (`cmake --build build --target wire_bench`); it reads the clock, and
+# is left out of the default build, so CI never spends its 2 minutes on it.
+add_executable(wire_bench EXCLUDE_FROM_ALL wire_bench.cpp)
 target_link_libraries(wire_bench PRIVATE nexus_sync)
 target_compile_options(wire_bench PRIVATE ${warnings})
 
