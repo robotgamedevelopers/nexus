@@ -8,7 +8,9 @@
 
 set(warnings ${NEXUS_WARNINGS})
 
-add_executable(sync_test sync_test.cpp)
+# crafted_tables.cpp is the one source of sync_test that includes schema's generated header, so the rest compiles
+# beside it.
+add_executable(sync_test sync_test.cpp crafted_tables.cpp)
 target_link_libraries(sync_test PRIVATE nexus_sync)
 # The state format 1 fixtures, written by a nexus from before formats (fixtures/main_state_fixture.cpp).
 target_compile_definitions(sync_test PRIVATE NEXUS_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

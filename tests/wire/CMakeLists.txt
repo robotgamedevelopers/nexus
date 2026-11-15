@@ -16,10 +16,14 @@ if(MSVC)
     set_source_files_properties(${next_sources} PROPERTIES COMPILE_OPTIONS /wd4305)
 endif()
 
-# wire_test.cpp includes only this version's headers (src/wire/tables.h), wire_next.cpp only the later one's
-# (NexusNextTable.h); each version's code is in its own namespace.
-add_executable(wire_test wire_test.cpp wire_next.cpp)
-target_link_libraries(wire_test PRIVATE nexus_wire nexus_wire_next)
+# The later version's side of both tests (versions.h), compiled once: wire_next.cpp includes only the later version's
+# headers (NexusNextTable.h), and the tests only this version's; each version's code is in its own namespace.
+add_library(nexus_wire_next_side STATIC wire_next.cpp)
+target_link_libraries(nexus_wire_next_side PUBLIC nexus_wire_next)
+target_compile_options(nexus_wire_next_side PRIVATE ${NEXUS_WARNINGS})
+
+add_executable(wire_test wire_test.cpp)
+target_link_libraries(wire_test PRIVATE nexus_wire nexus_wire_next_side)
 target_compile_options(wire_test PRIVATE ${NEXUS_WARNINGS})
 
 foreach(group roundtrip versions)
@@ -28,9 +32,9 @@ foreach(group roundtrip versions)
 endforeach()
 
 # nexus's own wire code (sync::Sessions, sync::Actions, the Hello) against the later version's generated code, both
-# ways: nexus_versions_test.cpp includes only nexus's headers, wire_next.cpp only the later version's.
-add_executable(nexus_versions_test nexus_versions_test.cpp wire_next.cpp)
-target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next)
+# ways: nexus_versions_test.cpp includes only nexus's headers.
+add_executable(nexus_versions_test nexus_versions_test.cpp)
+target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next_side)
 target_compile_options(nexus_versions_test PRIVATE ${NEXUS_WARNINGS})
 
 foreach(group sessions actions hello)

@@ -25,7 +25,7 @@
 #include "sync/mirror.h"
 #include "sync/sessions.h"
 #include "sync/wire.h"
-#include "wire/tables.h"
+#include "crafted_tables.h"
 
 namespace {
 
@@ -627,19 +627,8 @@ void sessions_malformed_refused_unchanged() {
     }
     // the same in format 4, as schema's table: well formed, and refused for what it says
     {
-        nexuswire::SessionsDiffBuilder w;
-        nexuswire::SessionChange* s = nexuswire::SessionsDiffSessionsAdd(w.main, w.GetRoot()->sessions);
-        s->id = 1;
-        s->changed = true;
-        s->first = ~std::uint64_t(0);
-        s->keep_from = ~std::uint64_t(0);
-        nexuswire::EntryChange* e = nexuswire::SessionChangeEntriesAdd(w.main, s->entries);
-        e->kind = nexuswire::EntryKind::Person;
-        e->closed = true;
-        s->queue_changed = true;
-        std::string bytes(static_cast<std::size_t>(nexuswire::SessionsDiffMeasure(w)), '\0');
-        CHECK(nexuswire::SessionsDiffSave(w, reinterpret_cast<std::uint8_t*>(bytes.data()),
-            static_cast<std::int64_t>(bytes.size())) == static_cast<std::int64_t>(bytes.size()));
+        const std::string bytes = synctest::craftedOverflowDiff();
+        CHECK(!bytes.empty());
         Sessions a = b;
         bool threw = false;
         try {
@@ -1385,17 +1374,8 @@ void hello_min_peer() {
 // Format 4: an entry whose kind this build does not know reads as a notice, never failing the read; here one whose
 // writer set no kind (None, as a later version's kind reads; wire_unit_versions sends a real later kind).
 void sessions_unknown_kind_is_a_notice() {
-    nexuswire::SessionsDiffBuilder w;
-    nexuswire::SessionChange* s = nexuswire::SessionsDiffSessionsAdd(w.main, w.GetRoot()->sessions);
-    s->id = 1;
-    s->changed = true;
-    nexuswire::EntryChange* e = nexuswire::SessionChangeEntriesAdd(w.main, s->entries);
-    e->closed = true;
-    nexuswire::TableStringEmplace(w.main, e->tail, "a later kind", 12);
-    s->queue_changed = true;
-    std::string bytes(static_cast<std::size_t>(nexuswire::SessionsDiffMeasure(w)), '\0');
-    CHECK(nexuswire::SessionsDiffSave(w, reinterpret_cast<std::uint8_t*>(bytes.data()),
-        static_cast<std::int64_t>(bytes.size())) == static_cast<std::int64_t>(bytes.size()));
+    const std::string bytes = synctest::craftedUnsetKindDiff();
+    CHECK(!bytes.empty());
     Sessions read;
     read.apply_string(bytes);
     const SessionView* v = read.find(1);
