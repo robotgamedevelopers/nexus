@@ -228,11 +228,12 @@ if(TARGET nexus_server)
     set_tests_properties(server_unit_install PROPERTIES LABELS unit TIMEOUT 30)
 
     add_test(NAME server_functional_setup
-             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
+             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -DSOURCE=${CMAKE_SOURCE_DIR}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
     set_tests_properties(server_functional_setup PROPERTIES LABELS functional TIMEOUT 120)
     # The crash at start again, with the per-user service registered; skipped where the machine registers none.
     add_test(NAME server_functional_setup_service
-             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -DMODE=service
+             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -DSOURCE=${CMAKE_SOURCE_DIR} -DMODE=service
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
     set_tests_properties(server_functional_setup_service PROPERTIES LABELS functional TIMEOUT 120
                          SKIP_REGULAR_EXPRESSION "setup_functional \\(service\\): skipped")

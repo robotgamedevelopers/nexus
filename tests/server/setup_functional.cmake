@@ -1,7 +1,7 @@
 # `nexus-server setup`, its handover and `doctor` on the real filesystem, in a HOME of the test's own (a short one under
 # /tmp, so the control socket's path fits). Functional: real processes, a real socket, real time.
 #
-#   cmake -DSERVER=<nexus-server> [-DMODE=service] -P setup_functional.cmake
+#   cmake -DSERVER=<nexus-server> -DSOURCE=<the fork> [-DMODE=service] -P setup_functional.cmake
 #
 # Without MODE (no service registered, --no-service): the first run places the server and the handover starts it; a
 # second run changes nothing; a build with no tested mark is refused and nothing changes; a tested build of other bytes
@@ -18,8 +18,9 @@
 # Each program placed is a copy in a directory of its own, with its <program>.tested written from `build-of`, as
 # rebuild writes it once the tests pass.
 
-if(NOT SERVER)
-    message(FATAL_ERROR "usage: cmake -DSERVER=<nexus-server> [-DMODE=service] -P setup_functional.cmake")
+if(NOT SERVER OR NOT SOURCE)
+    message(FATAL_ERROR "usage: cmake -DSERVER=<nexus-server> -DSOURCE=<the fork> [-DMODE=service] "
+        "-P setup_functional.cmake")
 endif()
 execute_process(COMMAND mktemp -d /tmp/nxsetup.XXXXXX OUTPUT_VARIABLE home OUTPUT_STRIP_TRAILING_WHITESPACE
                 RESULT_VARIABLE made)
@@ -94,7 +95,22 @@ function(refuse text what)
     endif()
 endfunction()
 
+# A setup that goes well exits 0, but only where the fork's Claude driver is built (npm ci && npm run build in
+# drivers/claude): without it, setup's driver steps FAIL and it exits 1, and the other lines are still checked.
+if(EXISTS "${SOURCE}/drivers/claude/dist/src/main.js" AND IS_DIRECTORY "${SOURCE}/drivers/claude/node_modules")
+    set(good 0)
+    set(background 3)
+else()
+    set(good 1)
+    set(background 1)
+    message(STATUS "setup_functional: the Claude driver is not built in ${SOURCE}, so setup exits 1 where it would "
+        "exit 0 or 3")
+endif()
+
 function(expect_exit text want)
+    if(want STREQUAL "good")
+        set(want "${good}")
+    endif()
     if(NOT rc STREQUAL "${want}")
         set(failed "${failed}\n  ${text}: exit ${rc}, not ${want}" PARENT_SCOPE)
     endif()
@@ -192,7 +208,7 @@ if(MODE STREQUAL "service")
 else()
     # 2. Again: nothing to do.
     run_setup("${home}/a/nexus-server" "second setup")
-    expect_exit("second" 0)
+    expect_exit("second" good)
     expect("second" "ok    the server is placed")
     expect("second" "ok    the server runs the placed build")
     refuse("second" "start ")
@@ -210,7 +226,7 @@ else()
     build_of("${home}/b/nexus-server")
     file(WRITE "${home}/b/nexus-server.tested" "${build}\n")
     run_setup("${home}/b/nexus-server" "setup from another build")
-    expect_exit("takeover" 0)
+    expect_exit("takeover" good)
     expect("takeover" "done  the server is placed: ${placed}")
     expect("takeover" "drain the server runs build")
     expect("takeover" "ok    the server runs the placed build")
@@ -246,7 +262,7 @@ else()
     # 6. With no service, setup gone at once (--wait 0): the handover process finishes the takeover by itself.
     make_program(d "xx" ON)
     run_setup("${home}/d/nexus-server" "setup that does not wait" --wait 0)
-    expect_exit("background" 3)
+    expect_exit("background" "${background}")
     expect("background" "the handover still runs, in the background")
     set(state "")
     foreach(i RANGE 100)

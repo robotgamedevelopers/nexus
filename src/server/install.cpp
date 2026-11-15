@@ -445,13 +445,14 @@ bool copyTree(const std::string& from, const std::string& to, std::string* why) 
     return true;
 }
 
+#if defined(__APPLE__)
 // Whether the trees `a` and `b` hold the same files with the same bytes.
 bool sameTree(const std::string& a, const std::string& b) {
     return isDir(a) && isDir(b) && run({"diff", "-rq", a, b}).status == 0;
 }
 
 // Puts a copy of the tree `from` at `to` in one rename: the new tree beside it, the old moved aside, then removed.
-// `*copied` says whether it copied; a tree already the same is left as it is.
+// `*copied` says whether it copied; a tree already the same is left as it is. The window's (macOS only).
 bool placeTree(const std::string& from, const std::string& to, std::string* why, bool* copied = nullptr) {
     if (copied != nullptr) {
         *copied = false;
@@ -480,6 +481,7 @@ bool placeTree(const std::string& from, const std::string& to, std::string* why,
     run({"rm", "-rf", old});
     return true;
 }
+#endif
 
 // The server program to place: the build directory's, which `rebuild` has just made; this program when that is gone.
 std::string builtServer(const std::string& self) {
