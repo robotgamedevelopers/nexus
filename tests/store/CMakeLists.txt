@@ -135,6 +135,8 @@ store_tlc_test(tlc_journal_trace_no_sync_rejected     JournalTrace JournalTrace.
 store_tlc_test(tlc_store_lock_spec  StoreLock StoreLock.cfg      pass)
 store_tlc_test(tlc_store_lock_move  StoreLock StoreLockMove.cfg  pass)
 store_tlc_test(tlc_store_lock_three StoreLock StoreLockThree.cfg pass WORKERS 8)
+# Nightly: the three servers with four records, the per-commit instance before it was cut to three for CI's cap.
+store_tlc_test(tlc_store_lock_four  StoreLock StoreLockFour.cfg  pass WORKERS 8 NIGHTLY)
 store_tlc_test(tlc_store_lock_fail  StoreLock StoreLockFail.cfg  pass)
 store_tlc_test(tlc_store_lock_gate  StoreLock StoreLockGate.cfg  pass)
 # Reversed witnesses: the order before the lock (two writers, a record written unlocked, a number written twice, the

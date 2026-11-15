@@ -12,6 +12,10 @@
 //        nexus-server store check [--dir DIR]
 //                                         reads the store without changing it; refused while a server has it
 //        nexus-server stop [--dir DIR]    stops the running server
+//        nexus-server status [--dir DIR]  asks the running server: SERVING, and the build it runs from
+//        nexus-server builds <verb> ... [--dir DIR]
+//                                         the installed builds under DIR/builds (server/builds.h, docs/builds.md):
+//                                         place, hash, formats, list, verify, current, back, prune, remove, help
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
@@ -40,6 +44,7 @@
 #include <vector>
 
 #include "no_core.h"
+#include "server/builds.h"
 #include "server/home.h"
 #include "server/server.h"
 #include "sync/formats.h"
@@ -48,7 +53,8 @@ namespace {
 
 int usage() {
     std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
-                         "       nexus-server serve|stop [--dir DIR]\n"
+                         "       nexus-server serve|stop|status [--dir DIR]\n"
+                         "       nexus-server builds <verb> ... [--dir DIR]   (`nexus-server builds help`)\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
                          "       nexus-server store check [--dir DIR]\n"
@@ -120,7 +126,7 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
-        } else if (command == "config" || command == "store") {
+        } else if (command == "config" || command == "store" || command == "builds") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -167,10 +173,35 @@ int main(int argc, char** argv) {
         } else {
             setenv(nexus::server::kSandboxBinVariable, bin.c_str(), 1);
         }
+        // The build this program is in, held for the server's life so that no prune removes it while it runs; one
+        // being removed as this starts refuses the start.
+        nexus::server::builds::BuildHold hold;
+        const nexus::store::Status held = nexus::server::builds::holdBuild(selfPath(), hold);
+        if (!held.is_ok()) {
+            std::fprintf(stderr, "nexus-server: %s\n", held.message().c_str());
+            return 1;
+        }
+        paths.build = hold.hash();
         return nexus::server::serve(paths);
     }
-    if (command == "stop")
+    if (command == "stop") {
         return nexus::server::stop(paths);
+    }
+    if (command == "status") {
+        return nexus::server::status(paths);
+    }
+    if (command == "builds") {
+        nexus::server::builds::Result r;
+        const int code = nexus::server::builds::command(paths.dir, configArgs, {}, r);
+        for (const std::string& line : r.out) {
+            std::printf("%s\n", line.c_str());
+        }
+        std::fflush(stdout);
+        for (const std::string& line : r.err) {
+            std::fprintf(stderr, "nexus-server: builds: %s\n", line.c_str());
+        }
+        return code;
+    }
     if (command == "config") {
         return nexus::server::config(paths, configArgs);
     }

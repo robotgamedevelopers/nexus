@@ -202,6 +202,13 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_config_repo PUBLIC src)
     target_compile_options(nexus_config_repo PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_config_repo PUBLIC nexus_sync)
+
+    # Placement (src/server/builds.h, docs/builds.md): the installed builds, each immutable and named by its content's
+    # hash, and the one pointer to the current and previous. POSIX files and locks; no time but what is passed in.
+    add_library(nexus_builds STATIC src/server/sha256.cpp src/server/build_manifest.cpp src/server/builds.cpp)
+    target_include_directories(nexus_builds PUBLIC src)
+    target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_builds PUBLIC nexus_store)
 endif()
 
 # The window's hitch detector (src/hitch.h): each frame's main-thread work against the budget, its phases, a fixed ring
@@ -285,7 +292,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo)
+    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)

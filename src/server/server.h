@@ -40,6 +40,8 @@ struct Paths {
     std::string drivers;    // <dir>/drivers: which program is each friend's driver (server/driver_table.h)
     std::string accounts;   // $HOME/.nexus/server/accounts whatever --dir says: the logins, where the drivers read them
                             // (server/home.h accountsDir)
+    std::string build;      // serve: the placed build this program runs from (server/builds.h holdBuild), learnt from
+                            // its own resolved path; empty for a program outside one (a build tree)
 };
 
 // Who asks for a session: a client id (empty: none), the number of its first action in the session, the state format
@@ -89,6 +91,9 @@ int storeCommand(const Paths& p, const std::vector<std::string>& args);
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.
 int stop(const Paths& p);
+// Asks the running server whether it serves, and from which build: prints its answer, `SERVING` and then
+// `build <hash>` (or `build none`, a program outside the placed builds). Exit 0 when it serves, else 1.
+int status(const Paths& p);
 // `nexus-server config <verb> ...`: the accounts and friends (server/config_repo.h, docs/accounts.md). path, check,
 // history and remote work on the files and the repository directly; reload and restore ask the running server, which
 // decides.

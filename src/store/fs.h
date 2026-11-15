@@ -133,6 +133,17 @@ struct PosixOptions {
 };
 std::unique_ptr<Fs> make_posix_fs(PosixOptions options = {});
 
+// The store lock's two checks of where a lock lives, for any directory locked with flock on its own descriptor (the
+// store's, and the builds directory's: server/builds.h). POSIX, beside PosixFs.
+//   unlockable_filesystem: what the filesystem of the directory open at `dirfd` is, in words, when locks there cannot
+//     be trusted (a network filesystem, or one that passes locks to another program); empty when it is none of those.
+//     `test_fs_type` is PosixOptions' seam (a Linux name: "nfs", "fuse", ...).
+//   locks_kept: the lock just taken on `dirfd` checked where it is: a second exclusive lock on another descriptor of the
+//     directory must be refused. Failed, saying that `who` would not be kept out, when it is granted (or
+//     `test_locks_ignored`), or neither granted nor refused.
+std::string unlockable_filesystem(int dirfd, const std::string& test_fs_type = std::string());
+Status locks_kept(int dirfd, const std::string& dir, const std::string& who, bool test_locks_ignored = false);
+
 std::string dir_of(const std::string& path);
 std::string name_of(const std::string& path);
 

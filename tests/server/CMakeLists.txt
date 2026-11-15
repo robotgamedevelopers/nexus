@@ -209,3 +209,115 @@ tlc_test(tlc_supervisor_trace_faulty_limit_rejected SupervisorTrace SupervisorTr
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)
+
+# Placement (src/server/builds.h, docs/builds.md, models/placement):
+#   unit        builds_test (builds_unit_*): the manifest, the hash, the evidence, the formats rule, the names in the
+#               builds directory, prune's choice, the program's build. Text and decisions only: no files, clock or
+#               sockets.
+#   functional  builds_functional (builds_functional_*): the verbs on real files in a directory of the test's own (a
+#               scratch HOME of its own; never ~/.nexus): a crash (a child process killed) at every step of place and of
+#               current, then a fresh run; two placements and two switches at once, many rounds; untested, a tampered
+#               file, a stale mark, a driver changed after its tests, all refused; prune with a build in use; a full
+#               disk; a filesystem whose locks are not kept.
+#   model       TLC: Placement.tla, its reversed witnesses, and the code's walks (builds_walk, functional: real files,
+#               threads) checked against it; the faulty walks rejected.
+#   model_nightly  Placement.tla on its larger instances (two actors two verbs each; one actor three verbs).
+add_executable(builds_test builds_test.cpp)
+target_link_libraries(builds_test PRIVATE nexus_builds)
+target_compile_options(builds_test PRIVATE ${warnings})
+foreach(group sha manifest evidence formats names prune program)
+    add_test(NAME builds_unit_${group} COMMAND builds_test ${group})
+    set_tests_properties(builds_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+if(NOT WIN32)
+    add_executable(builds_functional builds_functional.cpp)
+    target_link_libraries(builds_functional PRIVATE nexus_builds)
+    target_compile_options(builds_functional PRIVATE ${warnings})
+    foreach(case place_and_switch crash_place crash_switch crash_prune two_places two_switches refusals
+                 prune_in_use disk_full unkept_locks hold help)
+        add_test(NAME builds_functional_${case} COMMAND builds_functional ${case}
+                 ${CMAKE_CURRENT_BINARY_DIR}/builds-${case})
+        set_tests_properties(builds_functional_${case} PROPERTIES LABELS functional TIMEOUT 120)
+    endforeach()
+
+    find_package(Threads REQUIRED)
+    add_executable(builds_walk builds_walk.cpp)
+    target_link_libraries(builds_walk PRIVATE nexus_builds Threads::Threads)
+    target_compile_options(builds_walk PRIVATE ${warnings})
+    add_dependencies(model_checks builds_walk builds_test)
+
+    # TLC through the store's runner (tests/store/tlc.cmake) on models/placement.
+    set(placement_models "${PROJECT_SOURCE_DIR}/models/placement")
+    set(placement_tlc "${PROJECT_SOURCE_DIR}/tests/store/tlc.cmake")
+    function(placement_tlc_test name cfg module expect)
+        cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;CAP" "WALK" ${ARGN})
+        if(NOT T_WORKERS)
+            set(T_WORKERS 2)
+        endif()
+        set(label model)
+        if(NOT T_CAP)
+            set(T_CAP 60)
+        endif()
+        if(T_NIGHTLY)
+            set(label model_nightly)
+        endif()
+        math(EXPR ctest_timeout "${T_CAP} + 30")
+        set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${placement_models} -DMODULE=${module}
+                 -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${T_CAP})
+        if(T_PROPERTY)
+            list(APPEND defs -DPROPERTY=${T_PROPERTY})
+        endif()
+        if(T_WALK)
+            string(REPLACE ";" "," walk_args "${T_WALK}")
+            list(APPEND defs -DWALK=$<TARGET_FILE:builds_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=PlacementTraceData.tla)
+        endif()
+        add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${placement_tlc})
+        set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    endfunction()
+
+    # The spec on its small instances, every invariant, and VerbsEnd under fairness.
+    # spec: 306,768 states, 50 s on 4 workers, a shard of its own (ci.yml, placement-spec), capped at the shards' 80 s;
+    # seq: 73,043 states, 9 s on 4 workers.
+    placement_tlc_test(tlc_placement_spec Placement.cfg Placement pass WORKERS 4 CAP 80)
+    placement_tlc_test(tlc_placement_seq PlacementSeq.cfg Placement pass WORKERS 4)
+    placement_tlc_test(tlc_placement_large PlacementLarge.cfg Placement pass WORKERS 8 NIGHTLY CAP 1800)
+    placement_tlc_test(tlc_placement_seq_three PlacementSeqThree.cfg Placement pass WORKERS 8 NIGHTLY CAP 1800)
+
+    # Reversed witnesses: each broken variant must be rejected by the invariant named.
+    placement_tlc_test(tlc_placement_witness_two_renames witnesses/PTwoRenames.cfg Placement invariant
+                       PROPERTY PrevIsLastCurrent)
+    placement_tlc_test(tlc_placement_witness_no_lock witnesses/PNoLock.cfg Placement invariant
+                       PROPERTY PrevIsLastCurrent)
+    placement_tlc_test(tlc_placement_witness_in_place witnesses/PInPlace.cfg Placement invariant
+                       PROPERTY CurrentValid)
+    placement_tlc_test(tlc_placement_witness_tested_program_only witnesses/PTestedProgramOnly.cfg Placement invariant
+                       PROPERTY CurrentValid)
+    placement_tlc_test(tlc_placement_witness_stale_marker witnesses/PStaleMarker.cfg Placement invariant
+                       PROPERTY CurrentValid)
+    placement_tlc_test(tlc_placement_witness_prune_in_use witnesses/PPruneInUse.cfg Placement invariant
+                       PROPERTY InUseKept)
+    placement_tlc_test(tlc_placement_witness_reuse_tmp witnesses/PReuseTmp.cfg Placement invariant
+                       PROPERTY NamedWhole)
+    placement_tlc_test(tlc_placement_witness_no_sync witnesses/PNoSync.cfg Placement invariant
+                       PROPERTY NamedWhole)
+
+    # Trace binding: the real code's walks on real files, each a behaviour of Placement.tla: a behaviour reaches the
+    # trace's last record, which TLC reports as TraceUnfinished violated (PlacementTrace.tla says why).
+    foreach(seed 1 2 3)
+        placement_tlc_test(tlc_placement_trace_seed_${seed} PlacementTrace.cfg PlacementTrace invariant
+                           PROPERTY TraceUnfinished WALK ${seed} 800)
+    endforeach()
+    # The binding can fail: each reversed fault's walk is not a behaviour of the spec. No behaviour reaches its end, so
+    # TLC explores them all and ends with no error: `pass` here is the rejection. Each seed is one whose walk reaches
+    # the fault (the trace is matched up to the step the fault changes, and no further): prune-in-use's needs a server
+    # up on a build a prune would remove.
+    foreach(fault_seed no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1)
+        string(REPLACE ":" ";" fs "${fault_seed}")
+        list(GET fs 0 fault)
+        list(GET fs 1 seed)
+        placement_tlc_test(tlc_placement_trace_${fault}_rejected PlacementTrace.cfg PlacementTrace pass
+                           WALK ${seed} 800 --fault ${fault})
+    endforeach()
+endif()

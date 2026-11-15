@@ -232,6 +232,21 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
+          # placement: every unit group, then its walks on real files and their faults, all at once (each about 2 s,
+          # bound by the syncs, each in a directory of its own; any failure fails the step)
+          build/tests/server/builds_test
+          builds_pids=()
+          for seed in 1 2 3; do
+            mkdir -p "walks/builds_$seed"
+            build/tests/server/builds_walk "$seed" 800 "walks/builds_$seed/trace.tla" & builds_pids+=($!)
+          done
+          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
+            mkdir -p "walks/builds_${fault_seed%%:*}"
+            build/tests/server/builds_walk "${fault_seed#*:}" 800 --fault "${fault_seed%%:*}" "walks/builds_${fault_seed%%:*}/trace.tla" & builds_pids+=($!)
+          done
+          for pid in "${builds_pids[@]}"; do
+            wait "$pid"
+          done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
@@ -544,10 +559,10 @@ jobs:
           - part: units
             targets: >-
               model_test overlay_test sync_test secrets_test store_test durable_test driver_protocol_test
-              supervisor_test wire_test nexus_versions_test
+              supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
+              overlay_walk trace_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -604,6 +619,8 @@ jobs:
           build/tests/driver/driver_protocol_test
           # the driver supervisor: every group
           build/tests/server/supervisor_test
+          # placement: every group (the manifest, the hash, the evidence, the formats rule, the names, prune's choice)
+          build/tests/server/builds_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
@@ -678,6 +695,14 @@ jobs:
           done
           for fault in --faulty-turn --faulty-resume; do
             walk build/tests/server/supervisor_walk 1 1000 "$fault"
+          done
+          # placement's walks on real files (each in walk-files beside its trace) and their faults, at the seeds the
+          # trace checks use (tests/server/CMakeLists.txt)
+          for seed in 1 2 3; do
+            walk build/tests/server/builds_walk "$seed" 800
+          done
+          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
+            walk build/tests/server/builds_walk "${fault_seed#*:}" 800 --fault "${fault_seed%%:*}"
           done
           while [ "$running" -gt 0 ]; do
             wait -n
@@ -760,6 +785,14 @@ jobs:
           - shard: store-lock
             run: '^tlc_store_lock'
             build: store_lock_walk
+          # Placement (models/placement/Placement.tla): its two-actor instance alone (50 s on four workers), then the
+          # one-actor instance, the witnesses and the code's walks with their faults (about 40 s on two cores).
+          - shard: placement-spec
+            run: '^tlc_placement_spec$'
+          - shard: placement-rest
+            run: '^tlc_placement_'
+            build: builds_walk
+            skip: '^tlc_placement_spec$'
           - shard: claude
             run: '^tlc_claude'
             node: true
@@ -783,7 +816,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|claude|witness|secrets|glide|overlay)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

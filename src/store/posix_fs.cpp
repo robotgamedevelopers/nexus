@@ -186,7 +186,7 @@ std::string unlockable_name(const std::string& type) {
 }
 
 // The filesystem a held directory is on, when it is one where locks cannot be trusted: what it is; else empty.
-std::string unlockable_filesystem(int dirfd) {
+std::string unlockable_by_type(int dirfd) {
     struct statfs fs;
     if (::fstatfs(dirfd, &fs) != 0) {
         return std::string();   // the lock below says why, if anything is wrong
@@ -277,8 +277,7 @@ public:
         if (fd.get() < 0) {
             return os_error("open", dir);
         }
-        const std::string type = options_.test_fs_type.empty() ? unlockable_filesystem(fd.get())
-                                                                : unlockable_name(options_.test_fs_type);
+        const std::string type = unlockable_filesystem(fd.get(), options_.test_fs_type);
         if (!type.empty()) {
             return Status::failed(dir + " is on " + type + ", where a lock is not trusted to keep a second "
                                   "nexus-server out; keep the server's directory on a local disk (--dir, or HOME)");
@@ -369,17 +368,9 @@ public:
         }
         // The lock checked where it is: a second exclusive lock on another descriptor of the same directory must be
         // refused now. Granted, this filesystem does not keep locks, whatever its type said.
-        Fd again(::openat(fd.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
-        if (again.get() < 0) {
-            return os_error("open", dir);
-        }
-        const bool granted = options_.test_locks_ignored || ::flock(again.get(), LOCK_EX | LOCK_NB) == 0;
-        if (granted || errno != EWOULDBLOCK) {
-            return Status::failed("locks on " + dir + " are not kept: a second exclusive lock was " +
-                                  (granted ? std::string("granted") : "neither granted nor refused (" +
-                                   std::string(std::strerror(errno)) + ")") + " while this process held one, so a "
-                                  "second nexus-server would not be kept out; keep the server's directory on a local "
-                                  "disk (--dir, or HOME)");
+        Status kept = locks_kept(fd.get(), dir, "a second nexus-server", options_.test_locks_ignored);
+        if (!kept.is_ok()) {
+            return kept;
         }
         // The gate goes as `gate` closes: readers may start again, and are refused by the store's lock while it is held.
         out = std::make_unique<PosixLock>(fd.release(), roots_, dir);
@@ -624,6 +615,25 @@ private:
 };
 
 } // namespace
+
+std::string unlockable_filesystem(int dirfd, const std::string& test_fs_type) {
+    return test_fs_type.empty() ? unlockable_by_type(dirfd) : unlockable_name(test_fs_type);
+}
+
+Status locks_kept(int dirfd, const std::string& dir, const std::string& who, bool test_locks_ignored) {
+    Fd again(::openat(dirfd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (again.get() < 0) {
+        return os_error("open", dir);
+    }
+    const bool granted = test_locks_ignored || ::flock(again.get(), LOCK_EX | LOCK_NB) == 0;
+    if (granted || errno != EWOULDBLOCK) {
+        return Status::failed("locks on " + dir + " are not kept: a second exclusive lock was " +
+                              (granted ? std::string("granted") : "neither granted nor refused (" +
+                               std::string(std::strerror(errno)) + ")") + " while this process held one, so " + who +
+                              " would not be kept out; keep the server's directory on a local disk (--dir, or HOME)");
+    }
+    return Status::ok();
+}
 
 std::unique_ptr<Fs> make_posix_fs(PosixOptions options) {
     return std::make_unique<PosixFs>(std::move(options));

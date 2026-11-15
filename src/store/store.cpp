@@ -9,14 +9,6 @@ namespace nexus::store {
 
 namespace {
 
-// The formats this build writes, and the oldest format of a reader each declares it can be read by (store.h). Every
-// older format is still read. 3 and 4 frame each change, entry and session by its length, so that a later format's
-// additions are skipped by this build, as long as that format declares this one can read it.
-constexpr std::uint8_t kRecordFormat = 3;       // 2: by session, unframed; 1: a friend tab's, by name, migrated
-constexpr std::uint8_t kRecordReader = 3;       // the oldest record format a reader must know to read ours
-constexpr std::uint8_t kSnapshotFormat = 4;     // 3: by session, unframed; 2: friend tabs; 1: before drivers
-constexpr std::uint8_t kSnapshotReader = 4;
-
 // The entry kinds the unframed formats had: Person 0, Friend 1, Notice 2. A later kind (Tool 3) comes only in a framed
 // format, and a framed format may hold kinds this build does not know: they are kept as they are, and the server shows
 // them as notices (server/durable.cpp).
