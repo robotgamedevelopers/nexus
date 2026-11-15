@@ -690,15 +690,18 @@ jobs:
   # labelled model runs in exactly one shard: each shard names its tests by regex (`run`, less `skip`) and builds only
   # the walks they run (`build`), and the last, window, takes every test no other shard names, so a new test is never
   # missed. `--no-tests=error` fails a shard whose regex matches nothing. The largest instances each have a shard of
-  # their own, on eight TLC workers, timed two at a time on a loaded tlc runner host (the CMakeLists beside them give
-  # the times); supervisor switch and place and link ensure are capped at 75 s, not 60, which keeps their jobs well
-  # inside the 2 minutes. The tab label's traces need the window's logic, which does not build on Linux at Prax's pin
-  # (build-and-unit-linux says why), so they run on macOS (model-label).
+  # their own (SHARD in their CMakeLists, which give the times and worker counts), capped at 80 s: the 2 minutes less
+  # the worst setup seen before the tests step (29 s) and the steps after, so TLC's cap, not the job's, ends a run that
+  # is starved. Their timeouts (2026-11-15, 50 runs: 21 of ~240 model jobs in the last hour, 14 on one host) were runs
+  # starved by other repositories' jobs on the same host (9 of them alongside a timed-out shard on average, 2.8 beside
+  # one that passed), not instances grown past their caps. The tab label's traces need the window's logic, which does
+  # not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS (model-label).
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
     # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
-    # past their 60 s. A shard waiting for a runner is not counted in its 2 minutes.
+    # past their 60 s. Which machines carry the label is the fleet record's (the busiest is kept off it). A shard
+    # waiting for a runner is not counted in its 2 minutes.
     runs-on: [self-hosted, fleet, Linux, X64, tlc]
     timeout-minutes: 2
     strategy:
@@ -755,12 +758,17 @@ jobs:
           - shard: secrets-trace
             run: '^tlc_secrets_trace_'
             build: secrets_walk
+          # The board's scroller and the overlay: their specs, witnesses and walks (about 25 short tests), split from
+          # window, which ran 50 s at p50 and 112 s at worst with them.
+          - shard: glide-overlay
+            run: '^tlc_(glide|overlay)_'
+            build: overlay_walk glide_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
-            build: trace_walk overlay_walk glide_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|claude|witness|secrets)'
+            build: trace_walk
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|claude|witness|secrets|glide|overlay)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

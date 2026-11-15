@@ -52,9 +52,10 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 # tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
-#          [WORKERS w] [NIGHTLY] [CAP s] [LABEL] [OVERLAY])
+#          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
-# `ctest -j <cores>` keeps one TLC worker per core.
+# `ctest -j <cores>` keeps one TLC worker per core. SHARD marks an instance that has a CI model shard of its own and
+# caps it at that shard's budget (80 s; the function says how it is derived).
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at
 # s instead, nightly or not; a per-commit cap stays well inside the CI job's 2 minutes (.github/workflows/ci.yml, the
@@ -80,7 +81,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS"
+    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS;SHARD"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP" "" ${ARGN})
     set(models_dir "${PROJECT_SOURCE_DIR}/models")
     set(tlc_script "${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake")
@@ -92,6 +93,13 @@ function(tlc_test name module cfg expect)
     if(T_NIGHTLY)
         set(label model_nightly)
         set(cap 300)
+    endif()
+    # SHARD: the instance is the only test of its CI model shard, so the shard's 2 minutes are its budget. 120 s, less
+    # the shard's setup before the tests step (checkout, Java and jar check, configure: p90 14 s, worst 29 s over 50
+    # runs of each such shard, 2026-11-15) and the steps after it (2-3 s), leaves 88 s; 80 s keeps a margin, so TLC's
+    # own cap (which says how far it got) fires before the job is cancelled. A cap is the run's limit, not its time.
+    if(T_SHARD)
+        set(cap 80)
     endif()
     if(T_CAP)
         set(cap ${T_CAP})

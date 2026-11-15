@@ -55,15 +55,17 @@ set_tests_properties(sync_unit PROPERTIES LABELS unit TIMEOUT 30)
 # workers); MCLinkWide.cfg, two windows over two sessions, one action each, an open entry grown once and a restart
 # (171,304 states, 1 min 15 s); MCLinkSessionsWide.cfg, MCLinkSessions.cfg with three actions (240,308 states, 1 min).
 # Per commit on eight workers each, timed two at a time on a loaded tlc runner host (16 cores): two windows 21 s, one
-# window 12 s, tabs 20 s, ensure 32 s (62 s on four workers there, so it is capped at 75 s).
-tlc_test(tlc_link_two_windows MCLink MCLink.cfg      pass WORKERS 8)
-tlc_test(tlc_link_one_window  MCLink MCLinkOne.cfg   pass WORKERS 8)
+# window 12 s, tabs 20 s, ensure 32 s. Alone on an idle 16-thread host (amd-2, 2026-11-15), eight workers against four:
+# ensure 16.2 s / 124 CPU s against 28.9 / 116, two windows 11.7 / 88 against 19.4 / 77, so they keep eight. Each has
+# a CI shard of its own (SHARD: capped at the shard's budget, 80 s).
+tlc_test(tlc_link_two_windows MCLink MCLink.cfg      pass WORKERS 8 SHARD)
+tlc_test(tlc_link_one_window  MCLink MCLinkOne.cfg   pass WORKERS 8 SHARD)
 tlc_test(tlc_link_grow        MCLink MCLinkGrow.cfg  pass WORKERS 4)
-tlc_test(tlc_link_tabs        MCLink MCLinkTabs.cfg  pass WORKERS 8)
+tlc_test(tlc_link_tabs        MCLink MCLinkTabs.cfg  pass WORKERS 8 SHARD)
 tlc_test(tlc_link_stops       MCLink MCLinkStops.cfg pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_link_wide        MCLink MCLinkWide.cfg  pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_link_sessions    MCLink MCLinkSessions.cfg pass WORKERS 4)
-tlc_test(tlc_link_ensure      MCLink MCLinkEnsure.cfg pass WORKERS 8 CAP 75)
+tlc_test(tlc_link_ensure      MCLink MCLinkEnsure.cfg pass WORKERS 8 SHARD)
 tlc_test(tlc_link_sessions_wide MCLink MCLinkSessionsWide.cfg pass WORKERS 8 NIGHTLY)
 
 # Reversed witnesses: each broken variant must be rejected by the property named.

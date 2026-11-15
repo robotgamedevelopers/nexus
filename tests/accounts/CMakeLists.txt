@@ -34,8 +34,10 @@ endforeach()
 # MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (131,024
 # distinct states, 20 s). Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
 # distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
-# Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores).
-tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8)
+# Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores); alone on an idle
+# one (amd-2, 2026-11-15) 16.2 s / 124 CPU s, against 26.3 s / 106 on four. In a CI shard of its own (SHARD: capped at
+# the shard's budget, 80 s).
+tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)
