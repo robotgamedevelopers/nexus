@@ -979,10 +979,10 @@ void signIn() {
     std::string url = loginUrl(node);
     CHECK(!url.empty() && has(url, control.url));
     // Never cut: a buffer one byte short is refused.
-    char small[512];
+    char tooShort[512];
     char err[512];
-    if (url.size() < sizeof small) {
-        CHECK(nts_login_url(node, small, url.size(), err, sizeof err) == -1 && has(err, "never cut"));
+    if (url.size() < sizeof tooShort) {
+        CHECK(nts_login_url(node, tooShort, url.size(), err, sizeof err) == -1 && has(err, "never cut"));
     }
     nts_status st{};
     CHECK(nts_status_get(node, &st, err, sizeof err) == 0 && st.state == NTS_STATE_NEEDS_LOGIN);
