@@ -1,0 +1,54 @@
+# Primes the Tailscale shim's CI caches (docs/tailscale.md, layer 0). The shim is not on main yet, so on main this
+# workflow has nothing to build: it exists here so that GitHub can dispatch it, which it does only for a workflow on the
+# default branch. A dispatch for another ref runs that ref's own tailscale-prime.yml, so a branch that adds the shim
+# brings the full workflow with it, and a per-commit job on a machine not yet primed dispatches it for its commit
+# (.github/tailscale-dispatch.sh). The inputs are the full workflow's, so a dispatch made for either is valid here.
+#   by hand   gh workflow run tailscale-prime.yml --ref <branch> [-f os=linux] [-f sha=<commit>]
+
+name: tailscale-prime
+
+on:
+  schedule:
+    - cron: "41 8 * * *"
+  workflow_dispatch:
+    inputs:
+      os:
+        description: which OS to prime
+        type: choice
+        options: [all, macos, linux, windows]
+        default: all
+      sha:
+        description: the commit to build (empty for the branch's tip)
+        type: string
+        default: ""
+      cold:
+        description: measure a cold Windows build (one slot, a fresh key directory removed after; primes nothing there)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tailscale-prime-${{ inputs.os || 'all' }}-${{ inputs.sha || github.sha }}${{ inputs.cold && '-cold' || '' }}
+  cancel-in-progress: false
+
+jobs:
+  nothing-to-prime:
+    runs-on: [self-hosted, fleet, Linux, X64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.sha }}
+          sparse-checkout: src/tailscale
+      - name: Nothing to prime without the shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f src/tailscale/pins.cmake ]; then
+            echo "::error::this commit has the Tailscale shim (src/tailscale/pins.cmake) but runs the tailscale-prime.yml that has none to build; the commit's own tailscale-prime.yml must build it"
+            exit 1
+          fi
+          echo "Nothing to prime: this commit has no Tailscale shim (src/tailscale)."
