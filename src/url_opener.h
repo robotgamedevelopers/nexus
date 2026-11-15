@@ -23,7 +23,9 @@ public:
     using Open = std::function<void(const std::string& url)>;
 
     explicit UrlOpener(Open open);
-    // Drops what is still queued (wiped) and waits for the one being opened, if any.
+    // Drops what is still queued (wiped) and waits for the one being opened, if any, for 2 s at most: a system call
+    // stuck longer is left to finish on the opener's thread, detached (it holds the shared queue and its own `open`,
+    // nothing of the opener's), so that the window closes all the same.
     ~UrlOpener();
     UrlOpener(const UrlOpener&) = delete;
     UrlOpener& operator=(const UrlOpener&) = delete;

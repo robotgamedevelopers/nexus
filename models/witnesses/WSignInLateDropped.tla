@@ -13,7 +13,7 @@ PrintDropsLate(a, v) ==
             /\ proc' = [proc EXCEPT ![a] = NoProc] /\ procs' = [procs EXCEPT ![a] = @ - 1]
             /\ log' = {[id |-> i, event |-> "late"]}
             /\ UNCHANGED <<next, flow, cbs, badcb, signedin, losses, up, file, held, disk, failures, taken, lost,
-                           restarts>>
+                           restarts, ask>>
             /\ UNCHANGED win
 
 BrokenSpec == Init /\ [][ServerNextWith(Need, Receive, PrintDropsLate, Timeout) \/ WindowNextWith(Redirect, Stray)]_vars

@@ -77,12 +77,13 @@ VARIABLES
     lost,       \* ghost: the flows whose held token went with a restart
     restarts,   \* how many times the server restarted
     said,       \* ghost: the token each flow's process printed, in time or late
-    log         \* the lines the last step wrote to server.log
+    log,        \* the lines the last step wrote to server.log
+    ask         \* each account's paste asked for in the window instead of a sign-in (the secret dialog), while open
 
 vars == <<next, flow, proc, procs, cbs, badcb, signedin, losses, conn, armed, view, claimed, opened, browser, gate, up,
-          file, held, disk, failures, taken, lost, restarts, said, log>>
+          file, held, disk, failures, taken, lost, restarts, said, log, ask>>
 win == <<conn, armed, view, claimed, opened, browser, gate>>
-srv == <<next, flow, proc, procs, cbs, badcb, signedin, losses>>
+srv == <<next, flow, proc, procs, cbs, badcb, signedin, losses, ask>>
 store == <<file, held, disk, failures, taken, lost, restarts, said>>
 
 None == "none"
@@ -134,6 +135,7 @@ Init ==
     /\ restarts = 0
     /\ said = [i \in Ids |-> None]
     /\ log = {}
+    /\ ask = [a \in Accounts |-> FALSE]
 
 ----------------------------------------------------------------------------
 \* The server.
@@ -144,24 +146,42 @@ NeedWith(B(_), a) ==
     /\ flow' = [flow EXCEPT ![next] = [st |-> "needed", acct |-> a, opener |-> None, denied |-> FALSE]]
     /\ next' = next + 1
     /\ log' = {[id |-> next, event |-> "needed"]}
-    /\ UNCHANGED <<proc, procs, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<proc, procs, cbs, badcb, signedin, losses, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
-Need(a) == NeedWith(LAMBDA x : LiveOf(x) = {} /\ held[x] = None, a)
+\* No flow while a paste is asked for the account (the desk is busy with it: Hub::needSignIn).
+Need(a) == NeedWith(LAMBDA x : LiveOf(x) = {} /\ held[x] = None /\ ~ask[x], a)
 
 \* A signed-in account loses its login: its driver said no credential, or its year ended.
 Lose(a) ==
     /\ signedin[a] /\ losses < MaxLosses
     /\ signedin' = [signedin EXCEPT ![a] = FALSE] /\ losses' = losses + 1 /\ log' = {}
-    /\ UNCHANGED <<next, flow, proc, procs, cbs, badcb, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, flow, proc, procs, cbs, badcb, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
+
+\* Flow i's process, if one serves it, is told to end (it ends a step later: End).
+Kill(i) ==
+    LET a == flow[i].acct IN
+    IF proc[a].id = i /\ proc[a].st # "none"
+    THEN proc' = [proc EXCEPT ![a].ending = TRUE] /\ UNCHANGED procs
+    ELSE UNCHANGED <<proc, procs>>
 
 \* No linked window reads sign-ins (each is from a build before them), so the account is asked for by a paste instead
-\* (Hub::signInWindowsChanged, SignInDesk::fallBack): a needed flow, which no window holds and no process serves, ends
-\* dropped. The paste itself is the Secrets model's; here the account simply stays without a login until a later need.
+\* (Hub::signInWindowsChanged, SignInDesk::fallBack): a flow no window holds ends dropped, needed or running (its window
+\* went away, and none left could take it over), its process told to end, and the paste is asked for at once, unless the
+\* account is signed in or its login is held. The paste itself is the Secrets model's: here it is open (ask) until it
+\* ends (AskEnds), or until a login for the account is stored, which closes it.
 FallBack(i) ==
-    /\ flow[i].st = "needed"
-    /\ flow' = [flow EXCEPT ![i].st = "dropped"]
+    /\ flow[i].st \in Live /\ flow[i].opener = None
+    /\ LET a == flow[i].acct IN
+       /\ flow' = [flow EXCEPT ![i].st = "dropped"]
+       /\ Kill(i)
+       /\ ask' = [ask EXCEPT ![a] = @ \/ (~signedin[a] /\ held[a] = None)]
     /\ log' = {[id |-> i, event |-> "dropped"]}
-    /\ UNCHANGED <<next, proc, procs, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+
+\* The paste asked for ends without a value: the person cancels it, or its deadline passes.
+AskEnds(a) ==
+    /\ ask[a] /\ ask' = [ask EXCEPT ![a] = FALSE] /\ log' = {}
+    /\ UNCHANGED <<next, flow, proc, procs, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
 
 \* A claim the server takes. For a needed flow it starts the account's process; for a running one no window holds, the
 \* window takes it over and nothing starts; any other is late.
@@ -210,7 +230,7 @@ ReceiveWith(C(_), O(_), B(_), m) ==
     /\ CASE m.kind = "claim"    -> C(m) /\ UNCHANGED <<cbs, badcb>>
          [] m.kind = "opened"   -> O(m) /\ UNCHANGED <<proc, procs, cbs, badcb>>
          [] m.kind = "callback" -> B(m) /\ UNCHANGED procs
-    /\ UNCHANGED <<next, signedin, losses>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, signedin, losses, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
 Receive(m) == ReceiveWith(ClaimCorrect, OpenedCorrect, CallbackCorrect, m)
 
@@ -220,14 +240,16 @@ Url(a) ==
     /\ proc' = [proc EXCEPT ![a].st = "url"]
     /\ flow' = [flow EXCEPT ![proc[a].id].st = "url-sent"]
     /\ log' = {[id |-> proc[a].id, event |-> "url"]}
-    /\ UNCHANGED <<next, procs, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, procs, cbs, badcb, signedin, losses, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
-\* The token, captured from the process's output straight into the one-chance store: durable now, or held.
-\* W(a, v) is what the store does with it.
+\* The token, captured from the process's output straight into the one-chance store: durable now, or held. Durable,
+\* the account is signed in, and a paste asked for it is answered and closed (SecretDesk::satisfied): nobody is asked
+\* to paste a login that is there. W(a, v) is what the store does with it.
 WriteCorrect(a, v) ==
     IF disk = "ok"
     THEN /\ file' = [file EXCEPT ![a] = v] /\ signedin' = [signedin EXCEPT ![a] = TRUE] /\ UNCHANGED held
-    ELSE /\ held' = [held EXCEPT ![a] = v] /\ UNCHANGED <<file, signedin>>
+         /\ ask' = [ask EXCEPT ![a] = FALSE]
+    ELSE /\ held' = [held EXCEPT ![a] = v] /\ UNCHANGED <<file, signedin, ask>>
 
 \* The process prints its token. In time (its flow running), the flow is captured. Late (the flow ended while the
 \* process, told to end, still ran: its deadline passed during the callback, or in the grace after), the token is
@@ -259,7 +281,7 @@ Exit(a) ==
        /\ flow' = [flow EXCEPT ![i].st = IF flow[i].denied THEN "cancelled" ELSE "failed", ![i].opener = None]
        /\ log' = {[id |-> i, event |-> IF flow[i].denied THEN "cancelled" ELSE "failed"]}
     /\ proc' = [proc EXCEPT ![a] = NoProc] /\ procs' = [procs EXCEPT ![a] = @ - 1]
-    /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
 \* A running flow's deadline passes: it expires, and its process is told to end (K(i)); it ends a step later (End).
 TimeoutWith(K(_), i) ==
@@ -267,13 +289,7 @@ TimeoutWith(K(_), i) ==
     /\ flow' = [flow EXCEPT ![i].st = "expired", ![i].opener = None]
     /\ K(i)
     /\ log' = {[id |-> i, event |-> "expired"]}
-    /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
-
-Kill(i) ==
-    LET a == flow[i].acct IN
-    IF proc[a].id = i /\ proc[a].st # "none"
-    THEN proc' = [proc EXCEPT ![a].ending = TRUE] /\ UNCHANGED procs
-    ELSE UNCHANGED <<proc, procs>>
+    /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
 Timeout(i) == TimeoutWith(Kill, i)
 
@@ -282,13 +298,15 @@ End(a) ==
     /\ proc[a].st # "none" /\ proc[a].ending
     /\ proc' = [proc EXCEPT ![a] = NoProc] /\ procs' = [procs EXCEPT ![a] = @ - 1]
     /\ log' = {}
-    /\ UNCHANGED <<next, flow, cbs, badcb, signedin, losses, up>> /\ UNCHANGED win /\ UNCHANGED store
+    /\ UNCHANGED <<next, flow, cbs, badcb, signedin, losses, up, ask>> /\ UNCHANGED win /\ UNCHANGED store
 
-\* A held token is written again: the disk takes it, the account is signed in, and the memory of it is wiped.
+\* A held token is written again: the disk takes it, the account is signed in (a paste asked for it closed), and the
+\* memory of it is wiped.
 Retry(a) ==
     /\ held[a] # None /\ disk = "ok"
     /\ file' = [file EXCEPT ![a] = held[a]] /\ held' = [held EXCEPT ![a] = None]
     /\ signedin' = [signedin EXCEPT ![a] = TRUE]
+    /\ ask' = [ask EXCEPT ![a] = FALSE]
     /\ log' = {}
     /\ UNCHANGED <<next, flow, proc, procs, cbs, badcb, losses, up, disk, failures, taken, lost, restarts, said>>
     /\ UNCHANGED win
@@ -313,6 +331,7 @@ Restart ==
     /\ held' = [a \in Accounts |-> None]
     /\ lost' = lost \cup {i \in Ids : taken[i] # None /\ held[flow[i].acct] = taken[i]}
     /\ log' = {[id |-> i, event |-> "dropped"] : i \in {j \in Ids : flow[j].st \in Live}}
+    /\ ask' = [a \in Accounts |-> FALSE]
     /\ UNCHANGED <<next, cbs, badcb, signedin, losses, up, file, disk, failures, taken, said>> /\ UNCHANGED win
 
 ----------------------------------------------------------------------------
@@ -382,7 +401,7 @@ RedirectWith(G(_, _, _), c, i, ok) ==
                        ELSE proc
             /\ UNCHANGED <<up, gate>>
     /\ UNCHANGED <<conn, armed, view, claimed, opened>>
-    /\ UNCHANGED <<next, flow, procs, cbs, badcb, signedin, losses>> /\ UNCHANGED store /\ Quiet
+    /\ UNCHANGED <<next, flow, procs, cbs, badcb, signedin, losses, ask>> /\ UNCHANGED store /\ Quiet
 
 Redirect(c, i, ok) == RedirectWith(GateCorrect, c, i, ok)
 
@@ -394,14 +413,15 @@ StrayCorrect(c) == UNCHANGED <<up, gate>>
 Stray(c) == StrayWith(StrayCorrect, c)
 
 \* A window loses its link or quits: its gate closes. The server sees the link end and lets go of the flows the
-\* window held, so that another window (or this one, back) can take them over; nothing starts for that.
+\* window held, so that another window can take them over (this one, back, claims none it claimed before: claimed
+\* keeps them); nothing starts for that.
 Disconnect(c) ==
     /\ conn[c]
     /\ conn' = [conn EXCEPT ![c] = FALSE] /\ view' = [view EXCEPT ![c] = {}]
     /\ armed' = [armed EXCEPT ![c] = FALSE] /\ gate' = [gate EXCEPT ![c] = 0]
     /\ flow' = [i \in Ids |-> IF flow[i].opener = c THEN [flow[i] EXCEPT !.opener = None] ELSE flow[i]]
     /\ UNCHANGED <<claimed, opened, browser, up>> /\ UNCHANGED store /\ Quiet
-    /\ UNCHANGED <<next, proc, procs, cbs, badcb, signedin, losses>>
+    /\ UNCHANGED <<next, proc, procs, cbs, badcb, signedin, losses, ask>>
 
 Connect(c) ==
     /\ ~conn[c] /\ conn' = [conn EXCEPT ![c] = TRUE]
@@ -410,7 +430,7 @@ Connect(c) ==
 ----------------------------------------------------------------------------
 
 ServerNextWith(N(_), R(_), P(_, _), T(_)) ==
-    \/ \E a \in Accounts : N(a) \/ Lose(a) \/ Url(a) \/ Exit(a) \/ End(a) \/ Retry(a)
+    \/ \E a \in Accounts : N(a) \/ Lose(a) \/ Url(a) \/ Exit(a) \/ End(a) \/ Retry(a) \/ AskEnds(a)
     \/ \E a \in Accounts, v \in Tokens : P(a, v)
     \/ \E m \in up : R(m)
     \/ \E i \in Ids : T(i) \/ FallBack(i)
@@ -450,6 +470,7 @@ TypeOK ==
     /\ taken \in [Ids -> Tokens \cup {None}] /\ said \in [Ids -> Tokens \cup {None}]
     /\ lost \subseteq Ids /\ badcb \subseteq Ids
     /\ disk \in {"ok", "failing"}
+    /\ ask \in [Accounts -> BOOLEAN]
 
 \* At most one flow is live for an account, and at most one `claude setup-token` runs for it.
 OneFlowPerAccount == \A a \in Accounts : Cardinality(LiveOf(a)) <= 1
@@ -482,6 +503,8 @@ HeldOnlyCaptured ==
     \A a \in Accounts : held[a] # None => \E i \in Ids : flow[i].acct = a /\ taken[i] = held[a]
 \* Signed in means a login is in the file.
 SignedInHasLogin == \A a \in Accounts : signedin[a] => file[a] # None
+\* Nobody is asked to paste the login of an account that is signed in.
+NoAskWhenSignedIn == \A a \in Accounts : signedin[a] => ~ask[a]
 \* No token reaches server.log or any window's state.
 NoTokenInLog == \A x \in log : NoValueIn(x)
 NoTokenToWindows == \A c \in Clients : \A p \in view[c] : NoValueIn(p)

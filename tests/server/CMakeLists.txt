@@ -106,7 +106,8 @@ if(NOT WIN32)
     target_compile_options(signin_functional PRIVATE ${warnings})
     target_include_directories(signin_functional PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     add_dependencies(signin_functional nexus_fake_claude nexus-signin-open)
-    foreach(case same_machine printed_url forwarded declined api_key stopped unguarded gate_in_use gate_v6_in_use late crashed)
+    foreach(case same_machine printed_url forwarded declined api_key stopped unguarded gate_in_use gate_v6_in_use late crashed
+                 forwarded_v6 quick_exit group)
         file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/signin-${case})
         add_test(NAME signin_functional_${case}
                  COMMAND signin_functional $<TARGET_FILE:nexus_fake_claude> $<TARGET_FILE:nexus-signin-open> ${case}

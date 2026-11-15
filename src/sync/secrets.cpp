@@ -368,6 +368,23 @@ SecretEffects SecretDesk::retry(std::uint64_t now, SecretKeeper& keeper) {
     return out;
 }
 
+SecretEffects SecretDesk::satisfied(const std::string& account, const std::string& what) {
+    SecretEffects out;
+    for (std::size_t i = 0; i < open_.size();) {
+        const SecretRequest r = open_[i];
+        if (r.account != account || r.what != what) {
+            ++i;
+            continue;
+        }
+        out.replies.push_back(SecretReply{r.id, askers_[r.id], true, std::string(), r.account, r.what});
+        out.notes.push_back(SecretNote{r.id, r.asker, "stored", r.account,
+            note(r, "is there already: the account was signed in in the browser, so nothing needs pasting")});
+        out.log.push_back(SecretLog{r.id, r.account, "satisfied", "signed in in the browser"});
+        end(i, SecretState::Stored, out);
+    }
+    return out;
+}
+
 SecretEffects SecretDesk::drop() {
     SecretEffects out;
     while (!open_.empty()) {

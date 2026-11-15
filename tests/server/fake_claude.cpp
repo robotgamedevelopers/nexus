@@ -6,11 +6,14 @@
 //
 // - It checks what the runner promises: a terminal on 0, 1 and 2; CLAUDE_CONFIG_DIR, an existing directory; BROWSER
 //   set; no ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN. Any broken: it exits 3.
-// - It listens on loopback (on <port> with one, else any port), and makes up a sign-in URL whose redirect_uri is
-//   http://localhost:<that port>/callback; with mode `forward` the redirect names another, free port, as on another
-//   machine, and the test's replay port is <port>.
-// - It hands the URL to $BROWSER (modes `helper`, `forward`, `deny`, `apikey`), or prints it in its
-//   terminal (`print`), or does both (`both`), the way the real program falls back; `silent` gives it to nobody.
+// - It listens on loopback (on <port> with one, else any port), on 127.0.0.1 alone, and makes up a sign-in URL whose
+//   redirect_uri is http://localhost:<that port>/callback; with mode `forward` the redirect names another, free port,
+//   as on another machine, and the test's replay port is <port>; `forward6` is the same listening on [::1] alone.
+// - It hands the URL to $BROWSER (modes `helper`, `forward`, `forward6`, `deny`, `apikey`, `quick`, `group`), or prints
+//   it in its terminal (`print`), or does both (`both`), the way the real program falls back; `silent` gives it to
+//   nobody.
+// - With mode `quick` it exits the moment its token is printed; with `group` it first starts a process of its own, in
+//   its process group, that ignores a hangup (its pid in grandchild.pid beside the program's name).
 // - It takes the one GET on /callback: with its state and code `fakeCode...`, it prints a made-up token (an API key's
 //   shape with `apikey`), between terminal escapes, and exits 0; with `error=...` it prints that sign-in was declined
 //   and exits 1; any other request (a wrong path or state) ends it: exit 5, as a wrong request would end a real login.
@@ -68,6 +71,50 @@ int listenOn(std::uint16_t port, std::uint16_t* bound) {
     return s;
 }
 
+// On [::1] alone (IPV6_V6ONLY), as a program whose `localhost` resolved to IPv6 first does.
+int listenOn6(std::uint16_t port, std::uint16_t* bound) {
+    const int s = socket(AF_INET6, SOCK_STREAM, 0);
+    if (s < 0) {
+        return -1;
+    }
+    int on = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+    setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on);
+    sockaddr_in6 a{};
+    a.sin6_family = AF_INET6;
+    a.sin6_port = htons(port);
+    a.sin6_addr = in6addr_loopback;
+    socklen_t len = sizeof a;
+    if (bind(s, reinterpret_cast<const sockaddr*>(&a), sizeof a) != 0 || listen(s, 4) != 0 ||
+            getsockname(s, reinterpret_cast<sockaddr*>(&a), &len) != 0) {
+        close(s);
+        return -1;
+    }
+    *bound = ntohs(a.sin6_port);
+    return s;
+}
+
+// A process of the program's own (as a real one may leave a helper running), in its process group, that ignores the
+// hangup its terminal's end sends: only a signal to the group ends it. Its pid goes to grandchild.pid beside the
+// program's name, for the test to watch.
+void spawnGrandchild(const std::string& self) {
+    const pid_t pid = fork();
+    if (pid == 0) {
+        signal(SIGHUP, SIG_IGN);
+        for (int i = 0; i < 600; ++i) {
+            usleep(100000);
+        }
+        _exit(0);
+    }
+    if (pid > 0) {
+        const std::string path = self.substr(0, self.rfind('/') + 1) + "grandchild.pid";
+        if (std::FILE* f = std::fopen(path.c_str(), "w")) {
+            std::fprintf(f, "%ld\n", static_cast<long>(pid));
+            std::fclose(f);
+        }
+    }
+}
+
 bool terminal(int fd) { return isatty(fd) == 1; }
 
 bool environmentAsPromised() {
@@ -114,12 +161,15 @@ int main(int argc, char** argv) {
         mode = mode.substr(0, dash);
     }
     std::uint16_t bound = 0;
-    const int listener = listenOn(port, &bound);
+    const int listener = mode == "forward6" ? listenOn6(port, &bound) : listenOn(port, &bound);
     if (listener < 0) {
         return 6;
     }
+    if (mode == "group") {
+        spawnGrandchild(argv[0]);
+    }
     std::uint16_t redirect = bound;
-    if (mode == "forward") {
+    if (mode == "forward" || mode == "forward6") {
         // A port free now, which the window's gate binds: the redirect as from another machine.
         std::uint16_t other = 0;
         const int probe = listenOn(0, &other);
@@ -190,6 +240,9 @@ int main(int argc, char** argv) {
                 "Your OAuth token (valid for 1 year):\r\n\r\n\x1b[33m%s\x1b[0m\r\n\r\n"
                 "Store this token securely.\r\n", mode == "apikey" ? kApiKey : kToken);
     std::fflush(stdout);
+    if (mode == "quick") {
+        return 0;       // at once: what it printed is still in the terminal when its exit is seen
+    }
     // As the real program may: a moment before it exits, its output read meanwhile.
     usleep(50000);
     return 0;

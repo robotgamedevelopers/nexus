@@ -4,7 +4,7 @@
 EXTENDS MCSignIn
 
 WriteDrops(a, v) ==
-    IF disk = "ok" THEN WriteCorrect(a, v) ELSE UNCHANGED <<file, signedin, held>>
+    IF disk = "ok" THEN WriteCorrect(a, v) ELSE UNCHANGED <<file, signedin, held, ask>>
 
 BrokenSpec == Init /\ [][ServerNextWith(Need, Receive, LAMBDA a, v : PrintWith(WriteDrops, a, v), Timeout) \/
                          WindowNextWith(Redirect, Stray)]_vars

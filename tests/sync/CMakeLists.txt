@@ -135,8 +135,9 @@ tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg in
 # SignIn.tla with every safety property, the windows' views never holding a login and no log line any value. The
 # faulty walks (a takeover that starts a second process, a callback replayed twice, a gate that takes a stray request)
 # must each be rejected by the rule they break, on the code's own record. The claim fault runs on seed 2: seed 1's walk
-# takes no takeover since the walk gained the late print and the fallback, so its fault is never played.
-foreach(seed 1 2 3 4)
+# takes no takeover since the walk gained the late print and the fallback, so its fault is never played. Seed 22's walk
+# prints a login late while the paste the fallback asked for is open (it counts print-while-asked), which must close it.
+foreach(seed 1 2 3 4 22)
     tlc_test(tlc_signin_trace_seed_${seed} SignInTrace SignInTrace.cfg pass SIGNWALK SEED ${seed} STEPS 6000)
 endforeach()
 tlc_test(tlc_signin_trace_faulty_claim_rejected SignInTrace SignInTrace.cfg invariant

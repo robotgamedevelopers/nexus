@@ -1191,10 +1191,13 @@ void Hub::secretEffects(const SecretEffects& effects) {
             reask_.emplace_back(r.account, r.what);
         }
     }
-    // A login that became durable (at its answer or at a retry) signs its account in, without a restart.
+    // A login that became durable (at its answer or at a retry) signs its account in, without a restart. Any other ask
+    // for that login still open (a paste asked for while the browser's sign-in ran) is answered and closed: nobody is
+    // asked to paste a login that is there (models/SignIn.tla NoAskWhenSignedIn).
     for (const SecretRequest& r : effects.stored) {
         const accounts::Account* a = accounts_ ? accounts_->account(r.account) : nullptr;
         if (a != nullptr && r.what == loginFile(a->provider)) {
+            secretEffects(desk_.satisfied(r.account, r.what));
             reportSignedIn(r.account, true);
             if (responder_ != nullptr) {
                 responder_->signedIn(r.account);

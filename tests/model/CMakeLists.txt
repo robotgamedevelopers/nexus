@@ -520,6 +520,7 @@ tlc_test(tlc_signin_witness_stray_hostile WSignInStrayForwards WSignInStrayHosti
 tlc_test(tlc_signin_witness_replay_any WSignInStrayForwards WSignInReplayAny.cfg invariant
          PROPERTY CallbackOnlyMatching)
 tlc_test(tlc_signin_witness_drop_token WSignInDropToken WSignInDropToken.cfg invariant PROPERTY TokenNeverDropped)
+tlc_test(tlc_signin_witness_ask_kept WSignInAskKept WSignInAskKept.cfg invariant PROPERTY NoAskWhenSignedIn)
 tlc_test(tlc_signin_witness_token_in_log WSignInTokenInLog WSignInTokenInLog.cfg invariant PROPERTY NoTokenInLog)
 tlc_test(tlc_signin_witness_no_timeout WSignInNoTimeout WSignInNoTimeout.cfg liveness)
 tlc_test(tlc_signin_witness_need_twice WSignInNeedTwice WSignInNeedTwice.cfg invariant PROPERTY OneFlowPerAccount)

@@ -246,6 +246,10 @@ public:
     // else held and written again by retry(); never dropped, and never in any effect. Nobody is answered.
     SecretEffects capture(std::uint64_t id, const std::string& account, const std::string& what,
                           const SecretValue& value, SecretKeeper& keeper, std::uint64_t now);
+    // `account`'s `what` became durable by another way than these requests (the browser's sign-in captured its login):
+    // every open request for it is answered stored and closed, so nobody is asked to paste what is there already. Its
+    // asker hears "stored", which is so; the request is remembered stored.
+    SecretEffects satisfied(const std::string& account, const std::string& what);
     // The server is ending: every open request is dropped, unanswered (its asker ends with the server), and every held
     // value is lost, logged "lost" (the one way a value that arrived is not stored). Expired requests are forgotten.
     SecretEffects drop();

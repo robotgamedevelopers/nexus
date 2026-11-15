@@ -1321,7 +1321,7 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
 // The fake's values (tests/server/fake_claude.h), repeated here so that this file needs nothing of the server's tests.
 const char* const kFakeState = "fakeStateQm8vTrXw4kGdHbN2pL7cJ9sZ1aE6";
 const char* const kFakeCode = "fakeCodePw3kGdHbX5rT8yU2iO4mN7qW1eR9";
-const char* const kFakeToken = "sk-ant-oat01-FAKEtokenZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iUyTrEwQaSdFgHjKlZxCvBnM-AA";
+const char* const kFakeToken = "sk-ant-oat01-FAKEtokenZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iUyTrEwQaSdFgHjKlZxCvBnMwPeRtYuIoPaSdFgHjKlZxCvBnMqWe-AA";
 
 const sync::SignInOffer* offerOf(const sync::Sessions& s, std::uint64_t id) {
     for (const sync::SignInOffer& o : s.offers()) {

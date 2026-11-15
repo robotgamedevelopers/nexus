@@ -19,8 +19,10 @@
 // token, or an API key one time in six, which the server refuses: the model's Exit; or exits; told to end, it may
 // still print, in time or late, which is taken all the same: the model's Print; or ends: the model's End), the browser
 // (each page a window opened, sent to the redirect once, signed in or declined), stray requests to a gate, the links,
-// the windows from before sign-ins (a moment with only those linked ends the needed flow: the model's FallBack; the
-// walk cancels the paste asked for instead, and asks again), the disk and the restarts. After each step it records the code's state as the model's variables (all but `log`, which the model
+// the windows from before sign-ins (a moment with only those linked ends the flow no window holds, needed or running,
+// and asks for a paste: the model's FallBack), the person cancelling that paste and the account asked for again (the
+// model's AskEnds, then Need), the disk and the restarts. After each step it records the code's state as the model's
+// variables (all but `log`, which the model
 // keeps per step; every log line is searched for every made-up value instead, and one found fails the walk).
 //
 // The server mints a fresh flow in the same call that ends one (Hub::signInEffects needAgain) and for every account
@@ -69,11 +71,17 @@ constexpr std::uint64_t kMaxFailures = 6;
 constexpr std::uint64_t kMaxLosses = 12;
 const char* const kNone = "none";
 
+// A made-up login of a subscription's length: `head`, filled out with `fill` (a letter each login has alone).
+std::string fakeLogin(std::string head, char fill) {
+    head.resize(sync::kSubscriptionTokenBytes, fill);
+    return head;
+}
+
 // The made-up logins: two of a subscription's shape (the model's t1, t2), and an API key's, which the server refuses.
-const std::vector<std::string> kLogins{"sk-ant-oat01-FAKEwalkTokOneQx7Lm2Vb9Nc4Zr8Tw3Ys6Ud1Pe5Kf0HgJjAA",
-                                       "sk-ant-oat01-FAKEwalkTokTwoWp4Hn8Rk2Bv6Mx9Cq3Lz7Gd5Fs1Jt0YuAA"};
+const std::vector<std::string> kLogins{fakeLogin("sk-ant-oat01-FAKEwalkTokOneQx7Lm2Vb9Nc4Zr8Tw3Ys6Ud1Pe5Kf0HgJj", 'q'),
+                                       fakeLogin("sk-ant-oat01-FAKEwalkTokTwoWp4Hn8Rk2Bv6Mx9Cq3Lz7Gd5Fs1Jt0Yu", 'z')};
 const std::vector<std::string> kTokens{"t1", "t2"};
-const std::string kApiKey = "sk-ant-api03-FAKEwalkKeyQx7Lm2Vb9Nc4Zr8Tw3Ys6Ud1Pe5Kf0HgJjAAAA";
+const std::string kApiKey = fakeLogin("sk-ant-api03-FAKEwalkKeyQx7Lm2Vb9Nc4Zr8Tw3Ys6Ud1Pe5Kf0HgJj", 'k');
 
 std::uint64_t rngState = 0;
 std::uint64_t rnd() {
@@ -332,6 +340,16 @@ struct Walk {
         return kNone;
     }
 
+    // The paste open for `account` (the model's ask): its request id, or 0.
+    std::uint64_t asked(const std::string& account) const {
+        for (const sync::SecretRequest& r : hub->secrets().open()) {
+            if (r.account == account) {
+                return r.id;
+            }
+        }
+        return 0;
+    }
+
     std::string tokenOfFile(const std::string& account) const {
         const auto it = keeper.files.find(account);
         if (it == keeper.files.end()) {
@@ -464,6 +482,7 @@ struct Walk {
             auto it = said.find(id);
             return val(it == said.end() ? std::string(kNone) : it->second);
         });
+        o << ", ask |-> " << byAcct([this](const std::string& a) { return b(asked(a) != 0); });
         return o.str();
     }
 
@@ -779,6 +798,9 @@ int main(int argc, char** argv) {
                 if (ending) {
                     ++counts["print-late"];
                 }
+                if (w.asked(a) != 0) {
+                    ++counts["print-while-asked"];
+                }
                 const std::size_t v = pick(kLogins.size());
                 std::set<std::uint64_t> before;
                 for (const sync::SecretRequest& r : w.hub->secrets().holding()) {
@@ -846,48 +868,61 @@ int main(int argc, char** argv) {
             }
             fields = "id |-> " + std::to_string(ended);
         } else if (choice < 880) {
-            // Only windows from before sign-ins are linked a moment: the needed flow ends and its account is asked for
-            // by a paste instead (the model's FallBack, one flow a step: so only with one needed). The person cancels
-            // the paste, so the account is needed again later.
-            std::vector<std::uint64_t> needed;
+            // Only windows from before sign-ins are linked a moment: a flow no window holds (needed, or running after
+            // its window went) ends, its process told to end, and its account is asked for by a paste instead (the
+            // model's FallBack, one flow a step: so only with one such flow). The paste stays open until "askend", or
+            // until a late login closes it.
+            std::vector<std::uint64_t> unheld;
             for (const auto& [id, f] : w.flows) {
-                if (w.hub->signIns().stateOf(id) == sync::SignInState::Needed) {
-                    needed.push_back(id);
+                const std::optional<sync::SignInState> s = w.hub->signIns().stateOf(id);
+                if (s && (*s == sync::SignInState::Needed || (sync::signInRunning(*s) && f.opener == kNone))) {
+                    unheld.push_back(id);
                 }
             }
             // A few a walk: each spends a flow id, and the walk ends when they run out.
-            if (needed.size() != 1 || counts["fallback"] >= 3) {
+            if (unheld.size() != 1 || counts["fallback"] >= 6) {
                 continue;
             }
-            const std::uint64_t i = needed[0];
+            const std::uint64_t i = unheld[0];
             const std::string acct = w.flows[i].acct;
+            const bool wasRunning = w.hub->signIns().stateOf(i) != sync::SignInState::Needed;
             op = "fallback";
             w.oldOnly = true;
             w.hub->signInWindowsChanged();
             w.oldOnly = false;
             if (w.hub->signIns().stateOf(i) != sync::SignInState::Dropped) {
-                fail("a needed flow did not end when only older windows were linked");
+                fail("a flow no window holds did not end when only older windows were linked");
             }
-            bool asked = false;
-            for (const sync::SecretRequest& r : w.hub->secrets().open()) {
-                if (r.account == acct) {
-                    asked = true;
-                    sync::Action cancel;
-                    cancel.kind = sync::ActionKind::SecretCancel;
-                    cancel.request = r.id;
-                    std::string why;
-                    w.hub->apply(cancel, &why, std::string());
-                    break;
+            if (wasRunning) {
+                ++counts["fallback-running"];
+                if (w.proc[acct].id == i && w.proc[acct].st != kNone && !w.proc[acct].ending) {
+                    fail("a running flow fell back to a paste, and its process was not told to end");
                 }
             }
-            if (!asked) {
-                fail("a needed flow ended for older windows, and no paste was asked for");
+            const bool expect = w.hub->signedIn().count(acct) == 0 && w.heldOf(acct) == kNone;
+            if (expect != (w.asked(acct) != 0)) {
+                fail(expect ? "a flow ended for older windows, and no paste was asked for" :
+                              "a paste was asked for an account signed in, or whose login is held");
             }
-            // A newer window back, an AI's `config sign-in`: the account is needed again (a "need" record after this).
-            std::string said;
-            w.hub->requestSignIn(acct, &said);
-            ++counts["fallback-reasked"];
             fields = "id |-> " + std::to_string(i);
+        } else if (choice < 888) {
+            // The paste asked for ends without a value (the person cancels it); then a newer window back, or an AI's
+            // `config sign-in`, needs the account again (a "need" record after this one, if it mints a flow).
+            const std::uint64_t r = w.asked(a);
+            if (r == 0) {
+                continue;
+            }
+            op = "askend";
+            sync::Action cancel;
+            cancel.kind = sync::ActionKind::SecretCancel;
+            cancel.request = r;
+            std::string why;
+            if (!w.hub->apply(cancel, &why, std::string())) {
+                fail("the hub refused a paste's cancel: " + why);
+            }
+            std::string said;
+            w.hub->requestSignIn(a, &said);
+            fields = "a |-> " + q(a);
         } else if (choice < 905) {
             if (w.hub->signedIn().count(a) == 0 || w.losses >= kMaxLosses) {
                 continue;

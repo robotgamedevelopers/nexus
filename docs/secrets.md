@@ -244,8 +244,10 @@ The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signi
    `sensible-browser`, `www-browser` and `x-www-browser`, and it is BROWSER too: it hands the URL to the server over a
    Unix socket in the server's directory (0600), with a nonce that names its flow, and opens nothing. Where the program
    opens a browser by a path of its own, the URL it prints in its terminal is taken instead (`UrlScanner`, which reads
-   past every terminal escape: CSI, OSC, DCS and the other strings, the two-byte and the charset-select forms, each
-   split across reads). A URL fails the flow unless it is https, to a host on Claude's sign-in list (`claude.com`,
+   the terminal's text as a terminal shows it: CSI, OSC, DCS and the other strings, the two-byte and the
+   charset-select forms, each split across reads, are never text, and every one of them, a colour change too, ends a
+   URL's run; a URL counts once its line stands, at its line feed, and a carriage return followed by anything else
+   starts the line over). A URL fails the flow unless it is https, to a host on Claude's sign-in list (`claude.com`,
    `platform.claude.com`, `claude.ai`, compared byte for byte, so a look-alike such as `claude.com.example` is
    refused), of printable bytes only, with a local redirect (http, localhost or 127.0.0.1, a port) and a state. The
    window checks the host against the same list before it opens anything.
@@ -278,14 +280,20 @@ The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signi
    guesses, not measurements). Where [::1] exists but its port is taken by another program, the gate fails with one
    plain line rather than listen on 127.0.0.1 alone (a browser that tries ::1 first would hand the callback to that
    program). The server replays the query once, from the holding window only, while the flow waits, only with the
-   URL's state (compared in constant time) and only of printable bytes, to the listener on its own 127.0.0.1; anything
-   else is dropped. The gate also closes when its flow leaves the window's state or the link is lost. A window binds
+   URL's state (compared in constant time) and only of printable bytes, to the listener on the redirect's own host and
+   port, on loopback alone: `localhost` on [::1] first, then 127.0.0.1, as a browser tries it; `127.0.0.1` on IPv4
+   alone; anything else is dropped. The token exchange that follows gets 30 s past the flow's deadline (a guess, not a
+   measurement) before its process is told to end. The gate also closes when its flow leaves the window's state or the link is lost. A window binds
    one gate at a time: a second page that needs one waits, queued, until the first's callback is taken or its flow
    leaves.
-6. **Captured.** The process prints the token. The server takes it from the terminal (`TokenScanner`, which holds a
-   few bytes at a time and wipes them, and takes only a run of the subscription login's shape, `sk-ant-oat01-` and
-   40 to 256 bytes in all, scanning on past anything else) and checks again that it is a subscription's login, not an
-   API key. It then puts the token straight into the one-chance store as a request of nexus's own (above: never
+6. **Captured.** The process prints the token. The server takes it from the terminal (`TokenScanner`, which holds at
+   most one login's bytes at a time and wipes them, and reads the terminal's text as `UrlScanner` does, but for a
+   colour change, which a run of the token goes on across). A candidate is a run of the subscription login's shape,
+   `sk-ant-oat01-` and its token bytes, exactly 108 bytes in all (the published shape, not a measured login: a run of
+   another length is passed over, and its length, never its bytes, is logged); a longer run is two things joined and
+   no candidate. It counts once its line stands; when the process has ended, by itself with status 0 or by the
+   server's stop, the last candidate printed is the login. The server checks again that it is a subscription's login,
+   not an API key. It then puts the token straight into the one-chance store as a request of nexus's own (above: never
    dropped, stored when durable, held and written again while the disk refuses it). The account is signed in, and
    each session held for want of a credential starts its driver. Sessions on the account read "was signed in in the
    browser". A token printed after its flow ended (the deadline passed while the browser was sent back, or in the
@@ -300,12 +308,14 @@ dropped makes a fresh flow at once, so the next show of the window starts the si
 | captured | the token was printed and is a subscription's login | "was signed in in the browser" |
 | cancelled | the person declined on the page, and the window's gate forwarded that | "declined on the page" |
 | failed | the process ended without a token (a decline on the server's own machine is this: the server never sees the redirect), its URL was refused, or what it printed was not a subscription's login | "ended without a login" |
-| expired | 10 minutes after its process started (a guess, not a measurement), its process ended | "was not finished in 10 minutes" |
+| expired | 10 minutes after its process started (a guess, not a measurement; 30 s more once the callback was forwarded, while the program exchanges the code for its login), its process ended | "was not finished in 10 minutes" |
 | dropped | the server ended; the account was signed in otherwise (a paste, its driver, a late token); or only windows from before sign-ins are linked, and a paste is asked for instead (Versions, below) | none |
 
-A window that closes or loses its link lets go of the flows it holds; the process keeps running, and the next window
-shown (or the same one, back) takes the flow over and opens the URL again. A window's gate that cannot bind its port
-shows one problem line in that window.
+A window that closes or loses its link lets go of the flows it holds; the process keeps running, and the next other
+window shown takes the flow over and opens the URL again. The same window, back, does not claim a flow it claimed
+before: that flow ends at its deadline, and the fresh one after it is offered at the next show. When the windows left
+linked are all from before sign-ins, a flow no window holds ends at once, its process ended, and a paste is asked for
+instead (Versions, below). A window's gate that cannot bind its port shows one problem line in that window.
 
 **The window.** Nothing new shows: no settings screen, no hint text. While an account has no login, its sessions'
 state cursor is red (AGENTS.md, "The state cursor"), and the notices above are the only words. All of the window's

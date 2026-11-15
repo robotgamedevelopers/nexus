@@ -21,7 +21,7 @@
 EXTENDS Integers, Sequences, TLC, SignInTraceData
 
 VARIABLES next, flow, proc, procs, cbs, badcb, signedin, losses, conn, armed, view, claimed, opened, browser, gate, up,
-          file, held, disk, failures, taken, lost, restarts, said, log, l
+          file, held, disk, failures, taken, lost, restarts, said, log, ask, l
 
 S == INSTANCE SignIn WITH Clients <- TraceClients, Remote <- TraceRemote, Accounts <- TraceAccounts,
                           Tokens <- TraceTokens, MaxFlows <- TraceMaxFlows, MaxRestarts <- TraceMaxRestarts,
@@ -55,12 +55,13 @@ Matches(k) ==
     /\ lost = r.lost
     /\ restarts = r.restarts
     /\ said = r.said
+    /\ ask = r.ask
 
 TraceMatches == Matches(l)
 
 \* TraceMatches by variable, before it in SignInTrace.cfg, so that a mismatch names the variable the code differs in.
 MatchServer == next = Trace[l].next /\ flow = Trace[l].flow /\ proc = Trace[l].proc /\ procs = Trace[l].procs /\
-               signedin = Trace[l].signedin /\ losses = Trace[l].losses
+               signedin = Trace[l].signedin /\ losses = Trace[l].losses /\ ask = Trace[l].ask
 MatchCallbacks == cbs = Trace[l].cbs /\ badcb = Trace[l].badcb
 MatchWindows == conn = Trace[l].conn /\ armed = Trace[l].armed /\ claimed = Trace[l].claimed /\
                 opened = Trace[l].opened /\ browser = Trace[l].browser
@@ -82,6 +83,7 @@ Step(r) ==
       [] r.op = "timeout"    -> S!Timeout(r.id)
       [] r.op = "fallback"   -> S!FallBack(r.id)
       [] r.op = "retry"      -> S!Retry(r.a)
+      [] r.op = "askend"     -> S!AskEnds(r.a)
       [] r.op = "diskfail"   -> S!DiskFails
       [] r.op = "diskheal"   -> S!DiskHeals
       [] r.op = "restart"    -> S!Restart
@@ -97,7 +99,7 @@ Step(r) ==
       [] OTHER               -> FALSE
 
 traceVars == <<next, flow, proc, procs, cbs, badcb, signedin, losses, conn, armed, view, claimed, opened, browser, gate,
-              up, file, held, disk, failures, taken, lost, restarts, said, log, l>>
+              up, file, held, disk, failures, taken, lost, restarts, said, log, ask, l>>
 
 TraceInit == l = 1 /\ S!Init
 
@@ -136,6 +138,7 @@ HeldOnlyCaptured == S!HeldOnlyCaptured
 EveryPrintTaken == S!EveryPrintTaken
 GateForEveryPage == S!GateForEveryPage
 SignedInHasLogin == S!SignedInHasLogin
+NoAskWhenSignedIn == S!NoAskWhenSignedIn
 NoTokenToWindows == S!NoTokenToWindows
 ProcessOnlyFromNeeded == S!ProcessOnlyFromNeeded
 EndedStaysEnded == S!EndedStaysEnded

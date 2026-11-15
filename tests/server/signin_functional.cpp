@@ -10,7 +10,11 @@
 //   same_machine   the helper hands the URL over; the browser's redirect goes straight to the program's listener
 //   printed_url    the program prints its URL instead (it opened a browser by a path of its own): the scanner takes it
 //   forwarded      the server on another machine: the gate takes the one callback (a stray request and a wrong state
-//                  first, each answered "not found", the program untouched), the runner replays it to the program
+//                  first, each answered "not found", the program untouched), the runner replays it to the program,
+//                  which listens on 127.0.0.1 alone (the replay tries [::1] first, then 127.0.0.1)
+//   forwarded_v6   the same, the program listening on [::1] alone
+//   quick_exit     the program exits the moment its token is printed: the runner reads its terminal before closing it
+//   group          the program leaves a process of its own running: stopped, or exiting, its whole group is ended
 //   declined       the person declines on the page: the program exits 1, and its end is reported
 //   api_key        the program prints an API key: the scanner passes it over, and the program's end is reported
 //   stopped        the flow ends before any URL: the process is ended, its end not reported, its directory removed
@@ -20,7 +24,8 @@
 //   late           the flow ends after the browser was sent back: the process, told to end, prints its token in the
 //                  grace, and the runner hands it over all the same
 //   crashed        a server ended without its runner's end: the next runner ends the program it left (it holds the
-//                  lock in .signin) and removes every .signin directory left behind
+//                  lock in .signin) and removes every .signin directory left behind, but none under an account entry
+//                  that is not itself a directory (a link)
 //
 // Each case also checks that the runner's log lines hold no byte of the URL's state, the code or the token, and that
 // the program saw none of the test's own API key variables (the fake exits 3 if it did).
@@ -160,8 +165,8 @@ void setUp(Run& r, const std::string& mode) {
     o.home = std::filesystem::current_path().string();
     o.path = "/usr/bin:/bin";
     o.now = nowMs;
-    if (mode.rfind("forward-", 0) == 0) {
-        o.replayPort = static_cast<std::uint16_t>(std::atoi(mode.c_str() + 8));
+    if (mode.rfind("forward", 0) == 0 && mode.find('-') != std::string::npos) {
+        o.replayPort = static_cast<std::uint16_t>(std::atoi(mode.c_str() + mode.find('-') + 1));
     }
     server::SignInRunner::Events e;
     e.url = [&r](const std::string&, std::uint64_t id, const sync::SecretValue& url) {
@@ -244,9 +249,26 @@ void sameMachine(const std::string& mode) {
 void caseSameMachine() { sameMachine("helper"); }
 void casePrintedUrl() { sameMachine("print"); }
 
-void caseForwarded() {
+// Whether this machine has an IPv6 loopback to listen on.
+bool hasIpv6Loopback() {
+    const int s = socket(AF_INET6, SOCK_STREAM, 0);
+    if (s < 0) {
+        return false;
+    }
+    sockaddr_in6 a{};
+    a.sin6_family = AF_INET6;
+    a.sin6_addr = in6addr_loopback;
+    const bool ok = bind(s, reinterpret_cast<const sockaddr*>(&a), sizeof a) == 0;
+    close(s);
+    return ok;
+}
+
+// The server on another machine (`mode` forward: the program listens on 127.0.0.1 alone; forward6: on [::1] alone):
+// the gate takes the one callback, and the runner replays it to the redirect's localhost, IPv6 loopback first, then
+// IPv4, so that it reaches the program whichever it listens on.
+void forwarded(const std::string& family) {
     const std::uint16_t listener = freePort();
-    const std::string mode = "forward-" + std::to_string(listener);
+    const std::string mode = family + "-" + std::to_string(listener);
     Run r;
     setUp(r, mode);
     sync::SignInTarget t;
@@ -283,7 +305,91 @@ void caseForwarded() {
     CHECK(r.gotToken && r.token.bytes() == fake_claude::kToken);
     CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
     CHECK(!r.exited);
+    for (const std::string& line : r.log) {
+        CHECK(line.find("not replayed") == std::string::npos);
+    }
     checkClean(r);
+}
+
+void caseForwarded() { forwarded("forward"); }
+
+void caseForwardedV6() {
+    if (!hasIpv6Loopback()) {
+        std::printf("signin_functional forwarded_v6: this machine has no IPv6 loopback; nothing to check\n");
+        return;
+    }
+    forwarded("forward6");
+}
+
+// The program prints its token and exits at once: what it printed is read from its terminal before the terminal is
+// closed (the runner drains it after it sees the exit), so the token is handed over.
+void caseQuickExit() {
+    for (int i = 0; i < 5; ++i) {
+        Run r;
+        setUp(r, "quick");
+        sync::SignInTarget t;
+        CHECK(startAndUrl(r, &t));
+        browserGet(t.port, callback(t.state, std::string("code=") + fake_claude::kCode));
+        CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
+        CHECK(r.gotToken && r.token.bytes() == fake_claude::kToken && !r.exited);
+        checkClean(r);
+    }
+}
+
+// The pid the `group` fake wrote, or -1.
+pid_t grandchildPid() {
+    FILE* f = std::fopen("bin/grandchild.pid", "r");
+    if (f == nullptr) {
+        return -1;
+    }
+    long v = -1;
+    if (std::fscanf(f, "%ld", &v) != 1) {
+        v = -1;
+    }
+    std::fclose(f);
+    return static_cast<pid_t>(v);
+}
+
+// Whether `pid` has ended (and been collected by init) within 5 s.
+bool endsSoon(pid_t pid) {
+    const std::uint64_t until = nowMs() + 5000;
+    while (nowMs() < until) {
+        if (kill(pid, 0) != 0 && errno == ESRCH) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+// A program that left a process of its own running (in its group, deaf to the hangup): stopped, its whole group is
+// ended; exiting after its token, its group is ended as it is collected. No process of a sign-in outlives it.
+void caseGroup() {
+    {
+        Run r;
+        setUp(r, "group");
+        sync::SignInTarget t;
+        CHECK(startAndUrl(r, &t));
+        const pid_t g = grandchildPid();
+        CHECK(g > 1 && kill(g, 0) == 0);
+        r.runner->stop("claude-main");
+        CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
+        CHECK(g > 1 && endsSoon(g));
+        checkClean(r);
+    }
+    {
+        Run r;
+        setUp(r, "group");
+        sync::SignInTarget t;
+        CHECK(startAndUrl(r, &t));
+        const pid_t g = grandchildPid();
+        CHECK(g > 1 && kill(g, 0) == 0);
+        browserGet(t.port, callback(t.state, std::string("code=") + fake_claude::kCode));
+        CHECK(pump(r, [&] { return !r.runner->running("claude-main"); }));
+        CHECK(r.gotToken && r.token.bytes() == fake_claude::kToken);
+        CHECK(g > 1 && endsSoon(g));
+        checkClean(r);
+    }
 }
 
 void caseDeclined() {
@@ -443,6 +549,11 @@ void caseCrashed() {
     if (odd != nullptr) {
         std::fclose(odd);
     }
+    // An account entry that is a link to a directory elsewhere (never ours to sweep): its .signin is left alone.
+    std::filesystem::remove_all("elsewhere", ec);
+    std::filesystem::create_directories("elsewhere/.signin");
+    std::filesystem::create_directory_symlink(std::filesystem::absolute("elsewhere"), "accounts/claude-link", ec);
+    CHECK(!ec);
     std::fflush(nullptr);
     const pid_t child = fork();
     if (child == 0) {
@@ -478,6 +589,7 @@ void caseCrashed() {
     CHECK(!std::filesystem::exists("accounts/claude-main/.signin"));
     CHECK(!std::filesystem::exists("accounts/claude-other/.signin"));
     CHECK(std::filesystem::is_regular_file("accounts/claude-odd/.signin"));
+    CHECK(std::filesystem::is_directory("elsewhere/.signin"));
     int ended = 0;
     int removed = 0;
     for (const std::string& line : r.log) {
@@ -506,7 +618,8 @@ const Case kCases[] = {
     {"same_machine", caseSameMachine}, {"printed_url", casePrintedUrl}, {"forwarded", caseForwarded},
     {"declined", caseDeclined},        {"api_key", caseApiKey},         {"stopped", caseStopped},
     {"unguarded", caseUnguarded},      {"gate_in_use", caseGateInUse},  {"late", caseLate},
-    {"gate_v6_in_use", caseGateV6InUse}, {"crashed", caseCrashed},
+    {"gate_v6_in_use", caseGateV6InUse}, {"crashed", caseCrashed}, {"forwarded_v6", caseForwardedV6},
+    {"quick_exit", caseQuickExit},     {"group", caseGroup},
 };
 
 } // namespace

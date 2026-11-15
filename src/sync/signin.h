@@ -39,6 +39,10 @@ namespace nexus::sync {
 // A flow's deadline: 10 minutes from its process's start. A guess, not a measurement: long enough to sign in, two-step
 // check included; short enough that a page left unfinished does not hold the account's process for long.
 constexpr std::uint64_t kSignInDeadlineMs = 10 * 60 * 1000;
+// How long past its deadline a flow whose callback went to the program's listener has before its process is told to
+// end: the program is exchanging the code for the login, a request of a second or so. A guess, not measured: many
+// times that, and short beside the deadline.
+constexpr std::uint64_t kSignInExchangeGraceMs = 30 * 1000;
 // The client name under which the store keeps the last flow id minted (SessionStore::applied), as kSecretIdsClient
 // keeps the secret requests': no window can take it, so an id is never reused across restarts.
 extern const char* const kSignInIdsClient;
@@ -60,6 +64,7 @@ struct SignInTarget {
     std::uint16_t port = 0;
     std::string path;           // the redirect's path, such as /callback
     std::string state;          // the URL's state
+    std::string host;           // the redirect's host: localhost or 127.0.0.1
     bool operator==(const SignInTarget&) const = default;
 };
 // Whether `host` is one of the hosts `provider`'s sign-in sends the browser to: one list per harness (claude:
@@ -169,15 +174,18 @@ public:
     void late(const std::string& account, SignInEffects* out);
     // The process of `account` ended with no token: its flow fails, or is cancelled when the person declined.
     SignInEffects exited(const std::string& account, std::uint64_t id, const std::string& why);
-    // Every running flow past its deadline expires, its process ended.
+    // Every running flow past its deadline expires, its process ended; one whose callback was forwarded has
+    // kSignInExchangeGraceMs more first.
     SignInEffects expire(std::uint64_t now);
-    // A window's link ended: the flows it held are let go of, for another window (or it, back) to take over.
+    // A window's link ended: the flows it held are let go of, for another window to take over (the same window, back,
+    // does not claim one again: SignInOpener claims each offer once).
     SignInEffects windowGone(const std::string& opener);
     // `account` was signed in otherwise (a paste, its driver): its flow ends, dropped, its process ended.
     SignInEffects signedIn(const std::string& account);
     // No linked window can sign an account in in the browser (each is of a format before sign-ins), so the hub asks
-    // for a paste instead: every needed flow (no process, no window holding it) ends, dropped, and its account is
-    // returned. models/SignIn.tla FallBack.
+    // for a paste instead: every needed flow (no process, no window holding it), and every running flow no window
+    // holds (its window went away), ends, dropped, its process ended, and its account is returned. models/SignIn.tla
+    // FallBack.
     std::vector<std::string> fallBack(SignInEffects* out);
     // The server is ending: every live flow is dropped and every process ended.
     SignInEffects drop();
@@ -208,6 +216,7 @@ private:
         bool denied = false;    // the callback replayed carried the person's refusal
     };
     Flow* byId(std::uint64_t id);
+    static std::uint64_t dueAt(const Flow& f);
     void end(const std::string& account, SignInState state, SignInEffects& out);
     std::map<std::string, Flow> flows_;             // the live flows, by account
     std::map<std::uint64_t, SignInState> ended_;    // the most recent flows ended, by id
@@ -305,41 +314,99 @@ private:
     bool used_[kConnections] = {};
 };
 
+// The text a terminal shows, read from its output a byte at a time (ECMA-48, as terminals do it), for the scanners
+// below. Each byte is hidden (inside an escape sequence, or a colour or style change, SGR, which leaves the text as it
+// was), shown (a byte the terminal prints or a control it acts on, CR and LF among them), or a break: every other
+// escape sequence (a cursor move, an erase, a title, a hyperlink, a charset select) ends where it ends, and the text on
+// either side of it is not one run. A string (OSC, DCS, SOS, PM, APC) ends at BEL, at ST (ESC \), at CAN or SUB, or at
+// an ESC that starts anything else, which then begins a sequence of its own; CAN or SUB also cancels a CSI or an escape
+// under way, and an ESC inside a CSI ends it and begins another.
+class TerminalText {
+public:
+    enum class Byte : std::uint8_t { Hidden, Shown, Break };
+    Byte step(char c);
+
+private:
+    Byte afterEscape(unsigned char u);
+    // 0 none; 1 after ESC; 2 in a CSI; 3 in a string; 4 in a string after ESC; 5 in an escape's intermediate bytes.
+    int escape_ = 0;
+    bool sgr_ = false;      // the CSI under way may be SGR: parameters alone so far
+};
+
 // Finds the sign-in URL `claude setup-token` also prints in its terminal, a few seconds after it hands it to `open`:
 // the server's fallback where the program opens a browser by a path of its own rather than the helper on its PATH. A
-// URL is taken only whole (ended by a space or a line's end) and only when parseSignInUrl accepts it. Holds no more of
-// the output than one URL's bytes, wiped as they go.
+// URL is a run of URL bytes (any escape sequence ends one, a colour change too, as a space or any byte no URL holds
+// does), taken only once
+// its line stands (an LF ends it; a CR followed by anything but LF starts the line over, and what was on it before is
+// not text) and only when parseSignInUrl accepts it: the first such. Holds no more of the output than one URL's bytes,
+// in a buffer reserved once and wiped as it goes.
 class UrlScanner {
 public:
-    explicit UrlScanner(std::string provider) : provider_(std::move(provider)) {}
+    explicit UrlScanner(std::string provider);
     bool feed(std::string_view bytes);
     bool found() const { return found_; }
     SecretValue take();
     ~UrlScanner();
+    UrlScanner(const UrlScanner&) = delete;
+    UrlScanner& operator=(const UrlScanner&) = delete;
 
 private:
+    void endRun();
+    void endLine();
     std::string provider_;
-    std::string text_;
+    std::string run_;           // the run of URL bytes under way, while it may be one; capacity reserved once
+    SecretValue line_;          // a URL on the line under way, taken when the line stands
     SecretValue url_;
     bool found_ = false;
-    int escape_ = 0;
+    bool cr_ = false;           // a CR was the last byte shown: the line stands at an LF, and starts over at anything else
+    TerminalText term_;
 };
 
-// Finds the token `claude setup-token` prints in what its terminal shows, escape sequences aside. Holds no more of the
-// output than the few bytes that may start a token cut between two reads, wiped as they go.
+// The length of a subscription's login, `sk-ant-oat01-` and its token bytes, in bytes: the one length taken. Not
+// measured (no real login is read here): it is the published shape of Anthropic's keys and tokens (13 bytes of prefix
+// and 95 of token), and the server logs the length of any login-shaped run it passes over, never its bytes, so that a
+// login of another length shows in server.log as such.
+constexpr std::size_t kSubscriptionTokenBytes = 108;
+
+// Finds the token `claude setup-token` prints in what its terminal shows (TerminalText). A candidate is a run of token
+// bytes from the login's prefix, of exactly kSubscriptionTokenBytes and a subscription login's shape (a longer run is
+// two things joined, and is no candidate); it counts once its line stands (an LF ends it; a CR followed by anything but
+// LF starts the line over, and what was on it before is not text). The login is the last such candidate printed, read
+// when the output has ended (finish()), so that an example line printed before it is not taken. Holds no more of the
+// output than one login's bytes, in a fixed buffer wiped as it goes.
 class TokenScanner {
 public:
-    // More of the terminal's output; true once the token is found (take() gives it).
-    bool feed(std::string_view bytes);
+    TokenScanner() = default;
+    TokenScanner(const TokenScanner&) = delete;
+    TokenScanner& operator=(const TokenScanner&) = delete;
+    // More of the terminal's output.
+    void feed(std::string_view bytes);
+    // The output has ended: true when a login was printed (take() gives the last one).
+    bool finish();
     bool found() const { return found_; }
     SecretValue take();
+    // How many candidates counted, and the length of the last login-shaped run passed over (0: none), for server.log.
+    std::size_t candidates() const { return candidates_; }
+    std::size_t passedOver() const { return passedOver_; }
     ~TokenScanner();
 
 private:
-    std::string text_;          // the output since the last cut, escape sequences out
+    void push(char c);
+    void endRun();
+    void endLine();
+    void wipeRun();
+    char run_[kSubscriptionTokenBytes] = {};    // the run under way: from the prefix once it is seen, else its last bytes
+    std::size_t runBytes_ = 0;
+    std::size_t runTotal_ = 0;  // how long the run is from the prefix on, past what the buffer holds
+    bool inToken_ = false;      // the run holds the prefix, at run_[0]
+    SecretValue line_;          // a candidate on the line under way
+    SecretValue last_;          // the last candidate whose line stood
     SecretValue token_;
+    std::size_t candidates_ = 0;
+    std::size_t passedOver_ = 0;
     bool found_ = false;
-    int escape_ = 0;            // 0 none; 1 after ESC; 2 in CSI; 3 in OSC; 4 in OSC after ESC
+    bool cr_ = false;
+    TerminalText term_;
 };
 
 } // namespace nexus::sync

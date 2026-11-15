@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 namespace nexus::sync {
 
@@ -12,20 +13,16 @@ const char* const kSignInIdsClient = "nexus:sign-ins";
 namespace {
 
 constexpr std::string_view kTokenPrefix = "sk-ant-";
-// A subscription's login: an OAuth token, "sk-ant-oat01-" and token bytes.
+// A subscription's login: an OAuth token, "sk-ant-oat01-" and token bytes, kSubscriptionTokenBytes in all.
 constexpr std::string_view kSubscriptionPrefix = "sk-ant-oat01-";
-// The shortest and longest login taken. A judgement, not measured against a real login (none is read here): a login is
-// about 100 bytes; anything much shorter is a line that names the prefix, and anything past 256 bytes is not one.
-constexpr std::size_t kTokenMinBytes = 40;
-constexpr std::size_t kTokenMaxBytes = 256;
 
 bool isTokenByte(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_';
 }
 
 bool isSubscriptionShape(std::string_view b) {
-    return b.size() >= kTokenMinBytes && b.size() <= kTokenMaxBytes && b.substr(0, kSubscriptionPrefix.size()) ==
-        kSubscriptionPrefix && std::all_of(b.begin(), b.end(), isTokenByte);
+    return b.size() == kSubscriptionTokenBytes && b.substr(0, kSubscriptionPrefix.size()) == kSubscriptionPrefix &&
+        std::all_of(b.begin(), b.end(), isTokenByte);
 }
 
 int hexValue(char c) {
@@ -171,9 +168,12 @@ bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarge
         return false;
     }
     std::string_view rest;
-    for (std::string_view prefix : {std::string_view("http://localhost:"), std::string_view("http://127.0.0.1:")}) {
+    std::string_view host;
+    for (std::string_view h : {std::string_view("localhost"), std::string_view("127.0.0.1")}) {
+        const std::string prefix = "http://" + std::string(h) + ":";
         if (std::string_view(redirect).substr(0, prefix.size()) == prefix) {
             rest = std::string_view(redirect).substr(prefix.size());
+            host = h;
         }
     }
     std::size_t digits = 0;
@@ -195,6 +195,7 @@ bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarge
     out->port = static_cast<std::uint16_t>(port);
     out->path = std::string(path);
     out->state = state;
+    out->host = std::string(host);
     return true;
 }
 
@@ -478,7 +479,7 @@ SignInEffects SignInDesk::expire(std::uint64_t now) {
     SignInEffects out;
     std::vector<std::string> due;
     for (const auto& [account, f] : flows_) {
-        if (signInRunning(f.state) && f.due <= now) {
+        if (signInRunning(f.state) && dueAt(f) <= now) {
             due.push_back(account);
         }
     }
@@ -512,7 +513,9 @@ SignInEffects SignInDesk::signedIn(const std::string& account) {
 std::vector<std::string> SignInDesk::fallBack(SignInEffects* out) {
     std::vector<std::string> accounts;
     for (const auto& [key, f] : flows_) {
-        if (f.state == SignInState::Needed) {
+        // A needed flow, and a running one that no window holds (its window went away): no window left could take it
+        // over, so its process is ended rather than left to its deadline.
+        if (f.state == SignInState::Needed || (signInRunning(f.state) && f.opener.empty())) {
             accounts.push_back(key);
         }
     }
@@ -552,11 +555,17 @@ std::vector<SignInOffer> SignInDesk::offers() const {
 std::optional<std::uint64_t> SignInDesk::deadline() const {
     std::optional<std::uint64_t> out;
     for (const auto& [account, f] : flows_) {
-        if (signInRunning(f.state) && (!out || f.due < *out)) {
-            out = f.due;
+        if (signInRunning(f.state) && (!out || dueAt(f) < *out)) {
+            out = dueAt(f);
         }
     }
     return out;
+}
+
+std::uint64_t SignInDesk::dueAt(const Flow& f) {
+    // A flow whose callback went to its listener is exchanging the code for the login: it gets a short grace past its
+    // deadline before its process is told to end, so that a login a moment from being printed is not cut off.
+    return f.state == SignInState::CallbackForwarded ? f.due + kSignInExchangeGraceMs : f.due;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -709,69 +718,134 @@ std::size_t GateSlots::used() const {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The terminal's text, escape sequences aside (ECMA-48): `escape` is 0 outside one; 1 after ESC; 2 in a CSI (ESC [,
-// to a final byte 0x40-0x7e); 3 in a string (OSC ESC ], DCS ESC P, SOS ESC X, PM ESC ^, APC ESC _: to BEL or ST); 4
-// in a string after ESC; 5 in an escape's intermediate bytes (0x20-0x2f, as in a charset select ESC ( B), to its
-// final byte. A two-byte escape (ESC 7, ESC =, ESC M) is ESC and its final byte. True when `c` is a byte the terminal
-// shows.
+// TerminalText
 
 namespace {
 
-bool visible(char c, int& escape) {
+constexpr unsigned char kEsc = 0x1b;
+constexpr unsigned char kCan = 0x18;
+constexpr unsigned char kSub = 0x1a;
+constexpr unsigned char kBel = 0x07;
+
+} // namespace
+
+TerminalText::Byte TerminalText::afterEscape(unsigned char u) {
+    if (u == kEsc) {
+        escape_ = 1;    // the first ESC is cut short; the second begins again
+        return Byte::Break;
+    }
+    if (u == kCan || u == kSub) {
+        escape_ = 0;
+        return Byte::Break;
+    }
+    if (u == '[') {
+        escape_ = 2;
+        sgr_ = true;
+        return Byte::Hidden;
+    }
+    if (u == ']' || u == 'P' || u == 'X' || u == '^' || u == '_') {
+        escape_ = 3;
+        return Byte::Hidden;
+    }
+    if (u >= 0x20 && u <= 0x2f) {
+        escape_ = 5;    // an intermediate byte, as in a charset select (ESC ( B): its final byte follows
+        return Byte::Hidden;
+    }
+    escape_ = 0;        // a two-byte escape (ESC 7, ESC =, ESC M) ends with this byte
+    return Byte::Break;
+}
+
+TerminalText::Byte TerminalText::step(char c) {
     const unsigned char u = static_cast<unsigned char>(c);
-    switch (escape) {
+    switch (escape_) {
         case 1:
-            if (u == 0x1b) {
-                escape = 1;
-            } else if (c == '[') {
-                escape = 2;
-            } else if (c == ']' || c == 'P' || c == 'X' || c == '^' || c == '_') {
-                escape = 3;
-            } else if (u >= 0x20 && u <= 0x2f) {
-                escape = 5;
-            } else {
-                escape = 0;     // a two-byte escape's final byte
-            }
-            return false;
+            return afterEscape(u);
         case 2:
+            if (u == kCan || u == kSub) {
+                escape_ = 0;
+                return Byte::Break;
+            }
+            if (u == kEsc) {
+                escape_ = 1;
+                return Byte::Break;
+            }
+            if (u >= 0x30 && u <= 0x3f) {
+                return Byte::Hidden;    // a parameter byte
+            }
+            if (u >= 0x20 && u <= 0x2f) {
+                sgr_ = false;           // an intermediate byte: not SGR
+                return Byte::Hidden;
+            }
             if (u >= 0x40 && u <= 0x7e) {
-                escape = 0;
+                escape_ = 0;
+                return u == 'm' && sgr_ ? Byte::Hidden : Byte::Break;
             }
-            return false;
+            if (u < 0x20) {
+                return Byte::Shown;     // a control inside a CSI is acted on, as terminals do
+            }
+            return Byte::Hidden;
         case 3:
-            if (u == 0x07) {
-                escape = 0;
-            } else if (u == 0x1b) {
-                escape = 4;
+            if (u == kBel || u == kCan || u == kSub) {
+                escape_ = 0;
+                return Byte::Break;
             }
-            return false;
+            if (u == kEsc) {
+                escape_ = 4;
+            }
+            return Byte::Hidden;
         case 4:
-            escape = c == '\\' ? 0 : 3;
-            return false;
-        case 5:
-            if (u == 0x1b) {
-                escape = 1;
-            } else if (u < 0x20 || u > 0x2f) {
-                escape = 0;     // the final byte
+            if (u == '\\') {
+                escape_ = 0;            // ST
+                return Byte::Break;
             }
-            return false;
+            // Any other byte after ESC ends the string, and the ESC begins a sequence of its own.
+            (void)afterEscape(u);
+            return Byte::Break;
+        case 5:
+            if (u == kCan || u == kSub) {
+                escape_ = 0;
+                return Byte::Break;
+            }
+            if (u == kEsc) {
+                escape_ = 1;
+                return Byte::Break;
+            }
+            if (u >= 0x20 && u <= 0x2f) {
+                return Byte::Hidden;
+            }
+            escape_ = 0;
+            return Byte::Break;
         default:
             break;
     }
-    if (u == 0x1b) {
-        escape = 1;
-        return false;
+    if (u == kEsc) {
+        escape_ = 1;
+        return Byte::Hidden;
     }
-    return true;
+    return Byte::Shown;
 }
-
-} // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------
 // UrlScanner
 
+namespace {
+
+constexpr std::string_view kUrlStart = "https://";
+
+bool isUrlByte(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    return u > 0x20 && u < 0x7f;
+}
+
+} // namespace
+
+UrlScanner::UrlScanner(std::string provider) : provider_(std::move(provider)) {
+    // Reserved once: the run never outgrows it, so no copy of its bytes is left behind by a growth.
+    run_.reserve(kSignInUrlBytes + 1);
+}
+
 UrlScanner::~UrlScanner() {
-    wipeBytes(text_);
+    wipeBytes(run_);
 }
 
 SecretValue UrlScanner::take() {
@@ -780,49 +854,89 @@ SecretValue UrlScanner::take() {
     return out;
 }
 
+void UrlScanner::endRun() {
+    if (run_.size() > kUrlStart.size() && run_.compare(0, kUrlStart.size(), kUrlStart) == 0 && line_.empty()) {
+        SignInTarget t;
+        if (parseSignInUrl(provider_, run_, &t)) {
+            line_ = SecretValue(run_);
+        }
+    }
+    wipeBytes(run_);
+}
+
+void UrlScanner::endLine() {
+    if (!found_ && !line_.empty()) {
+        url_ = std::move(line_);
+        found_ = true;
+    }
+    line_.clear();
+}
+
 bool UrlScanner::feed(std::string_view bytes) {
-    if (found_) {
-        return true;
-    }
-    constexpr std::string_view kStart = "https://";
     for (char c : bytes) {
-        if (!visible(c, escape_)) {
+        if (found_) {
+            break;
+        }
+        // Every escape sequence ends a URL's run, a colour change (SGR) too: a URL is never coloured part way along, and
+        // the words a colour change leads into are not the URL's (a token's run, below, goes on across an SGR).
+        if (term_.step(c) != TerminalText::Byte::Shown) {
+            endRun();
             continue;
         }
-        const unsigned char u = static_cast<unsigned char>(c);
-        const bool urlByte = u > 0x20 && u < 0x7f;
-        if (!urlByte) {
-            // A URL ends here, if one was being read.
-            if (text_.size() > kStart.size() && text_.compare(0, kStart.size(), kStart) == 0) {
-                SignInTarget t;
-                if (parseSignInUrl(provider_, text_, &t)) {
-                    url_ = SecretValue(text_);
-                    found_ = true;
-                    wipeBytes(text_);
-                    return true;
-                }
+        if (cr_) {
+            if (c == '\n') {
+                cr_ = false;
+                endLine();
+                continue;
             }
-            wipeBytes(text_);
+            if (c == '\r') {
+                continue;
+            }
+            cr_ = false;
+            line_.clear();      // the line starts over: what was on it is not text
+        }
+        if (c == '\r') {
+            endRun();
+            cr_ = true;
             continue;
         }
-        text_.push_back(c);
+        if (c == '\n') {
+            endRun();
+            endLine();
+            continue;
+        }
+        if (!isUrlByte(c)) {
+            endRun();
+            continue;
+        }
+        run_.push_back(c);
         // Only what may start a URL is kept: a run of URL bytes is dropped as soon as it cannot be one.
-        const std::size_t n = std::min(text_.size(), kStart.size());
-        if (text_.compare(0, n, kStart.substr(0, n)) != 0 || text_.size() > kSignInUrlBytes) {
-            wipeBytes(text_);
+        const std::size_t n = std::min(run_.size(), kUrlStart.size());
+        if (run_.compare(0, n, kUrlStart.substr(0, n)) != 0 || run_.size() > kSignInUrlBytes) {
+            wipeBytes(run_);
             if (c == 'h') {
-                text_.push_back(c);     // it may start one
+                run_.push_back(c);      // it may start one
             }
         }
     }
-    return false;
+    return found_;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // TokenScanner
 
 TokenScanner::~TokenScanner() {
-    wipeBytes(text_);
+    wipeRun();
+}
+
+void TokenScanner::wipeRun() {
+    volatile char* p = run_;
+    for (std::size_t i = 0; i < sizeof run_; ++i) {
+        p[i] = 0;
+    }
+    runBytes_ = 0;
+    runTotal_ = 0;
+    inToken_ = false;
 }
 
 SecretValue TokenScanner::take() {
@@ -831,47 +945,101 @@ SecretValue TokenScanner::take() {
     return out;
 }
 
-bool TokenScanner::feed(std::string_view bytes) {
+void TokenScanner::push(char c) {
+    if (!inToken_) {
+        // Before the prefix: its last bytes alone, which may be the prefix's start.
+        if (runBytes_ == kTokenPrefix.size()) {
+            std::memmove(run_, run_ + 1, runBytes_ - 1);
+            --runBytes_;
+        }
+        run_[runBytes_++] = c;
+        if (runBytes_ == kTokenPrefix.size() && std::string_view(run_, runBytes_) == kTokenPrefix) {
+            inToken_ = true;
+            runTotal_ = runBytes_;
+        }
+        return;
+    }
+    ++runTotal_;
+    if (runBytes_ < sizeof run_) {
+        run_[runBytes_++] = c;
+    }
+}
+
+void TokenScanner::endRun() {
+    if (inToken_) {
+        const std::string_view run(run_, runBytes_);
+        if (runTotal_ == kSubscriptionTokenBytes && isSubscriptionShape(run)) {
+            line_ = SecretValue(run);
+        } else {
+            passedOver_ = runTotal_;
+        }
+    }
+    wipeRun();
+}
+
+void TokenScanner::endLine() {
+    if (!line_.empty()) {
+        last_ = std::move(line_);
+        ++candidates_;
+    }
+    line_.clear();
+}
+
+void TokenScanner::feed(std::string_view bytes) {
     if (found_) {
-        return true;
+        return;
     }
     for (char c : bytes) {
-        if (visible(c, escape_)) {
-            text_.push_back(isTokenByte(c) ? c : '\n');
+        const TerminalText::Byte b = term_.step(c);
+        if (b == TerminalText::Byte::Hidden) {
+            continue;
+        }
+        if (b == TerminalText::Byte::Break) {
+            endRun();
+            continue;
+        }
+        if (cr_) {
+            if (c == '\n') {
+                cr_ = false;
+                endLine();
+                continue;
+            }
+            if (c == '\r') {
+                continue;
+            }
+            cr_ = false;
+            line_.clear();      // the line starts over: what was on it is not text
+        }
+        if (c == '\r') {
+            endRun();
+            cr_ = true;
+            continue;
+        }
+        if (c == '\n') {
+            endRun();
+            endLine();
+            continue;
+        }
+        if (isTokenByte(c)) {
+            push(c);
+        } else {
+            endRun();
         }
     }
-    // A token is the prefix and its bytes up to a byte that cannot be in one: until that byte arrives it may go on.
-    std::size_t at = text_.find(kTokenPrefix);
-    while (at != std::string::npos) {
-        std::size_t end = at;
-        while (end < text_.size() && isTokenByte(text_[end])) {
-            ++end;
-        }
-        if (end == text_.size()) {
-            break;      // not ended yet: keep it, and what follows decides
-        }
-        // Only a subscription's login, whole and of its shape, is taken; any other run (an API key, a line that names
-        // the prefix) is passed over, and the scan goes on.
-        if (isSubscriptionShape(std::string_view(text_).substr(at, end - at))) {
-            token_ = SecretValue(std::string_view(text_).substr(at, end - at));
+}
+
+bool TokenScanner::finish() {
+    if (!found_) {
+        endRun();
+        endLine();      // the line under way stands: nothing came after it
+        if (!last_.empty()) {
+            token_ = std::move(last_);
             found_ = true;
-            wipeBytes(text_);
-            return true;
         }
-        at = text_.find(kTokenPrefix, end);
+        last_.clear();
     }
-    // Keep only what may start a token: from an unended prefix on, or else the last few bytes.
-    std::size_t keep = at != std::string::npos ? at :
-        (text_.size() > kTokenPrefix.size() ? text_.size() - kTokenPrefix.size() : 0);
-    if (text_.size() - keep > 4096) {
-        keep = text_.size();    // a run of token bytes longer than any login: not one
-    }
-    if (keep > 0) {
-        std::string rest = text_.substr(keep);
-        wipeBytes(text_);
-        text_ = std::move(rest);
-    }
-    return false;
+    return found_;
 }
 
 } // namespace nexus::sync
+

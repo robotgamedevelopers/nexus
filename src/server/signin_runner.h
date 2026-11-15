@@ -12,9 +12,13 @@
 //   taken (sync::UrlScanner).
 //
 // The process's terminal output goes only through the scanners, which keep a few bytes at a time and wipe them: the
-// URL once (to the hub, then to the claiming window alone), the token once (straight to the one-chance store). Nothing
-// else of the output is kept, logged or shown. A window's callback is replayed once to the program's listener on the
-// server's loopback, its answer read and dropped. The runner never writes to the program's input.
+// URL once (to the hub, then to the claiming window alone), the token once the program has ended (the last login it
+// printed, straight to the one-chance store), its terminal read to the end first. Nothing else of the output is kept,
+// logged or shown. A window's callback is replayed once to the program's listener on the server's loopback (the
+// redirect's own host: localhost is tried on ::1, then on 127.0.0.1, as browsers do; 127.0.0.1 on that alone), its
+// answer read and dropped. The runner never writes to the program's input. The program runs in a process group of its
+// own, and the group is what is ended: by stop(), at its grace, and once the program has ended, so that nothing it
+// started outlives it.
 //
 // POSIX (a pty, poll, posix_spawn), like the rest of nexus-server: macOS and Linux, and Linux inside WSL2 on Windows.
 
@@ -26,6 +30,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -95,7 +100,6 @@ private:
         sync::TokenScanner token;
         sync::UrlScanner url{"claude"};     // the runner runs `claude setup-token`: its hosts
         bool urlSent = false;
-        bool printed = false;
         std::uint64_t killAt = 0;   // when SIGKILL follows the SIGTERM; 0: not ending
     };
     struct Helper {
@@ -107,9 +111,18 @@ private:
         int fd = -1;
         std::string out;            // the request still to write; wiped as it goes
         std::uint64_t until = 0;
+        bool sent = false;          // a byte of it went: the connection is made
+        std::uint16_t port = 0;
+        std::vector<int> families;  // the address families still to try, after the one `fd` is for
+        std::uint64_t id = 0;
+        std::string account;
     };
     void readTerminal(const std::string& account, Proc& p);
-    void reap(const std::string& account, Proc& p, bool reported);
+    // The process ended (its status, already collected) or is ended now: its terminal read to the end, its group
+    // ended, its directory removed, and its login handed over or its end reported (unless the flow ended first:
+    // `reported`).
+    void reap(const std::string& account, Proc& p, bool reported, std::optional<int> status);
+    bool connectReplay(Replay& r);
     void acceptHelper();
     void readHelper(Helper& h);
     std::uint64_t now() const;

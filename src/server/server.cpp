@@ -997,7 +997,8 @@ int Server::run() {
             if (it->link->ended()) {
                 std::fprintf(stderr, "nexus-server: link %llu ended by its client after %llu actions\n",
                     static_cast<unsigned long long>(it->id), static_cast<unsigned long long>(it->link->applied()));
-                // The sign-ins its window held are let go of, for another window (or it, back) to take over.
+                // The sign-ins its window held are let go of, for another window to take over; with none left that
+                // can, signInWindowsChanged ends them and asks for a paste.
                 hub_->signInWindowGone(it->signIn);
                 it = links_.erase(it);
                 linksEnded = true;

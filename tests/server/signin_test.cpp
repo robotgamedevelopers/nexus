@@ -54,8 +54,8 @@ const std::string kCode = "fakeCoPw3kGdHbX5rT8yU2iO4mN7qW1eR9";
 const std::string kOtherState = "fakeStOtherZ3xY6vB8nM1lK4jH7gF2dS";
 const std::string kUrl = "https://claude.com/cai/oauth/authorize?code=true&client_id=fake-client&response_type=code"
                          "&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&scope=user%3Ainference&state=" + kState;
-const std::string kToken = "sk-ant-oat01-fakeTkZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iU" + std::string(48, 'q') + "AA";
-const std::string kApiKey = "sk-ant-api03-fakeKyZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iU" + std::string(48, 'k') + "AA";
+const std::string kToken = "sk-ant-oat01-fakeTkZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iU" + std::string(55, 'q') + "AA";
+const std::string kApiKey = "sk-ant-api03-fakeKyZq8wX3cV6bN9mA2sD5fG7hJ1kL4pO0iU" + std::string(55, 'k') + "AA";
 const std::string kCallback = "code=" + kCode + "&state=" + kState;
 
 bool holds(const std::string& text, const std::string& part) {
@@ -129,17 +129,19 @@ void urls() {
 
     CHECK(sync::isClaimToken("abc123") && !sync::isClaimToken("") && !sync::isClaimToken("a-b") &&
           !sync::isClaimToken(std::string(sync::kSignInTokenBytes + 1, 'a')));
+    CHECK(kToken.size() == sync::kSubscriptionTokenBytes && kApiKey.size() == sync::kSubscriptionTokenBytes);
     CHECK(sync::isSubscriptionToken(secret(kToken)) && !sync::isSubscriptionToken(secret(kApiKey)));
     CHECK(!sync::isSubscriptionToken(secret("sk-ant-oat01-short")) &&
           !sync::isSubscriptionToken(secret(kToken + " trailing")));
-    // Its exact shape: "sk-ant-oat01-" and token bytes, 40 to 256 bytes in all.
+    // Its exact shape: "sk-ant-oat01-" and token bytes, kSubscriptionTokenBytes (108) in all, not one more or fewer.
     CHECK(!sync::isSubscriptionToken(secret("sk-ant-oat02-" + kToken.substr(13))) &&
           !sync::isSubscriptionToken(secret("sk-ant-oatx1-" + kToken.substr(13))) &&
           !sync::isSubscriptionToken(secret(kToken + std::string(256, 'q'))) &&
-          sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(243, 'q'))) &&
-          !sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(244, 'q'))) &&
-          sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(27, 'q'))) &&
-          !sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(26, 'q'))));
+          sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(95, 'q'))) &&
+          !sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(96, 'q'))) &&
+          !sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(94, 'q'))) &&
+          !sync::isSubscriptionToken(secret("sk-ant-oat01-" + std::string(94, 'q') + " ")) &&
+          !sync::isSubscriptionToken(secret(kToken.substr(0, 107) + "!")));
 
     // Same machine: a loopback server, or the server's host name the window's own (first label, case aside).
     CHECK(sync::sameMachine("localhost", "", "") && sync::sameMachine("me@127.0.0.1", "", ""));
@@ -453,95 +455,212 @@ void gate() {
 
 // ---------------------------------------------------------------------------------------------------------------------
 
+// What a token scanner fed `chunks` and then finished found: the login, or empty.
+std::string scanToken(const std::vector<std::string>& chunks, sync::TokenScanner* keep = nullptr) {
+    sync::TokenScanner own;
+    sync::TokenScanner& s = keep != nullptr ? *keep : own;
+    for (const std::string& c : chunks) {
+        s.feed(c);
+    }
+    return s.finish() ? s.take().bytes() : std::string();
+}
+
+// What a URL scanner fed `chunks` found: the URL, or empty.
+std::string scanUrl(const std::vector<std::string>& chunks) {
+    sync::UrlScanner s("claude");
+    for (const std::string& c : chunks) {
+        if (s.feed(c)) {
+            return s.take().bytes();
+        }
+    }
+    return std::string();
+}
+
+// `text` cut in two at every byte, and fed a byte at a time: the token scanner finds `want` (empty: nothing) each way.
+bool tokenEveryCut(const std::string& text, const std::string& want) {
+    bool ok = true;
+    for (std::size_t cut = 0; cut <= text.size(); ++cut) {
+        if (scanToken({text.substr(0, cut), text.substr(cut)}) != want) {
+            std::fprintf(stderr, "  cut at %zu of %zu\n", cut, text.size());
+            ok = false;
+        }
+    }
+    std::vector<std::string> bytes;
+    for (char c : text) {
+        bytes.emplace_back(1, c);
+    }
+    return ok && scanToken(bytes) == want;
+}
+
+bool urlEveryCut(const std::string& text, const std::string& want) {
+    bool ok = true;
+    for (std::size_t cut = 0; cut <= text.size(); ++cut) {
+        if (scanUrl({text.substr(0, cut), text.substr(cut)}) != want) {
+            std::fprintf(stderr, "  cut at %zu of %zu\n", cut, text.size());
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 void scanner() {
-    // The token as `claude setup-token` prints it, among colours, cursor moves, a title and the words around it, fed a
-    // byte at a time and cut at every place.
-    const std::string screen = "\x1b[2J\x1b[HOpening browser...\r\n\x1b]0;claude\x07\x1b[32m\xe2\x9c\x93 Long-lived "
-                               "token created\x1b[0m\r\n\r\nYour OAuth token (valid for 1 year):\r\n\r\n\x1b[1m" +
-                               kToken + "\x1b[22m\r\n\r\nStore this token securely.\r\n";
-    for (std::size_t cut = 0; cut <= screen.size(); cut += 7) {
+    const std::string E = "\x1b";
+    // A second made-up login, of the same shape: an example line printed before the login, in the cases that need two.
+    const std::string other = "sk-ant-oat01-fakeExQz7mV2cX9bN4lK8jH3gF6dS1aP5oI0uY" + std::string(55, 'x') + "AA";
+    CHECK(other.size() == sync::kSubscriptionTokenBytes);
+
+    // The token as `claude setup-token` prints it, among colours, cursor moves, a title and the words around it, cut
+    // at every place and fed a byte at a time. Nothing is taken before the output ends (finish()).
+    const std::string screen = E + "[2J" + E + "[HOpening browser...\r\n" + E + "]0;claude\x07" + E +
+                               "[32m\xe2\x9c\x93 Long-lived token created" + E + "[0m\r\n\r\nYour OAuth token (valid for "
+                               "1 year):\r\n\r\n" + E + "[1m" + kToken + E + "[22m\r\n\r\nStore this token securely.\r\n";
+    CHECK(tokenEveryCut(screen, kToken));
+    {
         sync::TokenScanner s;
-        const bool first = s.feed(std::string_view(screen).substr(0, cut));
-        const bool second = s.feed(std::string_view(screen).substr(cut));
-        CHECK(!first || cut >= screen.find(kToken) + kToken.size());
-        CHECK(second && s.found());
-        CHECK(s.take().bytes() == kToken);
+        s.feed(screen);
+        CHECK(!s.found() && s.candidates() == 1 && s.passedOver() == 0);
+        CHECK(s.finish() && s.take().bytes() == kToken);
     }
-    sync::TokenScanner bytewise;
-    for (char c : screen) {
-        bytewise.feed(std::string_view(&c, 1));
-    }
-    CHECK(bytewise.found() && bytewise.take().bytes() == kToken);
-    // Not ended yet: not found until a byte that cannot be in a token follows.
-    sync::TokenScanner open;
-    CHECK(!open.feed("token: " + kToken) && open.feed("\r\n") && open.take().bytes() == kToken);
+    // The line under way when the output ends stands: nothing came after it.
+    CHECK(scanToken({"token: " + kToken}) == kToken);
     // A line that names the prefix alone, and a run of token bytes longer than any login, are not a token.
-    sync::TokenScanner words;
-    CHECK(!words.feed("tokens start with sk-ant- and go on\r\n" + std::string(9000, 'a') + "\n"));
-    CHECK(!words.found());
-    // An escape sequence inside the token's bytes is skipped (a terminal's colour change mid-line).
-    sync::TokenScanner coloured;
-    CHECK(coloured.feed(kToken.substr(0, 20) + "\x1b[0m" + kToken.substr(20) + "\n") &&
-          coloured.take().bytes() == kToken);
-    // Every escape form, at every place around and inside the token, the whole fed split in two at every byte: a
-    // charset select (ESC and an intermediate byte, then its final byte), two-byte escapes, a CSI with parameters, and
-    // the strings (OSC to BEL or ST, DCS, SOS, PM, APC to ST). None of its bytes is taken as the terminal's text.
-    const std::vector<std::string> escapes{
-        "\x1b(B", "\x1b)0", "\x1b(0", "\x1b#8", "\x1b%G", "\x1b 7", "\x1b" "7", "\x1b" "8", "\x1b=", "\x1b>", "\x1bM",
-        "\x1b" "c", "\x1b[38;5;12m", "\x1b[?25l", "\x1b]0;title sk-ant-oat01-" + std::string(40, 'z') + "\x07",
-        "\x1b]8;;https://x.example\x1b\\", "\x1bPq#0;2;0;0;0sk-ant-oat01-" + std::string(40, 'd') + "\x1b\\",
-        "\x1bXsos\x1b\\", "\x1b^pm\x1b\\", "\x1b_apc sk-ant-oat01-" + std::string(40, 'a') + "\x1b\\"};
-    const std::vector<std::size_t> places{0, 3, 7, 13, 20, kToken.size() - 1, kToken.size()};
-    for (const std::string& esc : escapes) {
-        for (std::size_t at : places) {
-            const std::string text = "token:\r\n" + kToken.substr(0, at) + esc + kToken.substr(at) + "\r\n";
-            for (std::size_t cut = 0; cut <= text.size(); ++cut) {
-                sync::TokenScanner s;
-                s.feed(std::string_view(text).substr(0, cut));
-                s.feed(std::string_view(text).substr(cut));
-                const bool ok = s.found() && s.take().bytes() == kToken;
-                CHECK(ok);
-                if (!ok) {
-                    std::fprintf(stderr, "  escape %zu bytes at %zu, cut at %zu\n", esc.size(), at, cut);
-                }
+    CHECK(scanToken({"tokens start with sk-ant- and go on\r\n" + std::string(9000, 'a') + "\n"}).empty());
+
+    // The exact length: one byte fewer or more is no login, and its length (never its bytes) is what passedOver() says.
+    for (const std::size_t n : {sync::kSubscriptionTokenBytes - 1, sync::kSubscriptionTokenBytes + 1}) {
+        sync::TokenScanner s;
+        const std::string run = "sk-ant-oat01-" + std::string(n - 13, 'q');
+        CHECK(scanToken({"token:\r\n" + run + "\r\n"}, &s).empty() && s.passedOver() == n && s.candidates() == 0);
+    }
+
+    // A colour change (SGR) inside the token's bytes is hidden and the run goes on (a terminal's colour change mid-line);
+    // around it, too.
+    CHECK(tokenEveryCut(kToken.substr(0, 20) + E + "[0m" + kToken.substr(20) + "\n", kToken));
+    CHECK(tokenEveryCut(E + "[1;33m" + kToken + E + "[0m\r\n", kToken));
+    CHECK(tokenEveryCut(kToken.substr(0, 30) + E + "[38;5;12m" + kToken.substr(30) + "\n", kToken));
+
+    // Every other escape form is a break between runs: around the token it leaves it whole; inside it, it cuts it in
+    // two, and neither half is a login. A charset select (ESC, an intermediate byte, then its final byte), two-byte
+    // escapes, CSIs that are not SGR (a cursor move, an erase, a private mode, an SGR-like final with an intermediate),
+    // and the strings (OSC to BEL or ST, DCS, SOS, PM, APC to ST), whose bytes are never the terminal's text.
+    const std::vector<std::string> breaks{
+        E + "(B", E + ")0", E + "(0", E + "#8", E + "%G", E + " 7", E + "7", E + "8", E + "=", E + ">", E + "M", E + "c",
+        E + "[?25l", E + "[2K", E + "[1A", E + "[G", E + "[1C", E + "[5;1H", E + "[1 m",
+        E + "]0;title sk-ant-oat01-" + std::string(95, 'z') + "\x07", E + "]8;;https://x.example" + E + "\\",
+        E + "Pq#0;2;0;0;0sk-ant-oat01-" + std::string(95, 'd') + E + "\\", E + "Xsos" + E + "\\", E + "^pm" + E + "\\",
+        E + "_apc sk-ant-oat01-" + std::string(95, 'a') + E + "\\"};
+    const std::vector<std::size_t> inside{3, 7, 13, 20, kToken.size() - 1};
+    for (const std::string& esc : breaks) {
+        bool around = tokenEveryCut("token:\r\n" + esc + kToken + "\r\n", kToken) &&
+                      tokenEveryCut("token:\r\n" + kToken + esc + "\r\n", kToken) &&
+                      tokenEveryCut("token:\r\n" + esc + kToken + esc + "\r\n", kToken);
+        CHECK(around);
+        for (const std::size_t at : inside) {
+            const bool cut = tokenEveryCut("token:\r\n" + kToken.substr(0, at) + esc + kToken.substr(at) + "\r\n", "");
+            CHECK(cut);
+            if (!around || !cut) {
+                std::fprintf(stderr, "  escape of %zu bytes at %zu\n", esc.size(), at);
             }
         }
     }
-    // A first candidate that is not a subscription's login (an API key, a prefix too short to be one, a login of
-    // another kind) is passed over, and the scan goes on to the login.
-    for (const std::string& first : {kApiKey, std::string("sk-ant-oat01-short"),
-                                     "sk-ant-oat02-" + std::string(60, 'w'), "sk-ant-oat01-" + std::string(300, 'w')}) {
-        const std::string text = first + "\r\nYour OAuth token:\r\n" + kToken + "\r\n";
-        for (std::size_t cut = 0; cut <= text.size(); cut += 5) {
-            sync::TokenScanner s;
-            s.feed(std::string_view(text).substr(0, cut));
-            s.feed(std::string_view(text).substr(cut));
-            CHECK(s.found() && s.take().bytes() == kToken);
-        }
+
+    // The second reader's inputs (made up, of our login's length).
+    CHECK(tokenEveryCut("Your token:\r\n" + kToken + "\r\n", kToken));
+    CHECK(tokenEveryCut(E + "]0;title\x07" + kToken + "\n", kToken));                           // OSC title, BEL
+    CHECK(tokenEveryCut(E + "]8;;https://x" + E + "\\" + kToken + E + "]8;;" + E + "\\\n", kToken));   // OSC 8, ST
+    CHECK(tokenEveryCut(E + "Pq#0" + E + "\\" + kToken + "\n", kToken));                        // DCS, ST
+    CHECK(tokenEveryCut(E + "(B" + kToken + "\n", kToken));                                     // charset select
+    CHECK(tokenEveryCut(E + "7" + kToken + E + "8\n", kToken));                                 // ESC 7, ESC 8
+    CHECK(tokenEveryCut("\xe2\x9c\x93" + kToken + "\n", kToken));                               // a wide character
+    CHECK(tokenEveryCut(kToken + "\xcc\x81\n", kToken));                                        // a combining one
+    CHECK(tokenEveryCut(kToken + E + "[2K" + E + "[1A" + E + "[GStore it\n", kToken));          // erase, moves, text
+    CHECK(tokenEveryCut(kToken + E + "[1CStore\n", kToken));                                    // a cursor forward
+    CHECK(tokenEveryCut("Token" + E + "[5;1H" + kToken + "\n", kToken));                        // text, a move, token
+    // The token directly followed by letters is one run longer than a login: two things joined, no login.
+    {
+        sync::TokenScanner s;
+        CHECK(scanToken({kToken + "Store\n"}, &s).empty() && s.passedOver() == kToken.size() + 5);
+    }
+    // A placeholder overwritten by the token (a carriage return starts the line over).
+    CHECK(tokenEveryCut("sk-ant-oat01-PLACEHOLDER" + std::string(28, 'x') + "\r" + kToken + "\n", kToken));
+    // Two runs of the prefix: an example of another length, then the login; an API key, then the login.
+    CHECK(tokenEveryCut("e.g. sk-ant-oat01-" + std::string(40, 'x') + "\n" + kToken + "\n", kToken));
+    CHECK(tokenEveryCut(kApiKey + "\n" + kToken + "\n", kToken));
+    CHECK(scanToken({std::string(1 << 20, 'a') + "\n" + kToken + "\n"}) == kToken);           // 1 MB of junk first
+    CHECK(scanToken({"sk-ant-oat01-" + std::string(1 << 20, 'a') + "\n" + kToken + "\n"}) == kToken);
+    // A string that is not ended: an ESC that begins anything but ST ends it, and so do CAN and SUB.
+    CHECK(tokenEveryCut(E + "]0;title" + E + "[0m" + kToken + "\n", kToken));
+    CHECK(tokenEveryCut(E + "]0;title\x18" + kToken + "\n", kToken));
+    CHECK(tokenEveryCut(E + "]0;title\x1a" + kToken + "\n", kToken));
+    CHECK(tokenEveryCut(E + "Pq" + E + "[2K" + kToken + "\n", kToken));
+    // CAN inside a CSI cancels it: what follows is text.
+    CHECK(tokenEveryCut(E + "[12\x18" + kToken + "\n", kToken));
+    CHECK(tokenEveryCut("\x9b" "0m" + kToken + "\n", kToken));                                  // an 8-bit CSI before
+
+    // A carriage return starts the line over: a token followed by CR and other text was overwritten on screen, and is
+    // not taken; CR LF, and escapes after the CR (an erase to the line's end), leave the line standing.
+    CHECK(tokenEveryCut(kToken + "\r\n", kToken));
+    CHECK(tokenEveryCut(kToken + "\r" + E + "[K\n", kToken));
+    CHECK(tokenEveryCut(kToken + "\r\r\n", kToken));
+    CHECK(tokenEveryCut("Your token:\r\n" + kToken + "\rStore this token securely.\n", ""));
+    CHECK(tokenEveryCut("Your token:\r\n" + kToken + "\r" + E + "[2KStore this token securely.\n", ""));
+    // The token after the CR is what the line shows.
+    CHECK(tokenEveryCut(other + "\r" + kToken + "\n", kToken));
+
+    // More than one login printed: the last whose line stood, never a joined run.
+    CHECK(tokenEveryCut("For example:\r\n" + other + "\r\nYour token:\r\n" + kToken + "\r\n", kToken));
+    CHECK(tokenEveryCut(kToken + "\r\n" + other + "\r\n", other));
+    CHECK(tokenEveryCut(other + " " + kToken + "\n", kToken));
+    {
+        sync::TokenScanner s;
+        CHECK(scanToken({other + "\n" + kToken + "\n"}, &s) == kToken && s.candidates() == 2);
+    }
+    // Nothing after finish(): a second finish, or more output, changes nothing.
+    {
+        sync::TokenScanner s;
+        s.feed(kToken + "\n");
+        CHECK(s.finish() && s.finish());
+        s.feed(other + "\n");
+        CHECK(s.take().bytes() == kToken);
     }
 
     // The URL as the terminal prints it after its first try to open a browser: found whole, at any cut, among other
-    // links; a link that is not a sign-in URL with a local redirect is passed over.
-    const std::string printed = "\x1b[2mBrowser didn't open? Use the url below to sign in (c to copy)\x1b[0m\r\n"
-                                "https://docs.example/help hhttps://x\r\n\x1b[4m" + kUrl + "\x1b[24m\r\n";
-    for (std::size_t cut = 0; cut <= printed.size(); cut += 11) {
-        sync::UrlScanner u("claude");
-        u.feed(std::string_view(printed).substr(0, cut));
-        CHECK(u.feed(std::string_view(printed).substr(cut)) && u.take().bytes() == kUrl);
+    // links, once its line stands; a link that is not a sign-in URL with a local redirect is passed over.
+    const std::string printed = E + "[2mBrowser didn't open? Use the url below to sign in (c to copy)" + E +
+                                "[0m\r\nhttps://docs.example/help hhttps://x\r\n" + E + "[4m" + kUrl + E + "[24m\r\n";
+    CHECK(urlEveryCut(printed, kUrl));
+    {
+        sync::UrlScanner unended("claude");
+        CHECK(!unended.feed(kUrl) && !unended.feed(" ") && unended.feed("\n") && unended.take().bytes() == kUrl);
     }
-    sync::UrlScanner unended("claude");
-    CHECK(!unended.feed(kUrl) && unended.feed(" ") && unended.take().bytes() == kUrl);
-    sync::UrlScanner other("claude");
-    CHECK(!other.feed("see https://docs.example/a?state=s and https://claude.com/?redirect_uri=http://evil.example:1/c"
-                      "&state=s\n") && !other.found());
+    CHECK(scanUrl({"see https://docs.example/a?state=s and https://claude.com/?redirect_uri=http://evil.example:1/c"
+                   "&state=s\n"}).empty());
     // A sign-in shaped URL to a host not on the list is passed over, and the scan goes on to the one that is.
-    sync::UrlScanner lookalike("claude");
-    CHECK(!lookalike.feed("https://claude.com.evil.example/cai/oauth/authorize?redirect_uri=http://localhost:9/cb"
-                          "&state=" + kState + "\r\n") && !lookalike.found());
-    CHECK(lookalike.feed(kUrl + "\r\n") && lookalike.take().bytes() == kUrl);
-    // A charset select before the URL leaves none of its bytes in it.
-    sync::UrlScanner selected("claude");
-    CHECK(selected.feed("\x1b(B" + kUrl + "\x1b(0\r\n") && selected.take().bytes() == kUrl);
+    CHECK(urlEveryCut("https://claude.com.evil.example/cai/oauth/authorize?redirect_uri=http://localhost:9/cb&state=" +
+                      kState + "\r\n" + kUrl + "\r\n", kUrl));
+    // Every escape ends a URL's run, a colour change too: the URL before it is whole, the text after it is not the
+    // URL's; one inside it cuts it, and neither half is a sign-in URL.
+    for (const std::string& esc : {E + "(B", E + "[39m", E + "[0m", E + "[2K", E + "[1C", E + "7",
+                                   E + "]8;;https://x" + E + "\\"}) {
+        CHECK(urlEveryCut(esc + kUrl + esc + "Paste code here\r\n", kUrl));
+        CHECK(urlEveryCut(kUrl.substr(0, 30) + esc + kUrl.substr(30) + "\r\n", ""));
+    }
+    // A string not ended, then the URL: ended by the ESC that begins the CSI, by CAN or by SUB.
+    CHECK(urlEveryCut(E + "]0;title" + E + "[0m" + kUrl + "\n", kUrl));
+    CHECK(urlEveryCut(E + "]0;title\x18" + kUrl + "\n", kUrl));
+    // The second reader's: plain; split; then a colour change and words; inside a hyperlink that shows it too; a
+    // lookalike host.
+    CHECK(urlEveryCut("Open: " + kUrl + "\r\n", kUrl));
+    CHECK(urlEveryCut(kUrl + E + "[39mPaste code here\n", kUrl));
+    CHECK(urlEveryCut(E + "]8;;" + kUrl + E + "\\" + kUrl + E + "]8;;" + E + "\\\n", kUrl));
+    CHECK(scanUrl({"https://claude.ai.evil.com/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcb&state=s\n"}).empty());
+    // A URL inside a hyperlink's hidden part alone is not the terminal's text.
+    CHECK(scanUrl({E + "]8;;" + kUrl + E + "\\click here" + E + "]8;;" + E + "\\\n"}).empty());
+    // A carriage return starts the line over: a URL overwritten is not taken; CR LF leaves it standing.
+    CHECK(urlEveryCut(kUrl + "\r\n", kUrl));
+    CHECK(urlEveryCut(kUrl + "\r" + E + "[K\n", kUrl));
+    CHECK(urlEveryCut(kUrl + "\rPaste code here\n", ""));
+    CHECK(urlEveryCut("https://placeholder\r" + kUrl + "\n", kUrl));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -899,7 +1018,16 @@ void hub_late() {
     CHECK(s.act(sync::ActionKind::SignInOpened, 1, "w1"));
     CHECK(s.act(sync::ActionKind::SignInCallback, 1, "w1", kCallback));
     CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::CallbackForwarded);
+    // The callback forwarded, the process is exchanging the code for the login: at its deadline it gets the exchange's
+    // grace (kSignInExchangeGraceMs) before it is told to end; past that, it expires.
     s.now += sync::kSignInDeadlineMs;
+    CHECK(s.hub->signInDeadline() == s.now + sync::kSignInExchangeGraceMs);
+    s.hub->expireSignIns();
+    CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::CallbackForwarded && s.runner.stopped.empty());
+    s.now += sync::kSignInExchangeGraceMs - 1;
+    s.hub->expireSignIns();
+    CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::CallbackForwarded && s.runner.stopped.empty());
+    s.now += 1;
     s.hub->expireSignIns();
     CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Expired &&
           s.runner.stopped == std::vector<std::string>{"a1"});
@@ -992,6 +1120,51 @@ void hub_older() {
         }
         CHECK(logged);
         CHECK(s.store.applied(sync::kSignInIdsClient) == 2);
+    }
+    // A running flow whose window went away, then only older windows: no window left can take it over, so it ends at
+    // once, its process told to end, and the paste is asked for (models/SignIn.tla FallBack). The process prints its
+    // login late all the same: stored, the account signed in, and the paste asked for is answered and closed, so
+    // nobody is asked to paste a login that is there (NoAskWhenSignedIn).
+    {
+        store::MemFs fs;
+        Keeper k;
+        std::uint32_t linked = current;
+        Server s(fs, k, [&linked] { return sync::takesSignIn(linked); });
+        CHECK(s.act(sync::ActionKind::SignInClaim, 1, "w1"));
+        s.hub->signInUrl("a1", 1, secret(kUrl));
+        CHECK(s.act(sync::ActionKind::SignInOpened, 1, "w1"));
+        s.hub->signInWindowGone("w1");
+        CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Waiting && s.runner.stopped.empty());
+        CHECK(s.hub->state().offers().size() == 1 && s.hub->state().offers()[0].opener.empty());
+        linked = older;
+        s.hub->signInWindowsChanged();
+        CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Dropped);
+        CHECK(s.runner.stopped == std::vector<std::string>{"a1"});
+        const std::vector<sync::SecretRequest> r = s.hub->state().requests();
+        CHECK(r.size() == 1 && r[0].account == "a1" && r[0].what == "oauth-token");
+        s.hub->signInPrinted("a1", secret(kToken));
+        CHECK(k.files["a1/oauth-token"] == kToken && s.hub->signedIn().count("a1") == 1);
+        CHECK(s.hub->state().requests().empty() && s.hub->secrets().open().empty());
+        CHECK(s.hub->secrets().stateOf(r[0].id) == sync::SecretState::Stored);
+        // The window's answer to the closed paste, crossing it, is late: nothing more is written.
+        const std::size_t writes = k.files.size();
+        s.act(sync::ActionKind::SecretAnswer, r[0].id, "", kToken);
+        CHECK(k.files.size() == writes && s.hub->secrets().open().empty());
+        for (const std::string& l : s.events.lines) {
+            CHECK(!leaks(l));
+        }
+    }
+    // The same, a flow a window still holds: it goes on, and no paste is asked for.
+    {
+        store::MemFs fs;
+        Keeper k;
+        std::uint32_t linked = current;
+        Server s(fs, k, [&linked] { return sync::takesSignIn(linked); });
+        CHECK(s.act(sync::ActionKind::SignInClaim, 1, "w1"));
+        linked = older;
+        s.hub->signInWindowsChanged();
+        CHECK(s.hub->signIns().stateOf(1) == sync::SignInState::Started && s.runner.stopped.empty());
+        CHECK(s.hub->state().requests().empty());
     }
 }
 

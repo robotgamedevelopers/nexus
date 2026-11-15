@@ -96,7 +96,7 @@ SignInRunner::SignInRunner(Options options, Events events) : options_(std::move(
 SignInRunner::~SignInRunner() {
     for (auto& [account, p] : procs_) {
         if (p.pid > 0) {
-            ::kill(p.pid, SIGKILL);
+            ::kill(-p.pid, SIGKILL);    // its group: the program and anything it started
             int status = 0;
             ::waitpid(p.pid, &status, 0);
         }
@@ -136,8 +136,13 @@ std::vector<std::string> SignInRunner::sweep() {
     }
     for (const std::filesystem::directory_entry& entry : it) {
         const std::string account = entry.path().filename().string();
-        const std::string configDir = entry.path().string() + "/.signin";
         struct stat st{};
+        // The account's entry itself first: a link, or anything else that is not a directory, is not an account's
+        // directory the runner made, and nothing under it is removed.
+        if (::lstat(entry.path().c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        const std::string configDir = entry.path().string() + "/.signin";
         if (::lstat(configDir.c_str(), &st) != 0) {
             continue;
         }
@@ -227,7 +232,7 @@ bool SignInRunner::open(std::string* why) {
 void SignInRunner::start(std::uint64_t id, const std::string& account) {
     if (procs_.count(account) != 0) {
         stop(account);      // the desk starts one per account; one left over is ended first
-        reap(account, procs_[account], true);
+        reap(account, procs_[account], true, std::nullopt);
     }
     auto fail = [&](const std::string& what) {
         if (events_.exited) {
@@ -382,32 +387,71 @@ void SignInRunner::stop(const std::string& account) {
     if (it == procs_.end() || it->second.pid <= 0 || it->second.killAt != 0) {
         return;
     }
-    ::kill(it->second.pid, SIGTERM);
+    ::kill(-it->second.pid, SIGTERM);   // its group (POSIX_SPAWN_SETSID: numbered by its pid)
     it->second.killAt = now() + kKillGraceMs;
+}
+
+// A connection to the replay's next address family, on loopback and the flow's own port alone; false when none is left
+// (errno says why the last failed).
+bool SignInRunner::connectReplay(Replay& r) {
+    while (!r.families.empty()) {
+        const int family = r.families.front();
+        r.families.erase(r.families.begin());
+        const int fd = ::socket(family, SOCK_STREAM, 0);
+        if (fd < 0 || !nonblocking(fd)) {
+            if (fd >= 0) {
+                ::close(fd);
+            }
+            continue;
+        }
+#if defined(SO_NOSIGPIPE)
+        // A send on a connection refused is an error, never a SIGPIPE (Linux: MSG_NOSIGNAL on the send).
+        int on = 1;
+        ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+#endif
+        int rc = -1;
+        if (family == AF_INET6) {
+            sockaddr_in6 addr{};
+            addr.sin6_family = AF_INET6;
+            addr.sin6_port = htons(r.port);
+            addr.sin6_addr = in6addr_loopback;
+            rc = ::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr);
+        } else {
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(r.port);
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            rc = ::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr);
+        }
+        if (rc == 0 || errno == EINPROGRESS) {
+            r.fd = fd;
+            return true;
+        }
+        const int saved = errno;
+        ::close(fd);
+        errno = saved;
+    }
+    return false;
 }
 
 void SignInRunner::replay(std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                           const sync::SecretValue& query) {
-    const std::uint16_t port = options_.replayPort != 0 ? options_.replayPort : target.port;
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (fd < 0 || !nonblocking(fd) ||
-            (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0 && errno != EINPROGRESS)) {
-        if (fd >= 0) {
-            ::close(fd);
-        }
+    Replay r;
+    r.port = options_.replayPort != 0 ? options_.replayPort : target.port;
+    // The redirect's own host: localhost on IPv6 loopback first, then IPv4, as browsers try it; 127.0.0.1 on IPv4
+    // alone. Loopback only, and the flow's own port only.
+    r.families = target.host == "127.0.0.1" ? std::vector<int>{AF_INET} : std::vector<int>{AF_INET6, AF_INET};
+    r.id = id;
+    r.account = account;
+    if (!connectReplay(r)) {
         if (events_.log) {
             events_.log("sign-in " + std::to_string(id) + ": " + account + ": the callback was not replayed: " +
                         std::strerror(errno));
         }
         return;
     }
-    Replay r;
-    r.fd = fd;
-    r.out = "GET " + target.path + "?" + query.bytes() + " HTTP/1.1\r\nHost: localhost:" + std::to_string(target.port) +
+    r.out = "GET " + target.path + "?" + query.bytes() + " HTTP/1.1\r\nHost: " +
+        (target.host.empty() ? std::string("localhost") : target.host) + ":" + std::to_string(target.port) +
         "\r\nConnection: close\r\n\r\n";
     r.until = now() + kReplayMs;
     replays_.push_back(std::move(r));
@@ -450,40 +494,47 @@ void SignInRunner::readTerminal(const std::string& account, Proc& p) {
                     events_.url(account, p.id, url);
                 }
             }
-            if (!p.printed && p.token.feed(bytes)) {
-                p.printed = true;
-                const sync::SecretValue token = p.token.take();
-                std::memset(buf, 0, sizeof buf);
-                if (events_.printed) {
-                    events_.printed(account, token);
-                }
-                return;     // the hub may have stopped it; the next serve reads on
-            }
+            p.token.feed(bytes);
             std::memset(buf, 0, sizeof buf);
             continue;
         }
-        if (n < 0 && (errno == EAGAIN || errno == EINTR)) {
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && errno == EAGAIN) {
             return;
         }
-        // The end of its terminal (EIO on Linux once the program has exited): collect it.
+        // The end of its terminal (EIO on Linux once the program has exited, 0 elsewhere): everything it wrote is read.
         ::close(p.master);
         p.master = -1;
         return;
     }
 }
 
-// The process has ended, or is ended now: collected, its config directory removed, and its end reported unless the
-// flow ended first (`reported`).
-void SignInRunner::reap(const std::string& account, Proc& p, bool reported) {
-    int status = 0;
+// The process has ended (`status`, collected already) or is ended now. Before anything is closed, its terminal is read
+// to the end, so that what the program wrote before it ended goes through the scanners; then its group is ended, so
+// that nothing it started outlives it; then its directory is removed. The login is the last one it printed, handed
+// over when it exited 0, or when the runner ended it (the flow ended first: a login printed meanwhile is stored late);
+// otherwise its end is reported, unless the flow ended first (`reported`).
+void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std::optional<int> status) {
+    if (p.master >= 0) {
+        readTerminal(account, p);
+    }
+    int st = status.value_or(0);
     if (p.pid > 0) {
-        if (::waitpid(p.pid, &status, WNOHANG) == 0) {
-            ::kill(p.pid, SIGKILL);
-            ::waitpid(p.pid, &status, 0);
-        }
+        // The group first, while the program's pid (its group's number) is still its own: collected, it could be
+        // another's. The status collected is the program's own if it had ended by then.
+        ::kill(-p.pid, SIGKILL);
+        ::waitpid(p.pid, &st, 0);
+        status = st;
+        p.pid = -1;
     }
     if (p.master >= 0) {
-        ::close(p.master);
+        readTerminal(account, p);       // what it wrote as it ended
+        if (p.master >= 0) {
+            ::close(p.master);
+            p.master = -1;
+        }
     }
     if (p.lock >= 0) {
         ::close(p.lock);
@@ -492,11 +543,28 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported) {
     std::error_code ec;
     std::filesystem::remove_all(p.configDir, ec);
     const std::uint64_t id = p.id;
-    std::string why = WIFEXITED(status) ? "it exited " + std::to_string(WEXITSTATUS(status)) :
-        WIFSIGNALED(status) ? "it ended on signal " + std::to_string(WTERMSIG(status)) : "it ended";
-    const bool tell = !reported && !p.printed;
+    const bool exitedZero = status.has_value() && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    const bool endedByUs = p.killAt != 0;
+    const std::string why = !status ? "it was ended" : WIFEXITED(st) ? "it exited " + std::to_string(WEXITSTATUS(st)) :
+        WIFSIGNALED(st) ? "it ended on a signal" : "it ended";
+    const bool found = p.token.finish();
+    if (p.token.passedOver() != 0 && events_.log) {
+        events_.log("sign-in " + std::to_string(id) + ": " + account + ": a login-shaped run of " +
+                    std::to_string(p.token.passedOver()) + " bytes was passed over (a login is " +
+                    std::to_string(sync::kSubscriptionTokenBytes) + ")");
+    }
+    sync::SecretValue token;
+    if (found && (exitedZero || endedByUs)) {
+        token = p.token.take();
+    }
     procs_.erase(account);
-    if (tell && events_.exited) {
+    if (!token.empty()) {
+        if (events_.printed) {
+            events_.printed(account, token);
+        }
+        return;
+    }
+    if (!reported && events_.exited) {
         events_.exited(account, id, why);
     }
 }
@@ -583,46 +651,52 @@ bool SignInRunner::serve() {
             continue;
         }
         Proc& q = it->second;
-        int status = 0;
-        const bool ended = q.master < 0 || (q.pid > 0 && ::waitpid(q.pid, &status, WNOHANG) == q.pid);
-        if (ended) {
-            if (q.master < 0 || q.pid <= 0) {
-                reap(account, q, q.killAt != 0);
-            } else {
-                // Collected above: its status is this one.
-                q.pid = -1;
-                ::close(q.master);
-                q.master = -1;
-                if (q.lock >= 0) {
-                    ::close(q.lock);
-                    q.lock = -1;
-                }
-                std::error_code ec;
-                std::filesystem::remove_all(q.configDir, ec);
-                const std::uint64_t id = q.id;
-                const bool tell = q.killAt == 0 && !q.printed;
-                procs_.erase(account);
-                if (tell && events_.exited) {
-                    events_.exited(account, id, WIFEXITED(status) ?
-                        "it exited " + std::to_string(WEXITSTATUS(status)) : "it ended on a signal");
-                }
-            }
+        // Ended? Looked at without collecting it (WNOWAIT), so that its group is ended (reap) while its pid is still
+        // its own; then collected.
+        siginfo_t info{};
+        const bool exited = q.pid > 0 && ::waitid(P_PID, static_cast<id_t>(q.pid), &info,
+                                                  WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == q.pid;
+        if (exited) {
+            ::kill(-q.pid, SIGKILL);
+            int status = 0;
+            ::waitpid(q.pid, &status, 0);
+            q.pid = -1;
+            reap(account, q, q.killAt != 0, status);
+            continue;
+        }
+        if (q.master < 0) {
+            // Its terminal ended, the program not yet: it is ended now, and collected.
+            reap(account, q, q.killAt != 0, std::nullopt);
             continue;
         }
         if (q.killAt != 0 && now() >= q.killAt) {
-            ::kill(q.pid, SIGKILL);
-            reap(account, q, true);
+            reap(account, q, true, std::nullopt);     // past its grace: SIGKILL to its group
         }
     }
     for (Replay& r : replays_) {
         if (!r.out.empty()) {
+#if defined(MSG_NOSIGNAL)
+            const ssize_t n = ::send(r.fd, r.out.data(), r.out.size(), MSG_NOSIGNAL);
+#else
             const ssize_t n = ::send(r.fd, r.out.data(), r.out.size(), 0);
+#endif
             if (n > 0) {
+                r.sent = true;
                 std::fill_n(r.out.begin(), static_cast<std::size_t>(n), '\0');
                 r.out.erase(0, static_cast<std::size_t>(n));
             } else if (n < 0 && errno != EAGAIN && errno != EINTR && errno != ENOTCONN) {
-                sync::wipeBytes(r.out);
-                r.until = 0;
+                // Refused before a byte went: the next family, if one is left (localhost on IPv4 after IPv6).
+                ::close(r.fd);
+                r.fd = -1;
+                if (r.sent || !connectReplay(r)) {
+                    if (events_.log) {
+                        events_.log("sign-in " + std::to_string(r.id) + ": " + r.account +
+                                    ": the callback was not replayed: " + std::strerror(errno));
+                    }
+                    sync::wipeBytes(r.out);
+                    r.until = 0;
+                    continue;
+                }
             }
         } else {
             // The listener's answer: read and dropped, until it closes.
