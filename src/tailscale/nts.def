@@ -1,0 +1,9 @@
+; The Tailscale shim's exports (src/tailscale/nts.h), from which MSVC's lib makes nts.lib, the import library of
+; nts.dll (cmake/tailscale.cmake). Every function nts.h declares is here, and nothing else.
+LIBRARY nts
+EXPORTS
+    nts_version
+    nts_prepare
+    nts_start
+    nts_backend_state
+    nts_close

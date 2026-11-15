@@ -104,6 +104,14 @@ if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()
 
+# nexus's built-in Tailscale (docs/tailscale.md): the Go shim over tsnet (src/tailscale), built with the pinned Go
+# toolchain, and its tests. Layer 0 builds it and nothing links it yet, so it is off by default and needs Go when on;
+# src/tailscale/CMakeLists.txt builds it on its own, without Prax, as CI does.
+option(NEXUS_TAILSCALE "Build the Tailscale shim (src/tailscale) and its tests (needs Go)" OFF)
+if(NEXUS_TAILSCALE)
+    include(cmake/tailscale.cmake)
+endif()
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
 add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
@@ -314,4 +322,7 @@ endif()
 add_subdirectory(tests/wire)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
+endif()
+if(NEXUS_TAILSCALE)
+    add_subdirectory(tests/tailscale)
 endif()
