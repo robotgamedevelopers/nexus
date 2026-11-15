@@ -341,7 +341,7 @@ void roundtripActions() {
     }
     CHECK(d->start == 9);
     const int kinds = static_cast<int>(ActionKind::Max);
-    CHECK(kinds == 14);
+    CHECK(kinds == 16);
     CHECK(d->actions.size() == kinds);
     for (int32_t i = 0; i < d->actions.size(); ++i) {
         const int k = i + 1;
@@ -620,7 +620,7 @@ void test_versions() {
     // window shows it as a notice), each counted; everything else is as written.
     const Read oldReadsNew = currentReadSessions(newSessions);
     CHECK(clean(oldReadsNew));
-    CHECK(oldReadsNew.unknown == 2);
+    CHECK(oldReadsNew.unknown == 3);    // the title, the Image kind and the second session's Waiting activity
     CHECK(oldReadsNew.friendName == "rowan");
     CHECK(oldReadsNew.instance == "studio");
     CHECK((oldReadsNew.kinds == Names{"Person", "None", "Tool"}));

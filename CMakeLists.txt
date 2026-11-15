@@ -33,6 +33,11 @@ FetchContent_Declare(prax
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(prax)
 
+# A static library of ours compiles without waiting for the static libraries it links, which only its users' links
+# need: so nexus_sync, and every library over it, compiles beside schema's generated code (nexus_wire) rather than after
+# it, and CI's 2-minute build is not one long chain. Set after Prax, so Prax's own targets keep their order.
+set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
+
 if(MSVC)
     set(NEXUS_WARNINGS /W4 /WX)
     # getenv, strerror and the like are standard C, which MSVC's CRT deprecates in favour of its own; Prax does the same.
@@ -112,6 +117,23 @@ if(NEXUS_TAILSCALE)
     include(cmake/tailscale.cmake)
 endif()
 
+# What Claude's sandbox needs on Linux and WSL2, bubblewrap and socat, built from pinned sources so no machine installs
+# them (cmake/sandbox.cmake); nexus-server, whose drivers use them, depends on them. macOS's sandbox is the system's.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(nexus_sandbox_default ${NEXUS_LINK})
+else()
+    set(nexus_sandbox_default OFF)
+endif()
+option(NEXUS_SANDBOX_TOOLS "Build bubblewrap and socat for the Claude driver's sandbox (Linux only)"
+    ${nexus_sandbox_default})
+if(NEXUS_SANDBOX_TOOLS)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "nexus: bubblewrap and socat are the sandbox's on Linux only; configure with "
+            "-DNEXUS_SANDBOX_TOOLS=OFF")
+    endif()
+    include(cmake/sandbox.cmake)
+endif()
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
 add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
@@ -127,11 +149,13 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
+# From state format 4 the bytes are schema's tables (nexus_wire, cmake/schema.cmake); before it the hand-written codecs.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
+    src/sync/legacy_codec.cpp src/sync/tables_codec.cpp src/sync/tables_actions.cpp
     src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/secrets.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts)
+target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire)
 
 if(NEXUS_SERVER_PARTS)
     # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
@@ -265,6 +289,9 @@ if(NEXUS_LINK)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
+    if(NEXUS_SANDBOX_TOOLS)
+        add_dependencies(nexus-server nexus_sandbox_tools)
+    endif()
 endif()
 
 if(NEXUS_WINDOW AND (APPLE OR WIN32))

@@ -178,6 +178,12 @@ void test('no subscription is refused; the account token counts as one only when
     assert.deepEqual(token.take()[1], { kind: 'credential', billing: 'subscription' });
     assert.equal(token.exitCode, undefined);
     assert.deepEqual(token.harness.prompts, ['hello']);
+
+    // The token as the driver hands it over, on a descriptor (wall.ts), is the same subscription login.
+    const fd = await refusedAtStart({ apiProvider: 'firstParty', tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' });
+    assert.deepEqual(fd.take()[1], { kind: 'credential', billing: 'subscription' });
+    assert.equal(fd.exitCode, undefined);
+    assert.deepEqual(fd.harness.prompts, ['hello']);
 });
 
 void test('an init that names an API key ends the turn and the driver', async () => {

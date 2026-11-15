@@ -30,12 +30,16 @@ const UnitViewInfo * UnitView()
         { 12, "LinkAccount", 0xff7b88c2ff4bff78ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 13, "UnlinkAccount", 0xdea837e630d4d73dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 14, "SetDefault", 0xd9292b9837d05494ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 15, "SecretAnswer", 0xb4e56199e0ae32c3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 16, "SecretCancel", 0x9f781e34e9b7c12full, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 17, "Rename", 0x60320a18282b2b33ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 1, "Idle", 0xc92905d14a9421f3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 2, "Busy", 0x2a02d2a7e41d6700ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Down", 0x032c13736048bf35ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 4, "Waiting", 0x123b7254b44dd148ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant EntryKind_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -59,8 +63,8 @@ const UnitViewInfo * UnitView()
         { 6, "set_title", 0x2bbef72c13124e22ull, "*string", NULL, &Change_view_arm_fields[1], TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "NexusNext.schema", 14, 8, 15, ActionKind_view_variants, TableDocNone, 0, NULL },
-        { "Activity", "NexusNext.schema", 3, 8, 4, Activity_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "NexusNext.schema", 17, 8, 18, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "Activity", "NexusNext.schema", 4, 8, 5, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "NexusNext.schema", 5, 8, 6, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary unions[] = {
@@ -74,6 +78,7 @@ const UnitViewInfo * UnitView()
         { "EntryChange", "NexusNext.schema", true, EntryChangeTableType(), TableDocNone, 0, NULL },
         { "Hello", "NexusNext.schema", true, HelloTableType(), TableDocNone, 0, NULL },
         { "Record", "NexusNext.schema", true, RecordTableType(), TableDocNone, 0, NULL },
+        { "SecretRequest", "NexusNext.schema", true, SecretRequestTableType(), TableDocNone, 0, NULL },
         { "SessionChange", "NexusNext.schema", true, SessionChangeTableType(), TableDocNone, 0, NULL },
         { "SessionInfo", "NexusNext.schema", true, SessionInfoTableType(), TableDocNone, 0, NULL },
         { "SessionsDiff", "NexusNext.schema", true, SessionsDiffTableType(), TableDocNone, 0, NULL },
@@ -83,7 +88,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswirenext", 0x2f2450356481543cull,
         0, NULL,
-        13, tables,
+        14, tables,
         3, enums,
         0, NULL,
         1, unions,

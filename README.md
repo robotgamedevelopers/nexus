@@ -140,10 +140,16 @@ dependency fetched by npm, never kept in this repository) with permission prompt
 It runs only on a subscription: it removes every API-key variable from Claude's environment, loads no Claude settings
 files unless told to, and refuses any session that would bill an API key, another provider or paid extra usage, with
 a `no-credential` error saying why and what to do. Its login is the account its `--account <name>` names, and
-nothing else: Claude runs with `~/.nexus/server/accounts/<name>` as `CLAUDE_CONFIG_DIR` and the token in its
-`oauth-token` file as `CLAUDE_CODE_OAUTH_TOKEN`, in Claude's environment only. Any `CLAUDE_CONFIG_DIR` or
-`CLAUDE_CODE_OAUTH_TOKEN` the server's environment carries is removed; the Keychain's login and `~/.claude` are never
-used. Without the directory, or with a token file that is missing, not one line, or readable by anyone but its owner,
+nothing else: the token in `~/.nexus/server/accounts/<name>/oauth-token` reaches Claude on a descriptor, never in an
+environment, and Claude keeps its own state in `~/.nexus/server/harness/claude/<name>` as `CLAUDE_CONFIG_DIR`. Any
+`CLAUDE_CONFIG_DIR` or `CLAUDE_CODE_OAUTH_TOKEN` the server's environment carries is removed; the Keychain's login and
+`~/.claude` are never used. Keeping the token from the AI it runs is best effort, not isolation: its shell runs in the OS
+sandbox with the accounts' directory out of reach, its file tools are kept out of it, its network goes through a proxy
+that refuses this machine's own addresses, and writing the files on its list of what runs outside the sandbox is
+denied to it, by rule (a list, not complete). None of the routes the tests try reads the token; some routes stay open, listed per OS in [docs/secrets.md](docs/secrets.md) ("The token
+wall"), among them this machine reached by way of another one. On Linux and WSL2 that sandbox's bubblewrap and socat
+are built by nexus (`cmake/sandbox.cmake`), not installed. Without the directory, or with a token file that is missing,
+not one line, or readable by anyone but its owner,
 the driver refuses to start with a `no-credential` error naming the file. To log an account in:
 
 ```sh
@@ -188,6 +194,11 @@ side of it is there); the friends' AIs answering (layer 3); the plus button's up
   network and crypto sources, fetched at the release tag and compiled unmodified (`cmake/mosh.cmake`). mosh is GPL v3
   or later; section 13 of the GPL v3 and of nexus's AGPL v3 allows the two to be combined, each keeping its own
   licence and notices.
+- On Linux and WSL2, the Claude driver's sandbox programs, built from their release sources by `cmake/sandbox.cmake`,
+  pinned by SHA-256 and compiled unmodified: [bubblewrap](https://github.com/containers/bubblewrap) 0.13.1 (LGPL v2
+  or later), [socat](http://www.dest-unreach.org/socat/) 1.8.1.3 (GPL v2), and
+  [libcap](https://git.kernel.org/pub/scm/libs/libcap/libcap.git) 2.78 (BSD or GPL v2, linked into bubblewrap). Each
+  is a separate program nexus runs, keeping its own licence and notices.
 - [nova-tools](https://github.com/mas-bandwidth/nova-tools) and
   [nova-sprint](https://github.com/mas-bandwidth/nova-sprint): nexus calls their command-line tools. It runs
   no AI models itself.

@@ -1,0 +1,16 @@
+#!/bin/sh
+# ssh for the commands the Claude driver's AI runs (drivers/claude/src/main.ts puts this directory first on Claude's
+# PATH). In Claude's sandbox no connection leaves but through its proxy, which is the driver's (src/egress.ts: it
+# reaches any machine but this one). Claude names the way through it for git in GIT_SSH_COMMAND (ssh with a
+# ProxyCommand to the proxy, and no shared control socket: ~/.ssh is not writable there); this gives plain `ssh host`
+# the same. On Linux and WSL2 the ProxyCommand is bin/ssh-proxy's, given first so that ssh takes it, which also
+# reaches an IPv6 address. Outside the sandbox, where neither is set, it is the system's ssh, unchanged.
+case "${GIT_SSH_COMMAND:-}" in
+    "ssh "*)
+        if [ "$(uname -s)" = Linux ]; then
+            exec /bin/sh -c '/usr/bin/ssh -o "ProxyCommand='"'"'$0/ssh-proxy'"'"' %h %p" '"${GIT_SSH_COMMAND#ssh }"' "$@"' \
+                "$(dirname "$0")" "$@"
+        fi
+        exec /bin/sh -c "/usr/bin/$GIT_SSH_COMMAND \"\$@\"" ssh "$@" ;;
+    *) exec /usr/bin/ssh "$@" ;;
+esac

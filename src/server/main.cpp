@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "no_core.h"
+#include "server/home.h"
 #include "server/server.h"
 #include "sync/formats.h"
 
@@ -137,10 +138,31 @@ int main(int argc, char** argv) {
                 client.format = static_cast<std::uint32_t>(format);
             }
         }
+        // Its Hello (sync/formats.h), from a window of format 4 on. One that does not read is said and left out: the
+        // server then goes by the format alone, as with a window from before Hello.
+        if (const char* hello = std::getenv(nexus::sync::kHelloVariable)) {
+            std::string helloWhy;
+            if (nexus::sync::readHello(hello, &client.hello, &helloWhy)) {
+                client.hasHello = true;
+            } else {
+                std::fprintf(stderr, "nexus-server: %s is %s; going by the state format alone\n",
+                    nexus::sync::kHelloVariable, helloWhy.c_str());
+            }
+        }
         return nexus::server::newSession(paths, selfPath(), client);
     }
-    if (command == "serve")
+    if (command == "serve") {
+        // The sandbox's bwrap and socat that the build made beside this program on Linux (cmake/sandbox.cmake), for
+        // the Claude driver to find (drivers/claude/src/tools.ts; on macOS it only keeps tools from writing there):
+        // from this program's own path only, over any value it was started with (server/home.h sandboxBinOf).
+        const std::string bin = nexus::server::sandboxBinOf(selfPath());
+        if (bin.empty()) {
+            unsetenv(nexus::server::kSandboxBinVariable);
+        } else {
+            setenv(nexus::server::kSandboxBinVariable, bin.c_str(), 1);
+        }
         return nexus::server::serve(paths);
+    }
     if (command == "stop")
         return nexus::server::stop(paths);
     if (command == "config") {

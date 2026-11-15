@@ -8,13 +8,22 @@
 
 set(warnings ${NEXUS_WARNINGS})
 
-add_executable(sync_test sync_test.cpp)
+# crafted_tables.cpp is the one source of sync_test that includes schema's generated header, so the rest compiles
+# beside it.
+add_executable(sync_test sync_test.cpp crafted_tables.cpp)
 target_link_libraries(sync_test PRIVATE nexus_sync)
 # The state format 1 fixtures, written by a nexus from before formats (fixtures/main_state_fixture.cpp).
 target_compile_definitions(sync_test PRIVATE NEXUS_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_compile_options(sync_test PRIVATE ${warnings})
 
 add_dependencies(model_checks sync_test)
+
+# A measurement, not a test: encode and decode times of the sessions diff and the actions in each format
+# (wire_bench.cpp says which messages). Run by hand (`cmake --build build --target wire_bench`); it reads the clock, and
+# is left out of the default build, so CI never spends its 2 minutes on it.
+add_executable(wire_bench EXCLUDE_FROM_ALL wire_bench.cpp)
+target_link_libraries(wire_bench PRIVATE nexus_sync)
+target_compile_options(wire_bench PRIVATE ${warnings})
 
 # The walks TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
@@ -96,6 +105,15 @@ endforeach()
 foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000)
 endforeach()
+# The same walks in format 4, schema's tables: each value rides as table bytes, through the wiping allocator and the
+# wiped read region (src/sync/tables_actions.cpp), so that path is bound to the model too. The walks above stay in
+# format 3, the hand-written codec, which windows of format 3 still use.
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_secrets_trace_tables_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
+             FORMAT 4)
+endforeach()
+tlc_test(tlc_secrets_trace_tables_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
+         SECWALK SEED 1 STEPS 2000 FAULTY echo FORMAT 4)
 # Seed 9: a walk with late answers in it (two, both played); with the held values in the walk, seed 1 has none.
 tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
          SECWALK SEED 9 STEPS 2000 FAULTY store-late)

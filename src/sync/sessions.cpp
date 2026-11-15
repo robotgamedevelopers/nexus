@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "sync/codec.h"
 #include "sync/wire.h"
 
 namespace nexus::sync {
@@ -11,28 +12,6 @@ namespace {
 
 bool sameEntry(const EntryRef& a, const EntryRef& b) {
     return a == b || *a == *b;
-}
-
-// EntryKind on the wire: Person 0, Friend 1, Notice 2, Tool 3 (from format 2). Format 1 has no Tool: a tool line goes
-// to a window of format 1 as the friend's text, as servers before format 2 sent it. A kind this build does not know (a
-// later server's) is read as a notice, which the window draws as a plain dim line.
-std::uint8_t kindOnWire(EntryKind k, std::uint32_t format) {
-    if (format < 2 && k == EntryKind::Tool) {
-        return static_cast<std::uint8_t>(EntryKind::Friend);
-    }
-    return static_cast<std::uint8_t>(k);
-}
-
-EntryKind kindRead(std::uint8_t k) {
-    return k <= static_cast<std::uint8_t>(EntryKind::Tool) ? static_cast<EntryKind>(k) : EntryKind::Notice;
-}
-
-// Activity on the wire, from format 2: Idle 0, Busy 1, Down 2. Format 1 carries none, and a session of it reads idle:
-// that server cannot say, and idle claims least (the person may send, which is always safe, where busy would have them
-// wait on nothing). A value this build does not know (a later server's) reads busy: the server said the friend is
-// neither idle nor down, so not waiting on the person.
-Activity activityRead(std::uint8_t a) {
-    return a <= static_cast<std::uint8_t>(Activity::Down) ? static_cast<Activity>(a) : Activity::Busy;
 }
 
 // The entry `s` holds at transcript index i, or null.
@@ -53,44 +32,31 @@ std::string named(SessionId id) {
     return "session " + std::to_string(id);
 }
 
-// One entry: its kind, closed flag, the length of text `a` holds of it (non-zero only for an entry `a` holds open that
-// only grew) and the rest of its text. From format 2 these are framed by their length, and fields a later format adds
-// go after them.
-void writeEntry(Writer& w, const SessionEntry& e, const EntryRef* had, std::uint32_t format) {
+// One entry of the diff: its kind, closed flag, the length of text `had` holds of it (non-zero only for an entry `had`
+// holds open that only grew) and the rest of its text. In schema's tables (`tables`) an entry whose text is not a
+// table's text goes whole, offset 0: the window holds such text with U+FFFD in place of the bytes it could not carry
+// (codec::tableText), so an offset into it would not be where the server's is. Both texts are checked: the one held can
+// be cut inside a character that the new one completes ("ab\xC3" growing to "ab\xC3\xA9"), and the window holds the cut
+// text with U+FFFD, three bytes where the server's had one, so a growth from it would be refused on every later diff.
+codec::EntryChange entryChange(const SessionEntry& e, const EntryRef* had, bool tables) {
     std::size_t offset = 0;
     if (had != nullptr && !(*had)->closed && (*had)->kind == e.kind && (*had)->text.size() <= e.text.size() &&
-            e.text.compare(0, (*had)->text.size(), (*had)->text) == 0) {
+            e.text.compare(0, (*had)->text.size(), (*had)->text) == 0 &&
+            (!tables || (codec::tableText((*had)->text) && codec::tableText(e.text)))) {
         offset = (*had)->text.size();
     }
-    Writer body;
-    Writer& out = format < 2 ? w : body;
-    out.byte(kindOnWire(e.kind, format));
-    out.byte(e.closed ? 1 : 0);
-    out.u64(offset);
-    out.u64(e.text.size() - offset);
-    out.raw(e.text.data() + offset, e.text.size() - offset);
-    if (format >= 2) {
-        w.str(body.take());
-    }
+    return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset)};
 }
 
-// One changed session: what it is (its friend, harness, account, model and effort); from format 2 its activity; its
-// first index; the index k of the first entry `a` does not hold as it is; the entries from k to the end; then a byte, 1
-// if the queue changed, and if so the queue. From format 2 the whole is framed by its length, and fields added since
-// go after the queue, each only ever appended: its instance (empty: the friend's default instance). A window of
-// format 1 is not sent the instance.
-void writeSession(Writer& w, const SessionView& b, const SessionView* a, std::uint32_t format) {
-    Writer body;
-    Writer& out = format < 2 ? w : body;
-    out.str(b.info.friendName);
-    out.str(b.info.harness);
-    out.str(b.info.account);
-    out.str(b.info.model);
-    out.str(b.info.effort);
-    if (format >= 2) {
-        out.byte(static_cast<std::uint8_t>(b.activity));
-    }
-    out.u64(b.first);
+// One changed session: what it is, its activity, its first index, the index k of the first entry `a` does not hold as
+// it is, the entries from k to the end, and its queue if that changed.
+codec::SessionChange sessionChange(const SessionView& b, const SessionView* a, bool tables) {
+    codec::SessionChange c;
+    c.id = b.id;
+    c.changed = true;
+    c.info = b.info;
+    c.activity = b.activity;
+    c.first = b.first;
     std::uint64_t k = b.first;
     while (k < b.total()) {
         const EntryRef* had = entryAt(a, k);
@@ -99,65 +65,29 @@ void writeSession(Writer& w, const SessionView& b, const SessionView* a, std::ui
         }
         ++k;
     }
-    out.u64(k);
-    out.u64(b.total() - k);
+    c.keepFrom = k;
+    c.entries.reserve(static_cast<std::size_t>(b.total() - k));
     for (std::uint64_t i = k; i < b.total(); ++i) {
-        writeEntry(out, *b.entries[static_cast<std::size_t>(i - b.first)], entryAt(a, i), format);
+        c.entries.push_back(entryChange(*b.entries[static_cast<std::size_t>(i - b.first)], entryAt(a, i), tables));
     }
-    const bool queueChanged = a == nullptr || a->queue != b.queue;
-    out.byte(queueChanged ? 1 : 0);
-    if (queueChanged) {
-        out.u64(b.queue.size());
-        for (const std::string& q : b.queue) {
-            out.str(q);
-        }
+    c.queueChanged = a == nullptr || a->queue != b.queue;
+    if (c.queueChanged) {
+        c.queue = b.queue;
     }
-    if (format >= 2) {
-        out.str(b.info.instance);
-        w.str(body.take());
-    }
+    return c;
 }
 
-// Entry i, read from `r` (format 1) or from its frame (format 2 on, whose fields past the text are skipped).
-EntryRef readEntry(Reader& r, const std::string& name, std::uint64_t i, const SessionView* a, std::uint32_t format) {
-    std::string frame;
-    if (format >= 2) {
-        frame = r.str();
-    }
-    Reader framed(frame);
-    Reader& in = format < 2 ? r : framed;
-    const EntryKind kind = kindRead(in.byte());
-    const std::uint8_t closed = in.byte();
-    if (closed > 1) {
-        throw BadDiff(name + ": entry " + std::to_string(i) + " has closed flag " + std::to_string(closed));
-    }
-    const std::uint64_t offset = in.u64();
-    std::string text = in.str();
-    if (offset != 0) {
-        const EntryRef* had = entryAt(a, i);
-        if (had == nullptr || (*had)->closed || (*had)->kind != kind || (*had)->text.size() != offset) {
-            throw BadDiff(name + ": entry " + std::to_string(i) + " grows from " + std::to_string(offset) +
-                " bytes, which this state does not hold open");
-        }
-        text = (*had)->text + text;
-    }
-    return std::make_shared<const SessionEntry>(SessionEntry{kind, std::move(text), closed == 1});
-}
-
-// A changed session's fields, from `r`; `left` bounds the counts it may declare (the bytes there are to read).
-SessionRef readFields(Reader& r, std::size_t left, SessionId id, const SessionView* a, std::uint32_t format) {
+// A changed session as read, applied to `a`, what this state holds of it (or null): the entries it keeps must be ones
+// `a` holds, and an entry that grows must grow from one `a` holds open at that length.
+SessionRef applySession(codec::SessionChange&& c, const SessionView* a) {
     auto t = std::make_shared<SessionView>();
-    t->id = id;
-    const std::string name = named(id);
-    t->info.friendName = r.str();
-    t->info.harness = r.str();
-    t->info.account = r.str();
-    t->info.model = r.str();
-    t->info.effort = r.str();
-    t->activity = format >= 2 ? activityRead(r.byte()) : Activity::Idle;
-    t->first = r.u64();
-    const std::uint64_t k = r.u64();
-    const std::uint64_t count = r.u64();
+    t->id = c.id;
+    const std::string name = named(c.id);
+    t->info = std::move(c.info);
+    t->activity = c.activity;
+    t->first = c.first;
+    const std::uint64_t k = c.keepFrom;
+    const std::uint64_t count = c.entries.size();
     if (k < t->first) {
         throw BadDiff(name + ": diff sends from entry " + std::to_string(k) + ", before its tail's first, " +
             std::to_string(t->first));
@@ -166,11 +96,6 @@ SessionRef readFields(Reader& r, std::size_t left, SessionId id, const SessionVi
     if (count > ~std::uint64_t(0) - k) {
         throw BadDiff(name + ": diff sends " + std::to_string(count) + " entries from entry " + std::to_string(k) +
             ", past the last entry number there can be");
-    }
-    // Each entry takes at least one byte, so a count past what is left of the diff is malformed.
-    if (count > left) {
-        throw BadDiff(name + ": diff says it sends " + std::to_string(count) + " entries in " + std::to_string(left) +
-            " bytes");
     }
     if (k - t->first > (a == nullptr ? 0 : a->entries.size())) {
         throw BadDiff(name + ": diff keeps " + std::to_string(k - t->first) + " entries this state lacks");
@@ -183,85 +108,29 @@ SessionRef readFields(Reader& r, std::size_t left, SessionId id, const SessionVi
         }
         t->entries.push_back(*had);
     }
-    for (std::uint64_t i = k; i < k + count; ++i) {
-        t->entries.push_back(readEntry(r, name, i, a, format));
+    std::uint64_t i = k;
+    for (codec::EntryChange& e : c.entries) {
+        std::string text = std::move(e.tail);
+        if (e.offset != 0) {
+            const EntryRef* had = entryAt(a, i);
+            if (had == nullptr || (*had)->closed || (*had)->kind != e.kind || (*had)->text.size() != e.offset) {
+                throw BadDiff(name + ": entry " + std::to_string(i) + " grows from " + std::to_string(e.offset) +
+                    " bytes, which this state does not hold open");
+            }
+            text = (*had)->text + text;
+        }
+        t->entries.push_back(std::make_shared<const SessionEntry>(SessionEntry{e.kind, std::move(text), e.closed}));
+        ++i;
     }
-    const std::uint8_t queueChanged = r.byte();
-    if (queueChanged == 0) {
+    if (!c.queueChanged) {
         if (a == nullptr) {
             throw BadDiff(name + ": diff keeps the queue of a session this state lacks");
         }
         t->queue = a->queue;
-    } else if (queueChanged == 1) {
-        const std::uint64_t n = r.u64();
-        if (n > left) {
-            throw BadDiff(name + ": diff says its queue holds " + std::to_string(n) + " prompts in " +
-                std::to_string(left) + " bytes");
-        }
-        for (std::uint64_t q = 0; q < n; ++q) {
-            t->queue.push_back(r.str());
-        }
     } else {
-        throw BadDiff(name + ": queue flag " + std::to_string(queueChanged) + ", neither 0 nor 1");
-    }
-    // From format 2, the fields appended after the queue; a frame from before them gives their defaults.
-    if (format >= 2 && !r.done()) {
-        t->info.instance = r.str();
+        t->queue = std::move(c.queue);
     }
     return t;
-}
-
-// A changed session: in format 1 read straight from the diff; from format 2 from its frame, whose fields past the
-// queue (a later format's) are skipped.
-SessionRef readSession(Reader& r, std::size_t left, SessionId id, const SessionView* a, std::uint32_t format) {
-    if (format < 2) {
-        return readFields(r, left, id, a, format);
-    }
-    const std::string frame = r.str();
-    Reader framed(frame);
-    return readFields(framed, frame.size(), id, a, format);
-}
-
-// The open secret requests, from format 3, after the sessions: how many, then each framed by its length (its id,
-// account, what is asked, the asker's session and friend, and the asker's reason; fields a later format adds go after
-// them). The whole list goes in every diff: it is a few short lines.
-void writeRequests(Writer& w, const std::vector<SecretRequest>& requests) {
-    w.u64(requests.size());
-    for (const SecretRequest& q : requests) {
-        Writer f;
-        f.u64(q.id);
-        f.str(q.account);
-        f.str(q.what);
-        f.u64(q.asker);
-        f.str(q.askerName);
-        f.str(q.why);
-        w.str(f.take());
-    }
-}
-
-std::vector<SecretRequest> readRequests(Reader& r, std::size_t left) {
-    const std::uint64_t n = r.u64();
-    if (n > left) {
-        throw BadDiff("sessions diff says it holds " + std::to_string(n) + " secret requests in " +
-            std::to_string(left) + " bytes");
-    }
-    std::vector<SecretRequest> out;
-    for (std::uint64_t i = 0; i < n; ++i) {
-        const std::string frame = r.str();
-        Reader f(frame);
-        SecretRequest q;
-        q.id = f.u64();
-        q.account = f.str();
-        q.what = f.str();
-        q.asker = f.u64();
-        q.askerName = f.str();
-        q.why = f.str();
-        if (q.id == 0 || (!out.empty() && !(out.back().id < q.id))) {
-            throw BadDiff("sessions diff names secret request " + std::to_string(q.id) + " out of order or twice");
-        }
-        out.push_back(std::move(q));
-    }
-    return out;
 }
 
 const std::shared_ptr<const std::vector<SecretRequest>>& noRequests() {
@@ -348,29 +217,28 @@ const SessionView* Sessions::first(const std::string& friendName) const {
     return nullptr;
 }
 
-// A diff: the number of sessions; then for each, in id order, its id and a byte: 0 when `existing` holds it as it is,
-// else 1 and the session (writeSession), in this state's format. A session `existing` holds and this state lacks is
-// not named, which removes it.
+// A diff: for each session in id order, its id and whether `existing` holds it as it is; if not, the session
+// (sessionChange). A session `existing` holds and this state lacks is not named, which removes it. Then the open secret
+// requests. Written in this state's format (sync/codec.h).
 std::string Sessions::diff_from(const Sessions& existing) const {
     if (*this == existing) {
         return std::string();
     }
-    Writer w;
-    w.u64(sessions_->size());
+    const bool tables = format_ >= kTablesFormat;
+    codec::SessionsChange change;
+    change.sessions.reserve(sessions_->size());
     for (const SessionRef& b : *sessions_) {
-        w.u64(b->id);
         const SessionView* a = existing.find(b->id);
         if (a != nullptr && (a == b.get() || *a == *b)) {
-            w.byte(0);
+            codec::SessionChange kept;
+            kept.id = b->id;
+            change.sessions.push_back(std::move(kept));
             continue;
         }
-        w.byte(1);
-        writeSession(w, *b, a, format_);
+        change.sessions.push_back(sessionChange(*b, a, tables));
     }
-    if (format_ >= kSecretsFormat) {
-        writeRequests(w, *requests_);
-    }
-    return w.take();
+    change.requests = *requests_;
+    return tables ? codec::writeTables(change) : codec::writeLegacy(change, format_);
 }
 
 std::string Sessions::init_diff() const {
@@ -381,49 +249,39 @@ void Sessions::apply_string(const std::string& diff) {
     if (diff.empty()) {
         return;
     }
-    Reader r(diff);
-    const std::uint64_t n = r.u64();
-    if (n > diff.size()) {
-        throw BadDiff("sessions diff says it holds " + std::to_string(n) + " sessions in " +
-            std::to_string(diff.size()) + " bytes");
-    }
+    int unknown = 0;
+    codec::SessionsChange change = format_ >= kTablesFormat ? codec::readTables(diff, &unknown) :
+        codec::readLegacy(diff, format_);
     std::vector<SessionRef> sessions;
-    sessions.reserve(static_cast<std::size_t>(n));
-    for (std::uint64_t i = 0; i < n; ++i) {
-        const SessionId id = r.u64();
+    sessions.reserve(change.sessions.size());
+    for (codec::SessionChange& c : change.sessions) {
+        const SessionId id = c.id;
         if (id == 0) {
             throw BadDiff("sessions diff names session 0; ids start at 1");
         }
         if (!sessions.empty() && !(sessions.back()->id < id)) {
             throw BadDiff("sessions diff names " + named(id) + " out of order or twice");
         }
-        const std::uint8_t changed = r.byte();
         auto had = lookup(*sessions_, id);
         const SessionView* a = had == sessions_->end() ? nullptr : had->get();
-        if (changed == 0) {
+        if (!c.changed) {
             if (a == nullptr) {
                 throw BadDiff("sessions diff keeps " + named(id) + ", which this state lacks");
             }
             sessions.push_back(*had);
-        } else if (changed == 1) {
-            sessions.push_back(readSession(r, diff.size(), id, a, format_));
         } else {
-            throw BadDiff("sessions diff marks " + named(id) + " with " + std::to_string(changed) +
-                ", neither 0 nor 1");
+            sessions.push_back(applySession(std::move(c), a));
         }
     }
-    // Format 1 ends with its sessions; from format 2 what a later format adds after them is skipped. From format 3 the
-    // open secret requests follow, always (a diff cut short before them is refused, not read as none), and what a
-    // later format adds after them is skipped.
-    if (format_ < 2) {
-        r.end();
-    }
-    std::vector<SecretRequest> requests;
-    if (format_ >= kSecretsFormat) {
-        requests = readRequests(r, diff.size());
+    for (std::size_t i = 0; i < change.requests.size(); ++i) {
+        const SecretRequest& q = change.requests[i];
+        if (q.id == 0 || (i > 0 && !(change.requests[i - 1].id < q.id))) {
+            throw BadDiff("sessions diff names secret request " + std::to_string(q.id) + " out of order or twice");
+        }
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
-    setRequests(std::move(requests));
+    setRequests(std::move(change.requests));
+    unknown_ = unknown;
 }
 
 bool Sessions::operator==(const Sessions& x) const {
@@ -467,9 +325,9 @@ bool readStateFile(const std::string& bytes, Sessions* out, std::string* why) {
         *why = "not a state file: it does not start with a line \"nexus-state <format>\"";
         return false;
     }
-    if (format < kOldestServerFormat) {
+    if (format < kMinPeer) {
         *why = "a state of format " + std::to_string(format) + ", older than this build reads (" +
-            std::to_string(kOldestServerFormat) + " on)";
+            std::to_string(kMinPeer) + " on)";
         return false;
     }
     Sessions state;
