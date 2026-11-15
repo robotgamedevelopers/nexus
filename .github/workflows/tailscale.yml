@@ -36,6 +36,10 @@ on:
         description: the commit to build (empty for the caller's)
         type: string
         default: ""
+      cold:
+        description: with prime, Windows builds in a fresh key directory of its own (removed after), to measure cold
+        type: boolean
+        default: false
       macos:
         type: boolean
         default: true
@@ -230,10 +234,13 @@ jobs:
         id: caches
         env:
           KEY: ${{ hashFiles('src/tailscale/pins.cmake', 'src/tailscale/go.mod', 'src/tailscale/go.sum') }}
+          COLD: ${{ inputs.prime && inputs.cold }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:LOCALAPPDATA "nexus-ci-tailscale"
           $dir = Join-Path $root $env:KEY.Substring(0, 16)
+          # A cold measurement (tailscale-prime's cold input) builds in a key directory of its own, removed after.
+          if ($env:COLD -eq 'true') { $dir = Join-Path $root "cold-$env:GITHUB_RUN_ID-${{ matrix.slot }}" }
           New-Item -ItemType Directory -Force -Path "$dir\go\mod", "$dir\go\build", "$dir\downloads" | Out-Null
           Set-Content -Path "$dir\used" -Value ''
           Get-ChildItem -Directory $root | Where-Object { $_.FullName -ne $dir } | ForEach-Object {
@@ -281,6 +288,16 @@ jobs:
         run: |
           cmake -S src/tailscale -B build-tailscale -A x64 "-DNEXUS_GO_MODCACHE=$env:NEXUS_GO_CACHES\mod" "-DNEXUS_GO_BUILDCACHE=$env:NEXUS_GO_CACHES\build" "-DNEXUS_TAILSCALE_DOWNLOADS=$env:NEXUS_TAILSCALE_DOWNLOADS"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
+      # Measurements, in tailscale-prime only: the Go caches the generated build really passes to Go (GOCACHE and
+      # GOMODCACHE, read from the build files; nothing else of the environment is printed) and how many files Go's
+      # build cache holds before and after the build.
+      - name: Go's caches in use
+        if: ${{ inputs.prime }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Recurse -Filter *.vcxproj build-tailscale | Select-String -Pattern '(GOCACHE|GOMODCACHE)=[^ "&;]+' -AllMatches |
+            ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
+          "build cache files before the build: $((Get-ChildItem -Recurse -File "$env:NEXUS_GO_CACHES\build").Count)"
       # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
       - name: Build the shim and its test program, go vet, and the licence notices
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
@@ -292,6 +309,37 @@ jobs:
         run: |
           ctest --test-dir build-tailscale -C Release -L tailscale -j $env:JOBS --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
+      # In tailscale-prime only: the build cache's files after the build; the antivirus's state (measured, never
+      # changed); the time to read every build cache file twice (the first read is scanned on access by a real-time
+      # scanner, the second mostly not); and a no-change rebuild (the shim's sources touched, so Go runs and finds
+      # everything cached).
+      - name: Cache, antivirus and no-change measurements
+        if: ${{ inputs.prime }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Recurse -File "$env:NEXUS_GO_CACHES\build"
+          "build cache files after the build: $($files.Count), $([math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB)) MB"
+          try {
+            $mp = Get-MpComputerStatus
+            "antivirus: real-time protection $($mp.RealTimeProtectionEnabled), on-access $($mp.OnAccessProtectionEnabled), engine $($mp.AMEngineVersion)"
+          } catch { "antivirus status not readable here: $($_.Exception.Message)" }
+          try {
+            $ex = (Get-MpPreference).ExclusionPath
+            "antivirus path exclusions: $(if ($ex) { $ex -join '; ' } else { 'none listed' })"
+          } catch { "antivirus exclusions not readable here: $($_.Exception.Message)" }
+          foreach ($pass in 1, 2) {
+            $t = Measure-Command { foreach ($f in $files) { [void][IO.File]::ReadAllBytes($f.FullName) } }
+            "read every build cache file, pass ${pass}: $([math]::Round($t.TotalSeconds, 1)) s"
+          }
+          Get-ChildItem src/tailscale/shim/*.go | ForEach-Object { $_.LastWriteTime = Get-Date }
+          $t = Measure-Command { cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_checks | Out-Null }
+          if ($LASTEXITCODE -ne 0) { throw "the no-change rebuild exited $LASTEXITCODE" }
+          "no-change rebuild (shim sources touched, Go cache warm): $([math]::Round($t.TotalSeconds, 1)) s"
       - name: Primed
-        if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
+        if: ${{ steps.dispatch.outputs.dispatched != 'true' && !(inputs.prime && inputs.cold) }}
         run: Set-Content -Path "${{ steps.caches.outputs.dir }}\primed" -Value ''
+      - name: Remove the cold measurement's key directory
+        if: ${{ always() && inputs.prime && inputs.cold }}
+        run: |
+          $dir = "${{ steps.caches.outputs.dir }}"
+          if ($dir -and (Split-Path -Leaf $dir) -like 'cold-*') { Remove-Item -Recurse -Force $dir }
