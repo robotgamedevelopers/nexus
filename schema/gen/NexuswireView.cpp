@@ -30,6 +30,8 @@ const UnitViewInfo * UnitView()
         { 12, "LinkAccount", 0xff7b88c2ff4bff78ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 13, "UnlinkAccount", 0xdea837e630d4d73dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 14, "SetDefault", 0xd9292b9837d05494ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 15, "SecretAnswer", 0xb4e56199e0ae32c3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 16, "SecretCancel", 0x9f781e34e9b7c12full, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -56,7 +58,7 @@ const UnitViewInfo * UnitView()
         { 5, "set_info", 0x5d21aec9380ade68ull, "SessionInfo", SessionInfoTableType(), NULL, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "Nexus.schema", 14, 8, 15, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "Nexus.schema", 16, 8, 17, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "Nexus.schema", 3, 8, 4, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "Nexus.schema", 4, 8, 5, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
@@ -71,6 +73,7 @@ const UnitViewInfo * UnitView()
         { "EntryChange", "Nexus.schema", true, EntryChangeTableType(), TableDocNone, 0, NULL },
         { "Hello", "Nexus.schema", true, HelloTableType(), TableDocNone, 0, NULL },
         { "Record", "Nexus.schema", true, RecordTableType(), TableDocNone, 0, NULL },
+        { "SecretRequest", "Nexus.schema", true, SecretRequestTableType(), TableDocNone, 0, NULL },
         { "SessionChange", "Nexus.schema", true, SessionChangeTableType(), TableDocNone, 0, NULL },
         { "SessionInfo", "Nexus.schema", true, SessionInfoTableType(), TableDocNone, 0, NULL },
         { "SessionsDiff", "Nexus.schema", true, SessionsDiffTableType(), TableDocNone, 0, NULL },
@@ -80,7 +83,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswire", 0xcb24df40c7376c7dull,
         0, NULL,
-        13, tables,
+        14, tables,
         3, enums,
         0, NULL,
         1, unions,

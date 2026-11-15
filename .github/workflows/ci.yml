@@ -159,8 +159,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks and wire_test
-        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test
+      - name: Build the model checks, wire_test and nexus_versions_test
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test nexus_versions_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -197,6 +197,7 @@ jobs:
           build/tests/server/secrets_test
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
+            build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
@@ -218,8 +219,10 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
-          # the formats as schema's tables: every table read back, and two versions reading each other both ways
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
+          # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
+          build/tests/wire/nexus_versions_test
 
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
   # tests (a scripted query: no process, clock or network), and the protocol's conformance cases run against it as a
@@ -550,7 +553,7 @@ jobs:
         run: >-
           cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
           link_walk secrets_walk secrets_test store_test durable_test journal_walk driver_protocol_test supervisor_test
-          supervisor_walk wire_test
+          supervisor_walk wire_test nexus_versions_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -587,6 +590,7 @@ jobs:
           build/tests/server/secrets_test
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
+            build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
@@ -608,8 +612,10 @@ jobs:
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
-          # the formats as schema's tables: every table read back, and two versions reading each other both ways
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
+          # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
+          build/tests/wire/nexus_versions_test
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
   # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test

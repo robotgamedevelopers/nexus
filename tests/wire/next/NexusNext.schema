@@ -1,19 +1,22 @@
 // TEST ONLY: a later version of schema/Nexus.schema, as a later nexus would ship it, so that tests/wire/wire_test.cpp
 // proves a window and a server of the two versions read each other's bytes both ways. It is schema/Nexus.schema with
-// three additions and nothing else changed: a field (SessionInfo.title), an enum value (EntryKind.Image) and a union
-// arm (Change.set_title). Its package is its own only so that both versions link into one test program; a package
-// name is not on the table wire (a table rides by its fields' name hashes).
+// these additions and nothing else changed: fields (SessionInfo.title, Action.note, Hello.build), enum values
+// (EntryKind.Image, Activity.Waiting, ActionKind.Rename) and a union arm (Change.set_title). Its package is its own only so that both
+// versions link into one test program; a package name is not on the table wire (a table rides by its fields' name
+// hashes).
 //
-// When schema/Nexus.schema changes, this file changes the same way, keeping the three additions.
+// When schema/Nexus.schema changes, this file changes the same way, keeping the additions.
 
 package nexuswirenext
 
-// Sent first on a link, each way: the protocol this end speaks, and the oldest protocol of the other end it still
-// works with. An end refuses the link only when the other's `proto` is below its `min_peer`.
+// Sent first on a link, each way, before any state (src/link/bootstrap.h): the protocol this end speaks (its state
+// format, src/sync/formats.h), and the oldest protocol of the other end it still works with. An end refuses the link
+// only when the other's `proto` is below its `min_peer`; otherwise the link speaks the older of the two protos.
 table Hello
 {
     proto    uint32
     min_peer uint32
+    build    *string
 }
 
 // ---- The sessions state, server to window (src/sync/sessions.h) ----
@@ -34,7 +37,8 @@ enum Activity
 {
     Idle,
     Busy,
-    Down
+    Down,
+    Waiting
 }
 
 // What a session is (sync::SessionInfo, store::Info): its friend, harness, account, model and effort, and which of
@@ -78,11 +82,25 @@ table SessionChange
     queue         []string
 }
 
+// An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
+// asked for, the asker's session (0: nexus itself) and friend, and the asker's one-line reason. Never a value.
+table SecretRequest
+{
+    id         uint64
+    account    *string
+    what       *string
+    asker      uint64
+    asker_name *string
+    why        *string
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
-// holds and this one lacks is not named, which removes it.
+// holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
+// every diff (a few short lines).
 table SessionsDiff
 {
     sessions []SessionChange
+    requests []SecretRequest
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -102,11 +120,15 @@ enum ActionKind
     AddFriend,
     LinkAccount,
     UnlinkAccount,
-    SetDefault
+    SetDefault,
+    SecretAnswer,
+    SecretCancel,
+    Rename
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
-// its text, and an account action's account. Its number is the diff's `start` plus its place in the list.
+// its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
+// the person pasted them, never text). Its number is the diff's `start` plus its place in the list.
 table Action
 {
     kind        ActionKind
@@ -114,6 +136,9 @@ table Action
     friend_name *string
     text        *string
     account     *string
+    request     uint64
+    secret      *bytes
+    note        *string
 }
 
 // An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.

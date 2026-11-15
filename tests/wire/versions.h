@@ -28,11 +28,45 @@ struct Read {
     std::vector<std::string> queue;     // the first session's queue
 };
 
-// The later version: a sessions diff whose session has the added field set and whose entries include the added kind
-// (Image), and a record whose changes include the added arm (set_title); and its readers of each.
+// What a reader of the later version made of an actions diff: the read's report, then each action, in order.
+struct ReadActions {
+    bool loaded = false;
+    int unknown = 0;
+    bool damaged = false;
+    bool refused = false;
+    std::uint64_t start = 0;
+    std::vector<std::string> kinds;     // by name
+    std::vector<std::uint64_t> sessions;
+    std::vector<std::string> friends;
+    std::vector<std::string> texts;
+    std::vector<std::uint64_t> requests;
+    std::vector<std::string> secrets;
+};
+
+// What a reader of the later version made of a Hello.
+struct ReadHello {
+    bool loaded = false;
+    int unknown = 0;
+    std::uint32_t proto = 0;
+    std::uint32_t minPeer = 0;
+    bool buildPresent = false;
+};
+
+// The later version: a sessions diff, from an empty state, of two sessions: the first with the added field set and
+// entries that include the added kind (Image), the second with the added activity (Waiting); a record whose changes
+// include the added arm (set_title); and its readers of each.
 Bytes nextSessions();
 Bytes nextRecord();
 Read nextReadSessions(const Bytes& bytes);
 Read nextReadRecord(const Bytes& bytes);
+
+// The later version's actions diff, from action 5: a send to session 7 ("hi"), the added kind (Rename, of session 7 to
+// "new name") with the added field (note) set, a secret answer (request 3) and a stop of session 7; and its reader.
+Bytes nextActions();
+ReadActions nextReadActions(const Bytes& bytes);
+
+// The later version's Hello, with the added field (build) set; and its reader.
+Bytes nextHello(std::uint32_t proto, std::uint32_t minPeer);
+ReadHello nextReadHello(const Bytes& bytes);
 
 } // namespace wiretest

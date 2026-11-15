@@ -62,7 +62,7 @@ inline const char * EnumName( Activity value )
     }
 }
 
-// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 14] (SPEC §4.2)
+// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 16] (SPEC §4.2)
 enum class ActionKind : uint8_t
 {
     None = 0,
@@ -80,7 +80,9 @@ enum class ActionKind : uint8_t
     LinkAccount = 12,
     UnlinkAccount = 13,
     SetDefault = 14,
-    Max = 14, // the exported extent (SPEC §4.2)
+    SecretAnswer = 15,
+    SecretCancel = 16,
+    Max = 16, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any ActionKind value, out-of-set included
@@ -103,6 +105,8 @@ inline const char * EnumName( ActionKind value )
         case ActionKind::LinkAccount: return "LinkAccount";
         case ActionKind::UnlinkAccount: return "UnlinkAccount";
         case ActionKind::SetDefault: return "SetDefault";
+        case ActionKind::SecretAnswer: return "SecretAnswer";
+        case ActionKind::SecretCancel: return "SecretCancel";
         default: return "???";
     }
 }

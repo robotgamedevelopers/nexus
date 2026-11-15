@@ -53,7 +53,7 @@ static sync::Sessions inFormat(sync::Sessions state, std::uint32_t format) {
     return state;
 }
 
-// The actions up, in the link's format too: framed from format 3 (sync/actions.h).
+// The actions up, in the link's format too: framed from format 3, schema's tables from 4 (sync/actions.h).
 static sync::Actions actionsIn(std::uint64_t next, std::uint32_t format) {
     sync::Actions actions(next);
     actions.setFormat(format);
@@ -106,6 +106,10 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
     if (diff.empty())
         return fresh;
     std::vector<sync::Action> actions;
+    // No count of what a later window's actions held that this server does not know: these bytes are mosh's own,
+    // re-encoded from the actions it kept, where an unknown field is already gone and an unknown kind is Unknown,
+    // which the hub counts and refuses with its reason (Hub::apply). What a later end sends that this build does not
+    // know is counted and logged on the window's end only, for the state it receives.
     const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format); }, problem);
     sync::wipeBytes(diff);  // it may hold a secret answer's value
     if (!parsed)

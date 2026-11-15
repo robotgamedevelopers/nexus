@@ -105,9 +105,15 @@ void ClientLink::run() {
     Connect connect;
     if (!bootstrap(options_.bootstrap, runCommand, &connect, &why))
         return fail(why);
-    // A server whose format this window no longer reads: one plain line, at once, never a link that cannot be read.
-    // The link uses the format the server answered with, which is never newer than the one the window stated.
-    const std::string refused = sync::serverRefusal(connect.format);
+    // The server's Hello, against the window's (sync/formats.h): a server whose proto is below the window's min_peer
+    // is refused in one plain line, at once, never a link that cannot be read. A server from before Hello states only
+    // its format. The link uses the format the server answered with, which is never newer than the one the window
+    // stated.
+    sync::Hello mine;
+    if (!statesHello(options_.bootstrap, &mine)) {
+        mine = sync::statedFormat(options_.bootstrap.stateFormat);
+    }
+    const std::string refused = sync::refusalOfServer(connect.hello, mine);
     if (!refused.empty()) {
         connect.key.assign(connect.key.size(), '\0');
         return fail(refused);
@@ -125,6 +131,7 @@ void ClientLink::run() {
     std::uint64_t lastNum = ~std::uint64_t(0);
     bool lastAcknowledged = false;
     std::uint64_t lastHanded = 0;
+    int lastUnknown = 0;
     while (!stop_) {
         freezeClock();
         {
@@ -160,6 +167,16 @@ void ClientLink::run() {
                 s.sent != lastHanded) {
             lastHanded = s.sent;
             s.sessions = session->state();
+            // What a later server's state held that this window skipped (sync/sessions.h): logged when it changes, so
+            // a window that shows a notice for an unknown entry kind says why.
+            if (s.sessions.unknown() != lastUnknown) {
+                lastUnknown = s.sessions.unknown();
+                if (lastUnknown > 0) {
+                    std::fprintf(stderr, "nexus: link to %s: the server's state holds %d field(s) or value(s) this "
+                        "window does not know (a later nexus-server): skipped; an entry of a kind it does not know "
+                        "shows as a notice\n", options_.bootstrap.host.c_str(), lastUnknown);
+                }
+            }
             lastNum = s.stateNum;
             lastStatus = status;
             lastAcknowledged = s.acknowledged;

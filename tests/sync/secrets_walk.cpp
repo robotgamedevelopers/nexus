@@ -3,14 +3,17 @@
 // (models/SecretsTrace.tla). No real files, no clock, no sockets: the time is the walk's counter, the values' files are
 // the server's AccountFiles over MemFs, and the values are fake ones the walk makes up.
 //
-//   secrets_walk <seed> <steps> [--faulty-store-late | --faulty-echo] <out.tla>
+//   secrets_walk <seed> <steps> [--format 3|4] [--faulty-store-late | --faulty-echo] <out.tla>
+//
+// --format is the format of the windows that take requests and of their actions (3 unless given): CI walks both, so
+// both the hand-written codec and schema's tables carry the values the model checks.
 //
 // The pieces are the real ones, wired as the server and the windows wire them: the hub's askSecret, apply,
 // expireSecrets and dropSecrets (a restart is a new Hub over the same store); the server's AccountFiles writing each
 // value (server/secret_files.h) and its SecretLines making each answer's driver line and each log line
-// (server/secret_lines.h); each window's state is the hub's Sessions sent as a diff in the window's format (3, or 2 for
+// (server/secret_lines.h); each window's state is the hub's Sessions sent as a diff in the window's format (the walk's, 2 for
 // the old window, which never receives a request) and applied to the window's copy, then given to its SecretPrompt;
-// each answer or cancel is an Action encoded by Actions in format 3 and parsed back by Actions::parse before the hub
+// each answer or cancel is an Action encoded by Actions in that format and parsed back by Actions::parse before the hub
 // applies it. After each step the walk records the code's state as the model's variables: the next id (the store's
 // counter), each request's state as the hub reports it, each window's link, view, dialog and answered ids, the
 // answers in flight, each account's file as MemFs holds it, the writes of each request's value, the askers' answers,
@@ -80,6 +83,11 @@ const std::vector<std::string> kValues{"fakeWk7Hq2Lone", "fakeWk9Zx4Ptwo", "fake
 const std::vector<std::string> kTokens{"v1", "v2", "b1"};
 
 std::uint64_t rngState = 0;
+
+// The format of the windows that take requests and of their actions (--format): 3, the first with secret requests, or
+// 4, schema's tables, where a value rides as table bytes through the wiping allocator and the wiped read region. The
+// old window is format 2 either way.
+std::uint32_t walkFormat = sync::kSecretsFormat;
 std::uint64_t next() {
     rngState ^= rngState >> 12;
     rngState ^= rngState << 25;
@@ -213,7 +221,7 @@ struct Window {
 };
 
 struct Flight {
-    std::string wire;               // the action as it travels: Actions in format 3
+    std::string wire;               // the action as it travels: Actions in the walk's format
     std::uint64_t id = 0;
     bool secret = false;
     std::string token;              // the value's token, or none for a cancel
@@ -253,7 +261,7 @@ struct Walk {
             Window w;
             w.name = c;
             w.old = c == kOld;
-            w.got.setFormat(w.old ? 2 : sync::kSecretsFormat);
+            w.got.setFormat(w.old ? 2 : walkFormat);
             windows.push_back(std::move(w));
         }
         // Two friends' sessions, whose AIs ask through their drivers.
@@ -480,13 +488,13 @@ struct Walk {
         return viewOf(w) + dialogOf(w) != before;
     }
 
-    // An answer or a cancel, as the window sends it: one action, encoded in format 3.
+    // An answer or a cancel, as the window sends it: one action, encoded in the walk's format.
     void send(sync::Action action, const std::string& token) {
         clean(sync::describe(action), "an action's description");
         sync::Actions mine(++num);
-        mine.setFormat(sync::kSecretsFormat);
+        mine.setFormat(walkFormat);
         sync::Actions base(num);
-        base.setFormat(sync::kSecretsFormat);
+        base.setFormat(walkFormat);
         const std::uint64_t id = action.request;
         const bool secret = action.kind == sync::ActionKind::SecretAnswer;
         mine.add(std::move(action));
@@ -510,12 +518,21 @@ int main(int argc, char** argv) {
             faulty = "store-late";
         } else if (std::strcmp(argv[i], "--faulty-echo") == 0) {
             faulty = "echo";
+        } else if (std::strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
+            const unsigned long f = std::strtoul(argv[++i], nullptr, 10);
+            if (f != sync::kSecretsFormat && f != sync::kTablesFormat) {
+                std::fprintf(stderr, "secrets_walk: --format is %lu, not %u or %u\n", f, sync::kSecretsFormat,
+                    sync::kTablesFormat);
+                return 2;
+            }
+            walkFormat = static_cast<std::uint32_t>(f);
         } else {
             args.emplace_back(argv[i]);
         }
     }
     if (args.size() != 3) {
-        std::fprintf(stderr, "usage: secrets_walk <seed> <steps> [--faulty-store-late | --faulty-echo] <out.tla>\n");
+        std::fprintf(stderr, "usage: secrets_walk <seed> <steps> [--format 3|4] [--faulty-store-late | --faulty-echo] "
+            "<out.tla>\n");
         return 2;
     }
     rngState = std::strtoull(args[0].c_str(), nullptr, 10) * 0x9E3779B97F4A7C15ULL + 1;
@@ -629,7 +646,7 @@ int main(int argc, char** argv) {
             c.conn = false;
             c.prompt.lost();
             c.got = sync::Sessions();
-            c.got.setFormat(c.old ? 2 : sync::kSecretsFormat);
+            c.got.setFormat(c.old ? 2 : walkFormat);
             fields = "c |-> " + q(c.name);
         } else if (choice < 700) {
             if (c.conn) {
@@ -646,7 +663,7 @@ int main(int argc, char** argv) {
             const std::size_t i = pick(w.up.size());
             Flight m = w.up[i];
             w.up.erase(w.up.begin() + static_cast<std::ptrdiff_t>(i));
-            const std::vector<sync::Action> actions = sync::Actions::parse(m.wire, sync::kSecretsFormat);
+            const std::vector<sync::Action> actions = sync::Actions::parse(m.wire, walkFormat);
             sync::wipeBytes(m.wire);
             if (actions.size() != 1) {
                 fail("an action in flight read back as " + std::to_string(actions.size()));

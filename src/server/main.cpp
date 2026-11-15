@@ -138,6 +138,17 @@ int main(int argc, char** argv) {
                 client.format = static_cast<std::uint32_t>(format);
             }
         }
+        // Its Hello (sync/formats.h), from a window of format 4 on. One that does not read is said and left out: the
+        // server then goes by the format alone, as with a window from before Hello.
+        if (const char* hello = std::getenv(nexus::sync::kHelloVariable)) {
+            std::string helloWhy;
+            if (nexus::sync::readHello(hello, &client.hello, &helloWhy)) {
+                client.hasHello = true;
+            } else {
+                std::fprintf(stderr, "nexus-server: %s is %s; going by the state format alone\n",
+                    nexus::sync::kHelloVariable, helloWhy.c_str());
+            }
+        }
         return nexus::server::newSession(paths, selfPath(), client);
     }
     if (command == "serve") {
