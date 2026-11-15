@@ -1,5 +1,6 @@
 # nexus: one person and several AIs in one window. The window runs on macOS; on 64-bit Windows it builds against Prax's
-# Win32 backend where Prax allows (NEXUS_WINDOW below); on Linux the parts without a window build and test.
+# Win32 backend where Prax allows (NEXUS_WINDOW below), and a native Windows build holds the window's code alone
+# (NEXUS_SERVER_PARTS below); on Linux the parts without a window build and test.
 cmake_minimum_required(VERSION 3.28)
 
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
