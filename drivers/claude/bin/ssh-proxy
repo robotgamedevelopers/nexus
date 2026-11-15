@@ -1,0 +1,19 @@
+#!/bin/sh
+# The ProxyCommand bin/ssh gives ssh in Claude's sandbox on Linux and WSL2: socat (nexus's, first on Claude's PATH,
+# src/tools.ts) through the sandbox's HTTP proxy, which leads to the driver's (src/egress.ts: it reaches any machine
+# but this one). An IPv6 address goes in brackets, as HTTP CONNECT writes it: socat reads the colons of a bare one as
+# more fields of its PROXY address and refuses it before the proxy ever sees it (measured in CI on WSL2, 2026-11-14).
+# Usage: ssh-proxy <host> <port>
+host=$1
+port=$2
+case "$host" in
+    *:*) host="[$host]" ;;
+esac
+proxy=${HTTPS_PROXY:-${https_proxy:-}}
+proxy=${proxy#*://}
+proxy=${proxy%%/*}
+case "$proxy" in
+    *:*) ;;
+    *) echo "ssh-proxy: no HTTPS_PROXY with a port here, so no way out of the sandbox" >&2; exit 1 ;;
+esac
+exec socat - "PROXY:${proxy%:*}:$host:$port,proxyport=${proxy##*:}"

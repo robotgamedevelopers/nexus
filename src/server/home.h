@@ -9,7 +9,10 @@
 //   nexus-config/     the accounts and friends: accounts.json and friends.json, a git repository of their own
 //                     (server/config_repo.h, docs/accounts.md); no credential is ever in it
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always
-//                     under $HOME/.nexus/server, whatever --dir says
+//                     under $HOME/.nexus/server, whatever --dir says; secrets only, which no AI's tool reaches
+//                     (docs/secrets.md, "The token wall")
+//   harness/claude/<name>/  the Claude driver's own state for that account (its CLAUDE_CONFIG_DIR), kept apart from
+//                     the login so that the logins can be walled whole
 //
 // ~/.nexus is made mode 0700 by whichever of the window and the server starts first; the server makes ~/.nexus/server,
 // mode 0700, itself. Pure.

@@ -104,6 +104,23 @@ if(NEXUS_LINK)
     include(cmake/mosh.cmake)
 endif()
 
+# What Claude's sandbox needs on Linux and WSL2, bubblewrap and socat, built from pinned sources so no machine installs
+# them (cmake/sandbox.cmake); nexus-server, whose drivers use them, depends on them. macOS's sandbox is the system's.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(nexus_sandbox_default ${NEXUS_LINK})
+else()
+    set(nexus_sandbox_default OFF)
+endif()
+option(NEXUS_SANDBOX_TOOLS "Build bubblewrap and socat for the Claude driver's sandbox (Linux only)"
+    ${nexus_sandbox_default})
+if(NEXUS_SANDBOX_TOOLS)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "nexus: bubblewrap and socat are the sandbox's on Linux only; configure with "
+            "-DNEXUS_SANDBOX_TOOLS=OFF")
+    endif()
+    include(cmake/sandbox.cmake)
+endif()
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
 add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
@@ -257,6 +274,9 @@ if(NEXUS_LINK)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
+    if(NEXUS_SANDBOX_TOOLS)
+        add_dependencies(nexus-server nexus_sandbox_tools)
+    endif()
 endif()
 
 if(NEXUS_WINDOW AND (APPLE OR WIN32))

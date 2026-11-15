@@ -139,8 +139,18 @@ int main(int argc, char** argv) {
         }
         return nexus::server::newSession(paths, selfPath(), client);
     }
-    if (command == "serve")
+    if (command == "serve") {
+#if defined(__linux__)
+        // The sandbox's bwrap and socat that the build made beside this program (cmake/sandbox.cmake), for the Claude
+        // driver to find (drivers/claude/src/tools.ts); one already in the environment is kept.
+        const std::string self = selfPath();
+        const std::string::size_type slash = self.rfind('/');
+        if (slash != std::string::npos) {
+            setenv("NEXUS_SANDBOX_BIN", (self.substr(0, slash) + "/sandbox").c_str(), 0);
+        }
+#endif
         return nexus::server::serve(paths);
+    }
     if (command == "stop")
         return nexus::server::stop(paths);
     if (command == "config") {

@@ -262,6 +262,148 @@ jobs:
       - name: Conformance of the Claude driver
         run: ctest --test-dir build -L claude_driver -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
+  # The Claude driver's token wall (drivers/claude/src/wall.ts, docs/secrets.md "The token wall"), end to end: the real
+  # Claude executable the pinned SDK ships (so npm ci with the optional per-platform package here), on a fake token,
+  # against a fake Messages API on 127.0.0.1, in the OS sandbox, trying every way an AI could read its login. Spends
+  # nothing and reaches no outside service.
+  claude-driver-wall:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, fleet, macOS, ARM64]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Node from the runner's machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          echo "node $(node --version), npm $(npm --version) on $(hostname -s)"
+      - name: Install the pinned packages, with the Claude executable
+        working-directory: drivers/claude
+        run: npm ci --no-audit --no-fund
+      - name: Compile
+        working-directory: drivers/claude
+        run: npm run build
+      - name: The token wall
+        working-directory: drivers/claude
+        env:
+          NEXUS_WALL_REPORT: '1'
+        # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
+        # login back to this machine; a runner with no fleet login skips that probe.
+        run: |
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
+            export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+          else
+            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+          fi
+          npm run test:functional
+
+  # The same wall on Linux, where Claude's sandbox is bubblewrap and socat, both built by nexus from pinned sources
+  # (cmake/sandbox.cmake) and found by the driver (drivers/claude/src/tools.ts), with nothing installed for them: on an
+  # Ubuntu bench (the tlc runners are the amd benches, never WSL2), whose AppArmor lets a program make user namespaces
+  # only with a profile, which the driver loads for nexus's bwrap through passwordless sudo (the test unloads it first
+  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time), and inside captain's WSL2, which
+  # has no AppArmor. The sandbox tools' build directory is kept per runner under ~/.cache/nexus-ci, so they are built
+  # once per pin.
+  claude-driver-wall-linux:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        where: [ubuntu, wsl2]
+        # Each of the test's two runs in a job of its own: on WSL2 under load one run took 52 s, both past the cap.
+        run: [whole-wall, without-the-hook]
+        include:
+          - where: ubuntu
+            labels: [self-hosted, fleet, Linux, X64, tlc]
+          - where: wsl2
+            labels: [self-hosted, fleet, Linux, X64, wsl2]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Where this runs, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in *microsoft*|*WSL2*) wsl=wsl2 ;; *) wsl=ubuntu ;; esac
+          if [ "$wsl" != "${{ matrix.where }}" ]; then
+            echo "::error::$(hostname -s) (kernel $kernel) is not a ${{ matrix.where }} machine"
+            exit 1
+          fi
+          restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo none)
+          echo "$(hostname -s): kernel $kernel; apparmor_restrict_unprivileged_userns: $restrict; passwordless sudo: $(sudo -n true 2>/dev/null && echo yes || echo no)"
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          # The runs' directories under a temporary directory of this runner's own: two Claude sandboxes at once whose
+          # working directories share an ancestor a few levels up fail each other's commands now and then (bwrap:
+          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). A short path: under the
+          # job's runner.temp the sandbox could not make its sockets ("Failed to create bridge sockets").
+          own="${TMPDIR:-/tmp}/$RUNNER_NAME"
+          mkdir -p "$own"
+          echo "TMPDIR=$own" >> "$GITHUB_ENV"
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/$RUNNER_NAME/prax-downloads"
+          {
+            echo "SANDBOX_BUILD=$caches/$RUNNER_NAME/sandbox-build"
+            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
+            echo "NEXUS_SANDBOX_BIN=$caches/$RUNNER_NAME/sandbox-build/sandbox"
+          } >> "$GITHUB_ENV"
+      - name: Build bubblewrap and socat
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$SANDBOX_BUILD" -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF \
+            -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_SANDBOX_TOOLS=ON > /dev/null
+          cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(nproc)"
+          "$NEXUS_SANDBOX_BIN/bwrap/bwrap" --version
+          "$NEXUS_SANDBOX_BIN/socat/socat" -V | head -2
+      - name: Install the pinned packages, with the Claude executable
+        working-directory: drivers/claude
+        # Installed once per lockfile on each runner and kept beside its other caches: WSL2's install took 24 to 47 s
+        # when it asked the registry each time, and 26 to 38 s from npm's cache on a loaded captain (Ubuntu: 4 s).
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$HOME/.cache/nexus-ci/$RUNNER_NAME/claude-driver-packages"
+          kept="$base/$(sha256sum package-lock.json | cut -c1-16)"
+          if [ ! -d "$kept/node_modules" ]; then
+            npm ci --prefer-offline --no-audit --no-fund
+            rm -rf "$base"
+            mkdir -p "$kept"
+            mv node_modules "$kept/node_modules"
+          fi
+          rm -rf node_modules
+          ln -s "$kept/node_modules" node_modules
+      - name: Compile
+        working-directory: drivers/claude
+        run: npm run build
+      - name: The token wall
+        working-directory: drivers/claude
+        env:
+          NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_FRESH_PROFILE: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
+        # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
+        # login back to this machine; a runner with no fleet login skips that probe.
+        run: |
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
+            export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+          else
+            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+          fi
+          npm run test:functional
+
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
   # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the

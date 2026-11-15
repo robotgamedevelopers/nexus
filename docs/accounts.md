@@ -57,6 +57,13 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
 the server's sign-in check and the drivers read the one path (`src/server/home.h`, `accountsDir`).
 
+The logins' directory holds secrets only, and the AI a driver runs cannot read it, or the token, by any tool: not its
+shell, its file tools or a fetch ([secrets.md](secrets.md), "The token wall", says what is guaranteed and by which
+layer). The Claude driver keeps Claude's own state (its settings, sessions, memory) apart, in
+`~/.nexus/server/harness/claude/<name>/`, which the AI can read and write; a driver from before this copies what it
+left in the login's directory there once, and never a secret. Editing `accounts.json` and `friends.json` stays open to
+the AI: they hold no secret.
+
 ## accounts.json
 
 ```json

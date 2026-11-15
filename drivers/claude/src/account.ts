@@ -1,16 +1,23 @@
 // The account the driver runs Claude on: one directory per login under nexus-server's home,
-// ~/.nexus/server/accounts/<name>/, named by the drivers file's --account <name>. Claude runs with that directory as
-// CLAUDE_CONFIG_DIR and the account's token, from the file oauth-token there (one line, from `claude setup-token`, mode
-// 0600), as CLAUDE_CODE_OAUTH_TOKEN, in Claude's environment only. Nothing else is a credential: not the Keychain, not
-// the server's environment, not ~/.claude. The token is never logged, written to the server or put in an argument.
+// ~/.nexus/server/accounts/<name>/, named by the drivers file's --account <name>. Its token is the file oauth-token
+// there (one line, from `claude setup-token`, mode 0600), which Claude gets on a descriptor (wall.ts), never in an
+// environment. Claude's own state is kept apart, in ~/.nexus/server/harness/claude/<name>/ as CLAUDE_CONFIG_DIR, so
+// that the logins' directory holds secrets only and no tool reaches it. Nothing else is a credential: not the
+// Keychain, not the server's environment, not ~/.claude. The token is never logged, written to the server or put in an
+// argument.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import {
+    closeSync, constants, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+    renameSync, rmSync,
+} from 'node:fs';
+import { dirname } from 'node:path';
 
 /** An account the driver can start Claude on. */
 export interface Account {
     name: string;
-    dir: string;        // CLAUDE_CONFIG_DIR
-    token: string;      // CLAUDE_CODE_OAUTH_TOKEN; never logged
+    dir: string;        // the login's directory, accounts/<name>/: secrets only, which no tool reaches (wall.ts)
+    configDir: string;  // CLAUDE_CONFIG_DIR, harness/claude/<name>/: Claude's own state (configDirOf)
+    token: string;      // handed to Claude on a descriptor (wall.ts); never logged, never in an environment
 }
 
 /** Why there is no account to start on: a `no-credential` error's cause and fix. */
@@ -129,7 +136,63 @@ export function readAccount(home: string | undefined, name: string): Account | A
     if (lines.length !== 1 || /\s/.test(lines[0] ?? '')) {
         return { cause: `the account ${name}'s token ${path} does not hold one token on one line`, fix: makeToken(dir) };
     }
-    return { name, dir, token: lines[0] ?? '' };
+    return { name, dir, configDir: configDirOf(home, name), token: lines[0] ?? '' };
+}
+
+/** Where Claude's own state is kept for an account, under HOME: never inside the accounts' directory. */
+export const kConfigUnderHome = '.nexus/server/harness/claude';
+
+/**
+ * The account `name`'s CLAUDE_CONFIG_DIR under `home`: Claude's settings, sessions, memory and shell snapshots. It is
+ * apart from the login's directory so that the wall can keep every tool out of the logins whole, while the AI still
+ * reads and writes its own state.
+ */
+export function configDirOf(home: string, name: string): string {
+    return `${home.replace(/\/+$/, '')}/${kConfigUnderHome}/${name}`;
+}
+
+/**
+ * What a login's directory held of Claude's own state before it moved to configDirOf: every directory (sessions,
+ * projects, memory, snapshots...) and these files. Never anything else: a file the secret dialog stored there is a
+ * secret and stays (docs/secrets.md).
+ */
+const kClaudeStateFiles = ['.claude.json', 'settings.json', 'settings.local.json', 'CLAUDE.md'];
+
+/**
+ * Makes the account's CLAUDE_CONFIG_DIR (mode 0700) if it is missing. A new one takes a copy of the state an older
+ * driver left in the login's directory (kClaudeStateFiles and every directory, links never followed), so that sessions
+ * resume where they were; the copy is made once, and the login's directory is left as it was. Undefined, or why not.
+ */
+export function openConfigDir(account: Pick<Account, 'dir' | 'configDir'>): string | undefined {
+    if (existsSync(account.configDir)) {
+        const st = lstatSync(account.configDir);
+        if (!st.isDirectory() || (uid() !== undefined && st.uid !== uid())) {
+            return `${account.configDir} is not a directory of this user's; move it aside, and the driver makes it again`;
+        }
+        return undefined;
+    }
+    const partial = `${account.configDir}.partial-${process.pid}`;
+    try {
+        mkdirSync(dirname(account.configDir), { recursive: true, mode: 0o700 });
+        rmSync(partial, { recursive: true, force: true });
+        mkdirSync(partial, { mode: 0o700 });
+        for (const entry of readdirSync(account.dir, { withFileTypes: true })) {
+            if (entry.isDirectory() || (entry.isFile() && kClaudeStateFiles.includes(entry.name))) {
+                cpSync(`${account.dir}/${entry.name}`, `${partial}/${entry.name}`,
+                    { recursive: true, dereference: false, preserveTimestamps: true, errorOnExist: true, force: false });
+            }
+        }
+        // Whole or not at all: a driver that dies mid-copy leaves only a .partial, made again by the next.
+        renameSync(partial, account.configDir);
+    } catch (e) {
+        rmSync(partial, { recursive: true, force: true });
+        if (existsSync(account.configDir)) {
+            return undefined;   // Another driver of the account made it first.
+        }
+        const code = codeOf(e);
+        return `cannot make ${account.configDir}${code === '' ? '' : ` (${code})`}; make it with \`mkdir -p -m 700 ${account.configDir}\``;
+    }
+    return undefined;
 }
 
 /** Whether `a` is an account rather than a refusal. */

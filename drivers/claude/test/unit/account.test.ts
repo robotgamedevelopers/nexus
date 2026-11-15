@@ -36,9 +36,10 @@ void test('an account is its directory under ~/.nexus/server/accounts and the on
     const dir = makeAccount('main', 'sk-ant-oat01-secret\n');
     assert.equal(dir, `${home}/.nexus/server/accounts/main`);
     const a = readAccount(home, 'main');
-    assert.deepEqual(a, { name: 'main', dir, token: 'sk-ant-oat01-secret' });
+    assert.deepEqual(a, { name: 'main', dir, configDir: `${home}/.nexus/server/harness/claude/main`, token: 'sk-ant-oat01-secret' });
     makeAccount('crlf', '  tok-2\r\n\r\n');
-    assert.deepEqual(readAccount(`${home}/`, 'crlf'), { name: 'crlf', dir: `${home}/.nexus/server/accounts/crlf`, token: 'tok-2' });
+    assert.deepEqual(readAccount(`${home}/`, 'crlf'), { name: 'crlf', dir: `${home}/.nexus/server/accounts/crlf`,
+        configDir: `${home}/.nexus/server/harness/claude/crlf`, token: 'tok-2' });
 });
 
 void test('the logins are where the server looks for them: the one path of src/server/home.h', () => {
@@ -136,13 +137,14 @@ void test('the start is refused with no-credential before any harness when the a
     assert.equal(ok.args.account, 'ready');
 });
 
-void test('Claude gets the account\'s login and none it inherited', () => {
+void test('Claude gets the account\'s directory, none it inherited, and its token in no environment', () => {
     const { env } = scrub({
         CLAUDE_CONFIG_DIR: '/Users/me/.claude', CLAUDE_CODE_OAUTH_TOKEN: 'inherited', ANTHROPIC_API_KEY: 'k',
         PATH: '/bin', HOME: '/h',
     });
-    const account: Account = { name: 'main', dir: '/h/.nexus/server/accounts/main', token: 'own' };
-    assert.deepEqual(harnessEnv(env, account), {
-        PATH: '/bin', HOME: '/h', CLAUDE_CONFIG_DIR: '/h/.nexus/server/accounts/main', CLAUDE_CODE_OAUTH_TOKEN: 'own',
-    });
+    const account: Account = { name: 'main', dir: '/h/.nexus/server/accounts/main',
+        configDir: '/h/.nexus/server/harness/claude/main', token: 'own' };
+    const harness = harnessEnv(env, account);
+    assert.deepEqual(harness, { PATH: '/bin', HOME: '/h', CLAUDE_CONFIG_DIR: '/h/.nexus/server/harness/claude/main' });
+    assert.ok(!Object.values(harness).includes('own'), 'the token is in Claude\'s environment');
 });

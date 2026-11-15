@@ -19,6 +19,7 @@
      ("loop-trace" "Server loop bound to a model: a spec of one pass of nexus-server's loop (the batch applied with the drivers held, its one flush, the drivers released, the state set, the links' ticks at the next pass, and a crash anywhere in it), and the real loop's trace (hold, flush, release, tick, with the fs seam's crashes) checked against it in CI, with reversed witnesses for a release, a state or a tick before the flush. Today the order is held by tests/server/pass_test.cpp and link_e2e's flush run, not by a trace")
      ("ios-client" "iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend" :later t)
      ("install-through-ai" "Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer." :later t)
+     ("real-isolation" "Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates, using existing maintained tools: a microVM per run on the machine's own hypervisor (such as Cloud Hypervisor on KVM, with a minimal guest kernel and warm snapshots), or VMs or Kubernetes on GCP or AWS, with friends and workers spun up there." :later t)
      )
    :columns (("done" "done"))
    :cells (
@@ -34,6 +35,7 @@
      ("loop-trace" "done" "t-loop-trace")
      ("ios-client" "done" "t-ios-client")
      ("install-through-ai" "done" "t-install-through-ai")
+     ("real-isolation" "done" "t-real-isolation")
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
@@ -173,4 +175,5 @@
   (:id "t-panels" :type :task :title "Panels: data rendered by nexus, never code loaded into it" :state :todo)
   (:id "t-one-app" :type :task :title "One app: nexus-server starts at boot and runs every tool and friend as its child; permissions granted once" :state :todo)
   (:id "t-ios-client" :type :task :title "iOS client: one universal iPhone and iPad app, a second client of the server (after layer 2; waits on Prax's iOS backend)" :state :todo)
-  (:id "t-install-through-ai" :type :task :title "Install through AI: README as the installer, one friend (the installing AI), proven by a cold run on a clean Mac" :state :todo)))
+  (:id "t-install-through-ai" :type :task :title "Install through AI: README as the installer, one friend (the installing AI), proven by a cold run on a clean Mac" :state :todo)
+  (:id "t-real-isolation" :type :task :title "Real isolation: friends, API-billed fleet workers and CI workers in a sandboxed microVM, VM or container (local hypervisor, or GCP or AWS)" :state :todo)))
