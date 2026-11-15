@@ -3,7 +3,8 @@
 # GitHub-hosted); and the build without the window, its unit and functional tests and the sanitizers' programs, the
 # TLA+ models with their trace checks (in parallel shards), and the code generated from
 # schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
-# captain (wsl2-functional), where nexus runs everything but the overlay on Windows. Every pull request runs it, whatever its base,
+# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; and the Windows build with its unit
+# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal). Every pull request runs it, whatever its base,
 # and so does every push to main.
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
@@ -885,3 +886,47 @@ jobs:
         run: |
           ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
+      # The terminal tab's WSL2 shell test, for wsl2-terminal to run (this job's NETWORK SERVICE has no WSL2 distribution).
+      - name: Keep the WSL2 terminal test for wsl2-terminal
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wsl2-terminal-test
+          path: ${{ env.NEXUS_BUILD }}\tests\window\Release\nexus_wsl2_terminal_tests.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
+  # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
+  # shell's prompt, TERM, home directory, Escape and exit. The windows job builds it with MSVC; it runs here, on captain's
+  # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
+  # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
+  wsl2-terminal:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: windows
+    runs-on: [self-hosted, fleet, Linux, X64, wsl2]
+    timeout-minutes: 2
+    steps:
+      - name: Inside WSL2, with interop to Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in
+            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
+            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
+          esac
+          if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+            echo "::error::WSL interop is off on $(hostname -s) (no /proc/sys/fs/binfmt_misc/WSLInterop): Windows programs cannot start from here; turn it on in /etc/wsl.conf ([interop] enabled=true)"
+            exit 1
+          fi
+      - name: The test the windows job built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wsl2-terminal-test
+          path: ${{ runner.temp }}/wsl2-terminal
+      - name: wsl2_terminal (functional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+          "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"

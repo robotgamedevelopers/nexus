@@ -181,6 +181,12 @@ add_library(nexus_config STATIC src/config.cpp)
 target_include_directories(nexus_config PUBLIC src)
 target_compile_options(nexus_config PRIVATE ${NEXUS_WARNINGS})
 
+# What a terminal tab's shell is (src/terminal_launch.h): the login shell on macOS and Linux, a WSL2 bash on Windows, and
+# what the probe of WSL2 found. No OS, no time, no Prax, so it builds and is unit-tested everywhere, Windows included.
+add_library(nexus_terminal_launch STATIC src/terminal_launch.cpp)
+target_include_directories(nexus_terminal_launch PUBLIC src)
+target_compile_options(nexus_terminal_launch PRIVATE ${NEXUS_WARNINGS})
+
 # The formats across versions as schema's variable tables (schema/Nexus.schema), generated and checked in under
 # schema/gen: the library nexus_wire, and the target schema_generate that regenerates it at the pinned schema commit.
 include(cmake/schema.cmake)
@@ -208,7 +214,8 @@ if(NEXUS_WINDOW)
     add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
     target_include_directories(nexus_terminals PUBLIC src)
     target_compile_options(nexus_terminals PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_terminals PUBLIC nexus_view prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)
+    target_link_libraries(nexus_terminals PUBLIC nexus_view nexus_terminal_launch prax::studio_terminal prax::process
+        prax::vterm prax::core prax::core_cpp)
 
     # The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
     # functional test on pages it serves from memory.

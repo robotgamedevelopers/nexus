@@ -12,7 +12,9 @@
 #include "pr/vterm.h"
 
 #include "foreground.h"
+#include "friends.h"
 #include "style.h"
+#include "terminal_launch.h"
 
 namespace nexus {
 
@@ -75,6 +77,7 @@ void PraxTerminals::closeAll() {
     titles_.clear();
     asked_.clear();
     failed_.clear();
+    problems_.clear();
     dirs_.clear();
     scales_.clear();
 }
@@ -97,7 +100,7 @@ void PraxTerminals::run() {
             prTerminalDestroy(terminal);
         }
         for (const Start& s : starts) {
-            Started done = ending ? Started{s.id, nullptr, -1, s.scale, s.dir} : start(s);
+            Started done = ending ? Started{s.id, nullptr, -1, s.scale, s.dir, {}} : start(s);
             lock.lock();
             started_.push_back(std::move(done));
             lock.unlock();
@@ -144,24 +147,48 @@ void PraxTerminals::run() {
 }
 
 PraxTerminals::Started PraxTerminals::start(const Start& s) {
-    Started done{s.id, nullptr, -1, s.scale, s.dir};
+    Started done{s.id, nullptr, -1, s.scale, s.dir, {}};
     std::string where = s.dir;
-    PrFileInfo info{};
-    if (!where.empty() && (!prFileInfo(view(where), &info) || info.kind != PrFileKind_Directory)) {
-        std::fprintf(stderr, "nexus: %s is no longer a directory; the terminal starts in the home directory\n",
-            where.c_str());
-        where.clear();
+    if (kShellHost == ShellHost::Wsl2 && s.program.empty()) {
+        // WSL2 is there, and the saved directory still a directory inside it (terminal_launch.h).
+        const Command probe = wsl2Probe(where);
+        const Wsl2Verdict verdict = wsl2Verdict(probe, runCommand(probe, kWsl2ProbeTimeoutSeconds), where,
+            kWsl2ProbeTimeoutSeconds);
+        if (!verdict.problem.empty()) {
+            std::fprintf(stderr, "nexus: a terminal tab cannot start: %s\n", verdict.problem.c_str());
+            done.problem = verdict.problem;
+            return done;
+        }
+        if (verdict.home) {
+            std::fprintf(stderr, "nexus: %s is no longer a directory inside WSL2; the terminal starts in the WSL2 home "
+                "directory\n", where.c_str());
+            where.clear();
+        }
+    } else {
+        PrFileInfo info{};
+        if (!where.empty() && (!prFileInfo(view(where), &info) || info.kind != PrFileKind_Directory)) {
+            std::fprintf(stderr, "nexus: %s is no longer a directory; the terminal starts in the home directory\n",
+                where.c_str());
+            where.clear();
+        }
+    }
+    const TerminalLaunch launch = terminalLaunch(kShellHost, s.program, where);
+    std::vector<PrStringView> arguments;
+    for (const std::string& a : launch.arguments) {
+        arguments.push_back(view(a));
     }
     PrRawString home = prRawStringNull();
-    if (where.empty()) {
+    if (launch.directory.empty()) {
         home = prFileUserDirectory(PrFileUserDirectory_Home);
     }
     PrTerminalDesc desc{};
     desc.font = font(s.scale);
     desc.app = app_;
     desc.launcher = launcher_;
-    desc.program = view(s.program);
-    desc.directory = where.empty() ? prRawStringView(&home) : view(where);
+    desc.program = view(launch.program);
+    desc.arguments = arguments.empty() ? nullptr : arguments.data();
+    desc.argumentCount = uint32_t(arguments.size());
+    desc.directory = launch.directory.empty() ? prRawStringView(&home) : view(launch.directory);
     desc.scrollback = kPrTerminalScrollbackDefault;
     desc.notificationTag = s.id + 1;
     // The shell is the child that prTerminalCreate starts (foreground.h): it returns once the shell has started. Only
@@ -170,8 +197,10 @@ PraxTerminals::Started PraxTerminals::start(const Start& s) {
     PrStatus status = prTerminalCreate(&desc, &done.terminal);
     prRawStringReset(&home);
     if (status != PrStatus_Ok || done.terminal == nullptr) {
-        std::fprintf(stderr, "nexus: could not start %s for a terminal tab (status %d): check that SHELL names a "
-            "shell that runs\n", s.program.empty() ? "the login shell" : s.program.c_str(), int(status));
+        std::fprintf(stderr, "nexus: could not start %s for a terminal tab (status %d): %s\n",
+            launch.program.empty() ? "the login shell" : launch.program.c_str(), int(status),
+            kShellHost == ShellHost::Wsl2 ? "check that wsl.exe runs in PowerShell" : "check that SHELL names a shell "
+            "that runs");
         done.terminal = nullptr;
         return done;
     }
@@ -208,7 +237,11 @@ void PraxTerminals::take() {
             continue;
         }
         if (s.terminal == nullptr) {
-            failed_.insert(s.id);
+            if (!s.problem.empty()) {
+                problems_[s.id] = s.problem;    // the tab stays, showing the line
+            } else {
+                failed_.insert(s.id);
+            }
             held_.erase(s.id);
             continue;
         }
@@ -295,7 +328,7 @@ bool PraxTerminals::hold(std::size_t id, const PrAppEvent& e) {
         return false;
     }
     // nexus's own chords (Command-W, Command-T, the tab keys) act at once, whatever the shell.
-    if ((e.modifiers & style::kCommand) != 0 || failed_.count(id) != 0) {
+    if ((e.modifiers & style::kCommand) != 0 || failed_.count(id) != 0 || problems_.count(id) != 0) {
         return false;
     }
     auto queued = held_.find(id);
@@ -373,6 +406,7 @@ bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
 void PraxTerminals::close(std::size_t id) {
     asked_.erase(id);
     failed_.erase(id);
+    problems_.erase(id);
     dirs_.erase(id);
     scales_.erase(id);
     labels_.erase(id);
@@ -451,6 +485,12 @@ bool PraxTerminals::ended(std::size_t id) {
     }
     PrProcessInfo info = prTerminalProcessInfo(terminal);
     return info.exited && info.outputEnded;
+}
+
+std::string PraxTerminals::problem(std::size_t id) {
+    take();
+    auto it = problems_.find(id);
+    return it != problems_.end() ? it->second : std::string();
 }
 
 std::string PraxTerminals::programTitle(std::size_t id) {

@@ -115,6 +115,8 @@ struct FakeTerminals final : Terminals {
     }
     void update(std::size_t id) override { ++updates[id]; }
     bool ended(std::size_t id) override { return finished.count(id) != 0; }
+    std::map<std::size_t, std::string> problems;    // tabs whose shell cannot run here (on Windows: no WSL2)
+    std::string problem(std::size_t id) override { return problems.count(id) ? problems[id] : std::string(); }
     std::string title(std::size_t id) override { return titles.count(id) ? titles[id] : std::string(); }
     void setTextScale(float k) override { scale = k; }
 };
@@ -1628,6 +1630,29 @@ void anEndedTerminalCloses() {
     CHECK(h.view.promptBox != kPrLayoutNodeNone);
 }
 
+// A terminal whose shell cannot run on this machine at all (on Windows, no WSL2: terminal_launch.h) shows its one line
+// in place of a shell, declares no terminal, and stays: it does not close by itself, Escape still hides nothing there,
+// and Command-W closes it.
+void aTerminalWithNoShellShowsItsLine() {
+    Harness h;
+    h.commandT();   // 2
+    const std::string line = "WSL2 is not installed: wsl.exe was not found. Install it with `wsl --install` in "
+        "PowerShell and restart Windows, then open a new terminal tab";
+    h.terminals.problems[2] = line;
+    h.terminals.shown.clear();
+    h.frame();
+    h.frame();
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), line));
+    CHECK(h.terminals.shown.empty());
+    CHECK(h.ids() == "0 1 2" && h.active().id == 2);
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    CHECK(h.hides == 0);
+    CHECK(h.ids() == "0 1 2");
+    h.commandW();
+    CHECK(h.ids() == "0 1" && h.model.active() == 0);
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), line));
+}
+
 // A shell that cannot start leaves no tab, and the tab that showed before shows again.
 void aTerminalThatCannotStartLeavesNoTab() {
     Harness h;
@@ -1984,6 +2009,7 @@ int main() {
     hiddenTerminalsAreServiced();
     anEndedTerminalCloses();
     aTerminalThatCannotStartLeavesNoTab();
+    aTerminalWithNoShellShowsItsLine();
     dragsStayInTheirZone();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);

@@ -588,6 +588,16 @@ struct Builder {
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
         HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(tab.id));
+        // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
+        // sprint tab's is.
+        const std::string problem = view.terminals->problem(tab.id);
+        if (!problem.empty()) {
+            PrLayoutNode box = element(window, Part::BoardBox);
+            PrLayoutNode column = element(box, Part::Column);
+            PrLayoutNode centered = element(column, Part::Centered);
+            label(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
+            return;
+        }
         view.terminals->show(tab.id, window);
     }
 
