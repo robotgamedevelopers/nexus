@@ -307,8 +307,8 @@ tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrac
 
 # The secret dialog (docs/secrets.md): Secrets.tla on four small instances (MCSecretsBad: a paste not of a token's
 # shape and a failing disk), every property, and a witness per
-# property, per commit (each a second or two); its three larger instances nightly (MCSecretsTwo.cfg took 7 s of the
-# model job's 2 minutes). Bound to the code by trace checks: tests/sync's secrets_walk, tlc_secrets_trace_*.
+# property, per commit (each a second or two); its four larger instances nightly (MCSecretsTwo.cfg took 7 s of the
+# model job's 2 minutes; MCSecretsBadTwo.cfg, two requests, 57 s, past the per-commit cap). Bound to the code by trace checks: tests/sync's secrets_walk, tlc_secrets_trace_*.
 tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
 tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
 tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)
@@ -331,6 +331,7 @@ tlc_test(tlc_secrets_witness_no_client_opens WSecNoClientOpens WSecNoClientOpens
 tlc_test(tlc_secrets_witness_no_timeout     WSecNoTimeout     WSecNoTimeout.cfg     liveness)
 tlc_test(tlc_secrets_witness_dialog_stays   WSecDialogStays   WSecDialogStays.cfg   liveness)
 tlc_test(tlc_secrets_spec_bad  MCSecrets MCSecretsBad.cfg   pass)
+tlc_test(tlc_secrets_spec_bad_two MCSecrets MCSecretsBadTwo.cfg pass WORKERS 4 NIGHTLY CAP 600)
 tlc_test(tlc_secrets_witness_drop_on_failure WSecDropOnFailure WSecDropOnFailure.cfg invariant
          PROPERTY ReceivedNeverDropped)
 tlc_test(tlc_secrets_witness_late_after_deadline WSecLateAfterDeadline WSecLateAfterDeadline.cfg invariant
