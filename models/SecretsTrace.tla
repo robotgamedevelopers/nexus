@@ -16,8 +16,10 @@
 (*                                                                         *)
 (* Each step of this spec takes the Secrets action the record names, and   *)
 (* TraceMatches requires the spec's state to equal the code's, variable by *)
-(* variable. A step the spec cannot take is a deadlock. The model's safety *)
-(* properties are checked on the trace.                                    *)
+(* variable. A step the spec cannot take is a deadlock. Where the spec     *)
+(* leaves a choice open (a write that was not durable may or may not have  *)
+(* reached the file), the code's record picks it (FileChosen). The         *)
+(* model's safety properties are checked on the trace.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, SecretsTraceData
 
@@ -75,10 +77,21 @@ traceVars == <<next, req, conn, view, dialog, done, up, file, stores, replies, t
 
 TraceInit == l = 1 /\ S!Init
 
+\* The request a receive or a retry is for.
+StepId(r) == IF r.op = "receive" THEN r.m.id ELSE r.id
+
+\* A write that was not durable (S!Hold, S!RetryFails) leaves the file as it was or holding the value: the spec allows
+\* both, and the code took one. On such a step (a receive or a retry that leaves its request holding) the code's file
+\* picks the branch; a file the spec does not allow leaves no step, a deadlock. On every other step the file is checked
+\* by TraceMatches like any variable, so a late answer stored anyway still fails TraceMatches.
+FileChosen(r) ==
+    (r.op \in {"receive", "retry"} /\ req'[StepId(r)].st = "holding") => file' = r.file
+
 TraceNext ==
     /\ l < Len(Trace)
     /\ l' = l + 1
     /\ Step(Trace[l + 1])
+    /\ FileChosen(Trace[l + 1])
 
 Done == l = Len(Trace) /\ UNCHANGED traceVars
 

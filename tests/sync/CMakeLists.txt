@@ -91,8 +91,9 @@ endforeach()
 foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000)
 endforeach()
+# Seed 9: a walk with late answers in it (two, both played); with the held values in the walk, seed 1 has none.
 tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
-         SECWALK SEED 1 STEPS 2000 FAULTY store-late)
+         SECWALK SEED 9 STEPS 2000 FAULTY store-late)
 # The echo is injected into the code (SecretDesk::injectEchoFault): the value reaches server.log's bytes, and the
 # code-side invariant names it.
 tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog

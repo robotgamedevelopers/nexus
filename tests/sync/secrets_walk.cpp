@@ -555,11 +555,10 @@ int main(int argc, char** argv) {
             }
             const std::vector<sync::SessionId> askers{0, 1, 2};
             const sync::SessionId asker = askers[pick(askers.size())];
-            // A friend's AI with an ask open is refused before any request is made (Hub::askSecret), which the model
-            // leaves out: the walk asks only from an asker with none open.
-            const std::vector<sync::SecretRequest>& open = w.hub->secrets().open();
-            if (asker != 0 && std::any_of(open.begin(), open.end(),
-                                          [&](const sync::SecretRequest& r) { return r.asker == asker; })) {
+            // A friend's AI with an ask not yet answered (open, or its value held) is refused before any request is
+            // made (Hub::askSecret, SecretDesk::waiting), which the model leaves out: the walk asks only from an
+            // asker with none waiting.
+            if (asker != 0 && w.hub->secrets().waiting(asker)) {
                 continue;
             }
             op = "ask";
