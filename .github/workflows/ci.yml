@@ -896,7 +896,13 @@ jobs:
           $version = $versionText[0]
           $stamp = "$version`n$($configure -join "`n")"
           $kept = if (Test-Path "$env:NEXUS_BUILD.configured") { Get-Content -Raw "$env:NEXUS_BUILD.configured" } else { '' }
-          if ($env:NEXUS_BUILD_FINISHED -eq 'True' -and (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt") -and $kept.TrimEnd() -eq $stamp) {
+          if ($env:NEXUS_BUILD_FINISHED -ne 'True') {
+            Write-Output "configuring: the kept build directory has no finished build"
+          } elseif (-not (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt")) {
+            Write-Output "configuring: the kept build directory has no CMakeCache.txt"
+          } elseif ($kept.TrimEnd() -ne $stamp) {
+            Write-Output "configuring: the kept build directory was configured otherwise (stamp '$($kept.TrimEnd())', now '$stamp')"
+          } else {
             Write-Output "configured already with these arguments by $version; cmake --build re-runs it if a CMake file changed"
             exit 0
           }
