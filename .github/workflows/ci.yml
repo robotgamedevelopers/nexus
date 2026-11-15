@@ -517,10 +517,24 @@ jobs:
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
   # On the runners labelled tlc, as the model shards: on hulk's loaded general runners its build ran past the 2 minutes.
   # It builds the programs it runs and nothing else, through ccache (sanitizer flags key their own entries).
+  # Two parts in parallel, each within the 2 minutes: the unit programs, and the trace walks with their faults. Both
+  # share the compiler cache outside the workspace, and each builds only the programs it runs.
   sanitizers-linux:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, Linux, X64, tlc]
     timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+            targets: >-
+              model_test overlay_test sync_test secrets_test store_test durable_test driver_protocol_test
+              supervisor_test wire_test nexus_versions_test
+          - part: walks
+            targets: >-
+              overlay_walk trace_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
+    name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
       CXX: clang++
@@ -555,18 +569,36 @@ jobs:
             -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
             "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      # Exactly the programs the next step runs (model_checks would add the accounts' and the glide's, which it does not).
+      # Exactly the programs this part runs (model_checks would add the accounts' and the glide's, which it does not).
       - name: Build the programs it runs
-        run: >-
-          cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
-          link_walk secrets_walk secrets_test store_test durable_test journal_walk store_lock_walk driver_protocol_test
-          supervisor_test supervisor_walk wire_test nexus_versions_test
-      - name: Unit tests and trace walks under the sanitizers
+        run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      - name: Unit tests under the sanitizers
+        if: matrix.part == 'units'
         shell: bash
         run: |
           set -euo pipefail
           build/tests/model/model_test
           build/tests/model/overlay_test
+          build/tests/sync/sync_test
+          # the secret dialog: every unit group, the leak test among them
+          build/tests/server/secrets_test
+          # the store: every unit group (MemFs, crashes at every write and sync, the lock, the start-up order), and
+          # the server's tabs on it
+          build/tests/store/store_test
+          build/tests/store/durable_test
+          # the driver protocol: every group (the parser and the reader over every chunking)
+          build/tests/driver/driver_protocol_test
+          # the driver supervisor: every group
+          build/tests/server/supervisor_test
+          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
+          # schema's own tables and in nexus's state and actions
+          build/tests/wire/wire_test
+          build/tests/wire/nexus_versions_test
+      - name: Trace walks and their faults under the sanitizers
+        if: matrix.part == 'walks'
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p walks
           for seed in 1 2 3; do
             build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
@@ -583,7 +615,6 @@ jobs:
           for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
             build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
           done
-          build/tests/sync/sync_test
           for windows in 1 2 3 4; do
             for seed in 1 2 3 4; do
               build/tests/sync/link_walk "$seed" 1000 "$windows" walks/link.tla
@@ -592,17 +623,12 @@ jobs:
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
           done
-          # the secret dialog: every unit group (the leak test among them), then its walks, each failing if a value's
-          # bytes reach anything but the keeper
-          build/tests/server/secrets_test
+          # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
             build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
-          # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
-          # journal's walks
-          build/tests/store/store_test
-          build/tests/store/durable_test
+          # the journal's walks
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
           done
@@ -616,20 +642,13 @@ jobs:
           for fault in --faulty-unlocked --faulty-restore-first; do
             build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
           done
-          # the driver protocol: every group (the parser and the reader over every chunking)
-          build/tests/driver/driver_protocol_test
-          # the driver supervisor: every group, then its walks and their faults
-          build/tests/server/supervisor_test
+          # the driver supervisor's walks and their faults
           for seed in 1 2 3 4 5 6 7 8; do
             build/tests/server/supervisor_walk "$seed" 1000 walks/supervisor.tla
           done
           for fault in --faulty-turn --faulty-resume; do
             build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
           done
-          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
-          # schema's own tables and in nexus's state and actions
-          build/tests/wire/wire_test
-          build/tests/wire/nexus_versions_test
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
   # platform, so these run where runners are many, in parallel shards, each well within the 2 minutes. Every test
