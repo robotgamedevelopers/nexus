@@ -96,7 +96,8 @@ jobs:
           touch "$dir"
           find "$root" -mindepth 1 -maxdepth 1 -type d ! -path "$dir" -mtime +7 -print -exec chmod -R u+w {} + -exec rm -rf {} +
           echo "NEXUS_GO_CACHES=$dir/go" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
           echo "dir=$dir" >> "$GITHUB_OUTPUT"
           if [ -f "$dir/primed" ]; then echo "primed=true" >> "$GITHUB_OUTPUT"; else echo "primed=false" >> "$GITHUB_OUTPUT"; fi
       - name: Not primed here, so tailscale-prime builds and tests this commit
@@ -121,7 +122,7 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests (arm64)
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
-        run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
+        run: ctest --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure --no-tests=error
       - name: Tests (x86_64, under Rosetta)
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
         shell: bash
@@ -178,7 +179,8 @@ jobs:
           touch "$dir"
           find "$root" -mindepth 1 -maxdepth 1 -type d ! -path "$dir" -mtime +7 -print -exec chmod -R u+w {} + -exec rm -rf {} +
           echo "NEXUS_GO_CACHES=$dir/go" >> "$GITHUB_ENV"
-          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
+          echo "TEST_JOBS=$(nproc)" >> "$GITHUB_ENV"
           echo "dir=$dir" >> "$GITHUB_OUTPUT"
           if [ -f "$dir/primed" ]; then echo "primed=true" >> "$GITHUB_OUTPUT"; else echo "primed=false" >> "$GITHUB_OUTPUT"; fi
       - name: Not primed here, so tailscale-prime builds and tests this commit
@@ -203,7 +205,7 @@ jobs:
         run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
-        run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
+        run: ctest --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure --no-tests=error
       - name: Primed
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
         shell: bash
@@ -252,7 +254,18 @@ jobs:
           }
           "NEXUS_GO_CACHES=$dir\go" >> $env:GITHUB_ENV
           "NEXUS_TAILSCALE_DOWNLOADS=$dir\downloads" >> $env:GITHUB_ENV
-          "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+          # Compiles use the runner's core share and tests the processor count, as ci.yml's windows job.
+          $jobs = [Environment]::ProcessorCount
+          $share = 0
+          if ("$env:NOVA_JOB_CORES" -match '^[1-9][0-9]*$' -and [int]::TryParse($env:NOVA_JOB_CORES, [ref]$share)) {
+            $jobs = $share
+            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is ${share}: jobs use it"
+          } else {
+            $shown = if ($null -eq $env:NOVA_JOB_CORES) { 'unset' } else { $env:NOVA_JOB_CORES }
+            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is '$shown', not a positive integer: jobs use the processor count, $jobs"
+          }
+          "JOBS=$jobs" >> $env:GITHUB_ENV
+          "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
           "dir=$dir" >> $env:GITHUB_OUTPUT
           "primed=$(if (Test-Path "$dir\primed") { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
       - name: Not primed here, so tailscale-prime builds and tests this commit
@@ -307,7 +320,7 @@ jobs:
       - name: Tests
         if: ${{ steps.dispatch.outputs.dispatched != 'true' }}
         run: |
-          ctest --test-dir build-tailscale -C Release -L tailscale -j $env:JOBS --output-on-failure --no-tests=error
+          ctest --test-dir build-tailscale -C Release -L tailscale -j $env:TEST_JOBS --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
       # In tailscale-prime only: the build cache's files after the build; the antivirus's state (measured, never
       # changed); the time to read every build cache file twice (the first read is scanned on access by a real-time
