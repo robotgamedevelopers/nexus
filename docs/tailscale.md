@@ -290,8 +290,10 @@ same size as nexus's to within a few KB (on Windows: nts.dll 21,554,176, nts_tes
 
 The table is layer 0's API. Layer 1's API, on macOS arm64 the same day: a program that links nexus's build
 (`libnts.a`) and calls `nts_start`, so the linker keeps what nexus would, is 22,879,496 bytes (stripped 19,433,584),
-+0.1 MB over layer 0's test program. Layer 1's test program, 24,104,752, is no longer the measure: its test-hooks build
-carries tailscale's test control server and a DERP relay, which nexus's build does not.
++0.1 MB over layer 0's test program. On Windows, nexus's `nts.dll` is 21,713,920, +0.16 MB over layer 0's. Layer 1's
+test programs are no longer the measure (macOS arm64 24,104,752; Linux x86_64 46,177,736 unstripped; Windows
+tailscale_test.exe 250,880): their test-hooks build carries tailscale's test control server and a DERP relay, which
+nexus's build does not.
 
 Against the first measurement (v1.104.1, go1.27.1, no omit tags), the omit tags and the pin move together take 0.9 MB
 off the macOS arm64 slice and 1.0 MB off x86_64, 2.3 MB off Linux (1.3 MB stripped) and 0.9 MB off the Windows DLL. On
