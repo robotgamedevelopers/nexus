@@ -54,7 +54,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
 #          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [LABEL] [OVERLAY])
 # WORKERS is TLC's worker count, 2 unless given; ctest reserves that many cores for the test (PROCESSORS), so
-# `ctest -j <cores>` keeps one TLC worker per core. SHARD marks an instance that has a CI model shard of its own and
+# `ctest -j <cores>` keeps one TLC worker per core; in CI a run takes no more workers than the runner's share of cores
+# (NEXUS_TLC_CORES, tlc-workers.cmake). SHARD marks an instance that has a CI model shard of its own and
 # caps it at that shard's budget (80 s; the function says how it is derived).
 # NIGHTLY labels the test model_nightly in place of model: the nightly workflow runs it, the per-commit model job does
 # not (it runs `ctest -L '^model$'`). Its TLC run is capped at 300 s, not 60: see the instances below. CAP s caps it at

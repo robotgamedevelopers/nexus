@@ -706,6 +706,10 @@ jobs:
     timeout-minutes: 2
     strategy:
       fail-fast: false
+      # The number of runners labelled tlc in the fleet (6 on 2026-11-15; the fleet's runner distribution sets it, and
+      # this one number follows it). More shards at once than runners only queue; fewer leave runners idle. A shard
+      # waiting here is not counted in its 2 minutes.
+      max-parallel: 6
       matrix:
         include:
           - shard: supervisor
@@ -821,6 +825,24 @@ jobs:
             echo "JOBS=$(sh .github/job-cores.sh)"
             echo "TEST_JOBS=$(nproc)"
           } >> "$GITHUB_ENV"
+      # The runner's share of its host's cores, read at run time (NOVA_JOB_CORES, which each fleet runner exports; the
+      # core count where it is unset): no TLC run takes more workers than that (tests/model/tlc-workers.cmake), so a
+      # shard asks its host for what the fleet gives it, however many runners the host carries. Never below 4: the
+      # instances with a shard of their own fit their 80 s on four cores (switch 45 s, place 40, link ensure 34, on
+      # four pinned cores of an idle 16-thread host) and not on two (sign-in 94-107 s), so a share under 4 is a fleet
+      # record to change, and the job says so in its log. TEST_JOBS stays the core count: it counts ctest's slots for
+      # the trace checks and witnesses, each a JVM that runs a second or two on one core.
+      - name: The runner's share of cores for TLC
+        shell: bash
+        run: |
+          set -euo pipefail
+          share=$(sh .github/job-cores.sh)
+          if [ "$share" -lt 4 ]; then
+            echo "::warning::this runner's share on $(hostname -s) is $share cores (NOVA_JOB_CORES); the model shards need 4 (ci.yml, model, says why), so TLC runs on 4"
+            share=4
+          fi
+          echo "TLC runs take at most $share workers each"
+          echo "NEXUS_TLC_CORES=$share" >> "$GITHUB_ENV"
       # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
       # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
       - name: Node from the runner's machine, and the Claude driver built

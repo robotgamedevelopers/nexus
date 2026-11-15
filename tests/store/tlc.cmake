@@ -61,21 +61,14 @@ if(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
     endif()
 endif()
 
-if(NOT DEFINED WORKERS OR "${WORKERS}" STREQUAL "")
-    set(WORKERS 2)
-endif()
 if(NOT DEFINED CAP OR "${CAP}" STREQUAL "")
     set(CAP 60)
 endif()
-if(WORKERS GREATER 2)
-    set(jvm -XX:+UseParallelGC -XX:ParallelGCThreads=${WORKERS})
-else()
-    set(jvm -XX:+UseSerialGC -XX:TieredStopAtLevel=1)
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../model/tlc-workers.cmake")
 
 execute_process(
-    COMMAND "${java}" ${jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC
-            -workers ${WORKERS} -metadir "${WORK}/meta" -config "${cfg_name}" "${MODULE}.tla"
+    COMMAND "${java}" ${tlc_jvm} "-Djava.io.tmpdir=${WORK}/tmp" -cp "${jar}" tlc2.TLC
+            -workers ${tlc_workers} -metadir "${WORK}/meta" -config "${cfg_name}" "${MODULE}.tla"
     WORKING_DIRECTORY "${WORK}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT ${CAP})
 file(WRITE "${WORK}/tlc.log" "${out}")

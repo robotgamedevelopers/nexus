@@ -101,7 +101,8 @@ endif()
 # tlc host (amd-2, 2026-11-15), wall s / CPU s on eight workers and on four: plain 15.8/90 on eight; place 25.1/166 and
 # 38.8/144; sign-in 16.2/100 and 29.7/108; switch 48.9/288 and 45.5/162. Switch does not get faster past four workers
 # (the same 45-47 s on four CPUs as on sixteen), so it runs four and needs 44% less CPU, which is what a shard gets
-# least of on a busy host; the others run eight, which nearly halves their time for 7-17% more CPU. Over 50 CI runs
+# least of on a busy host; the others run eight, which nearly halves their time for 7-17% more CPU (in CI, no more
+# than the runner's share of cores: tests/model/tlc-workers.cmake). Over 50 CI runs
 # (pass p50/p90): plain 25/39 s, switch 46/64, place 42/55, sign-in 27/41; the timeouts were runs starved by other
 # jobs on the host (sign-in generated 3,633 of its states in 55 s), not instances grown past their cap.
 tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD)
