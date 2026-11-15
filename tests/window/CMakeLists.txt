@@ -1,5 +1,6 @@
-# The tests of the window's logic (NEXUS_WINDOW_LOGIC in CMakeLists.txt: it starts processes through Prax's
-# lib/process).
+# The tests of the window's code. Those of its logic need NEXUS_WINDOW_LOGIC (CMakeLists.txt: it starts processes
+# through Prax's lib/process); the hitch detector's, the settings files' and the board scroller's build everywhere, native
+# Windows included; those that draw or set text need NEXUS_WINDOW.
 if(NEXUS_WINDOW_LOGIC)
     # The window's unit tests: pure logic only (no OS, no clock, no window, no network).
     add_executable(nexus_window_tests test_window.cpp)

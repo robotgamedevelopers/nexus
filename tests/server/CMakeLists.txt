@@ -1,7 +1,8 @@
 # Tests of nexus-server's driver supervisor (src/server/supervisor.h) and the friends layer over it, with four labels:
 #   unit           supervisor_test: the state machine by rule, every refusal and every deadline at its edges, text
 #                  gathering and splitting, the failed-start count, shutdown from every phase; friends_unit: the
-#                  drivers file; server_unit_home: the server's home and the settings files; server_unit_pass: the
+#                  drivers file; server_unit_home: the server's home and config (the settings files' own parsing is
+#                  tests/window's config_unit); server_unit_pass: the
 #                  order of a pass's end (flush, then release and state). Logic only: no processes,
 #                  files, sockets or clock.
 #   functional     friends_functional_*: the friends layer's real processes (the fake driver, tests/driver, and shell
