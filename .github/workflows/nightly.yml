@@ -62,7 +62,7 @@ jobs:
           downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which no check program uses.
       - name: Configure (Release)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF

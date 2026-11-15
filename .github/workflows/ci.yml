@@ -16,8 +16,11 @@
 # jar must be the pinned tla2tools.jar v1.7.4, whose sha256 is in .github/tla2tools.sha256; any other jar
 # fails the job.
 #
-# Builds use every core and tests run one job per core (`sysctl -n hw.ncpu`). Caches live outside the workspace, under
-# ~/Library/Caches/nexus-ci on the runner's machine, so a build is from scratch but Prax is not recompiled each time:
+# Builds use the job's share of its host's cores and tests run one job per core of that share: NOVA_JOB_CORES, which
+# each fleet runner exports, or the machine's core count where it is unset (.github/job-cores.sh; the windows job does
+# the same in pwsh). Runners share hosts, so a job that took every core would starve the others. Caches live outside
+# the workspace, under ~/Library/Caches/nexus-ci on the runner's machine, so a build is from scratch but Prax is not
+# recompiled each time:
 #   ccache/                    compiled objects, when the machine has ccache; CCACHE_BASEDIR makes the runners'
 #                              different workspaces hit (it compiles with relative paths, so objects are identical)
 #   lto/                       the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
@@ -69,7 +72,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(sysctl -n hw.ncpu)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -145,7 +148,7 @@ jobs:
           downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
@@ -239,7 +242,7 @@ jobs:
           downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
           mkdir -p "$downloads"
           echo "PR_DOWNLOAD_DIR=$downloads" >> "$GITHUB_ENV"
-          echo "JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "JOBS=$(sh .github/job-cores.sh)" >> "$GITHUB_ENV"
       - name: Install the pinned packages
         working-directory: drivers/claude
         run: npm ci --omit=optional --no-audit --no-fund
@@ -284,7 +287,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(nproc)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -378,7 +381,7 @@ jobs:
             echo "CCACHE_DIR=$caches/ccache"
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(nproc)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       - name: Configure (Debug, ASan and UBSan)
         shell: bash
@@ -578,7 +581,7 @@ jobs:
             echo "CCACHE_DIR=$caches/ccache"
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(nproc)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       # The Claude driver's trace checks (models/ClaudeDriverTrace.tla) run its unit tests and its walk under Node, from
       # its build: Node from the runner's machine as in the claude-driver job, the pinned packages, the compile alone.
@@ -678,7 +681,7 @@ jobs:
             echo "CCACHE_DIR=$caches/ccache"
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sysctl -n hw.ncpu)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       # Without the link's transport (mosh and protobuf), which the walk does not use.
       - name: Configure (Release)
@@ -732,7 +735,7 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(nproc)"
+            echo "JOBS=$(sh .github/job-cores.sh)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
         shell: bash
@@ -814,7 +817,17 @@ jobs:
           "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
           "NEXUS_BUILD=$build" >> $env:GITHUB_ENV
           "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
-          "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+          # The job's share of the host's cores, as .github/job-cores.sh: NOVA_JOB_CORES, else the processor count.
+          $jobs = [Environment]::ProcessorCount
+          $share = 0
+          if ("$env:NOVA_JOB_CORES" -match '^[1-9][0-9]*$' -and [int]::TryParse($env:NOVA_JOB_CORES, [ref]$share)) {
+            $jobs = $share
+            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is ${share}: jobs use it"
+          } else {
+            $shown = if ($null -eq $env:NOVA_JOB_CORES) { 'unset' } else { $env:NOVA_JOB_CORES }
+            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is '$shown', not a positive integer: jobs use the processor count, $jobs"
+          }
+          "JOBS=$jobs" >> $env:GITHUB_ENV
           cmake --version
           if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
       # Prax at the commit CMakeLists.txt pins, fetched once per runner at depth 1 (a full clone outlasts the job's 2
