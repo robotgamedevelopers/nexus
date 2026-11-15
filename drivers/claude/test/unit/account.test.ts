@@ -156,6 +156,41 @@ void test('the start is refused before any account is read when the AI\'s sandbo
     assert.ok('account' in prepare(['--account', 'ready', '--cwd', '/w'], () => true, findAny, () => undefined, undefined));
 });
 
+void test('a limited friend starts only where the limit holds, else it is refused before any account is read', () => {
+    let looked = false;
+    const findAny = (name: string): Account | AccountRefusal => {
+        looked = true;
+        return { name, dir: '/h/a', configDir: '/h/c', token: 't' };
+    };
+    const linux = { home: '/h', platform: 'linux', realpath: (p: string): string => p.replace(/^\/link/, '/h') };
+    const start = (cwd: string, place = linux, more: string[] = []): ReturnType<typeof prepare> =>
+        prepare(['--account', 'ready', '--cwd', cwd, '--limit', 'cwd', ...more], () => true, findAny, () => undefined,
+            undefined, place);
+    const refused = (r: ReturnType<typeof prepare>): string => {
+        assert.ok('refusal' in r);
+        const e = r.refusal[1];
+        assert.ok(e?.kind === 'error' && e.code === 'other');
+        assert.match(e.fix, /"limit"/);
+        return e.cause;
+    };
+    assert.match(refused(start('/h')), /is the home directory/);
+    assert.match(refused(start('/link')), /is the home directory/, 'a link to HOME is HOME');
+    assert.match(refused(start('/')), /root of the file system/);
+    assert.match(refused(start('/h/.nexus/server')), /inside ~\/.nexus/);
+    assert.match(refused(start('/h/.ssh')), /inside ~\/.ssh/);
+    assert.match(refused(start('/h/.nexus')), /holds ~\/.nexus/);
+    assert.match(refused(start('/h/w', { ...linux, platform: 'win32' })), /cannot limit it on win32/);
+    assert.match(refused(start('/h/w', linux, ['--claude', '/bin/claude'])), /--claude \/bin\/claude/);
+    assert.match(refused(start('/h/w', { ...linux, home: '' })), /HOME is not set/);
+    assert.equal(looked, false, 'no account is read for a limited session that cannot start');
+    // Its own directory, anywhere else: under HOME, or beside it.
+    assert.ok('account' in start('/h/w'));
+    assert.ok('account' in start('/srv/proj'));
+    assert.ok('account' in start('/h/w', { ...linux, platform: 'darwin' }));
+    // Unlimited, the same places start as before.
+    assert.ok('account' in prepare(['--account', 'ready', '--cwd', '/h'], () => true, findAny, () => undefined, undefined, linux));
+});
+
 void test('Claude gets the account\'s directory, none it inherited, and its token in no environment', () => {
     const { env } = scrub({
         CLAUDE_CONFIG_DIR: '/Users/me/.claude', CLAUDE_CODE_OAUTH_TOKEN: 'inherited', ANTHROPIC_API_KEY: 'k',

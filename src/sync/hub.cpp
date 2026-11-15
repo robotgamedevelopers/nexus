@@ -507,6 +507,18 @@ bool Hub::settle(std::vector<std::string>* report, const std::string& cause, con
                     wasInstance + " -> " + (info.instance.empty() ? std::string("none") : info.instance));
             }
         }
+        // Its friend's "limit" changed (a reload): told, and its driver restarts under the new limit once no turn is
+        // open (Drivers::configured); an open turn runs to its end under the one it started with.
+        if (fr != nullptr && frBefore != nullptr && fr->limit != frBefore->limit) {
+            instanceNotice += std::string(instanceNotice.empty() ? "" : " ") + info.friendName + " is " +
+                (fr->limit ? "now limited to its directory" : "no longer limited to its directory") + " (" + cause +
+                "): this session's driver restarts " + (fr->limit ? "limited" : "unlimited") + " once no turn is "
+                "open; a turn already open finishes as it started.";
+            if (report != nullptr) {
+                report->push_back("session " + std::to_string(id) + " (" + info.friendName + "): limit " +
+                    (frBefore->limit ? "true" : "false") + " -> " + (fr->limit ? "true" : "false"));
+            }
+        }
         if (info.account.empty()) {
             if (!instanceNotice.empty() && !moveTo(id, info, instanceNotice)) {
                 return false;
@@ -941,6 +953,9 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
                 refused = "no account " + a + " is set up";
             } else if (std::find(fr->accounts.begin(), fr->accounts.end(), a) != fr->accounts.end()) {
                 refused = f + " is already linked to " + a;
+            } else if (!fr->limit && next.account(a)->billing == accounts::Billing::Api) {
+                refused = a + " is billed at API rate, and a friend on an API-billed account is always limited, but " +
+                    f + " has \"limit\": false in friends.json; set it to true there first (docs/accounts.md)";
             } else {
                 fr->accounts.push_back(a);
             }

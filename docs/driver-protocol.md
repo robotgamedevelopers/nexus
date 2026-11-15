@@ -14,6 +14,7 @@ The server starts the driver with these arguments:
 |---|---|
 | `--cwd <dir>` | the directory the harness works in; always given |
 | `--resume <session id>` | resume this harness session (an id the driver reported in a `session` message); absent for a new session |
+| `--limit cwd` | the friend is limited to its directory (`docs/accounts.md`, "limit"): the AI reads and writes only in `--cwd` (and what its harness needs to run); absent for a friend not limited. A driver that cannot enforce it, or does not know the argument, refuses to start with an `error` (code `other`), never runs unlimited |
 
 The account the harness uses is chosen by the environment the server starts the driver with, never by the protocol.
 The driver's standard error is free text for logs; the server shows none of it as conversation.

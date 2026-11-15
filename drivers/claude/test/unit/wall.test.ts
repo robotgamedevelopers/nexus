@@ -10,7 +10,7 @@ import { after, test } from 'node:test';
 
 import { configDirOf, kClaudeStateFiles, kMaxStateFileBytes, openConfigDir } from '../../src/account.js';
 import {
-    bothForms, configFiles, folded, kClaudeSandboxProtects, kGitNameRules, kLoginVariables, kNoSettingsHooks, nexusOutsideState, programsOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
+    bothForms, configFiles, folded, kClaudeSandboxProtects, kDataRoots, kGitNameRules, kLoginVariables, kNoSettingsHooks, limitOf, nexusOutsideState, programsOf, projectStateOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
     type Wall, type WallFs,
 } from '../../src/wall.js';
 import { LeakScan } from '../leak-scan.js';
@@ -461,4 +461,77 @@ void test('a file not made yet resolves through its nearest folder that is', () 
     assert.equal(realOf('/w/lnk2/new/deeper/file', d), '/h/.nexus/server/accounts/new/deeper/file');
     assert.equal(realOf('/w/notes.md', d), '/w/notes.md');
     assert.equal(realOf('/nowhere/at/all', { realpath: () => { throw new Error('ENOENT'); } }), '/nowhere/at/all');
+});
+
+void test('a limited friend\'s sandbox reads none of HOME and the data roots but its directory, its state and its programs', () => {
+    const exists = (p: string): boolean => p !== '/srv';
+    const env = { PATH: '/var/h/.local/bin:/usr/bin:/home/linuxbrew/.linuxbrew/bin:/var/h/.ssh/bin', TMPDIR: '/var/t/' };
+    const l = limitOf('/var/h', '/var/h/w', '/var/h/.nexus/server/harness/claude/main', ['/d/driver'], 'linux', env,
+        '/opt/node/bin/node', realpath, exists);
+    // HOME and every data root that exists, in both forms.
+    assert.deepEqual(l.denyRead, ['/home', '/root', '/mnt', '/media', '/run/media', '/var/h', '/private/var/h']);
+    for (const p of ['/var/h/w', '/private/var/h/w', '/d/driver', '/opt/node', '/var/h/.local/bin', '/home/linuxbrew/.linuxbrew/bin',
+        '/home/linuxbrew/.linuxbrew', '/var/h/.gitconfig', '/var/h/.config/git', '/var/h/.bashrc',
+        '/var/h/.nexus/server/harness/claude/main/shell-snapshots', '/var/h/.nexus/server/harness/claude/main/session-env',
+        '/var/h/.nexus/server/harness/claude/main/projects/-var-h-w']) {
+        assert.ok(l.allowRead.includes(p), p);
+    }
+    // Never ~/.ssh, ~/.nexus or a folder above either; never a token file a program keeps under HOME; not HOME's parent bin.
+    for (const p of ['/var/h/.ssh/bin', '/var/h', '/var/h/.nexus', '/var/h/.npmrc', '/var/h/.local', '/var/h/.nexus/server/accounts']) {
+        assert.ok(!l.allowRead.includes(p), p);
+    }
+    assert.ok(!l.allowRead.some((p) => p.startsWith('/var/h/.ssh') || p.startsWith('/private/var/h/.ssh')));
+    // Writes: its directory and the temporary ones only.
+    assert.deepEqual(l.allowWrite, ['/var/h/w', '/private/var/h/w', '/var/t', '/private/var/t', '/tmp', '/private/tmp']);
+    assert.deepEqual(l.roots, ['/var/h/w', '/private/var/h/w']);
+    // The project's folder by the directory as given and as resolved, each in both forms.
+    assert.deepEqual(l.reads, ['/var/h/.nexus/server/harness/claude/main/projects/-var-h-w',
+        '/private/var/h/.nexus/server/harness/claude/main/projects/-var-h-w',
+        '/var/h/.nexus/server/harness/claude/main/projects/-private-var-h-w',
+        '/private/var/h/.nexus/server/harness/claude/main/projects/-private-var-h-w']);
+    assert.deepEqual(l.ssh, ['/var/h/.ssh', '/private/var/h/.ssh']);
+    assert.equal(projectStateOf('/c', '/Users/me/my proj.x'), '/c/projects/-Users-me-my-proj-x');
+    // A temporary directory that holds HOME is not written (a test's HOME in /tmp).
+    const inTmp = limitOf('/tmp/run/h', '/tmp/run/h/w', '/tmp/run/h/.nexus/c', [], 'darwin', { TMPDIR: '/tmp/run/t' }, '/n/node', (p) => p, () => true);
+    assert.deepEqual(inTmp.allowWrite, ['/tmp/run/h/w', '/tmp/run/t', '/private/tmp']);
+    assert.deepEqual(inTmp.denyRead, [...kDataRoots['darwin'] ?? [], '/tmp/run/h']);
+});
+
+void test('a limited friend\'s sandbox, deny rules and settings', () => {
+    const l = limitOf('/h', '/h/w', '/h/.nexus/server/harness/claude/main', [], 'linux', {}, '/n/node', (p) => p, () => true);
+    const s = wallSandbox(wall, ['/h', '/w'], 4321, l);
+    assert.deepEqual(s.filesystem.allowWrite, l.allowWrite);
+    assert.deepEqual(s.filesystem.allowRead, l.allowRead);
+    assert.deepEqual(s.filesystem.denyRead, ['/h/.nexus/server/accounts', ...l.denyRead]);
+    // Unlimited: no allowRead, HOME writable as before.
+    assert.equal('allowRead' in wallSandbox(wall, ['/h', '/w'], 4321).filesystem, false);
+    const rules = wallDenyRules(wall, l);
+    for (const r of ['Read(//h/.ssh)', 'Read(//h/.ssh/**)', 'Edit(//h/.ssh/**)']) {
+        assert.ok(rules.includes(r), r);
+    }
+    assert.ok(!wallDenyRules(wall).includes('Read(//h/.ssh/**)'));
+});
+
+void test('the hook refuses a limited friend\'s file tools every path outside its directory, by where it resolves', () => {
+    const d = fakeFs({ '/w/a.c': '1:1', '/w/sub/b.c': '1:2', '/h/notes': '1:3', '/h/.ssh/id': '1:4', '/c/projects/-w/m.md': '1:5' },
+        { '/w/out': '/h' });
+    const limit = { roots: ['/w'], reads: ['/c/projects/-w'] };
+    const refuseL = (tool: string, input: Record<string, unknown>): string | undefined =>
+        toolRefusal(tool, input, wall, '/w', '/h', d, limit);
+    for (const [tool, input] of [['Read', { file_path: '/h/notes' }], ['Read', { file_path: '~/.ssh/id' }],
+        ['Read', { file_path: 'out/notes' }], ['Read', { file_path: '/w/../h/notes' }], ['Read', { file_path: '/w//../h/notes' }],
+        ['Grep', { pattern: 'x', path: '/h' }], ['Grep', { pattern: 'x' , glob: '/h/**' }], ['Glob', { pattern: '/h/**/*.c' }],
+        ['Glob', { pattern: '**/*', path: '..' }], ['Write', { file_path: '/h/new', content: 'x' }],
+        ['Write', { file_path: 'out/new', content: 'x' }], ['Edit', { file_path: '/c/projects/-w/m.md', old_string: 'a', new_string: 'b' }],
+        ['NotebookEdit', { notebook_path: '/tmp/x.ipynb', new_source: 'x' }]] as const) {
+        assert.match(refuseL(tool, input) ?? '', /limits this friend to its directory, \/w/, `${tool} ${JSON.stringify(input)}`);
+    }
+    for (const [tool, input] of [['Read', { file_path: 'a.c' }], ['Read', { file_path: '/w/sub/b.c' }], ['Grep', { pattern: 'x' }],
+        ['Grep', { pattern: 'x', path: 'sub' }], ['Glob', { pattern: '**/*.c' }], ['Write', { file_path: 'new.c', content: 'x' }],
+        ['Edit', { file_path: 'sub/b.c', old_string: 'a', new_string: 'b' }], ['Read', { file_path: '/c/projects/-w/m.md' }],
+        ['Bash', { command: 'cat /h/notes' }]] as const) {
+        assert.equal(refuseL(tool, input), undefined, `${tool} ${JSON.stringify(input)}`);
+    }
+    // Unlimited, the same reads outside go on.
+    assert.equal(toolRefusal('Read', { file_path: '/h/notes' }, wall, '/w', '/h', d), undefined);
 });

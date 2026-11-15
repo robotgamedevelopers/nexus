@@ -2,13 +2,15 @@
 // a seeded random walk and writes the trace as AccountsTraceData.tla, for TLC to check against models/Accounts.tla
 // (models/AccountsTrace.tla). No files, no clock: the registry is the hub's, the sign-ins are reported by the walk.
 //
-//   accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance] <out.tla>
+//   accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance | --faulty-limit] <out.tla>
 //
 // Each step is one of the model's operations, given to the code the way the server gives it: an account action from a
 // window (add, remove, friend, link, unlink, default, set, create) through Hub::apply; a hand edit (dropfriend,
 // droplink, dropaccount, provider, addinst, dropinst, moveinst) as the registry it leaves, through Hub::applyAccounts,
 // the way `nexus-server config reload` applies the files; a sign-in reported (in, out) through Hub::reportSignedIn; a
-// usage limit (rotate) through Hub::rotate. After it the walk records the code's whole state: each account absent,
+// usage limit (rotate) through Hub::rotate; a friend's limit or an account's billing edited (limit, billing) as the
+// registry it leaves; a session's driver started (start), limited or not as accounts::limitedFor decides from the
+// hub's registry, the way the server decides it at every driver start (src/server/drivers.cpp), or ended (end). After it the walk records the code's whole state: each account absent,
 // signed in or needing sign-in, its provider, the friends with their links, defaults and instances, each session's
 // friend, instance, account and harness, the next id, the sessions the step gave a notice (their transcripts' notices counted before and after), and whether the code took
 // the step or refused it.
@@ -21,6 +23,8 @@
 //   --faulty-stay      a session left on an account no longer linked to its friend
 //   --faulty-harness   a session left on its old harness when its account's provider changed
 //   --faulty-instance  a session left on an instance its friend no longer has
+//   --faulty-limit     a driver started open for a limited friend on an account billed by subscription (a server that
+//                      reads only the account's billing)
 
 #include <algorithm>
 #include <cstdint>
@@ -68,6 +72,24 @@ struct Walk {
     sync::Hub hub{store};
     std::map<std::string, std::string> provider = kProvider;   // an account's provider, kept while it is not set up
     std::uint64_t num = 0;
+    // Each session's driver, as the walk started it: "off", "limited" or "open", with whether its account was billed at
+    // API rate and its friend limited at the start (the model's run).
+    struct Run {
+        std::string st = "off";
+        bool api = false;
+        bool flim = false;
+    };
+    std::map<sync::SessionId, Run> runs;
+
+    // A friend's limit as the model reads it: a friend not in the files reads limited (accounts::limitedFor).
+    bool limitOf(const std::string& f) const {
+        const accounts::Friend* x = reg().friendNamed(f);
+        return x == nullptr || x->limit;
+    }
+    bool apiBilled(const std::string& a) const {
+        const accounts::Account* x = reg().account(a);
+        return x != nullptr && x->billing == accounts::Billing::Api;
+    }
 
     const accounts::Registry& reg() const { return *hub.accounts(); }
 
@@ -163,7 +185,22 @@ struct Walk {
                     q(s->info.harness) << "]";
             }
         }
-        o << ">>, nextSes |-> " << store.nextId() << ", told |-> {";
+        o << ">>, nextSes |-> " << store.nextId() << ", lim |-> (";
+        for (std::size_t i = 0; i < kFriends.size(); ++i) {
+            o << (i == 0 ? "" : " @@ ") << q(kFriends[i]) << " :> " << (limitOf(kFriends[i]) ? "TRUE" : "FALSE");
+        }
+        o << "), bill |-> (";
+        for (std::size_t i = 0; i < kAccts.size(); ++i) {
+            o << (i == 0 ? "" : " @@ ") << q(kAccts[i]) << " :> " << q(apiBilled(kAccts[i]) ? "api" : "sub");
+        }
+        o << "), run |-> <<";
+        for (sync::SessionId id = 1; id <= kMaxSes; ++id) {
+            const auto it = runs.find(id);
+            const Run r = it == runs.end() ? Run{} : it->second;
+            o << (id == 1 ? "" : ", ") << "[st |-> " << q(r.st) << ", api |-> " << (r.api ? "TRUE" : "FALSE") <<
+                ", flim |-> " << (r.flim ? "TRUE" : "FALSE") << "]";
+        }
+        o << ">>, told |-> {";
         first = true;
         for (sync::SessionId id : told) {
             o << (first ? "" : ", ") << id;
@@ -186,12 +223,14 @@ int main(int argc, char** argv) {
             faulty = "harness";
         } else if (std::strcmp(argv[i], "--faulty-instance") == 0) {
             faulty = "instance";
+        } else if (std::strcmp(argv[i], "--faulty-limit") == 0) {
+            faulty = "limit";
         } else {
             args.emplace_back(argv[i]);
         }
     }
     if (args.size() != 3) {
-        std::fprintf(stderr, "usage: accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance] "
+        std::fprintf(stderr, "usage: accounts_walk <seed> <steps> [--faulty-stay | --faulty-harness | --faulty-instance | --faulty-limit] "
                      "<out.tla>\n");
         return 2;
     }
@@ -201,7 +240,8 @@ int main(int argc, char** argv) {
     Walk w;
     w.hub.useAccounts(accounts::Registry{}, nullptr);
     std::vector<std::string> records;
-    records.push_back("[op |-> \"init\", f |-> \"none\", a |-> \"none\", s |-> 0, p |-> \"none\", ok |-> TRUE, " +
+    records.push_back("[op |-> \"init\", f |-> \"none\", a |-> \"none\", s |-> 0, p |-> \"none\", v |-> TRUE, "
+                      "b |-> \"sub\", ok |-> TRUE, " +
                       w.record({}) + "]");
     std::vector<std::string> acctsOrNone = kAccts;
     acctsOrNone.emplace_back(kNone);
@@ -218,8 +258,10 @@ int main(int argc, char** argv) {
         std::string a = kNone;
         std::string p = kNone;
         sync::SessionId s = 0;
+        bool v = true;
+        std::string b = "sub";
         bool ok = false;
-        const std::size_t choice = pick(58);   // weighted toward the steps that move sessions
+        const std::size_t choice = pick(66);   // weighted toward the steps that move sessions
         if (choice < 3) {
             op = "add";
             a = pickOf(kAccts);
@@ -301,6 +343,52 @@ int main(int argc, char** argv) {
             op = "rotate";
             s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
             ok = w.hub.rotate(s);
+        } else if (choice >= 58 && choice < 60) {
+            // A friend's limit edited; a friend not in the files has no "limit" to edit (the model refuses it too).
+            op = "limit";
+            f = pickOf(kFriends);
+            v = pick(2) == 0;
+            accounts::Registry next = w.reg();
+            if (accounts::Friend* x = next.friendNamed(f)) {
+                x->limit = v;
+                ok = w.edit(next);
+            }
+        } else if (choice >= 60 && choice < 62) {
+            // An account's billing edited; an account not in the files has none (the model refuses it too).
+            op = "billing";
+            a = pickOf(kAccts);
+            b = pick(2) == 0 ? "api" : "sub";
+            accounts::Registry next = w.reg();
+            for (accounts::Account& x : next.accounts) {
+                if (x.name == a) {
+                    x.billing = b == "api" ? accounts::Billing::Api : accounts::Billing::Subscription;
+                    ok = w.edit(next);
+                }
+            }
+        } else if (choice >= 62 && choice < 65) {
+            // A session's driver started: limited as the server decides at the start, from the files as they are.
+            op = "start";
+            s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
+            const sync::StoredSession* on = w.store.find(s);
+            Walk::Run& r = w.runs[s];
+            if (on != nullptr && r.st == "off") {
+                const std::string& acc = on->info.account;
+                bool limited = accounts::limitedFor(w.hub.accounts(), on->info.friendName, acc);
+                if (faulty == "limit" && limited && !w.apiBilled(acc)) {
+                    limited = false;
+                    ++faults;
+                }
+                r = Walk::Run{limited ? "limited" : "open", !acc.empty() && w.apiBilled(acc), w.limitOf(on->info.friendName)};
+                ok = true;
+            }
+        } else if (choice == 65) {
+            op = "end";
+            s = static_cast<sync::SessionId>(1 + pick(kMaxSes));
+            Walk::Run& r = w.runs[s];
+            if (r.st != "off") {
+                r = Walk::Run{};
+                ok = true;
+            }
         } else if (choice >= 50) {
             // An edit of a friend's instances: one added at the end, one taken out, or one moved in place (its
             // directory changed, its name kept).
@@ -377,7 +465,8 @@ int main(int argc, char** argv) {
             }
         }
         records.push_back("[op |-> " + q(op) + ", f |-> " + q(f) + ", a |-> " + q(a) + ", s |-> " +
-                          std::to_string(s) + ", p |-> " + q(p) + ", ok |-> " + (ok ? "TRUE" : "FALSE") + ", " +
+                          std::to_string(s) + ", p |-> " + q(p) + ", v |-> " + (v ? "TRUE" : "FALSE") + ", b |-> " + q(b) +
+                          ", ok |-> " + (ok ? "TRUE" : "FALSE") + ", " +
                           w.record(told) + "]");
     }
 
@@ -393,6 +482,8 @@ int main(int argc, char** argv) {
         << "TraceInsts == {\"i1\", \"i2\"}\n"
         << "TraceMaxSes == " << kMaxSes << "\n"
         << "TraceStartHarness == \"" << kStartHarness << "\"\n"
+        << "TraceBills == {\"sub\", \"api\"}\n"
+        << "TraceLimits == {TRUE, FALSE}\n"
         << "Trace == <<\n";
     for (std::size_t i = 0; i < records.size(); ++i) {
         out << "  " << records[i] << (i + 1 < records.size() ? ",\n" : "\n");

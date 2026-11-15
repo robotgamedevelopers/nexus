@@ -458,7 +458,8 @@ What it costs:
   reaches this machine's sshd as the person, outside the sandbox. The test's ssh-out probe sees the fleet refuse the
   way back today; that is the fleet's configuration, not the wall. An option that closes it: deny the sandbox reading
   the person's private keys in `~/.ssh` (a deny-read rule beside the accounts'). Its cost: the AI cannot ssh, or use git
-  over ssh, with the person's keys at all, only with keys of its own. Not done in this change.
+  over ssh, with the person's keys at all, only with keys of its own. A limited friend (below) has exactly that: it
+  reads nothing in `~/.ssh`. An unlimited one keeps the route open.
 - *Every OS: descriptor 3 is Claude's to close* (layer 1). A substituted Claude executable that ignores it leaves the
   token on a descriptor its tools inherit.
 - *Every OS: the hook is text-based* and can be spelled around (layers 1 to 5 hold without it against the routes the
@@ -493,6 +494,67 @@ What it costs:
   dumpable (`src/no_core.h`, above). The Claude driver is a Node process, and Node has no call for either, so it does
   neither: from reading the token file until Claude has it, the token is in the driver's memory, and a core file of it
   or a process of the same user allowed to trace it could hold or read it.
+
+### A limited friend
+
+A friend with `"limit": true` in friends.json (docs/accounts.md, "limit"; the default for a friend added, and always for
+one on an account billed at API rate) runs with the wall above and, on top of it, kept to its directory. The server
+passes the driver `--limit cwd` at every start of such a session; a driver that does not know the argument refuses to
+start (so an older driver never runs a limited friend unlimited), and the Claude driver adds the limit from what Claude
+and the machine already have (`wall.ts` `limitOf`), nothing of nexus's own:
+
+1. *The shell* (Claude's sandbox, as layer 2). Reads are denied in the home directory and the platform's data roots
+   (macOS `/Users`, `/Volumes` and their `/System/Volumes/Data` forms; Linux and WSL2 `/home`, `/root`, `/mnt`,
+   `/media`, `/run/media`, `/srv`, those that exist), and allowed again (`allowRead`) only for the working directory;
+   the parts of the account's Claude state the shell reads (its shell snapshots, its session environment, and the
+   project's memory folder); the programs nexus runs (node and its install prefix, the driver, the sandbox's tools) and
+   the PATH folders under a denied root (outside HOME, a `bin` or `sbin` folder with its parent, such as Homebrew's on
+   Linux); and, read only, the config git and the shells read at every start (`kLimitedReadsUnderHome`: `.gitconfig`,
+   `.config/git`, the bash and zsh start-up files, `.profile`, `.inputrc`; never `.npmrc` or `.envrc`, which hold tokens).
+   None of those is `~/.ssh`, `~/.nexus` or a folder above either. Writes are allowed only in the working directory and
+   the temporary directories (the session's `TMPDIR` and `/tmp`, never one that holds HOME), less the files of layer 5.
+2. *The file tools* (Claude's own working-directory limit): `blockReadsOutsideWorkingDirectories` and
+   `blockWritesOutsideWorkingDirectories`, which hold in every permission mode and which no allow rule lifts, with the
+   project's memory folder exempt for reading; and Read and Edit deny rules on `~/.ssh`.
+3. *The hook* refuses a file tool any path whose every place on disk (links followed, `..` and doubled slashes resolved)
+   is not in the working directory, or, to read, the project's memory folder. Deny-leaning: another spelling of the
+   directory (another case on a case-insensitive volume) is refused.
+
+A limited session does not start, in one line, when its directory does not exist, is HOME or the root, holds `~/.nexus`,
+or is inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; when HOME is not set; or with `--claude`
+naming another Claude (whose settings nexus has not measured). It never starts unlimited instead (fail closed).
+
+**Measured** (macOS, the pinned Claude, `NEXUS_WALL_RUN=limited` and `limited-nohook` of the functional test; CI runs both
+on Ubuntu and WSL2 too). With a file of another project and a made-up private key planted in the scratch HOME, outside
+the working directory:
+
+| route | unlimited | limited |
+|---|---|---|
+| shell: `cat` the other project's file, the private key | read | denied (1: Operation not permitted) |
+| shell: `ls` HOME, `grep -r` HOME | listed, found | denied (1) |
+| shell: a symbolic link in its directory to the other project, then `cat` | read | denied (1) |
+| shell: write in HOME and in the other project | written | denied (1) |
+| Read: the other project's file; the private key; through the link | read | refused (3, and 2 without the hook); the key also by rule |
+| Grep, Glob: HOME | found | refused (3, and 2 without the hook) |
+| Write: in the other project | written | refused (3, and 2 without the hook) |
+| the token, by the shell through a glob and by Read | denied (wall) | denied (wall) |
+| its own directory: Write, Edit and Read a file; build and run a C program; `git status` and commit | works | works |
+
+**What it costs.** It cannot ssh, or use git over ssh, with the person's keys (it reads nothing in `~/.ssh`); it cannot
+read another project, a package cache or a toolchain kept under HOME but off the PATH (Go's module cache and build
+cache, `~/.cargo`'s registry, `~/.npm`, a language version manager's installs beyond the PATH folder), nor write
+caches there: point such a tool's cache into the working directory or the temporary directory (`GOCACHE`,
+`GOMODCACHE`, `npm_config_cache`). On macOS a program that keeps a cache in the user's temporary folder (`cc`'s
+xcrun cache) warns and runs. Claude's own state is the account's, outside the sandbox, so its memory and transcripts work.
+
+**What stays open to a limited friend.** Everything outside the data roots and HOME stays readable to its shell, as to
+any program of the user: the system's folders, `/etc`, `/opt`, `/tmp` and whatever other users or programs leave there
+(macOS's `/Library`, `/Applications`, `/private/var` beyond its own temporary folder). The network is the wall's:
+unchanged, every other machine reachable through the driver's proxy, so a limited friend still fetches, pushes over
+https with credentials of its own, and reaches services on other machines. The git config files under HOME it reads
+(above) are readable. A file another friend keeps outside the data roots (in `/tmp`, say) is readable. The limit is
+best effort like the wall: the AI's own user account is the person's, and a sandboxed VM or container
+(`real-isolation`, the roadmap) is the real isolation.
 
 Not a hole, a known fault: on Linux two Claude sandboxes at once, whose working directories share an ancestor a few
 levels up, now and then fail each other's commands (`bwrap: Can't find source path <ancestor>/.mcp.json`; measured in

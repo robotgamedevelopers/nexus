@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
     }
 
     // A version newer than this server reads, committed by hand: refused, and the file left as it was.
-    const std::string newer = "{\n  \"version\": 2,\n  \"accounts\": []\n}\n";
+    const std::string newer = "{\n  \"version\": 3,\n  \"accounts\": []\n}\n";
     spit(repo.accountsPath(), newer);
     CHECK(runGit(dir, {"commit", "-q", "-am", "a newer nexus-server's files"}).status == 0);
     report.clear();

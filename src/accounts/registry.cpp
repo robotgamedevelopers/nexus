@@ -167,8 +167,8 @@ PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& exam
             ok = false;
         } else {
             r.read.version = static_cast<int>(n);
-            // Version 1 is the first: nothing older to upgrade yet. An upgrade of version n to n + 1 goes here, in
-            // the order of the versions, and sets r.read.upgraded.
+            // The upgrades, in the order of the versions, are in the fields' defaults: version 1 had no "billing"
+            // (every account a subscription's) and no "limit" (every friend unlimited), and its file is read so.
             r.read.upgraded = r.read.version < kVersion;
         }
     }
@@ -206,14 +206,33 @@ bool stringField(Reader& r, PrJsonValueIndex object, const std::string& key, con
     return true;
 }
 
-const char* const kNameRule = "1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-'";
+// A true-or-false member: true with its value (`fallback` when absent); false (an error made) when not true or false.
+bool boolField(Reader& r, PrJsonValueIndex object, const std::string& key, const std::string& what, bool fallback,
+               bool* out) {
+    const PrJsonValueIndex v = prJsonMember(r.doc(), object, pr(key));
+    if (v == kPrJsonMissing) {
+        *out = fallback;
+        return true;
+    }
+    const PrJsonKind k = prJsonKind(r.doc(), v);
+    if (k != PrJsonKind_True && k != PrJsonKind_False) {
+        r.errorAt(v, what + "'s \"" + key + "\" is " + kindName(k) + ", not true or false",
+                  "write true or false, without quotes");
+        return false;
+    }
+    *out = k == PrJsonKind_True;
+    return true;
+}
+
+const char* const kNameRule ="1 to 64 letters, digits, '-', '_' or '.', not starting with '.' or '-'";
 const char* const kProviderRule = "1 to 32 lowercase letters, digits or '-', as \"claude\"";
 const char* const kMachineRule = "1 to 253 letters, digits, '-' or '.', not starting with '-' or '.', as \"studio\"";
 const char* const kDirRule = "starting with '/', printable, at most 4096 bytes, as \"/Users/me/work\"";
 const char* const kAccountsExample =
-    "{ \"version\": 1, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\" } ] }";
+    "{ \"version\": 2, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\", \"billing\": \"subscription\" } ] }";
 const char* const kFriendsExample =
-    "{ \"version\": 1, \"friends\": [ { \"name\": \"claude\", \"accounts\": [\"work\"], \"default\": \"work\" } ] }";
+    "{ \"version\": 2, \"friends\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
+    "\"work\" } ] }";
 
 bool contains(const std::vector<std::string>& v, std::string_view x) {
     return std::find(v.begin(), v.end(), x) != v.end();
@@ -331,6 +350,16 @@ std::vector<std::string> problems(const Registry& r) {
                               "keep one");
             }
         }
+        // A session on an account billed at API rate is always limited: so its friend may not say otherwise.
+        for (const std::string& a : f.accounts) {
+            const Account* acc = r.account(a);
+            if (!f.limit && acc != nullptr && acc->billing == Billing::Api) {
+                out.push_back("friends.json: the friend \"" + f.name + "\" has \"limit\": false and links to the "
+                              "account \"" + a + "\", which accounts.json bills at API rate (\"billing\": \"api\"); a "
+                              "friend on an API-billed account is always limited to its directory, so set \"" +
+                              f.name + "\"'s \"limit\" to true, or take \"" + a + "\" out of its \"accounts\"");
+            }
+        }
         if (!f.preferred.empty() && !contains(f.accounts, f.preferred)) {
             out.push_back("friends.json: the friend \"" + f.name + "\"'s \"default\" is \"" + f.preferred + "\", " +
                           "which is not in its \"accounts\"; add it to \"accounts\", or set \"default\" to one of " +
@@ -362,7 +391,8 @@ std::string accountsText(const Registry& r) {
     std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n  \"accounts\": [";
     for (std::size_t i = 0; i < r.accounts.size(); ++i) {
         s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(r.accounts[i].name) +
-             ",\n      \"provider\": " + quoted(r.accounts[i].provider) + "\n    }";
+             ",\n      \"provider\": " + quoted(r.accounts[i].provider) + ",\n      \"billing\": " +
+             quoted(billingName(r.accounts[i].billing)) + "\n    }";
     }
     s += r.accounts.empty() ? "]\n}\n" : "\n  ]\n}\n";
     return s;
@@ -373,7 +403,7 @@ std::string friendsText(const Registry& r) {
     for (std::size_t i = 0; i < r.friends.size(); ++i) {
         const Friend& f = r.friends[i];
         s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(f.name) +
-             ",\n      \"accounts\": [";
+             ",\n      \"limit\": " + (f.limit ? "true" : "false") + ",\n      \"accounts\": [";
         for (std::size_t k = 0; k < f.accounts.size(); ++k) {
             s += std::string(k == 0 ? "\n" : ",\n") + "        " + quoted(f.accounts[k]);
         }
@@ -415,10 +445,21 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
         }
         Account a;
         const std::string what = "an account";
-        bool ok = onlyKeys(r, e, {"name", "provider"}, what);
+        bool ok = onlyKeys(r, e, {"name", "provider", "billing"}, what);
         ok = stringField(r, e, "name", what, true, false, &a.name) && ok;
         const std::string named = a.name.empty() ? what : "the account \"" + a.name + "\"";
         ok = stringField(r, e, "provider", named, true, false, &a.provider) && ok;
+        // Absent: a subscription's, in every version (version 1 had no API-billed accounts).
+        std::string billing;
+        ok = stringField(r, e, "billing", named, false, false, &billing) && ok;
+        if (billing == "api") {
+            a.billing = Billing::Api;
+        } else if (!billing.empty() && billing != "subscription") {
+            r.errorAt(prJsonMember(r.doc(), e, pr("billing")), named + "'s \"billing\" is \"" + billing +
+                      "\", which is not one of \"subscription\" and \"api\"", "write \"subscription\" (a "
+                      "subscription's login) or \"api\" (billed at the provider's API rate)");
+            ok = false;
+        }
         if (ok && !isName(a.name)) {
             r.errorAt(e, named + " is not a name (" + kNameRule + ")", "rename it");
             ok = false;
@@ -459,9 +500,12 @@ Read readFriends(std::string_view text, const std::string& path, Registry* regis
             continue;
         }
         Friend f;
-        bool ok = onlyKeys(r, e, {"name", "accounts", "default", "instances"}, "a friend");
+        bool ok = onlyKeys(r, e, {"name", "limit", "accounts", "default", "instances"}, "a friend");
         ok = stringField(r, e, "name", "a friend", true, false, &f.name) && ok;
         const std::string named = f.name.empty() ? std::string("a friend") : "the friend \"" + f.name + "\"";
+        // Absent: limited, for a friend written since the field (version 2); not limited in a version 1 file, whose
+        // friends ran unlimited, so that nothing changes under a person until the file says so.
+        ok = boolField(r, e, "limit", named, r.read.version >= 2, &f.limit) && ok;
         ok = stringField(r, e, "default", named, false, true, &f.preferred) && ok;
         const PrJsonValueIndex l = prJsonMember(r.doc(), e, pr("accounts"));
         if (l != kPrJsonMissing && prJsonKind(r.doc(), l) != PrJsonKind_Array) {
@@ -569,14 +613,37 @@ std::string landing(const Registry& registry, const std::set<std::string>& up, s
     return std::string();
 }
 
+std::string_view billingName(Billing billing) {
+    return billing == Billing::Api ? "api" : "subscription";
+}
+
+bool limitedFor(const Registry* registry, std::string_view friendName, std::string_view account) {
+    if (registry == nullptr) {
+        return true;
+    }
+    const Friend* f = registry->friendNamed(friendName);
+    if (f == nullptr || f->limit) {
+        return true;
+    }
+    const Account* a = account.empty() ? nullptr : registry->account(account);
+    return a != nullptr && a->billing == Billing::Api;
+}
+
 std::vector<std::string> changes(const Registry& before, const Registry& after) {
     std::vector<std::string> out;
     for (const Account& a : after.accounts) {
         const Account* was = before.account(a.name);
         if (was == nullptr) {
-            out.push_back("account " + a.name + " set up (" + a.provider + ")");
-        } else if (was->provider != a.provider) {
+            out.push_back("account " + a.name + " set up (" + a.provider +
+                          (a.billing == Billing::Api ? ", billed at API rate)" : ")"));
+            continue;
+        }
+        if (was->provider != a.provider) {
             out.push_back("account " + a.name + "'s provider " + was->provider + " -> " + a.provider);
+        }
+        if (was->billing != a.billing) {
+            out.push_back("account " + a.name + "'s billing " + std::string(billingName(was->billing)) + " -> " +
+                          std::string(billingName(a.billing)));
         }
     }
     for (const Account& a : before.accounts) {
@@ -599,8 +666,13 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
                 names.push_back(i.name + " (" + i.machine + " " + i.dir + ")");
             }
             out.push_back("friend " + f.name + " set up, accounts " + list(f.accounts) + ", default " +
-                          (f.preferred.empty() ? std::string("none") : f.preferred) + ", instances " + list(names));
+                          (f.preferred.empty() ? std::string("none") : f.preferred) + ", instances " + list(names) +
+                          ", limit " + (f.limit ? "true" : "false"));
             continue;
+        }
+        if (was->limit != f.limit) {
+            out.push_back("friend " + f.name + "'s limit " + (was->limit ? "true" : "false") + " -> " +
+                          (f.limit ? "true" : "false"));
         }
         if (was->accounts != f.accounts) {
             out.push_back("friend " + f.name + "'s accounts " + list(was->accounts) + " -> " + list(f.accounts));

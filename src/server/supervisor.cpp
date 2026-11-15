@@ -134,6 +134,12 @@ Output Supervisor::setPlace(std::string cwd, bool here, Millis now) {
     return finish();
 }
 
+Output Supervisor::setLimited(bool limited, Millis now) {
+    config_.limited = limited;
+    advance(now);
+    return finish();
+}
+
 Output Supervisor::setOptions(std::string model, std::string effort, Millis now) {
     config_.model = std::move(model);
     config_.effort = std::move(effort);
@@ -524,6 +530,11 @@ void Supervisor::startDriver(Millis now) {
         if (!state_.session.empty()) {
             argv.insert(argv.end(), {"--resume", state_.session});
         }
+        // Limited to --cwd: a driver that cannot keep the limit refuses to start rather than run unlimited (an
+        // older one refuses the argument it does not know), so a limited session never runs without it.
+        if (config_.limited) {
+            argv.insert(argv.end(), {"--limit", "cwd"});
+        }
     }
     command(Command::Kind::Start, std::move(argv));
     phase_ = Phase::Starting;
@@ -535,6 +546,7 @@ void Supervisor::startDriver(Millis now) {
     lastFix_.clear();
     driverAccount_ = config_.account;
     driverCwd_ = config_.cwd;
+    driverLimited_ = config_.limited;
     driverModel_.clear();
     driverEffort_.clear();
     retiring_ = false;
@@ -597,14 +609,15 @@ void Supervisor::take() {
 
 // With no turn open, a driver started under an account that is no longer the session's is ended quietly: the next one
 // starts under the session's account. So is one started in a directory that is no longer the session's, or any while
-// the session's instance is on another machine. So is one told a model or effort the session has since put back to the
+// the session's instance is on another machine, or one started under another limit than the session's now. So is one
+// told a model or effort the session has since put back to the
 // harness's default, which a settings line cannot say: the next one starts on the defaults. A turn open runs to its
 // end first.
 void Supervisor::retire(Millis now) {
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
     if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
-                                  cleared)) {
+                                  driverLimited_ != config_.limited || cleared)) {
         retiring_ = true;
         endQuietly(now);
     }

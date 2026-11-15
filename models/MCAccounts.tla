@@ -6,6 +6,8 @@ EXTENDS Accounts
 ProvidersMixed == [a \in {"a1", "a2", "a3"} |-> IF a = "a3" THEN "codex" ELSE "claude"]
 \* One of each.
 ProvidersTwo == [a \in {"a1", "a3"} |-> IF a = "a3" THEN "codex" ELSE "claude"]
+\* Two Claude accounts (MCAccountsLimit.cfg: one may be billed at API rate).
+ProvidersPair == [a \in {"a1", "a2"} |-> "claude"]
 \* One Claude account.
 ProvidersOne == [a \in {"a1"} |-> "claude"]
 =============================================================================

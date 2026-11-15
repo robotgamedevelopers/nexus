@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // nexus-claude-driver: nexus-server's driver for Claude (docs/driver-protocol.md), on the Claude Agent SDK.
 //
-//   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--model <model>] [--effort <level>]
-//                         [--setting-sources <user,project,local>] [--claude <path>]
+//   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--limit cwd] [--model <model>]
+//                         [--effort <level>] [--setting-sources <user,project,local>] [--claude <path>]
 //
-// The server passes --cwd and --resume; the others come from the drivers file. The account is the directory
+// The server passes --cwd, --resume and --limit (a friend limited to its directory); the others come from the drivers
+// file. The account is the directory
 // ~/.nexus/server/accounts/<name>/ and its token file (account.ts): Claude gets the directory as CLAUDE_CONFIG_DIR and
 // the token on a descriptor, never in an environment, and never the Keychain's login, the server's environment's or
 // ~/.claude. Every API-key and login variable is removed first (env.ts), and the driver refuses any session not on a
@@ -80,8 +81,9 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             allowDangerouslySkipPermissions: true,
             canUseTool: (_name, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
             includePartialMessages: true,
+            // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data), egressPort,
-                env),
+                env, { hook: true }, start.limited),
         },
     });
 }

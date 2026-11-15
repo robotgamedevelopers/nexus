@@ -38,7 +38,7 @@
 #               SecretsTraceData.tla into WORK, with SEED and STEPS, FORMAT (3 or 4, the windows' and actions'
 #               format; 3 unless given), and FAULTY one of store-late, echo
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
-#               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance
+#               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
@@ -115,10 +115,10 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
 elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
-    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness" OR FAULTY STREQUAL "instance")
+    if(FAULTY STREQUAL "stay" OR FAULTY STREQUAL "harness" OR FAULTY STREQUAL "instance" OR FAULTY STREQUAL "limit")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay, harness or instance")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stay, harness, instance or limit")
     endif()
     execute_process(COMMAND "${ACCWALK}" ${walk_args} "${WORK}/AccountsTraceData.tla"
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

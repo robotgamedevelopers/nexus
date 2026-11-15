@@ -22,11 +22,18 @@
 namespace nexus::accounts {
 
 // The version of the files this code writes, and the newest it reads. An older version is upgraded as it is read.
-constexpr int kVersion = 1;
+// Version 2 added an account's "billing" and a friend's "limit" (docs/accounts.md, Versions): a version 1 file reads
+// every account as billed by subscription and every friend as not limited, which is how nexus ran them then.
+constexpr int kVersion = 2;
+
+// How an account's sessions are paid for: a subscription's included usage, or the provider's API rate. A session on an
+// API-billed account is always limited (Friend::limit), whatever its friend says (docs/accounts.md, "limit").
+enum class Billing { Subscription, Api };
 
 struct Account {
     std::string name;
     std::string provider;
+    Billing billing = Billing::Subscription;
     bool operator==(const Account&) const = default;
 };
 
@@ -46,6 +53,10 @@ struct Friend {
     std::vector<std::string> accounts;  // linked, in link order (the order a rotation goes through them)
     std::string preferred;              // the default account: one of `accounts`, or empty for none
     std::vector<Instance> instances{};  // in the file's order; the first is the friend's default instance
+    // Limited: the AI's file tools and shell read and write only inside its instance's directory (the driver's sandbox,
+    // docs/secrets.md "A limited friend"). True for a friend made now; a friend from before the field (a version 1
+    // file, or the drivers file's) is false, as it ran then. Never false while the friend links an API-billed account.
+    bool limit = true;
     bool operator==(const Friend&) const = default;
 
     const Instance* instance(std::string_view instanceName) const;
@@ -74,7 +85,8 @@ bool isDir(std::string_view dir);
 
 // Why the registry is not consistent, each problem with what to change and in which file; empty when it is: names and
 // providers well formed, no name twice, every link to an account set up and each once, every default linked, every instance named once
-// within its friend, on a machine, in an absolute directory.
+// within its friend, on a machine, in an absolute directory, and no friend with "limit": false linked to an account
+// billed at API rate.
 std::vector<std::string> problems(const Registry& registry);
 
 // The files' text, in the one layout this code writes.
@@ -104,6 +116,15 @@ std::string nextUp(const Registry& registry, const std::set<std::string>& up, st
 // Where a session of the friend goes when its account is no longer linked to it: the friend's default when signed in,
 // else its first signed-in linked account, else none (empty).
 std::string landing(const Registry& registry, const std::set<std::string>& up, std::string_view friendName);
+
+// Whether a session of `friendName` on `account` (empty: none) runs limited, decided when its driver starts: when the
+// friend is limited, or the account is billed at API rate, or the registry is not there or does not hold the friend
+// (deny-leaning: a friend nexus cannot read a "limit" for is limited). models/Accounts.tla `Eff` and `Start`
+// (ApiAlwaysLimited, NeverWeakerThanFriend; tests/accounts/accounts_walk.cpp binds it).
+bool limitedFor(const Registry* registry, std::string_view friendName, std::string_view account);
+
+// The words of a billing in the files ("subscription", "api").
+std::string_view billingName(Billing billing);
 
 // What changed from `before` to `after`, one line each, for the apply's report (empty when nothing did).
 std::vector<std::string> changes(const Registry& before, const Registry& after);

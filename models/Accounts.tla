@@ -49,6 +49,21 @@
 (* just taken, and the operation with its arguments and result. No action  *)
 (* reads either, so TLC tells states apart without them (VIEW).            *)
 (*                                                                         *)
+(* A friend is limited to its directory or not (`lim`, friends.json's    *)
+(* "limit"; a friend set up by an action is limited, one not set up reads *)
+(* limited), and an account is billed by subscription or at API rate      *)
+(* (`bill`, accounts.json's "billing"); both are set by edits only          *)
+(* (`ReloadLimit`, `ReloadBilling`). A friend that is not limited may link  *)
+(* no API-billed account: an edit or a link that would leave one is        *)
+(* refused. A session's driver starts (`Start`) limited when its friend is  *)
+(* limited or its account is billed at API rate, decided then, from the    *)
+(* files as they are (accounts::limitedFor); a change later takes effect   *)
+(* from the next start (`End`, then `Start`: Supervisor.tla retires the     *)
+(* driver once no turn is open), and a friend's limit changed tells each   *)
+(* of its sessions. `run` is each session's driver: off, or started limited *)
+(* or open, with whether its account was API-billed and its friend limited *)
+(* at the start.                                                           *)
+(*                                                                         *)
 (* Not modelled: an instance's machine and directory (a driver runs only   *)
 (* for an instance on the server's own machine: unit- and functional-      *)
 (* tested); what a change of a session's account does to its driver        *)
@@ -66,7 +81,10 @@ CONSTANTS
     Friends,        \* the friend names a model config uses
     Insts,          \* the friends' instance names a model config uses
     MaxSes,         \* the sessions a model config may make (ids 1 .. MaxSes)
-    StartHarness    \* the harness of a session on no account (the friend's harness)
+    StartHarness,   \* the harness of a session on no account (the friend's harness)
+    Bills,          \* the billings an edit may give an account: "sub", "api"
+    Limits,         \* the limits an edit may give a friend: TRUE, FALSE
+    Runs            \* whether drivers start and end (TRUE) or the model leaves them off (FALSE)
 
 None == "none"
 Ids == 1..MaxSes
@@ -74,6 +92,7 @@ Range(sq) == {sq[i] : i \in DOMAIN sq}
 Harnesses == Providers \cup {StartHarness}
 ASSUME None \notin Accts \cup Friends \cup Harnesses \cup Insts
 ASSUME \A a \in Accts : Provider[a] \in Providers
+ASSUME Bills \subseteq {"sub", "api"} /\ Limits \subseteq BOOLEAN /\ Runs \in BOOLEAN
 
 VARIABLES
     acct,       \* each account: "absent", "in" (signed in) or "out" (needs sign-in)
@@ -84,14 +103,18 @@ VARIABLES
     insts,      \* each friend's instances, in order (the first its default instance)
     ses,        \* each session id: made, its friend, its instance (or None), its account (or None) and its harness
     nextSes,    \* the id the next session made gets
+    lim,        \* each friend: limited to its directory (TRUE for a friend not set up)
+    bill,       \* each account's billing: "sub" or "api" ("sub" for an account not set up)
+    run,        \* each session's driver: its state "off", "limited" or "open", and at its start, api and flim
     told,       \* history: the sessions the step gave a notice
     last        \* history: the operation, its arguments and its result
 
-model == <<acct, prov, known, links, dflt, insts, ses, nextSes>>
-vars == <<acct, prov, known, links, dflt, insts, ses, nextSes, told, last>>
+model == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run>>
+vars == <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill, run, told, last>>
 View == model
 
 NoSes == [made |-> FALSE, friend |-> None, inst |-> None, acct |-> None, harness |-> None]
+Off == [st |-> "off", api |-> FALSE, flim |-> FALSE]
 
 Up(a) == acct[a] = "in"
 Drop(sq, x) == SelectSeq(sq, LAMBDA y : y /= x)
@@ -143,19 +166,26 @@ BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, mv) ==
     /\ ses' = SettledI(nl, nd, np, ni)
     /\ told' = SettledToldI(nl, np, ni) \cup {s \in Ids : ses[s].made /\ <<ses[s].friend, ses[s].inst>> \in mv}
     /\ Done(op, f, a, 0, TRUE)
-    /\ UNCHANGED nextSes
+    \* A friend kept keeps its limit; one set up anew, or not set up, is limited. An account not set up bills "sub".
+    /\ lim' = [g \in Friends |-> IF g \in kn /\ g \in known THEN lim[g] ELSE TRUE]
+    /\ bill' = [b \in Accts |-> IF ac[b] = "absent" THEN "sub" ELSE bill[b]]
+    /\ UNCHANGED <<nextSes, run>>
 BecomeI(op, f, a, ac, np, kn, nl, nd, ni) == BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, {})
 Become(op, f, a, ac, np, kn, nl, nd) == BecomeI(op, f, a, ac, np, kn, nl, nd, InstsFor(kn))
 
 \* The files agree: links name accounts set up, each once, only from friends set up; a default is linked or none;
-\* instances only of friends set up, each named once.
-ConsistentI(ac, kn, nl, nd, ni) ==
-    \A f \in Friends :
+\* instances only of friends set up, each named once; a friend not limited (limits nm) links no account billed at API
+\* rate (billings nb).
+NoApiUnlimited(kn, nl, nm, nb) == \A f \in kn : ~nm[f] => \A i \in DOMAIN nl[f] : nb[nl[f][i]] /= "api"
+ConsistentLB(ac, kn, nl, nd, ni, nm, nb) ==
+    /\ \A f \in Friends :
         /\ \A i \in DOMAIN nl[f] : ac[nl[f][i]] /= "absent"
         /\ Len(nl[f]) = Cardinality(Range(nl[f]))
         /\ f \notin kn => nl[f] = << >> /\ nd[f] = None /\ ni[f] = << >>
         /\ nd[f] = None \/ nd[f] \in Range(nl[f])
         /\ Len(ni[f]) = Cardinality(Range(ni[f]))
+    /\ NoApiUnlimited(kn, nl, nm, nb)
+ConsistentI(ac, kn, nl, nd, ni) == ConsistentLB(ac, kn, nl, nd, ni, lim, bill)
 Consistent(ac, kn, nl, nd) == ConsistentI(ac, kn, nl, nd, InstsFor(kn))
 
 Init ==
@@ -167,6 +197,9 @@ Init ==
     /\ insts = [f \in Friends |-> << >>]
     /\ ses = [s \in Ids |-> NoSes]
     /\ nextSes = 1
+    /\ lim = [f \in Friends |-> TRUE]
+    /\ bill = [a \in Accts |-> "sub"]
+    /\ run = [s \in Ids |-> Off]
     /\ told = {}
     /\ last = [op |-> "init", f |-> None, a |-> None, s |-> 0, ok |-> TRUE]
 
@@ -181,7 +214,7 @@ Report(a, st) ==
     IF acct[a] /= "absent"
     THEN /\ acct' = [acct EXCEPT ![a] = st]
          /\ Done(IF st = "in" THEN "in" ELSE "out", None, a, 0, TRUE) /\ told' = {}
-         /\ UNCHANGED <<prov, known, links, dflt, insts, ses, nextSes>>
+         /\ UNCHANGED <<prov, known, links, dflt, insts, ses, nextSes, lim, bill, run>>
     ELSE Refused(IF st = "in" THEN "in" ELSE "out", None, a, 0, {})
 
 \* The person's: an account removed. Every friend's link to it goes, and a default on it becomes none.
@@ -196,8 +229,9 @@ AddFriend(f) ==
     THEN Become("friend", f, None, acct, prov, known \cup {f}, links, dflt)
     ELSE Refused("friend", f, None, 0, {})
 
+\* Refused, too, when the friend is not limited and the account is billed at API rate.
 LinkAccount(f, a) ==
-    IF f \in known /\ acct[a] /= "absent" /\ a \notin Range(links[f])
+    IF f \in known /\ acct[a] /= "absent" /\ a \notin Range(links[f]) /\ (lim[f] \/ bill[a] /= "api")
     THEN Become("link", f, a, acct, prov, known, [links EXCEPT ![f] = Append(@, a)], dflt)
     ELSE Refused("link", f, a, 0, {})
 
@@ -229,6 +263,23 @@ ReloadDropLink(f, a) == Reload(f, a, acct, prov, known, [links EXCEPT ![f] = Dro
 ReloadDropAccount(a) == Reload(None, a, [acct EXCEPT ![a] = "absent"], prov, known, links, dflt)
 \* An account's provider changed.
 ReloadProvider(a, p) == Reload(None, a, acct, [prov EXCEPT ![a] = p], known, links, dflt)
+\* A friend's limit set (refused for a friend not set up, or false while it links an account billed at API rate).
+\* When it changes, each of the friend's sessions is told (its driver restarts with it once no turn is open).
+ReloadLimit(f, v) ==
+    IF f \in known /\ ConsistentLB(acct, known, links, dflt, insts, [lim EXCEPT ![f] = v], bill)
+    THEN /\ lim' = [lim EXCEPT ![f] = v]
+         /\ told' = IF v = lim[f] THEN {} ELSE {s \in Ids : ses[s].made /\ ses[s].friend = f}
+         /\ Done("limit", f, None, 0, TRUE)
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, bill, run>>
+    ELSE Refused("limit", f, None, 0, {})
+\* An account's billing set (refused for an account not set up, or "api" while a friend not limited links it).
+ReloadBilling(a, b) ==
+    IF acct[a] /= "absent" /\ ConsistentLB(acct, known, links, dflt, insts, lim, [bill EXCEPT ![a] = b])
+    THEN /\ bill' = [bill EXCEPT ![a] = b]
+         /\ told' = {}
+         /\ Done("billing", None, a, 0, TRUE)
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, run>>
+    ELSE Refused("billing", None, a, 0, {})
 \* An instance added to the end of a friend's (refused for a friend not set up, or a name it already has).
 ReloadAddInstance(f, i) == ReloadI(f, i, acct, prov, known, links, dflt, [insts EXCEPT ![f] = Append(@, i)])
 \* An instance taken out of a friend's.
@@ -246,7 +297,7 @@ SetSession(s, a) ==
     IF ses[s].made /\ (a = None \/ a \in Range(links[ses[s].friend]))
     THEN /\ ses' = [ses EXCEPT ![s].acct = a, ![s].harness = HarnessFor(a, prov, @)]
          /\ Done("set", None, a, s, TRUE) /\ told' = {}
-         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes>>
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("set", None, a, s, IF ses[s].made THEN {s} ELSE {})
 
 \* The server's, where a usage limit is reported: the friend's next signed-in linked account after the session's, in
@@ -258,7 +309,7 @@ Rotate(s) ==
          THEN Refused("rotate", None, None, s, {s})
          ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]
               /\ Done("rotate", None, n, s, TRUE) /\ told' = {s}
-              /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes>>
+              /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("rotate", None, None, s, {})
 
 \* A session made with friend f, copying session `from` (0: none): its account when linked to f (or none), else
@@ -274,21 +325,54 @@ Create(f, from) ==
                                              harness |-> HarnessFor(a, prov, StartHarness)]]
          /\ nextSes' = nextSes + 1
          /\ Done("create", f, a, from, TRUE) /\ told' = {}
-         /\ UNCHANGED <<acct, prov, known, links, dflt, insts>>
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, lim, bill, run>>
     ELSE Refused("create", f, None, from, {})
 
+\* The server's: a session's driver started, limited when its friend is limited or its account is billed at API rate,
+\* from the files as they are now (accounts::limitedFor). Eff is passed in so that a witness can break it.
+Eff(s) == lim[ses[s].friend] \/ (ses[s].acct /= None /\ bill[ses[s].acct] = "api")
+StartWith(E(_), s) ==
+    IF ses[s].made /\ run[s].st = "off"
+    THEN /\ run' = [run EXCEPT ![s] = [st |-> IF E(s) THEN "limited" ELSE "open",
+                                       api |-> ses[s].acct /= None /\ bill[ses[s].acct] = "api",
+                                       flim |-> lim[ses[s].friend]]]
+         /\ Done("start", None, None, s, TRUE) /\ told' = {}
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill>>
+    ELSE Refused("start", None, None, s, {})
+Start(s) == StartWith(Eff, s)
+\* The server's: a session's driver ended (retired after a change, exited, stopped).
+End(s) ==
+    IF run[s].st /= "off"
+    THEN /\ run' = [run EXCEPT ![s] = Off]
+         /\ Done("end", None, None, s, TRUE) /\ told' = {}
+         /\ UNCHANGED <<acct, prov, known, links, dflt, insts, ses, nextSes, lim, bill>>
+    ELSE Refused("end", None, None, s, {})
+
 \* The steps, with the actions a reversed witness breaks passed in.
-NextWithIM(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
-           DropInst(_, _), MoveInst(_, _)) ==
+NextAll(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
+        DropInst(_, _), MoveInst(_, _), Lk(_, _), AddF(_), Sta(_), LimR(_, _), BillR(_, _)) ==
     \/ \E f \in Friends, i \in Insts : AddInst(f, i) \/ DropInst(f, i) \/ MoveInst(f, i)
     \/ \E a \in Accts : Add(a) \/ Rm(a) \/ Report(a, "in") \/ Report(a, "out") \/ ReloadDropAccount(a)
     \/ \E a \in Accts, p \in Providers : Pv(a, p)
-    \/ \E f \in Friends : AddFriend(f) \/ ReloadDropFriend(f)
-    \/ \E f \in Friends, a \in Accts : LinkAccount(f, a) \/ Ul(f, a) \/ DropLink(f, a)
+    \/ \E f \in Friends : AddF(f) \/ ReloadDropFriend(f)
+    \/ \E f \in Friends, a \in Accts : Lk(f, a) \/ Ul(f, a) \/ DropLink(f, a)
+    \/ \E f \in Friends, v \in Limits : LimR(f, v)
+    \/ \E a \in Accts, b \in Bills : BillR(a, b)
+    \/ Runs /\ \E s \in Ids : Sta(s) \/ End(s)
     \/ \E f \in Friends, a \in Accts \cup {None} : Def(f, a)
     \/ \E s \in Ids, a \in Accts \cup {None} : St(s, a)
     \/ \E s \in Ids : Rot(s)
     \/ \E f \in Friends, from \in 0..MaxSes : Cr(f, from)
+
+NextWithIM(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), AddInst(_, _),
+           DropInst(_, _), MoveInst(_, _)) ==
+    NextAll(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, AddInst, DropInst, MoveInst, LinkAccount, AddFriend, Start,
+            ReloadLimit, ReloadBilling)
+
+\* The steps with the limit's actions passed in, for its witnesses.
+NextLimitWith(Lk(_, _), AddF(_), Sta(_), LimR(_, _), BillR(_, _)) ==
+    NextAll(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, Rotate, Create, ReloadDropLink, ReloadProvider,
+            ReloadAddInstance, ReloadDropInstance, ReloadMoveInstance, Lk, AddF, Sta, LimR, BillR)
 
 NextWithI(Add(_), Rm(_), Ul(_, _), Def(_, _), St(_, _), Rot(_), Cr(_, _), DropLink(_, _), Pv(_, _), DropInst(_, _)) ==
     NextWithIM(Add, Rm, Ul, Def, St, Rot, Cr, DropLink, Pv, ReloadAddInstance, DropInst, ReloadMoveInstance)
@@ -316,6 +400,9 @@ TypeOK ==
     /\ \A f \in Friends : insts[f] \in Seq(Insts)
     /\ ses \in [Ids -> Session]
     /\ nextSes \in 1..(MaxSes + 1)
+    /\ lim \in [Friends -> BOOLEAN]
+    /\ bill \in [Accts -> {"sub", "api"}]
+    /\ run \in [Ids -> [st : {"off", "limited", "open"}, api : BOOLEAN, flim : BOOLEAN]]
     /\ told \subseteq Ids
     /\ last.ok \in BOOLEAN
 
@@ -345,6 +432,20 @@ HarnessMatches == \A s \in Ids : ses[s].made /\ ses[s].acct /= None => ses[s].ha
 
 \* The sessions made are exactly the ids below the next.
 IdsDense == \A s \in Ids : ses[s].made <=> s < nextSes
+
+\* No driver of a session on an account billed at API rate ever starts unlimited.
+ApiAlwaysLimited == \A s \in Ids : run[s].st /= "off" /\ run[s].api => run[s].st = "limited"
+
+\* No driver starts with a weaker limit than its friend's at its start.
+NeverWeakerThanFriend == \A s \in Ids : run[s].st /= "off" /\ run[s].flim => run[s].st = "limited"
+
+\* A friend not limited links no account billed at API rate; a friend not set up reads limited, an account not set up
+\* bills by subscription; only a session made has a driver.
+LimitSound ==
+    /\ NoApiUnlimited(known, links, lim, bill)
+    /\ \A f \in Friends \ known : lim[f]
+    /\ \A a \in Accts : acct[a] = "absent" => bill[a] = "sub"
+    /\ \A s \in Ids : run[s].st /= "off" => ses[s].made
 
 -----------------------------------------------------------------------------
 \* Action properties, on the step's history.
@@ -380,6 +481,13 @@ OnlyItsSession == [][last'.op \in {"set", "rotate"} => \A s \in Ids \ {last'.s} 
 MovedInstanceIsTold ==
     [][last'.op = "moveinst" /\ last'.ok =>
          {s \in Ids : ses[s].made /\ ses[s].friend = last'.f /\ ses[s].inst = last'.a} \subseteq told']_vars
+
+\* A friend set up by an action is limited.
+NewFriendLimited == [][last'.op = "friend" /\ last'.ok => lim'[last'.f]]_vars
+
+\* A friend's limit changed tells each of its sessions.
+LimitChangeIsTold ==
+    [][\A s \in Ids : ses[s].made /\ known' = known /\ lim'[ses[s].friend] /= lim[ses[s].friend] => s \in told']_vars
 
 \* An operation refused changes nothing.
 RefusedChangesNothing == [][~last'.ok => UNCHANGED model]_vars

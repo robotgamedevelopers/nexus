@@ -74,19 +74,22 @@ the AI: they hold no secret.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "accounts": [
     {
       "name": "work",
-      "provider": "claude"
+      "provider": "claude",
+      "billing": "subscription"
     },
     {
       "name": "home",
-      "provider": "claude"
+      "provider": "claude",
+      "billing": "subscription"
     },
     {
       "name": "codex-main",
-      "provider": "codex"
+      "provider": "codex",
+      "billing": "api"
     }
   ]
 }
@@ -94,10 +97,11 @@ the AI: they hold no secret.
 
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
-| `version` | top | yes | the whole number `1` (see Versions) |
+| `version` | top | yes | the whole number `2` (see Versions) |
 | `accounts` | top | yes | a list of accounts, in any order you like; `[]` for none |
 | `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the accounts |
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
+| `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); a friend on an `api` account is always limited (friends.json's `limit`) |
 
 The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 
@@ -105,10 +109,11 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "friends": [
     {
       "name": "claude",
+      "limit": false,
       "accounts": [
         "work",
         "home",
@@ -135,6 +140,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
     },
     {
       "name": "reviewer",
+      "limit": true,
       "accounts": [
         "home"
       ],
@@ -147,9 +153,10 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
-| `version` | top | yes | the whole number `1` (see Versions) |
+| `version` | top | yes | the whole number `2` (see Versions) |
 | `friends` | top | yes | a list of friends; `[]` for none |
 | `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
+| `limit` | each friend | no (`true`) | `true` or `false`, without quotes: whether the friend's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for a friend that links an account with `"billing": "api"` |
 | `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the order is the order a rotation at a usage limit goes through them |
 | `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
 | `instances` | each friend | no (none) | a list of instances, in order; the first is the friend's default instance |
@@ -173,6 +180,36 @@ The server's machine is the name the `machine` fields are compared with. It is t
 its `machine` equals, ignoring case, either that name or the full host name: on a Mac whose `hostname` is
 `studio.local`, both `studio` and `studio.local` are this machine. When the host name cannot be read and the config
 names none, the server has no machine: no instance is on it, and it says so in its log.
+
+## limit: a friend kept to its directory
+
+`"limit": true` keeps the friend's AI, its shell and its file tools, inside the directory of the instance its session
+runs in: it reads and writes there, and nowhere else people keep files. `"limit": false` is the AI as it ran before
+the field existed: under the token wall (docs/secrets.md), but free to read the rest of the home directory.
+
+- **A friend added is limited.** One added in the window, or written into friends.json without a `limit`, is `true`.
+  Set `"limit": false` on a friend you want unlimited (yourself as administrator, say) by editing the file.
+- **A friend on an API-billed account is always limited.** A friend that links any account with `"billing": "api"`
+  cannot be `false`: `config check` and a reload refuse it, naming both files and the fix; linking such an account to an
+  unlimited friend in the window is refused the same way. (The fleet's own workers that run models at API rate outside
+  nexus run under their own sandbox tool, not this field.)
+- **What it keeps out**, on macOS and Linux (WSL2 too): the home directory and the places people keep files (macOS
+  `/Users`, `/Volumes`; Linux `/home`, `/root`, `/mnt` (WSL2's Windows drives), `/media`, `/run/media`, `/srv`), so
+  other projects, documents, `~/.ssh`'s keys, other friends' directories and other accounts' state; and every write
+  outside its directory and the temporary directories. What stays readable, and the costs, are in docs/secrets.md
+  ("A limited friend").
+- **Where it cannot start.** A limited session does not start, with one line saying why where a session's start
+  refusals already show, when its directory does not exist, is the home directory or the root, holds `~/.nexus`, or is
+  inside `~/.nexus` or `~/.ssh`; on a platform other than macOS and Linux; or when the drivers file names another Claude
+  (`--claude`). It never starts unlimited instead.
+- **A change takes effect at the next start.** Setting a friend's `limit` (or an account's `billing`) and reloading
+  tells each of the friend's sessions; a driver that is running ends once no turn is open (an open turn finishes as it
+  started), and the next starts with the new limit.
+
+The server decides a session's limit each time it starts the session's driver, from the files as they are then: limited
+when the friend is limited, when its account is billed at API rate, or when the friend is not in friends.json at all.
+models/Accounts.tla checks the rules (no driver on an API-billed account starts unlimited; none starts weaker than its
+friend's limit).
 
 The server writes both files in one layout: two-space indent, one field per line, keys in the order above, the lists in
 the order they hold, and a newline at the end. Write them the same way and a save never reshuffles your edit (any valid
@@ -336,7 +373,11 @@ Both files carry `"version"`, from the first release. A nexus-server reads its o
 older file is upgraded in place when the server starts (your entries kept as they were, written in the new version, and
 committed as an upgrade, which the server's log reports), unless the files hold edits not yet applied: those are never
 written over, and the next reload writes the new version. `config check` never writes anything, an upgrade included.
-(Version 1 is the first, so no file is older yet.) A file whose version is newer than the server reads is refused
+Version 2 added `billing` (accounts.json) and `limit` (friends.json). A version 1 file is read with every account billed
+by subscription and every friend **not** limited, as it ran before (a friend in a version 1 file that a person added by
+hand while the edit was pending reads unlimited too: set its `limit` after the upgrade), and the upgrade writes each
+friend's `"limit": false` and each account's `"billing": "subscription"` into the files, so that the choice is plain
+to see and to change. An older nexus-server refuses a version 2 file rather than drop the limit. A file whose version is newer than the server reads is refused
 with a message saying so, and left exactly as it is: run the newer nexus-server, or update this one. The version only
 rises when a change cannot be read by an older reader.
 

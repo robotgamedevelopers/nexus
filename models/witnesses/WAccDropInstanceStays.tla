@@ -8,7 +8,7 @@ BrokenDropInstance(f, i) ==
     THEN /\ insts' = ni
          /\ told' = {}
          /\ Done("reload", f, i, 0, TRUE)
-         /\ UNCHANGED <<acct, prov, known, links, dflt, ses, nextSes>>
+         /\ UNCHANGED <<lim, bill, run, acct, prov, known, links, dflt, ses, nextSes>>
     ELSE Refused("reload", f, i, 0, {})
 
 BrokenSpec == Init /\ [][NextWithI(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, Rotate, Create, ReloadDropLink, ReloadProvider, BrokenDropInstance)]_vars

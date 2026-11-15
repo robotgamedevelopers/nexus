@@ -61,6 +61,7 @@ export interface HarnessStart {
     effort?: EffortLevel;
     settingSources: SettingSource[];
     claudePath?: string;
+    limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
 }
 
 /** Model and effort changes; an absent field is no change (in `inUse`, the value the driver was started with). */
@@ -120,9 +121,10 @@ export interface Arguments {
     effort?: EffortLevel;
     settingSources: SettingSource[];
     claudePath?: string;
+    limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
 }
 
-const kUsage = 'the arguments are --cwd <dir> and --resume <session id> (from the server), and from the drivers file '
+const kUsage = 'the arguments are --cwd <dir>, --resume <session id> and --limit cwd (from the server), and from the drivers file '
     + '--account <name> (required), --model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
     + '--claude <path of a claude executable>';
 
@@ -131,7 +133,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -141,6 +143,13 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
             case '--resume': a.resume = value; break;
             case '--model': a.model = value; break;
             case '--claude': a.claudePath = value; break;
+            case '--limit':
+                // The one limit there is: a value this driver does not know is refused, never run unlimited.
+                if (value !== 'cwd') {
+                    return { error: `--limit ${value} is not a limit this driver knows; the one it knows is --limit cwd` };
+                }
+                a.limit = value;
+                break;
             case '--effort':
                 if (!isEffortLevel(value)) {
                     return { error: `--effort ${value} is not one of ${kEffortLevels.join(', ')}` };
@@ -403,7 +412,8 @@ export class Driver {
         this.ready = false;
         this.prompts = new Prompts((m) => { this.took(m); });
         this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
-        const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources };
+        const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
+            limited: this.args.limit === 'cwd' };
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {

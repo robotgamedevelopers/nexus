@@ -758,6 +758,39 @@ void testPlace() {
     CHECK(hasArgs(o, {"--cwd", "/v"}) && o.effects.size() == 1 && !w.state().summary);
 }
 
+// The session's limit (accounts::limitedFor, decided by the server): given to each driver as `--limit cwd` when it
+// starts; a driver started under the other limit is ended quietly once no turn is open, never a failed start.
+void testLimit() {
+    Config c = config();
+    c.limited = true;
+    Output o;
+    Supervisor s(c, {}, kStart, &o);
+    o = s.prompt("one", kStart);
+    CHECK(hasArgs(o, {"--cwd", "/w", "--limit", "cwd"}) && s.driverLimited());
+    s.message(Hello{1, "h"}, kStart + 1);
+    // Working: a change of limit waits for the turn's end; the turn finishes under the limit it started with.
+    o = s.setLimited(false, kStart + 2);
+    CHECK(o.commands.empty() && s.phase() == Phase::Working && s.driverLimited() && !s.limited());
+    o = s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+    CHECK(ended(s, o) && s.retiring());
+    o = s.exited("exited with status 0", kStart + 4);
+    CHECK(s.phase() == Phase::None && s.failedStarts() == 0 && o.commands.empty());
+    // The next starts unlimited: no --limit at all.
+    o = s.prompt("two", kStart + 5);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && !s.driverLimited());
+    CHECK(std::find(o.commands[0].argv.begin(), o.commands[0].argv.end(), "--limit") == o.commands[0].argv.end());
+    s.message(Hello{1, "h"}, kStart + 6);
+    s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 7);
+    // The same limit again: nothing changes. Limited again while idle: the driver is ended at once, the next limited.
+    o = s.setLimited(false, kStart + 8);
+    CHECK(o.commands.empty() && s.phase() == Phase::Idle);
+    o = s.setLimited(true, kStart + 9);
+    CHECK(ended(s, o));
+    s.exited("exited with status 0", kStart + 10);
+    o = s.prompt("three", kStart + 11);
+    CHECK(hasArgs(o, {"--limit", "cwd"}) && s.driverLimited() && s.failedStarts() == 0);
+}
+
 // ---- the credential, errors, the session ----
 
 void testCredentialAndErrors() {
@@ -1158,6 +1191,7 @@ const Group kGroups[] = {
     {"settings", testSettings},
     {"account", testAccount},
     {"place", testPlace},
+    {"limit", testLimit},
     {"activity", testActivity},
     {"signin", testSignIn},
 };

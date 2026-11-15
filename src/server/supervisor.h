@@ -83,6 +83,9 @@ struct Config {
     // nothing goes before it.
     std::function<std::string(const std::string& prompt)> summarize;
     bool here = true;                   // the session's instance is on this machine (setPlace): else no driver starts
+    // The driver starts limited to its directory (`--limit cwd`, docs/driver-protocol.md): decided by the server
+    // (accounts::limitedFor) and given at each start; a driver started otherwise is ended once no turn is open.
+    bool limited = false;
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
@@ -187,6 +190,10 @@ public:
     // carrying a summary of the conversation so far (Config::summarize), with a notice. While not here, no queued
     // prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
     Output setPlace(std::string cwd, bool here, Millis now);
+    // The session's limit changed (its friend's "limit", accounts::limitedFor): a driver started under the other one is
+    // ended quietly once no turn is open, like a change of place (an open turn runs to its end first); the next starts
+    // under this one.
+    Output setLimited(bool limited, Millis now);
 
     std::optional<Millis> deadline() const;     // when tick() next has something to do
     const sync::DriverState& state() const { return state_; }
@@ -209,6 +216,8 @@ public:
     const std::string& driverAccount() const { return driverAccount_; }    // the alive driver's; empty with none
     const std::string& cwd() const { return config_.cwd; }                  // the session's directory
     const std::string& driverCwd() const { return driverCwd_; }    // the alive driver's directory; empty with none
+    bool limited() const { return config_.limited; }                // the next driver starts limited
+    bool driverLimited() const { return driverLimited_; }           // the alive driver was started limited
     bool here() const { return config_.here; }                           // the session's instance is on this machine
     bool retiring() const { return retiring_; }     // the driver is being ended for an account change
     const std::string& openPrompt() const { return openPrompt_; }
@@ -259,6 +268,7 @@ private:
     std::string lastFix_;               // and its fix
     std::string driverAccount_;         // the account the driver alive was started under
     std::string driverCwd_;             // the directory it was started in
+    bool driverLimited_ = false;        // whether it was started limited
     std::string driverModel_;           // the model and effort it was told (empty: the harness's default)
     std::string driverEffort_;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)

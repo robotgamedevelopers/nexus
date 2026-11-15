@@ -305,6 +305,9 @@ void test('start values from the drivers file go to the query', async () => {
     assert.equal(s.effort, 'xhigh');
     assert.deepEqual(s.settingSources, ['user', 'project']);
     assert.equal(s.claudePath, '/bin/claude');
+    assert.equal(s.limited, false);
+    const limited = await started({ limit: 'cwd' });
+    assert.equal(limited.host.harness.start.limited, true);
 });
 
 async function refusedLine(bytes: Uint8Array, opened = false): Promise<TestHost> {
@@ -679,11 +682,17 @@ void test('parseArguments', () => {
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w']), { account: 'a', cwd: '/w', settingSources: [] });
     assert.deepEqual(parseArguments(['--cwd', '/w', '--account', 'a', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
         { account: 'a', cwd: '/w', resume: 'abc', effort: 'max', settingSources: ['user', 'local'] });
+    // The server's --limit cwd: the one limit there is.
+    assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'cwd']),
+        { account: 'a', cwd: '/w', limit: 'cwd', settingSources: [] });
+    const unknownLimit = parseArguments(['--account', 'a', '--cwd', '/w', '--limit', 'home']);
+    assert.ok('error' in unknownLimit && unknownLimit.error.includes('the one it knows is --limit cwd'));
     const noAccount = parseArguments(['--cwd', '/w']);
     assert.ok('error' in noAccount && noAccount.error.includes('--account <name> is required'));
     for (const bad of [[], ['--cwd'], ['--account', 'a'], ['--account', '', '--cwd', '/w'], ['--cwd', '/w', '--x', 'y'],
         ['--account', 'a', '--cwd', '/w', '--effort', 'huge'], ['--account', 'a', '--cwd', '/w', '--resume', 'has space'],
-        ['--account', 'a', '--cwd', '/w', '--setting-sources', 'policy']]) {
+        ['--account', 'a', '--cwd', '/w', '--setting-sources', 'policy'], ['--account', 'a', '--cwd', '/w', '--limit', 'home'],
+        ['--account', 'a', '--cwd', '/w', '--limit']]) {
         assert.ok('error' in parseArguments(bad), bad.join(' '));
     }
 });

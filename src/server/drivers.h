@@ -163,6 +163,7 @@ private:
     std::string friendOf(sync::SessionId id) const;
     ResolvedDriver resolve(sync::SessionId id) const;
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
+    bool limitedOf(const sync::SessionInfo& info) const;
     ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
