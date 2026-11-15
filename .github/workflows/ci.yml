@@ -796,10 +796,9 @@ jobs:
         run: >-
           cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
           "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
-      - name: Build the shim and its test program
-        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_test
-      - name: go vet
-        run: cmake --build build-tailscale --target nexus_tailscale_vet
+      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
+      - name: Build the shim and its test program, go vet, and the licence notices
+        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests (arm64)
         run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
       - name: Tests (x86_64, under Rosetta)
@@ -843,14 +842,11 @@ jobs:
         run: >-
           cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release -DCMAKE_LINKER_TYPE=LLD
           "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
-      - name: Build the shim and its test program
-        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_test
-      - name: go vet
-        run: cmake --build build-tailscale --target nexus_tailscale_vet
+      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
+      - name: Build the shim and its test program, go vet, and the licence notices
+        run: cmake --build build-tailscale --parallel "$JOBS" --target tailscale_checks
       - name: Tests
         run: ctest --test-dir build-tailscale -L tailscale -j "$JOBS" --output-on-failure --no-tests=error
-      - name: Licence notices
-        run: cmake --build build-tailscale --target nexus_tailscale_notices_check
 
   # On captain's Windows runners with MSVC: the DLL (whose C parts llvm-mingw compiles, fetched once per runner into
   # %LOCALAPPDATA%\nexus-ci\tailscale\<runner>, beside nothing the windows job keeps), its import library, and the
@@ -879,14 +875,11 @@ jobs:
         run: |
           cmake -S src/tailscale -B build-tailscale -A x64 "-DNEXUS_GO_MODCACHE=$env:NEXUS_GO_CACHES\mod" "-DNEXUS_GO_BUILDCACHE=$env:NEXUS_GO_CACHES\build" "-DNEXUS_TAILSCALE_DOWNLOADS=$env:NEXUS_TAILSCALE_DOWNLOADS"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
-      - name: Build the shim and its test program
+      # tailscale_checks: the test program, go vet and the licence notices' check, side by side (tests/tailscale).
+      - name: Build the shim and its test program, go vet, and the licence notices
         run: |
-          cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_test
+          cmake --build build-tailscale --config Release --parallel $env:JOBS --target tailscale_checks
           if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
-      - name: go vet
-        run: |
-          cmake --build build-tailscale --config Release --target nexus_tailscale_vet
-          if ($LASTEXITCODE -ne 0) { throw "go vet exited $LASTEXITCODE" }
       - name: Tests
         run: |
           ctest --test-dir build-tailscale -C Release -L tailscale -j $env:JOBS --output-on-failure --no-tests=error

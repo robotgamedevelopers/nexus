@@ -14,6 +14,11 @@ if(WIN32)
     target_link_libraries(tailscale_test PRIVATE advapi32)
 endif()
 
+# What CI builds in one step: the test program, go vet and the licence notices' check (cmake/tailscale.cmake). They
+# are independent, so a parallel build runs them side by side (CMake's Makefiles run separate --target goals in turn).
+add_custom_target(tailscale_checks)
+add_dependencies(tailscale_checks tailscale_test nexus_tailscale_vet nexus_tailscale_notices_check)
+
 add_test(NAME tailscale_unit_version COMMAND tailscale_test version)
 set_tests_properties(tailscale_unit_version PROPERTIES LABELS "unit;tailscale" TIMEOUT 30)
 
