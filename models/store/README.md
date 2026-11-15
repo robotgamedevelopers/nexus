@@ -129,7 +129,7 @@ What does not meet them: a server a person starts by hand has no restart, so ass
 | `StoreLock.cfg` | two servers and a reader, each server started up to twice, one stop, one death, up to three records; `Serves` and `RefusedServes` under `Live`, and `NoNewReaderWhileWriterWaits` | 126,888 distinct states, depth 46, 12 s on four workers |
 | `StoreLockFail.cfg` | two servers, each started up to twice, one stop, one death, up to two failed steps (open, listen, restore); `Serves` and `RefusedServes` under `Live` | 137,707 distinct states, depth 48, 10 s |
 | `StoreLockMove.cfg` | two servers, the directory moved aside once, one stop, one death; `Serves` under `Live` | 27,252 distinct states, depth 30, 1 s |
-| `StoreLockThree.cfg` | three servers, each started up to twice, one stop, one death, up to four records; safety only | 2,263,793 distinct states, depth 48, 14 s on four workers |
+| `StoreLockThree.cfg` | three servers, each started up to twice, one stop, one death, up to three records; safety only | 1,388,174 distinct states, depth 47, 6 s on eight workers |
 | `StoreLockGate.cfg` | two servers and two readers with no bound on reads; safety and `NoNewReaderWhileWriterWaits` (no liveness: a suspended reader is unbounded, `docs/formats.md`) | 3,562 distinct states, depth 35, under 1 s |
 
 Reversed witnesses (in `witnesses/`), each counterexample read against the code and failing for the reason given:

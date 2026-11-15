@@ -134,7 +134,7 @@ store_tlc_test(tlc_journal_trace_no_sync_rejected     JournalTrace JournalTrace.
 # readers with no bound on reads (the gate: NoNewReaderWhileWriterWaits); every safety property.
 store_tlc_test(tlc_store_lock_spec  StoreLock StoreLock.cfg      pass)
 store_tlc_test(tlc_store_lock_move  StoreLock StoreLockMove.cfg  pass)
-store_tlc_test(tlc_store_lock_three StoreLock StoreLockThree.cfg pass)
+store_tlc_test(tlc_store_lock_three StoreLock StoreLockThree.cfg pass WORKERS 8)
 store_tlc_test(tlc_store_lock_fail  StoreLock StoreLockFail.cfg  pass)
 store_tlc_test(tlc_store_lock_gate  StoreLock StoreLockGate.cfg  pass)
 # Reversed witnesses: the order before the lock (two writers, a record written unlocked, a number written twice, the
