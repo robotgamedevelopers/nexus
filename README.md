@@ -14,11 +14,19 @@ Synchronization Protocol: over UDP, surviving sleep and network changes. The fir
 
 ## Setting it up
 
-Tell the AI you already use (Claude Code, Codex, ...) "set up nexus" and point it at this repository. It follows
-[SETUP.md](SETUP.md): it makes your own fork of nexus, builds it from source on your machine, places it and keeps it
-running, with one friend: that AI's own harness and account. You run no command and install nothing; you sign in once,
-in nexus's own dialog. After that you change nexus by asking that AI: it edits your fork and runs
+The goal: you tell the AI you already use (Claude Code, Codex, ...) "set up nexus" and point it at this repository. It
+follows [SETUP.md](SETUP.md): it makes your own fork of nexus, builds it from source on your machine, places it and
+keeps it running, with one friend: that AI's own harness and account. You run no command and install nothing; you sign
+in once, in nexus's own dialog. After that you change nexus by asking that AI: it edits your fork and runs
 `nexus-server rebuild`, and the new build takes over from the running one.
+
+What is true today: the AI builds and sets up your fork on macOS and on Linux or WSL2 (the server only there) with no
+step of yours, keeps the server running as a per-user service, and rebuilds and hands over to a new build without
+losing a session, putting the previous build back if the new one does not start. Not yet, each a row of
+[docs/ROADMAP.md](docs/ROADMAP.md) being worked on: the window's friend tab comes from nova-tools, so a fresh install
+shows none (`window-friends-from-server`); the window does not reconnect by itself after a takeover
+(`window-reattach-takeover`); and the sign-in asks for a token you make yourself with `claude setup-token`, the one
+command you still run (`t-accounts-sign-in`). SETUP.md says each one plainly, at its top.
 
 ## A day with nexus
 
