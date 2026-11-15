@@ -312,12 +312,12 @@ void refusals() {
     CHECK(nts_backend_state(12345, err, sizeof err) == -1 && has(err, "not a started node"));
 
     // The reason is cut to the caller's buffer and always ends; a null buffer or a size of 0 is allowed.
-    char small[8];
-    std::memset(small, 'x', sizeof small);
-    CHECK(nts_close(1, small, sizeof small) == -1 && std::strlen(small) == 7);
+    char tiny[8];
+    std::memset(tiny, 'x', sizeof tiny);
+    CHECK(nts_close(1, tiny, sizeof tiny) == -1 && std::strlen(tiny) == 7);
     CHECK(nts_close(1, nullptr, 0) == -1);
-    small[0] = 'x';
-    CHECK(nts_close(1, small, 0) == -1 && small[0] == 'x');
+    tiny[0] = 'x';
+    CHECK(nts_close(1, tiny, 0) == -1 && tiny[0] == 'x');
 }
 
 // Run with TS_AUTHKEY in the environment from the process's start (ctest sets it), as a key inherited from a shell would
