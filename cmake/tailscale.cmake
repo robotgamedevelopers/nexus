@@ -247,6 +247,20 @@ add_custom_target(nexus_tailscale_notices
     WORKING_DIRECTORY ${nexus_ts_source}
     COMMENT "Writing src/tailscale/NOTICES.md"
     VERBATIM)
+# The environment policy: every environment read in the Go source the shim links, on every platform nexus builds it
+# for, against src/tailscale/environment.txt, and shim/environment.go against what the file generates (it fails when
+# the pinned module gains a read the file does not list); and nexus_tailscale_environment, which rewrites
+# shim/environment.go from the file.
+add_custom_target(nexus_tailscale_environment_check
+    COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO} run ./environment -check -tags ${nexus_ts_tags}
+    WORKING_DIRECTORY ${nexus_ts_source}
+    COMMENT "src/tailscale/environment.txt against the environment reads of the code the shim links"
+    VERBATIM)
+add_custom_target(nexus_tailscale_environment
+    COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO} run ./environment -tags ${nexus_ts_tags}
+    WORKING_DIRECTORY ${nexus_ts_source}
+    COMMENT "Writing src/tailscale/shim/environment.go from src/tailscale/environment.txt"
+    VERBATIM)
 
 # Links the shim into target: nexus's build, or with TESTHOOKS the test program's; the build order; and on Windows the
 # manifest and the DLL beside the program.

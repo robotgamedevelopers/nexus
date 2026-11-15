@@ -1,0 +1,210 @@
+# The process environment the Tailscale shim's linked code reads, and what the shim does about each read.
+# Checked by `go run ./environment -check` (cmake/tailscale.cmake's nexus_tailscale_environment_check, in CI): every
+# environment read in the Go source the shim links on any platform nexus builds it for (the standard library included,
+# nexus's own code not) must be here, and every line here must name a read that is still there. shim/environment.go is
+# generated from this file (`go run ./environment`). Fields are separated by tabs: name (or @place for a read whose name
+# the source computes), refuse | forced | allow, and why.
+#
+# refuse: nts_start refuses while it is set, to anything (even empty), as Go or the C library sees the environment.
+# forced: the shim sets it itself before every start.
+# allow: read, but it cannot change the control server, sign-in, logging, uploads, TLS keys or trust, or debugging.
+#
+# Not seen by the scan: what the Go runtime reads by its own means (GODEBUG, GOGC, GOMAXPROCS, GOTRACEBACK, ...), which
+# is why GODEBUG is also refused below.
+TS_NO_LOGS_NO_SUPPORT	forced	set to true before every start: nothing is ever uploaded to Tailscale's log service
+TS_DISABLE_PORTMAPPER	refuse	a tailscale knob (networking); nexus sets none (the test build sets it itself, to true, for its loopback tests)
+TS_4VIA6_ALLOW_LOCAL	refuse	a tailscale knob (networking: 4via6 to local addresses); nexus sets none
+TS_DEBUG_FAKE_PROXY_AUTH	refuse	a tailscale debugging knob that sends a made-up proxy authorization header
+TS_DEBUG_FORCE_CLIENT_SIDE_REACHABILITY_ROUTECHECK	refuse	a tailscale debugging knob; nexus turns on none
+SSLKEYLOGFILE	refuse	tlsdial writes every TLS session's keys to this file, which would let anyone with the file read control traffic
+SSL_CERT_FILE	refuse	crypto/x509 trusts the certificates in this file, which could let another server pose as the control server
+SSL_CERT_DIR	refuse	crypto/x509 trusts the certificates in these directories, which could let another server pose as the control server
+GODEBUG	refuse	changes Go's TLS, X.509 and HTTP behaviour and turns on runtime debugging
+DEBUG_HTTP2_GOROUTINES	refuse	Go's HTTP/2 debugging
+IN_TS_TEST	refuse	tells logtail and magicsock they run in tailscale's own tests
+NLDEBUG	refuse	netlink debugging, printed to stderr
+APPSVC_RUN_ZIP	allow	hostinfo: whether the node runs in Azure App Service, reported to control as its environment
+AWS_EXECUTION_ENV	allow	hostinfo: whether the node runs in AWS Fargate, reported to control as its environment
+AWS_LAMBDA_FUNCTION_NAME	allow	hostinfo: whether the node runs in AWS Lambda, reported to control as its environment
+AWS_LAMBDA_FUNCTION_VERSION	allow	hostinfo: whether the node runs in AWS Lambda, reported to control as its environment
+AWS_LAMBDA_INITIALIZATION_TYPE	allow	hostinfo: whether the node runs in AWS Lambda, reported to control as its environment
+AWS_LAMBDA_RUNTIME_API	allow	hostinfo: whether the node runs in AWS Lambda, reported to control as its environment
+DYNO	allow	hostinfo: whether the node runs on Heroku, reported to control as its environment
+FLY_APP_NAME	allow	hostinfo: whether the node runs on Fly.io, reported to control as its environment
+FLY_REGION	allow	hostinfo: whether the node runs on Fly.io, reported to control as its environment
+HASSIO_TOKEN	allow	hostinfo: only whether it is set (Home Assistant), reported to control as the environment; its value is not read
+SUPERVISOR_TOKEN	allow	hostinfo: only whether it is set (Home Assistant), reported to control as the environment; its value is not read
+KUBERNETES_SERVICE_HOST	allow	hostinfo: whether the node runs in Kubernetes, reported to control as its environment
+KUBERNETES_SERVICE_PORT	allow	hostinfo: whether the node runs in Kubernetes, reported to control as its environment
+K_CONFIGURATION	allow	hostinfo and netmon: whether the node runs on Knative or Cloud Run (environment report, link polling)
+K_REVISION	allow	hostinfo and netmon: whether the node runs on Knative or Cloud Run (environment report, link polling)
+K_SERVICE	allow	hostinfo and netmon: whether the node runs on Knative or Cloud Run (environment report, link polling)
+PORT	allow	hostinfo and netmon: part of the Knative, Cloud Run and Heroku checks
+REPL_OWNER	allow	hostinfo: whether the node runs on Replit, reported to control as its environment
+REPL_SLUG	allow	hostinfo: whether the node runs on Replit, reported to control as its environment
+SNAP	allow	hostinfo: whether the program is a snap package, reported to control
+SNAP_NAME	allow	hostinfo: whether the program is a snap package, reported to control
+SYNOPKG_DSM_VERSION_MAJOR	allow	distro: the Synology DSM version, reported to control
+WEBSITE_AUTH_AUTO_AAD	allow	hostinfo: whether the node runs in Azure App Service, reported to control as its environment
+WEBSITE_STACK	allow	hostinfo: whether the node runs in Azure App Service, reported to control as its environment
+XPC_SERVICE_NAME	allow	version: whether the program is Tailscale's own macOS app, reported to control
+CI	allow	cibuild: only whether health and eventbus panic on their own internal errors in tailscale's CI
+GITHUB_ACTIONS	allow	cibuild: only whether health and eventbus panic on their own internal errors in tailscale's CI
+GITHUB_REPOSITORY_OWNER	allow	cibuild: whether this is tailscale's own CI; nothing the shim links acts on it
+DISPLAY	allow	dns: whether a Linux desktop user runs the program; the shim's node never changes the host's DNS
+HOME	allow	default paths for state and logs; tsnet is always given the state directory, and logs are the shim's
+XDG_DATA_HOME	allow	a default path for state; tsnet is always given the state directory
+LocalAppData	allow	default Windows paths for state and logs; tsnet is always given the state directory
+ProgramData	allow	default Windows paths for state, logs and the env file (which the shim never applies)
+STATE_DIRECTORY	allow	a default systemd path for logs; tsnet is always given the state directory
+CACHE_DIRECTORY	allow	a default systemd path for logs; tsnet is always given the state directory
+WG_TUN_NAME_FILE	allow	wireguard-go's macOS TUN device; tsnet uses userspace networking and makes no TUN device
+TZ	allow	the local time zone, for times in logs
+ZONEINFO	allow	where Go finds time zone data
+PATH	allow	os/exec's command search; the shim runs no command
+PATHEXT	allow	os/exec's command search on Windows; the shim runs no command
+path	allow	os/exec's command search on Windows; the shim runs no command
+SYSTEMROOT	allow	os/exec keeps it for child processes on Windows; the shim runs no command
+NoDefaultCurrentDirectoryInExePath	allow	os/exec's command search on Windows; the shim runs no command
+LOCALDOMAIN	allow	the host resolver's options; names the node dials resolve only through the tailnet, and control's TLS certificate is checked whatever address its name gave
+RES_OPTIONS	allow	the host resolver's options; control's TLS certificate is checked whatever address its name gave
+HOSTALIASES	allow	the host resolver's aliases; control's TLS certificate is checked whatever address its name gave
+ASR_CONFIG	allow	the host resolver's options (OpenBSD); control's TLS certificate is checked whatever address its name gave
+REQUEST_METHOD	allow	httpproxy: ignores HTTP_PROXY under CGI
+@golang.org/x/net/http/httpproxy/proxy.go:getEnvAny	allow	HTTP_PROXY, HTTPS_PROXY, NO_PROXY and their lower case: an HTTP proxy for control and DERP connections, whose TLS is still checked end to end
+@vendor/golang.org/x/net/http/httpproxy/proxy.go:getEnvAny	allow	the standard library's copy: HTTP_PROXY, HTTPS_PROXY, NO_PROXY and their lower case, as above
+@golang.org/x/net/proxy/proxy.go:init	allow	ALL_PROXY and NO_PROXY and their lower case: a SOCKS proxy, as above
+@os/env.go:Getenv	allow	the implementation of os.Getenv; its callers' names are scanned
+@os/env.go:LookupEnv	allow	the implementation of os.LookupEnv; its callers' names are scanned
+@os/exec/exec.go:environ	allow	the environment os/exec gives a child process; the shim runs no command
+@golang.org/x/sys/unix/env_unix.go:Getenv	allow	the implementation of unix.Getenv; its callers' names are scanned
+@golang.org/x/sys/windows/env_windows.go:Getenv	allow	the implementation of windows.Getenv; its callers' names are scanned
+@tailscale.com/envknob/envknob.go:LookupBool	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:LookupInt	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:LookupIntSized	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:LookupUintSized	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:RegisterBool	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:RegisterDuration	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:RegisterInt	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:RegisterOptBool	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:RegisterString	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:String	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/envknob/envknob.go:boolOr	allow	envknob's own lookup by its caller's name; every caller's name is scanned
+@tailscale.com/util/def/def.go:LookupEnv	allow	a helper whose only callers are in cmd/containerboot, which the shim does not link
+@tailscale.com/hostinfo/hostinfo.go:EnvironWithoutSystemdServiceVars	allow	the environment for a helper process tailscaled runs; the shim runs none
+@tailscale.com/ipn/ipnlocal/peerapi.go:handleServeEnv	allow	the peer API serves the whole process environment to a peer that control grants debug access: a host must hold no secret in its environment (docs/tailscale.md)
+TAILSCALE_USE_WIP_CODE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TSNET_FORCE_LOGIN	refuse	makes tsnet log in again with an auth key over a node's saved state
+TS_ALLOW_ADMIN_CONSOLE_REMOTE_UPDATE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_ALLOW_DEBUG_IP	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_ALLOW_SELF_INGRESS	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_ASSUME_NETWORK_UP_FOR_TEST	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_AUDIENCE	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_AUTHKEY	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_AUTH_KEY	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_BIND_TO_INTERFACE_BY_ROUTE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_CERT_SHARE_MODE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_CLIENT_ID	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_CLIENT_SECRET	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_CONTROL_URL	refuse	tsnet uses it as the control server when its own field is empty; nexus names it only in nts_start
+TS_DEBUG_ACME	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ACME_DIRECTORY_URL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ACME_FORCE_RENEWAL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ALWAYS_USE_DERP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_CONFIGURE_WSL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_CONNECT_FAILURES	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_CONTROL_FLAGS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_CRASH_ON_UNEXPECTED	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DERP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DERP_WS_CLIENT	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DISABLE_LIKELY_HOME_ROUTER_IP_SELF	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DISABLE_UDP_GRO	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DISABLE_UDP_GSO	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DISCO	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DNS_CACHE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DNS_FORWARD_SEND	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_DNS_FORWARD_USE_ROUTES	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ENABLE_PMTUD	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ENABLE_SILENT_DISCO	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ENV_FILE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_EXIT_NODE_DNS_NET_PKG	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FAKE_GOOS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FAKE_HEALTH_ERROR	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FAKE_IPC_VERSION	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FILTER_RATE_LIMIT_LOGS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_FORCE_H1_LOGS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_KEY_PATH	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_LOGTAIL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_LOGTAIL_FLUSHDELAY	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_LOGTAIL_WAKES	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_LOG_RATE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_LOG_TIME	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MAGICSOCK_BIND_SOCKET	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MAGICSOCK_PEERMAP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MAGICSOCK_RING_BUFFER_MAX_SIZE_BYTES	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MAGIC_DNS_DUAL_STACK	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MAP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_MTU	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NETCHECK	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NETLINK	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NETSTACK	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NETSTACK_LEAK_MODE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NETSTACK_LOOPBACK_PORT	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NEVER_DIRECT_UDP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_NOISE_DIAL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_OMIT_LOCAL_ADDRS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PANIC_MACHINE_KEY	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PATCHIFY_PEER	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PATCHIFY_PEER_MISS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PERMIT_HTTP_C2N	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PMTUD	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PREFER_IPV6_USERDIAL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PRETENDPOINT	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PROFILES	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_PROXY_DNS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_RAW_DISCO	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_RAW_WGLOG	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_REGISTER	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_RESTUN_STOP_ON_IDLE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_ROUTECHECK	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_SCOPE_QUAD100_MACOS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_SEND_CALLME_UNKNOWN_PEER	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_SERVE_MAX_IDLE_CONNS_PER_HOST	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_SSH_IGNORE_TAILNET_POLICY	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_SSH_POLICY_FILE	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_STRIP_CAPS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_STRIP_ENDPOINTS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_STRIP_HOME_DERP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_TLS_DIAL	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_TRUSTED_CIDRS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_USE_DERP_ADDR	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_USE_DERP_HTTP	refuse	a tailscale debugging knob; nexus turns on none
+TS_DEBUG_WHOIS	refuse	a tailscale debugging knob; nexus turns on none
+TS_DISABLE_FEATURE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_DISABLE_SSH_SERVER	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_DISABLE_TAILDROP	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_DISABLE_UPNP	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_DISCO_PONG_IPV4_DELAY	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_DNS_FORWARD_SKIP_TCP_RETRY	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_ENABLE_RAW_DISCO	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_FORCE_LINUX_BIND_TO_DEVICE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_FORCE_NOISE_443	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_HOST_ENV	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_ID_TOKEN	refuse	tsnet signs in with it when its own field is empty; nexus signs in only from nts_start's parameters
+TS_INTERNAL_APP	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_LOGS_DIR	refuse	changes tailscale's logging or where its logs go
+TS_LOG_TARGET	refuse	changes tailscale's logging or where its logs go
+TS_NETSTACK_ENABLE_RACK	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_NETSTACK_KEEPALIVE_IDLE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_NETSTACK_KEEPALIVE_INTERVAL	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_PANIC_IF_HIT_MAIN_CONTROL	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_PLEASE_PANIC	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_SERVE_ALLOW_ALL_INTERFACES	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_TEST_ALLOW_AUTO_UPDATE	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_TUN_DISABLE_TCP_GRO	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_TUN_DISABLE_UDP_GRO	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_UNSAFE_SKIP_NKS_VERIFICATION	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_USE_CACHED_NETMAP	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_USE_CONTROL_DIAL_PLAN	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none
+TS_WG_ASM	refuse	a tailscale knob (control, sign-in, logging, uploads, keys, networking or debugging); nexus sets none

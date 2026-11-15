@@ -43,8 +43,9 @@ type handle struct {
 	// nts_accept takes it), and done, closed when the handle closes.
 	ln       net.Listener
 	accepted chan net.Conn
-	// A connection.
-	conn net.Conn
+	// A connection, and whether it is a UDP one (nts_dial_udp: each read is one datagram).
+	conn    net.Conn
+	udpConn bool
 	// A UDP socket.
 	pc net.PacketConn
 

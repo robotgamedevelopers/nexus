@@ -12,7 +12,9 @@ set(NEXUS_LLVM_MINGW_SHA256 fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bc
 # one). None is used by a tsnet node that signs in interactively and talks over the tailnet; each one dropped is code,
 # and for webclient an embedded web UI with its font, that nexus would otherwise ship. Every Go command of the build,
 # vet and the licence notices uses the same list. Kept: netstack, portmapper, DNS, logtail (its uploads are off; it
-# writes the state directory's own log buffer), health, c2n and the rest tsnet needs.
+# writes the state directory's own log buffer), health, c2n and the rest tsnet needs. cachenetmap is left out for
+# correctness as well: a network map loaded from disk at a start would count as received from control, and ready means
+# a map from control since this start (docs/tailscale.md).
 set(NEXUS_TAILSCALE_OMIT
     ts_omit_webclient ts_omit_aws ts_omit_kube ts_omit_bird ts_omit_drive ts_omit_taildrop ts_omit_ssh ts_omit_tap
     ts_omit_tpm ts_omit_synology ts_omit_systray ts_omit_wakeonlan ts_omit_capture ts_omit_cli ts_omit_completion
@@ -21,4 +23,4 @@ set(NEXUS_TAILSCALE_OMIT
     ts_omit_appconnectors ts_omit_conn25 ts_omit_linuxdnsfight ts_omit_webbrowser ts_omit_colorable
     ts_omit_cliconndiag ts_omit_androiddns ts_omit_androidbin ts_omit_identityfederation ts_omit_oauthkey
     ts_omit_debugeventbus ts_omit_tundevstats ts_omit_portlist ts_omit_netlog ts_omit_favorites
-    ts_omit_serviceclientprefs)
+    ts_omit_serviceclientprefs ts_omit_cachenetmap)

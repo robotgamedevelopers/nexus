@@ -48,6 +48,20 @@ NTS_API int nts_test_control_up(char* err, size_t err_size);
 // refuses on its certificate.
 NTS_API int nts_test_control_untrusted_url(char* url, size_t url_size, char* err, size_t err_size);
 
+// Cuts every connection to the control server, then holds its port silently (connections accepted, never answered),
+// as a control server whose host stopped answering. nts_test_control_up ends it.
+NTS_API int nts_test_control_blackhole(char* err, size_t err_size);
+
+// How many calls into tsnet that send (a dial, a datagram sent) the shim has made in this process.
+NTS_API long long nts_test_net_calls(void);
+
+// Hands the node text as if control had sent it as an error (tsnet's ErrMessage), through the path a real one takes.
+NTS_API int nts_test_inject_control_error(int node, const char* text, char* err, size_t err_size);
+
+// Opens TCP and UDP traps on one free port of the host's 127.0.0.1, counting what reaches them: the port, or -1.
+NTS_API int nts_test_host_trap(char* err, size_t err_size);
+NTS_API long long nts_test_host_trap_count(void);
+
 // Stops the control server, its relay and its STUN server.
 NTS_API int nts_test_control_stop(char* err, size_t err_size);
 

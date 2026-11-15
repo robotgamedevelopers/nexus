@@ -44,7 +44,7 @@
 #   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
 #               (./walk) runs under GO, offline, with the local toolchain (the module needs no other); it is run
 #               first and writes TailscaleTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of ready, url,
-#               close, table
+#               close, table, down
 #   GO          with TSWALK: a go command, 1.21 or newer
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
@@ -194,10 +194,11 @@ elseif(DEFINED TSWALK AND NOT "${TSWALK}" STREQUAL "")
             "trace checks run its walk with Go 1.21 or newer (the fleet's sdk/bin has one): install it, configure again.")
     endif()
     set(walk_args "${SEED}" "${STEPS}" "${WORK}/TailscaleTraceData.tla")
-    if(FAULTY STREQUAL "ready" OR FAULTY STREQUAL "url" OR FAULTY STREQUAL "close" OR FAULTY STREQUAL "table")
+    if(FAULTY STREQUAL "ready" OR FAULTY STREQUAL "url" OR FAULTY STREQUAL "close" OR FAULTY STREQUAL "table" OR
+        FAULTY STREQUAL "down")
         list(APPEND walk_args "--faulty-${FAULTY}")
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not ready, url, close or table")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not ready, url, close, table or down")
     endif()
     # The module has no dependency: nothing is fetched (GOPROXY=off), and the local Go builds it (GOTOOLCHAIN=local),
     # with the user's own build cache (Go locks it, so parallel tests share it safely).

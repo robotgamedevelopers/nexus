@@ -22,7 +22,8 @@ endif()
 # (cmake/tailscale.cmake). They are independent, so a parallel build runs them side by side (CMake's Makefiles run
 # separate --target goals in turn).
 add_custom_target(tailscale_checks)
-add_dependencies(tailscale_checks tailscale_test nexus_tailscale_shim nexus_tailscale_vet nexus_tailscale_notices_check)
+add_dependencies(tailscale_checks tailscale_test nexus_tailscale_shim nexus_tailscale_vet nexus_tailscale_notices_check
+    nexus_tailscale_environment_check)
 
 # The lifecycle module's Go tests, with the pinned Go (a module of its own, with no requirements).
 add_test(NAME tailscale_unit_lifecycle
@@ -39,7 +40,8 @@ endforeach()
 
 # The groups, here and in .github/workflows/tailscale.yml's list for macOS's x86_64 slice.
 set(NEXUS_TAILSCALE_FUNCTIONAL state_dir refusals refuses_inherited_key lock lock_two_process panics log_cap quiet
-    unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key)
+    unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key long_sign_in
+    control_error control_blackhole close_each_other)
 foreach(group ${NEXUS_TAILSCALE_FUNCTIONAL})
     set(work ${CMAKE_CURRENT_BINARY_DIR}/work_${group})
     file(MAKE_DIRECTORY ${work})

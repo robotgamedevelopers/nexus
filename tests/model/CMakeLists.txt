@@ -80,8 +80,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
 # tests/driver.
 # With TSWALK, it is the Tailscale shim's lifecycle walk (src/tailscale/lifecycle/walk, run with the local Go: the
-# module has no dependency), and FAULTY one of its faults (ready, url, close, table). NODEADLOCK checks a spec whose
-# environment may come to rest (TLC's -deadlock).
+# module has no dependency), and FAULTY one of its faults (ready, url, close, table, down). NODEADLOCK checks a spec
+# whose environment may come to rest (TLC's -deadlock).
 find_program(NEXUS_NODE node)
 find_program(NEXUS_GO_LOCAL go HINTS "$ENV{HOME}/sdk/bin")
 function(tlc_test name module cfg expect)
@@ -403,6 +403,8 @@ tlc_test(tlc_secrets_witness_held_never_retried WSecHeldNeverRetried WSecHeldNev
 # every property (its environment comes to rest once every node is closed, hence NODEADLOCK); each reversed witness
 # rejected; the code's walks checked against the spec over several seeds; and each of the walk's faults rejected.
 tlc_test(tlc_tailscale_spec Tailscale MCTailscale.cfg pass NODEADLOCK)
+tlc_test(tlc_tailscale_spec_keys Tailscale MCTailscaleKeys.cfg pass NODEADLOCK)
+tlc_test(tlc_tailscale_spec_certs Tailscale MCTailscaleCerts.cfg pass NODEADLOCK)
 tlc_test(tlc_tailscale_witness_ready_without_peers Tailscale witnesses/WTsReadyWithoutPeers.cfg invariant NODEADLOCK
          PROPERTY ReadyHasPeers)
 tlc_test(tlc_tailscale_witness_url_kept Tailscale witnesses/WTsURLKept.cfg invariant NODEADLOCK
@@ -413,10 +415,18 @@ tlc_test(tlc_tailscale_witness_table_ignores Tailscale witnesses/WTsTableIgnores
          PROPERTY OneNodePerDir)
 tlc_test(tlc_tailscale_witness_no_relogin Tailscale witnesses/WTsNoRelogin.cfg liveness NODEADLOCK)
 tlc_test(tlc_tailscale_witness_poll_ignored Tailscale witnesses/WTsPollIgnored.cfg liveness NODEADLOCK)
+tlc_test(tlc_tailscale_witness_cert_ignored Tailscale witnesses/WTsCertIgnored.cfg invariant NODEADLOCK
+         PROPERTY CertNeverReady)
+# Orders recorded from the real shim against the test control server: each must be a behaviour of the model's Next,
+# its world included (TailscaleOrders.tla: OrderNotReached violated means the model produces the whole order).
+foreach(order restart authkey cert starting)
+    tlc_test(tlc_tailscale_order_${order} TailscaleOrders TailscaleOrders_${order}.cfg invariant NODEADLOCK
+             PROPERTY OrderNotReached)
+endforeach()
 foreach(seed 1 2 3 4 5)
     tlc_test(tlc_tailscale_trace_seed_${seed} TailscaleTrace TailscaleTrace.cfg pass SEED ${seed} STEPS 1000 TSWALK)
 endforeach()
-foreach(fault ready url close table)
+foreach(fault ready url close table down)
     tlc_test(tlc_tailscale_trace_faulty_${fault}_rejected TailscaleTrace TailscaleTrace.cfg deadlock SEED 1 STEPS 1000
              TSWALK FAULTY ${fault})
 endforeach()

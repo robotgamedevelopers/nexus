@@ -420,12 +420,35 @@ void startChecks() {
     CHECK(refused(params(dir, "nexus-test", "https://control.example?q=1"), "more than a host"));
     CHECK(refused(params(dir, "nexus-test", "https://controlplane.tailscale.com"), "hosted service"));
     CHECK(refused(params(dir, "nexus-test", "https://login.tailscale.com"), "hosted service"));
+    // The hosted service in other spellings is still the hosted service, and refused with an auth key or without.
+    for (const char* hosted : {"https://controlplane.tailscale.com.", "https://CONTROLPLANE.tailscale.com:443",
+                               "https://controlplane.tailscale.com.:443/"}) {
+        CHECK(refused(params(dir, "nexus-test", hosted), "hosted service"));
+        CHECK(refused(params(dir, "nexus-test", hosted, "tskey-a-value-that-must-not-be-shown"), "hosted service"));
+        CHECK(!has(err, "must-not-be-shown"));
+    }
+    // "\xef\xbd\x83..." is fullwidth "controlplane"; "\xe3\x80\x82" an ideographic full stop. IDNA maps both to the
+    // hosted service's name, so neither is mapped: the host must be given in ASCII.
+    CHECK(refused(params(dir, "nexus-test",
+                         "https://\xef\xbd\x83\xef\xbd\x8f\xef\xbd\x8e\xef\xbd\x94\xef\xbd\x92\xef\xbd\x8f\xef\xbd\x8c"
+                         "\xef\xbd\x90\xef\xbd\x8c\xef\xbd\x81\xef\xbd\x8e\xef\xbd\x85.tailscale.com",
+                         "tskey-a-value-that-must-not-be-shown"),
+                  "not ASCII"));
+    CHECK(refused(params(dir, "nexus-test", "https://controlplane.tailscale\xe3\x80\x82" "com"), "not ASCII"));
+    CHECK(refused(params(dir, "nexus-test", "https://xn--a.example"), "IDNA"));
+    for (const char* port :
+         {"https://control.example:", "https://control.example:0", "https://control.example:99999"}) {
+        CHECK(refused(params(dir, "nexus-test", port), "port is not a number from 1 to 65535"));
+    }
+    CHECK(refused(params(dir, "nexus-test", "https://[fe80::1%25en0]"), "zone"));
     CHECK(refused(params(dir, "nexus-test", nullptr, "tskey-a-value-that-must-not-be-shown"), "auth key"));
     nts_start_params p = params(dir, "nexus-test", nullptr, "tskey-a-value-that-must-not-be-shown");
     CHECK(nts_start(&p, err, sizeof err) == 0 && !has(err, "must-not-be-shown"));
-    // A start refuses before anything else while a tsnet sign-in variable is set, naming it (never its value).
+    // A start refuses before anything else while a variable of the environment policy's refused list
+    // (src/tailscale/environment.txt) is set, naming it (never its value).
     for (const char* name : {"TS_AUTHKEY", "TS_AUTH_KEY", "TS_CLIENT_SECRET", "TS_CLIENT_ID", "TS_ID_TOKEN",
-                             "TS_AUDIENCE", "TS_CONTROL_URL"}) {
+                             "TS_AUDIENCE", "TS_CONTROL_URL", "TSNET_FORCE_LOGIN", "SSLKEYLOGFILE", "SSL_CERT_FILE",
+                             "SSL_CERT_DIR", "GODEBUG", "TS_DEBUG_MAP", "TS_LOG_TARGET", "TAILSCALE_USE_WIP_CODE"}) {
         setEnv(name, "a-value-that-must-not-be-shown");
         p = params(dir, "nexus-test");
         CHECK(nts_start(&p, err, sizeof err) == 0);
@@ -591,14 +614,16 @@ void refusals() {
     }
     CHECK(startOffline(other, why) == 0 && has(why, "the control server https://control.example's"));
     CHECK(!fs::exists(other / "tailscaled.state"));
-    // A layer 0 directory (a node's state and no record: Tailscale's hosted service's) given to another.
-    fs::path layer0 = work / "layer0";
-    fs::create_directories(layer0);
+    // A node's state and no record (the record removed outside nexus): refused, since whose state it is cannot be
+    // known, and nothing is written there.
+    fs::path unrecorded = work / "unrecorded";
+    fs::create_directories(unrecorded);
     {
-        std::ofstream(layer0 / "tailscaled.state") << "{}";
+        std::ofstream(unrecorded / "tailscaled.state") << "{}";
     }
-    CHECK(startOffline(layer0, why) == 0 && has(why, "Tailscale's hosted service's"));
-    CHECK(readFile(layer0 / "tailscaled.state") == "{}");
+    CHECK(startOffline(unrecorded, why) == 0 && has(why, "no record of its control server"));
+    CHECK(readFile(unrecorded / "tailscaled.state") == "{}");
+    CHECK(!fs::exists(unrecorded / "nexus-tailscale.control"));
     // An offline start records its control server, and a second start there agrees with it.
     fs::path recorded = work / "recorded";
     int node = startOffline(recorded, why);
@@ -1292,6 +1317,77 @@ void tailnet() {
         }
         CHECK(nts_send_to(sockB, "x", 1, "nexus-nobody:1", 1000, err, sizeof err) == NTS_ERROR &&
               has(err, "no peer"));
+
+        // UDP truncation: the count is the datagram's whole length, and the buffer holds what fit.
+        CHECK(eventually([&] {
+            char e[512];
+            nts_write(udpA, "0123456789", 10, 1000, e, sizeof e);
+            char head[4] = {};
+            char sender[128];
+            long long m = nts_recv_from(sockB, head, sizeof head, 200, sender, sizeof sender, e, sizeof e);
+            return m == 10 && std::memcmp(head, "0123", 4) == 0;
+        }));
+        CHECK(eventually([&] {
+            char e[512];
+            nts_send_to(sockB, "abcdefgh", 8, from.c_str(), 1000, e, sizeof e);
+            char head[3] = {};
+            long long m = nts_read(udpA, head, sizeof head, 200, e, sizeof e);
+            return m == 8 && std::memcmp(head, "abc", 3) == 0;
+        }));
+        // An absurd size is refused by validation, before the buffer is touched.
+        char one[1];
+        CHECK(nts_recv_from(sockB, one, SIZE_MAX, 0, nullptr, 0, err, sizeof err) == NTS_ERROR &&
+              has(err, "above the most"));
+        CHECK(nts_send_to(sockB, one, SIZE_MAX, from.c_str(), 0, err, sizeof err) == NTS_ERROR &&
+              has(err, "above the most"));
+        CHECK(nts_read(udpA, one, SIZE_MAX, 0, err, sizeof err) == NTS_ERROR && has(err, "above the most"));
+        CHECK(nts_write(udpA, one, SIZE_MAX, 0, err, sizeof err) == NTS_ERROR && has(err, "above the most"));
+    }
+
+    // Dials and datagrams go only to the tailnet's peers: loopback (a trap listening there), a private address, an
+    // address in the tailnet's range that no peer has, a public name and the host's own name are each refused with
+    // the reason, and nothing was sent (no call into tsnet that sends, nothing at the trap).
+    int trap = nts_test_host_trap(err, sizeof err);
+    CHECK(trap > 0);
+    long long calls = nts_test_net_calls();
+    long long trapped = nts_test_host_trap_count();
+    const std::string port = std::to_string(trap);
+    const std::string offTailnet[] = {"127.0.0.1:" + port, "[::1]:" + port, "localhost:" + port, "10.1.2.3:" + port,
+                                      "100.64.99.99:" + port, "example.com:443"};
+    for (const std::string& to : offTailnet) {
+        CHECK(nts_dial_tcp(a, to.c_str(), 1000, err, sizeof err) == 0 && has(err, "no peer"));
+        CHECK(nts_dial_udp(a, to.c_str(), 1000, err, sizeof err) == 0 && has(err, "no peer"));
+        CHECK(sockB <= 0 || (nts_send_to(sockB, "x", 1, to.c_str(), 1000, err, sizeof err) == NTS_ERROR &&
+                             has(err, "no peer")));
+    }
+    CHECK(nts_test_net_calls() == calls);
+    CHECK(nts_test_host_trap_count() == trapped);
+
+    // Timeout 0: a dial is refused (it must wait for the peer); peers are answered from the node's own state; an
+    // accept takes a connection already waiting; a read returns data already arrived.
+    CHECK(nts_dial_tcp(a, (dnsOf("nexus-b") + ":7000").c_str(), 0, err, sizeof err) == 0 &&
+          has(err, "timeout of 0"));
+    CHECK(nts_peers(a, nullptr, 0, 0, err, sizeof err) == 1);
+    int second = nts_dial_tcp(a, (dnsOf("nexus-b") + ":7000").c_str(), 30000, err, sizeof err);
+    CHECK(second > 0);
+    int waiting = 0;
+    CHECK(second <= 0 || eventually([&] {
+        waiting = nts_accept(listener, 0, err, sizeof err);
+        return waiting != NTS_TIMEOUT;
+    }));
+    CHECK(second <= 0 || waiting > 0);
+    if (second > 0 && waiting > 0) {
+        CHECK(nts_write(second, "abc", 3, 10000, err, sizeof err) == 3);
+        long long got = NTS_TIMEOUT;
+        CHECK(eventually([&] {
+            char three[8];
+            got = nts_read(waiting, three, sizeof three, 0, err, sizeof err);
+            return got != NTS_TIMEOUT;
+        }));
+        CHECK(got == 3);
+        char huge[1];
+        CHECK(nts_read(waiting, huge, SIZE_MAX, 0, err, sizeof err) == NTS_ERROR && has(err, "above the most"));
+        CHECK(nts_write(waiting, huge, SIZE_MAX, 0, err, sizeof err) == NTS_ERROR && has(err, "above the most"));
     }
     // A node's close closes its handles.
     CHECK(closeNode(a));
@@ -1399,11 +1495,12 @@ void controlDown() {
     CHECK(nts_test_control_down(err, sizeof err) == 0);
     nts_status st{};
     CHECK(waitFor(a, [](const nts_status& s) { return s.reason == NTS_REASON_CONTROL_UNREACHABLE; }, st));
-    CHECK(st.state == NTS_STATE_READY);
+    CHECK(st.state == NTS_STATE_READY && st.control_down != 0);
     // The tailnet keeps working without control.
     CHECK(dialed > 0 && accepted > 0 && carries(dialed, accepted, "while control is down"));
     CHECK(nts_test_control_up(err, sizeof err) == 0);
     CHECK(waitFor(a, [](const nts_status& s) { return s.state == NTS_STATE_READY && s.reason == 0; }, st));
+    CHECK(st.control_down == 0);
     CHECK(dialed > 0 && accepted > 0 && carries(accepted, dialed, "control is back"));
     CHECK(closeNode(a));
     CHECK(closeNode(b));
@@ -1443,6 +1540,193 @@ void authKey() {
         CHECK(!has(readFile(work / "right" / "nexus-tailscale.log"), "tskey-test-only-key"));
         CHECK(closeNode(right));
     }
+}
+
+// Control's own words reach the host scrubbed: an error naming the node's auth key, another key and a URL, longer
+// than a reason holds, gives the reason code it names (auth-key) and a text with none of them, cut to 256 bytes. The
+// node's log holds none of them either.
+void controlError() {
+    fs::path work = fresh("control_error");
+    fs::path dir = work / "state";
+    char err[512];
+    std::string path = dir.string();
+    nts_start_params p = params(path, "nexus-control-error", nullptr, "nexus-own-secret-key");
+    int node = nts_test_start_offline(&p, err, sizeof err);
+    CHECK(node > 0);
+    if (node <= 0) {
+        std::fprintf(stderr, "control_error: %s\n", err);
+        return;
+    }
+    std::string text = "invalid authkey nexus-own-secret-key (also tskey-auth-other-123); see "
+                       "https://control.example/admin/machines?key=nexus-own-secret-key for more; " +
+                       std::string(600, 'x');
+    CHECK(nts_test_inject_control_error(node, text.c_str(), err, sizeof err) == 0);
+    nts_status st{};
+    CHECK(waitState(node, NTS_STATE_FAILED, st));
+    std::string reason = st.reason_text;
+    CHECK(st.reason == NTS_REASON_AUTH_KEY && has(reason, "invalid authkey"));
+    CHECK(!has(reason, "nexus-own-secret-key") && !has(reason, "tskey-") && !has(reason, "://"));
+    CHECK(has(reason, "<a secret, withheld>") && has(reason, "<a URL, withheld>"));
+    CHECK(reason.size() <= 256);
+    CHECK(closeNode(node));
+    std::string log = readFile(dir / "nexus-tailscale.log");
+    CHECK(!has(log, "nexus-own-secret-key") && !has(log, "tskey-auth-other"));
+}
+
+// The sign-in left waiting long enough for tsnet to repeat its URL line in the log (every 5 s), in a child whose
+// stdout and stderr are files: the log holds the placeholder and never the URL, no reason text ever names a URL, and
+// the child prints nothing at all.
+void longSignInChild() {
+    fs::path work = fresh("long_sign_in_child");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    fs::path dir = work / "state";
+    int node = start(dir, "nexus-long-sign-in", control.url);
+    CHECK(node > 0);
+    if (node <= 0) {
+        return;
+    }
+    std::string url = loginUrl(node);
+    CHECK(!url.empty());
+    bool urlInReason = false;
+    auto look = [&] {
+        nts_status s{};
+        char e[512];
+        if (nts_status_get(node, &s, e, sizeof e) == 0 && (has(s.reason_text, "://") ||
+                                                           (!url.empty() && has(s.reason_text, url)))) {
+            urlInReason = true;
+        }
+    };
+    // tsnet's line with the URL, twice: at least one 5 s repeat.
+    CHECK(eventually([&] {
+        look();
+        std::string log = readFile(dir / "nexus-tailscale.log");
+        size_t first = log.find("<a URL, withheld>");
+        return first != std::string::npos && log.find("<a URL, withheld>", first + 1) != std::string::npos;
+    }));
+    char err[512];
+    CHECK(!url.empty() && nts_test_control_approve(url.c_str(), err, sizeof err) == 0);
+    nts_status st{};
+    CHECK(waitFor(node,
+                  [&](const nts_status& s) {
+                      look();
+                      return s.state == NTS_STATE_READY;
+                  },
+                  st));
+    look();
+    CHECK(!urlInReason);
+    CHECK(closeNode(node));
+    std::string log = readFile(dir / "nexus-tailscale.log");
+    CHECK(!url.empty() && !has(log, url) && !has(log, "://"));
+}
+
+void longSignIn() {
+    std::error_code ec;
+    fs::remove("long_stdout.txt", ec);
+    fs::remove("long_stderr.txt", ec);
+    int rc = std::system(command("long_sign_in_child >long_stdout.txt 2>long_stderr.txt").c_str());
+    std::string printed = readFile(fs::current_path() / "long_stdout.txt");
+    std::string errors = readFile(fs::current_path() / "long_stderr.txt");
+    CHECK(rc == 0);
+    CHECK(printed.empty() && errors.empty());
+    if (rc != 0 || !printed.empty() || !errors.empty()) {
+        // The child's output is only what its failed checks said: never the URL, which it does not print.
+        std::fprintf(stderr, "long_sign_in_child: rc %d, %zu bytes on stdout, %zu on stderr\n", rc, printed.size(),
+                     errors.size());
+    }
+}
+
+// Control blackholed (its connections cut, then its port held silently): the node reports control unreachable at
+// once (the map poll closed), stays ready with the control-down flag, and the tailnet keeps working; with control
+// back, the flag clears.
+void controlBlackhole() {
+    fs::path work = fresh("control_blackhole");
+    Control control(true);
+    CHECK(control.ok);
+    if (!control.ok) {
+        return;
+    }
+    int a = signedIn(work / "a", "nexus-a", control);
+    int b = signedIn(work / "b", "nexus-b", control);
+    CHECK(a > 0 && b > 0);
+    if (a <= 0 || b <= 0) {
+        return;
+    }
+    char err[512];
+    nts_peer peer{};
+    CHECK(eventually([&] { return seesPeer(a, dnsOf("nexus-b"), peer); }));
+    int listener = nts_listen_tcp(b, 7200, err, sizeof err);
+    int dialed = nts_dial_tcp(a, (dnsOf("nexus-b") + ":7200").c_str(), 30000, err, sizeof err);
+    int accepted = nts_accept(listener, 30000, err, sizeof err);
+    CHECK(listener > 0 && dialed > 0 && accepted > 0);
+    auto before = Clock::now();
+    CHECK(nts_test_control_blackhole(err, sizeof err) == 0);
+    nts_status st{};
+    CHECK(waitFor(a, [](const nts_status& s) { return s.control_down != 0; }, st));
+    auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - before).count();
+    // At once: the poll's close is seen at the shim's next look (250 ms), never after a keep-alive's minutes.
+    CHECK(took < 10000);
+    CHECK(st.state == NTS_STATE_READY && st.reason == NTS_REASON_CONTROL_UNREACHABLE);
+    CHECK(dialed > 0 && accepted > 0 && carries(dialed, accepted, "while control is blackholed"));
+    CHECK(nts_test_control_up(err, sizeof err) == 0);
+    CHECK(waitFor(a, [](const nts_status& s) { return s.state == NTS_STATE_READY && s.control_down == 0; }, st));
+    CHECK(st.reason == NTS_REASON_NONE);
+    CHECK(closeNode(a));
+    CHECK(closeNode(b));
+}
+
+struct Pair {
+    std::atomic<int> entered{0};
+    std::atomic<int> closed[2] = {{-2}, {-2}};
+    int nodes[2] = {0, 0};
+};
+
+struct Side {
+    Pair* pair;
+    int me;
+};
+
+// Each node's callback closes the other node, both at once: neither waits on the other.
+void closeTheOther(void* user, int, unsigned long long) {
+    auto* side = static_cast<Side*>(user);
+    Pair* pair = side->pair;
+    if (pair->closed[side->me].load() != -2) {
+        return;
+    }
+    ++pair->entered;
+    auto until = Clock::now() + std::chrono::seconds(10);
+    while (pair->entered.load() < 2 && Clock::now() < until) {
+        std::this_thread::yield();
+    }
+    char err[512];
+    pair->closed[side->me] = nts_close(pair->nodes[1 - side->me], err, sizeof err);
+}
+
+void closeEachOther() {
+    fs::path work = fresh("close_each_other");
+    std::string why;
+    Pair pair;
+    pair.nodes[0] = startOffline(work / "x", why, "nexus-x");
+    pair.nodes[1] = startOffline(work / "y", why, "nexus-y");
+    CHECK(pair.nodes[0] > 0 && pair.nodes[1] > 0);
+    if (pair.nodes[0] <= 0 || pair.nodes[1] <= 0) {
+        std::fprintf(stderr, "close_each_other: %s\n", why.c_str());
+        return;
+    }
+    Side x{&pair, 0};
+    Side y{&pair, 1};
+    char err[512];
+    CHECK(nts_watch(pair.nodes[0], closeTheOther, &x, err, sizeof err) == 0);
+    CHECK(nts_watch(pair.nodes[1], closeTheOther, &y, err, sizeof err) == 0);
+    CHECK(eventually([&] { return pair.closed[0].load() != -2 && pair.closed[1].load() != -2; }));
+    CHECK(pair.entered.load() == 2);
+    CHECK(pair.closed[0].load() == 0 && pair.closed[1].load() == 0);
+    nts_status st{};
+    CHECK(nts_status_get(pair.nodes[0], &st, err, sizeof err) == -1 && has(err, "is closed"));
+    CHECK(nts_status_get(pair.nodes[1], &st, err, sizeof err) == -1 && has(err, "is closed"));
 }
 
 void certificate() {
@@ -1515,6 +1799,10 @@ const Group kGroups[] = {
     {"expiry", expiry},
     {"control_down", controlDown},
     {"auth_key", authKey},
+    {"long_sign_in", longSignIn},
+    {"control_error", controlError},
+    {"control_blackhole", controlBlackhole},
+    {"close_each_other", closeEachOther},
 };
 
 }  // namespace
@@ -1529,6 +1817,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::strcmp(argv[1], "quiet_child") == 0) {
         quietChild();
+        return failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "long_sign_in_child") == 0) {
+        longSignInChild();
         return failures == 0 ? 0 : 1;
     }
     if (argc != 2) {

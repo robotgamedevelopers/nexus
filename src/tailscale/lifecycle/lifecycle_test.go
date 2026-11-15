@@ -2,10 +2,12 @@
 package lifecycle
 
 import (
+	"errors"
 	"math/rand"
+	"net/netip"
 	"strings"
 	"testing"
-	"time"
+	"unicode/utf8"
 )
 
 func run(events ...Event) Node {
@@ -84,10 +86,129 @@ func TestInteractiveSignInToReady(t *testing.T) {
 	expect(t, "starting", n, Starting, ReasonNone)
 	n = Step(n, backend("Running"))
 	expect(t, "running without the map", n, Running, ReasonNone)
-	n = Step(n, poll(false))
-	expect(t, "a poll not yet open", n, Running, ReasonNone)
 	n = Step(n, poll(true))
 	expect(t, "ready", n, Ready, ReasonNone)
+}
+
+func TestPollClosedIsControlDownWhileReady(t *testing.T) {
+	n := run(start, backend("Running"), poll(true))
+	gen := n.Gen
+	n = Step(n, Event{Kind: Poll, Text: "the map poll to control closed"})
+	expect(t, "poll closed", n, Ready, ReasonControlUnreachable)
+	if !n.Down || n.Text != "the map poll to control closed" || n.Gen != gen+1 {
+		t.Fatalf("poll closed: down %v, text %q, generation +%d", n.Down, n.Text, n.Gen-gen)
+	}
+	// A second close, or an error logged meanwhile, keeps the first reason's text.
+	n = Step(n, Event{Kind: Poll, Text: "again"})
+	if n.Text != "the map poll to control closed" {
+		t.Fatalf("the text changed to %q", n.Text)
+	}
+	n = Step(n, poll(true))
+	expect(t, "a new map", n, Ready, ReasonNone)
+	if n.Down {
+		t.Fatal("still down after a new map")
+	}
+	// Down is a change on its own, even where the reason does not show it (a refusal outranks it).
+	n = run(start, backend("NeedsLogin"), errMsg("invalid authkey"))
+	gen = n.Gen
+	n = Step(n, Event{Kind: Poll, Text: "closed"})
+	expect(t, "refused, then down", n, Failed, ReasonAuthKey)
+	if !n.Down || n.Gen != gen+1 {
+		t.Fatal("down while failed is not a change")
+	}
+}
+
+func TestMapForAnExpiredKeyIsNotReady(t *testing.T) {
+	n := run(start, backend("Running"), poll(true), self(true))
+	expect(t, "expired", n, Running, ReasonNone)
+	n = Step(n, poll(true))
+	expect(t, "a map for the expired key", n, Running, ReasonNone)
+	if n.Peers {
+		t.Fatal("a map for an expired key counted as the peers")
+	}
+}
+
+func TestDialTarget(t *testing.T) {
+	peers := []Peer{
+		{Name: "nexus-b.tailnet.example.", Addrs: []netip.Addr{netip.MustParseAddr("100.64.0.2"),
+			netip.MustParseAddr("fd7a:115c:a1e0::2")}},
+		{Name: "only-six.tailnet.example.", Addrs: []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0::3")}},
+		{Name: "no-address.tailnet.example.", Addrs: nil},
+	}
+	good := map[string]string{
+		"nexus-b.tailnet.example:7000":  "100.64.0.2:7000",
+		"NEXUS-B.tailnet.example.:7000": "100.64.0.2:7000",
+		"nexus-b:1":                     "100.64.0.2:1",
+		"100.64.0.2:65535":              "100.64.0.2:65535",
+		"[fd7a:115c:a1e0::2]:80":        "[fd7a:115c:a1e0::2]:80",
+		"[::ffff:100.64.0.2]:80":        "100.64.0.2:80",
+		"only-six:80":                   "[fd7a:115c:a1e0::3]:80",
+	}
+	for address, want := range good {
+		got, err := DialTarget(address, peers)
+		if err != nil || got.String() != want {
+			t.Fatalf("%q: got %v, %v; want %s", address, got, err, want)
+		}
+	}
+	// Off the tailnet, or no peer's: refused, whatever the host's network or resolver would make of it.
+	bad := map[string]string{
+		"127.0.0.1:7000":          "no peer's tailnet address",
+		"[::1]:7000":              "no peer's tailnet address",
+		"localhost:7000":          "no peer is named localhost",
+		"10.1.2.3:80":             "no peer's tailnet address",
+		"192.168.1.1:80":          "no peer's tailnet address",
+		"100.64.99.99:1":          "no peer's tailnet address",
+		"203.0.113.7:443":         "no peer's tailnet address",
+		"example.com:443":         "no peer is named example.com",
+		"nexus-b.example.com:443": "no peer is named nexus-b.example.com",
+		"[fe80::1%en0]:80":        "zone",
+		"no-address:80":           "no tailnet address yet",
+		"nexus-b":                 "not name:port",
+		"nexus-b:":                "port",
+		"nexus-b:0":               "port",
+		"nexus-b:65536":           "port",
+		"nexus-b:http":            "port",
+		":80":                     "no host",
+		"fd7a:115c:a1e0::2:80":    "not name:port",
+	}
+	for address, part := range bad {
+		_, err := DialTarget(address, peers)
+		if err == nil || !strings.Contains(err.Error(), part) {
+			t.Fatalf("%q: got %v, want a refusal with %q", address, err, part)
+		}
+	}
+	if _, err := DialTarget("100.64.0.2:1", nil); err == nil {
+		t.Fatal("a dial with no peers accepted")
+	}
+}
+
+func TestScrub(t *testing.T) {
+	key := "tskey-auth-kXYZ-0123456789abcdef"
+	text := "register: invalid authkey " + key + "; visit https://login.example.invalid/a/0123 or " +
+		"http://127.0.0.1:41641/a/x?y=1 and tskey-other-key"
+	got := Scrub(text, []string{key, ""}, 0)
+	for _, leaked := range []string{key, "https://", "http://", "login.example.invalid", "tskey-"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("%q kept %q", got, leaked)
+		}
+	}
+	if !strings.Contains(got, URLWithheld) || !strings.Contains(got, SecretWithheld) ||
+		!strings.Contains(got, "invalid authkey") {
+		t.Fatalf("scrubbed: %q", got)
+	}
+	// A secret that is no tskey (a key a control server of another make issues) is withheld too.
+	if got := Scrub("refused: hunter2-key", []string{"hunter2-key"}, 0); strings.Contains(got, "hunter2") {
+		t.Fatalf("a secret kept: %q", got)
+	}
+	// Cut to the limit on a character boundary.
+	long := strings.Repeat("é", 200)
+	cut := Scrub(long, nil, 101)
+	if len(cut) > 101 || !strings.HasSuffix(cut, "...") || !utf8.ValidString(cut) {
+		t.Fatalf("cut: %d bytes, %q", len(cut), cut[len(cut)-8:])
+	}
+	if Scrub("short", nil, 101) != "short" {
+		t.Fatal("a short text changed")
+	}
 }
 
 func TestRunningIsNotReadyUntilTheMapComesAgain(t *testing.T) {
@@ -277,6 +398,11 @@ func TestTable(t *testing.T) {
 	}
 }
 
+// sameIDNA is an IDNA lookup that changes nothing; badIDNA one that calls every name invalid.
+func sameIDNA(s string) (string, error) { return s, nil }
+
+func badIDNA(s string) (string, error) { return "", errors.New("invalid") }
+
 func TestControlURL(t *testing.T) {
 	good := map[string]string{
 		"":                               "",
@@ -285,9 +411,24 @@ func TestControlURL(t *testing.T) {
 		"HTTPS://control.example":        "https://control.example",
 		"http://127.0.0.1:41641":         "http://127.0.0.1:41641", // the test build's own, given as plain
 		"https://example.com.tailscale2": "https://example.com.tailscale2",
+		// One server, one record: a trailing dot, the default port and letter case are spellings of the same host.
+		"https://control.example.":      "https://control.example",
+		"https://control.example:443":   "https://control.example",
+		"https://control.example.:443/": "https://control.example",
+		"https://CONTROL.example:00443": "https://control.example",
+		"https://control.example:1":     "https://control.example:1",
+		"https://control.example:65535": "https://control.example:65535",
+		"https://192.0.2.10":            "https://192.0.2.10",
+		"https://192.0.2.10:8443":       "https://192.0.2.10:8443",
+		"https://[2001:DB8::0:1]":       "https://[2001:db8::1]",
+		"https://[2001:db8::1]:443":     "https://[2001:db8::1]",
+		"https://[2001:db8::1]:8443":    "https://[2001:db8::1]:8443",
+		"https://xn--bcher-kva.example": "https://xn--bcher-kva.example",
+		"https://tailscale.com.example": "https://tailscale.com.example",
+		"https://nottailscale.com":      "https://nottailscale.com",
 	}
 	for raw, want := range good {
-		got, err := ControlURL(raw, "http://127.0.0.1:41641")
+		got, err := ControlURL(raw, "http://127.0.0.1:41641", sameIDNA)
 		if err != nil || got != want {
 			t.Fatalf("%q: got %q, %v; want %q", raw, got, err, want)
 		}
@@ -295,15 +436,50 @@ func TestControlURL(t *testing.T) {
 	bad := []string{"http://control.example", "http://127.0.0.1:41641", "ftp://control.example", "control.example",
 		"https://", "https://user:secret@control.example", "https://control.example/path",
 		"https://control.example?x=1", "https://control.example#f", "https://controlplane.tailscale.com",
-		"https://login.tailscale.com", "https://tailscale.com", "https://%zz"}
+		"https://login.tailscale.com", "https://tailscale.com", "https://%zz",
+		// The hosted service in other spellings: a trailing dot, case, the default port, fullwidth and other
+		// non-ASCII forms that IDNA maps to it, percent escapes.
+		"https://controlplane.tailscale.com.", "https://CONTROLPLANE.TAILSCALE.COM", "https://tailscale.com.",
+		"https://controlplane.tailscale.com:443", "https://controlplane.tailscale.com.:443",
+		"https://ｃｏｎｔｒｏｌｐｌａｎｅ.ｔａｉｌｓｃａｌｅ.ｃｏｍ", "https://controlplane.tailscale。com",
+		"https://controlplane.tailscale．com", "https://controlplane.tailſcale.com", "https://tailscale.com​",
+		"https://controlplane%2etailscale.com", "https://login.tailscale.io", "https://tailscale.io.",
+		// Ports: none after the colon, zero, out of range, not a number.
+		"https://control.example:", "https://control.example:0", "https://control.example:99999",
+		"https://control.example:65536", "https://control.example:-1", "https://control.example:+443",
+		"https://control.example:44 3", "https://control.example:0x1bb", "https://[2001:db8::1]:",
+		"https://[2001:db8::1]:0",
+		// IPv6 zones and malformed brackets; IPv4 in forms other than dotted decimal.
+		"https://[fe80::1%25en0]", "https://[fe80::1%en0]:8443", "https://[2001:db8::1", "https://[192.0.2.1]",
+		"https://[::ffff:192.0.2.1]", "https://2001:db8::1", "https://127.1", "https://0x7f.0.0.1",
+		"https://192.0.2.010.example.1",
+		// Names that are not host names.
+		"https://.", "https://..", "https://a..example", "https://-control.example", "https://control-.example",
+		"https://con_trol.example", "https://" + strings.Repeat("a", 64) + ".example",
+		"https://" + strings.Repeat("a.", 127) + "aa",
+	}
 	for _, raw := range bad {
-		_, err := ControlURL(raw, "")
+		_, err := ControlURL(raw, "", sameIDNA)
 		if err == nil {
 			t.Fatalf("%q accepted", raw)
 		}
 		if strings.Contains(err.Error(), "secret") {
 			t.Fatalf("%q: the error repeats the URL: %v", raw, err)
 		}
+	}
+	// A name IDNA calls invalid (or would change) is refused; an address is not given to IDNA.
+	if _, err := ControlURL("https://xn--a.example", "", badIDNA); err == nil {
+		t.Fatal("a name IDNA refuses accepted")
+	}
+	changes := func(s string) (string, error) { return s + "x", nil }
+	if _, err := ControlURL("https://control.example", "", changes); err == nil {
+		t.Fatal("a name IDNA would change accepted")
+	}
+	if got, err := ControlURL("https://192.0.2.10", "", badIDNA); err != nil || got != "https://192.0.2.10" {
+		t.Fatalf("an IPv4 address given to IDNA: %q, %v", got, err)
+	}
+	if got, err := ControlURL("https://[2001:db8::1]", "", badIDNA); err != nil || got != "https://[2001:db8::1]" {
+		t.Fatalf("an IPv6 address given to IDNA: %q, %v", got, err)
 	}
 }
 
@@ -322,12 +498,25 @@ func TestRecord(t *testing.T) {
 	if err != nil || write != "https://control.example" {
 		t.Fatalf("a new directory: %q, %v", write, err)
 	}
-	write, err = CheckRecord("", true, "")
+	write, err = CheckRecord("", false, "")
 	if err != nil || write != Hosted {
-		t.Fatalf("a layer 0 directory with the hosted service: %q, %v", write, err)
+		t.Fatalf("a new directory for the hosted service: %q, %v", write, err)
 	}
-	if _, err := CheckRecord("", true, "https://control.example"); err == nil {
-		t.Fatal("a layer 0 directory (the hosted service's) given to another control server")
+	// Node state with no record: the record was removed outside nexus, and no start guesses whose state it is.
+	for _, control := range []string{"", "https://control.example"} {
+		if _, err := CheckRecord("", true, control); err == nil {
+			t.Fatalf("state with no record started for %q", control)
+		}
+	}
+	// The record is ControlURL's canonical form, so every spelling of one server matches it.
+	for _, raw := range []string{"https://Control.Example.", "https://control.example:443", "https://control.example"} {
+		control, err := ControlURL(raw, "", sameIDNA)
+		if err != nil {
+			t.Fatalf("%q: %v", raw, err)
+		}
+		if _, err := CheckRecord("https://control.example", true, control); err != nil {
+			t.Fatalf("%q refused by its own server's record: %v", raw, err)
+		}
 	}
 	write, err = CheckRecord("https://control.example", true, "https://control.example")
 	if err != nil || write != "" {
@@ -338,32 +527,5 @@ func TestRecord(t *testing.T) {
 	}
 	if _, err := CheckRecord("https://a.example", false, "https://b.example"); err == nil {
 		t.Fatal("one control server's directory given to another")
-	}
-}
-
-func TestSettle(t *testing.T) {
-	var s Settle
-	at := time.Unix(1000, 0)
-	if s.Look(at, true, true) {
-		t.Fatal("settled at the first look")
-	}
-	if s.Look(at.Add(SettleAfter-time.Millisecond), true, true) {
-		t.Fatal("settled too soon")
-	}
-	if !s.Look(at.Add(SettleAfter), true, true) {
-		t.Fatal("not settled after SettleAfter")
-	}
-	if s.Look(at.Add(time.Second), true, false) {
-		t.Fatal("settled with the poll closed")
-	}
-	if s.Look(at.Add(2*time.Second), true, true) {
-		t.Fatal("settled at once after the poll reopened")
-	}
-	s.Reset()
-	if s.Look(at.Add(3*time.Second), true, true) {
-		t.Fatal("settled at once after a reset")
-	}
-	if s.Look(at.Add(4*time.Second), false, true) {
-		t.Fatal("settled while not running")
 	}
 }

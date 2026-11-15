@@ -25,27 +25,66 @@ import (
 	"unsafe"
 
 	"github.com/robotgamedevelopers/nexus/src/tailscale/lifecycle"
+	"golang.org/x/net/idna"
 	gvlog "gvisor.dev/gvisor/pkg/log"
 	"tailscale.com/envknob"
 	"tailscale.com/tsnet"
 )
 
-// The variables tsnet reads when its own fields are empty: an auth key, an OAuth client, workload identity, or another
-// control server. nexus gives tsnet its sign-in and control server only from nts_start's parameters, so a start
-// refuses while any is set.
-var refusedEnvironment = []string{
-	"TS_AUTHKEY", "TS_AUTH_KEY", "TS_CLIENT_SECRET", "TS_CLIENT_ID", "TS_ID_TOKEN", "TS_AUDIENCE", "TS_CONTROL_URL",
-}
+// The environment policy (src/tailscale/environment.txt, generated into environment.go): every variable the linked
+// code reads that could change the control server, sign-in, logging, uploads, TLS keys or trust, or debugging is
+// refused at every start; the forced ones are set by the shim itself at every start. testForced holds what the test
+// build sets itself (hooks_on.go), with the value it sets: a refused variable at exactly that value is the test's own.
+var (
+	testForcedMu sync.Mutex
+	testForced   = map[string]string{}
+)
 
-// environmentHas reports whether name is set, as Go sees the environment (what tsnet reads) or as the C library does
-// (what the host program has set). Either is enough to refuse.
-func environmentHas(name string) bool {
-	if _, set := os.LookupEnv(name); set {
-		return true
+// environmentValue reports whether name is set and to what, as Go sees the environment (what tsnet reads) or as the
+// C library does (what the host program has set). Either is enough to refuse.
+func environmentValue(name string) (string, bool) {
+	if v, set := os.LookupEnv(name); set {
+		return v, true
 	}
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	return C.getenv(cname) != nil
+	if v := C.getenv(cname); v != nil {
+		return C.GoString(v), true
+	}
+	return "", false
+}
+
+// checkEnvironment applies the policy before a start: it sets the forced variables again (so that a host that unset
+// or changed one cannot turn uploads on), then refuses while any refused variable is set, naming it and never its
+// value.
+func checkEnvironment() error {
+	envknob.SetNoLogsNoSupport()
+	testForcedMu.Lock()
+	forced := make(map[string]string, len(testForced))
+	for k, v := range testForced {
+		forced[k] = v
+	}
+	testForcedMu.Unlock()
+	for name, value := range forced {
+		envknob.Setenv(name, value)
+	}
+	for _, name := range refusedEnvironment {
+		v, set := environmentValue(name)
+		if !set {
+			continue
+		}
+		if want, ok := forced[name]; ok && v == want {
+			continue
+		}
+		return fmt.Errorf("%s is set in this process's environment; nexus takes the control server, sign-in and "+
+			"logging only from nts_start's parameters, and refuses to start while it is set (its value is not shown; "+
+			"src/tailscale/environment.txt says why): unset it", name)
+	}
+	if v, _ := environmentValue("TS_NO_LOGS_NO_SUPPORT"); v != "true" {
+		return fmt.Errorf("TS_NO_LOGS_NO_SUPPORT could not be set to true in this process's environment, so log " +
+			"uploads could not be turned off: refusing to start")
+	}
+	return nil
 }
 
 var (
@@ -242,8 +281,8 @@ func nts_start(params *C.nts_start_params, errOut *C.char, errSize C.size_t) (rc
 }
 
 var (
-	plainMu    sync.Mutex
-	plainURL   string
+	plainMu  sync.Mutex
+	plainURL string
 )
 
 // plainControl is the one plain http control URL nts_start accepts: the test build's own loopback control server
@@ -268,20 +307,16 @@ func startNode(name string, p startParams, plain string, errOut *C.char, errSize
 	testPanic(name)
 	// Checked before anything else, so that a start that would sign in by another key, or reach another control
 	// server, never begins.
-	for _, variable := range refusedEnvironment {
-		if environmentHas(variable) {
-			failf(errOut, errSize, name, "%s is set in this process's environment, and tsnet would use it; nexus "+
-				"takes the sign-in and the control server only from nts_start's parameters (docs/tailscale.md), so "+
-				"unset %s and start again", variable, variable)
-			return 0
-		}
+	if err := checkEnvironment(); err != nil {
+		failf(errOut, errSize, name, "%v", err)
+		return 0
 	}
 	if p.dir == "" || p.hostname == "" {
 		failf(errOut, errSize, name, "a state directory and a hostname are both needed; pass an absolute directory "+
 			"and a non-empty name")
 		return 0
 	}
-	control, err := lifecycle.ControlURL(p.control, plain)
+	control, err := lifecycle.ControlURL(p.control, plain, idna.Lookup.ToASCII)
 	if err != nil {
 		failf(errOut, errSize, name, "%v", err)
 		return 0
@@ -300,6 +335,7 @@ func startNode(name string, p startParams, plain string, errOut *C.char, errSize
 	started := false
 	defer func() {
 		if !started {
+			dropSecret(n.id)
 			n.cancel()
 			if n.server != nil {
 				n.server.Close()
@@ -313,6 +349,8 @@ func startNode(name string, p startParams, plain string, errOut *C.char, errSize
 		return 0
 	}
 	n.held, n.log = held, logFile
+	// Withheld from every log line and every reason from here until the node closes (or this start fails).
+	addSecret(n.id, p.authKey)
 	n.server = &tsnet.Server{
 		Dir:        stateDir,
 		Hostname:   p.hostname,
@@ -326,7 +364,7 @@ func startNode(name string, p startParams, plain string, errOut *C.char, errSize
 	n.apply(lifecycle.Event{Kind: lifecycle.Start})
 	testPanic(name + " after open")
 	if err := n.server.Start(); err != nil {
-		failf(errOut, errSize, name, "tsnet did not start on %s: %v; see %s", stateDir, err,
+		failf(errOut, errSize, name, "tsnet did not start on %s: %s; see %s", stateDir, scrubCut(err.Error(), reasonMax),
 			filepath.Join(stateDir, logName))
 		return 0
 	}
@@ -380,9 +418,15 @@ func nts_close(id C.int, errOut *C.char, errSize C.size_t) (rc C.int) {
 	for _, child := range children {
 		child.shut()
 	}
+	n.mu.Lock()
+	n.stopped = true
+	n.mu.Unlock()
 	close(n.stop)
-	if threadID() != n.notifier.Load() {
-		// Called from any thread but the callback's own: no callback runs once this returns.
+	// From a thread that runs no node's callback, this waits for the node's notifier to end: no callback of the node
+	// runs once it returns. From inside a callback (this node's or another's) it does not wait, since the callback it
+	// would wait for may itself be waiting for the caller's (two callbacks closing each other's nodes): the closed
+	// node's callback starts no more, but one already running may still be running when this returns.
+	if !insideCallback() {
 		<-n.notifierDone
 	}
 	closeErr := n.server.Close()
@@ -404,6 +448,7 @@ func nts_close(id C.int, errOut *C.char, errSize C.size_t) (rc C.int) {
 	orderMu.Unlock()
 	n.log.Close()
 	n.held.release()
+	dropSecret(n.id)
 	if closeErr != nil {
 		failf(errOut, errSize, "nts_close", "%v", closeErr)
 		return -1

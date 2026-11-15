@@ -11,11 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -50,12 +48,14 @@ type node struct {
 	watchUser unsafe.Pointer
 	poked     bool // nts_watch set a callback: call it once at once
 
-	poke          chan struct{} // wakes the notifier (capacity 1)
-	stop          chan struct{} // closed when the node closes: the notifier returns
-	notifierDone  chan struct{}
-	notifier      atomic.Uint64 // the notifier's OS thread (threadID)
+	poke         chan struct{} // wakes the notifier (capacity 1)
+	stop         chan struct{} // closed when the node closes: the notifier returns
+	notifierDone chan struct{}
 	watchersDone sync.WaitGroup
-	settle       lifecycle.Settle // the watcher's own
+	relogged     bool // under mu: nts_login was called since the start (a map tsnet holds is then an old one)
+	wasInPoll    bool // the status watcher's own: the map poll was open at its last look
+	calling      bool // under mu: the notifier is running the host's callback
+	stopped      bool // under mu: the node is closing, and no callback starts again
 }
 
 func newNode(id int) *node {
@@ -98,22 +98,30 @@ func (n *node) notify() {
 	defer close(n.notifierDone)
 	// Locked for the goroutine's life: Go ends the thread with it.
 	runtime.LockOSThread()
-	n.notifier.Store(threadID())
+	self := threadID()
+	notifiers.Store(self, true)
+	defer notifiers.Delete(self)
 	var last uint64
 	called := false
 	for {
 		n.mu.Lock()
+		if n.stopped {
+			n.mu.Unlock()
+			return
+		}
 		gen, fn, user, poked, changed := n.state.Gen, n.watchFn, n.watchUser, n.poked, n.changed
 		n.poked = false
+		call := fn != nil && (poked || !called || gen != last)
+		// Marked under the lock that nts_close takes to stop the node: a callback either starts before the close
+		// (and the close may wait for it) or never.
+		n.calling = call
 		n.mu.Unlock()
-		select {
-		case <-n.stop:
-			return
-		default:
-		}
-		if fn != nil && (poked || !called || gen != last) {
+		if call {
 			called, last = true, gen
 			callWatch(fn, user, n.id, gen)
+			n.mu.Lock()
+			n.calling = false
+			n.mu.Unlock()
 		}
 		select {
 		case <-changed:
@@ -124,16 +132,33 @@ func (n *node) notify() {
 	}
 }
 
-// urlPattern finds URLs in tsnet's user log, which names the sign-in URL (a secret) every few seconds while one is
-// wanted: the shim withholds every URL from the log.
-var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
+// notifiers is the OS threads that run a node's notifier (threadID -> true): a call of nts_close from one of them is
+// from inside a callback.
+var notifiers sync.Map
 
-// userLog is tsnet's user log for a node: to the node's log file, every URL withheld.
+// insideCallback is whether the calling thread is running a node's callback.
+func insideCallback() bool {
+	_, ok := notifiers.Load(threadID())
+	return ok
+}
+
+// userLog is tsnet's user log for a node: to the node's log file, which withholds every URL (tsnet's user log names
+// the sign-in URL, a secret, every few seconds while one is wanted) and every key (cappedLog.Write).
 func userLog(w io.Writer) func(string, ...any) {
 	logger := log.New(w, "", log.LstdFlags|log.LUTC|log.Lmicroseconds)
 	return func(format string, args ...any) {
-		logger.Print(urlPattern.ReplaceAllString(fmt.Sprintf(format, args...), "<a URL, withheld>"))
+		logger.Print(fmt.Sprintf(format, args...))
 	}
+}
+
+// reasonMax is the most of a text from tsnet or control a state's reason holds (nts_status.reason_text holds 512).
+const reasonMax = 256
+
+// controlText is a text that came from tsnet or control, as the node's state may hold it: URLs and keys withheld. A
+// control server's refusal is its own text: one that echoed the auth key or named a URL would otherwise reach the
+// host. It is not cut here, so the reason code is classified from all its words; fill cuts it to reasonMax.
+func controlText(text string) string {
+	return scrub(text)
 }
 
 // receivedError is how tsnet's backend logs an error from control that it does not send as a notification
@@ -148,8 +173,11 @@ func (n *node) backendLog(format string, args ...any) {
 		return
 	}
 	text := strings.TrimPrefix(fmt.Sprintf(format, args...), receivedError)
-	n.apply(lifecycle.Event{Kind: lifecycle.Logged, Text: text})
+	n.apply(lifecycle.Event{Kind: lifecycle.Logged, Text: controlText(text)})
 }
+
+// pollClosed is the reason's text when the map poll to control closes.
+const pollClosed = "the map poll to control closed; the tailnet keeps working while tsnet reconnects"
 
 // watch turns what tsnet says into the node's events, until the node closes: its notifications as they come
 // (watchBus), and its status every look (watchStatus).
@@ -168,7 +196,7 @@ func (n *node) watchBus() {
 				Next() (ipn.Notify, error)
 				Close() error
 			}
-			watcher, err = client.WatchIPNBus(n.ctx, ipn.NotifyInitialState)
+			watcher, err = client.WatchIPNBus(n.ctx, ipn.NotifyInitialState|ipn.NotifyInitialStatus)
 			if err == nil {
 				for {
 					note, err := watcher.Next()
@@ -188,9 +216,15 @@ func (n *node) watchBus() {
 }
 
 // fromNotify is one of tsnet's notifications as events.
+//
+// A network map: tsnet sends the self node (SelfChange) after it has received a map from control and applied it
+// (ipnlocal.LocalBackend.SetControlClientStatus), which is when the node has its peers; that is the map event, never a
+// time. A watcher that subscribes after a map came sees it in its first notification's status (InitialStatus,
+// Self.InNetworkMap); since the shim builds tsnet without its map cache (pins.cmake), a map tsnet holds came from
+// control since this start, but after nts_login only a new one counts.
 func (n *node) fromNotify(note ipn.Notify) {
 	if note.ErrMessage != nil {
-		n.apply(lifecycle.Event{Kind: lifecycle.ErrMessage, Text: *note.ErrMessage})
+		n.apply(lifecycle.Event{Kind: lifecycle.ErrMessage, Text: controlText(*note.ErrMessage)})
 	}
 	if note.State != nil {
 		n.apply(lifecycle.Event{Kind: lifecycle.Backend, Text: note.State.String()})
@@ -201,9 +235,22 @@ func (n *node) fromNotify(note ipn.Notify) {
 	if note.LoginFinished != nil {
 		n.apply(lifecycle.Event{Kind: lifecycle.LoginFinished})
 	}
+	if st := note.InitialStatus; st != nil && st.Self != nil && st.Self.InNetworkMap {
+		n.mu.Lock()
+		relogged := n.relogged
+		n.mu.Unlock()
+		if !relogged {
+			if st.Self.KeyExpiry != nil {
+				n.selfExpiry(true, *st.Self.KeyExpiry)
+			}
+			n.apply(lifecycle.Event{Kind: lifecycle.Poll, Flag: true})
+		}
+	}
 	if note.SelfChange != nil {
 		expiry := note.SelfChange.KeyExpiry
 		n.selfExpiry(!expiry.IsZero(), expiry)
+		// A map for an expired key brings no peers; lifecycle.Step ignores it then.
+		n.apply(lifecycle.Event{Kind: lifecycle.Poll, Flag: true})
 	}
 }
 
@@ -238,7 +285,10 @@ func (n *node) watchStatus() {
 }
 
 // lookOnce reads tsnet's status once: its state and URL when they differ from what the node has, its key expiry, and
-// whether the map poll has settled open (lifecycle.Settle).
+// whether the map poll to control has closed since the last look (tsnet's health tracker: the poll is the node's one
+// connection to control, and tsnet marks it closed the moment it ends), which is the down flag at once while tsnet
+// reconnects. A poll that stays open but silent (control's host gone without closing it) is seen when tsnet's own
+// keep-alive watchdog closes it.
 func (n *node) lookOnce() {
 	client, err := n.server.LocalClient()
 	if err != nil {
@@ -267,20 +317,17 @@ func (n *node) lookOnce() {
 			n.selfExpiry(false, time.Time{})
 		}
 	}
-	n.mu.Lock()
-	running := status.BackendState == ipn.Running.String() && !n.state.KeyExpired
-	settled := n.settle.Look(time.Now(), running, inPoll)
-	want := settled && (!n.state.Peers || n.state.Down)
-	n.mu.Unlock()
-	if want {
-		n.apply(lifecycle.Event{Kind: lifecycle.Poll, Flag: true})
+	closed := n.wasInPoll && !inPoll
+	n.wasInPoll = inPoll
+	if closed {
+		n.apply(lifecycle.Event{Kind: lifecycle.Poll, Text: pollClosed})
 	}
 }
 
-// login asks tsnet for a new login: the node's peers must come again, and the poll seen so far is forgotten.
+// login asks tsnet for a new login: the node's peers must come again, from a new map.
 func (n *node) login(ctx context.Context) error {
 	n.mu.Lock()
-	n.settle.Reset()
+	n.relogged = true
 	n.mu.Unlock()
 	n.apply(lifecycle.Event{Kind: lifecycle.Login})
 	client, err := n.server.LocalClient()
@@ -296,7 +343,12 @@ func fill(out *C.nts_status, state lifecycle.Node, keyExpiry int64) {
 	out.reason = C.int(state.Reason)
 	out.generation = C.ulonglong(state.Gen)
 	out.key_expiry = C.longlong(keyExpiry)
-	write(&out.reason_text[0], C.size_t(len(out.reason_text)), state.Text)
+	out.control_down = 0
+	if state.ControlDown {
+		out.control_down = 1
+	}
+	// The sign-in URL is given by nts_login_url only: never in the reason.
+	write(&out.reason_text[0], C.size_t(len(out.reason_text)), scrubCut(state.Text, reasonMax))
 }
 
 // peerOf is a peer's status as nts_peer.

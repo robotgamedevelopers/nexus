@@ -11,16 +11,19 @@
 //	needs-login  a sign-in is needed: with the URL when tsnet has one (the URL is held only in this state), without
 //	             it while one is being asked for, or with reason machine-approval when the control server's admin must
 //	             approve the machine
-//	running      tsnet says running, but no peer map has come from control since this start or sign-in
-//	ready        running and the peer map has come from control at least once since this start or sign-in (a
-//	             restarted node can say running before it has its peers; dialing a peer then fails)
+//	running      tsnet says running, but no network map from control has been received and applied since this
+//	             start or sign-in
+//	ready        running, and a network map from control has been received and applied since this start or sign-in
+//	             (tsnet's own signal: the self-node notification it sends after applying a map; a restarted node
+//	             says running before it has its map, and dialing a peer then fails)
 //	expired      the node's key expired; a new login (Login) asks for a URL, and the node keeps its identity
 //	stopped      closed by the host, or stopped by control
 //	failed       control refused the node and tsnet will not get past it alone (a refused auth key or tag, an
 //	             untrusted certificate, a tailnet that requires log uploads), with the reason
 //
 // Control being unreachable is not a state: a ready node keeps its connections while control is down, so the state
-// stays and the reason says control-unreachable until the map poll is back.
+// stays, the down flag (Node.Down, nts_status.control_down) is set and the reason says control-unreachable, from the
+// moment the map poll to control closes (or tsnet logs an error reaching control) until a new map is received.
 package lifecycle
 
 import "strings"
@@ -98,7 +101,7 @@ const (
 	LoginFinished // tsnet says the login succeeded
 	ErrMessage    // control's refusal (ipn.Notify.ErrMessage), in Text
 	Logged        // an error tsnet's backend logged from control ("Received error: ..."), in Text
-	Poll          // Flag: the map poll from control is open and has been across two looks (the peer map is in)
+	Poll          // Flag true: a network map from control was received and applied; false: the map poll closed (Text)
 	Self          // Flag: the node's own key has expired, from its self node
 )
 
@@ -126,9 +129,11 @@ type Node struct {
 	Reason Reason
 	Text   string // the reason in plain words, or ""
 	URL    string // the sign-in URL: non-empty only when Phase is NeedsLogin
+	// ControlDown: control cannot be reached (or asks the node to wait), whatever the state; nts_status.control_down.
+	ControlDown bool
 
-	// Gen counts the changes of Phase, Reason, Text or URL: a host that saw generation g has seen everything up to
-	// it.
+	// Gen counts the changes of Phase, Reason, Text, URL or ControlDown: a host that saw generation g has seen
+	// everything up to it.
 	Gen uint64
 
 	// The facts.
@@ -136,7 +141,7 @@ type Node struct {
 	Closed      bool
 	Backend     string // tsnet's last state
 	PendingURL  string // the last sign-in URL tsnet asked for, until a login finishes or a new one is asked for
-	Peers       bool   // the peer map has come from control since this start or sign-in
+	Peers       bool   // a network map from control was received and applied since this start or sign-in
 	KeyExpired  bool   // the node's own key has expired
 	Refusal     Reason // control's refusal, or ReasonNone
 	RefusalText string
@@ -151,6 +156,7 @@ var Faults struct {
 	URLKept           bool // the sign-in URL stays shown after the login finished
 	ClosedKeepsPhase  bool // a close leaves the state as it was
 	TableIgnores      bool // Table.Reserve claims a directory another node holds
+	PollClosedIgnored bool // the map poll closing leaves the node shown as reaching control
 }
 
 // Step is the node after e. It never fails: an event that makes no sense in a state changes nothing it should not.
@@ -209,9 +215,13 @@ func Step(n Node, e Event) Node {
 			n.Down, n.DownText = true, e.Text
 		}
 	case Poll:
-		if e.Flag {
+		switch {
+		case e.Flag && !n.KeyExpired:
+			// A map for an expired key brings no peers: the node must sign in again first.
 			n.Peers = true
 			n.Down, n.DownText = false, ""
+		case !e.Flag && !n.Down && !Faults.PollClosedIgnored:
+			n.Down, n.DownText = true, e.Text
 		}
 	case Self:
 		n.KeyExpired = e.Flag
@@ -224,7 +234,7 @@ func Step(n Node, e Event) Node {
 
 // derive sets the host's state from the facts, and counts a change.
 func derive(n Node) Node {
-	before := [4]string{n.Phase.String(), n.Reason.String(), n.Text, n.URL}
+	before := [5]string{n.Phase.String(), n.Reason.String(), n.Text, n.URL, boolName(n.ControlDown)}
 	phase, reason, text, url := NotStarted, ReasonNone, "", ""
 	switch {
 	case n.Closed && !Faults.ClosedKeepsPhase:
@@ -267,10 +277,18 @@ func derive(n Node) Node {
 		}
 	}
 	n.Phase, n.Reason, n.Text, n.URL = phase, reason, text, url
-	if [4]string{n.Phase.String(), n.Reason.String(), n.Text, n.URL} != before {
+	n.ControlDown = n.Started && !n.Closed && n.Down
+	if [5]string{n.Phase.String(), n.Reason.String(), n.Text, n.URL, boolName(n.ControlDown)} != before {
 		n.Gen++
 	}
 	return n
+}
+
+func boolName(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // classifyRefusal names control's refusal (ipn.Notify.ErrMessage, which tsnet sends for a register response's error).

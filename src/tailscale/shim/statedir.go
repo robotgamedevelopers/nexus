@@ -93,7 +93,9 @@ func checkControl(dir, control string) error {
 		return fmt.Errorf("cannot read %s: %v", recordPath, err)
 	}
 	_, statErr := os.Stat(filepath.Join(dir, stateName))
-	write, err := lifecycle.CheckRecord(recorded, statErr == nil, control)
+	// State that cannot be looked at counts as state: a start never guesses that a directory is empty.
+	hasState := statErr == nil || !errors.Is(statErr, fs.ErrNotExist)
+	write, err := lifecycle.CheckRecord(recorded, hasState, control)
 	if err != nil {
 		return fmt.Errorf("%s (%s)", err.Error(), dir)
 	}

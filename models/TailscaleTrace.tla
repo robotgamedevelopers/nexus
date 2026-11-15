@@ -3,21 +3,24 @@
 (* Trace validation: TLC checks that one trace of the real lifecycle code  *)
 (* (src/tailscale/lifecycle/lifecycle.go: Step, derive and Table, the      *)
 (* code the shim's watch runs for every node) is a behaviour of            *)
-(* Tailscale.tla.                                                          *)
+(* Tailscale.tla, its environment included.                                *)
 (*                                                                         *)
-(* The walk (src/tailscale/lifecycle/walk) drives TraceN nodes on TraceD   *)
-(* state directories with a seeded random walk of starts (each held in a   *)
-(* lifecycle.Table, or refused), closes, and events of every kind with the *)
-(* texts tsnet gives (refusals, certificate and network errors, sign-in    *)
-(* URLs), in any order, and writes TailscaleTraceData.tla beside this      *)
-(* module: Trace, one record per step, with the operation, the node, the   *)
-(* directory, the event, and after it the code's facts, its state, its     *)
-(* reason, whether it shows a URL, and the table's holders.                *)
+(* The walk (src/tailscale/lifecycle/walk) plays the model's host and      *)
+(* world on TraceN nodes and TraceD state directories: each step is one of *)
+(* Tailscale.tla's actions, taken where the walk's copy of the world       *)
+(* allows it, giving the code the event that action produces (with the     *)
+(* texts tsnet gives: refusals, certificate and network errors, sign-in    *)
+(* URLs). It writes TailscaleTraceData.tla beside this module: Trace, one  *)
+(* record per step, with the action and its arguments, and after it the    *)
+(* code's facts, its state, its reason, whether it shows a URL, its down   *)
+(* flag, and the table's holders.                                          *)
 (*                                                                         *)
-(* Each step takes the step of Tailscale.tla the record names and pins the *)
-(* next state to the record. A step the spec cannot take to that state has *)
-(* no successor, which TLC reports as a deadlock. The invariants of        *)
-(* Tailscale.tla are checked on the trace as well.                         *)
+(* Each step takes the action the record names, so the event must be one   *)
+(* the model's world produces in that state (an event out of the world's   *)
+(* order has no step), and pins the next state to the record (a state the  *)
+(* code reached that the action does not give has none either). TLC        *)
+(* reports either as a deadlock. The invariants of Tailscale.tla are       *)
+(* checked on the trace as well.                                           *)
 (***************************************************************************)
 EXTENDS Tailscale, Sequences, TailscaleTraceData
 
@@ -33,27 +36,33 @@ Pin(r) ==
     /\ Phase(node'[r.n]) = r.phase
     /\ Reason(node'[r.n]) = r.reason
     /\ Shown(node'[r.n]) = r.url
+    /\ ControlDown(node'[r.n]) = r.down
     /\ holder' = r.holder
 
 Do(r) ==
-    CASE r.op = "start" ->
-            /\ ~node[r.n].started /\ holder[r.d] = NoNode
-            /\ holder' = [holder EXCEPT ![r.d] = r.n]
-            /\ dirOf' = [dirOf EXCEPT ![r.n] = r.d]
-            /\ Apply(r.n, Ev("start", "", FALSE, "", FALSE))
-      [] r.op = "refused" ->
-            /\ ~node[r.n].started /\ holder[r.d] # NoNode
-            /\ UNCHANGED <<node, holder, dirOf>>
-      [] r.op = "close" ->
-            /\ Live(r.n)
-            /\ Apply(r.n, Ev("close", "", FALSE, "", FALSE))
-            /\ holder' = [holder EXCEPT ![Dir(r.n)] = IF @ = r.n THEN NoNode ELSE @]
-            /\ UNCHANGED dirOf
-      [] r.op = "event" ->
-            /\ node[r.n].started /\ r.e.k \in Kinds \ {"start", "close"}
-            /\ Apply(r.n, r.e)
-            /\ UNCHANGED <<holder, dirOf>>
-      [] OTHER -> FALSE
+    CASE r.op = "HostStart"          -> HostStart(r.n, r.d, r.k, r.c)
+      [] r.op = "refused"            -> ~node[r.n].started /\ holder[r.d] # NoNode /\ UNCHANGED vars
+      [] r.op = "HostClose"          -> HostClose(r.n)
+      [] r.op = "HostLogin"          -> HostLogin(r.n)
+      [] r.op = "TsNeedsLogin"       -> TsNeedsLogin(r.n)
+      [] r.op = "TsURL"              -> TsURL(r.n)
+      [] r.op = "Approve"            -> Approve(r.n)
+      [] r.op = "TsFinished"         -> TsFinished(r.n)
+      [] r.op = "TsKeyAccepted"      -> TsKeyAccepted(r.n)
+      [] r.op = "TsKeyAcceptedQuiet" -> TsKeyAcceptedQuiet(r.n)
+      [] r.op = "TsStarting"         -> TsStarting(r.n)
+      [] r.op = "TsRunning"          -> TsRunning(r.n)
+      [] r.op = "TsNetMap"           -> TsNetMap(r.n)
+      [] r.op = "TsPollClosed"       -> TsPollClosed(r.n)
+      [] r.op = "TsExpire"           -> TsExpire(r.n)
+      [] r.op = "TsExpiredState"     -> TsExpiredState(r.n)
+      [] r.op = "TsRefuse"           -> TsRefuse(r.n, r.cls)
+      [] r.op = "TsRateLimited"      -> TsRateLimited(r.n)
+      [] r.op = "TsLogDown"          -> TsLogDown(r.n)
+      [] r.op = "TsCertFail"         -> TsCertFail(r.n)
+      [] r.op = "CtlDown"            -> CtlDown
+      [] r.op = "CtlUp"              -> CtlUp
+      [] OTHER                       -> FALSE
 
 TraceInit == l = 1 /\ Init
 
@@ -62,7 +71,6 @@ TraceNext ==
     /\ l' = l + 1
     /\ Do(Trace[l + 1])
     /\ Pin(Trace[l + 1])
-    /\ UNCHANGED <<enrolled, keyDead, wantURL, approved, ctl, outages, expiries, refusals>>
 
 \* The end of the trace: stutter, so that a trace read to its end is no deadlock.
 Done == l = Len(Trace) /\ UNCHANGED traceVars

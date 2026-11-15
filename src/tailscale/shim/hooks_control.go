@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"tailscale.com/derp/derpserver"
-	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
@@ -74,6 +73,43 @@ type testControl struct {
 	derp   *derpserver.Server
 	relay  *httptest.Server
 	stun   net.PacketConn
+	// hole, while control is blackholed: a listener on its port that takes connections and never answers.
+	hole *trackedListener
+}
+
+// blackhole cuts every connection to control and then holds its port with a listener that accepts and never
+// answers: a node's next poll hangs, as against a control server whose host stopped answering.
+func (c *testControl) blackhole() error {
+	c.down()
+	var ln net.Listener
+	var err error
+	for try := 0; try < 100; try++ {
+		ln, err = net.Listen("tcp", c.addr)
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		return err
+	}
+	c.hole = &trackedListener{Listener: ln, conns: map[net.Conn]bool{}}
+	go func(hole *trackedListener) {
+		for {
+			if _, err := hole.Accept(); err != nil {
+				return
+			}
+		}
+	}(c.hole)
+	return nil
+}
+
+// unhole ends a blackhole: its listener and every connection it held closed.
+func (c *testControl) unhole() {
+	if c.hole != nil {
+		c.hole.closeAll()
+		c.hole = nil
+	}
 }
 
 var (
@@ -137,6 +173,7 @@ func (c *testControl) down() {
 
 func (c *testControl) stop() {
 	c.down()
+	c.unhole()
 	c.relay.CloseClientConnections()
 	c.relay.Close()
 	c.derp.Close()
@@ -146,7 +183,7 @@ func (c *testControl) stop() {
 func startControl(requireAuth bool, authKey string) (*testControl, error) {
 	// No node of the test program reaches another machine: the port mapper off, and sockets made by the plain OS
 	// calls (tailscale's netns would bind them to the default route's interface, which loopback is not).
-	envknob.Setenv("TS_DISABLE_PORTMAPPER", "true")
+	forcePortMapperOff()
 	netns.SetEnabled(false)
 	c := &testControl{}
 	var err error
@@ -323,7 +360,31 @@ func nts_test_control_down(errOut *C.char, errSize C.size_t) (rc C.int) {
 	return 0
 }
 
-// nts_test_control_up brings it back on the same port, with everything it knew.
+// nts_test_control_blackhole cuts every connection to control, then holds its port silently: connections are
+// accepted and never answered. nts_test_control_up ends it.
+//
+//export nts_test_control_blackhole
+func nts_test_control_blackhole(errOut *C.char, errSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_test_control_blackhole", errOut, errSize, &rc, -1)
+	controlMu.Lock()
+	defer controlMu.Unlock()
+	c := currentControl("nts_test_control_blackhole", errOut, errSize)
+	if c == nil {
+		return -1
+	}
+	if c.http == nil {
+		write(errOut, errSize, "nts_test_control_blackhole: control is down; bring it up first")
+		return -1
+	}
+	if err := c.blackhole(); err != nil {
+		failf(errOut, errSize, "nts_test_control_blackhole", "%v", err)
+		return -1
+	}
+	write(errOut, errSize, "")
+	return 0
+}
+
+// nts_test_control_up brings it back on the same port, with everything it knew (ending a blackhole).
 //
 //export nts_test_control_up
 func nts_test_control_up(errOut *C.char, errSize C.size_t) (rc C.int) {
@@ -338,6 +399,7 @@ func nts_test_control_up(errOut *C.char, errSize C.size_t) (rc C.int) {
 		write(errOut, errSize, "nts_test_control_up: it is up")
 		return -1
 	}
+	c.unhole()
 	if err := c.listenControl(c.addr); err != nil {
 		failf(errOut, errSize, "nts_test_control_up", "%v", err)
 		return -1

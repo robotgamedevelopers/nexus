@@ -8,6 +8,7 @@ package main
 import "C"
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,16 +17,43 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/robotgamedevelopers/nexus/src/tailscale/lifecycle"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
 )
 
-// Peers, who-is, and TCP and UDP through a node's embedded stack (nts.h). Every name is resolved through the
-// tailnet (tsnet's own MagicDNS, or the node's peer list), never the host's resolver, and nothing here opens a socket
-// on the host's network.
+// Peers, who-is, and TCP and UDP through a node's embedded stack (nts.h). A dial or a datagram goes only to a peer of
+// the tailnet: its address is decided by lifecycle.DialTarget from the node's peer list before tsnet is called, so a
+// name is never given to the host's resolver and nothing here opens a socket on the host's network (tsnet's own Dial
+// would reach an address off the tailnet through the host).
+
+// maxIO is the most one read, write or datagram call takes: a size above it is refused as a mistake (a negative
+// length cast to size_t, say) before any buffer is touched.
+const maxIO = 1 << 30
+
+// datagramMax is the largest UDP payload over IPv4 or IPv6 without jumbograms: a datagram read goes into a buffer this
+// size, so that one longer than the caller's buffer is seen and its length returned.
+const datagramMax = 65535
+
+var datagrams = sync.Pool{New: func() any { b := make([]byte, datagramMax); return &b }}
+
+// netCalls counts the calls into tsnet that send (a dial, a datagram sent): a test seam, read by the test build's
+// nts_test_net_calls, so a test can show that a refused dial or send reached nothing.
+var netCalls atomic.Int64
+
+// statusWithin is a context for a call that answers from the node's own state (status, peers, who-is): it ends with
+// the timeout when above 0, and otherwise only when the node closes (0 does not wait: the answer is in this process).
+func statusWithin(n *node, timeoutMs C.int) (context.Context, context.CancelFunc) {
+	if timeoutMs <= 0 {
+		return context.WithCancel(n.ctx)
+	}
+	return within(n, timeoutMs)
+}
 
 // peersOf is the node's peers, sorted by DNS name.
 func peersOf(n *node, timeoutMs C.int) ([]*ipnstate.PeerStatus, error) {
@@ -33,7 +61,7 @@ func peersOf(n *node, timeoutMs C.int) ([]*ipnstate.PeerStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := within(n, timeoutMs)
+	ctx, cancel := statusWithin(n, timeoutMs)
 	defer cancel()
 	status, err := client.Status(ctx)
 	if err != nil {
@@ -45,6 +73,43 @@ func peersOf(n *node, timeoutMs C.int) ([]*ipnstate.PeerStatus, error) {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].DNSName < list[j].DNSName })
 	return list, nil
+}
+
+// target is where a dial or datagram to address from n goes (lifecycle.DialTarget over n's peers), or why none.
+func target(n *node, address string, timeoutMs C.int) (netip.AddrPort, error) {
+	list, err := peersOf(n, timeoutMs)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("tsnet's status: %v", err)
+	}
+	peers := make([]lifecycle.Peer, 0, len(list))
+	for _, p := range list {
+		peers = append(peers, lifecycle.Peer{Name: p.DNSName, Addrs: p.TailscaleIPs})
+	}
+	return lifecycle.DialTarget(address, peers)
+}
+
+// sizeOK is whether a buffer of size bytes at buf is one a read or write may use.
+func sizeOK(name string, buf unsafe.Pointer, size C.size_t, errOut *C.char, errSize C.size_t) bool {
+	if buf == nil && size > 0 {
+		write(errOut, errSize, name+": a null buffer")
+		return false
+	}
+	if size > maxIO {
+		failf(errOut, errSize, name, "size %d is above the most one call takes (%d); pass a real buffer's size",
+			uint64(size), maxIO)
+		return false
+	}
+	return true
+}
+
+// readDatagram reads one datagram with read into a buffer of datagramMax, copies what fits into out, and returns the
+// datagram's whole length: more than len(out) when it was cut.
+func readDatagram(out []byte, read func([]byte) (int, error)) (int, error) {
+	bp := datagrams.Get().(*[]byte)
+	defer datagrams.Put(bp)
+	count, err := read(*bp)
+	copy(out, (*bp)[:count])
+	return count, err
 }
 
 // sameName is whether a peer's DNS name is name: letter case and a trailing dot ignored.
@@ -143,7 +208,7 @@ func nts_whois_addr(id C.int, remote *C.char, out *C.nts_whois, timeoutMs C.int,
 		failf(errOut, errSize, "nts_whois_addr", "no local client: %v", err)
 		return -1
 	}
-	ctx, cancel := within(n, timeoutMs)
+	ctx, cancel := statusWithin(n, timeoutMs)
 	defer cancel()
 	who, err := client.WhoIs(ctx, addr.String())
 	if errors.Is(err, local.ErrPeerNotFound) {
@@ -217,25 +282,39 @@ func nts_accept(id C.int, timeoutMs C.int, errOut *C.char, errSize C.size_t) (rc
 		return C.NTS_ERROR
 	}
 	defer h.reading.Store(false)
-	timeout, stop := deadline(timeoutMs)
-	defer stop()
-	select {
-	case c := <-h.accepted:
-		child := &handle{kind: kindConn, conn: c}
-		if !add(h.node, child) {
-			c.Close()
-			failf(errOut, errSize, "nts_accept", "the listener's node closed")
-			return C.NTS_ERROR
+	var c net.Conn
+	if timeoutMs == 0 {
+		// 0 does not wait: a connection already waiting in the accept loop, or a timeout at once.
+		select {
+		case c = <-h.accepted:
+		case <-h.done:
+		default:
+			write(errOut, errSize, "nts_accept: timed out")
+			return C.NTS_TIMEOUT
 		}
-		write(errOut, errSize, "")
-		return C.int(child.id)
-	case <-h.done:
+	} else {
+		timeout, stop := deadline(timeoutMs)
+		defer stop()
+		select {
+		case c = <-h.accepted:
+		case <-h.done:
+		case <-timeout:
+			write(errOut, errSize, "nts_accept: timed out")
+			return C.NTS_TIMEOUT
+		}
+	}
+	if c == nil {
 		failf(errOut, errSize, "nts_accept", "listener %d was closed while waiting", int(id))
 		return C.NTS_ERROR
-	case <-timeout:
-		write(errOut, errSize, "nts_accept: timed out")
-		return C.NTS_TIMEOUT
 	}
+	child := &handle{kind: kindConn, conn: c}
+	if !add(h.node, child) {
+		c.Close()
+		failf(errOut, errSize, "nts_accept", "the listener's node closed")
+		return C.NTS_ERROR
+	}
+	write(errOut, errSize, "")
+	return C.int(child.id)
 }
 
 // dial is nts_dial_tcp and nts_dial_udp: network "tcp" or "udp".
@@ -250,9 +329,20 @@ func dial(name string, id C.int, network string, address *C.char, timeoutMs C.in
 	if n == nil {
 		return 0
 	}
+	if timeoutMs == 0 {
+		failf(errOut, errSize, name, "a timeout of 0 cannot dial (a dial waits for the peer); pass one above 0, or a "+
+			"negative one to wait without limit")
+		return 0
+	}
+	to, err := target(n, C.GoString(address), timeoutMs)
+	if err != nil {
+		failf(errOut, errSize, name, "%v", err)
+		return 0
+	}
 	ctx, cancel := within(n, timeoutMs)
 	defer cancel()
-	c, err := n.server.Dial(ctx, network, C.GoString(address))
+	netCalls.Add(1)
+	c, err := n.server.Dial(ctx, network, to.String())
 	if err != nil {
 		if ctx.Err() != nil && n.ctx.Err() == nil {
 			failf(errOut, errSize, name, "timed out: %v", err)
@@ -261,7 +351,7 @@ func dial(name string, id C.int, network string, address *C.char, timeoutMs C.in
 		}
 		return 0
 	}
-	h := &handle{kind: kindConn, conn: c}
+	h := &handle{kind: kindConn, conn: c, udpConn: network == "udp"}
 	if !add(n, h) {
 		c.Close()
 		failf(errOut, errSize, name, "node %d closed while dialing", int(id))
@@ -384,8 +474,7 @@ func nts_read(id C.int, buf unsafe.Pointer, size C.size_t, timeoutMs C.int, errO
 	if h == nil {
 		return C.NTS_ERROR
 	}
-	if buf == nil && size > 0 {
-		write(errOut, errSize, "nts_read: a null buffer")
+	if !sizeOK("nts_read", buf, size, errOut, errSize) {
 		return C.NTS_ERROR
 	}
 	if !h.reading.CompareAndSwap(false, true) {
@@ -394,7 +483,12 @@ func nts_read(id C.int, buf unsafe.Pointer, size C.size_t, timeoutMs C.int, errO
 	}
 	defer h.reading.Store(false)
 	h.conn.SetReadDeadline(ioDeadline(timeoutMs))
-	count, err := h.conn.Read(unsafe.Slice((*byte)(buf), int(size)))
+	out := unsafe.Slice((*byte)(buf), int(size))
+	if h.udpConn {
+		count, err := readDatagram(out, h.conn.Read)
+		return ioResult("nts_read", h, count, err, false, errOut, errSize)
+	}
+	count, err := h.conn.Read(out)
 	return ioResult("nts_read", h, count, err, true, errOut, errSize)
 }
 
@@ -407,8 +501,7 @@ func nts_write(id C.int, buf unsafe.Pointer, size C.size_t, timeoutMs C.int, err
 	if h == nil {
 		return C.NTS_ERROR
 	}
-	if buf == nil && size > 0 {
-		write(errOut, errSize, "nts_write: a null buffer")
+	if !sizeOK("nts_write", buf, size, errOut, errSize) {
 		return C.NTS_ERROR
 	}
 	if !h.writing.CompareAndSwap(false, true) {
@@ -430,8 +523,7 @@ func nts_recv_from(id C.int, buf unsafe.Pointer, size C.size_t, timeoutMs C.int,
 	if h == nil {
 		return C.NTS_ERROR
 	}
-	if buf == nil && size > 0 {
-		write(errOut, errSize, "nts_recv_from: a null buffer")
+	if !sizeOK("nts_recv_from", buf, size, errOut, errSize) {
 		return C.NTS_ERROR
 	}
 	if !h.reading.CompareAndSwap(false, true) {
@@ -440,43 +532,16 @@ func nts_recv_from(id C.int, buf unsafe.Pointer, size C.size_t, timeoutMs C.int,
 	}
 	defer h.reading.Store(false)
 	h.pc.SetReadDeadline(ioDeadline(timeoutMs))
-	count, addr, err := h.pc.ReadFrom(unsafe.Slice((*byte)(buf), int(size)))
+	var addr net.Addr
+	count, err := readDatagram(unsafe.Slice((*byte)(buf), int(size)), func(b []byte) (int, error) {
+		c, a, e := h.pc.ReadFrom(b)
+		addr = a
+		return c, e
+	})
 	if err == nil && addr != nil {
 		write(from, fromSize, addr.String())
 	}
 	return ioResult("nts_recv_from", h, count, err, false, errOut, errSize)
-}
-
-// resolveUDP is address as a UDP address on the tailnet: ip:port, or name:port with name a peer's DNS name (or its
-// first label), resolved through the node's peer list.
-func resolveUDP(n *node, address string, timeoutMs C.int) (*net.UDPAddr, error) {
-	if ap, err := netip.ParseAddrPort(address); err == nil {
-		return net.UDPAddrFromAddrPort(ap), nil
-	}
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("the address is not name:port or ip:port: %v", err)
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return nil, fmt.Errorf("the port %q is not 1..65535", portText)
-	}
-	list, err := peersOf(n, timeoutMs)
-	if err != nil {
-		return nil, fmt.Errorf("tsnet's status: %v", err)
-	}
-	for _, p := range list {
-		short, _, _ := strings.Cut(p.DNSName, ".")
-		if !sameName(p.DNSName, host) && !strings.EqualFold(short, host) {
-			continue
-		}
-		for _, a := range p.TailscaleIPs {
-			if a.Is4() {
-				return net.UDPAddrFromAddrPort(netip.AddrPortFrom(a, uint16(port))), nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("no peer is named %s on the tailnet", host)
 }
 
 //export nts_send_to
@@ -488,8 +553,11 @@ func nts_send_to(id C.int, buf unsafe.Pointer, size C.size_t, address *C.char, t
 	if h == nil {
 		return C.NTS_ERROR
 	}
-	if address == nil || (buf == nil && size > 0) {
-		write(errOut, errSize, "nts_send_to: a null buffer or address")
+	if address == nil {
+		write(errOut, errSize, "nts_send_to: a null address")
+		return C.NTS_ERROR
+	}
+	if !sizeOK("nts_send_to", buf, size, errOut, errSize) {
 		return C.NTS_ERROR
 	}
 	if !h.writing.CompareAndSwap(false, true) {
@@ -497,13 +565,14 @@ func nts_send_to(id C.int, buf unsafe.Pointer, size C.size_t, address *C.char, t
 		return C.NTS_ERROR
 	}
 	defer h.writing.Store(false)
-	to, err := resolveUDP(h.node, C.GoString(address), timeoutMs)
+	to, err := target(h.node, C.GoString(address), timeoutMs)
 	if err != nil {
 		failf(errOut, errSize, "nts_send_to", "%v", err)
 		return C.NTS_ERROR
 	}
 	h.pc.SetWriteDeadline(ioDeadline(timeoutMs))
-	count, err := h.pc.WriteTo(unsafe.Slice((*byte)(buf), int(size)), to)
+	netCalls.Add(1)
+	count, err := h.pc.WriteTo(unsafe.Slice((*byte)(buf), int(size)), net.UDPAddrFromAddrPort(to))
 	return ioResult("nts_send_to", h, count, err, false, errOut, errSize)
 }
 

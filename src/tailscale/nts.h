@@ -10,8 +10,9 @@
 //   - log uploads to Tailscale are off (envknob.SetNoLogsNoSupport, which sets TS_NO_LOGS_NO_SUPPORT=true in this
 //     process's environment when the shim loads);
 //   - nothing the shim or tsnet logs goes to stdout or stderr. tsnet's user log goes to <dir>/nexus-tailscale.log
-//     (0600; past 1 MiB it moves to nexus-tailscale.log.1 and a new one begins), with every URL in it withheld, and so
-//     do Go's log package and gVisor's logger while that node is the newest running (nowhere while none runs).
+//     (0600; past 1 MiB it moves to nexus-tailscale.log.1 and a new one begins), with every URL and every key in it
+//     withheld, and so do Go's log package, gVisor's logger and a stopped panic's text while that node is the newest
+//     running (nowhere while none runs).
 //     tsnet's backend log goes to its own buffer files, <dir>/tailscaled.log1.txt and tailscaled.log2.txt, which tsnet
 //     caps at 50 MB together (filch.DefaultMaxFileSize) and which hold the sign-in URL (tsnet writes it there itself);
 //   - the state directory is owner-only: 0700 on macOS and Linux, a protected ACL that grants only the current user on
@@ -43,11 +44,22 @@
 // Threads. Every call may be made from any thread, and calls on different handles run concurrently. On one
 // connection, one nts_read and one nts_write may run at once (a second of the same kind at the same time is refused
 // as busy); on one listener one nts_accept, on one UDP socket one nts_recv_from and one nts_send_to. A call that waits
-// takes a timeout in milliseconds: 0 does not wait (on a read, write, accept or datagram call it waits up to 1 ms,
-// since the embedded stack fails a deadline already past before it looks for data), a negative one waits without
-// limit; closing the handle (or its node) from another thread ends the wait with an error. The state callback
-// (nts_watch) runs on a thread of the shim's own, never inside another call; it may call anything here except
-// nts_close on its own node, which it may call too but which then returns before the callback does.
+// takes a timeout in milliseconds; a negative one waits without limit, and closing the handle (or its node) from
+// another thread ends the wait with an error. A timeout of 0:
+//   - nts_status_wait: no wait; NTS_TIMEOUT at once unless the generation is already past after;
+//   - nts_peers, nts_peer_find, nts_whois_addr: answered from the node's own state in this process, with no limit (as
+//     a negative one; these never wait on the network);
+//   - nts_accept: a connection already waiting, or NTS_TIMEOUT at once;
+//   - nts_read, nts_write, nts_recv_from, nts_send_to: waits up to 1 ms (the embedded stack fails a deadline already
+//     past before it looks for data), so data already arrived is returned;
+//   - nts_dial_tcp, nts_dial_udp: refused (a dial waits for the peer).
+// The state callback (nts_watch) runs on a thread of the shim's own, never inside another call, and may call anything
+// here. nts_close called from inside a callback (closing its own node, or another node, whose callback may be closing
+// this one) does not wait for the closed node's callback: that node's callback starts no more, but one already running
+// may still be running when nts_close returns, and finds the node's handle closed.
+//
+// Sizes. A read, write or datagram call refuses a size above 1 GiB (a mistake, such as a negative length cast to
+// size_t) before touching the buffer.
 #ifndef NEXUS_TAILSCALE_NTS_H
 #define NEXUS_TAILSCALE_NTS_H
 
@@ -72,8 +84,10 @@ extern "C" {
 #define NTS_STATE_NOT_STARTED 0
 #define NTS_STATE_STARTING 1    // started; tsnet has not yet said whether it needs a sign-in, or brings the tunnel up
 #define NTS_STATE_NEEDS_LOGIN 2 // a sign-in is needed: nts_login_url gives the URL when tsnet has one
-#define NTS_STATE_RUNNING 3     // running, but no peer map from control yet since this start or sign-in
-#define NTS_STATE_READY 4       // running and the peer map received: peers can be listed and dialed
+#define NTS_STATE_RUNNING 3     // running, but no network map from control received and applied since this start
+                                // or sign-in
+#define NTS_STATE_READY 4       // running, and a network map received and applied since this start or sign-in (tsnet
+                                // says so, never a time): peers can be listed and dialed
 #define NTS_STATE_EXPIRED 5     // the node's key expired: nts_login asks for a new sign-in, keeping its identity
 #define NTS_STATE_STOPPED 6     // closed, or stopped by control
 #define NTS_STATE_FAILED 7      // control refused the node, with the reason; nts_login tries again
@@ -120,13 +134,15 @@ typedef struct nts_start_params {
 #ifndef NTS_TYPES_ONLY
 
 // Starts a node. Refused before anything starts: a missing directory or hostname; a control_url that is not an
-// https:// address (with a host, no user, query, fragment or path), or that names Tailscale's hosted service (leave
-// it empty for that); an auth_key without a control_url (the hosted service signs in interactively only); a state
-// directory that recorded another control server; a directory a running node holds; and any of tsnet's sign-in
-// variables in the environment (TS_AUTHKEY, TS_AUTH_KEY, TS_CLIENT_SECRET, TS_CLIENT_ID, TS_ID_TOKEN, TS_AUDIENCE,
-// TS_CONTROL_URL), since tsnet would act on them. A node with saved state comes back signed in; one without asks to
-// sign in (nts_login_url) or uses the auth key. Contacts the control server, so it is never called from a unit test.
-// Returns the node's handle, or 0 with the reason in err.
+// https:// address (with a host, no user, query, fragment or path; a port from 1 to 65535; no IPv6 zone; an ASCII
+// host name that IDNA leaves as it is), or that names Tailscale's hosted service in any spelling (letter case, a
+// trailing dot, :443: leave it empty for that); an auth_key without a control_url (the hosted service signs in
+// interactively only); a state directory that recorded another control server, or that holds a node's state but no
+// record (changed outside nexus); a directory a running node holds; and any variable in the environment that tsnet or
+// its libraries would act on (src/tailscale/environment.txt: sign-in keys, the control URL, a forced login, a TLS key
+// log, debug knobs). The URL compared and recorded is the canonical one (lower case, no trailing dot, no :443). A node
+// with saved state comes back signed in; one without asks to sign in (nts_login_url) or uses the auth key. Contacts
+// the control server, so it is never called from a unit test. Returns the node's handle, or 0 with the reason in err.
 NTS_API int nts_start(const nts_start_params* params, char* err, size_t err_size);
 
 // Closes the node, every handle it owns and its log file, and frees its state directory; its state is then stopped
@@ -142,7 +158,11 @@ typedef struct nts_status {
     unsigned long long generation; // counts the changes of state, reason and text: a host that saw g has seen them all
     long long key_expiry;          // when the node's key expires, seconds since 1970 UTC; 0 when it does not or is not
                                    // known yet (control sets it; tagged nodes and many self-hosted servers never expire)
-    char reason_text[512];         // the reason in plain words, or empty
+    int control_down;              // non-zero while control cannot be reached (reason control-unreachable): set the
+                                   // moment the node's map poll to control closes, whatever the state. A ready node
+                                   // stays ready (the tailnet keeps working on the map it has) with this set
+    char reason_text[512];         // the reason in plain words (URLs and keys withheld; control's own words at most
+                                   // 256 bytes), or empty; never the sign-in URL
 } nts_status;
 
 #ifndef NTS_TYPES_ONLY
@@ -168,7 +188,8 @@ typedef void (*nts_watch_fn)(void* user, int node, unsigned long long generation
 #ifndef NTS_TYPES_ONLY
 
 // Sets the node's state callback (fn NULL removes it). Once set, it is called once at once and then after each change.
-// After nts_close returns (from any other thread), no callback runs. Returns 0, or -1 with the reason in err.
+// After nts_close returns on a thread that runs no callback, no callback of that node runs (see Threads at the top of
+// this file for nts_close inside a callback). Returns 0, or -1 with the reason in err.
 NTS_API int nts_watch(int node, nts_watch_fn fn, void* user, char* err, size_t err_size);
 
 // Asks for a new login: after expiry (the node keeps its identity: the same keys and state directory, a new sign-in
@@ -216,32 +237,37 @@ NTS_API int nts_listen_tcp(int node, int port, char* err, size_t err_size);
 // The next connection on a listener: its handle, NTS_TIMEOUT, or NTS_ERROR with the reason in err.
 NTS_API int nts_accept(int listener, int timeout_ms, char* err, size_t err_size);
 
-// A TCP connection to address ("name:port" or "ip:port"; a name is resolved through the tailnet's DNS, never the
-// host's): its handle, or 0 with the reason in err (NTS_TIMEOUT's meaning is said in err).
+// A TCP connection to address, which must be a peer of the tailnet: "ip:port" with ip a peer's tailnet address, or
+// "name:port" with name a peer's DNS name or the first label of it (resolved through the node's peer list to the peer's
+// IPv4 address, never by the host's resolver). Any other address (loopback, a private or public address no peer has,
+// a name no peer has) is refused with the reason before any socket or resolver is touched: nothing is sent. Its
+// handle, or 0 with the reason in err (a timeout is said in err).
 NTS_API int nts_dial_tcp(int node, const char* address, int timeout_ms, char* err, size_t err_size);
 
-// UDP through the node's embedded stack: a connected socket to address (as nts_dial_tcp), read and written with
+// UDP through the node's embedded stack: a connected socket to address (a peer, as nts_dial_tcp), read and written with
 // nts_read and nts_write, one datagram a call. Its handle, or 0 with the reason in err.
 NTS_API int nts_dial_udp(int node, const char* address, int timeout_ms, char* err, size_t err_size);
 
 // A UDP socket on port (1..65535) of the node's tailnet IPv4 address: its handle, or 0 with the reason in err.
 NTS_API int nts_listen_udp(int node, int port, char* err, size_t err_size);
 
-// Reads into buf from a connection (TCP: what has arrived, up to size; UDP: one datagram, cut to size). Returns the
-// count (0 at the end of a TCP stream), NTS_TIMEOUT, or NTS_ERROR with the reason in err.
+// Reads into buf from a connection (TCP: what has arrived, up to size; UDP: one datagram). Returns the count (0 at the
+// end of a TCP stream), NTS_TIMEOUT, or NTS_ERROR with the reason in err. On UDP the count is the datagram's whole
+// length: when it is more than size, the datagram was cut and buf holds its first size bytes.
 NTS_API long long nts_read(int conn, void* buf, size_t size, int timeout_ms, char* err, size_t err_size);
 
 // Writes size bytes of buf to a connection (UDP: one datagram). Returns the count written, NTS_TIMEOUT (some bytes
 // may have gone), or NTS_ERROR with the reason in err.
 NTS_API long long nts_write(int conn, const void* buf, size_t size, int timeout_ms, char* err, size_t err_size);
 
-// One datagram from a UDP socket into buf (cut to size), with its sender's "ip:port" into from. Returns the count,
-// NTS_TIMEOUT, or NTS_ERROR with the reason in err.
+// One datagram from a UDP socket into buf, with its sender's "ip:port" into from. Returns the datagram's whole length
+// (more than size when it was cut: buf then holds its first size bytes), NTS_TIMEOUT, or NTS_ERROR with the reason in
+// err.
 NTS_API long long nts_recv_from(int socket, void* buf, size_t size, int timeout_ms, char* from, size_t from_size,
                                 char* err, size_t err_size);
 
-// One datagram from a UDP socket to address ("ip:port", or "name:port" resolved through the tailnet's peers). Returns
-// the count sent, NTS_TIMEOUT, or NTS_ERROR with the reason in err.
+// One datagram from a UDP socket to address, a peer of the tailnet as nts_dial_tcp gives it (any other address is
+// refused and nothing is sent). Returns the count sent, NTS_TIMEOUT, or NTS_ERROR with the reason in err.
 NTS_API long long nts_send_to(int socket, const void* buf, size_t size, const char* address, int timeout_ms,
                               char* err, size_t err_size);
 
