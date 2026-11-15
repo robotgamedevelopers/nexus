@@ -85,8 +85,9 @@ endif()
 # nexus-server's own parts (the store, the server's tabs on it, the driver protocol and the driver supervisor) and
 # their tests are built where nexus-server runs: macOS and Linux, and so inside WSL2 on Windows. A native Windows build
 # leaves them out, and keeps every library the window links (the model, the link's states with the accounts, the
-# settings files, the hitch detector, the board's scroller), the formats' tables the window and the server will share
-# (nexus_wire, docs/formats.md), and their unit tests. The model checks' walks are left out there too: TLC runs them on
+# settings files, the hitch detector, the board's scroller, the terminal tab's launch line), the formats' tables the
+# window and the server will share (nexus_wire, docs/formats.md), their unit tests and the WSL2 terminal test
+# (tests/window wsl2_terminal). The model checks' walks are left out there too: TLC runs them on
 # Linux and macOS (tests/model tlc_test).
 if(WIN32)
     set(NEXUS_SERVER_PARTS OFF)

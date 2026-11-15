@@ -761,9 +761,9 @@ jobs:
   # of them build and run as the Linux build inside WSL2 (wsl2-functional) and on Linux (build-and-unit-linux), so a
   # native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them,
   # which TLC runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the
-  # link's states with the accounts, the settings files, the hitch detector, the board's scroller), the formats' tables
-  # (nexus_wire), src/platform_win.cpp, and their unit tests. Not the window itself (Prax's Win32 backend of lib/app does
-  # not compile at its pin).
+  # link's states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's
+  # launch line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal test,
+  # which wsl2-terminal runs. Not the window itself (Prax's Win32 backend of lib/app does not compile at its pin).
   #
   # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
   # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
@@ -792,7 +792,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $caches | Out-Null
           # The runner's directory holds only what this job keeps: anything else (an old Prax pin, a leftover build
           # directory) goes.
-          $keep = @('build-x64', 'build-x64.ok', 'build-x64.unfinished', 'build-x64.configured', 'prax-downloads', "prax-$pin")
+          $keep = @('build-x64', 'build-x64.ok', 'build-x64.unfinished', 'prax-downloads', "prax-$pin")
           Get-ChildItem -Force $caches | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
             Write-Output "removing $($_.FullName)"
             Remove-Item -Recurse -Force $_.FullName
@@ -810,7 +810,6 @@ jobs:
             if ($starts -gt 3) {
               Write-Output "the build directory has had 3 starts without a finished build; removing it"
               Remove-Item -Recurse -Force $build
-              Remove-Item -Force -ErrorAction SilentlyContinue "$build.configured"
               $starts = 0
             } else {
               Write-Output "the build directory has no finished build; resuming it (start $starts of 3)"
@@ -884,8 +883,9 @@ jobs:
       # the link are off on Windows (CMakeLists.txt says why for each); src/platform_win.cpp is compiled on its own.
       # A configure here regenerates every project file (Prax's included), about 6 s. It is skipped when the kept build
       # directory finished its last build and was configured with these same arguments by this same cmake (the stamp
-      # build-x64.configured): `cmake --build` then re-runs the configure itself (the solution's ZERO_CHECK project)
-      # whenever a CMakeLists.txt or an included .cmake file has changed since, so a skip never builds a stale project.
+      # nexus-ci-configured.txt inside it, so it goes with the directory): `cmake --build` then re-runs the configure
+      # itself (the solution's ZERO_CHECK project) whenever a CMakeLists.txt or an included .cmake file has changed
+      # since, so a skip never builds a stale project.
       - name: Configure (Release, MSVC x64)
         run: |
           $configure = @('-S', '.', '-B', $env:NEXUS_BUILD, '-A', 'x64', "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE",
@@ -895,7 +895,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
           $version = $versionText[0]
           $stamp = "$version`n$($configure -join "`n")"
-          $kept = if (Test-Path "$env:NEXUS_BUILD.configured") { Get-Content -Raw "$env:NEXUS_BUILD.configured" } else { '' }
+          $stampFile = Join-Path $env:NEXUS_BUILD 'nexus-ci-configured.txt'
+          $kept = if (Test-Path $stampFile) { [string](Get-Content -Raw $stampFile) } else { '' }
           if ($env:NEXUS_BUILD_FINISHED -ne 'True') {
             Write-Output "configuring: the kept build directory has no finished build"
           } elseif (-not (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt")) {
@@ -906,10 +907,10 @@ jobs:
             Write-Output "configured already with these arguments by $version; cmake --build re-runs it if a CMake file changed"
             exit 0
           }
-          Remove-Item -Force -ErrorAction SilentlyContinue "$env:NEXUS_BUILD.configured"
+          Remove-Item -Force -ErrorAction SilentlyContinue $stampFile
           cmake @configure
           if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
-          Set-Content -NoNewline -Path "$env:NEXUS_BUILD.configured" -Value $stamp
+          Set-Content -NoNewline -Path $stampFile -Value $stamp
       - name: Build
         run: |
           cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
