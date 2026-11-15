@@ -68,7 +68,14 @@ bool paths(const std::string& dir, Paths* out, std::string* why);
 // The server: runs until `nexus-server stop`, SIGTERM or SIGINT, or a takeover drains it (server/takeover.h), then ends
 // every friend's driver and waits for them. `build` is this program's build (takeover.h buildOf), which it answers to
 // `build`. Returns the exit status: kTakeoverExit after a takeover, 0 when another server already serves the directory.
-int serve(const Paths& p, const std::string& build = std::string());
+// The Claude driver tree a placed server runs, whatever ~/.nexus/drivers/claude links to later (server/install.h): a
+// word of a driver's command that starts with `link` + "/" starts with `tree` + "/" instead, so that a newer build's
+// driver, placed beside this one's before this server drains, never runs under it. Empty: none.
+struct DriverPin {
+    std::string link;
+    std::string tree;
+};
+int serve(const Paths& p, const std::string& build = std::string(), const DriverPin& pin = DriverPin{});
 // Asks the running server for a session, starting one (`self` serve) if none answers; prints its CONNECT line.
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.

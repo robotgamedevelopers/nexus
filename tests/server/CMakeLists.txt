@@ -89,7 +89,7 @@ if(NOT WIN32)
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured sign_in no_credential usage_limit no_account instance_dir
                  instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in
-                 secret_leak_witness)
+                 secret_leak_witness pinned unpinned)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -201,15 +201,22 @@ tlc_test(tlc_takeover_witness_stops_new     WTakeoverStopsNew   WTakeoverStopsNe
 tlc_test(tlc_takeover_witness_starts_last   WTakeoverStartsLast WTakeoverStartsLast.cfg action PROPERTY StartsPlaced)
 tlc_test(tlc_takeover_witness_no_deadline   WTakeoverNoDeadline WTakeoverNoDeadline.cfg liveness)
 tlc_test(tlc_takeover_witness_ask_only_old  WTakeoverAskOnlyOld WTakeoverAskOnlyOld.cfg liveness)
-foreach(seed 1 2 3)
+# Without a rollback, or with only the service to start the new build, a behaviour ends with no server and nothing
+# left to do: TLC is told not to stop at that deadlock, so that it finds WorkingRuns violated there (stuttering).
+tlc_test(tlc_takeover_witness_no_rollback   WTakeoverNoRollback WTakeoverNoRollback.cfg liveness NOCHECK_DEADLOCK)
+tlc_test(tlc_takeover_witness_service_starts WTakeoverServiceStarts WTakeoverServiceStarts.cfg liveness
+         NOCHECK_DEADLOCK)
+foreach(seed 1 2 3 4 5)
     tlc_test(tlc_takeover_trace_seed_${seed} TakeoverTrace TakeoverTrace.cfg pass TAKEOVERWALK SEED ${seed} STEPS 800)
 endforeach()
-# A drain that does not wait for the open turn, and an installer that stops rather than drains: each step is none the
-# spec takes, so TLC finds no successor.
+# A drain that does not wait for the open turn, a handover that stops rather than drains, and a rollback that leaves
+# the broken program in place: each step is none the spec takes, so TLC finds no successor.
 tlc_test(tlc_takeover_trace_faulty_drain_rejected TakeoverTrace TakeoverTrace.cfg deadlock
-         TAKEOVERWALK SEED 2 STEPS 800 FAULTY drain)
+         TAKEOVERWALK SEED 3 STEPS 800 FAULTY drain)
 tlc_test(tlc_takeover_trace_faulty_stop_rejected TakeoverTrace TakeoverTrace.cfg deadlock
-         TAKEOVERWALK SEED 1 STEPS 800 FAULTY stop)
+         TAKEOVERWALK SEED 2 STEPS 800 FAULTY stop)
+tlc_test(tlc_takeover_trace_faulty_rollback_rejected TakeoverTrace TakeoverTrace.cfg deadlock
+         TAKEOVERWALK SEED 1 STEPS 800 FAULTY rollback)
 
 # Setting nexus up from a fork (src/server/install.h): setup's pure parts by unit test; setup, its takeover of a running
 # server of another build, and doctor, run for real in a HOME of the test's own with no service registered.
@@ -223,4 +230,10 @@ if(TARGET nexus_server)
     add_test(NAME server_functional_setup
              COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
     set_tests_properties(server_functional_setup PROPERTIES LABELS functional TIMEOUT 120)
+    # The crash at start again, with the per-user service registered; skipped where the machine registers none.
+    add_test(NAME server_functional_setup_service
+             COMMAND ${CMAKE_COMMAND} -DSERVER=$<TARGET_FILE:nexus-server> -DMODE=service
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_functional.cmake)
+    set_tests_properties(server_functional_setup_service PROPERTIES LABELS functional TIMEOUT 120
+                         SKIP_REGULAR_EXPRESSION "setup_functional \\(service\\): skipped")
 endif()

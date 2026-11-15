@@ -158,14 +158,16 @@ struct Server {
     std::set<pid_t> pids;               // every driver seen running
     std::uint64_t num = 1;
 
-    explicit Server(const std::string& dir, bool secrets = false) {
+    // `pinLink` and `pinTree`: the driver tree the server was placed with (server/server.h DriverPin).
+    explicit Server(const std::string& dir, bool secrets = false, const std::string& pinLink = std::string(),
+                    const std::string& pinTree = std::string()) {
         std::string why;
         if (!store.open(*fs, dir + "/store", &why)) {
             std::fprintf(stderr, "drivers_functional: %s\n", why.c_str());
             std::exit(1);
         }
         drivers = std::make_unique<Drivers>(store, Drivers::Options{dir + "/drivers", dir, kTiming, now, kHost, {},
-                                                                    secrets});
+                                                                    secrets, pinLink, pinTree});
         hub = std::make_unique<sync::Hub>(store, sync::Limits{}, drivers.get());
         drivers->attach(*hub);
         if (secrets) {
@@ -1174,6 +1176,25 @@ void secretSignIn(Server& s, const std::string& dir, const std::string& fake) {
     nowhereElse(s, dir);
 }
 
+// A server placed with a driver tree of its own runs that tree, whatever the link the drivers file names points at: the
+// drivers file names <dir>/link/ada.script, which is not there, and the server pinned to <dir>/tree runs
+// <dir>/tree/ada.script. Unpinned, the same file starts no driver that answers (the reversed check).
+void pinned(Server& s, const std::string& dir, const std::string& fake, bool pin) {
+    std::filesystem::create_directories(dir + "/tree");
+    writeFile(dir + "/tree/ada.script", std::string(kHello) + "send\nemit {\"kind\":\"text\",\"delta\":\"pinned\"}\n"
+        "emit {\"kind\":\"text-end\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/link/ada.script\nfriend ada fake " + dir +
+        "\n");
+    s.send("hi");
+    if (pin) {
+        CHECK(s.serveUntil([&] { return s.transcript().size() == 2 && idle(s); }, 10));
+        CHECK((s.transcript() == std::vector<std::string>{"P hi", "F pinned"}));
+    } else {
+        s.serveUntil([&] { return s.transcript().size() >= 2; }, 3);
+        CHECK(!has(s.transcript(), "F pinned"));
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1234,6 +1255,13 @@ int main(int argc, char** argv) {
             const std::vector<std::string> t = s.transcript();
             CHECK(t.size() == 2 && has(t.back(), "nexus-server restarted while ada was answering"));
             CHECK(s.drivers->pid(kAda) < 0);
+            s.end();
+            if (failures != 0) {
+                dump(s);
+            }
+        } else if (name == "pinned" || name == "unpinned") {
+            Server s(dir, false, name == "pinned" ? dir + "/link" : std::string(), dir + "/tree");
+            pinned(s, dir, fake, name == "pinned");
             s.end();
             if (failures != 0) {
                 dump(s);

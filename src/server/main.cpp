@@ -7,11 +7,14 @@
 //                                         (sync/formats.h), which the line then states after the key
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs)
 //        nexus-server stop [--dir DIR]    stops the running server
-//        nexus-server setup [--no-service] [--wait S] [--dir DIR]
-//                                         places this build and keeps it running (server/install.h, SETUP.md)
+//        nexus-server setup [--no-service] [--wait S] [--start-wait S] [--program FILE] [--dir DIR]
+//                                         places this tested build and keeps it running (server/install.h, SETUP.md)
 //        nexus-server doctor [--dir DIR]  what is missing, one line each, with the command that fixes it
-//        nexus-server rebuild [--no-tests] [--jobs N] [--no-service] [--wait S] [--dir DIR]
+//        nexus-server rebuild [--jobs N] [--no-service] [--wait S] [--dir DIR]
 //                                         builds the fork this was built from, runs the fast tests, then setup
+//        nexus-server handover [--service] [--start-wait S] [--dir DIR]
+//                                         the handover process setup starts detached (server/takeover.h Handover)
+//        nexus-server build-of FILE       the build of a file's bytes (server/takeover.h buildOf)
 //        nexus-server help [setup|doctor|rebuild|takeover]
 //                                         each verb's help (server/install.h verbHelp); a verb with --help says it too
 //        nexus-server config <verb> [--dir DIR]
@@ -52,9 +55,12 @@ namespace {
 const char* const kUsage =
     "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
     "       nexus-server serve|stop [--dir DIR]\n"
-    "       nexus-server setup [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server setup [--no-service] [--wait <seconds>] [--start-wait <seconds>] [--program <file>] "
+    "[--dir DIR]\n"
     "       nexus-server doctor [--dir DIR]\n"
-    "       nexus-server rebuild [--no-tests] [--jobs <n>] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server rebuild [--jobs <n>] [--no-service] [--wait <seconds>] [--dir DIR]\n"
+    "       nexus-server handover [--service] [--start-wait <seconds>] [--dir DIR]\n"
+    "       nexus-server build-of <file>\n"
     "       nexus-server config path|check|reload|history [--dir DIR]\n"
     "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
     "       nexus-server help [setup|doctor|rebuild|takeover]\n"
@@ -152,7 +158,8 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
-        } else if (command == "config" || command == "setup" || command == "rebuild") {
+        } else if (command == "config" || command == "setup" || command == "rebuild" || command == "handover" ||
+                   command == "build-of") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -190,7 +197,9 @@ int main(int argc, char** argv) {
             std::fclose(f);
             build = nexus::server::buildOf(bytes);
         }
-        return nexus::server::serve(paths, build);
+        // With the driver tree it was placed with, the build is of both: a new driver alone is a takeover too.
+        const nexus::server::DriverPin pin = nexus::server::pinnedDriver(selfPath(), paths.home);
+        return nexus::server::serve(paths, build.empty() ? build : nexus::server::runningBuild(build, pin), pin);
     }
     if (command == "setup") {
         return nexus::server::setup(paths, selfPath(), configArgs);
@@ -200,6 +209,12 @@ int main(int argc, char** argv) {
     }
     if (command == "rebuild") {
         return nexus::server::rebuild(paths, selfPath(), configArgs);
+    }
+    if (command == "handover") {
+        return nexus::server::handover(paths, selfPath(), configArgs);
+    }
+    if (command == "build-of") {
+        return nexus::server::buildOfFile(configArgs);
     }
     if (command == "stop")
         return nexus::server::stop(paths);

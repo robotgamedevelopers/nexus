@@ -61,15 +61,28 @@ std::string firstDriversFile(const std::string& node, const std::string& driverM
 // (`<placed>/dist/`), so that no friend runs from the fork while it is being built; unchanged when there is none.
 std::string movedDriverPaths(const std::string& text, const std::string& source, const std::string& placed);
 
+// The driver tree the server at `self` was placed with: <self>.driver names it (claude@<driver build>, under
+// ~/.nexus/drivers), and the server runs that tree whatever ~/.nexus/drivers/claude links to. None without the file.
+DriverPin pinnedDriver(const std::string& self, const std::string& home);
+// The build a server answers to `build`: its program's (buildOf its bytes), and with a pinned driver tree, the build of
+// both, so that a new driver alone is a new build the running server hands over to.
+std::string runningBuild(const std::string& programBuild, const DriverPin& pin);
+
 // The help of `setup`, `doctor`, `rebuild` and `takeover` (`nexus-server help <topic>`, or the verb with --help): what
 // it does, step by step, its options, what it prints and its exit statuses, for an AI reading it cold. Empty for any
 // other topic. SETUP.md says the same at more length.
 std::string verbHelp(const std::string& topic);
 
-// `nexus-server setup [--no-service] [--wait <seconds>]`, `doctor`, and `rebuild [--no-tests]`: their exit statuses.
-// `self` is this program's own path.
+// `nexus-server setup`, `doctor` and `rebuild` (verbHelp says each one's options): their exit statuses. `self` is this
+// program's own path.
 int setup(const Paths& p, const std::string& self, const std::vector<std::string>& args);
 int doctor(const Paths& p, const std::string& self);
 int rebuild(const Paths& p, const std::string& self, const std::vector<std::string>& args);
+// `nexus-server handover [--service] [--start-wait <seconds>]`: the handover process setup starts detached
+// (server/takeover.h Handover), which brings the running server to the placed build, or back to the previous one.
+// Exit: 0 the placed build runs; 1 it rolled back, or failed.
+int handover(const Paths& p, const std::string& self, const std::vector<std::string>& args);
+// `nexus-server build-of <file>`: prints the build of a file's bytes (server/takeover.h buildOf). Exit 1 unreadable.
+int buildOfFile(const std::vector<std::string>& args);
 
 } // namespace nexus::server

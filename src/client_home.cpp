@@ -99,13 +99,18 @@ bool clientHomeFrom(const char* home, std::string* dir, std::string* why) {
     return true;
 }
 
-bool clientHome(std::string* dir, std::string* why) {
+std::string homeDirectory() {
 #if defined(_WIN32)
-    const std::string home = environmentUtf8(L"USERPROFILE");
-    return clientHomeFrom(home.c_str(), dir, why);
+    return environmentUtf8(L"USERPROFILE");
 #else
-    return clientHomeFrom(std::getenv(kHomeVariable), dir, why);
+    const char* home = std::getenv(kHomeVariable);
+    return home != nullptr ? std::string(home) : std::string();
 #endif
+}
+
+bool clientHome(std::string* dir, std::string* why) {
+    const std::string home = homeDirectory();
+    return clientHomeFrom(home.c_str(), dir, why);
 }
 
 bool makeClientHome(const std::string& dir, std::string* why) {

@@ -23,7 +23,11 @@ namespace nexus {
 // null or empty. Pure.
 bool clientHomeFrom(const char* home, std::string* dir, std::string* why);
 
-// The window's home from this process's environment: the one place the window resolves it.
+// The person's home directory from this process's environment (HOME, or USERPROFILE on Windows): the one place the
+// window reads it. Empty when it is not set.
+std::string homeDirectory();
+
+// The window's home from this process's environment (homeDirectory, with .nexus/client added).
 bool clientHome(std::string* dir, std::string* why);
 
 // Makes `dir` and the directory above it (~/.nexus), each mode 0700 on POSIX, if missing. False, with why.

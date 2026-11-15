@@ -6,7 +6,7 @@ EXTENDS Takeover
 BrokenStart ==
     /\ server = None
     /\ \E b \in AllBuilds : server' = b
-    /\ UNCHANGED <<placed, draining, late, turn, places>>
+    /\ UNCHANGED <<placed, previous, draining, late, turn, places, service, handing, failed, rolled>>
 
 BrokenNext == (Next /\ ~Start) \/ BrokenStart
 

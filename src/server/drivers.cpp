@@ -318,6 +318,14 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
     }
     DriverTable parsed = parseDriverTable(text, options_.home);
     ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
+    if (!options_.pinLink.empty() && !options_.pinTree.empty()) {
+        const std::string from = options_.pinLink + "/";
+        for (std::string& word : r.command) {
+            if (word.compare(0, from.size(), from) == 0) {
+                word = options_.pinTree + "/" + word.substr(from.size());
+            }
+        }
+    }
     if (table != nullptr) {
         *table = std::move(parsed);
     }

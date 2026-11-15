@@ -8,7 +8,7 @@ BrokenAsk ==
     /\ server # None
     /\ server # placed
     /\ Gone
-    /\ UNCHANGED <<placed, places>>
+    /\ UNCHANGED <<placed, previous, places, service, handing, failed, rolled>>
 
 BrokenNext == (Next /\ ~Ask) \/ BrokenAsk
 

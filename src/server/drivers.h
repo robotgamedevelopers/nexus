@@ -79,6 +79,9 @@ public:
                                         // (server/home.h sameMachine)
         bool secrets = false;           // the hub takes secret asks (Hub::secretsWith): each driver is told so after
                                         // its hello, and its ask-secret lines go to the hub
+        std::string pinLink{};          // a word of a driver's command starting with pinLink + "/" starts with
+        std::string pinTree{};          // pinTree + "/" instead: the driver tree this build was placed with
+                                        // (server/server.h DriverPin); empty: none
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.

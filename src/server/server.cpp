@@ -244,7 +244,7 @@ struct Link {
 
 class Server {
 public:
-    Server(const Paths& p, std::string build) : paths_(p), build_(std::move(build)) {}
+    Server(const Paths& p, std::string build, DriverPin pin) : paths_(p), pin_(std::move(pin)), build_(std::move(build)) {}
     int run();
 
 private:
@@ -254,6 +254,7 @@ private:
     bool endDrivers();
     void configApply(int fd, const std::string& request);
     Paths paths_;
+    DriverPin pin_;
     std::unique_ptr<store::Fs> fs_;
     std::unique_ptr<store::Fs> secretFs_;
     std::unique_ptr<AccountFiles> secretFiles_;
@@ -300,7 +301,7 @@ bool Server::openStore(std::string* why) {
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
-                                                                  machine, host, true});
+                                                                  machine, host, true, pin_.link, pin_.tree});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
@@ -911,14 +912,14 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
     return true;
 }
 
-int serve(const Paths& p, const std::string& build) {
+int serve(const Paths& p, const std::string& build, const DriverPin& pin) {
     umask(077);
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa{};
     sa.sa_handler = onSignal;
     sigaction(SIGTERM, &sa, nullptr);
     sigaction(SIGINT, &sa, nullptr);
-    Server server(p, build);
+    Server server(p, build, pin);
     return server.run();
 }
 

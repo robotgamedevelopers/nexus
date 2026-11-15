@@ -56,6 +56,57 @@ const char* stepName(Step step) {
     return "?";
 }
 
+const char* actName(Act act) {
+    switch (act) {
+        case Act::Done: return "done";
+        case Act::Wait: return "wait";
+        case Act::AskStop: return "ask-stop";
+        case Act::AskDrain: return "ask-drain";
+        case Act::Start: return "start";
+        case Act::RollBack: return "roll-back";
+        case Act::Fail: return "fail";
+    }
+    return "?";
+}
+
+Act Handover::step(const Seen& seen, Millis now) {
+    // A start that did not answer in time (noticed at the step before): roll back once, to a build that ran.
+    if (failed_) {
+        if (rolledBack_ || previous_.empty() || previous_ == placed_) {
+            return Act::Fail;
+        }
+        placed_ = previous_;
+        rolledBack_ = true;
+        failed_ = false;
+        startedAt_.reset();
+        return Act::RollBack;
+    }
+    // Rolled back, whatever answers is the previous build started again (one from before takeover answers no `build`).
+    if (rolledBack_ && seen.answers && (!seen.knowsBuild || seen.build == placed_)) {
+        return Act::Done;
+    }
+    Seen s = seen;
+    s.placed = placed_;
+    if (seen.answers) {
+        startedAt_.reset();     // a start is timed from the moment nothing answers, each time
+    }
+    switch (nextStep(s)) {
+        case Step::Done: return Act::Done;
+        case Step::AskStop: return Act::AskStop;
+        case Step::AskDrain: return Act::AskDrain;
+        case Step::Wait: return Act::Wait;
+        case Step::Start: break;
+    }
+    if (!startedAt_) {
+        startedAt_ = now;
+        return Act::Start;
+    }
+    if (now - *startedAt_ >= startMs_) {
+        failed_ = true;
+    }
+    return Act::Wait;
+}
+
 std::string buildReply(const std::string& build, bool draining) {
     return "BUILD " + build + (draining ? " draining" : "");
 }

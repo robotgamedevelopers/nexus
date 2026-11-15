@@ -7,7 +7,7 @@ BrokenDrainStop ==
     /\ server # None
     /\ draining
     /\ Gone
-    /\ UNCHANGED <<placed, places>>
+    /\ UNCHANGED <<placed, previous, places, service, handing, failed, rolled>>
 
 BrokenNext == (Next /\ ~DrainStop) \/ BrokenDrainStop
 

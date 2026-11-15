@@ -110,6 +110,21 @@ void drivers() {
     CHECK(movedDriverPaths("driver x /n /elsewhere/main.js\n", "/src/nexus", "/p") == "driver x /n /elsewhere/main.js\n");
 }
 
+void builds() {
+    // With no driver tree, the build is the program's; with one, it is of both, so a new driver alone is a new build.
+    const nexus::server::DriverPin none;
+    const nexus::server::DriverPin one{"/h/.nexus/drivers/claude", "/h/.nexus/drivers/claude@0123456789abcdef"};
+    const nexus::server::DriverPin two{"/h/.nexus/drivers/claude", "/h/.nexus/drivers/claude@fedcba9876543210"};
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", none) == "aaaaaaaaaaaaaaaa");
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", one) != "aaaaaaaaaaaaaaaa");
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", one) != runningBuild("aaaaaaaaaaaaaaaa", two));
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", one) != runningBuild("bbbbbbbbbbbbbbbb", one));
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", one).size() == 16);
+    // Only the tree's name counts, not where HOME is.
+    const nexus::server::DriverPin moved{"/g/.nexus/drivers/claude", "/g/.nexus/drivers/claude@0123456789abcdef"};
+    CHECK(runningBuild("aaaaaaaaaaaaaaaa", one) == runningBuild("aaaaaaaaaaaaaaaa", moved));
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +133,7 @@ int main() {
     unit();
     clientConfig();
     drivers();
+    builds();
     if (failures != 0) {
         std::fprintf(stderr, "install_test: %d failed\n", failures);
         return 1;

@@ -1,6 +1,7 @@
 // Unit tests of the takeover rules (src/server/takeover.h): the installer's step for everything it can see, the drain's
-// stop with and without a turn open and at its deadline, the `build` reply both ways, and the build of a program's
-// bytes. Logic only: time is an argument, and nothing runs.
+// stop with and without a turn open and at its deadline, the `build` reply both ways, the handover's acts through a
+// drain, a start, a start that never answers and its rollback, and the build of a program's bytes. Logic only: time is
+// an argument, and nothing runs.
 
 #include <cstdio>
 #include <string>
@@ -77,6 +78,87 @@ void replies() {
     CHECK(!parseBuildReply("BUILD ", &old) && !parseBuildReply("BUILD a b", &old) && !parseBuildReply("OK", &old));
 }
 
+Seen answering(const std::string& build, bool draining) {
+    Seen s;
+    s.answers = true;
+    s.knowsBuild = true;
+    s.build = build;
+    s.draining = draining;
+    return s;
+}
+
+void handover() {
+    const Millis t = 1000 * 1000;
+    const Seen nothing;
+    // The whole way: drain the old build, start the placed one once, and done when it answers.
+    {
+        Handover h("b", "a");
+        CHECK(h.step(answering("a", false), t) == Act::AskDrain);
+        CHECK(h.step(answering("a", true), t) == Act::Wait);
+        CHECK(h.step(nothing, t) == Act::Start);
+        // Started and not yet answering: wait, and do not start it twice.
+        CHECK(h.step(nothing, t + 10) == Act::Wait);
+        CHECK(h.step(answering("b", false), t + 20) == Act::Done);
+        CHECK(!h.failed() && !h.rolledBack() && h.placed() == "b");
+    }
+    // A server from before takeover is stopped, then the placed build started.
+    {
+        Handover h("b", "a");
+        Seen old;
+        old.answers = true;
+        CHECK(h.step(old, t) == Act::AskStop);
+        CHECK(h.step(nothing, t) == Act::Start);
+    }
+    // A placed build that never answers: failed at kStartMs (not a moment before), then rolled back to the previous
+    // build, started like any placed build, and done when it answers.
+    {
+        Handover h("b", "a");
+        CHECK(h.step(nothing, t) == Act::Start);
+        CHECK(h.step(nothing, t + kStartMs - 1) == Act::Wait && !h.failed());
+        CHECK(h.step(nothing, t + kStartMs) == Act::Wait && h.failed());
+        CHECK(h.step(nothing, t + kStartMs) == Act::RollBack);
+        CHECK(h.rolledBack() && !h.failed() && h.placed() == "a");
+        CHECK(h.step(nothing, t + kStartMs + 1) == Act::Start);
+        CHECK(h.step(answering("a", false), t + kStartMs + 2) == Act::Done);
+        CHECK(std::string(actName(Act::RollBack)) == "roll-back" && std::string(actName(Act::Fail)) == "fail");
+    }
+    // A start is timed from the moment nothing answers: a server that drains slowly does not use up the new build's time.
+    {
+        Handover h("b", "a");
+        CHECK(h.step(nothing, t) == Act::Start);
+        CHECK(h.step(answering("a", true), t + kStartMs - 1) == Act::Wait);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Start);
+        CHECK(h.step(nothing, t + 2 * kStartMs - 1) == Act::Wait && !h.failed());
+    }
+    // Rolled back to a server from before takeover: it answers no `build`, and that is done.
+    {
+        Handover h("b", "old");
+        CHECK(h.step(nothing, t) == Act::Start);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Wait);
+        CHECK(h.step(nothing, t + kStartMs) == Act::RollBack && h.placed() == "old");
+        Seen old;
+        old.answers = true;
+        CHECK(h.step(old, t + kStartMs + 1) == Act::Done);
+    }
+    // No previous build (a first install), the same build, or a previous that fails too: Fail, said once and again.
+    for (const std::string& previous : {std::string(), std::string("b")}) {
+        Handover h("b", previous);
+        CHECK(h.step(nothing, t) == Act::Start);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Wait);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Fail);
+        CHECK(h.step(nothing, t + kStartMs + 1) == Act::Fail);
+    }
+    {
+        Handover h("b", "a");
+        CHECK(h.step(nothing, t) == Act::Start);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Wait);
+        CHECK(h.step(nothing, t + kStartMs) == Act::RollBack);
+        CHECK(h.step(nothing, t + kStartMs) == Act::Start);
+        CHECK(h.step(nothing, t + 2 * kStartMs) == Act::Wait);
+        CHECK(h.step(nothing, t + 2 * kStartMs) == Act::Fail);
+    }
+}
+
 void builds() {
     // FNV-1a 64: the empty input is the offset basis; one byte changes the build.
     CHECK(buildOf("") == "cbf29ce484222325");
@@ -91,6 +173,7 @@ int main() {
     steps();
     drain();
     replies();
+    handover();
     builds();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

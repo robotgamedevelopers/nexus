@@ -1,21 +1,25 @@
-// Drives the real takeover code (src/server/takeover.h: nextStep, the installer's side, and Drain, the running
-// server's) with a seeded random walk and writes the trace as a TLA+ module (TakeoverTraceData.tla) for
-// models/TakeoverTrace.tla, under which TLC checks that the trace is a behaviour of models/Takeover.tla.
+// Drives the real takeover code (src/server/takeover.h: Handover, the handover process's side over nextStep, and
+// Drain, the running server's) with a seeded random walk and writes the trace as a TLA+ module (TakeoverTraceData.tla)
+// for models/TakeoverTrace.tla, under which TLC checks that the trace is a behaviour of models/Takeover.tla.
 //
-//   takeover_walk <seed> <steps> [--faulty-drain | --faulty-stop] <out.tla>
+//   takeover_walk <seed> <steps> [--faulty-drain | --faulty-stop | --faulty-rollback] <out.tla>
 //
 // The walk is a pure function of its arguments: its random numbers come from the seed (splitmix64) and its clock is
-// made up (from 1000 s), never the system's. It plays everything around the code: the installer placing builds (each a
-// build of made-up bytes, its id from buildOf), the service starting the placed program when none runs, friends'
-// turns opening and ending, and the clock moving, sometimes past a drain's deadline. The installer's move each time is
-// what nextStep says for what it sees, and the running server's stop is what its Drain says at each pass of its loop.
-// Each record is the state after one step: the placed build, the running one (or none), whether it drains, whether its
-// deadline has passed (Drain::late), whether a turn is open, and how many builds were placed. Builds are written by
-// name: "old" for the server from before takeover (which answers no `build`), "a" and "b" for the two a rebuild makes.
+// made up (from 1000 s), never the system's. It plays everything around the code: setup placing builds (each a build of
+// made-up bytes, its id from buildOf) when no handover runs, keeping the one placed before as the previous; a service,
+// when the walk has one, starting the placed program when none runs; friends' turns opening and ending; and the clock
+// moving, sometimes past a drain's deadline or a start's. Build "b" is broken on the store: started, it never answers.
+// The handover's move each time is what its Handover says for what it sees, and the running server's stop is what its
+// Drain says at each pass of its loop. Each record is the state after one step: the placed build and the previous one,
+// the running one (or none), whether it drains, whether its deadline has passed (Drain::late), whether a turn is open,
+// how many builds were placed, whether there is a service, whether a handover runs, whether it saw the placed build
+// fail, and whether it rolled back. Builds are written by name: "old" for the server from before takeover (which
+// answers no `build`), "a" and "b" for the two a rebuild makes.
 //
 // --faulty-drain stops a draining server at its first pass, turn or no turn (a drain without the wait); --faulty-stop
-// has the installer stop, not drain, a server running another build. TLC must reject both; that is the negative check
-// that shows the binding can fail.
+// has the handover stop, not drain, a server running another build; --faulty-rollback leaves the broken program in
+// place when the handover rolls back (the copy of the previous one skipped). TLC must reject each; that is the
+// negative check that shows the binding can fail.
 
 #include "server/takeover.h"
 
@@ -32,10 +36,11 @@
 
 namespace {
 
+using nexus::server::Act;
 using nexus::server::Drain;
+using nexus::server::Handover;
 using nexus::server::Millis;
 using nexus::server::Seen;
-using nexus::server::Step;
 
 struct Rng {
     std::uint64_t state;
@@ -61,9 +66,14 @@ struct Running {
 
 struct World {
     std::map<std::string, std::string> names;   // build id -> its name in the model
+    std::string broken;                         // the build that never comes up on the store
+    std::string oldBuild;
     std::string placed;                         // the placed program's build id
+    std::string previous;                       // the program kept beside it
     std::optional<Running> server;
+    std::optional<Handover> handover;           // the handover process, while it runs
     int places = 0;
+    bool service = false;
     Millis now = 1000 * 1000;
 };
 
@@ -74,14 +84,17 @@ std::string flag(bool b) {
 std::string record(const World& w) {
     std::ostringstream o;
     const bool draining = w.server && w.server->drain.draining();
-    o << "[placed |-> \"" << w.names.at(w.placed) << "\", server |-> \""
-      << (w.server ? w.names.at(w.server->build) : std::string("none")) << "\", draining |-> " << flag(draining)
-      << ", late |-> " << flag(w.server && w.server->drain.late(w.now)) << ", turn |-> "
-      << flag(w.server && w.server->turn) << ", places |-> " << w.places << "]";
+    o << "[placed |-> \"" << w.names.at(w.placed) << "\", previous |-> \"" << w.names.at(w.previous)
+      << "\", server |-> \"" << (w.server ? w.names.at(w.server->build) : std::string("none"))
+      << "\", draining |-> " << flag(draining) << ", late |-> " << flag(w.server && w.server->drain.late(w.now))
+      << ", turn |-> " << flag(w.server && w.server->turn) << ", places |-> " << w.places << ", service |-> "
+      << flag(w.service) << ", handing |-> " << flag(w.handover.has_value()) << ", failed |-> "
+      << flag(w.handover && w.handover->failed()) << ", rolled |-> " << flag(w.handover && w.handover->rolledBack())
+      << "]";
     return o.str();
 }
 
-// What the installer sees: the server's answer to `build`, as the control socket gives it.
+// What the handover sees: the server's answer to `build`, as the control socket gives it.
 Seen look(const World& w) {
     Seen s;
     s.placed = w.placed;
@@ -99,23 +112,36 @@ Seen look(const World& w) {
     return s;
 }
 
+// The placed program is started (by the service or the handover): it comes up, unless it is the broken build.
+bool startPlaced(World& w) {
+    if (w.server || w.placed == w.broken) {
+        return false;
+    }
+    w.server = Running{w.placed, w.placed != w.oldBuild, Drain{}, false};
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     bool faultyDrain = false;
     bool faultyStop = false;
+    bool faultyRollback = false;
     std::vector<const char*> args;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--faulty-drain") == 0) {
             faultyDrain = true;
         } else if (std::strcmp(argv[i], "--faulty-stop") == 0) {
             faultyStop = true;
+        } else if (std::strcmp(argv[i], "--faulty-rollback") == 0) {
+            faultyRollback = true;
         } else {
             args.push_back(argv[i]);
         }
     }
     if (args.size() != 3) {
-        std::fprintf(stderr, "usage: takeover_walk <seed> <steps> [--faulty-drain | --faulty-stop] <out.tla>\n");
+        std::fprintf(stderr,
+            "usage: takeover_walk <seed> <steps> [--faulty-drain | --faulty-stop | --faulty-rollback] <out.tla>\n");
         return 2;
     }
     const std::uint64_t seed = std::strtoull(args[0], nullptr, 10);
@@ -131,45 +157,65 @@ int main(int argc, char** argv) {
                                              nexus::server::buildOf("nexus-server, rebuild b")};
     World w;
     w.names = {{oldBuild, "old"}, {builds[0], "a"}, {builds[1], "b"}};
+    w.oldBuild = oldBuild;
+    w.broken = builds[1];
     w.placed = oldBuild;
+    w.previous = oldBuild;
+    w.service = rng.below(2) == 0;
     if (rng.below(2) == 0) {
         w.server = Running{oldBuild, false, Drain{}, false};
     }
     std::vector<std::string> trace{record(w)};
-    int drained = 0, stopped = 0, cut = 0, started = 0;
+    int drained = 0, stopped = 0, cut = 0, started = 0, rolledBack = 0, handedOver = 0;
+    int faults = 0;     // steps a faulty mode changed: a faulty walk with none checks nothing
     for (long k = 0; k < steps; ++k) {
-        switch (rng.below(8)) {
-            case 0: {   // the installer places a build (setup, rebuild), at most kMaxPlaces
-                if (w.places < kMaxPlaces && rng.below(3) == 0) {
+        switch (rng.below(9)) {
+            case 0: {   // setup places a build, at most kMaxPlaces, and only when no handover runs (it refuses then)
+                if (!w.handover && w.places < kMaxPlaces && rng.below(3) == 0) {
                     const std::string& b = builds[rng.below(builds.size())];
                     if (b != w.placed) {
+                        w.previous = w.placed;
                         w.placed = b;
                         ++w.places;
+                        w.handover.emplace(w.placed, w.previous);
                     }
                 }
                 break;
             }
             case 1:
-            case 2: {   // the installer looks and takes nextStep's step: only after it placed a build, as setup places
-                        // itself before it looks
-                if (w.places == 0) {
+            case 2: {   // the handover looks and does what its Handover says
+                if (!w.handover) {
                     break;
                 }
-                const Step step = nexus::server::nextStep(look(w));
-                if (step == Step::AskStop || (faultyStop && step == Step::AskDrain)) {
+                const Act act = w.handover->step(look(w), w.now);
+                if (act == Act::AskStop || (faultyStop && act == Act::AskDrain)) {
+                    faults += act == Act::AskDrain ? 1 : 0;
                     cut += w.server->turn ? 1 : 0;
                     w.server.reset();
                     ++stopped;
-                } else if (step == Step::AskDrain) {
+                } else if (act == Act::AskDrain) {
                     w.server->drain.request(w.now);
+                } else if (act == Act::Start) {
+                    started += startPlaced(w) ? 1 : 0;
+                } else if (act == Act::RollBack) {
+                    if (faultyRollback) {
+                        ++faults;
+                    } else {
+                        w.placed = w.handover->placed();
+                    }
+                    ++rolledBack;
+                } else if (act == Act::Done) {
+                    w.handover.reset();
+                    ++handedOver;
+                } else if (act == Act::Fail && !faultyRollback) {   // a faulty rollback leaves the broken build: Fail
+                    std::fprintf(stderr, "takeover_walk: the handover failed, with a previous build that works\n");
+                    return 1;
                 }
-                // Start is the service's (case 3); Wait and Done change nothing.
                 break;
             }
-            case 3: {   // the service starts the placed program when none runs
-                if (!w.server) {
-                    w.server = Running{w.placed, w.placed != oldBuild, Drain{}, false};
-                    ++started;
+            case 3: {   // the service, when there is one, starts the placed program when none runs
+                if (w.service) {
+                    started += startPlaced(w) ? 1 : 0;
                 }
                 break;
             }
@@ -179,14 +225,19 @@ int main(int argc, char** argv) {
                 }
                 break;
             }
-            case 5: {   // the clock: a moment, or, while draining, sometimes past the deadline
-                w.now += (w.server && w.server->drain.draining() && rng.below(4) == 0) ? nexus::server::kDrainMs : 50;
+            case 5: {   // the clock: a moment, or sometimes past a drain's deadline or a start's
+                Millis by = 50;
+                if (rng.below(4) == 0) {
+                    by = (w.server && w.server->drain.draining()) ? nexus::server::kDrainMs : nexus::server::kStartMs;
+                }
+                w.now += by;
                 break;
             }
             default: {  // a pass of the running server's loop
                 if (w.server && w.server->knowsTakeover) {
                     const Drain& d = w.server->drain;
                     const bool stop = faultyDrain ? d.draining() : d.stopNow(w.server->turn, w.now);
+                    faults += stop && !d.stopNow(w.server->turn, w.now) ? 1 : 0;
                     if (stop) {
                         cut += w.server->turn ? 1 : 0;
                         w.server.reset();
@@ -205,15 +256,26 @@ int main(int argc, char** argv) {
     }
     out << "---- MODULE TakeoverTraceData ----\n";
     out << "\\* Written by tests/server/takeover_walk: seed " << seed << ", " << steps << " steps"
-        << (faultyDrain ? ", faulty-drain" : "") << (faultyStop ? ", faulty-stop" : "") << ".\n";
+        << (faultyDrain ? ", faulty-drain" : "") << (faultyStop ? ", faulty-stop" : "")
+        << (faultyRollback ? ", faulty-rollback" : "") << ".\n";
     out << "EXTENDS TLC\n";
-    out << "TraceBuilds == {\"a\", \"b\"}\nTraceOld == \"old\"\nTraceNone == \"none\"\nTraceMaxPlaces == " << kMaxPlaces
-        << "\nTrace == <<\n";
+    out << "TraceBuilds == {\"a\", \"b\"}\nTraceBroken == {\"b\"}\nTraceOld == \"old\"\nTraceNone == \"none\"\n"
+        << "TraceMaxPlaces == " << kMaxPlaces << "\nTrace == <<\n";
     for (std::size_t i = 0; i < trace.size(); ++i) {
         out << "  " << trace[i] << (i + 1 < trace.size() ? ",\n" : "\n");
     }
     out << ">>\n====\n";
-    std::printf("takeover_walk: %zu records, %d starts, %d drained, %d stopped, %d turns cut\n", trace.size(), started,
-        drained, stopped, cut);
+    out.close();
+    if (!out) {
+        std::fprintf(stderr, "takeover_walk: cannot write %s\n", args[2]);
+        return 2;
+    }
+    std::printf("takeover_walk: %zu records, %d starts, %d drained, %d stopped, %d turns cut, %d rolled back, "
+                "%d handed over, %d faulty steps\n", trace.size(), started, drained, stopped, cut, rolledBack,
+                handedOver, faults);
+    if ((faultyDrain || faultyStop || faultyRollback) && faults == 0) {
+        std::fprintf(stderr, "takeover_walk: the faulty mode changed no step at this seed; pick another seed\n");
+        return 1;
+    }
     return 0;
 }

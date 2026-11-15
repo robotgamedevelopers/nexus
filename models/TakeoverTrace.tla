@@ -1,39 +1,45 @@
 --------------------------- MODULE TakeoverTrace ---------------------------
 (***************************************************************************)
 (* Trace validation: TLC checks that one trace of the real takeover code   *)
-(* (src/server/takeover.h: nextStep and Drain) is a behaviour of           *)
-(* Takeover.tla.                                                           *)
+(* (src/server/takeover.h: Handover over nextStep, and Drain) is a         *)
+(* behaviour of Takeover.tla.                                              *)
 (*                                                                         *)
 (* tests/server/takeover_walk.cpp drives the code with a seeded random     *)
 (* walk and writes TakeoverTraceData.tla beside this module. It defines    *)
-(*   TraceBuilds, TraceOld, TraceNone, TraceMaxPlaces: the instance, and   *)
-(*   Trace: one record per step of the walk, the state after it: placed,   *)
-(*     server, draining, late, turn and places, each read from the code    *)
-(*     (the server's Drain, the installer's nextStep and what it did).     *)
+(*   TraceBuilds, TraceBroken, TraceOld, TraceNone, TraceMaxPlaces: the    *)
+(*     instance, and                                                       *)
+(*   Trace: one record per step of the walk, the state after it, each      *)
+(*     field read from the code (the server's Drain, the handover's        *)
+(*     Handover and what it did).                                          *)
 (*                                                                         *)
 (* Each record after the first must be one step of Takeover's Next from    *)
 (* the one before, or no change at all (a step that changed nothing: the   *)
-(* installer waiting, the clock moving short of the deadline). Every       *)
+(* handover waiting, the clock moving short of a deadline). Every          *)
 (* Takeover safety property is checked on the trace.                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, TakeoverTraceData
 
-VARIABLES placed, server, draining, late, turn, places, l
+VARIABLES placed, previous, server, draining, late, turn, places, service, handing, failed, rolled, l
 
-T == INSTANCE Takeover WITH Builds <- TraceBuilds, OldBuild <- TraceOld, None <- TraceNone,
+T == INSTANCE Takeover WITH Builds <- TraceBuilds, Broken <- TraceBroken, OldBuild <- TraceOld, None <- TraceNone,
                             MaxPlaces <- TraceMaxPlaces
 
-specVars == <<placed, server, draining, late, turn, places>>
-traceVars == <<placed, server, draining, late, turn, places, l>>
+specVars == <<placed, previous, server, draining, late, turn, places, service, handing, failed, rolled>>
+traceVars == <<placed, previous, server, draining, late, turn, places, service, handing, failed, rolled, l>>
 
 Is(k) ==
     LET s == Trace[k] IN
     /\ placed = s.placed
+    /\ previous = s.previous
     /\ server = s.server
     /\ draining = s.draining
     /\ late = s.late
     /\ turn = s.turn
     /\ places = s.places
+    /\ service = s.service
+    /\ handing = s.handing
+    /\ failed = s.failed
+    /\ rolled = s.rolled
 
 TraceMatches == Is(l)
 
@@ -41,11 +47,16 @@ TraceMatches == Is(l)
 Becomes(k) ==
     LET s == Trace[k] IN
     /\ placed' = s.placed
+    /\ previous' = s.previous
     /\ server' = s.server
     /\ draining' = s.draining
     /\ late' = s.late
     /\ turn' = s.turn
     /\ places' = s.places
+    /\ service' = s.service
+    /\ handing' = s.handing
+    /\ failed' = s.failed
+    /\ rolled' = s.rolled
 
 TraceInit == l = 1 /\ T!Init /\ Is(1)
 
@@ -61,6 +72,8 @@ Done == l = Len(Trace) /\ UNCHANGED traceVars
 TraceSpec == TraceInit /\ [][TraceNext \/ Done]_traceVars
 
 TypeOK == T!TypeOK
+NeverRunsBroken == T!NeverRunsBroken
+IdlePlacedWorks == T!IdlePlacedWorks
 DrainCutsOnlyLate == T!DrainCutsOnlyLate
 StopOnlyOld == T!StopOnlyOld
 StartsPlaced == T!StartsPlaced

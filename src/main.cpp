@@ -879,9 +879,7 @@ int main(int argc, char** argv) {
     if (server != nullptr) {
         link::ClientLink::Options options;
         options.bootstrap.host = server;
-        if (const char* home = std::getenv("HOME")) {
-            options.bootstrap.home = home;
-        }
+        options.bootstrap.home = homeDirectory();
         options.wake = [] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
