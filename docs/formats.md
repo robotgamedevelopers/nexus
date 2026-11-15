@@ -116,6 +116,41 @@ server's state is.
 - It is refused only when its reader byte names a format later than this build reads. The message names the store,
   the record and both formats, and says to run the newer nexus-server.
 
+### One writer: the store's lock
+
+The journal has one writer. Two writers would each number their next record from the same replay, so one number
+lands twice and the next open keeps only what comes before it, and each could start a driver for the same queued
+prompt. So at most one process ever has a store open for writing, and the operating system enforces it
+(`models/store/StoreLock.tla`):
+
+- `store/lock`, an empty file mode 0600 in the store's directory, carries an advisory lock (`flock`) on an open
+  descriptor. It holds no bytes and no pid; the lock is the descriptor's. A server takes it exclusive, without
+  waiting, as the first thing `Store::open` does, before anything in the directory is read or written, and holds it
+  for the life of the process. The operating system releases it when the process ends, however it ends (kill -9, a
+  crash, an exit), so there is never a stale lock to clean up. The descriptor is close-on-exec: no driver or other
+  child holds it.
+- Older stores have no lock file; the first server of this version makes it. Formats are not touched: the lock file
+  is no part of the journal, and a server from before it ignores it (and takes no lock, which is why the start-up
+  order below also asks the control socket first).
+- A reader that changes nothing (`nexus-server store check`, `Store::inspect`) takes the lock shared, only for as
+  long as it copies the journal's files, and opens its copy in memory: it never cuts a torn tail or writes a
+  migration on the disk. While a server holds the lock it is refused in one line and reads nothing. A server that
+  starts while only readers hold the lock waits for them, at most 2 seconds; a server never waits on another writer.
+- Where locks cannot be trusted the store is refused, never run unlocked: a network filesystem (on macOS any volume
+  without `MNT_LOCAL`; on Linux NFS, SMB, CIFS, AFS, Ceph, GPFS, Lustre and NCP), and a filesystem that hands locks to
+  another program (FUSE, and 9p, which is WSL2's view of Windows drives). The message names the filesystem and says
+  to keep the server's directory on a local disk. A filesystem that returns an error for `flock` is refused the same
+  way. What cannot be detected (a local filesystem shared by another machine some other way) is not covered.
+
+`nexus-server serve` starts in this order (`src/server/start_order.h`): ask the control socket (another server
+answering, from before the lock or not: refused); take the store's lock and replay the journal (the lock held by
+another: refused); bind the control socket (answered: refused); and only then settle the sessions against the
+accounts and restore the friends' drivers, which may commit to the journal and start a driver for a queued prompt.
+Nothing writes a record or starts a driver before the lock and the socket are both held. A refused server writes one
+line saying which (another server has the store's lock, or answers on the socket) and exits 0, which a service
+manager does not restart (launchd's `KeepAlive` with `SuccessfulExit` false, systemd's `Restart=on-failure`); a
+server that could not start for any other reason exits 1.
+
 ## The fixtures
 
 Today's main formats are fixed as bytes that main's own code wrote, not as bytes this build claims main would write:

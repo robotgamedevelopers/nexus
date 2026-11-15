@@ -209,6 +209,13 @@ jobs:
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
           done
+          # the store's lock and the start-up order: their walks, then the faulty orders
+          for seed in 1 2 3 4 5; do
+            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+          done
+          for fault in --faulty-unlocked --faulty-restore-first; do
+            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
+          done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
           # the driver supervisor: every group, then its walks and their faults
@@ -552,8 +559,8 @@ jobs:
       - name: Build the programs it runs
         run: >-
           cmake --build build --parallel "$JOBS" --target model_test overlay_test overlay_walk trace_walk sync_test
-          link_walk secrets_walk secrets_test store_test durable_test journal_walk driver_protocol_test supervisor_test
-          supervisor_walk wire_test nexus_versions_test
+          link_walk secrets_walk secrets_test store_test durable_test journal_walk store_lock_walk driver_protocol_test
+          supervisor_test supervisor_walk wire_test nexus_versions_test
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -601,6 +608,13 @@ jobs:
           done
           for fault in accept-torn cut-too-far no-truncate no-sync; do
             build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
+          done
+          # the store's lock and the start-up order: their walks, then the faulty orders
+          for seed in 1 2 3 4 5; do
+            build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
+          done
+          for fault in --faulty-unlocked --faulty-restore-first; do
+            build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
@@ -669,6 +683,11 @@ jobs:
           - shard: journal
             run: '^tlc_journal'
             build: journal_walk
+          # The store's lock and the start-up order (models/store/StoreLock.tla): its instances, witnesses and the
+          # code's walks.
+          - shard: store-lock
+            run: '^tlc_store_lock'
+            build: store_lock_walk
           - shard: claude
             run: '^tlc_claude'
             node: true
@@ -687,7 +706,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk overlay_walk glide_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|claude|witness|secrets)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|claude|witness|secrets)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

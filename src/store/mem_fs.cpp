@@ -165,6 +165,81 @@ MemFs::MemFs(const MemFs& other)
     : dirs_(other.dirs_), files_(other.files_), live_(other.live_), epoch_(other.epoch_), calls_(other.calls_),
       fail_at_(other.fail_at_), dead_(other.dead_) {}
 
+LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms) {
+    if (exclusive_free) {
+        return LockStep::Take;
+    }
+    if (shared_free && waited_ms < kLockReaderWaitMs) {
+        return LockStep::Wait;
+    }
+    return LockStep::Busy;
+}
+
+// A lock on MemFs: its path and mode, released when it goes, unless a crash (the end of every process) took it first.
+class MemFs::Held : public FileLock {
+public:
+    Held(MemFs& fs, std::string path, LockMode mode) : fs_(fs), path_(std::move(path)), mode_(mode),
+                                                       epoch_(fs.epoch_) {
+        Locks& l = fs_.locks_[path_];
+        if (mode_ == LockMode::Exclusive) {
+            ++l.exclusive;
+        } else {
+            ++l.shared;
+        }
+    }
+    ~Held() override {
+        if (epoch_ != fs_.epoch_) {
+            return;
+        }
+        auto it = fs_.locks_.find(path_);
+        if (it == fs_.locks_.end()) {
+            return;
+        }
+        if (mode_ == LockMode::Exclusive) {
+            --it->second.exclusive;
+        } else {
+            --it->second.shared;
+        }
+        if (it->second.exclusive == 0 && it->second.shared == 0) {
+            fs_.locks_.erase(it);
+        }
+    }
+    Held(const Held&) = delete;
+    Held& operator=(const Held&) = delete;
+
+private:
+    MemFs& fs_;
+    std::string path_;
+    LockMode mode_;
+    std::uint64_t epoch_;
+};
+
+Status MemFs::lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) {
+    out.reset();
+    if (dead_) {
+        return Status::failed("memfs: lock " + path + " after an injected crash");
+    }
+    if (dirs_.find(dir_of(path)) == dirs_.end()) {
+        return Status::not_found("memfs: no directory " + dir_of(path));
+    }
+    const std::uint64_t exclusive = lock_holders(path, LockMode::Exclusive);
+    const std::uint64_t shared = lock_holders(path, LockMode::Shared);
+    const bool free = mode == LockMode::Shared ? exclusive == 0 : exclusive == 0 && shared == 0;
+    if (!free) {
+        return Status::busy("memfs: " + path + " is locked by another holder");
+    }
+    out = std::make_unique<Held>(*this, path, mode);
+    return Status::ok();
+}
+
+std::uint64_t MemFs::lock_holders(const std::string& path, LockMode mode) const {
+    auto it = locks_.find(path);
+    if (it == locks_.end()) {
+        return 0;
+    }
+    return mode == LockMode::Exclusive ? it->second.exclusive : it->second.shared;
+}
+
 Status MemFs::open_append(const std::string& path, std::unique_ptr<AppendFile>& out) {
     out.reset();
     if (dead_)
@@ -423,9 +498,10 @@ void MemFs::crash(const CrashPlan& plan) {
     }
     dead_ = false;
     fail_at_ = 0;
-    // The process died: what it held open is gone.
+    // The process died: what it held open is gone, and so are its locks.
     ++epoch_;
     opened_.clear();
+    locks_.clear();
     collect();
 }
 

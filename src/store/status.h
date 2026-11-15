@@ -11,16 +11,18 @@ namespace nexus::store {
 //   Failed    the disk failed or what is on it is not what the store wrote. After a failed write or fsync the store
 //             refuses every later change (what reached the disk is unknown); restarting the server reopens it from
 //             what is durable
+//   Busy      another process holds the store's lock (Fs::lock): nothing was read or written
 // The message says what happened and how to fix it.
 class Status {
 public:
-    enum class Code { Ok, Refused, NotFound, Failed };
+    enum class Code { Ok, Refused, NotFound, Failed, Busy };
 
     Status() = default;
     static Status ok() { return Status(); }
     static Status refused(std::string why) { return Status(Code::Refused, std::move(why)); }
     static Status not_found(std::string why) { return Status(Code::NotFound, std::move(why)); }
     static Status failed(std::string why) { return Status(Code::Failed, std::move(why)); }
+    static Status busy(std::string why) { return Status(Code::Busy, std::move(why)); }
 
     bool is_ok() const { return code_ == Code::Ok; }
     Code code() const { return code_; }

@@ -4,12 +4,21 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/mount.h>
+#include <sys/param.h>
+#else
+#include <sys/statfs.h>
+#endif
 
 namespace nexus::store {
 
@@ -37,6 +46,11 @@ public:
     Fd(const Fd&) = delete;
     Fd& operator=(const Fd&) = delete;
     int get() const { return fd_; }
+    int release() {
+        const int fd = fd_;
+        fd_ = -1;
+        return fd;
+    }
 
 private:
     int fd_;
@@ -82,8 +96,109 @@ private:
     std::string path_;
 };
 
+// A lock held: the descriptor flock was taken on. Closing it releases the lock; so does the end of the process. It is
+// opened close-on-exec, so no driver or other child the server starts ever holds it.
+class PosixLock : public FileLock {
+public:
+    explicit PosixLock(int fd) : fd_(fd) {}
+
+private:
+    Fd fd_;
+};
+
+// Where advisory locks cannot be trusted: a network filesystem (another machine's lock is not seen, or the lock is
+// emulated), or one that passes locks to another program (FUSE, 9p: WSL2's view of Windows drives). Empty when the
+// directory is on a local disk; otherwise the filesystem's name.
+std::string unlockable_filesystem(const std::string& dir) {
+    struct statfs fs;
+    if (::statfs(dir.c_str(), &fs) != 0) {
+        return std::string();   // the open below says why
+    }
+#if defined(__APPLE__)
+    if ((fs.f_flags & MNT_LOCAL) == 0) {
+        return fs.f_fstypename;
+    }
+    const std::string type = fs.f_fstypename;
+    if (type.rfind("macfuse", 0) == 0 || type.rfind("osxfuse", 0) == 0 || type == "fuse") {
+        return type;
+    }
+    return std::string();
+#else
+    switch (static_cast<unsigned long>(fs.f_type)) {
+    case 0x6969UL:
+        return "nfs";
+    case 0x517BUL:
+        return "smb";
+    case 0xFF534D42UL:
+        return "cifs";
+    case 0xFE534D42UL:
+        return "smb2";
+    case 0x65735546UL:
+        return "fuse";
+    case 0x01021997UL:
+        return "9p";
+    case 0x564CUL:
+        return "ncp";
+    case 0x5346414FUL:
+        return "afs";
+    case 0x6B414653UL:
+        return "kafs";
+    case 0x00C36400UL:
+        return "ceph";
+    case 0x47504653UL:
+        return "gpfs";
+    case 0x0BD00BD0UL:
+        return "lustre";
+    default:
+        return std::string();
+    }
+#endif
+}
+
 class PosixFs : public Fs {
 public:
+    Status lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) override {
+        out.reset();
+        const std::string dir = dir_of(path);
+        const std::string type = unlockable_filesystem(dir);
+        if (!type.empty()) {
+            return Status::failed(dir + " is on a " + type + " filesystem, where a lock is not trusted to keep a second "
+                                  "nexus-server out; keep the server's directory on a local disk (--dir, or HOME)");
+        }
+        Fd fd(::open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600));
+        if (fd.get() < 0) {
+            return os_error("open", path);
+        }
+        const int want = mode == LockMode::Exclusive ? LOCK_EX : LOCK_SH;
+        const auto start = std::chrono::steady_clock::now();
+        for (;;) {
+            if (::flock(fd.get(), want | LOCK_NB) == 0) {
+                out = std::make_unique<PosixLock>(fd.release());
+                return Status::ok();
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno != EWOULDBLOCK) {
+                const int e = errno;
+                return Status::failed("flock " + path + ": " + std::strerror(e) + " (this filesystem takes no locks; keep "
+                                      "the server's directory on a local disk)");
+            }
+            // Refused: a shared lock to be had now means only readers hold it (next_lock_step).
+            bool shared_free = false;
+            if (mode == LockMode::Exclusive && ::flock(fd.get(), LOCK_SH | LOCK_NB) == 0) {
+                shared_free = true;
+                ::flock(fd.get(), LOCK_UN);
+            }
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            if (next_lock_step(false, shared_free, static_cast<std::uint64_t>(waited)) != LockStep::Wait) {
+                return Status::busy(path + " is locked by another process");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kLockRetryMs));
+        }
+    }
+
     Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override {
         out.reset();
         int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);

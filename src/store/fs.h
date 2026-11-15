@@ -32,9 +32,36 @@ public:
     virtual Status sync() = 0;
 };
 
+// A lock on a file, held for as long as this object lives (an open descriptor with flock on it, on the real
+// filesystem). Destroying it releases the lock; so does the end of the process that holds it, for any reason, which
+// is why no lock is ever left behind to be cleaned up.
+class FileLock {
+public:
+    virtual ~FileLock() = default;
+};
+
+// Exclusive: one holder and no other, the store's writer. Shared: any number of holders and no exclusive one, a
+// reader that changes nothing.
+enum class LockMode { Shared, Exclusive };
+
+// What an opener does when its exclusive lock is refused (Fs::lock, models/store/StoreLock.tla): `exclusive_free`
+// false, then `shared_free` whether a shared lock is to be had at that moment. A shared lock to be had means only
+// readers hold it (a reader holds it for the milliseconds of its copy), so the opener tries again until `waited_ms`
+// passes kLockReaderWaitMs; no shared lock means a writer holds it, and the opener is refused at once. Time is an
+// argument: the unit tests give it.
+enum class LockStep { Take, Wait, Busy };
+constexpr std::uint64_t kLockReaderWaitMs = 2000;
+constexpr std::uint64_t kLockRetryMs = 10;
+LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms);
+
 class Fs {
 public:
     virtual ~Fs() = default;
+    // A lock on `path` (made if missing, in a directory that must exist), never waiting on a writer: Ok and `out` the
+    // lock; Busy when another holder has it in a mode that excludes this one (an exclusive lock waits, at most
+    // kLockReaderWaitMs, only on shared holders: next_lock_step); Failed when locks cannot be trusted where the file
+    // is (a network filesystem, or one that takes no locks), saying so, so that nothing runs unlocked.
+    virtual Status lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) = 0;
     virtual Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) = 0;  // NotFound if missing
     virtual Status make_dir(const std::string& dir) = 0;   // with its parents; nothing if it is there
     // Its files and directories, by name. NotFound if missing.
@@ -116,10 +143,18 @@ public:
     };
 
     // A copy is the disk as it is now, for the tests to crash in different ways: the AppendFiles open on this one
-    // stay with it, and none is open on the copy.
+    // stay with it, and none is open on the copy; nor is any lock held on the copy.
     MemFs() = default;
     MemFs(const MemFs& other);
     MemFs& operator=(const MemFs&) = delete;
+
+    // Locks are kept apart from the files, by path, as flock keeps them apart from the bytes: no file is made for one,
+    // and taking one is no mutating call (fail_at does not count it). Each process of a test or walk on one MemFs
+    // holds its own FileLock: destroying it is that process ending; crash() ends every process, and every lock goes.
+    // An exclusive lock refused while only shared ones are held is Busy at once: MemFs has no clock to wait on.
+    Status lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) override;
+    // The holders of the lock on `path` now: exclusive (0 or 1) and shared.
+    std::uint64_t lock_holders(const std::string& path, LockMode mode) const;
 
     Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override;
     Status make_dir(const std::string& dir) override;
@@ -167,6 +202,11 @@ private:
         std::vector<DirOp> pending;
     };
     class Open;
+    class Held;
+    struct Locks {
+        std::uint64_t exclusive = 0;
+        std::uint64_t shared = 0;
+    };
     Status step(const char* what, const std::string& path);
     File* file(const std::string& path);
     const File* file(const std::string& path) const;
@@ -177,6 +217,7 @@ private:
     std::vector<File> files_;
     std::vector<bool> live_;
     std::map<int, int> opened_;     // inode: AppendFiles open on it (kept alive while any is)
+    std::map<std::string, Locks> locks_;    // path: the locks held on it, in this epoch
     std::uint64_t epoch_ = 0;       // crashes so far: an AppendFile from an earlier epoch refuses
     std::uint64_t calls_ = 0;
     std::uint64_t fail_at_ = 0;

@@ -4,8 +4,9 @@
 //
 //   store_test            runs every group
 //   store_test <group>    runs one: codec memfs journal journal_crash store ids store_crash driver migrate dequeue
-//                         formats
+//                         formats instance lock start_order
 
+#include "server/start_order.h"
 #include "store/codec.h"
 #include "store/fs.h"
 #include "store/journal.h"
@@ -1424,6 +1425,197 @@ void test_instance() {
     }
 }
 
+// ---- lock ----
+
+// The store's lock (Fs::lock, Store::open, Store::inspect; models/store/StoreLock.tla) on MemFs: at most one writer,
+// taken before anything of the store is read, released when its Store goes or a crash ends every process; a reader
+// shares it with readers only, and reads without changing anything. The opener's choice when refused
+// (next_lock_step) with time as an argument.
+void test_lock() {
+    // The modes, on MemFs.
+    MemFs fs;
+    CHECK_OK(fs.make_dir("d"));
+    {
+        std::unique_ptr<FileLock> a;
+        std::unique_ptr<FileLock> b;
+        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, a));
+        CHECK(fs.lock("d/lock", LockMode::Exclusive, b).code() == Status::Code::Busy && b == nullptr);
+        CHECK(fs.lock("d/lock", LockMode::Shared, b).code() == Status::Code::Busy && b == nullptr);
+        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 1);
+        a.reset();
+        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 0);
+        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, b));
+    }
+    {
+        std::unique_ptr<FileLock> r1;
+        std::unique_ptr<FileLock> r2;
+        std::unique_ptr<FileLock> w;
+        CHECK_OK(fs.lock("d/lock", LockMode::Shared, r1));
+        CHECK_OK(fs.lock("d/lock", LockMode::Shared, r2));
+        CHECK(fs.lock_holders("d/lock", LockMode::Shared) == 2);
+        CHECK(fs.lock("d/lock", LockMode::Exclusive, w).code() == Status::Code::Busy);
+        r1.reset();
+        CHECK(fs.lock("d/lock", LockMode::Exclusive, w).code() == Status::Code::Busy);
+        r2.reset();
+        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, w));
+        // A lock is no file and no mutating call: the directory holds nothing, and fail_at does not count it.
+        std::vector<std::string> names;
+        CHECK_OK(fs.list("d", names));
+        CHECK(names.empty());
+    }
+    {
+        std::unique_ptr<FileLock> none;
+        CHECK(fs.lock("nowhere/lock", LockMode::Exclusive, none).code() == Status::Code::NotFound);
+    }
+    // A crash ends every process: the locks they held are gone, and a lock from before the crash, destroyed after it,
+    // takes nothing from a holder since.
+    {
+        std::unique_ptr<FileLock> before;
+        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, before));
+        fs.crash(fs.plan_all(true));
+        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 0);
+        std::unique_ptr<FileLock> after;
+        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, after));
+        before.reset();
+        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 1);
+    }
+
+    // Store::open: a second writer on the store is Busy, and has read and written nothing.
+    {
+        MemFs m;
+        Opened first = open_store(m);
+        CHECK_OK(first.st);
+        CHECK_OK(first.s->commit(1, made("ada", {enqueue("queued")})));
+        const std::uint64_t calls = m.calls();
+        const Bytes log = m.data("store/log");
+        Opened second = open_store(m);
+        CHECK(second.st.code() == Status::Code::Busy && second.s == nullptr);
+        CHECK(second.st.message().find("store/lock") != std::string::npos);
+        CHECK(m.calls() == calls && m.data("store/log") == log);
+        // The holder goes (a process ending): the next opener has the store, all of it.
+        first.s.reset();
+        Opened third = open_store(m);
+        CHECK_OK(third.st);
+        CHECK(third.s != nullptr && third.s->session(1) != nullptr && third.s->session(1)->queue.size() == 1);
+        // The holder dies with the machine: the lock goes with it.
+        m.crash(m.plan_all(true));
+        Opened fourth = open_store(m);
+        CHECK_OK(fourth.st);
+        third.s.reset();    // the dead process's Store, destroyed late, takes nothing from the live one
+        CHECK(m.lock_holders("store/lock", LockMode::Exclusive) == 1);
+    }
+
+    // Store::inspect: a reader changes nothing on the disk, sees what an open would, and is refused while a writer
+    // holds the lock.
+    {
+        MemFs m;
+        {
+            Opened o = open_store(m);
+            CHECK_OK(o.st);
+            CHECK_OK(o.s->commit(1, made("ada", {enqueue("queued")})));
+            CHECK_OK(o.s->commit(1, std::vector<Change>{append("hello")}));
+            // A torn tail: bytes written and never synced, which a crash keeps in part.
+            CHECK_OK(m.append("store/log", span_of("torn tail")));
+            m.crash(m.plan_all(true));
+        }
+        const Bytes log = m.data("store/log");
+        const std::uint64_t calls = m.calls();
+        MemFs copy;
+        std::unique_ptr<Store> s;
+        OpenReport r;
+        CHECK_OK(Store::inspect(m, "store", copy, s, &r));
+        CHECK(s != nullptr && s->sessions().size() == 1 && s->session(1)->transcript.size() == 1);
+        CHECK(r.records == 2 && r.cut_bytes == 9);
+        CHECK(m.data("store/log") == log && m.calls() == calls);
+        CHECK(m.lock_holders("store/lock", LockMode::Shared) == 0);
+        // A writer has it: the reader is refused, and reads nothing.
+        Opened w = open_store(m);
+        CHECK_OK(w.st);
+        MemFs copy2;
+        std::unique_ptr<Store> s2;
+        const Status busy = Store::inspect(m, "store", copy2, s2);
+        CHECK(busy.code() == Status::Code::Busy && s2 == nullptr && !copy2.has("store/log"));
+        CHECK(busy.message().find("running nexus-server") != std::string::npos);
+        // No store at all: NotFound, and nothing made.
+        MemFs empty;
+        MemFs copy3;
+        std::unique_ptr<Store> s3;
+        CHECK(Store::inspect(empty, "store", copy3, s3).code() == Status::Code::NotFound);
+        std::vector<std::string> names;
+        CHECK(empty.list("store", names).code() == Status::Code::NotFound);
+    }
+
+    // The test-only unlocked open takes no lock (the trace binding's negative check), so a second open succeeds.
+    {
+        MemFs m;
+        StoreOptions unlocked;
+        unlocked.test_unlocked = true;
+        Opened a = open_store(m, unlocked);
+        Opened b = open_store(m, unlocked);
+        CHECK_OK(a.st);
+        CHECK_OK(b.st);
+        CHECK(m.lock_holders("store/lock", LockMode::Exclusive) == 0);
+    }
+
+    // next_lock_step: a free lock is taken; readers only are waited for, up to kLockReaderWaitMs; a writer refuses at
+    // once.
+    CHECK(next_lock_step(true, true, 0) == LockStep::Take);
+    CHECK(next_lock_step(true, false, kLockReaderWaitMs * 2) == LockStep::Take);
+    CHECK(next_lock_step(false, true, 0) == LockStep::Wait);
+    CHECK(next_lock_step(false, true, kLockReaderWaitMs - 1) == LockStep::Wait);
+    CHECK(next_lock_step(false, true, kLockReaderWaitMs) == LockStep::Busy);
+    CHECK(next_lock_step(false, false, 0) == LockStep::Busy);
+}
+
+// ---- start order ----
+
+// nexus-server's start-up order (src/server/start_order.h): the socket asked, the store opened (its lock first), the
+// socket bound, the drivers restored, then the loop; Held at any step another server can hold is a refusal, at the
+// restore a failure; and the faulty orders the trace binding must see rejected.
+void test_start_order() {
+    using nexus::server::StartOrder;
+    using Step = StartOrder::Step;
+    using Outcome = StartOrder::Outcome;
+    auto run = [](StartOrder o, const std::vector<Outcome>& outcomes) {
+        std::vector<Step> steps;
+        for (Outcome out : outcomes) {
+            steps.push_back(o.next());
+            o.done(out);
+        }
+        steps.push_back(o.next());
+        return steps;
+    };
+    const std::vector<Outcome> ok(4, Outcome::Ok);
+    CHECK((run(StartOrder(), ok) == std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Restore,
+                                                      Step::Serve}));
+    CHECK((run(StartOrder(), {Outcome::Held}) == std::vector<Step>{Step::Probe, Step::Refused}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Held}) == std::vector<Step>{Step::Probe, Step::Open,
+                                                                                 Step::Refused}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Held}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Refused}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Ok, Outcome::Held}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Restore, Step::Failed}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Failed}) == std::vector<Step>{Step::Probe, Step::Open,
+                                                                                   Step::Failed}));
+    // Once ended, nothing changes it.
+    StartOrder ended;
+    ended.done(Outcome::Held);
+    ended.done(Outcome::Ok);
+    CHECK(ended.next() == Step::Refused);
+    StartOrder served;
+    for (int i = 0; i < 4; ++i) {
+        served.done(Outcome::Ok);
+    }
+    served.done(Outcome::Failed);
+    CHECK(served.next() == Step::Serve);
+    // The faulty orders.
+    CHECK((run(StartOrder(StartOrder::Fault::Unlocked), {Outcome::Ok, Outcome::Ok, Outcome::Ok}) ==
+           std::vector<Step>{Step::OpenUnlocked, Step::Restore, Step::Listen, Step::Serve}));
+    CHECK((run(StartOrder(StartOrder::Fault::RestoreFirst), ok) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Restore, Step::Listen, Step::Serve}));
+    CHECK(nexus::server::kRefusedExit == 0 && nexus::server::kFailedExit == 1);
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -1442,6 +1634,8 @@ const Group kGroups[] = {
     {"dequeue", test_dequeue},
     {"instance", test_instance},
     {"formats", test_formats},
+    {"lock", test_lock},
+    {"start_order", test_start_order},
 };
 
 } // namespace

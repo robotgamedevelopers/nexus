@@ -33,7 +33,9 @@
 #include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
+#include "server/start_order.h"
 #include "store/fs.h"
+#include "store/store.h"
 #include "sync/formats.h"
 #include "sync/hub.h"
 
@@ -247,8 +249,10 @@ public:
     int run();
 
 private:
-    bool openStore(std::string* why);
-    bool listenControl(std::string* why);
+    StartOrder::Outcome openStore(std::string* why);
+    StartOrder::Outcome probeControl(std::string* why);
+    StartOrder::Outcome listenControl(std::string* why);
+    bool restore(std::string* why);
     void control(int fd);
     bool endDrivers();
     void configApply(int fd, const std::string& request);
@@ -278,14 +282,38 @@ private:
     bool stopping_ = false;
 };
 
-bool Server::openStore(std::string* why) {
+// The store: its lock (exclusive, never waiting on a writer), then its replay. Nothing else of the server is made yet,
+// so nothing writes to the journal and no driver starts (server/start_order.h).
+StartOrder::Outcome Server::openStore(std::string* why) {
     fs_ = store::make_posix_fs();
     // A test seam, set only by tests/link/link_e2e.cpp's flush run (server/flush_gate.h).
     if (const char* gate = std::getenv(kFlushGateVariable)) {
         fs_ = withFlushGate(std::move(fs_), gate);
     }
-    if (!store_.open(*fs_, paths_.store, why))
-        return false;
+    if (!store_.open(*fs_, paths_.store, why)) {
+        if (store_.busy()) {
+            *why += ", so this one exits";
+            return StartOrder::Outcome::Held;
+        }
+        return StartOrder::Outcome::Failed;
+    }
+    const store::OpenReport& r = store_.report();
+    std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
+        "cut; its lock %s/%s held\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(),
+        store_.size() == 1 ? "" : "s", static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
+        static_cast<unsigned long long>(r.cut_bytes), paths_.store.c_str(), store::kLockName);
+    if (r.migrated > 0) {
+        std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
+            "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
+            r.migrated == 1 ? "" : "s", r.migrated == 1 ? "" : "s");
+    }
+    return StartOrder::Outcome::Ok;
+}
+
+// Everything over the store, made with its lock and the control socket both held: the drivers, the hub, the secret
+// dialog, the accounts (whose adoption commits to the journal), and last the drivers restored (which may commit and
+// start a driver for a queued prompt).
+bool Server::restore(std::string* why) {
     // The machine a friend's instance names to run here: the config's, else the short host name.
     const std::string host = hostName();
     const std::string machine = serverMachine(settings_.machine, host);
@@ -393,16 +421,6 @@ bool Server::openStore(std::string* why) {
             registry.accounts.size() == 1 ? "" : "s", registry.friends.size(), registry.friends.size() == 1 ? "" : "s",
             config_->dir().c_str());
     }
-    const store::OpenReport& r = store_.report();
-    std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
-        "cut\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(), store_.size() == 1 ? "" : "s",
-        static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
-        static_cast<unsigned long long>(r.cut_bytes));
-    if (r.migrated > 0) {
-        std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
-            "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
-            r.migrated == 1 ? "" : "s", r.migrated == 1 ? "" : "s");
-    }
     if (!drivers_->start(nowMs())) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;
@@ -410,34 +428,50 @@ bool Server::openStore(std::string* why) {
     return true;
 }
 
-bool Server::listenControl(std::string* why) {
-    sockaddr_un addr;
-    if (!socketAddress(paths_.socket, &addr)) {
-        *why = paths_.socket + " is too long for a Unix socket's address";
-        return false;
-    }
+// Another server answers on the control socket: Held. Asked before the store is opened (a server from before the
+// store's lock holds no lock, so only its socket shows it) and again just before the socket is bound.
+StartOrder::Outcome Server::probeControl(std::string* why) {
     const int other = connectControl(paths_.socket);
     if (other >= 0) {
         close(other);
-        *why = "a server already answers on " + paths_.socket + "; `nexus-server stop` stops it";
-        return false;
+        *why = "another nexus-server already answers on " + paths_.socket + ", so this one exits; `nexus-server stop` "
+            "stops it";
+        return StartOrder::Outcome::Held;
+    }
+    return StartOrder::Outcome::Ok;
+}
+
+StartOrder::Outcome Server::listenControl(std::string* why) {
+    sockaddr_un addr;
+    if (!socketAddress(paths_.socket, &addr)) {
+        *why = paths_.socket + " is too long for a Unix socket's address";
+        return StartOrder::Outcome::Failed;
+    }
+    if (probeControl(why) != StartOrder::Outcome::Ok) {
+        return StartOrder::Outcome::Held;
     }
     unlink(paths_.socket.c_str());   // a socket left by a server that ended without removing it
     listen_ = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_ < 0) {
         *why = errnoText("socket");
-        return false;
+        return StartOrder::Outcome::Failed;
+    }
+    // Close-on-exec: a child the server starts (git for the config repository, a driver) never holds the socket, so a
+    // server that dies leaves nothing answering on it.
+    if (fcntl(listen_, F_SETFD, FD_CLOEXEC) != 0) {
+        *why = errnoText("cannot set the control socket close-on-exec");
+        return StartOrder::Outcome::Failed;
     }
     if (bind(listen_, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
         *why = errnoText("cannot bind " + paths_.socket);
-        return false;
+        return StartOrder::Outcome::Failed;
     }
     if (chmod(paths_.socket.c_str(), 0600) != 0 || listen(listen_, 16) != 0) {
         *why = errnoText("cannot listen on " + paths_.socket);
-        return false;
+        return StartOrder::Outcome::Failed;
     }
     fcntl(listen_, F_SETFL, O_NONBLOCK);
-    return true;
+    return StartOrder::Outcome::Ok;
 }
 
 // One request on the control socket: "new" (a session: its CONNECT line) or "stop". Only this user may ask.
@@ -608,11 +642,50 @@ void Server::checkLogins() {
 
 int Server::run() {
     std::string why;
-    // The store opens before the control socket listens, so no session is made on a state not yet read.
-    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why) || !openStore(&why) ||
-            !listenControl(&why)) {
+    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
-        return 1;
+        return kFailedExit;
+    }
+    // The start, in its order (server/start_order.h, models/store/StoreLock.tla): the socket asked, the store's lock
+    // and its replay, the socket bound, and only then the drivers restored. No window is served before the loop, so no
+    // session is made on a state not yet read.
+    StartOrder start;
+    for (StartOrder::Step step = start.next(); step != StartOrder::Step::Serve; step = start.next()) {
+        StartOrder::Outcome outcome = StartOrder::Outcome::Failed;
+        switch (step) {
+        case StartOrder::Step::Probe:
+            outcome = probeControl(&why);
+            break;
+        case StartOrder::Step::Open:
+            outcome = openStore(&why);
+            break;
+        case StartOrder::Step::Listen:
+            outcome = listenControl(&why);
+            break;
+        case StartOrder::Step::Restore:
+            outcome = restore(&why) ? StartOrder::Outcome::Ok : StartOrder::Outcome::Failed;
+            break;
+        case StartOrder::Step::OpenUnlocked:
+            why = "an unlocked open is the trace binding's fault, never the server's";
+            break;
+        case StartOrder::Step::Refused:
+            // Another server has the store or the socket: said in one line, and an exit a service does not restart.
+            std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+            if (listen_ >= 0) {
+                close(listen_);
+            }
+            return kRefusedExit;
+        case StartOrder::Step::Failed:
+            std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+            if (listen_ >= 0) {
+                close(listen_);
+                unlink(paths_.socket.c_str());
+            }
+            return kFailedExit;
+        case StartOrder::Step::Serve:
+            break;
+        }
+        start.done(outcome);
     }
     std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
     int status = 0;
@@ -1005,6 +1078,29 @@ int config(const Paths& p, const std::vector<std::string>& args) {
                          "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
                          "(docs/accounts.md)\n");
     return 2;
+}
+
+int storeCommand(const Paths& p, const std::vector<std::string>& args) {
+    if (args.size() != 1 || args[0] != "check") {
+        std::fprintf(stderr, "usage: nexus-server store check [--dir DIR]\n"
+                             "Reads DIR/store without changing it; refused while a server has it open\n");
+        return 2;
+    }
+    std::unique_ptr<store::Fs> fs = store::make_posix_fs();
+    store::MemFs copy;
+    std::unique_ptr<store::Store> s;
+    store::OpenReport r;
+    const store::Status st = store::Store::inspect(*fs, p.store, copy, s, &r);
+    if (!st.is_ok()) {
+        std::fprintf(stderr, "nexus-server: %s\n", st.message().c_str());
+        return 1;
+    }
+    std::printf("OK store %s: %s, %zu session%s, next session %llu, %llu record%s after the snapshot, %llu bytes of torn "
+                "tail a server's open would cut; nothing was changed\n", p.store.c_str(), r.fresh ? "empty" : "read",
+                s->sessions().size(), s->sessions().size() == 1 ? "" : "s",
+                static_cast<unsigned long long>(s->next_session()), static_cast<unsigned long long>(r.records),
+                r.records == 1 ? "" : "s", static_cast<unsigned long long>(r.cut_bytes));
+    return 0;
 }
 
 sync::Hello helloOf(const Client& client) {

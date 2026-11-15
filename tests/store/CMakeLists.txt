@@ -24,6 +24,11 @@ add_executable(journal_walk journal_walk.cpp)
 target_link_libraries(journal_walk PRIVATE nexus_store)
 target_compile_options(journal_walk PRIVATE ${warnings})
 
+# The store's lock and the server's start-up order (src/server/start_order.h) for several processes on one MemFs.
+add_executable(store_lock_walk store_lock_walk.cpp)
+target_link_libraries(store_lock_walk PRIVATE nexus_store)
+target_compile_options(store_lock_walk PRIVATE ${warnings})
+
 # The store on the real filesystem: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     add_executable(store_functional_test store_functional_test.cpp)
@@ -33,10 +38,11 @@ endif()
 
 # The programs the unit and model tests run, built with the model's (cmake --build <dir> --target model_checks), so
 # the sanitizer and model jobs build them without the app.
-add_custom_target(store_checks DEPENDS store_test durable_test journal_walk)
+add_custom_target(store_checks DEPENDS store_test durable_test journal_walk store_lock_walk)
 add_dependencies(model_checks store_checks)
 
-foreach(group codec memfs journal journal_crash store ids store_crash driver migrate dequeue formats instance)
+foreach(group codec memfs journal journal_crash store ids store_crash driver migrate dequeue formats instance lock
+              start_order)
     add_test(NAME store_unit_${group} COMMAND store_test ${group})
     set_tests_properties(store_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()
@@ -57,7 +63,7 @@ set(store_tlc "${CMAKE_CURRENT_SOURCE_DIR}/tlc.cmake")
 
 # store_tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [WALK args...] [WORKERS w] [NIGHTLY])
 function(store_tlc_test name module cfg expect)
-    cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS" "WALK" ${ARGN})
+    cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;WALKER" "WALK" ${ARGN})
     if(NOT T_WORKERS)
         set(T_WORKERS 4)
     endif()
@@ -75,7 +81,12 @@ function(store_tlc_test name module cfg expect)
     endif()
     if(T_WALK)
         string(REPLACE ";" "," walk_args "${T_WALK}")
-        list(APPEND defs -DWALK=$<TARGET_FILE:journal_walk> -DWALK_ARGS=${walk_args})
+        if(T_WALKER STREQUAL "store_lock_walk")
+            list(APPEND defs -DWALK=$<TARGET_FILE:store_lock_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=StoreLockTraceData.tla)
+        else()
+            list(APPEND defs -DWALK=$<TARGET_FILE:journal_walk> -DWALK_ARGS=${walk_args})
+        endif()
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${store_tlc})
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
@@ -117,3 +128,29 @@ store_tlc_test(tlc_journal_trace_no_truncate_rejected JournalTrace JournalTrace.
                WALK 1 1000 --fault no-truncate)
 store_tlc_test(tlc_journal_trace_no_sync_rejected     JournalTrace JournalTrace.cfg deadlock
                WALK 1 1000 --fault no-sync)
+
+# The store's lock and the start-up order (models/store/StoreLock.tla): two processes and three, every property.
+store_tlc_test(tlc_store_lock_spec  StoreLock StoreLock.cfg      pass)
+store_tlc_test(tlc_store_lock_three StoreLock StoreLockThree.cfg pass)
+# Reversed witnesses: the order before the lock (two writers, a record written unlocked, a number written twice, the
+# queued prompt sent twice), and the drivers restored before the socket.
+store_tlc_test(tlc_store_lock_witness_two_writers StoreLock witnesses/LUnlockedTwoWriters.cfg invariant
+               PROPERTY OneWriter)
+store_tlc_test(tlc_store_lock_witness_unlocked_writes StoreLock witnesses/LUnlockedWrites.cfg invariant
+               PROPERTY LockedWrites)
+store_tlc_test(tlc_store_lock_witness_seqs StoreLock witnesses/LUnlockedSeqs.cfg invariant PROPERTY SeqsUnique)
+store_tlc_test(tlc_store_lock_witness_sent_twice StoreLock witnesses/LUnlockedSentTwice.cfg invariant
+               PROPERTY SentOnce)
+store_tlc_test(tlc_store_lock_witness_restore_first StoreLock witnesses/LRestoreFirst.cfg invariant
+               PROPERTY ListenedWrites)
+# Trace binding: the real StartOrder and Store::open's lock, two processes on one MemFs, each walk a behaviour of
+# StoreLock.tla; and the binding can fail: the order before the lock (an open with no lock) and the drivers restored
+# before the socket each take a step the spec cannot (deadlock).
+foreach(seed 1 2 3 4 5)
+    store_tlc_test(tlc_store_lock_trace_seed_${seed} StoreLockTrace StoreLockTrace.cfg pass
+                   WALKER store_lock_walk WALK ${seed} 2000)
+endforeach()
+store_tlc_test(tlc_store_lock_trace_unlocked_rejected StoreLockTrace StoreLockTrace.cfg deadlock
+               WALKER store_lock_walk WALK 1 2000 --faulty-unlocked)
+store_tlc_test(tlc_store_lock_trace_restore_first_rejected StoreLockTrace StoreLockTrace.cfg deadlock
+               WALKER store_lock_walk WALK 1 2000 --faulty-restore-first)

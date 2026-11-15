@@ -27,6 +27,24 @@
 
 <!-- nova-work:layers:end -->
 
+## Takeover
+
+<!-- nova-work:takeover:start -->
+
+| feature | done |
+|---|:---:|
+| 1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on store/lock, taken before the store is read, held for the life of the process, released by the OS however it ends); the server starts in the order lock, replay, socket, drivers restored; a second server exits 0 in one line; readers take the lock shared and change nothing; network filesystems refused (in progress) | ❌ |
+| 2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs | ❌ |
+| 3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk | ❌ |
+| 4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back | ❌ |
+| 5. Old-layout migration and the store's format against rollback: a store from the old ~/.nexus layout moves once, and a store a newer build wrote stays readable by the build rolled back to | ❌ |
+| 6. The model bound to the real steps: the takeover's TLA+ model checked against traces of the real placement, handover, supervision and migration in CI | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:takeover:end -->
+
 ## Window features
 
 <!-- nova-work:window-features:start -->

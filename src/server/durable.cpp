@@ -32,9 +32,13 @@ store::Info toStored(const sync::SessionInfo& i) {
 
 bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why, const store::StoreOptions& options) {
     sessions_.clear();
+    busy_ = false;
+    // A store this one held is closed first, which releases its lock: an open again is this process's own.
+    store_.reset();
     store::Status s = store::Store::open(fs, dir, options, store_, &report_);
     if (!s.is_ok()) {
         store_.reset();
+        busy_ = s.code() == store::Status::Code::Busy;
         if (why != nullptr) {
             *why = s.message();
         }

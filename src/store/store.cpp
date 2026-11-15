@@ -167,8 +167,24 @@ Store::Store(Fs& fs, std::string dir, const StoreOptions& options)
 Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, std::unique_ptr<Store>& out,
                    OpenReport* report) {
     std::unique_ptr<Store> s(new Store(fs, dir, options));
+    // The lock, before anything in the directory is read or written (the directory itself made first, as the lock
+    // file is in it: a make_dir changes nothing a store holds).
+    Status st = fs.make_dir(dir);
+    if (!st.is_ok()) {
+        return st;
+    }
+    if (!options.test_unlocked) {
+        st = fs.lock(dir + "/" + kLockName, LockMode::Exclusive, s->lock_);
+        if (st.code() == Status::Code::Busy) {
+            return Status::busy("store " + dir + " is open in another process, which holds its lock " + dir + "/" +
+                                kLockName + " (another nexus-server; `nexus-server stop` stops it)");
+        }
+        if (!st.is_ok()) {
+            return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
+        }
+    }
     Journal::Recovery rec;
-    Status st = s->journal_.open(rec);
+    st = s->journal_.open(rec);
     if (!st.is_ok()) {
         return st;
     }
@@ -198,6 +214,49 @@ Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, 
     }
     out = std::move(s);
     return Status::ok();
+}
+
+Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report) {
+    std::vector<std::string> names;
+    Status st = fs.list(dir, names);
+    if (st.code() == Status::Code::NotFound) {
+        return Status::not_found("no store in " + dir);
+    }
+    if (!st.is_ok()) {
+        return st;
+    }
+    {
+        std::unique_ptr<FileLock> lock;
+        st = fs.lock(dir + "/" + kLockName, LockMode::Shared, lock);
+        if (st.code() == Status::Code::Busy) {
+            return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock " + dir +
+                                "/" + kLockName + "; it is not read while a server writes it (`nexus-server stop` "
+                                "stops the server)");
+        }
+        if (!st.is_ok()) {
+            return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
+        }
+        if (!(st = copy.make_dir(dir)).is_ok()) {
+            return st;
+        }
+        // The journal's files, as they are under the lock; the temporaries of a compaction too, which open removes.
+        for (const char* name : {"log", "snapshot", "snapshot.tmp", "log.new"}) {
+            const std::string path = dir + "/" + name;
+            Bytes bytes;
+            st = fs.read_all(path, bytes);
+            if (st.code() == Status::Code::NotFound) {
+                continue;
+            }
+            if (!st.is_ok() || !(st = copy.create(path)).is_ok() || !(st = copy.append(path, bytes)).is_ok() ||
+                    !(st = copy.sync(path)).is_ok()) {
+                return st;
+            }
+        }
+        if (!(st = copy.sync_dir(dir)).is_ok()) {
+            return st;
+        }
+    }
+    return open(copy, dir, StoreOptions{}, out, report);
 }
 
 const Session* Store::session(std::uint64_t id) const {

@@ -2,7 +2,7 @@
 
 Every state machine in nexus has a TLA+ module here (`Overlay.tla`, when the overlay shows and hides, among them). TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
-This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`.
+This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`, and the store's lock with the server's start-up order (`StoreLock.tla`).
 
 ## What is modelled
 
