@@ -234,7 +234,7 @@ void stateDir() {
 #endif
     // Prepared again: still so, and the log file kept (appended to, never truncated).
     {
-        std::ofstream(dir / "nexus-tailscale.log", std::ios::app) << "kept\n";
+        std::ofstream(dir / "nexus-tailscale.log", std::ios::app | std::ios::binary) << "kept\n";
     }
     CHECK(prepare(dir).empty());
     CHECK(fs::file_size(dir / "nexus-tailscale.log") == 5);
