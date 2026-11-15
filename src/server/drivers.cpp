@@ -304,7 +304,7 @@ const accounts::Instance* Drivers::instanceOf(const sync::SessionInfo& info) con
 }
 
 ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
-    std::ifstream in(options_.table);
+    std::ifstream in(options_.tableNow ? options_.tableNow() : options_.table);
     std::string text;
     if (in) {
         std::ostringstream all;

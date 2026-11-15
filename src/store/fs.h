@@ -42,7 +42,17 @@ public:
 class FileLock {
 public:
     virtual ~FileLock() = default;
+    // Ok while the held directory still has a name; Failed, saying so, once it was removed while held (writes into it
+    // succeed and can never be found again). The store asks it at each durable write (Store::commit, Store::flush).
+    virtual Status alive() const { return Status::ok(); }
 };
+
+// The writers' gate: a file of this name in a store's directory, reached through its descriptor, locked exclusive by a
+// writer for as long as it waits for the store's lock, and shared by a reader for the moment of taking the store's lock
+// (never waiting). So a reader that comes while a writer waits gives way (Refused) instead of joining the readers the
+// writer waits for, and a stream of overlapping readers cannot keep a writer out: it waits only for those that held the
+// store when it began. A writer makes it; a reader never does (no gate: no writer of this build has waited there).
+constexpr const char* kGateName = "gate";
 
 // Exclusive: one holder and no other, the store's writer. Shared: any number of holders and no exclusive one, a
 // reader that changes nothing.
@@ -61,6 +71,8 @@ constexpr std::uint64_t kLockRetryMs = 10;
 // inside kLockReaderWaitMs, so that a writer's wait outlasts every reader that had the lock when it began. A judgement
 // against the store's size (its log is compacted past 4 MiB, a copy of which takes milliseconds), not measured.
 constexpr std::uint64_t kReaderCopyLimitMs = 500;
+// The most a reader reads at once under the shared lock: between chunks it asks the clock against kReaderCopyLimitMs.
+constexpr std::uint64_t kReaderChunkBytes = 256 * 1024;
 LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms,
                         std::uint64_t reader_wait_ms = kLockReaderWaitMs);
 
@@ -71,8 +83,10 @@ public:
     // a writer holds it (for a shared lock, and for an exclusive one when no shared lock is to be had); Failed when only
     // readers held it for all of an exclusive lock's wait (next_lock_step's Readers), saying so; Failed when locks
     // cannot be trusted where the directory is (a network filesystem, one that passes locks to another program, or one
-    // where a second exclusive lock is granted beside this one), saying so, so that nothing runs unlocked. Nothing is
-    // made: no lock file, and `dir` must exist.
+    // where a second exclusive lock is granted beside this one), saying so, so that nothing runs unlocked. An exclusive
+    // lock takes the writers' gate (kGateName) first and holds it until it has the store's lock, Busy when another
+    // writer holds the gate; a shared lock is Refused when a writer holds the gate. Nothing is made but the gate, by a
+    // writer, and `dir` must exist.
     virtual Status lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLock>& out) = 0;
     virtual Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) = 0;  // NotFound if missing
     virtual Status make_dir(const std::string& dir) = 0;   // with its parents; nothing if it is there
@@ -107,13 +121,15 @@ public:
 // an exclusive lock's wait on readers (the steady clock and a real sleep when empty; the trace walk gives its own, so
 // that time is an argument), and `reader_wait_ms` its length. `test_fs_type` makes every directory look as if it were
 // on that filesystem (a Linux name: "nfs", "fuse", ...), and `test_locks_ignored` makes the check after a lock see its
-// second exclusive lock granted, as on a filesystem that takes no locks: the refusals' own tests.
+// second exclusive lock granted, as on a filesystem that takes no locks: the refusals' own tests. `test_no_gate` takes
+// no gate (kGateName), the build before it: only the trace walk's reversed fault (--faulty-no-gate) sets it.
 struct PosixOptions {
     std::function<std::uint64_t()> now_ms;
     std::function<void(std::uint64_t)> sleep_ms;
     std::uint64_t reader_wait_ms = kLockReaderWaitMs;
     std::string test_fs_type;
     bool test_locks_ignored = false;
+    bool test_no_gate = false;
 };
 std::unique_ptr<Fs> make_posix_fs(PosixOptions options = {});
 

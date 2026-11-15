@@ -5,9 +5,11 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -47,8 +49,12 @@ namespace {
 
 constexpr std::size_t kMaxLinks = 64;      // windows' links (mosh sessions) at once
 constexpr int kControlTimeoutMs = 2000;     // for one request or reply on the control socket
-constexpr int kStartTimeoutMs = 5000;       // for a server `new` started to answer
+// The last-resort bound on `new` (ask): past the started server's whole wait for the store's lock (kHeldWaitMs) and a
+// stop's end, so that only a server neither serving nor exiting reaches it.
+constexpr std::uint64_t kNewLimitMs = 30000;
 constexpr int kMaxWaitMs = 1000;
+constexpr std::uint64_t kWaitProgressMs = 1000;    // how often a start waiting for the store's lock says so
+constexpr const char* kSocketName = "server.sock";  // the control socket, in the server's directory
 
 volatile sig_atomic_t gStop = 0;
 
@@ -109,6 +115,53 @@ bool socketAddress(const std::string& path, sockaddr_un* addr) {
     return true;
 }
 
+// Binds `sock` to `name` in the directory held by `dir`, whatever path that directory has now: on Linux through the
+// descriptor's /proc link, on macOS (which has no bind relative to a directory) by changing into it for the call and
+// back (by `path`, the name the server was given, only when the working directory cannot be opened to come back to).
+// False, with why, on failure; the working directory is always put back.
+bool bindIn(int sock, int dir, const char* name, const std::string& path, std::string* why) {
+#if defined(__APPLE__)
+    const int here = ::open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (here < 0) {
+        sockaddr_un byPath;
+        if (!socketAddress(path, &byPath) ||
+                bind(sock, reinterpret_cast<const sockaddr*>(&byPath), sizeof byPath) != 0) {
+            *why = std::strerror(errno);
+            return false;
+        }
+        return true;
+    }
+    sockaddr_un addr;
+    socketAddress(name, &addr);
+    bool bound = false;
+    if (fchdir(dir) != 0) {
+        *why = errnoText("cannot change into the server's directory");
+    } else {
+        bound = bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0;
+        if (!bound) {
+            *why = std::strerror(errno);
+        }
+        if (fchdir(here) != 0) {
+            std::fprintf(stderr, "nexus-server: %s\n", errnoText("cannot change back to the working directory").c_str());
+        }
+    }
+    close(here);
+    return bound;
+#else
+    (void)path;
+    sockaddr_un addr;
+    if (!socketAddress("/proc/self/fd/" + std::to_string(dir) + "/" + name, &addr)) {
+        *why = "the server directory's descriptor path is too long";
+        return false;
+    }
+    if (bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
+        *why = std::strerror(errno);
+        return false;
+    }
+    return true;
+#endif
+}
+
 // A connection to the control socket, or -1 with errno set.
 int connectControl(const std::string& path) {
     sockaddr_un addr;
@@ -126,6 +179,32 @@ int connectControl(const std::string& path) {
         return -1;
     }
     return fd;
+}
+
+bool readLine(int fd, std::string* line, int timeoutMs);
+bool writeAll(int fd, const std::string& s);
+
+// The question a start (and `new`) asks the control socket, and the one answer that counts as a server serving: a
+// connection alone does not, as a server that has accepted `stop` still holds its socket until its loop ends (and the
+// kernel accepts connections on it meanwhile), and then closes it with them unanswered.
+constexpr const char* kStatusRequest = "status";
+constexpr const char* kServingReply = "SERVING";
+// The wait for that answer: past one connection's read (kControlTimeoutMs) that a serving server may be in.
+constexpr int kStatusReplyMs = 3000;
+
+// Whether a server answers on `socket` that it serves: SERVING; or, from a server from before this question (which
+// takes no store lock and knows no `status`), the refusal it gives every request it does not know, which it gives only
+// from its serving loop, as it accepts nothing once it has accepted `stop`. Anything else (no socket, no connection, no
+// reply in kStatusReplyMs, the connection closed unanswered, any other line) is not serving.
+bool serving(const std::string& socket) {
+    const int fd = connectControl(socket);
+    if (fd < 0) {
+        return false;
+    }
+    std::string reply;
+    const bool replied = writeAll(fd, std::string(kStatusRequest) + "\n") && readLine(fd, &reply, kStatusReplyMs);
+    close(fd);
+    return replied && (reply == kServingReply || reply.rfind("ERROR unknown request", 0) == 0);
 }
 
 // One line from fd, without its newline, within the timeout. False on timeout, error or end before a newline.
@@ -250,6 +329,13 @@ constexpr const char* kHeldWaitVariable = "NEXUS_TEST_HELD_WAIT_MS";
 class Server : private StartSteps {
 public:
     explicit Server(const Paths& p) : paths_(p) {}
+    ~Server() override {
+        if (dirFd_ >= 0) {
+            close(dirFd_);
+        }
+    }
+    Server(const Server&) = delete;
+    Server& operator=(const Server&) = delete;
     int run();
 
 private:
@@ -270,6 +356,18 @@ private:
     // The control socket's file removed, only when its name still names the socket this process bound (its device
     // and inode, taken at the bind): never another server's, made at that name after this one's was moved or removed.
     void unlinkOwnSocket();
+    // The server's directory, held by descriptor from the start (after it is made) to the end: the socket is bound,
+    // checked, changed and removed in it, and the config repository and the drivers file are found through it, so a
+    // directory moved aside while the server runs keeps everything this server does in one directory.
+    int dirFd_ = -1;
+    std::string dirNow(const std::string& name) const;
+    // The control socket in the held directory, by its present path; by the name the server was given when that path
+    // is too long for a Unix socket's address.
+    std::string socketNow() const {
+        const std::string now = dirNow(kSocketName);
+        sockaddr_un addr;
+        return socketAddress(now, &addr) ? now : paths_.socket;
+    }
     bool bound_ = false;
     dev_t socketDev_ = 0;
     ino_t socketIno_ = 0;
@@ -320,7 +418,7 @@ StartOrder::Outcome Server::openStore(std::string* why) {
             fs_ = withFlushGate(std::move(fs_), gate);
         }
     }
-    if (!store_.open(*fs_, paths_.store, why)) {
+    if (!store_.open(*fs_, dirNow("store"), why)) {
         return store_.busy() ? StartOrder::Outcome::Held : StartOrder::Outcome::Failed;
     }
     const store::OpenReport& r = store_.report();
@@ -348,7 +446,8 @@ bool Server::restoreAll(std::string* why) {
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
-                                                                  machine, host, true});
+                                                                  machine, host, true,
+                                                                  [this] { return dirNow("drivers"); }});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
     drivers_->attach(*hub_);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
@@ -365,7 +464,7 @@ bool Server::restoreAll(std::string* why) {
     }, [] { return static_cast<std::uint64_t>(nowMs()); });
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
-    config_ = std::make_unique<ConfigRepo>(paths_.dir + "/nexus-config");
+    config_ = std::make_unique<ConfigRepo>([this] { return dirNow("nexus-config"); });
     // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
@@ -390,7 +489,7 @@ bool Server::restoreAll(std::string* why) {
         // A server from before accounts: its accounts are what the drivers file passed with --account, so that no
         // session moves (server/driver_table.h accountsFromDrivers), committed as an upgrade.
         std::string text;
-        std::ifstream in(paths_.drivers);
+        std::ifstream in(dirNow("drivers"));
         if (in) {
             std::ostringstream all;
             all << in.rdbuf();
@@ -458,14 +557,33 @@ bool Server::restoreAll(std::string* why) {
 // store's lock holds no lock, so only its socket shows it), at each try of a wait for a held lock, and again just
 // before the socket is bound.
 StartOrder::Outcome Server::probeControl(std::string* why) {
-    const int other = connectControl(paths_.socket);
-    if (other >= 0) {
-        close(other);
-        *why = "another nexus-server already answers on " + paths_.socket + ", so this one exits; `nexus-server stop` "
+    if (serving(socketNow())) {
+        *why = "another nexus-server is serving on " + paths_.socket + ", so this one exits; `nexus-server stop` "
             "stops it";
         return StartOrder::Outcome::Answered;
     }
     return StartOrder::Outcome::Ok;
+}
+
+// The present path of `name` in the server's directory, held by descriptor: where it is now, moved or not (macOS
+// F_GETPATH; Linux the descriptor's /proc link). The name the server was started with when nothing is held.
+std::string Server::dirNow(const std::string& name) const {
+    std::string base = paths_.dir;
+    if (dirFd_ >= 0) {
+#if defined(__APPLE__)
+        char path[MAXPATHLEN] = {};
+        if (fcntl(dirFd_, F_GETPATH, path) == 0) {
+            base = path;
+        }
+#else
+        char path[PATH_MAX] = {};
+        const ssize_t n = readlink(("/proc/self/fd/" + std::to_string(dirFd_)).c_str(), path, sizeof path - 1);
+        if (n > 0) {
+            base.assign(path, static_cast<std::size_t>(n));
+        }
+#endif
+    }
+    return base + "/" + name;
 }
 
 void Server::unlinkOwnSocket() {
@@ -473,10 +591,13 @@ void Server::unlinkOwnSocket() {
         return;
     }
     bound_ = false;
+    // In the held server directory (wherever it is now), and only the socket this process bound. What remains: between
+    // this look and the removal another process could put a file of its own at the name, inside the server's own
+    // directory (mode 0700); there is no call that removes a name only if it is a given file.
     struct stat st;
-    if (lstat(paths_.socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode) && st.st_dev == socketDev_ &&
-            st.st_ino == socketIno_) {
-        unlink(paths_.socket.c_str());
+    if (fstatat(dirFd_, kSocketName, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
+            st.st_dev == socketDev_ && st.st_ino == socketIno_) {
+        unlinkat(dirFd_, kSocketName, 0);
     }
 }
 
@@ -491,7 +612,8 @@ StartOrder::Outcome Server::listenControl(std::string* why) {
     }
     // A socket left by a server that ended without removing it: no server of this build can have bound it since, as
     // binding takes this store's lock first, which this one holds (docs/formats.md, for a server from before the lock).
-    unlink(paths_.socket.c_str());
+    // Removed, bound, read back and changed in the held directory, never by a path that could now name another.
+    unlinkat(dirFd_, kSocketName, 0);
     listen_ = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_ < 0) {
         *why = errnoText("socket");
@@ -503,19 +625,21 @@ StartOrder::Outcome Server::listenControl(std::string* why) {
         *why = errnoText("cannot set the control socket close-on-exec");
         return StartOrder::Outcome::Failed;
     }
-    if (bind(listen_, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
-        *why = errnoText("cannot bind " + paths_.socket);
+    if (!bindIn(listen_, dirFd_, kSocketName, paths_.socket, why)) {
+        *why = "cannot bind " + paths_.socket + ": " + *why;
         return StartOrder::Outcome::Failed;
     }
+    // What remains (docs/formats.md): between the bind and this look, another process of this user could replace the
+    // name in the server's own directory (mode 0700); the identity is then of that file, and the stop leaves it.
     struct stat st;
-    if (lstat(paths_.socket.c_str(), &st) != 0) {
+    if (fstatat(dirFd_, kSocketName, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISSOCK(st.st_mode)) {
         *why = errnoText("cannot read back " + paths_.socket);
         return StartOrder::Outcome::Failed;
     }
     bound_ = true;
     socketDev_ = st.st_dev;
     socketIno_ = st.st_ino;
-    if (chmod(paths_.socket.c_str(), 0600) != 0 || ::listen(listen_, 16) != 0) {
+    if (fchmodat(dirFd_, kSocketName, 0600, 0) != 0 || ::listen(listen_, 16) != 0) {
         *why = errnoText("cannot listen on " + paths_.socket);
         return StartOrder::Outcome::Failed;
     }
@@ -540,6 +664,13 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
+    // A start's (and `new`'s) question: answered only from this loop, so SERVING is true when said. Once `stop` is
+    // accepted the loop takes no more requests, and the connections still queued are closed unanswered with the socket
+    // (models/store/StoreLock.tla StopAccept, then CloseSocket; RefusedServes).
+    if (request == kStatusRequest) {
+        writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\n");
+        return;
+    }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
         configApply(fd, request);
         return;
@@ -548,7 +679,7 @@ void Server::control(int fd) {
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>` and then ` hello <hello>`, `stop`, `config reload` and `config restore <commit>`\n");
+            "` format <n>` and then ` hello <hello>`, `status`, `stop`, `config reload` and `config restore <commit>`\n");
         return;
     }
     // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
@@ -695,6 +826,11 @@ int Server::run() {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return kFailedExit;
     }
+    dirFd_ = ::open(paths_.dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirFd_ < 0) {
+        std::fprintf(stderr, "nexus-server: %s\n", errnoText("cannot open " + paths_.dir).c_str());
+        return kFailedExit;
+    }
     // The start, in its order (server/start_order.h, models/store/StoreLock.tla), each step through take_step, the
     // dispatch the trace walk runs too: the socket asked, the store's lock and its replay (waiting, a bounded time,
     // while a writer holds the lock and no server answers), the socket bound, and only then the drivers restored. No
@@ -706,15 +842,25 @@ int Server::run() {
     StartOrder start(StartOrder::Fault::None, heldWait);
     std::string heldWhy;     // what the lock's holder is, from the last open that found it held
     bool said = false;
+    Millis waitFrom = 0;     // when the wait began
+    Millis saidAt = 0;       // when it was last said
     for (;;) {
         const StartOrder::Step step = take_step(start, *this, &why);
         if (step == StartOrder::Step::Open && start.next() == StartOrder::Step::Wait) {
             heldWhy = why;
+            const Millis now = nowMs();
             if (!said) {
-                std::fprintf(stderr, "nexus-server: %s, and no server answers on %s: waiting up to %llu ms for it to "
-                    "let go (a server starting or stopping)\n", why.c_str(), paths_.socket.c_str(),
+                std::fprintf(stderr, "nexus-server: %s, and no server on %s says it serves: waiting up to %llu ms "
+                    "for it to let go (a server starting or stopping)\n", why.c_str(), paths_.socket.c_str(),
                     static_cast<unsigned long long>(heldWait));
                 said = true;
+                waitFrom = now;
+                saidAt = now;
+            } else if (now - saidAt >= kWaitProgressMs) {
+                // A person watching sees the wait go on, a line a second, not one line and then silence.
+                std::fprintf(stderr, "nexus-server: still waiting for the store's lock: %llu of %llu ms\n",
+                    static_cast<unsigned long long>(now - waitFrom), static_cast<unsigned long long>(heldWait));
+                saidAt = now;
             }
         }
         const StartOrder::Step at = start.next();
@@ -730,7 +876,7 @@ int Server::run() {
             return kRefusedExit;
         }
         if (at == StartOrder::Step::Stuck) {
-            std::fprintf(stderr, "nexus-server: %s, and no server answered on %s in %llu ms: its holder is neither "
+            std::fprintf(stderr, "nexus-server: %s, and no server on %s said it serves in %llu ms: its holder is neither "
                 "serving nor ending; find it (lsof %s) and stop it, then start the server again\n", heldWhy.c_str(),
                 paths_.socket.c_str(), static_cast<unsigned long long>(heldWait), paths_.store.c_str());
             return kStuckExit;
@@ -924,7 +1070,7 @@ int Server::run() {
 // Starts `self serve --dir <dir>` as a server of its own: a new session (no terminal), standard input from /dev/null,
 // standard output and error to the log, and no other file of this process open, so that ssh's channel closes when
 // `new` exits.
-bool startServer(const Paths& p, const std::string& self, std::string* why) {
+bool startServer(const Paths& p, const std::string& self, pid_t* started, std::string* why) {
     posix_spawn_file_actions_t files;
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_addopen(&files, 0, "/dev/null", O_RDONLY, 0);
@@ -952,30 +1098,13 @@ bool startServer(const Paths& p, const std::string& self, std::string* why) {
         *why = "cannot start `" + self + " serve`: " + std::strerror(rc);
         return false;
     }
+    *started = pid;
     return true;
 }
 
-// The request's reply line from the running server, starting one if `self` is given and none answers.
-bool ask(const Paths& p, const std::string& request, const std::string& self, std::string* reply, std::string* why) {
-    int fd = connectControl(p.socket);
-    if (fd < 0 && !self.empty() && (errno == ENOENT || errno == ECONNREFUSED)) {
-        std::string dirWhy;
-        if (!ensureHome(p, &dirWhy)) {
-            *why = dirWhy;
-            return false;
-        }
-        if (!startServer(p, self, why))
-            return false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kStartTimeoutMs);
-        while (fd < 0 && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            fd = connectControl(p.socket);
-        }
-        if (fd < 0) {
-            *why = "the server started did not answer on " + p.socket + " within 5 s; see " + p.log;
-            return false;
-        }
-    }
+// The request's reply line from the server on the socket, one try (`stop`, `config`).
+bool askOnce(const Paths& p, const std::string& request, std::string* reply, std::string* why) {
+    const int fd = connectControl(p.socket);
     if (fd < 0) {
         *why = errnoText("no server answers on " + p.socket);
         return false;
@@ -987,6 +1116,65 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
         return false;
     }
     return true;
+}
+
+// The request's reply line from the running server, starting one (`self` serve) when none answers: for `new`. It waits
+// on the outcomes a start reports (server/start_order.h), not a fixed time: a reply from a serving server; or the
+// started server's exit, 0 when another said it serves (asked again), else its code and the log, said as they are. A
+// connection closed unanswered is a server that has accepted `stop` (or ended): asked again, and once its socket goes a
+// server is started, which waits for the store's lock. kNewLimitMs bounds it all, for a server neither serving nor
+// exiting, as a last resort.
+bool ask(const Paths& p, const std::string& request, const std::string& self, std::string* reply, std::string* why) {
+    if (self.empty()) {
+        return askOnce(p, request, reply, why);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kNewLimitMs);
+    pid_t child = -1;           // the server this `new` started and has not yet collected
+    std::string last = "no server answered";
+    for (;;) {
+        const int fd = connectControl(p.socket);
+        if (fd >= 0) {
+            const bool ok = writeAll(fd, request + "\n") && readLine(fd, reply, kControlTimeoutMs * 2);
+            close(fd);
+            if (ok) {
+                return true;
+            }
+            last = "the server on " + p.socket + " closed the request unanswered (stopping, or ended)";
+        } else if (errno != ENOENT && errno != ECONNREFUSED) {
+            *why = errnoText("no server answers on " + p.socket);
+            return false;
+        } else if (child < 0) {
+            std::string dirWhy;
+            if (!ensureHome(p, &dirWhy)) {
+                *why = dirWhy;
+                return false;
+            }
+            if (!startServer(p, self, &child, why)) {
+                return false;
+            }
+            last = "the server started has not yet said it serves";
+        }
+        if (child >= 0) {
+            int status = 0;
+            const pid_t done = waitpid(child, &status, WNOHANG);
+            if (done == child) {
+                child = -1;
+                const bool another = WIFEXITED(status) && WEXITSTATUS(status) == kRefusedExit;
+                if (!another) {
+                    *why = "the server started exited " + (WIFEXITED(status) ?
+                        "with code " + std::to_string(WEXITSTATUS(status)) :
+                        "on signal " + std::to_string(WTERMSIG(status))) + " without serving; see " + p.log;
+                    return false;
+                }
+                last = "the server started found another serving, which then did not answer";
+            }
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            *why = last + " within " + std::to_string(kNewLimitMs / 1000) + " s; see " + p.log;
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 }
 
 } // namespace
@@ -1006,7 +1194,7 @@ bool paths(const std::string& dir, Paths* out, std::string* why) {
         d.pop_back();
     out->dir = d;
     out->config = d + "/config";
-    out->socket = d + "/server.sock";
+    out->socket = d + "/" + kSocketName;
     out->log = d + "/server.log";
     out->store = d + "/store";
     out->drivers = d + "/drivers";

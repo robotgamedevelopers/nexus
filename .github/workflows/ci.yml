@@ -215,7 +215,7 @@ jobs:
           for seed in 1 2 3 4 5; do
             build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
           done
-          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
             build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
           done
           for pid in "${lock_pids[@]}"; do
@@ -646,7 +646,7 @@ jobs:
           for seed in 1 2 3 4 5; do
             build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
           done
-          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
             build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
           done
           for pid in "${lock_pids[@]}"; do

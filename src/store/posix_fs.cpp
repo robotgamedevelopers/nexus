@@ -34,7 +34,8 @@ Status os_error(const char* what, const std::string& path) {
         return Status::failed(msg + " (free space on that disk, then restart the server)");
     }
     if (e == EACCES || e == EPERM || e == EROFS) {
-        return Status::failed(msg + " (the server's user must be able to write there)");
+        return Status::failed(msg + " (the user running nexus-server must be able to read there, and the server to "
+                              "write there too; `nexus-server store check` only reads)");
     }
     return Status::failed(msg + " (check the disk; the server reopens the store from what is durable when restarted)");
 }
@@ -124,6 +125,31 @@ public:
     PosixLock(const PosixLock&) = delete;
     PosixLock& operator=(const PosixLock&) = delete;
 
+    // The held directory still has a name: a directory removed while held (rm -r of the server's directory) has no
+    // link left, and what is written in it can never be found again.
+    Status alive() const override {
+        struct stat st;
+        if (::fstat(fd_.get(), &st) != 0) {
+            return os_error("fstat", dir_);
+        }
+        bool gone = st.st_nlink == 0;      // Linux: a removed directory has no link left
+#if defined(__APPLE__)
+        // macOS keeps a removed directory's link count, so the directory's present name (F_GETPATH, which follows
+        // renames) is asked instead: removed, it names nothing, or another directory made there since.
+        char path[MAXPATHLEN] = {};
+        struct stat now;
+        if (!gone && ::fcntl(fd_.get(), F_GETPATH, path) == 0) {
+            gone = ::stat(path, &now) != 0 || now.st_dev != st.st_dev || now.st_ino != st.st_ino;
+        }
+#endif
+        if (gone) {
+            return Status::failed("store " + dir_ + ": its directory was removed while this server held it, so nothing "
+                                  "written now could be found again; the store has failed and the server stops (put "
+                                  "the directory back from a backup, or start the server to make a new store)");
+        }
+        return Status::ok();
+    }
+
 private:
     Fd fd_;
     std::shared_ptr<Roots> roots_;
@@ -212,6 +238,23 @@ std::string unlockable_filesystem(int dirfd) {
 #endif
 }
 
+Status flock_failed(const std::string& what) {
+    const int e = errno;
+    return Status::failed("flock " + what + ": " + std::strerror(e) + " (this filesystem takes no locks; keep the "
+                          "server's directory on a local disk)");
+}
+
+// An exclusive lock's wait on readers run out: the readers that held the store when the wait began (with the gate held
+// no reader starts after), each of which gives up its copy within kReaderCopyLimitMs, did not let go in time: one
+// stopped or stuck.
+Status readers_held(const std::string& dir, std::uint64_t wait_ms) {
+    return Status::failed(dir + " is held by readers only (`nexus-server store check`, or another tool reading the "
+                          "store), and no new reader starts while a server waits, but those that held it did not let "
+                          "go within " + std::to_string(wait_ms) + " ms (each gives up its copy within " +
+                          std::to_string(kReaderCopyLimitMs) + " ms, so one is stopped or stuck); find it (lsof " +
+                          dir + ") and end it, then start the server again");
+}
+
 class PosixFs : public Fs {
 public:
     explicit PosixFs(PosixOptions options) : options_(std::move(options)), roots_(std::make_shared<Roots>()) {
@@ -240,8 +283,63 @@ public:
             return Status::failed(dir + " is on " + type + ", where a lock is not trusted to keep a second "
                                   "nexus-server out; keep the server's directory on a local disk (--dir, or HOME)");
         }
-        const int want = mode == LockMode::Exclusive ? LOCK_EX : LOCK_SH;
+        const bool exclusive = mode == LockMode::Exclusive;
         const std::uint64_t start = options_.now_ms();
+        // The gate first (kGateName, fs.h), through the directory's descriptor: a writer holds it exclusive while it
+        // waits for the store's lock, made if it is not there; a reader takes it shared, without waiting, only for the
+        // moment of taking the store's lock, and makes nothing (no gate: no writer of this build has waited here)
+        // (models/store/StoreLock.tla LockTry, RLock: NoNewReaderWhileWriterWaits).
+        // A writer makes it only by an exclusive create, and opens it when that finds it made: several writers making
+        // it at once on macOS, each with a plain O_CREAT, had one refused with ENOENT (server_lock's `new` race).
+        int opened = -1;
+        if (!options_.test_no_gate) {
+            opened = ::openat(fd.get(), kGateName, (exclusive ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC);
+            for (int tries = 0; exclusive && opened < 0 && errno == ENOENT && tries < 100; ++tries) {
+                opened = ::openat(fd.get(), kGateName, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+                if (opened < 0 && errno == EEXIST) {
+                    opened = ::openat(fd.get(), kGateName, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+                }
+            }
+            if (opened < 0 && (exclusive || errno != ENOENT)) {
+                return os_error("open", dir + "/" + kGateName);
+            }
+        }
+        Fd gate(opened);
+        if (gate.get() >= 0 && !exclusive) {
+            while (::flock(gate.get(), LOCK_SH | LOCK_NB) != 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno == EWOULDBLOCK) {
+                    return Status::refused(dir + " has a nexus-server waiting to open it, and a reader gives way to it");
+                }
+                return flock_failed(dir + "/" + kGateName);
+            }
+        }
+        if (exclusive && gate.get() >= 0) {
+            for (;;) {
+                if (::flock(gate.get(), LOCK_EX | LOCK_NB) == 0) {
+                    break;
+                }
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno != EWOULDBLOCK) {
+                    return flock_failed(dir + "/" + kGateName);
+                }
+                // Refused: a shared gate to be had means readers hold it, each for the moment of taking the store's
+                // lock (tried again below); none means another writer holds it, waiting for the store's lock: Busy.
+                if (::flock(gate.get(), LOCK_SH | LOCK_NB) != 0) {
+                    return Status::busy(dir + " is being opened by another writer, which holds its gate");
+                }
+                ::flock(gate.get(), LOCK_UN);
+                if (options_.now_ms() - start >= options_.reader_wait_ms) {
+                    return readers_held(dir, options_.reader_wait_ms);
+                }
+                options_.sleep_ms(kLockRetryMs);
+            }
+        }
+        const int want = exclusive ? LOCK_EX : LOCK_SH;
         for (;;) {
             if (::flock(fd.get(), want | LOCK_NB) == 0) {
                 break;
@@ -250,13 +348,12 @@ public:
                 continue;
             }
             if (errno != EWOULDBLOCK) {
-                const int e = errno;
-                return Status::failed("flock " + dir + ": " + std::strerror(e) + " (this filesystem takes no locks; "
-                                      "keep the server's directory on a local disk)");
+                return flock_failed(dir);
             }
-            // Refused: a shared lock to be had now means only readers hold it (next_lock_step).
+            // Refused: a shared lock to be had now means only readers hold it (next_lock_step); with the gate held, no
+            // reader starts now, so these are the readers that had it when this wait began.
             bool shared_free = false;
-            if (mode == LockMode::Exclusive && ::flock(fd.get(), LOCK_SH | LOCK_NB) == 0) {
+            if (exclusive && ::flock(fd.get(), LOCK_SH | LOCK_NB) == 0) {
                 shared_free = true;
                 ::flock(fd.get(), LOCK_UN);
             }
@@ -266,11 +363,7 @@ public:
                 return Status::busy(dir + " is locked by a writer");
             }
             if (step == LockStep::Readers) {
-                return Status::failed(dir + " is held by readers only (`nexus-server store check`, or another tool "
-                                      "reading the store, each of which lets go within " +
-                                      std::to_string(kReaderCopyLimitMs) + " ms), and they did not let go within " +
-                                      std::to_string(options_.reader_wait_ms) + " ms; find the reader that holds it "
-                                      "(lsof " + dir + ") and end it, then start the server again");
+                return readers_held(dir, options_.reader_wait_ms);
             }
             options_.sleep_ms(kLockRetryMs);
         }
@@ -288,6 +381,7 @@ public:
                                   "second nexus-server would not be kept out; keep the server's directory on a local "
                                   "disk (--dir, or HOME)");
         }
+        // The gate goes as `gate` closes: readers may start again, and are refused by the store's lock while it is held.
         out = std::make_unique<PosixLock>(fd.release(), roots_, dir);
         return Status::ok();
     }

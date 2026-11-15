@@ -5,7 +5,7 @@
 // which TLC checks that it is a behaviour of models/store/StoreLock.tla.
 //
 //   store_lock_walk <seed> <steps> [--faulty-unlocked | --faulty-restore-first | --faulty-held-refused |
-//                   --faulty-reader-busy] <out.tla>
+//                   --faulty-reader-busy | --faulty-no-gate] <out.tla>
 //
 // This is a functional test: the store is a real directory, <out.tla>.store beside the trace (emptied first), in the
 // test's own directory, and its locks are the system's. Time is not: each process's clocks (StartSteps::now_ms for the
@@ -17,16 +17,19 @@
 // The store starts with one session and one prompt queued (one record). Each step picks p1, p2 or the reader r1:
 //   a writer down starts (a person), one that crashed (exit 1 or 3, or killed) is started again (the service); one
 //   starting takes the step its StartOrder gives, through take_step and this walk's StartSteps:
-//     probe    the control socket, which the walk keeps (whose file it is): Answered when that server is listening
+//     probe    the control socket, which the walk keeps (whose file it is): Answered when that server serves (it is
+//              running, and has not accepted `stop`)
 //     open     Store::open through a filesystem that records its lock: the lock's tries while readers hold it (op
-//              rwait, a pause during which the reader may let go), then the lock (op lock: taken, held by a writer,
-//              or failed: readers that did not let go), then the replay (op open)
+//              rwait, a pause during which the reader may let go, or a reader may try to start: refused at the
+//              writer's gate, op rlock), then the lock (op lock: taken, held by a writer, or failed: readers that did
+//              not let go), then the replay (op open)
 //     wait     the pause and the probe of a start that found the lock held (op heldtick)
 //     listen   the control socket: Answered when a server answers on it, else this process's file
 //     restore  the drivers restored, as the server does: the queued prompt, when this process's store still has it
 //              queued, dequeued and sent (counted); else the driver's state committed
-//   a running server writes a step, or is stopped (op stop: its socket closed and its file removed if it is still its
-//   own; then op end: its drivers' last record, under the lock; then op exit: its lock released); a start that ended
+//   a running server writes a step, or is stopped (op stopaccept: it answers nothing more, its socket still bound;
+//   then op close: its socket closed and its file removed if it is still its own; then op end: its drivers' last
+//   record, under the lock; then op exit: its lock released); a start that ended
 //   exits (exit 0 when refused, 1 failed, 3 stuck); any process may die now and then (its Store destroyed, which
 //   closes its descriptors: the system releases its lock; its socket's file stays, answering no one).
 //   The reader takes the lock shared (op rlock: had when no writer holds it, else refused) and lets go (op rrelease).
@@ -37,7 +40,8 @@
 // The faults, each of which TLC must reject: --faulty-unlocked (StartOrder::Fault::Unlocked, the order before the
 // lock), --faulty-restore-first (RestoreFirst), --faulty-held-refused (HeldRefused: a held lock taken as another
 // server, exit 0), --faulty-reader-busy (readers that did not let go reported as a writer's lock: the start waits as
-// if a writer held it). A fault the walk never reached is an error (exit 1), so a rejection is the fault's.
+// if a writer held it), --faulty-no-gate (PosixOptions::test_no_gate, the build before the gate: a reader takes the lock
+// while a writer waits on readers). A fault the walk never reached is an error (exit 1), so a rejection is the fault's.
 
 #include "server/start_order.h"
 #include "store/codec.h"
@@ -79,7 +83,7 @@ constexpr std::size_t kWriters = 2;
 constexpr std::uint64_t kReaderWaitMs = 3 * nexus::store::kLockRetryMs;
 constexpr std::uint64_t kHeldWaitMs = 3 * nexus::server::kWaitRetryMs;
 
-enum class Fault { None, Unlocked, RestoreFirst, HeldRefused, ReaderBusy };
+enum class Fault { None, Unlocked, RestoreFirst, HeldRefused, ReaderBusy, NoGate };
 
 struct Step {
     std::string op;
@@ -93,7 +97,7 @@ struct Step {
 };
 
 // A running server's phase, past its start.
-enum class Phase { Running, Closed, Ended };
+enum class Phase { Running, Stopping, Closed, Ended };
 
 struct Proc {
     bool up = false;
@@ -121,6 +125,7 @@ struct Walk {
     int sock = -1;                  // whose the socket's file is
     std::uint64_t sent = 0;
     std::uint64_t reached = 0;      // times the fault changed what happened
+    std::uint64_t gave_way = 0;     // readers refused at the gate while a writer waited on readers
     std::vector<Step> steps;
 
     StartOrder::Fault order_fault() const {
@@ -133,6 +138,7 @@ struct Walk {
             return StartOrder::Fault::HeldRefused;
         case Fault::None:
         case Fault::ReaderBusy:
+        case Fault::NoGate:
             break;
         }
         return StartOrder::Fault::None;
@@ -161,7 +167,8 @@ struct Walk {
         case StartOrder::Step::Restore:
             return late_listen ? "open" : "listening";
         case StartOrder::Step::Serve:
-            return q.phase == Phase::Running ? "running" : q.phase == Phase::Closed ? "closed" : "ended";
+            return q.phase == Phase::Running ? "running" : q.phase == Phase::Stopping ? "stopping" :
+                   q.phase == Phase::Closed ? "closed" : "ended";
         case StartOrder::Step::Refused:
             return "refused";
         case StartOrder::Step::Stuck:
@@ -172,13 +179,14 @@ struct Walk {
         return "failed";
     }
 
-    // A server answers on the socket: its file is a live server's that is listening.
+    // A server says it is serving on the socket: its file is a live server's in its serving loop, before it accepted
+    // `stop` (the real question and answer, `status` and SERVING, are server_lock's: tests/link/server_lock.cpp
+    // startDuringStop).
     bool answers() const {
         if (sock < 0) {
             return false;
         }
-        const std::string s = pc(std::size_t(sock));
-        return s == "listening" || s == "running";
+        return pc(std::size_t(sock)) == "running";
     }
 
     // Who holds the directory's lock, asked of the system on a descriptor of the walk's own: a shared lock refused means
@@ -242,6 +250,8 @@ struct Walk {
 std::string name(std::size_t p) {
     return "p" + std::to_string(p + 1);
 }
+
+bool reader_step(Walk& w);
 
 void reader_release(Walk& w) {
     w.reader_lock.reset();
@@ -318,6 +328,7 @@ public:
         q.store.reset();
         PosixOptions options;
         options.reader_wait_ms = kReaderWaitMs;
+        options.test_no_gate = w_.fault == Fault::NoGate;
         options.now_ms = [&q] { return q.lock_clock; };
         Walk& w = w_;
         const std::size_t p = p_;
@@ -329,6 +340,16 @@ public:
             w.push("rwait", name(p));
             if (w.reader_lock && w.rng.below(3) == 0) {
                 reader_release(w);
+            }
+            if (!w.reader_lock && w.rng.below(2) == 0) {
+                // A reader starting while the writer waits on readers: the writer holds the gate, so it must give way
+                // (refused, the lock not taken); one that took the lock is a step the spec cannot take.
+                reader_step(w);
+                if (!w.reader_lock) {
+                    ++w.gave_way;
+                } else if (w.fault == Fault::NoGate) {
+                    ++w.reached;
+                }
             }
         };
         auto made = std::make_unique<ProcFs>(w_, nexus::store::make_posix_fs(std::move(options)));
@@ -493,12 +514,9 @@ bool writer_step(Walk& w, std::size_t p) {
     }
     if (q.phase == Phase::Running) {
         if (w.rng.below(15) == 0) {
-            // `nexus-server stop`: the socket closed, its file removed if it is still this server's.
-            if (w.sock == int(p)) {
-                w.sock = -1;
-            }
-            q.phase = Phase::Closed;
-            w.push("stop", name(p));
+            // `nexus-server stop` accepted: the loop answers nothing more; its socket is still bound.
+            q.phase = Phase::Stopping;
+            w.push("stopaccept", name(p));
             return true;
         }
         Change d = driverChange(q.store->journal().last_seq());
@@ -508,6 +526,15 @@ bool writer_step(Walk& w, std::size_t p) {
             return false;
         }
         w.push("write", name(p));
+        return true;
+    }
+    if (q.phase == Phase::Stopping) {
+        // The socket closed, its file removed if it is still this server's.
+        if (w.sock == int(p)) {
+            w.sock = -1;
+        }
+        q.phase = Phase::Closed;
+        w.push("close", name(p));
         return true;
     }
     if (q.phase == Phase::Closed) {
@@ -533,7 +560,8 @@ bool reader_step(Walk& w) {
     }
     std::unique_ptr<FileLock> held;
     const Status s = w.reader_fs->lock(w.dir, LockMode::Shared, held);
-    if (!s.is_ok() && s.code() != Status::Code::Busy) {
+    // Refused: busy (a writer holds the lock) or refused (a writer waits at the gate); read nothing.
+    if (!s.is_ok() && s.code() != Status::Code::Busy && s.code() != Status::Code::Refused) {
         std::fprintf(stderr, "store_lock_walk: the reader's lock failed: %s\n", s.message().c_str());
         return false;
     }
@@ -566,7 +594,7 @@ std::string fmt_step(const Step& st) {
 int main(int argc, char** argv) {
     if (argc != 4 && argc != 5) {
         std::fprintf(stderr, "usage: store_lock_walk <seed> <steps> [--faulty-unlocked | --faulty-restore-first | "
-                             "--faulty-held-refused | --faulty-reader-busy] <out.tla>\n");
+                             "--faulty-held-refused | --faulty-reader-busy | --faulty-no-gate] <out.tla>\n");
         return 2;
     }
     const std::uint64_t seed = std::strtoull(argv[1], nullptr, 10);
@@ -581,6 +609,8 @@ int main(int argc, char** argv) {
             w.fault = Fault::HeldRefused;
         } else if (std::strcmp(argv[3], "--faulty-reader-busy") == 0) {
             w.fault = Fault::ReaderBusy;
+        } else if (std::strcmp(argv[3], "--faulty-no-gate") == 0) {
+            w.fault = Fault::NoGate;
         } else {
             std::fprintf(stderr, "store_lock_walk: unknown fault %s\n", argv[3]);
             return 2;
@@ -591,7 +621,11 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::remove_all(w.dir, ec);
     w.rng = Rng(seed);
-    w.reader_fs = nexus::store::make_posix_fs();
+    {
+        PosixOptions reader;
+        reader.test_no_gate = w.fault == Fault::NoGate;
+        w.reader_fs = nexus::store::make_posix_fs(std::move(reader));
+    }
 
     // The store before the walk: one session, one prompt queued, one record.
     {
@@ -631,7 +665,8 @@ int main(int argc, char** argv) {
     if (stopped && w.fault == Fault::None) {
         return 1;
     }
-    const bool needs_reach = w.fault == Fault::HeldRefused || w.fault == Fault::ReaderBusy;
+    const bool needs_reach = w.fault == Fault::HeldRefused || w.fault == Fault::ReaderBusy ||
+                            w.fault == Fault::NoGate;
     if (needs_reach && w.reached == 0) {
         std::fprintf(stderr, "store_lock_walk: the walk never reached its fault; give it another seed or more steps\n");
         return 1;
@@ -651,19 +686,20 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "store_lock_walk: could not write %s\n", out_path);
         return 1;
     }
-    std::uint64_t counts[16] = {};
+    std::uint64_t counts[17] = {};
     const char* ops[] = {"start", "restart", "probe", "rwait", "lock", "heldtick", "open", "listen", "restore",
-                         "write", "stop", "end", "exit", "die", "rlock", "rrelease"};
+                         "write", "stopaccept", "close", "end", "exit", "die", "rlock", "rrelease"};
     for (const Step& st : w.steps) {
-        for (std::size_t k = 0; k < 16; ++k) {
+        for (std::size_t k = 0; k < 17; ++k) {
             if (st.op == ops[k]) {
                 ++counts[k];
             }
         }
     }
-    std::printf("store_lock_walk: %zu trace steps, %llu sends, fault reached %llu times;", w.steps.size(),
-                static_cast<unsigned long long>(w.sent), static_cast<unsigned long long>(w.reached));
-    for (std::size_t k = 0; k < 16; ++k) {
+    std::printf("store_lock_walk: %zu trace steps, %llu sends, %llu readers gave way, fault reached %llu times;",
+                w.steps.size(), static_cast<unsigned long long>(w.sent),
+                static_cast<unsigned long long>(w.gave_way), static_cast<unsigned long long>(w.reached));
+    for (std::size_t k = 0; k < 17; ++k) {
         std::printf(" %s %llu", ops[k], static_cast<unsigned long long>(counts[k]));
     }
     std::printf("%s\n", stopped ? "; stopped where the faulty order's store refused" : "");

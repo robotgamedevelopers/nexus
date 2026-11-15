@@ -79,6 +79,9 @@ public:
                                         // (server/home.h sameMachine)
         bool secrets = false;           // the hub takes secret asks (Hub::secretsWith): each driver is told so after
                                         // its hello, and its ask-secret lines go to the hub
+        std::function<std::string()> tableNow{};   // the drivers file's present path, read each time (the server
+                                                   // gives it through its held server directory, so a directory moved
+                                                   // aside keeps its file); `table` by name when empty
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.

@@ -5,8 +5,10 @@
 //                                         --client, the window's id and the number of its first action in the session;
 //                                         NEXUS_STATE_FORMAT in its environment, the state format the window reads
 //                                         (sync/formats.h), which the line then states after the key
-//        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs); exits 0, saying so, when
-//                                         another server already has the store's lock or the socket
+//        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs); exits 0, saying so, only
+//                                         when another server answers that it is serving; 3 when the store's lock is
+//                                         held for the whole wait by a server neither serving nor ending; 1 when it
+//                                         could not start (readers that did not let go among the reasons)
 //        nexus-server store check [--dir DIR]
 //                                         reads the store without changing it; refused while a server has it
 //        nexus-server stop [--dir DIR]    stops the running server

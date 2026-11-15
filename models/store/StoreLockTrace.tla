@@ -18,13 +18,14 @@
 (* the state it reaches must be the code's: a step the spec cannot take,   *)
 (* or takes to another state, has no successor, and TLC reports a          *)
 (* deadlock (an open with no lock before it, a restore before the socket,  *)
-(* a held lock refused at once, readers taken for a writer). Every         *)
-(* StoreLock invariant is checked on the trace too.                        *)
+(* a held lock refused at once, readers taken for a writer, a reader let   *)
+(* in while a writer waits on readers). Every StoreLock invariant is       *)
+(* checked on the trace too.                                               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, StoreLockTraceData
 
-VARIABLES pc, at, cur, lock, shared, sockFile, sockAt, journal, view, seen, bound, rwait, hwait, sent,
-          starts, reads, stops, deaths, l
+VARIABLES pc, at, cur, lock, shared, gate, sockFile, sockAt, journal, view, seen, bound, rwait, hwait, sent,
+          starts, reads, stops, deaths, fails, excused, l
 
 Unbounded == 1000000
 Names == <<"p1", "p2", "r1">>
@@ -32,7 +33,8 @@ Names == <<"p1", "p2", "r1">>
 \* The walk's waits: three retries on readers, three tries of a held lock (tests/store/store_lock_walk.cpp).
 S == INSTANCE StoreLock WITH Writers <- {"p1", "p2"}, Readers <- {"r1"}, MaxStarts <- Unbounded,
                              MaxReads <- Unbounded, MaxWrites <- Unbounded, MaxStops <- Unbounded,
-                             MaxDeaths <- Unbounded, MaxMoves <- 0, ReaderWait <- 3, HeldWait <- 3, Bug <- "none"
+                             MaxDeaths <- Unbounded, MaxMoves <- 0, MaxFails <- 0, ReaderWait <- 3, HeldWait <- 3,
+                             Bug <- "none"
 
 ASSUME Len(Trace) >= 1 /\ Trace[1].op = "init"
 
@@ -57,7 +59,8 @@ Step(r) ==
     ELSE IF r.op = "listen" THEN S!Listen(r.p)
     ELSE IF r.op = "restore" THEN S!Restore(r.p)
     ELSE IF r.op = "write" THEN S!Write(r.p)
-    ELSE IF r.op = "stop" THEN S!Stop(r.p)
+    ELSE IF r.op = "stopaccept" THEN S!StopAccept(r.p)
+    ELSE IF r.op = "close" THEN S!CloseSocket(r.p)
     ELSE IF r.op = "end" THEN S!EndDrivers(r.p)
     ELSE IF r.op = "exit" THEN S!Exit(r.p)
     ELSE IF r.op = "die" THEN S!Die(r.p)
@@ -65,8 +68,8 @@ Step(r) ==
     ELSE IF r.op = "rrelease" THEN S!RRelease(r.p)
     ELSE FALSE
 
-traceVars == <<pc, at, cur, lock, shared, sockFile, sockAt, journal, view, seen, bound, rwait, hwait, sent,
-               starts, reads, stops, deaths, l>>
+traceVars == <<pc, at, cur, lock, shared, gate, sockFile, sockAt, journal, view, seen, bound, rwait, hwait, sent,
+               starts, reads, stops, deaths, fails, excused, l>>
 
 TraceInit == l = 1 /\ S!Init /\ TraceMatches
 

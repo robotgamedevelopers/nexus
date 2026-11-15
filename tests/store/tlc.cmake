@@ -5,9 +5,9 @@
 #   MODELS      models/store of the checkout (its *.tla and *.cfg, and witnesses/*.cfg, are copied)
 #   MODULE      the module TLC checks (Journal, JournalTrace, StoreLock, StoreLockTrace)
 #   CFG         the configuration file, relative to MODELS
-#   EXPECT      pass | invariant | deadlock | temporal
+#   EXPECT      pass | invariant | deadlock | temporal | action
 #   PROPERTY    with invariant: the invariant whose violation is expected; with temporal: the configuration's one
-#               PROPERTY, whose violation is expected
+#               PROPERTY, whose violation is expected; with action: the action property ([][A]_v) expected violated
 #   WALK        optional: the walk program (journal_walk, store_lock_walk), run first with WALK_ARGS (comma-separated)
 #               and WORK/WALK_OUT
 #   WALK_OUT    optional: the trace module the walk writes, JournalTraceData.tla unless given
@@ -101,7 +101,11 @@ elseif(EXPECT STREQUAL "temporal")
     if(NOT out MATCHES "Temporal properties were violated")
         message(FATAL_ERROR "expected the temporal property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
     endif()
+elseif(EXPECT STREQUAL "action")
+    if(NOT out MATCHES "Action property ${PROPERTY} is violated")
+        message(FATAL_ERROR "expected the action property ${PROPERTY} to be violated, TLC exit ${rc}:\n${out}")
+    endif()
 else()
-    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, deadlock or temporal")
+    message(FATAL_ERROR "tlc.cmake: EXPECT is ${EXPECT}, not pass, invariant, deadlock, temporal or action")
 endif()
 message("${MODULE} ${cfg_name}: as expected (${EXPECT} ${PROPERTY})")

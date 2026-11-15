@@ -20,6 +20,11 @@
 //     server writes nothing and exits 3; the first serves on.
 //   - The server's directory moved aside and a new one made at its old name: the old server, stopped, removes no
 //     socket but its own and writes nothing into the new store.
+//   - A start during a stop (one idle connection holding the old server in its read, `stop` queued, then a start): it
+//     asks `status`, gets no SERVING, waits for the lock and serves; never exit 0 with nothing serving.
+//   - `new` while a writer holds the lock with no socket: it connects once the lock is let go (after 6 s, past the old
+//     5 s limit); held for good, it reports the started server's exit 3.
+//   - The server's directory moved aside: `config reload` through the moved socket works in the moved directory.
 //
 // Usage: server_lock <nexus-server> <dir>, with <dir> a directory of this test's own (a Unix socket's path must be
 // short, so it is under /tmp, named for the build tree: tests/link/CMakeLists.txt).
@@ -142,6 +147,38 @@ bool answering(const std::string& dir) {
     return ok;
 }
 
+// A connection to the server's control socket, or -1.
+int connectTo(const std::string& dir) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    const std::string path = dir + "/server.sock";
+    std::memcpy(addr.sun_path, path.c_str(), std::min(path.size() + 1, sizeof addr.sun_path));
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0 && connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+// The server's reply to `status` (what a start asks: src/server/server.cpp serving), or empty when it gives none.
+std::string statusOf(const std::string& dir) {
+    const int fd = connectTo(dir);
+    if (fd < 0) {
+        return std::string();
+    }
+    const char request[] = "status\n";
+    std::string reply;
+    if (write(fd, request, sizeof request - 1) == static_cast<ssize_t>(sizeof request - 1)) {
+        char c = 0;
+        while (read(fd, &c, 1) == 1 && c != '\n') {
+            reply.push_back(c);
+        }
+    }
+    close(fd);
+    return reply;
+}
+
 bool waitAnswering(const std::string& dir, int seconds) {
     const auto end = Clock::now() + std::chrono::seconds(seconds);
     while (Clock::now() < end) {
@@ -168,7 +205,7 @@ bool waitLog(const std::string& path, const std::string& text, int seconds) {
 // The line a refused server writes: another server has the store's lock, or answers on the socket.
 bool refusedLine(const std::string& log) {
     return has(log, "so this one exits") &&
-        (has(log, "is open in another process, which holds its lock") || has(log, "already answers on"));
+        (has(log, "is open in another process, which holds its lock") || has(log, "is serving on"));
 }
 
 void stopServer(const std::string& server, const std::string& dir) {
@@ -374,7 +411,7 @@ void heldNoSocket(const std::string& server, const std::string& top) {
     const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
     const std::string log = readFile(dir + "/stuck.log");
     CHECK(exit == 3 && took >= 300);
-    CHECK(has(log, "no server answered on " + dir + "/server.sock in 300 ms") && has(log, "lsof"));
+    CHECK(has(log, "no server on " + dir + "/server.sock said it serves in 300 ms") && has(log, "lsof"));
     CHECK(!answering(dir));
     std::printf("held: exit %d after %lld ms: %s", exit, static_cast<long long>(took), log.c_str());
     close(fd);
@@ -455,6 +492,86 @@ void dirMoved(const std::string& server, const std::string& top) {
     CHECK(waitExit(second, 20) == 0);
 }
 
+// A start while a server has accepted `stop` but still holds its socket (models/store/StoreLock.tla StopAccept, and
+// RefusedServes, whose reversed witness LConnectProbe is the start that took a connection for a serving server). One
+// idle connection keeps the old server in its 2 s read; `stop` queues behind it, then a server is started. A
+// connection alone would have answered, and the start exited 0 with nothing serving once the stop ended; it now asks
+// `status`, gets no SERVING (the stop is taken first and the socket closes on its question), waits for the lock, and
+// serves.
+void startDuringStop(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/stopping";
+    CHECK(mkdir(dir.c_str(), 0700) == 0);
+    pid_t first = spawn({server, "serve", "--dir", dir}, dir + "/first.log");
+    CHECK(first > 0 && waitLog(dir + "/first.log", "serving on", 20));
+    CHECK(statusOf(dir) == "SERVING");
+    const int idle = connectTo(dir);
+    CHECK(idle >= 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    pid_t stopper = spawn({server, "stop", "--dir", dir}, dir + "/stop.log");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    pid_t second = spawn({server, "serve", "--dir", dir}, dir + "/second.log");
+    CHECK(waitExit(first, 20) == 0);
+    CHECK(waitExit(stopper, 20) == 0);
+    close(idle);
+    CHECK(waitLog(dir + "/second.log", "nexus-server: serving on", 20));
+    CHECK(waitExit(second, 0) == -1);
+    CHECK(statusOf(dir) == "SERVING");
+    const std::string log = readFile(dir + "/second.log");
+    CHECK(!has(log, "so this one exits"));
+    std::printf("stopping: a start during a stop served: %s", log.c_str());
+    stopServer(server, dir);
+    CHECK(waitExit(second, 20) == 0);
+}
+
+// `new` while a writer holds the store's lock with no socket (a server stopping, its drivers ending): it waits on what
+// the start it began reports, not 5 s: the lock let go after 6 s, it prints its CONNECT line; held past the started
+// server's wait, it says that server's exit code (3) and the log.
+void newDuringStop(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/new-stop";
+    CHECK(mkdir(dir.c_str(), 0700) == 0 && mkdir((dir + "/store").c_str(), 0700) == 0);
+    int fd = holdStore(dir, LOCK_EX);
+    CHECK(fd >= 0);
+    pid_t asker = spawn({server, "new", "--dir", dir}, dir + "/new.log");
+    std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+    CHECK(waitExit(asker, 0) == -1);
+    close(fd);
+    CHECK(waitExit(asker, 20) == 0);
+    CHECK(has(readFile(dir + "/new.log"), "NEXUS CONNECT"));
+    std::printf("new during a stop: connected once the lock was let go after 6 s\n");
+    stopServer(server, dir);
+    for (int i = 0; i < 250 && answering(dir); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    fd = holdStore(dir, LOCK_EX);
+    CHECK(fd >= 0);
+    asker = spawn({"/usr/bin/env", "NEXUS_TEST_HELD_WAIT_MS=300", server, "new", "--dir", dir}, dir + "/new2.log");
+    const int exit = waitExit(asker, 20);
+    const std::string out = readFile(dir + "/new2.log");
+    CHECK(exit == 1 && has(out, "exited with code 3 without serving"));
+    std::printf("new during a stop, held for good: exit %d: %s", exit, out.c_str());
+    close(fd);
+}
+
+// The server's directory moved aside while it runs: `config reload`, asked through the moved socket, works on the
+// config repository in the moved directory (held by descriptor), and makes nothing at the old name.
+void configAfterMove(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/cfg";
+    const std::string moved = top + "/cfg-old";
+    CHECK(mkdir(dir.c_str(), 0700) == 0);
+    pid_t first = spawn({server, "serve", "--dir", dir}, top + "/cfg-first.log");
+    CHECK(first > 0 && waitLog(top + "/cfg-first.log", "serving on", 20));
+    CHECK(exists(dir + "/nexus-config"));
+    CHECK(rename(dir.c_str(), moved.c_str()) == 0);
+    std::string out;
+    const int exit = run("'" + server + "' config reload --dir '" + moved + "'", &out);
+    CHECK(exit == 0);
+    CHECK(!exists(dir));
+    std::printf("config after a move: exit %d: %s", exit, out.c_str());
+    stopServer(server, moved);
+    CHECK(waitExit(first, 20) == 0);
+    CHECK(!exists(moved + "/server.sock"));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -467,7 +584,8 @@ int main(int argc, char** argv) {
     std::string out;
     // What an earlier run left: its servers stopped (each directory's), its directory removed.
     for (const char* sub : {"race-0", "race-1", "race-2", "race-3", "new", "killed", "killed-starting", "check", "held",
-                            "reader", "linked", "linked-other", "mv", "mv-old"}) {
+                            "reader", "linked", "linked-other", "mv", "mv-old", "stopping", "new-stop", "cfg",
+                            "cfg-old"}) {
         run("'" + server + "' stop --dir '" + top + "/" + sub + "'", &out);
     }
     run("rm -rf '" + top + "'", &out);
@@ -485,6 +603,9 @@ int main(int argc, char** argv) {
     readerHeld(server, top);
     storeLinked(server, top);
     dirMoved(server, top);
+    startDuringStop(server, top);
+    newDuringStop(server, top);
+    configAfterMove(server, top);
 
     if (failures != 0) {
         std::fprintf(stderr, "server_lock: %d check(s) failed; the directory %s is kept\n", failures, top.c_str());

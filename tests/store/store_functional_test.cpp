@@ -236,7 +236,8 @@ void locks() {
     const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
     CHECK(busy.code() == Status::Code::Failed && b == nullptr);
     CHECK(busy.message().find("held by readers only") != std::string::npos);
-    CHECK(waited.count() >= static_cast<long long>(kLockReaderWaitMs));
+    // Less one: the lock's clock is whole milliseconds, so its 2000 can be 1999.x here (seen under load).
+    CHECK(waited.count() >= static_cast<long long>(kLockReaderWaitMs) - 1);
     std::printf("locks: a writer gave up on a reader after %lld ms: %s\n", static_cast<long long>(waited.count()),
                 busy.message().c_str());
     reader.reset();
@@ -297,6 +298,128 @@ void locks() {
         std::printf("locks: %s\n", unkept.message().c_str());
         // Neither refusal left a lock behind.
         CHECK_OK(Store::open(*fs, "locked", {}, s));
+    }
+
+    // Writers first: a stream of overlapping readers (a child takes a new shared lock every 40 ms and holds each for
+    // 100 ms, for 1.5 s, so some reader holds the store at every moment) does not keep a writer out. The writer takes
+    // the gate, waits only for the readers that held the store then (at most 100 ms), and has it; the readers that
+    // come while it waits give way (Refused), and those after are refused by its lock (Busy).
+    {
+        int fds[2];
+        CHECK(pipe(fds) == 0);
+        const pid_t readers = fork();
+        CHECK(readers >= 0);
+        if (readers == 0) {
+            close(fds[0]);
+            std::unique_ptr<Fs> rfs = make_posix_fs();
+            std::vector<std::pair<std::unique_ptr<FileLock>, int>> held;   // each lock and its age in ticks
+            int gaveWay = 0;
+            int busyAfter = 0;
+            int had = 0;
+            for (int tick = 0; tick < 150; ++tick) {      // 10 ms ticks: 1.5 s
+                for (auto it = held.begin(); it != held.end();) {
+                    it = ++it->second >= 10 ? held.erase(it) : it + 1;
+                }
+                if (tick % 4 == 0) {
+                    std::unique_ptr<FileLock> l;
+                    const Status st = rfs->lock("locked", LockMode::Shared, l);
+                    if (st.is_ok()) {
+                        held.emplace_back(std::move(l), 0);
+                        ++had;
+                        if (had == 3) {
+                            char go = 1;
+                            if (write(fds[1], &go, 1) != 1) {
+                                _exit(9);
+                            }
+                        }
+                    } else if (st.code() == Status::Code::Refused) {
+                        ++gaveWay;
+                    } else if (st.code() == Status::Code::Busy) {
+                        ++busyAfter;
+                    } else {
+                        _exit(8);
+                    }
+                }
+                usleep(10 * 1000);
+            }
+            std::printf("locks: the reader stream: %d locks had, %d gave way to the waiting writer, %d refused by its "
+                        "lock\n", had, gaveWay, busyAfter);
+            std::fflush(stdout);
+            _exit(gaveWay > 0 && busyAfter > 0 ? 0 : 1);
+        }
+        close(fds[1]);
+        char go = 0;
+        CHECK(read(fds[0], &go, 1) == 1);     // the stream is running, readers overlapping
+        close(fds[0]);
+        std::unique_ptr<Fs> wfs = make_posix_fs();
+        std::unique_ptr<Store> w;
+        const auto began = std::chrono::steady_clock::now();
+        CHECK_OK(Store::open(*wfs, "locked", {}, w));
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began);
+        std::printf("locks: a writer had the store %lld ms into a stream of overlapping readers\n",
+                    static_cast<long long>(took.count()));
+        CHECK(w != nullptr && took.count() < 1000);
+        usleep(300 * 1000);       // the stream's readers now refused by the lock
+        w.reset();
+        int status = 0;
+        waitpid(readers, &status, 0);
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+
+    // A reader's copy is bounded inside one file too: the log read in chunks with the clock asked between them. A log
+    // of 6 chunks under a clock that moves 100 ms each time it is asked is given up part way through the log.
+    {
+        std::filesystem::remove_all("chunked");
+        std::unique_ptr<Fs> cfs = make_posix_fs();
+        {
+            std::unique_ptr<Store> big;
+            CHECK_OK(Store::open(*cfs, "chunked", {}, big));
+            CHECK_OK(big->commit(1, made()));
+            for (int i = 0; i < 6; ++i) {
+                CHECK_OK(big->commit(1, prompt(std::string(kReaderChunkBytes, char('a' + i)))));
+            }
+        }
+        CHECK(std::filesystem::file_size("chunked/log") > 5 * kReaderChunkBytes);
+        std::uint64_t asked = 0;
+        MemFs copy;
+        std::unique_ptr<Store> r;
+        const Status slow = Store::inspect(*cfs, "chunked", copy, r, nullptr, [&asked] { return 100 * asked++; });
+        CHECK(slow.code() == Status::Code::Failed && slow.message().find("given up") != std::string::npos);
+        CHECK(asked >= 6 && asked <= 8);      // once at the start, then once per chunk until past 500 ms
+        std::printf("locks: a slow copy given up after %llu looks at the clock, inside the log\n",
+                    static_cast<unsigned long long>(asked));
+        MemFs copy2;
+        CHECK_OK(Store::inspect(*cfs, "chunked", copy2, r));      // at full speed it is read
+        r.reset();
+        std::filesystem::remove_all("chunked");
+    }
+
+    // The store's directory removed while it is held: the next write fails the store, loudly, instead of going into a
+    // directory no name reaches.
+    {
+        std::filesystem::remove_all("gone");
+        std::unique_ptr<Fs> gfs = make_posix_fs();
+        std::unique_ptr<Store> g;
+        CHECK_OK(Store::open(*gfs, "gone", {}, g));
+        CHECK_OK(g->commit(1, made()));
+        std::filesystem::remove_all("gone");
+        const Status lost = g->commit(1, prompt("into nowhere"));
+        CHECK(lost.code() == Status::Code::Failed &&
+              lost.message().find("was removed while this server held it") != std::string::npos);
+        std::printf("locks: %s\n", lost.message().c_str());
+        CHECK(!g->commit(1, prompt("again")).is_ok());     // and it stays failed
+        g.reset();
+        // In a batch (the server's group commit): the batch's flush fails, with the same line.
+        CHECK_OK(Store::open(*gfs, "gone", {}, g));
+        CHECK_OK(g->commit(1, made()));
+        g->begin_batch();
+        CHECK_OK(g->commit(1, prompt("batched")));
+        std::filesystem::remove_all("gone");
+        CHECK_OK(g->commit(1, prompt("batched, after")));
+        const Status flushed = g->flush();
+        CHECK(flushed.code() == Status::Code::Failed &&
+              flushed.message().find("was removed while this server held it") != std::string::npos);
+        g.reset();
     }
     std::filesystem::remove_all("elsewhere");
     std::filesystem::remove_all("locked");

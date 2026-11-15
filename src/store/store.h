@@ -179,6 +179,14 @@ private:
     std::string dir_;
     StoreOptions options_;
     std::unique_ptr<FileLock> lock_;    // before journal_, so released after the journal's log is closed
+    // Ok while the held directory has a name (FileLock::alive); once it has none the store has failed.
+    Status held_alive() {
+        Status s = lock_ ? lock_->alive() : Status::ok();
+        if (!s.is_ok()) {
+            failed_ = true;
+        }
+        return s;
+    }
     Journal journal_;
     bool failed_ = false;
     bool batching_ = false;
