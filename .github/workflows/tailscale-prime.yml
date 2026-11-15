@@ -21,12 +21,16 @@ on:
         description: the commit to build (empty for the branch's tip)
         type: string
         default: ""
+      cold:
+        description: measure a cold Windows build (one slot, a fresh key directory removed after; primes nothing there)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: tailscale-prime-${{ inputs.os || 'all' }}-${{ inputs.sha || github.sha }}
+  group: tailscale-prime-${{ inputs.os || 'all' }}-${{ inputs.sha || github.sha }}${{ inputs.cold && '-cold' || '' }}
   cancel-in-progress: false
 
 jobs:
