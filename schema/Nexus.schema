@@ -5,14 +5,16 @@
 // as None. So a later version adds fields and values here, never renumbers, and changes a default only through
 // `schema tables-baseline --update --reason`, which tables.baseline beside this file makes it say.
 //
-// Step 1 of moving off the hand-written codecs (docs/formats.md): these tables mirror today's fields exactly, so that
-// swapping each codec onto them is mechanical. Nothing reads or writes them yet. The code generated from this file is
-// in schema/gen, checked in; CI regenerates it at the pin and fails on any difference.
+// The link's state and actions are these tables from state format 4 (src/sync/formats.h, docs/formats.md), and a link
+// starts with each end's Hello; the store's record and snapshot are not yet (they mirror its fields, ready for the
+// swap). The code generated from this file is in schema/gen, checked in; CI regenerates it at the pin and fails on any
+// difference.
 
 package nexuswire
 
-// Sent first on a link, each way: the protocol this end speaks, and the oldest protocol of the other end it still
-// works with. An end refuses the link only when the other's `proto` is below its `min_peer`.
+// Sent first on a link, each way, before any state (src/link/bootstrap.h): the protocol this end speaks (its state
+// format, src/sync/formats.h), and the oldest protocol of the other end it still works with. An end refuses the link
+// only when the other's `proto` is below its `min_peer`; otherwise the link speaks the older of the two protos.
 table Hello
 {
     proto    uint32
@@ -79,11 +81,25 @@ table SessionChange
     queue         []string
 }
 
+// An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
+// asked for, the asker's session (0: nexus itself) and friend, and the asker's one-line reason. Never a value.
+table SecretRequest
+{
+    id         uint64
+    account    *string
+    what       *string
+    asker      uint64
+    asker_name *string
+    why        *string
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
-// holds and this one lacks is not named, which removes it.
+// holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
+// every diff (a few short lines).
 table SessionsDiff
 {
     sessions []SessionChange
+    requests []SecretRequest
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -103,11 +119,14 @@ enum ActionKind
     AddFriend,
     LinkAccount,
     UnlinkAccount,
-    SetDefault
+    SetDefault,
+    SecretAnswer,
+    SecretCancel
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
-// its text, and an account action's account. Its number is the diff's `start` plus its place in the list.
+// its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
+// the person pasted them, never text). Its number is the diff's `start` plus its place in the list.
 table Action
 {
     kind        ActionKind
@@ -115,6 +134,8 @@ table Action
     friend_name *string
     text        *string
     account     *string
+    request     uint64
+    secret      *bytes
 }
 
 // An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.

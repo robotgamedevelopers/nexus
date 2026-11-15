@@ -6379,6 +6379,43 @@ int64_t SessionChangeToJson( const SessionChange * root, char * buffer, int64_t 
     return TableJsonWriteGraph( root, SessionChangeTableType(), buffer, capacity, allocator );
 }
 
+bool SecretRequestFromJson( SecretRequestBuilder & builder, const char * text, int64_t bytes, TableReport * report )
+{
+    SecretRequest * root = builder.GetRoot();
+    if ( root == NULL )
+    {
+        if ( report != NULL ) { *report = TableReport(); }
+        return false;
+    } // locked: the report stays empty
+    TableReport read;
+    bool ok = TableJsonReadGraph( builder.main, root, SecretRequestTableType(), text, bytes, &read );
+    if ( !ok || read.refused || read.damaged || read.missing_required != 0 )
+    {
+        // the walk names the condition it refused where it met it; what it
+        // left unnamed is malformed text or a missing required field
+        if ( read.refuse_reason == TableRefuseReason::ok )
+        {
+            read.refuse_reason = read.missing_required != 0 && !read.damaged ? TableRefuseReason::missing_required : TableRefuseReason::malformed;
+        }
+        SecretRequestTableType()->reset( root );
+        if ( report != NULL ) { *report = read; }
+        return false;
+    }
+    read.refuse_reason = TableRefuseReason::ok;
+    if ( report != NULL ) { *report = read; }
+    return true;
+}
+
+int64_t SecretRequestToJsonMeasure( const SecretRequest * root, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, SecretRequestTableType(), NULL, 0, allocator );
+}
+
+int64_t SecretRequestToJson( const SecretRequest * root, char * buffer, int64_t capacity, TableAllocator allocator )
+{
+    return TableJsonWriteGraph( root, SecretRequestTableType(), buffer, capacity, allocator );
+}
+
 bool SessionsDiffFromJson( SessionsDiffBuilder & builder, const char * text, int64_t bytes, TableReport * report )
 {
     SessionsDiff * root = builder.GetRoot();
@@ -6885,6 +6922,51 @@ bool SessionChangeEditTextForm( const char * document, int64_t document_bytes, c
     if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
     TableReport report;
     if ( !SessionChangeFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool SecretRequestLoadTextForm( const char * text, int64_t bytes, SecretRequestBuilder & builder, const char ** refusal )
+{
+    std::string json;
+    if ( !TableTextFormToJson( text, bytes, SecretRequestTableType(), json, refusal ) ) { return false; }
+    TableReport report;
+    if ( !SecretRequestFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
+    {
+        *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
+        return false;
+    }
+    return true;
+}
+
+bool SecretRequestLoadTextForm( const char * text, int64_t bytes, const char ** document, int64_t * document_bytes, SecretRequestBuilder & builder, const char ** refusal )
+{
+    if ( !SecretRequestLoadTextForm( text, bytes, builder, refusal ) ) { return false; }
+    if ( document != NULL ) { *document = text; }
+    if ( document_bytes != NULL ) { *document_bytes = bytes; }
+    return true;
+}
+
+int64_t SecretRequestSaveTextForm( const char * document, int64_t document_bytes, char * buffer, int64_t capacity )
+{
+    if ( document == NULL || document_bytes < 0 || buffer == NULL || capacity < document_bytes ) { return -1; }
+    if ( document_bytes > 0 ) { memcpy( buffer, document, (size_t) document_bytes ); }
+    return document_bytes;
+}
+
+bool SecretRequestEditTextForm( const char * document, int64_t document_bytes, const TableTextFormEdit * edits, int64_t count, char * buffer, int64_t capacity, int64_t * edited_bytes, SecretRequestBuilder & builder, const char ** refusal )
+{
+    std::string edited;
+    std::string json;
+    if ( !tableTextFormEditText( std::string( document, (size_t) document_bytes ), SecretRequestTableType(), edits, count, edited, json, refusal ) ) { return false; }
+    if ( edited_bytes != NULL ) { *edited_bytes = (int64_t) edited.size(); }
+    if ( buffer == NULL || capacity < (int64_t) edited.size() ) { return false; }
+    if ( !edited.empty() ) { memcpy( buffer, edited.data(), edited.size() ); }
+    TableReport report;
+    if ( !SecretRequestFromJson( builder, json.data(), (int64_t) json.size(), &report ) || report.damaged || report.unknown != 0 || report.refused )
     {
         *refusal = report.refuse_reason == TableRefuseReason::out_of_range ? "text_bound" : "text_kind_mismatch";
         return false;

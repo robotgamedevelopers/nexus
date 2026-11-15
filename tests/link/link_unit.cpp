@@ -39,6 +39,13 @@ void connect_line_roundtrip() {
     CHECK(parseConnect(connectLine("60001", kKey, 2), &c));
     CHECK(c.port == "60001" && c.key == kKey && c.format == 2);
     CHECK(connectLine("60001", kKey, 2) == "NEXUS CONNECT 60001 " + std::string(kKey) + " format 2");
+    CHECK(c.hello == sync::statedFormat(2));    // a server from before Hello: its format, and every older one
+    // A server of Hello: its Hello after the format, for a window that stated one.
+    const std::string hello = sync::helloText(sync::Hello{6, 2});
+    CHECK(parseConnect(connectLine("60001", kKey, 4, hello), &c));
+    CHECK(c.port == "60001" && c.key == kKey && c.format == 4 && c.hello == (sync::Hello{6, 2}));
+    CHECK(connectLine("60001", kKey, 4, hello) == "NEXUS CONNECT 60001 " + std::string(kKey) + " format 4 hello " +
+        hello);
 }
 
 // What a window that states a format asks of nexus-server new, and what the server makes of each request: a window
@@ -66,6 +73,38 @@ void new_request_states_the_format() {
     CHECK(server::formatRefusalReply(none).empty());
     none.format = 1;
     CHECK(server::formatRefusalReply(none).empty());
+    CHECK(server::helloOf(none) == sync::statedFormat(1));
+    // A window of Hello states it after the format; the server reads it back, and decides on it.
+    server::Client hello;
+    hello.id = "window-1";
+    hello.next = 12;
+    hello.format = 4;
+    hello.hasHello = true;
+    hello.hello = sync::Hello{4, 1};
+    const std::string asked = server::newRequest(hello);
+    CHECK(asked == "new window-1 12 format 4 hello " + sync::helloText(sync::Hello{4, 1}));
+    CHECK(server::parseNewRequest(asked, &read));
+    CHECK(read.id == "window-1" && read.next == 12 && read.format == 4 && read.hasHello);
+    CHECK(read.hello == (sync::Hello{4, 1}) && server::helloOf(read) == read.hello);
+    CHECK(server::formatRefusalReply(read).empty());
+    for (const std::string& bad : {std::string("new hello"), std::string("new format 4 hello"),
+                                   std::string("new format 4 hello zz"), std::string("new format 4 hello 00"),
+                                   "new format 4 hello " + sync::helloText(sync::Hello{0, 1}),
+                                   "new hello " + sync::helloText(sync::Hello{4, 1}) + " format 4"}) {
+        CHECK(!server::parseNewRequest(bad, &read));
+    }
+    // min_peer: a server that works only with windows from proto 5 refuses this one in one ERROR line, which says
+    // what to do; a window whose own min_peer this server is below is refused too, so it hears why at once.
+    const std::string refused = server::formatRefusalReply(hello, sync::Hello{6, 5});
+    CHECK(refused.find("ERROR This window is too old") == 0 && refused.find("update nexus.") != std::string::npos);
+    CHECK(refused.find('\n') == std::string::npos);
+    server::Client picky = hello;
+    picky.hello = sync::Hello{6, 5};
+    const std::string tooOld = server::formatRefusalReply(picky, sync::Hello{4, 1});
+    CHECK(tooOld.find("ERROR nexus-server is too old") == 0 && tooOld.find("nexus-server stop") != std::string::npos);
+    // Every other pairing works.
+    CHECK(server::formatRefusalReply(picky, sync::Hello{5, 1}).empty());
+    CHECK(server::formatRefusalReply(hello, sync::Hello{9, 4}).empty());
 }
 
 void connect_line_refusals() {
@@ -76,6 +115,10 @@ void connect_line_refusals() {
         "NEXUS CONNECT 60001 " + std::string(kKey) + "A", "NEXUS CONNECT 60001 " + std::string(kKey).substr(1),
         "NEXUS CONNECT 60001  " + std::string(kKey), "NEXUS CONNECT 60001 AbCdEfGhIjKlMnOpQrSt-_",
         " NEXUS CONNECT 60001 " + std::string(kKey),
+        "NEXUS CONNECT 60001 " + std::string(kKey) + " format 4 hello",
+        "NEXUS CONNECT 60001 " + std::string(kKey) + " format 4 hello zz",
+        "NEXUS CONNECT 60001 " + std::string(kKey) + " format 4 hallo " + sync::helloText(sync::kHello),
+        "NEXUS CONNECT 60001 " + std::string(kKey) + " hello " + sync::helloText(sync::kHello),
     };
     for (const std::string& line : bad) {
         Connect c{"keep", "keep"};
@@ -96,11 +139,17 @@ void bootstrap_command_shape() {
     b.host = "studio";
     const Command c = bootstrapCommand(b);
     CHECK(c.program == "/usr/bin/ssh");
-    // The window states the state format it reads in nexus-server new's environment, which a server before formats
-    // ignores.
+    // The window states the state format it reads and its Hello in nexus-server new's environment, which a server
+    // before formats ignores, and one before Hello reads the format alone.
     const std::vector<std::string> want = {"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "studio", "--",
-        remoteLine({"env", "NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat), "nexus-server", "new"})};
+        remoteLine({"env", "NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat),
+                    "NEXUS_HELLO=" + sync::helloText(sync::kHello), "nexus-server", "new"})};
     CHECK(c.arguments == want);
+    sync::Hello stated;
+    CHECK(statesHello(b, &stated) && stated == sync::kHello);
+    b.stateFormat = 3;      // a window of format 3, from before Hello: the format alone
+    CHECK(!statesHello(b, &stated));
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"env", "NEXUS_STATE_FORMAT=3", "nexus-server", "new"}));
     b.stateFormat = 0;      // states none, as a window before formats
     CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new"}));
 }

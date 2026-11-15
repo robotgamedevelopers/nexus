@@ -24,9 +24,10 @@ namespace nexus::sync {
 //
 // Across versions (docs/formats.md): up to state format 2 the actions are unframed, kinds 1 to 14. From format 3 each
 // action is its kind and then its fields framed by their length, so that a reader skips the fields it does not know and
-// reads an action of a kind it does not know as Unknown (counted, never applied). The secret dialog's two kinds come
+// reads an action of a kind it does not know as Unknown (counted, never applied). From format 4 they are schema's
+// ActionsDiff table (schema/Nexus.schema), with the same rules by the table's own. The secret dialog's two kinds come
 // with format 3 (sync/secrets.h); a window sends them only for a request it received, which only a server of format 3
-// sends.
+// or later sends.
 enum class ActionKind : std::uint8_t {
     Unknown = 0,    // read, never written: a kind from a later window, which the server counts and does not apply
     Send = 1,       // a prompt sent in a session: it goes in the transcript
@@ -107,7 +108,9 @@ public:
     void setFormat(std::uint32_t format) { format_ = format; }
 
     // The actions a diff carries, for the server, which reads them out of mosh's get_remote_diff(). Throws BadDiff.
-    static std::vector<Action> parse(const std::string& diff, std::uint32_t format = kStateFormat);
+    // `unknown` (when given) is how many fields and kinds of a later window's it skipped (from format 4), for the log.
+    static std::vector<Action> parse(const std::string& diff, std::uint32_t format = kStateFormat,
+                                     int* unknown = nullptr);
 
 private:
     std::uint64_t first_ = 1;

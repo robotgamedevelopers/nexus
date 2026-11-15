@@ -16,6 +16,12 @@ target_compile_options(sync_test PRIVATE ${warnings})
 
 add_dependencies(model_checks sync_test)
 
+# A measurement, not a test: encode and decode times of the sessions diff and the actions in each format
+# (wire_bench.cpp says which messages). Run by hand; it reads the clock.
+add_executable(wire_bench wire_bench.cpp)
+target_link_libraries(wire_bench PRIVATE nexus_sync)
+target_compile_options(wire_bench PRIVATE ${warnings})
+
 # The walks TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
     add_executable(link_walk link_walk.cpp)

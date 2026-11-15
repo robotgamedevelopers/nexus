@@ -18,13 +18,19 @@ struct Connect {
     std::string port;
     std::string key;
     std::uint32_t format = 1;   // the state format the server sends on this link: 1 when the line states none
+    // The server's Hello (sync/formats.h): from the line's `hello` when it states one, else that of a server from
+    // before Hello, which speaks `format` and works with every older one.
+    sync::Hello hello = sync::statedFormat(1);
 };
 
 // The line nexus-server new prints. `format` 0 states none: the line a window that stated no format reads (one from
-// before formats, which takes nothing after the key).
-std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format = 0);
+// before formats, which takes nothing after the key). `hello`, the server's Hello as sync::helloText, goes after the
+// format, only to a window that stated a Hello: a window from before Hello reads nothing after the format.
+std::string connectLine(const std::string& port, const std::string& key, std::uint32_t format = 0,
+                        const std::string& hello = std::string());
 // True for exactly a CONNECT line: "NEXUS CONNECT", a port of 1 to 65535, and a key of 22 base64 characters (mosh's
-// printable 128-bit key), then, optionally, "format" and a number from 1, separated by single spaces.
+// printable 128-bit key), then, optionally, "format" and a number from 1, then, optionally, "hello" and a Hello
+// (sync::readHello), separated by single spaces.
 bool parseConnect(const std::string& line, Connect* out);
 
 // The line ssh runs on the server's machine: `exec "$SHELL" -l -c '<command>'`, each word of the command quoted.
@@ -36,12 +42,17 @@ struct Bootstrap {
     std::vector<std::string> command = {"nexus-server", "new"}; // run there in the login shell
     int timeoutSeconds = 30;
     // The state format the window reads, stated to nexus-server new in its environment (sync/formats.h); 0 states
-    // none, as a window before formats did.
+    // none, as a window before formats did. From format 4 (kTablesFormat) the window also states its Hello, the format
+    // as its proto and sync::kMinPeer; a format below 4 states no Hello, as a window from before Hello did.
     std::uint32_t stateFormat = sync::kStateFormat;
 };
 
+// The Hello the bootstrap states, if it states one.
+bool statesHello(const Bootstrap& b, sync::Hello* out);
+
 // The ssh command that runs it: no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
-// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format.
+// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format, with `NEXUS_HELLO=<hello>`
+// when it states a Hello: the format for a nexus-server from before Hello, which ignores the Hello.
 Command bootstrapCommand(const Bootstrap& b);
 
 // Runs the command over ssh with `run` and reads its output for the CONNECT line. False, with why (what ssh or the

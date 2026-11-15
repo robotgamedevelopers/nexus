@@ -1,5 +1,6 @@
 #include "link/mosh_link.h"
 
+#include <cstdio>
 #include <exception>
 #include <stdexcept>
 
@@ -53,7 +54,7 @@ static sync::Sessions inFormat(sync::Sessions state, std::uint32_t format) {
     return state;
 }
 
-// The actions up, in the link's format too: framed from format 3 (sync/actions.h).
+// The actions up, in the link's format too: framed from format 3, schema's tables from 4 (sync/actions.h).
 static sync::Actions actionsIn(std::uint64_t next, std::uint32_t format) {
     sync::Actions actions(next);
     actions.setFormat(format);
@@ -66,6 +67,7 @@ struct ServerSession::Impl {
     sync::Actions initialRemote;
     ServerTransport transport;
     sync::Applier applier;
+    int unknown = 0;    // what the last actions diff held that this server does not know, as last logged
     Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next, std::uint32_t f)
         : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(actionsIn(next, f)),
           transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
@@ -106,10 +108,20 @@ std::vector<sync::Action> ServerSession::take(std::string* problem) {
     if (diff.empty())
         return fresh;
     std::vector<sync::Action> actions;
-    const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format); }, problem);
+    int unknown = 0;
+    const bool parsed = guarded([&] { actions = sync::Actions::parse(diff, impl_->format, &unknown); }, problem);
     sync::wipeBytes(diff);  // it may hold a secret answer's value
     if (!parsed)
         return fresh;
+    // What a later window's actions held that this server skipped: logged when the count changes, never the text.
+    if (unknown != impl_->unknown) {
+        impl_->unknown = unknown;
+        if (unknown > 0) {
+            std::fprintf(stderr, "nexus-server: link on port %s: the window's actions hold %d field(s) or kind(s) this "
+                "server does not know (a later window): skipped; an action of a kind it does not know is counted and "
+                "not applied\n", port().c_str(), unknown);
+        }
+    }
     return impl_->applier.apply(actions, problem);
 }
 

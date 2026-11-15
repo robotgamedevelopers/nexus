@@ -3,6 +3,8 @@
 #               into next/gen, test only) reading each other's bytes both ways. In memory: no time, no sockets, no
 #               files. One ctest entry per group, so they run in parallel. The sanitizer jobs build it beside the model
 #               checks (--target model_checks wire_test) and run it.
+#   nexus_versions_test
+#               the same both ways through nexus's real wire code: the sessions diff, the actions and the Hello.
 
 # The later version's generated code, a library of its own so that its translation units never meet this version's.
 # MSVC's C4305 is off in its generated sources, as in this version's (src/wire/tables.h says why).
@@ -23,4 +25,15 @@ target_compile_options(wire_test PRIVATE ${NEXUS_WARNINGS})
 foreach(group roundtrip versions)
     add_test(NAME wire_unit_${group} COMMAND wire_test ${group})
     set_tests_properties(wire_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
+endforeach()
+
+# nexus's own wire code (sync::Sessions, sync::Actions, the Hello) against the later version's generated code, both
+# ways: nexus_versions_test.cpp includes only nexus's headers, wire_next.cpp only the later version's.
+add_executable(nexus_versions_test nexus_versions_test.cpp wire_next.cpp)
+target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next)
+target_compile_options(nexus_versions_test PRIVATE ${NEXUS_WARNINGS})
+
+foreach(group sessions actions hello)
+    add_test(NAME wire_unit_nexus_${group} COMMAND nexus_versions_test ${group})
+    set_tests_properties(wire_unit_nexus_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

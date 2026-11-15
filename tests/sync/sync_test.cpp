@@ -25,6 +25,7 @@
 #include "sync/mirror.h"
 #include "sync/sessions.h"
 #include "sync/wire.h"
+#include "wire/tables.h"
 
 namespace {
 
@@ -498,8 +499,15 @@ void sessions_open_entry_sends_only_growth() {
     const Sessions a({std::make_shared<const SessionView>(tailFor("ada", t, {}, Tail{}))});
     t.back() = entry(EntryKind::Friend, std::string(2000, 'a') + "bcd", false);
     const Sessions b({std::make_shared<const SessionView>(tailFor("ada", t, {}, Tail{}))});
+    // Only the three bytes it grew by, not the 2000 it held: in format 4 a diff also carries schema's table of the
+    // field ids it uses (about 200 bytes), and in format 3 nothing else (under 40).
     const std::string d = b.diff_from(a);
-    CHECK(d.size() < 40);
+    CHECK(d.size() < 400);
+    Sessions a3 = a;
+    Sessions b3 = b;
+    a3.setFormat(3);
+    b3.setFormat(3);
+    CHECK(b3.diff_from(a3).size() < 40);
     Sessions c = a;
     c.apply_string(d);
     CHECK(c == b);
@@ -525,12 +533,15 @@ void sessions_diff_bounded_by_tail() {
     const Sessions b({std::make_shared<const SessionView>(tailFor("ada", t, {}, tail))});
     CHECK(b.find(sid("ada"))->first == 10000 - 16);
     CHECK(b.find(sid("ada"))->total() == 10000);
+    // 16 entries of about 110 bytes, and a table of field ids in format 4 (about 200 bytes once per diff, sessions_
+    // open_entry_sends_only_growth)
+    const std::size_t bound = 16 * 120 + 400;
     const std::string fromEmpty = b.init_diff();
-    CHECK(fromEmpty.size() < 16 * 120 + 100);
+    CHECK(fromEmpty.size() < bound);
     // far behind: the tail, not the history
     std::vector<EntryRef> old(t.begin(), t.begin() + 10);
     const Sessions a({std::make_shared<const SessionView>(tailFor("ada", old, {}, tail))});
-    CHECK(b.diff_from(a).size() < 16 * 120 + 100);
+    CHECK(b.diff_from(a).size() < bound);
     // the byte budget: entries of 6000 bytes, at most 16 KiB, so two; the newest whole even when larger
     std::vector<EntryRef> big = {entry(EntryKind::Friend, std::string(6000, 'a')),
         entry(EntryKind::Friend, std::string(6000, 'b')), entry(EntryKind::Friend, std::string(6000, 'c'))};
@@ -605,11 +616,36 @@ void sessions_malformed_refused_unchanged() {
         w.byte(1);                  // then a queue of none, where the entry should be
         w.u64(0);
         Sessions a = b;
+        a.setFormat(3);
         bool threw = false;
         try {
             a.apply_string(w.take());
         } catch (const BadDiff&) {
             threw = true;
+        }
+        CHECK(threw && a == b);
+    }
+    // the same in format 4, as schema's table: well formed, and refused for what it says
+    {
+        nexuswire::SessionsDiffBuilder w;
+        nexuswire::SessionChange* s = nexuswire::SessionsDiffSessionsAdd(w.main, w.GetRoot()->sessions);
+        s->id = 1;
+        s->changed = true;
+        s->first = ~std::uint64_t(0);
+        s->keep_from = ~std::uint64_t(0);
+        nexuswire::EntryChange* e = nexuswire::SessionChangeEntriesAdd(w.main, s->entries);
+        e->kind = nexuswire::EntryKind::Person;
+        e->closed = true;
+        s->queue_changed = true;
+        std::string bytes(static_cast<std::size_t>(nexuswire::SessionsDiffMeasure(w)), '\0');
+        CHECK(nexuswire::SessionsDiffSave(w, reinterpret_cast<std::uint8_t*>(bytes.data()),
+            static_cast<std::int64_t>(bytes.size())) == static_cast<std::int64_t>(bytes.size()));
+        Sessions a = b;
+        bool threw = false;
+        try {
+            a.apply_string(bytes);
+        } catch (const BadDiff& x) {
+            threw = std::string(x.what()).find("past the last entry number") != std::string::npos;
         }
         CHECK(threw && a == b);
     }
@@ -1052,10 +1088,15 @@ void sessions_activity_and_tool_lines() {
     CHECK(!d.empty());
     c.apply_string(d);
     CHECK(c == b && c.find(sid("ada"))->activity == Activity::Down);
-    // The two whole diffs differ in one byte, the activity's: Down is 2. 3 is an activity this build does not know (a
-    // later server's): it reads busy, the friend neither idle nor down, and the diff is not refused.
-    std::string later = b.init_diff();
-    const std::string good = a.init_diff();
+    // In format 3 the two whole diffs differ in one byte, the activity's: Down is 2. 3 is an activity this build does
+    // not know (a later server's): it reads busy, the friend neither idle nor down, and the diff is not refused. (In
+    // format 4 an activity a later version adds reads busy too: wire_unit_versions.)
+    Sessions a3 = a;
+    Sessions b3 = b;
+    a3.setFormat(3);
+    b3.setFormat(3);
+    std::string later = b3.init_diff();
+    const std::string good = a3.init_diff();
     std::size_t at = later.size();
     for (std::size_t i = 0; i < later.size() && i < good.size(); ++i) {
         if (later[i] != good[i]) {
@@ -1067,6 +1108,7 @@ void sessions_activity_and_tool_lines() {
     if (at < later.size()) {
         later[at] = 3;
         Sessions e;
+        e.setFormat(3);
         e.apply_string(later);
         CHECK(e.find(sid("ada")) != nullptr && e.find(sid("ada"))->activity == Activity::Busy);
     }
@@ -1174,7 +1216,8 @@ void state_format_2_reads_later_formats() {
     requests.str(request.take());
     requests.str("a field a later format adds after the requests");
     Sessions three;
-    CHECK(three.format() == kStateFormat && kStateFormat == kSecretsFormat);
+    three.setFormat(kSecretsFormat);
+    CHECK(kSecretsFormat == 3 && kTablesFormat == 4);
     three.apply_string(sessions + requests.take());
     const std::vector<SecretRequest> asked{SecretRequest{4, "work", "oauth-token", 1, "ada", "the login expired"}};
     CHECK(three.requests() == asked);
@@ -1252,6 +1295,7 @@ void sessions_instance_appended() {
     // In format 3 the secret requests follow, none here.
     Writer none;
     none.u64(0);
+    b.setFormat(3);
     CHECK(b.init_diff() == mainSessionFrame(&studio) + none.take());
     b.setFormat(2);
     CHECK(b.init_diff() == mainSessionFrame(&studio));
@@ -1293,6 +1337,106 @@ void link_formats_agree() {
     const std::string server = serverRefusal(1, 2);
     CHECK(server.find("nexus-server is too old") != std::string::npos && server.find("nexus-server stop") !=
         std::string::npos && server.find('\n') == std::string::npos);
+}
+
+// Each end's Hello against the other's: refused only when the other's proto is below this end's min_peer, in one plain
+// line naming which end is too old; every other pairing works, at the older of the two protos. The Hello as text reads
+// back as it was, and text that is not a Hello is refused with why.
+void hello_min_peer() {
+    const Hello now = kHello;
+    CHECK(now.proto == kStateFormat && now.minPeer == kMinPeer);
+    // A window and a server of any two protos at or above the other's min_peer: no refusal either way.
+    for (std::uint32_t w = 1; w <= 6; ++w) {
+        for (std::uint32_t s = 1; s <= 6; ++s) {
+            const Hello window{w, 1};
+            const Hello server{s, 1};
+            CHECK(refusalOfWindow(window, server).empty() && refusalOfServer(server, window).empty());
+            CHECK(linkFormat(w, s) == (w < s ? w : s));
+        }
+    }
+    // A server that works only with windows from proto 5: a window of 4 is refused by the server, and told to update
+    // nexus; one of 5 or 6 is served.
+    const Hello strictServer{6, 5};
+    const std::string old = refusalOfWindow(Hello{4, 1}, strictServer);
+    CHECK(old.find("This window is too old") == 0 && old.find("update nexus.") != std::string::npos);
+    CHECK(old.find('\n') == std::string::npos);
+    CHECK(refusalOfWindow(Hello{5, 1}, strictServer).empty() && refusalOfWindow(Hello{6, 1}, strictServer).empty());
+    // A window that works only with servers from proto 5: a server of 4 is refused, by the window and, when the
+    // server hears the window's Hello, by the server too, with the same line, which says to update nexus-server.
+    const Hello strictWindow{6, 5};
+    const std::string fromWindow = refusalOfServer(Hello{4, 1}, strictWindow);
+    const std::string fromServer = refusalOfWindow(strictWindow, Hello{4, 1});
+    CHECK(fromWindow.find("nexus-server is too old") == 0 && fromWindow == fromServer);
+    CHECK(refusalOfServer(Hello{5, 1}, strictWindow).empty());
+    // An end from before Hello: it speaks the format it stated, and works with every older one.
+    CHECK(statedFormat(0) == (Hello{1, 1}) && statedFormat(3) == (Hello{3, 1}));
+    CHECK(refusalOfWindow(statedFormat(0)).empty() && refusalOfServer(statedFormat(3)).empty());
+    // The text form.
+    Hello read;
+    std::string why;
+    CHECK(readHello(helloText(Hello{7, 2}), &read, &why) && read == (Hello{7, 2}));
+    for (const std::string& bad : {std::string(), std::string("0"), std::string("zz"), std::string("ABCD"),
+                                   std::string("00"), helloText(Hello{0, 1}), std::string(2000, 'a')}) {
+        why.clear();
+        CHECK(!readHello(bad, &read, &why) && !why.empty() && why.find('\n') == std::string::npos);
+    }
+}
+
+// Format 4: an entry whose kind this build does not know reads as a notice, never failing the read; here one whose
+// writer set no kind (None, as a later version's kind reads; wire_unit_versions sends a real later kind).
+void sessions_unknown_kind_is_a_notice() {
+    nexuswire::SessionsDiffBuilder w;
+    nexuswire::SessionChange* s = nexuswire::SessionsDiffSessionsAdd(w.main, w.GetRoot()->sessions);
+    s->id = 1;
+    s->changed = true;
+    nexuswire::EntryChange* e = nexuswire::SessionChangeEntriesAdd(w.main, s->entries);
+    e->closed = true;
+    nexuswire::TableStringEmplace(w.main, e->tail, "a later kind", 12);
+    s->queue_changed = true;
+    std::string bytes(static_cast<std::size_t>(nexuswire::SessionsDiffMeasure(w)), '\0');
+    CHECK(nexuswire::SessionsDiffSave(w, reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::int64_t>(bytes.size())) == static_cast<std::int64_t>(bytes.size()));
+    Sessions read;
+    read.apply_string(bytes);
+    const SessionView* v = read.find(1);
+    CHECK(v != nullptr && v->entries.size() == 1);
+    if (v != nullptr && v->entries.size() == 1) {
+        CHECK(v->entries[0]->kind == EntryKind::Notice && v->entries[0]->text == "a later kind");
+        CHECK(v->activity == Activity::Idle);   // absent: its declared default
+    }
+}
+
+// Format 4 carries text as schema's text, well-formed UTF-8 with no zero byte. Text that is not reaches the window with
+// each such byte as U+FFFD, the diff never refused; an open entry of such text grows by whole sends (never an offset
+// into bytes the window holds otherwise), and the window's entry keeps up.
+void sessions_text_not_utf8() {
+    const std::string bad = std::string("ok \xff\x00 and \xc3", 11);
+    const std::string shown = "ok \xEF\xBF\xBD\xEF\xBF\xBD and \xEF\xBF\xBD";
+    auto state = [](const std::string& text, bool closed, bool queued = true) {
+        SessionView v = tailFor("ada", {entry(EntryKind::Friend, text, closed)},
+            queued ? std::vector<std::string>{text} : std::vector<std::string>{}, Tail{});
+        return Sessions({std::make_shared<const SessionView>(std::move(v))});
+    };
+    const Sessions a = state(bad, false);
+    const Sessions b = state(bad + " more", false);
+    const Sessions c = state(bad + " more, done", true);
+    Sessions window;
+    window.apply_string(a.init_diff());
+    window.apply_string(b.diff_from(a));
+    window.apply_string(c.diff_from(b));
+    const SessionView* v = window.find(sid("ada"));
+    CHECK(v != nullptr && v->entries.size() == 1);
+    if (v != nullptr && v->entries.size() == 1) {
+        CHECK(v->entries[0]->text == shown + " more, done" && v->entries[0]->closed);
+        CHECK(v->queue == std::vector<std::string>{shown + " more, done"});
+    }
+    // Good text still grows by its tail alone.
+    const Sessions g1 = state(std::string(3000, 'g'), false, false);
+    const Sessions g2 = state(std::string(3000, 'g') + "h", false, false);
+    CHECK(g2.diff_from(g1).size() < 400);
+    Sessions k = g1;
+    k.apply_string(g2.diff_from(g1));
+    CHECK(k == g2);
 }
 
 // A state file says its format and is read in it: this build's round trip; one of format 1 (main's bytes); one of a
@@ -1711,6 +1855,9 @@ const Case kCases[] = {
     {"state_format_1_from_main", state_format_1_from_main},
     {"state_format_2_reads_later_formats", state_format_2_reads_later_formats},
     {"link_formats_agree", link_formats_agree},
+    {"hello_min_peer", hello_min_peer},
+    {"sessions_unknown_kind_is_a_notice", sessions_unknown_kind_is_a_notice},
+    {"sessions_text_not_utf8", sessions_text_not_utf8},
     {"state_files", state_files},
     {"cursor_from_the_servers_state", cursor_from_the_servers_state},
 };

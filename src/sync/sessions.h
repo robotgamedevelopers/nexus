@@ -15,7 +15,10 @@
 // saw. The diff from a state that holds an entry still open sends only the text that entry grew by.
 //
 // Across versions: a diff is written in the format of the link it goes on (sync/formats.h, docs/formats.md), which a
-// window and a server of different versions agree on when the link is made.
+// window and a server of different versions agree on when the link is made: from format 4 schema's SessionsDiff table
+// (schema/Nexus.schema), before it the hand-written formats (sync/codec.h). What a diff says is worked out here, the
+// same in every format; the codec only writes it and reads it back. An entry kind this build does not know shows as a
+// notice and an activity it does not know as busy; neither ever fails the read.
 
 #pragma once
 
@@ -119,6 +122,10 @@ public:
     // keeps it; equality ignores it.
     std::uint32_t format() const { return format_; }
     void setFormat(std::uint32_t format) { format_ = format; }
+    // How many fields and enum values the last diff applied held that this build does not know and skipped (a later
+    // server's: schema's report.unknown, from format 4), so that the window can log them. A copy keeps it; equality
+    // ignores it.
+    int unknown() const { return unknown_; }
     bool operator==(const Sessions& x) const;
     bool compare(const Sessions& x) const { return !(*this == x); }  // mosh's verbose check: true when they differ
     void subtract(const Sessions*) {}   // a state is the whole picture, not a stream: nothing to forget
@@ -128,6 +135,7 @@ private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
     std::uint32_t format_ = kStateFormat;
+    int unknown_ = 0;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the
