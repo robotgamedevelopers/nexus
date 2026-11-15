@@ -27,12 +27,15 @@ namespace {
 Status os_error(const char* what, const std::string& path) {
     int e = errno;
     std::string msg = std::string(what) + " " + path + ": " + std::strerror(e);
-    if (e == ENOENT)
+    if (e == ENOENT) {
         return Status::not_found(msg);
-    if (e == ENOSPC || e == EDQUOT)
+    }
+    if (e == ENOSPC || e == EDQUOT) {
         return Status::failed(msg + " (free space on that disk, then restart the server)");
-    if (e == EACCES || e == EPERM || e == EROFS)
+    }
+    if (e == EACCES || e == EPERM || e == EROFS) {
         return Status::failed(msg + " (the server's user must be able to write there)");
+    }
     return Status::failed(msg + " (check the disk; the server reopens the store from what is durable when restarted)");
 }
 
@@ -40,8 +43,9 @@ class Fd {
 public:
     explicit Fd(int fd) : fd_(fd) {}
     ~Fd() {
-        if (fd_ >= 0)
+        if (fd_ >= 0) {
             ::close(fd_);
+        }
     }
     Fd(const Fd&) = delete;
     Fd& operator=(const Fd&) = delete;
@@ -58,14 +62,17 @@ private:
 
 Status full_sync(int fd, const std::string& path) {
 #ifdef F_FULLFSYNC
-    if (::fcntl(fd, F_FULLFSYNC) == 0)
+    if (::fcntl(fd, F_FULLFSYNC) == 0) {
         return Status::ok();
+    }
     // Some filesystems (network, FUSE) have no F_FULLFSYNC; fsync is the most they offer.
-    if (errno != ENOTSUP && errno != EINVAL && errno != ENOTTY)
+    if (errno != ENOTSUP && errno != EINVAL && errno != ENOTTY) {
         return os_error("F_FULLFSYNC", path);
+    }
 #endif
-    if (::fsync(fd) != 0)
+    if (::fsync(fd) != 0) {
         return os_error("fsync", path);
+    }
     return Status::ok();
 }
 
@@ -96,59 +103,109 @@ private:
     std::string path_;
 };
 
-// A lock held: the descriptor flock was taken on. Closing it releases the lock; so does the end of the process. It is
-// opened close-on-exec, so no driver or other child the server starts ever holds it.
+// The directories a PosixFs holds, by the name each was held by: the descriptor every later call on a name in it goes
+// through. Shared with each hold, which takes its entry out when it goes, so that a hold outliving its Fs is safe.
+using Roots = std::map<std::string, int>;
+
+// A directory held: its descriptor, opened once, with flock on it. Closing it releases the lock; so does the end of the
+// process. It is opened close-on-exec, so no driver or other child the server starts ever holds it.
 class PosixLock : public FileLock {
 public:
-    explicit PosixLock(int fd) : fd_(fd) {}
+    PosixLock(int fd, std::shared_ptr<Roots> roots, std::string dir)
+        : fd_(fd), roots_(std::move(roots)), dir_(std::move(dir)) {
+        roots_->emplace(dir_, fd_.get());   // a second hold of the same name in one Fs keeps the first's
+    }
+    ~PosixLock() override {
+        auto it = roots_->find(dir_);
+        if (it != roots_->end() && it->second == fd_.get()) {
+            roots_->erase(it);
+        }
+    }
+    PosixLock(const PosixLock&) = delete;
+    PosixLock& operator=(const PosixLock&) = delete;
 
 private:
     Fd fd_;
+    std::shared_ptr<Roots> roots_;
+    std::string dir_;
 };
 
-// Where advisory locks cannot be trusted: a network filesystem (another machine's lock is not seen, or the lock is
-// emulated), or one that passes locks to another program (FUSE, 9p: WSL2's view of Windows drives). Empty when the
-// directory is on a local disk; otherwise the filesystem's name.
-std::string unlockable_filesystem(const std::string& dir) {
-    struct statfs fs;
-    if (::statfs(dir.c_str(), &fs) != 0) {
-        return std::string();   // the open below says why
-    }
-#if defined(__APPLE__)
-    if ((fs.f_flags & MNT_LOCAL) == 0) {
-        return fs.f_fstypename;
-    }
-    const std::string type = fs.f_fstypename;
-    if (type.rfind("macfuse", 0) == 0 || type.rfind("osxfuse", 0) == 0 || type == "fuse") {
-        return type;
+// Where advisory locks cannot be trusted, by the Linux name of the filesystem (statfs's f_type, or the test seam's
+// name): a network filesystem (another machine's lock is not seen, or the lock is emulated), or one that passes locks
+// to another program. What each is, for the refusal; empty when it is none of these. virtiofs reports FUSE's type.
+std::string unlockable_name(const std::string& type) {
+    static const std::pair<const char*, const char*> kNames[] = {
+        {"nfs", "NFS, a network filesystem"},
+        {"smb", "SMB, a network filesystem"},
+        {"cifs", "CIFS (SMB), a network filesystem"},
+        {"smb2", "SMB2, a network filesystem"},
+        {"fuse", "FUSE, a filesystem run by another program (virtiofs, sshfs and the like are FUSE)"},
+        {"9p", "9p, a filesystem served by another program (WSL2's view of Windows drives is 9p)"},
+        {"ncp", "NCP, a network filesystem"},
+        {"afs", "AFS, a network filesystem"},
+        {"kafs", "kAFS, a network filesystem"},
+        {"ceph", "Ceph, a network filesystem"},
+        {"gpfs", "GPFS, a cluster filesystem"},
+        {"lustre", "Lustre, a cluster filesystem"},
+        {"beegfs", "BeeGFS, a cluster filesystem"},
+        {"coda", "Coda, a network filesystem"},
+        {"vboxsf", "vboxsf, a VirtualBox shared folder"},
+    };
+    for (const auto& [name, what] : kNames) {
+        if (type == name) {
+            return what;
+        }
     }
     return std::string();
+}
+
+// The filesystem a held directory is on, when it is one where locks cannot be trusted: what it is; else empty.
+std::string unlockable_filesystem(int dirfd) {
+    struct statfs fs;
+    if (::fstatfs(dirfd, &fs) != 0) {
+        return std::string();   // the lock below says why, if anything is wrong
+    }
+#if defined(__APPLE__)
+    const std::string type = fs.f_fstypename;
+    if ((fs.f_flags & MNT_LOCAL) == 0) {
+        return type + ", not a local disk";
+    }
+    if (type.rfind("macfuse", 0) == 0 || type.rfind("osxfuse", 0) == 0 || type == "fuse") {
+        return unlockable_name("fuse");
+    }
+    return unlockable_name(type);
 #else
     switch (static_cast<unsigned long>(fs.f_type)) {
     case 0x6969UL:
-        return "nfs";
+        return unlockable_name("nfs");
     case 0x517BUL:
-        return "smb";
+        return unlockable_name("smb");
     case 0xFF534D42UL:
-        return "cifs";
+        return unlockable_name("cifs");
     case 0xFE534D42UL:
-        return "smb2";
+        return unlockable_name("smb2");
     case 0x65735546UL:
-        return "fuse";
+        return unlockable_name("fuse");
     case 0x01021997UL:
-        return "9p";
+        return unlockable_name("9p");
     case 0x564CUL:
-        return "ncp";
+        return unlockable_name("ncp");
     case 0x5346414FUL:
-        return "afs";
+        return unlockable_name("afs");
     case 0x6B414653UL:
-        return "kafs";
+        return unlockable_name("kafs");
     case 0x00C36400UL:
-        return "ceph";
+        return unlockable_name("ceph");
     case 0x47504653UL:
-        return "gpfs";
+        return unlockable_name("gpfs");
     case 0x0BD00BD0UL:
-        return "lustre";
+        return unlockable_name("lustre");
+    case 0x19830326UL:
+        return unlockable_name("beegfs");
+    case 0x73757245UL:
+        return unlockable_name("coda");
+    case 0x786F4256UL:
+        return unlockable_name("vboxsf");
     default:
         return std::string();
     }
@@ -157,32 +214,45 @@ std::string unlockable_filesystem(const std::string& dir) {
 
 class PosixFs : public Fs {
 public:
-    Status lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) override {
+    explicit PosixFs(PosixOptions options) : options_(std::move(options)), roots_(std::make_shared<Roots>()) {
+        if (!options_.now_ms) {
+            options_.now_ms = [] {
+                return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            };
+        }
+        if (!options_.sleep_ms) {
+            options_.sleep_ms = [](std::uint64_t ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+        }
+    }
+
+    Status lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLock>& out) override {
         out.reset();
-        const std::string dir = dir_of(path);
-        const std::string type = unlockable_filesystem(dir);
+        // The directory itself, by its name this once (a symbolic link to it followed, so that every name it is reached
+        // by takes the one lock); from now on only by this descriptor.
+        Fd fd(::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+        if (fd.get() < 0) {
+            return os_error("open", dir);
+        }
+        const std::string type = options_.test_fs_type.empty() ? unlockable_filesystem(fd.get())
+                                                                : unlockable_name(options_.test_fs_type);
         if (!type.empty()) {
-            return Status::failed(dir + " is on a " + type + " filesystem, where a lock is not trusted to keep a second "
+            return Status::failed(dir + " is on " + type + ", where a lock is not trusted to keep a second "
                                   "nexus-server out; keep the server's directory on a local disk (--dir, or HOME)");
         }
-        Fd fd(::open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600));
-        if (fd.get() < 0) {
-            return os_error("open", path);
-        }
         const int want = mode == LockMode::Exclusive ? LOCK_EX : LOCK_SH;
-        const auto start = std::chrono::steady_clock::now();
+        const std::uint64_t start = options_.now_ms();
         for (;;) {
             if (::flock(fd.get(), want | LOCK_NB) == 0) {
-                out = std::make_unique<PosixLock>(fd.release());
-                return Status::ok();
+                break;
             }
             if (errno == EINTR) {
                 continue;
             }
             if (errno != EWOULDBLOCK) {
                 const int e = errno;
-                return Status::failed("flock " + path + ": " + std::strerror(e) + " (this filesystem takes no locks; keep "
-                                      "the server's directory on a local disk)");
+                return Status::failed("flock " + dir + ": " + std::strerror(e) + " (this filesystem takes no locks; "
+                                      "keep the server's directory on a local disk)");
             }
             // Refused: a shared lock to be had now means only readers hold it (next_lock_step).
             bool shared_free = false;
@@ -190,18 +260,42 @@ public:
                 shared_free = true;
                 ::flock(fd.get(), LOCK_UN);
             }
-            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count();
-            if (next_lock_step(false, shared_free, static_cast<std::uint64_t>(waited)) != LockStep::Wait) {
-                return Status::busy(path + " is locked by another process");
+            const LockStep step = next_lock_step(false, shared_free, options_.now_ms() - start,
+                                                 options_.reader_wait_ms);
+            if (step == LockStep::Busy) {
+                return Status::busy(dir + " is locked by a writer");
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(kLockRetryMs));
+            if (step == LockStep::Readers) {
+                return Status::failed(dir + " is held by readers only (`nexus-server store check`, or another tool "
+                                      "reading the store, each of which lets go within " +
+                                      std::to_string(kReaderCopyLimitMs) + " ms), and they did not let go within " +
+                                      std::to_string(options_.reader_wait_ms) + " ms; find the reader that holds it "
+                                      "(lsof " + dir + ") and end it, then start the server again");
+            }
+            options_.sleep_ms(kLockRetryMs);
         }
+        // The lock checked where it is: a second exclusive lock on another descriptor of the same directory must be
+        // refused now. Granted, this filesystem does not keep locks, whatever its type said.
+        Fd again(::openat(fd.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+        if (again.get() < 0) {
+            return os_error("open", dir);
+        }
+        const bool granted = options_.test_locks_ignored || ::flock(again.get(), LOCK_EX | LOCK_NB) == 0;
+        if (granted || errno != EWOULDBLOCK) {
+            return Status::failed("locks on " + dir + " are not kept: a second exclusive lock was " +
+                                  (granted ? std::string("granted") : "neither granted nor refused (" +
+                                   std::string(std::strerror(errno)) + ")") + " while this process held one, so a "
+                                  "second nexus-server would not be kept out; keep the server's directory on a local "
+                                  "disk (--dir, or HOME)");
+        }
+        out = std::make_unique<PosixLock>(fd.release(), roots_, dir);
+        return Status::ok();
     }
 
     Status open_append(const std::string& path, std::unique_ptr<AppendFile>& out) override {
         out.reset();
-        int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+        const At at = where(path);
+        int fd = ::openat(at.fd, at.name.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
         if (fd < 0) {
             return os_error("open", path);
         }
@@ -210,6 +304,9 @@ public:
     }
 
     Status make_dir(const std::string& dir) override {
+        if (held(dir) >= 0) {
+            return Status::ok();    // held by its descriptor: there, whatever its name now names
+        }
         std::size_t start = 0;
         while (true) {
             std::size_t slash = dir.find('/', start);
@@ -217,61 +314,84 @@ public:
             if (!at.empty()) {
                 if (::mkdir(at.c_str(), 0700) == 0) {
                     Status s = sync_dir(dir_of(at));
-                    if (!s.is_ok())
+                    if (!s.is_ok()) {
                         return s;
+                    }
                 } else if (errno != EEXIST) {
                     return os_error("mkdir", at);
                 }
             }
-            if (slash == std::string::npos)
+            if (slash == std::string::npos) {
                 return Status::ok();
+            }
             start = slash + 1;
         }
     }
 
     Status list(const std::string& dir, std::vector<std::string>& names) override {
         names.clear();
-        DIR* d = ::opendir(dir.c_str());
-        if (d == nullptr)
+        const int root = held(dir);
+        DIR* d = nullptr;
+        if (root >= 0) {
+            const int fd = ::openat(root, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            d = fd < 0 ? nullptr : ::fdopendir(fd);
+            if (fd >= 0 && d == nullptr) {
+                ::close(fd);
+            }
+        } else {
+            d = ::opendir(dir.c_str());
+        }
+        if (d == nullptr) {
             return os_error("opendir", dir);
+        }
         while (dirent* e = ::readdir(d)) {
             std::string n = e->d_name;
-            if (n != "." && n != "..")
+            if (n != "." && n != "..") {
                 names.push_back(n);
+            }
         }
         ::closedir(d);
         return Status::ok();
     }
 
     Status size(const std::string& path, std::uint64_t& out) override {
+        const At at = where(path);
         struct stat st;
-        if (::stat(path.c_str(), &st) != 0)
+        if (::fstatat(at.fd, at.name.c_str(), &st, 0) != 0) {
             return os_error("stat", path);
+        }
         out = std::uint64_t(st.st_size);
         return Status::ok();
     }
 
     Status read(const std::string& path, std::uint64_t off, std::uint64_t n, Bytes& out) override {
         out.clear();
-        Fd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
-        if (fd.get() < 0)
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_RDONLY | O_CLOEXEC));
+        if (fd.get() < 0) {
             return os_error("open", path);
+        }
         struct stat st;
-        if (::fstat(fd.get(), &st) != 0)
+        if (::fstat(fd.get(), &st) != 0) {
             return os_error("fstat", path);
+        }
         std::uint64_t total = std::uint64_t(st.st_size);
-        if (off >= total)
+        if (off >= total) {
             return Status::ok();
+        }
         out.resize(std::size_t(std::min(n, total - off)));
         std::size_t got = 0;
         while (got < out.size()) {
             ssize_t r = ::pread(fd.get(), out.data() + got, out.size() - got, off_t(off + got));
-            if (r < 0 && errno == EINTR)
+            if (r < 0 && errno == EINTR) {
                 continue;
-            if (r < 0)
+            }
+            if (r < 0) {
                 return os_error("read", path);
-            if (r == 0)
+            }
+            if (r == 0) {
                 break;
+            }
             got += std::size_t(r);
         }
         out.resize(got);
@@ -279,53 +399,76 @@ public:
     }
 
     Status create(const std::string& path) override {
-        Fd fd(::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
-        if (fd.get() < 0)
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
+        if (fd.get() < 0) {
             return os_error("create", path);
+        }
         return Status::ok();
     }
 
     Status append(const std::string& path, std::span<const std::uint8_t> data) override {
-        Fd fd(::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC));
-        if (fd.get() < 0)
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC));
+        if (fd.get() < 0) {
             return os_error("open", path);
+        }
         return write_all(fd.get(), data, path);
     }
 
     Status truncate(const std::string& path, std::uint64_t size) override {
-        if (::truncate(path.c_str(), off_t(size)) != 0)
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_WRONLY | O_CLOEXEC));
+        if (fd.get() < 0) {
+            return os_error("open", path);
+        }
+        if (::ftruncate(fd.get(), off_t(size)) != 0) {
             return os_error("truncate", path);
+        }
         return Status::ok();
     }
 
     Status sync(const std::string& path) override {
-        Fd fd(::open(path.c_str(), O_RDWR | O_CLOEXEC));
-        if (fd.get() < 0)
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_RDWR | O_CLOEXEC));
+        if (fd.get() < 0) {
             return os_error("open", path);
+        }
         return full_sync(fd.get(), path);
     }
 
     Status sync_dir(const std::string& dir) override {
+        const int root = held(dir);
+        if (root >= 0) {
+            return full_sync(root, dir);
+        }
         Fd fd(::open(dir.c_str(), O_RDONLY | O_CLOEXEC));
-        if (fd.get() < 0)
+        if (fd.get() < 0) {
             return os_error("open", dir);
+        }
         return full_sync(fd.get(), dir);
     }
 
     Status rename(const std::string& from, const std::string& to) override {
-        if (::rename(from.c_str(), to.c_str()) != 0)
+        const At a = where(from);
+        const At b = where(to);
+        if (::renameat(a.fd, a.name.c_str(), b.fd, b.name.c_str()) != 0) {
             return os_error("rename", from + " to " + to);
+        }
         return Status::ok();
     }
 
     Status remove(const std::string& path) override {
-        if (::unlink(path.c_str()) != 0)
+        const At at = where(path);
+        if (::unlinkat(at.fd, at.name.c_str(), 0) != 0) {
             return os_error("unlink", path);
+        }
         return Status::ok();
     }
 
     Status write_new(const std::string& path, std::span<const std::uint8_t> data) override {
-        Fd fd(::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+        const At at = where(path);
+        Fd fd(::openat(at.fd, at.name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
         if (fd.get() < 0) {
             return os_error("create", path);
         }
@@ -363,12 +506,33 @@ public:
         }
         return Status::ok();
     }
+
+private:
+    // A name to open: in a held directory, its descriptor and the name in it; elsewhere, the path as it is.
+    struct At {
+        int fd;
+        std::string name;
+    };
+    int held(const std::string& dir) const {
+        auto it = roots_->find(dir);
+        return it == roots_->end() ? -1 : it->second;
+    }
+    At where(const std::string& path) const {
+        const int root = held(dir_of(path));
+        if (root >= 0) {
+            return At{root, name_of(path)};
+        }
+        return At{AT_FDCWD, path};
+    }
+
+    PosixOptions options_;
+    std::shared_ptr<Roots> roots_;
 };
 
 } // namespace
 
-std::unique_ptr<Fs> make_posix_fs() {
-    return std::make_unique<PosixFs>();
+std::unique_ptr<Fs> make_posix_fs(PosixOptions options) {
+    return std::make_unique<PosixFs>(std::move(options));
 }
 
 } // namespace nexus::store

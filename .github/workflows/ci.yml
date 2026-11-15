@@ -213,7 +213,7 @@ jobs:
           for seed in 1 2 3 4 5; do
             build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
           done
-          for fault in --faulty-unlocked --faulty-restore-first; do
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
             build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
           done
           # the driver protocol: every group (the parser and the reader over every chunking)
@@ -639,7 +639,7 @@ jobs:
           for seed in 1 2 3 4 5; do
             build/tests/store/store_lock_walk "$seed" 2000 walks/store_lock.tla
           done
-          for fault in --faulty-unlocked --faulty-restore-first; do
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy; do
             build/tests/store/store_lock_walk 1 2000 "$fault" walks/store_lock.tla
           done
           # the driver supervisor's walks and their faults

@@ -243,16 +243,36 @@ struct Link {
     std::unique_ptr<link::ServerSession> link;
 };
 
-class Server {
+// A test seam, set only by tests/link/server_lock.cpp: the start's wait for a lock held by a writer that does not
+// answer (server/start_order.h kHeldWaitMs), in milliseconds, so that a test sees it run out without waiting 10 s.
+constexpr const char* kHeldWaitVariable = "NEXUS_TEST_HELD_WAIT_MS";
+
+class Server : private StartSteps {
 public:
     explicit Server(const Paths& p) : paths_(p) {}
     int run();
 
 private:
+    // The start's steps (server/start_order.h), each taken through take_step.
+    StartOrder::Outcome probe(std::string* why) override { return probeControl(why); }
+    StartOrder::Outcome open(bool unlocked, std::string* why) override;
+    StartOrder::Outcome listen(std::string* why) override { return listenControl(why); }
+    StartOrder::Outcome restore(std::string* why) override {
+        return restoreAll(why) ? StartOrder::Outcome::Ok : StartOrder::Outcome::Failed;
+    }
+    void pause(std::uint64_t ms) override { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+    std::uint64_t now_ms() override { return static_cast<std::uint64_t>(nowMs()); }
+
     StartOrder::Outcome openStore(std::string* why);
     StartOrder::Outcome probeControl(std::string* why);
     StartOrder::Outcome listenControl(std::string* why);
-    bool restore(std::string* why);
+    bool restoreAll(std::string* why);
+    // The control socket's file removed, only when its name still names the socket this process bound (its device
+    // and inode, taken at the bind): never another server's, made at that name after this one's was moved or removed.
+    void unlinkOwnSocket();
+    bool bound_ = false;
+    dev_t socketDev_ = 0;
+    ino_t socketIno_ = 0;
     void control(int fd);
     bool endDrivers();
     void configApply(int fd, const std::string& request);
@@ -282,26 +302,32 @@ private:
     bool stopping_ = false;
 };
 
-// The store: its lock (exclusive, never waiting on a writer), then its replay. Nothing else of the server is made yet,
-// so nothing writes to the journal and no driver starts (server/start_order.h).
+StartOrder::Outcome Server::open(bool unlocked, std::string* why) {
+    if (unlocked) {
+        *why = "an unlocked open is the trace binding's fault, never the server's";
+        return StartOrder::Outcome::Failed;
+    }
+    return openStore(why);
+}
+
+// The store: its lock (exclusive, on its directory, never waiting on a writer), then its replay. Nothing else of the
+// server is made yet, so nothing writes to the journal and no driver starts (server/start_order.h).
 StartOrder::Outcome Server::openStore(std::string* why) {
-    fs_ = store::make_posix_fs();
-    // A test seam, set only by tests/link/link_e2e.cpp's flush run (server/flush_gate.h).
-    if (const char* gate = std::getenv(kFlushGateVariable)) {
-        fs_ = withFlushGate(std::move(fs_), gate);
+    if (!fs_) {
+        fs_ = store::make_posix_fs();
+        // A test seam, set only by tests/link/link_e2e.cpp's flush run (server/flush_gate.h).
+        if (const char* gate = std::getenv(kFlushGateVariable)) {
+            fs_ = withFlushGate(std::move(fs_), gate);
+        }
     }
     if (!store_.open(*fs_, paths_.store, why)) {
-        if (store_.busy()) {
-            *why += ", so this one exits";
-            return StartOrder::Outcome::Held;
-        }
-        return StartOrder::Outcome::Failed;
+        return store_.busy() ? StartOrder::Outcome::Held : StartOrder::Outcome::Failed;
     }
     const store::OpenReport& r = store_.report();
     std::fprintf(stderr, "nexus-server: store %s: %s, %zu session%s, %llu record%s replayed, %llu bytes of torn tail "
-        "cut; its lock %s/%s held\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(),
+        "cut; its lock (on the directory) held\n", paths_.store.c_str(), r.fresh ? "new" : "opened", store_.size(),
         store_.size() == 1 ? "" : "s", static_cast<unsigned long long>(r.records), r.records == 1 ? "" : "s",
-        static_cast<unsigned long long>(r.cut_bytes), paths_.store.c_str(), store::kLockName);
+        static_cast<unsigned long long>(r.cut_bytes));
     if (r.migrated > 0) {
         std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
             "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
@@ -313,7 +339,7 @@ StartOrder::Outcome Server::openStore(std::string* why) {
 // Everything over the store, made with its lock and the control socket both held: the drivers, the hub, the secret
 // dialog, the accounts (whose adoption commits to the journal), and last the drivers restored (which may commit and
 // start a driver for a queued prompt).
-bool Server::restore(std::string* why) {
+bool Server::restoreAll(std::string* why) {
     // The machine a friend's instance names to run here: the config's, else the short host name.
     const std::string host = hostName();
     const std::string machine = serverMachine(settings_.machine, host);
@@ -428,17 +454,30 @@ bool Server::restore(std::string* why) {
     return true;
 }
 
-// Another server answers on the control socket: Held. Asked before the store is opened (a server from before the
-// store's lock holds no lock, so only its socket shows it) and again just before the socket is bound.
+// Another server answers on the control socket: Answered. Asked before the store is opened (a server from before the
+// store's lock holds no lock, so only its socket shows it), at each try of a wait for a held lock, and again just
+// before the socket is bound.
 StartOrder::Outcome Server::probeControl(std::string* why) {
     const int other = connectControl(paths_.socket);
     if (other >= 0) {
         close(other);
         *why = "another nexus-server already answers on " + paths_.socket + ", so this one exits; `nexus-server stop` "
             "stops it";
-        return StartOrder::Outcome::Held;
+        return StartOrder::Outcome::Answered;
     }
     return StartOrder::Outcome::Ok;
+}
+
+void Server::unlinkOwnSocket() {
+    if (!bound_) {
+        return;
+    }
+    bound_ = false;
+    struct stat st;
+    if (lstat(paths_.socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode) && st.st_dev == socketDev_ &&
+            st.st_ino == socketIno_) {
+        unlink(paths_.socket.c_str());
+    }
 }
 
 StartOrder::Outcome Server::listenControl(std::string* why) {
@@ -448,9 +487,11 @@ StartOrder::Outcome Server::listenControl(std::string* why) {
         return StartOrder::Outcome::Failed;
     }
     if (probeControl(why) != StartOrder::Outcome::Ok) {
-        return StartOrder::Outcome::Held;
+        return StartOrder::Outcome::Answered;
     }
-    unlink(paths_.socket.c_str());   // a socket left by a server that ended without removing it
+    // A socket left by a server that ended without removing it: no server of this build can have bound it since, as
+    // binding takes this store's lock first, which this one holds (docs/formats.md, for a server from before the lock).
+    unlink(paths_.socket.c_str());
     listen_ = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_ < 0) {
         *why = errnoText("socket");
@@ -466,7 +507,15 @@ StartOrder::Outcome Server::listenControl(std::string* why) {
         *why = errnoText("cannot bind " + paths_.socket);
         return StartOrder::Outcome::Failed;
     }
-    if (chmod(paths_.socket.c_str(), 0600) != 0 || listen(listen_, 16) != 0) {
+    struct stat st;
+    if (lstat(paths_.socket.c_str(), &st) != 0) {
+        *why = errnoText("cannot read back " + paths_.socket);
+        return StartOrder::Outcome::Failed;
+    }
+    bound_ = true;
+    socketDev_ = st.st_dev;
+    socketIno_ = st.st_ino;
+    if (chmod(paths_.socket.c_str(), 0600) != 0 || ::listen(listen_, 16) != 0) {
         *why = errnoText("cannot listen on " + paths_.socket);
         return StartOrder::Outcome::Failed;
     }
@@ -646,46 +695,54 @@ int Server::run() {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return kFailedExit;
     }
-    // The start, in its order (server/start_order.h, models/store/StoreLock.tla): the socket asked, the store's lock
-    // and its replay, the socket bound, and only then the drivers restored. No window is served before the loop, so no
-    // session is made on a state not yet read.
-    StartOrder start;
-    for (StartOrder::Step step = start.next(); step != StartOrder::Step::Serve; step = start.next()) {
-        StartOrder::Outcome outcome = StartOrder::Outcome::Failed;
-        switch (step) {
-        case StartOrder::Step::Probe:
-            outcome = probeControl(&why);
+    // The start, in its order (server/start_order.h, models/store/StoreLock.tla), each step through take_step, the
+    // dispatch the trace walk runs too: the socket asked, the store's lock and its replay (waiting, a bounded time,
+    // while a writer holds the lock and no server answers), the socket bound, and only then the drivers restored. No
+    // window is served before the loop, so no session is made on a state not yet read.
+    std::uint64_t heldWait = kHeldWaitMs;
+    if (const char* wait = std::getenv(kHeldWaitVariable)) {
+        heldWait = std::strtoull(wait, nullptr, 10);
+    }
+    StartOrder start(StartOrder::Fault::None, heldWait);
+    std::string heldWhy;     // what the lock's holder is, from the last open that found it held
+    bool said = false;
+    for (;;) {
+        const StartOrder::Step step = take_step(start, *this, &why);
+        if (step == StartOrder::Step::Open && start.next() == StartOrder::Step::Wait) {
+            heldWhy = why;
+            if (!said) {
+                std::fprintf(stderr, "nexus-server: %s, and no server answers on %s: waiting up to %llu ms for it to "
+                    "let go (a server starting or stopping)\n", why.c_str(), paths_.socket.c_str(),
+                    static_cast<unsigned long long>(heldWait));
+                said = true;
+            }
+        }
+        const StartOrder::Step at = start.next();
+        if (at == StartOrder::Step::Serve) {
             break;
-        case StartOrder::Step::Open:
-            outcome = openStore(&why);
-            break;
-        case StartOrder::Step::Listen:
-            outcome = listenControl(&why);
-            break;
-        case StartOrder::Step::Restore:
-            outcome = restore(&why) ? StartOrder::Outcome::Ok : StartOrder::Outcome::Failed;
-            break;
-        case StartOrder::Step::OpenUnlocked:
-            why = "an unlocked open is the trace binding's fault, never the server's";
-            break;
-        case StartOrder::Step::Refused:
-            // Another server has the store or the socket: said in one line, and an exit a service does not restart.
+        }
+        if (at == StartOrder::Step::Refused) {
+            // A live server answers: said in one line, and an exit a service does not restart.
             std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
             if (listen_ >= 0) {
                 close(listen_);
             }
             return kRefusedExit;
-        case StartOrder::Step::Failed:
+        }
+        if (at == StartOrder::Step::Stuck) {
+            std::fprintf(stderr, "nexus-server: %s, and no server answered on %s in %llu ms: its holder is neither "
+                "serving nor ending; find it (lsof %s) and stop it, then start the server again\n", heldWhy.c_str(),
+                paths_.socket.c_str(), static_cast<unsigned long long>(heldWait), paths_.store.c_str());
+            return kStuckExit;
+        }
+        if (at == StartOrder::Step::Failed) {
             std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
             if (listen_ >= 0) {
                 close(listen_);
-                unlink(paths_.socket.c_str());
+                unlinkOwnSocket();
             }
             return kFailedExit;
-        case StartOrder::Step::Serve:
-            break;
         }
-        start.done(outcome);
     }
     std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
     int status = 0;
@@ -844,8 +901,13 @@ int Server::run() {
             }
         }
     }
+    // The stop, in its order (models/store/StoreLock.tla Stop, EndDrivers, Exit): the control socket first, closed and
+    // its file removed (only if it is still this server's), so that from now on no probe finds a server that is going
+    // away and no window starts a session on it; then the drivers ended, whose last records are written under the
+    // store's lock, still held; the lock last, when the process ends. A server started in between finds the lock held
+    // and no socket, and waits for the lock (server/start_order.h Wait) rather than leave nothing serving.
     close(listen_);
-    unlink(paths_.socket.c_str());
+    unlinkOwnSocket();
     // Every open secret request ends unanswered with the server (its asker ends with it), each logged.
     hub_->dropSecrets();
     // After the control socket closes, so no window sends a prompt to a driver being ended.

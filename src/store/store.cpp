@@ -3,6 +3,8 @@
 
 #include "store/store.h"
 
+#include <chrono>
+
 namespace nexus::store {
 
 namespace {
@@ -167,17 +169,17 @@ Store::Store(Fs& fs, std::string dir, const StoreOptions& options)
 Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, std::unique_ptr<Store>& out,
                    OpenReport* report) {
     std::unique_ptr<Store> s(new Store(fs, dir, options));
-    // The lock, before anything in the directory is read or written (the directory itself made first, as the lock
-    // file is in it: a make_dir changes nothing a store holds).
+    // The lock, on the directory itself, before anything in it is read or written (the directory made first if it is
+    // not there: a make_dir changes nothing a store holds). From here on the directory is the hold's, not its name's.
     Status st = fs.make_dir(dir);
     if (!st.is_ok()) {
         return st;
     }
     if (!options.test_unlocked) {
-        st = fs.lock(dir + "/" + kLockName, LockMode::Exclusive, s->lock_);
+        st = fs.lock(dir, LockMode::Exclusive, s->lock_);
         if (st.code() == Status::Code::Busy) {
-            return Status::busy("store " + dir + " is open in another process, which holds its lock " + dir + "/" +
-                                kLockName + " (another nexus-server; `nexus-server stop` stops it)");
+            return Status::busy("store " + dir + " is open in another process, which holds its lock (on the directory "
+                                "itself)");
         }
         if (!st.is_ok()) {
             return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
@@ -216,7 +218,15 @@ Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, 
     return Status::ok();
 }
 
-Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report) {
+Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report,
+                      const std::function<std::uint64_t()>& now_ms) {
+    std::function<std::uint64_t()> now = now_ms;
+    if (!now) {
+        now = [] {
+            return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        };
+    }
     std::vector<std::string> names;
     Status st = fs.list(dir, names);
     if (st.code() == Status::Code::NotFound) {
@@ -227,23 +237,31 @@ Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_p
     }
     {
         std::unique_ptr<FileLock> lock;
-        st = fs.lock(dir + "/" + kLockName, LockMode::Shared, lock);
+        st = fs.lock(dir, LockMode::Shared, lock);
         if (st.code() == Status::Code::Busy) {
-            return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock " + dir +
-                                "/" + kLockName + "; it is not read while a server writes it (`nexus-server stop` "
-                                "stops the server)");
+            return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock; it is not "
+                                "read while a server writes it (`nexus-server stop` stops the server)");
         }
         if (!st.is_ok()) {
             return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
         }
+        const std::uint64_t start = now();
         if (!(st = copy.make_dir(dir)).is_ok()) {
             return st;
         }
-        // The journal's files, as they are under the lock; the temporaries of a compaction too, which open removes.
+        // The journal's files, as they are under the lock (through the hold, so the directory locked is the one read);
+        // the temporaries of a compaction too, which open removes. A copy that outlasts its limit lets the lock go and
+        // fails this reader, never a server waiting to start.
         for (const char* name : {"log", "snapshot", "snapshot.tmp", "log.new"}) {
             const std::string path = dir + "/" + name;
             Bytes bytes;
             st = fs.read_all(path, bytes);
+            if (now() - start > kReaderCopyLimitMs) {
+                return Status::failed("store " + dir + ": its copy took longer than " +
+                                      std::to_string(kReaderCopyLimitMs) + " ms under its shared lock, so it was given "
+                                      "up and the lock let go, so that no starting server waits on this reader; nothing "
+                                      "was read (check the disk, then try again)");
+            }
             if (st.code() == Status::Code::NotFound) {
                 continue;
             }

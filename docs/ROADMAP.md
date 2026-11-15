@@ -33,7 +33,7 @@
 
 | feature | done |
 |---|:---:|
-| 1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on store/lock, taken before the store is read, held for the life of the process, released by the OS however it ends); the server starts in the order lock, replay, socket, drivers restored; a second server exits 0 in one line; readers take the lock shared and change nothing; network filesystems refused (in progress) | ❌ |
+| 1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused (in progress) | ❌ |
 | 2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs | ❌ |
 | 3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk | ❌ |
 | 4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back | ❌ |

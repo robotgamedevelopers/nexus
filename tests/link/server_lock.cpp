@@ -11,7 +11,15 @@
 //     bound (mid-start), and a new one, started at once, serves (no lock is left behind, and no child of the dead one
 //     holds its socket).
 //   - `store check` while a server runs: refused in one line, exit 1, and the server keeps serving; once it has
-//     stopped, the check reads the store, exit 0, and changes nothing.
+//     stopped, the check reads the store, exit 0, and changes nothing; no lock file is ever made.
+//   - A writer holds the lock and no server answers (this test holding it, as a server stopping or replaying would):
+//     a server started waits and serves once it is let go; held past the wait (NEXUS_TEST_HELD_WAIT_MS), exit 3.
+//   - A reader holds the lock past a writer's wait (this test holding it shared, as a hung `store check`): exit 1,
+//     naming readers, never exit 0; let go, the next one serves.
+//   - The store reached by another name (a second server directory whose store is a symbolic link): the second
+//     server writes nothing and exits 3; the first serves on.
+//   - The server's directory moved aside and a new one made at its old name: the old server, stopped, removes no
+//     socket but its own and writes nothing into the new store.
 //
 // Usage: server_lock <nexus-server> <dir>, with <dir> a directory of this test's own (a Unix socket's path must be
 // short, so it is under /tmp, named for the build tree: tests/link/CMakeLists.txt).
@@ -20,6 +28,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <stdlib.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -55,6 +64,11 @@ using Clock = std::chrono::steady_clock;
 
 bool has(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
+}
+
+bool exists(const std::string& path) {
+    struct stat st {};
+    return lstat(path.c_str(), &st) == 0;
 }
 
 std::string readFile(const std::string& path) {
@@ -285,7 +299,7 @@ void killedOnce(const std::string& server, const std::string& dir, bool midStart
     const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
     std::printf("kill -9: the next server served %lld ms after it started\n", static_cast<long long>(took));
     CHECK(waitExit(second, 0) == -1);
-    CHECK(has(readFile(dir + "/second.log"), "its lock " + dir + "/store/lock held"));
+    CHECK(has(readFile(dir + "/second.log"), "its lock (on the directory) held"));
     // It serves a window: `new` reaches it rather than starting another.
     std::string out;
     CHECK(run("'" + server + "' new --dir '" + dir + "'", &out) == 0 && has(out, "NEXUS CONNECT"));
@@ -302,8 +316,9 @@ void storeCheck(const std::string& server, const std::string& top) {
     pid_t pid = spawn({server, "serve", "--dir", dir}, dir + "/serve.log");
     CHECK(pid > 0 && waitAnswering(dir, 20));
     CHECK(run("'" + server + "' store check --dir '" + dir + "'", &out) == 1);
-    CHECK(has(out, "is open in a running nexus-server, which holds its lock " + dir + "/store/lock"));
+    CHECK(has(out, "is open in a running nexus-server, which holds its lock"));
     CHECK(std::count(out.begin(), out.end(), '\n') == 1);
+    CHECK(!exists(dir + "/store/lock"));
     CHECK(answering(dir) && waitExit(pid, 0) == -1);
     stopServer(server, dir);
     CHECK(waitExit(pid, 20) == 0);
@@ -315,6 +330,129 @@ void storeCheck(const std::string& server, const std::string& top) {
     CHECK(stat((dir + "/store/log").c_str(), &after) == 0 && after.st_size == before.st_size &&
           after.st_mtime == before.st_mtime);
     CHECK(run("'" + server + "' store --dir '" + dir + "'", &out) == 2 && has(out, "usage: nexus-server store check"));
+    CHECK(!exists(dir + "/store/lock"));
+}
+
+// This test holding the store's directory locked itself, as another process would: a server stopping (its socket gone,
+// its drivers ending) or starting (replaying), exclusive; a reader (`store check`, hung), shared. -1 on failure.
+int holdStore(const std::string& dir, int how) {
+    const int fd = open((dir + "/store").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) {
+        return -1;
+    }
+    if (flock(fd, how | LOCK_NB) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+// A writer holds the lock and no server answers (a server stopping after its socket closed, or one replaying): a server
+// started then waits for the lock rather than exit 0, and serves once it is let go; held past the wait, it exits 3,
+// its own code, saying so; never exit 0 with nothing serving.
+void heldNoSocket(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/held";
+    CHECK(mkdir(dir.c_str(), 0700) == 0 && mkdir((dir + "/store").c_str(), 0700) == 0);
+    int fd = holdStore(dir, LOCK_EX);
+    CHECK(fd >= 0);
+    pid_t pid = spawn({"/usr/bin/env", "NEXUS_TEST_HELD_WAIT_MS=5000", server, "serve", "--dir", dir},
+                      dir + "/waits.log");
+    CHECK(pid > 0 && waitLog(dir + "/waits.log", "waiting up to 5000 ms", 20));
+    CHECK(waitExit(pid, 0) == -1 && !answering(dir));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    close(fd);      // the holder ends
+    CHECK(waitLog(dir + "/waits.log", "serving on", 20) && waitAnswering(dir, 20));
+    std::printf("held: a server waited for a held lock and served once it was let go\n");
+    stopServer(server, dir);
+    CHECK(waitExit(pid, 20) == 0);
+    // Held for good: exit 3 after the wait, nothing left serving that was not, and a line that says what holds it.
+    fd = holdStore(dir, LOCK_EX);
+    CHECK(fd >= 0);
+    const auto start = Clock::now();
+    pid = spawn({"/usr/bin/env", "NEXUS_TEST_HELD_WAIT_MS=300", server, "serve", "--dir", dir}, dir + "/stuck.log");
+    const int exit = waitExit(pid, 20);
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+    const std::string log = readFile(dir + "/stuck.log");
+    CHECK(exit == 3 && took >= 300);
+    CHECK(has(log, "no server answered on " + dir + "/server.sock in 300 ms") && has(log, "lsof"));
+    CHECK(!answering(dir));
+    std::printf("held: exit %d after %lld ms: %s", exit, static_cast<long long>(took), log.c_str());
+    close(fd);
+}
+
+// A reader (a hung `store check`) holds the lock shared past the writer's wait: the starting server exits 1, a start
+// that failed, naming readers, never exit 0 as if another server had the store; let go, the next one serves.
+void readerHeld(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/reader";
+    CHECK(mkdir(dir.c_str(), 0700) == 0 && mkdir((dir + "/store").c_str(), 0700) == 0);
+    const int fd = holdStore(dir, LOCK_SH);
+    CHECK(fd >= 0);
+    pid_t pid = spawn({server, "serve", "--dir", dir}, dir + "/first.log");
+    const int exit = waitExit(pid, 20);
+    const std::string log = readFile(dir + "/first.log");
+    CHECK(exit == 1 && has(log, "held by readers only") && !has(log, "another nexus-server"));
+    CHECK(!answering(dir));
+    std::printf("reader: exit %d: %s", exit, log.c_str());
+    close(fd);
+    pid = spawn({server, "serve", "--dir", dir}, dir + "/second.log");
+    CHECK(pid > 0 && waitAnswering(dir, 20));
+    stopServer(server, dir);
+    CHECK(waitExit(pid, 20) == 0);
+}
+
+// The store reached by another name while a server holds it: a second server directory whose store is a symbolic link
+// to the first's (so another socket, and only the lock between them). With the lock on a file found by name, removing
+// that file let a second writer in; the lock is the directory's now, and no file can be removed: the second server
+// waits, and exits 3, having written nothing; the first serves on.
+void storeLinked(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/linked";
+    const std::string other = top + "/linked-other";
+    CHECK(mkdir(dir.c_str(), 0700) == 0 && mkdir(other.c_str(), 0700) == 0);
+    pid_t first = spawn({server, "serve", "--dir", dir}, dir + "/first.log");
+    CHECK(first > 0 && waitLog(dir + "/first.log", "serving on", 20));
+    CHECK(!exists(dir + "/store/lock"));
+    CHECK(symlink((dir + "/store").c_str(), (other + "/store").c_str()) == 0);
+    struct stat before {};
+    CHECK(stat((dir + "/store/log").c_str(), &before) == 0);
+    pid_t second = spawn({"/usr/bin/env", "NEXUS_TEST_HELD_WAIT_MS=300", server, "serve", "--dir", other},
+                         other + "/second.log");
+    const int exit = waitExit(second, 20);
+    const std::string log = readFile(other + "/second.log");
+    CHECK(exit == 3 && has(log, "is open in another process, which holds its lock"));
+    CHECK(!has(log, "serving on") && !answering(other));
+    struct stat after {};
+    CHECK(stat((dir + "/store/log").c_str(), &after) == 0 && after.st_size == before.st_size);
+    CHECK(waitExit(first, 0) == -1 && answering(dir));
+    std::printf("linked: the store by another name: exit %d, the first server serving on\n", exit);
+    stopServer(server, dir);
+    CHECK(waitExit(first, 20) == 0);
+}
+
+// The server's directory moved aside while it runs, and a new one made at the old name with a server of its own: the
+// old server, stopped through its moved socket, removes no socket but its own (the new server answers on), and writes
+// nothing into the new store; each store is its server's.
+void dirMoved(const std::string& server, const std::string& top) {
+    const std::string dir = top + "/mv";
+    const std::string moved = top + "/mv-old";
+    CHECK(mkdir(dir.c_str(), 0700) == 0);
+    pid_t first = spawn({server, "serve", "--dir", dir}, top + "/mv-first.log");
+    CHECK(first > 0 && waitLog(top + "/mv-first.log", "serving on", 20));
+    CHECK(rename(dir.c_str(), moved.c_str()) == 0);
+    CHECK(mkdir(dir.c_str(), 0700) == 0);
+    pid_t second = spawn({server, "serve", "--dir", dir}, top + "/mv-second.log");
+    CHECK(second > 0 && waitLog(top + "/mv-second.log", "serving on", 20) && waitAnswering(dir, 20));
+    struct stat before {};
+    CHECK(lstat((dir + "/server.sock").c_str(), &before) == 0);
+    std::string newLog = readFile(dir + "/store/log");
+    stopServer(server, moved);
+    CHECK(waitExit(first, 20) == 0);
+    struct stat after {};
+    CHECK(lstat((dir + "/server.sock").c_str(), &after) == 0 && after.st_ino == before.st_ino);
+    CHECK(answering(dir) && waitExit(second, 0) == -1);
+    CHECK(readFile(dir + "/store/log") == newLog);
+    std::printf("moved: the old server stopped; the new one still answers at the old name\n");
+    stopServer(server, dir);
+    CHECK(waitExit(second, 20) == 0);
 }
 
 } // namespace
@@ -328,7 +466,8 @@ int main(int argc, char** argv) {
     const std::string top = argv[2];
     std::string out;
     // What an earlier run left: its servers stopped (each directory's), its directory removed.
-    for (const char* sub : {"race-0", "race-1", "race-2", "race-3", "new", "killed", "killed-starting", "check"}) {
+    for (const char* sub : {"race-0", "race-1", "race-2", "race-3", "new", "killed", "killed-starting", "check", "held",
+                            "reader", "linked", "linked-other", "mv", "mv-old"}) {
         run("'" + server + "' stop --dir '" + top + "/" + sub + "'", &out);
     }
     run("rm -rf '" + top + "'", &out);
@@ -342,6 +481,10 @@ int main(int argc, char** argv) {
     newRaced(server, top);
     killed(server, top);
     storeCheck(server, top);
+    heldNoSocket(server, top);
+    readerHeld(server, top);
+    storeLinked(server, top);
+    dirMoved(server, top);
 
     if (failures != 0) {
         std::fprintf(stderr, "server_lock: %d check(s) failed; the directory %s is kept\n", failures, top.c_str());

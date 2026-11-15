@@ -165,17 +165,18 @@ MemFs::MemFs(const MemFs& other)
     : dirs_(other.dirs_), files_(other.files_), live_(other.live_), epoch_(other.epoch_), calls_(other.calls_),
       fail_at_(other.fail_at_), dead_(other.dead_) {}
 
-LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms) {
+LockStep next_lock_step(bool exclusive_free, bool shared_free, std::uint64_t waited_ms, std::uint64_t reader_wait_ms) {
     if (exclusive_free) {
         return LockStep::Take;
     }
-    if (shared_free && waited_ms < kLockReaderWaitMs) {
-        return LockStep::Wait;
+    if (!shared_free) {
+        return LockStep::Busy;
     }
-    return LockStep::Busy;
+    return waited_ms < reader_wait_ms ? LockStep::Wait : LockStep::Readers;
 }
 
-// A lock on MemFs: its path and mode, released when it goes, unless a crash (the end of every process) took it first.
+// A lock on MemFs: its directory and mode, released when it goes, unless a crash (the end of every process) took it
+// first.
 class MemFs::Held : public FileLock {
 public:
     Held(MemFs& fs, std::string path, LockMode mode) : fs_(fs), path_(std::move(path)), mode_(mode),
@@ -214,26 +215,28 @@ private:
     std::uint64_t epoch_;
 };
 
-Status MemFs::lock(const std::string& path, LockMode mode, std::unique_ptr<FileLock>& out) {
+Status MemFs::lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLock>& out) {
     out.reset();
     if (dead_) {
-        return Status::failed("memfs: lock " + path + " after an injected crash");
+        return Status::failed("memfs: lock " + dir + " after an injected crash");
     }
-    if (dirs_.find(dir_of(path)) == dirs_.end()) {
-        return Status::not_found("memfs: no directory " + dir_of(path));
+    if (dirs_.find(dir) == dirs_.end()) {
+        return Status::not_found("memfs: no directory " + dir);
     }
-    const std::uint64_t exclusive = lock_holders(path, LockMode::Exclusive);
-    const std::uint64_t shared = lock_holders(path, LockMode::Shared);
-    const bool free = mode == LockMode::Shared ? exclusive == 0 : exclusive == 0 && shared == 0;
-    if (!free) {
-        return Status::busy("memfs: " + path + " is locked by another holder");
+    const std::uint64_t exclusive = lock_holders(dir, LockMode::Exclusive);
+    const std::uint64_t shared = lock_holders(dir, LockMode::Shared);
+    if (exclusive != 0) {
+        return Status::busy("memfs: " + dir + " is locked by a writer");
     }
-    out = std::make_unique<Held>(*this, path, mode);
+    if (mode == LockMode::Exclusive && shared != 0) {
+        return Status::failed("memfs: " + dir + " is locked by readers (MemFs has no clock to wait on them)");
+    }
+    out = std::make_unique<Held>(*this, dir, mode);
     return Status::ok();
 }
 
-std::uint64_t MemFs::lock_holders(const std::string& path, LockMode mode) const {
-    auto it = locks_.find(path);
+std::uint64_t MemFs::lock_holders(const std::string& dir, LockMode mode) const {
+    auto it = locks_.find(dir);
     if (it == locks_.end()) {
         return 0;
     }

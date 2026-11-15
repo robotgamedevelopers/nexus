@@ -1427,37 +1427,37 @@ void test_instance() {
 
 // ---- lock ----
 
-// The store's lock (Fs::lock, Store::open, Store::inspect; models/store/StoreLock.tla) on MemFs: at most one writer,
-// taken before anything of the store is read, released when its Store goes or a crash ends every process; a reader
-// shares it with readers only, and reads without changing anything. The opener's choice when refused
-// (next_lock_step) with time as an argument.
+// The store's lock (Fs::lock, Store::open, Store::inspect; models/store/StoreLock.tla) on MemFs: on the store's
+// directory, at most one writer, taken before anything of the store is read, released when its Store goes or a crash
+// ends every process; a reader shares it with readers only, reads without changing or making anything, and gives up a
+// copy that outlasts its limit. The opener's choice when refused (next_lock_step) with time as an argument.
 void test_lock() {
-    // The modes, on MemFs.
+    // The modes, on MemFs: a writer refuses all (Busy); readers refuse a writer as a failure, not as another writer.
     MemFs fs;
     CHECK_OK(fs.make_dir("d"));
     {
         std::unique_ptr<FileLock> a;
         std::unique_ptr<FileLock> b;
-        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, a));
-        CHECK(fs.lock("d/lock", LockMode::Exclusive, b).code() == Status::Code::Busy && b == nullptr);
-        CHECK(fs.lock("d/lock", LockMode::Shared, b).code() == Status::Code::Busy && b == nullptr);
-        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 1);
+        CHECK_OK(fs.lock("d", LockMode::Exclusive, a));
+        CHECK(fs.lock("d", LockMode::Exclusive, b).code() == Status::Code::Busy && b == nullptr);
+        CHECK(fs.lock("d", LockMode::Shared, b).code() == Status::Code::Busy && b == nullptr);
+        CHECK(fs.lock_holders("d", LockMode::Exclusive) == 1);
         a.reset();
-        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 0);
-        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, b));
+        CHECK(fs.lock_holders("d", LockMode::Exclusive) == 0);
+        CHECK_OK(fs.lock("d", LockMode::Exclusive, b));
     }
     {
         std::unique_ptr<FileLock> r1;
         std::unique_ptr<FileLock> r2;
         std::unique_ptr<FileLock> w;
-        CHECK_OK(fs.lock("d/lock", LockMode::Shared, r1));
-        CHECK_OK(fs.lock("d/lock", LockMode::Shared, r2));
-        CHECK(fs.lock_holders("d/lock", LockMode::Shared) == 2);
-        CHECK(fs.lock("d/lock", LockMode::Exclusive, w).code() == Status::Code::Busy);
+        CHECK_OK(fs.lock("d", LockMode::Shared, r1));
+        CHECK_OK(fs.lock("d", LockMode::Shared, r2));
+        CHECK(fs.lock_holders("d", LockMode::Shared) == 2);
+        CHECK(fs.lock("d", LockMode::Exclusive, w).code() == Status::Code::Failed);
         r1.reset();
-        CHECK(fs.lock("d/lock", LockMode::Exclusive, w).code() == Status::Code::Busy);
+        CHECK(fs.lock("d", LockMode::Exclusive, w).code() == Status::Code::Failed);
         r2.reset();
-        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, w));
+        CHECK_OK(fs.lock("d", LockMode::Exclusive, w));
         // A lock is no file and no mutating call: the directory holds nothing, and fail_at does not count it.
         std::vector<std::string> names;
         CHECK_OK(fs.list("d", names));
@@ -1465,19 +1465,19 @@ void test_lock() {
     }
     {
         std::unique_ptr<FileLock> none;
-        CHECK(fs.lock("nowhere/lock", LockMode::Exclusive, none).code() == Status::Code::NotFound);
+        CHECK(fs.lock("nowhere", LockMode::Exclusive, none).code() == Status::Code::NotFound);
     }
     // A crash ends every process: the locks they held are gone, and a lock from before the crash, destroyed after it,
     // takes nothing from a holder since.
     {
         std::unique_ptr<FileLock> before;
-        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, before));
+        CHECK_OK(fs.lock("d", LockMode::Exclusive, before));
         fs.crash(fs.plan_all(true));
-        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 0);
+        CHECK(fs.lock_holders("d", LockMode::Exclusive) == 0);
         std::unique_ptr<FileLock> after;
-        CHECK_OK(fs.lock("d/lock", LockMode::Exclusive, after));
+        CHECK_OK(fs.lock("d", LockMode::Exclusive, after));
         before.reset();
-        CHECK(fs.lock_holders("d/lock", LockMode::Exclusive) == 1);
+        CHECK(fs.lock_holders("d", LockMode::Exclusive) == 1);
     }
 
     // Store::open: a second writer on the store is Busy, and has read and written nothing.
@@ -1490,7 +1490,7 @@ void test_lock() {
         const Bytes log = m.data("store/log");
         Opened second = open_store(m);
         CHECK(second.st.code() == Status::Code::Busy && second.s == nullptr);
-        CHECK(second.st.message().find("store/lock") != std::string::npos);
+        CHECK(second.st.message().find("holds its lock") != std::string::npos);
         CHECK(m.calls() == calls && m.data("store/log") == log);
         // The holder goes (a process ending): the next opener has the store, all of it.
         first.s.reset();
@@ -1502,11 +1502,11 @@ void test_lock() {
         Opened fourth = open_store(m);
         CHECK_OK(fourth.st);
         third.s.reset();    // the dead process's Store, destroyed late, takes nothing from the live one
-        CHECK(m.lock_holders("store/lock", LockMode::Exclusive) == 1);
+        CHECK(m.lock_holders("store", LockMode::Exclusive) == 1);
     }
 
-    // Store::inspect: a reader changes nothing on the disk, sees what an open would, and is refused while a writer
-    // holds the lock.
+    // Store::inspect: a reader changes nothing on the disk and makes nothing there, sees what an open would, and is
+    // refused while a writer holds the lock.
     {
         MemFs m;
         {
@@ -1520,6 +1520,8 @@ void test_lock() {
         }
         const Bytes log = m.data("store/log");
         const std::uint64_t calls = m.calls();
+        std::vector<std::string> before;
+        CHECK_OK(m.list("store", before));
         MemFs copy;
         std::unique_ptr<Store> s;
         OpenReport r;
@@ -1527,7 +1529,10 @@ void test_lock() {
         CHECK(s != nullptr && s->sessions().size() == 1 && s->session(1)->transcript.size() == 1);
         CHECK(r.records == 2 && r.cut_bytes == 9);
         CHECK(m.data("store/log") == log && m.calls() == calls);
-        CHECK(m.lock_holders("store/lock", LockMode::Shared) == 0);
+        std::vector<std::string> after;
+        CHECK_OK(m.list("store", after));
+        CHECK(after == before);     // no lock file, nor anything else, made
+        CHECK(m.lock_holders("store", LockMode::Shared) == 0);
         // A writer has it: the reader is refused, and reads nothing.
         Opened w = open_store(m);
         CHECK_OK(w.st);
@@ -1536,6 +1541,22 @@ void test_lock() {
         const Status busy = Store::inspect(m, "store", copy2, s2);
         CHECK(busy.code() == Status::Code::Busy && s2 == nullptr && !copy2.has("store/log"));
         CHECK(busy.message().find("running nexus-server") != std::string::npos);
+        w.s.reset();
+        // A copy that outlasts its limit (the clock given): the reader fails itself and lets the lock go.
+        std::uint64_t clock = 1000;
+        const auto slow = [&clock] {
+            const std::uint64_t now = clock;
+            clock += kReaderCopyLimitMs;
+            return now;
+        };
+        MemFs copy4;
+        std::unique_ptr<Store> s4;
+        const Status late = Store::inspect(m, "store", copy4, s4, nullptr, slow);
+        CHECK(late.code() == Status::Code::Failed && s4 == nullptr);
+        CHECK(late.message().find("given up") != std::string::npos);
+        CHECK(m.lock_holders("store", LockMode::Shared) == 0);
+        Opened again = open_store(m);
+        CHECK_OK(again.st);
         // No store at all: NotFound, and nothing made.
         MemFs empty;
         MemFs copy3;
@@ -1554,33 +1575,39 @@ void test_lock() {
         Opened b = open_store(m, unlocked);
         CHECK_OK(a.st);
         CHECK_OK(b.st);
-        CHECK(m.lock_holders("store/lock", LockMode::Exclusive) == 0);
+        CHECK(m.lock_holders("store", LockMode::Exclusive) == 0);
     }
 
-    // next_lock_step: a free lock is taken; readers only are waited for, up to kLockReaderWaitMs; a writer refuses at
-    // once.
+    // next_lock_step: a free lock is taken; readers only are waited for, up to the wait, then given up on as readers
+    // (a failed start); a writer refuses at once.
     CHECK(next_lock_step(true, true, 0) == LockStep::Take);
     CHECK(next_lock_step(true, false, kLockReaderWaitMs * 2) == LockStep::Take);
     CHECK(next_lock_step(false, true, 0) == LockStep::Wait);
     CHECK(next_lock_step(false, true, kLockReaderWaitMs - 1) == LockStep::Wait);
-    CHECK(next_lock_step(false, true, kLockReaderWaitMs) == LockStep::Busy);
+    CHECK(next_lock_step(false, true, kLockReaderWaitMs) == LockStep::Readers);
+    CHECK(next_lock_step(false, true, 30, 30) == LockStep::Readers);
     CHECK(next_lock_step(false, false, 0) == LockStep::Busy);
+    CHECK(kReaderCopyLimitMs < kLockReaderWaitMs);
 }
 
 // ---- start order ----
 
 // nexus-server's start-up order (src/server/start_order.h): the socket asked, the store opened (its lock first), the
-// socket bound, the drivers restored, then the loop; Held at any step another server can hold is a refusal, at the
-// restore a failure; and the faulty orders the trace binding must see rejected.
+// socket bound, the drivers restored, then the loop; a live server answering is a refusal (exit 0); a lock held by a
+// writer is waited for, the socket asked at each try, a bounded time, then Stuck (exit 3); anything else a failure
+// (exit 1); and the faulty orders the trace binding must see rejected. Time is an argument.
 void test_start_order() {
     using nexus::server::StartOrder;
+    using nexus::server::StartSteps;
     using Step = StartOrder::Step;
     using Outcome = StartOrder::Outcome;
     auto run = [](StartOrder o, const std::vector<Outcome>& outcomes) {
         std::vector<Step> steps;
+        std::uint64_t now = 1000;
         for (Outcome out : outcomes) {
             steps.push_back(o.next());
-            o.done(out);
+            o.done(out, now);
+            now += nexus::server::kWaitRetryMs;
         }
         steps.push_back(o.next());
         return steps;
@@ -1588,32 +1615,89 @@ void test_start_order() {
     const std::vector<Outcome> ok(4, Outcome::Ok);
     CHECK((run(StartOrder(), ok) == std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Restore,
                                                       Step::Serve}));
-    CHECK((run(StartOrder(), {Outcome::Held}) == std::vector<Step>{Step::Probe, Step::Refused}));
-    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Held}) == std::vector<Step>{Step::Probe, Step::Open,
-                                                                                 Step::Refused}));
-    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Held}) ==
+    CHECK((run(StartOrder(), {Outcome::Answered}) == std::vector<Step>{Step::Probe, Step::Refused}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Answered}) ==
            std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Refused}));
-    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Ok, Outcome::Held}) ==
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Ok, Outcome::Failed}) ==
            std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Restore, Step::Failed}));
     CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Failed}) == std::vector<Step>{Step::Probe, Step::Open,
                                                                                    Step::Failed}));
+    // A writer holds the lock: wait, ask the socket, open again; a server answers: refused; the lock let go: on.
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Held, Outcome::Ok, Outcome::Held, Outcome::Answered}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Wait, Step::Open, Step::Wait, Step::Refused}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Held, Outcome::Ok, Outcome::Ok, Outcome::Ok, Outcome::Ok}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Wait, Step::Open, Step::Listen, Step::Restore,
+                             Step::Serve}));
+    // Held at a step no writer holds (the socket's, the restore's) is a failure, never a refusal.
+    CHECK((run(StartOrder(), {Outcome::Held}) == std::vector<Step>{Step::Probe, Step::Failed}));
+    CHECK((run(StartOrder(), {Outcome::Ok, Outcome::Ok, Outcome::Held}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Listen, Step::Failed}));
+    // The wait is bounded from the first time the lock was found held: past it, Stuck.
+    {
+        StartOrder o(StartOrder::Fault::None, 50);
+        o.done(Outcome::Ok, 1000);       // probe
+        o.done(Outcome::Held, 1000);     // open: held since 1000
+        CHECK(o.next() == Step::Wait);
+        o.done(Outcome::Ok, 1040);       // still inside: open again
+        CHECK(o.next() == Step::Open);
+        o.done(Outcome::Held, 1040);
+        o.done(Outcome::Ok, 1050);       // 50 since the first hold: Stuck
+        CHECK(o.next() == Step::Stuck);
+        o.done(Outcome::Ok, 1060);
+        CHECK(o.next() == Step::Stuck);
+    }
     // Once ended, nothing changes it.
     StartOrder ended;
-    ended.done(Outcome::Held);
-    ended.done(Outcome::Ok);
+    ended.done(Outcome::Answered, 0);
+    ended.done(Outcome::Ok, 0);
     CHECK(ended.next() == Step::Refused);
     StartOrder served;
     for (int i = 0; i < 4; ++i) {
-        served.done(Outcome::Ok);
+        served.done(Outcome::Ok, 0);
     }
-    served.done(Outcome::Failed);
+    served.done(Outcome::Failed, 0);
     CHECK(served.next() == Step::Serve);
     // The faulty orders.
     CHECK((run(StartOrder(StartOrder::Fault::Unlocked), {Outcome::Ok, Outcome::Ok, Outcome::Ok}) ==
            std::vector<Step>{Step::OpenUnlocked, Step::Restore, Step::Listen, Step::Serve}));
     CHECK((run(StartOrder(StartOrder::Fault::RestoreFirst), ok) ==
            std::vector<Step>{Step::Probe, Step::Open, Step::Restore, Step::Listen, Step::Serve}));
-    CHECK(nexus::server::kRefusedExit == 0 && nexus::server::kFailedExit == 1);
+    CHECK((run(StartOrder(StartOrder::Fault::HeldRefused), {Outcome::Ok, Outcome::Held}) ==
+           std::vector<Step>{Step::Probe, Step::Open, Step::Refused}));
+    CHECK(nexus::server::kRefusedExit == 0 && nexus::server::kFailedExit == 1 && nexus::server::kStuckExit == 3);
+
+    // take_step: the one dispatch the server and the trace walk share. A Wait pauses, then asks the socket.
+    struct Script : StartSteps {
+        std::vector<std::string> calls;
+        std::vector<Outcome> outcomes;
+        std::size_t next = 0;
+        std::uint64_t clock = 1000;
+        Outcome pop(const char* what) {
+            calls.push_back(what);
+            return next < outcomes.size() ? outcomes[next++] : Outcome::Ok;
+        }
+        Outcome probe(std::string*) override { return pop("probe"); }
+        Outcome open(bool unlocked, std::string*) override { return pop(unlocked ? "open-unlocked" : "open"); }
+        Outcome listen(std::string*) override { return pop("listen"); }
+        Outcome restore(std::string*) override { return pop("restore"); }
+        void pause(std::uint64_t ms) override {
+            calls.push_back("pause");
+            clock += ms;
+        }
+        std::uint64_t now_ms() override { return clock; }
+    };
+    Script script;
+    script.outcomes = {Outcome::Ok, Outcome::Held, Outcome::Ok, Outcome::Ok, Outcome::Ok, Outcome::Ok};
+    StartOrder order;
+    std::string why;
+    std::vector<Step> taken;
+    for (int i = 0; i < 8 && order.next() != Step::Serve; ++i) {
+        taken.push_back(nexus::server::take_step(order, script, &why));
+    }
+    CHECK((taken == std::vector<Step>{Step::Probe, Step::Open, Step::Wait, Step::Open, Step::Listen, Step::Restore}));
+    CHECK((script.calls == std::vector<std::string>{"probe", "open", "pause", "probe", "open", "listen", "restore"}));
+    CHECK(order.next() == Step::Serve);
+    CHECK(nexus::server::take_step(order, script, &why) == Step::Serve && script.calls.size() == 7);
 }
 
 struct Group {

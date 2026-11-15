@@ -119,27 +119,26 @@ struct OpenReport {
     std::uint64_t migrated = 0;  // sessions made from the friend tabs of an older format (then compacted into this one)
 };
 
-// The lock file in a store's directory (Fs::lock): the one writer holds it exclusive for the life of its Store, a
-// reader shared for the moment of its copy (Store::inspect). It holds no bytes; the lock is the descriptor's.
-constexpr const char* kLockName = "lock";
-
 class Store {
 public:
     // Opens (or makes) the store in `dir`, migrating an older format (and compacting it into this one). First, before
-    // anything in `dir` is read or written, the store's lock, exclusive (dir/lock, Fs::lock): held by this Store until
-    // it is destroyed, or until the process ends however it ends, so that at most one process ever has the store open
-    // for writing (models/store/StoreLock.tla). Busy, having read nothing, when another process holds it. Failed,
-    // saying why and what to do, where locks cannot be trusted, on a disk the journal refuses, a record this store
-    // cannot read, or a migration it could not write.
+    // anything in `dir` is read or written, the store's lock, exclusive, on the directory itself (Fs::lock): held by
+    // this Store until it is destroyed, or until the process ends however it ends, so that at most one process ever has
+    // the store open for writing (models/store/StoreLock.tla). Every later read and write of the store goes through
+    // that hold, never through the name `dir` again. Busy, having read nothing, when a writer holds it. Failed, saying
+    // why and what to do, when only readers held it for all of the wait, where locks cannot be trusted, on a disk the
+    // journal refuses, a record this store cannot read, or a migration it could not write.
     static Status open(Fs& fs, const std::string& dir, const StoreOptions& options, std::unique_ptr<Store>& out,
                        OpenReport* report = nullptr);
 
-    // Reads the store in `dir` without changing anything there: under the lock, shared and held only while its files
-    // are copied, the log and the snapshot are copied into `copy`, and the store is opened on the copy (so a torn tail
-    // is cut, or a migration written, only there; `report` says what an open would do). Busy, having read nothing,
-    // while a writer holds the lock (a running nexus-server); NotFound when there is no store in `dir`.
+    // Reads the store in `dir` without changing anything there, and makes nothing there: under the lock, shared and
+    // held only while its files are copied (at most kReaderCopyLimitMs by `now_ms`, past which the copy is given up and
+    // Failed, so that a reader never keeps a starting server out), the log and the snapshot are copied into `copy`,
+    // and the store is opened on the copy (so a torn tail is cut, or a migration written, only there; `report` says
+    // what an open would do). Busy, having read nothing, while a writer holds the lock (a running nexus-server);
+    // NotFound when there is no store in `dir`. `now_ms` empty: the steady clock.
     static Status inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out,
-                          OpenReport* report = nullptr);
+                          OpenReport* report = nullptr, const std::function<std::uint64_t()>& now_ms = {});
 
     // One durable step, all or none: `changes` to session `session`, and, when `client` is not empty, that client's
     // counter set to `num`. A session the store does not hold is made only by a step to next_session() whose first

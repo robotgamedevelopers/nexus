@@ -129,11 +129,14 @@ store_tlc_test(tlc_journal_trace_no_truncate_rejected JournalTrace JournalTrace.
 store_tlc_test(tlc_journal_trace_no_sync_rejected     JournalTrace JournalTrace.cfg deadlock
                WALK 1 1000 --fault no-sync)
 
-# The store's lock and the start-up order (models/store/StoreLock.tla): two processes and three, every property.
+# The store's lock and the start (models/store/StoreLock.tla): two servers and a reader with Serves under fairness,
+# two servers and a directory moved aside, three servers; every safety property.
 store_tlc_test(tlc_store_lock_spec  StoreLock StoreLock.cfg      pass)
+store_tlc_test(tlc_store_lock_move  StoreLock StoreLockMove.cfg  pass)
 store_tlc_test(tlc_store_lock_three StoreLock StoreLockThree.cfg pass)
 # Reversed witnesses: the order before the lock (two writers, a record written unlocked, a number written twice, the
-# queued prompt sent twice), and the drivers restored before the socket.
+# queued prompt sent twice); the drivers restored before the socket; writes by the store's name after it moved; a stop
+# that removes the socket file its name names; a held lock taken as another server, and readers taken as one (Serves).
 store_tlc_test(tlc_store_lock_witness_two_writers StoreLock witnesses/LUnlockedTwoWriters.cfg invariant
                PROPERTY OneWriter)
 store_tlc_test(tlc_store_lock_witness_unlocked_writes StoreLock witnesses/LUnlockedWrites.cfg invariant
@@ -143,14 +146,20 @@ store_tlc_test(tlc_store_lock_witness_sent_twice StoreLock witnesses/LUnlockedSe
                PROPERTY SentOnce)
 store_tlc_test(tlc_store_lock_witness_restore_first StoreLock witnesses/LRestoreFirst.cfg invariant
                PROPERTY ListenedWrites)
-# Trace binding: the real StartOrder and Store::open's lock, two processes on one MemFs, each walk a behaviour of
-# StoreLock.tla; and the binding can fail: the order before the lock (an open with no lock) and the drivers restored
-# before the socket each take a step the spec cannot (deadlock).
+store_tlc_test(tlc_store_lock_witness_by_path StoreLock witnesses/LByPath.cfg invariant PROPERTY LockedWrites)
+store_tlc_test(tlc_store_lock_witness_unlink_by_path StoreLock witnesses/LUnlinkByPath.cfg invariant
+               PROPERTY SocketKept)
+store_tlc_test(tlc_store_lock_witness_held_refused StoreLock witnesses/LHeldRefused.cfg temporal PROPERTY Serves)
+store_tlc_test(tlc_store_lock_witness_reader_refused StoreLock witnesses/LReaderRefused.cfg temporal PROPERTY Serves)
+# Trace binding (functional: real files and the system's locks, in the test's own directory): the real StartOrder
+# through take_step, Store::open's lock through PosixFs, and a reader's shared lock; each walk a behaviour of
+# StoreLock.tla. The binding can fail: the order before the lock (an open with no lock), the drivers restored before the
+# socket, a held lock refused at once, and readers taken for a writer each take a step the spec cannot (deadlock).
 foreach(seed 1 2 3 4 5)
     store_tlc_test(tlc_store_lock_trace_seed_${seed} StoreLockTrace StoreLockTrace.cfg pass
                    WALKER store_lock_walk WALK ${seed} 2000)
 endforeach()
-store_tlc_test(tlc_store_lock_trace_unlocked_rejected StoreLockTrace StoreLockTrace.cfg deadlock
-               WALKER store_lock_walk WALK 1 2000 --faulty-unlocked)
-store_tlc_test(tlc_store_lock_trace_restore_first_rejected StoreLockTrace StoreLockTrace.cfg deadlock
-               WALKER store_lock_walk WALK 1 2000 --faulty-restore-first)
+foreach(fault unlocked restore-first held-refused reader-busy)
+    store_tlc_test(tlc_store_lock_trace_${fault}_rejected StoreLockTrace StoreLockTrace.cfg deadlock
+                   WALKER store_lock_walk WALK 1 2000 --faulty-${fault})
+endforeach()

@@ -71,39 +71,49 @@ Each config in `witnesses/` sets `Bug` to one broken variant on a small instance
 
 The binding is shown to fail four times. `Journal::Fault` builds a faulty journal (test-only, never set by the store): `accept-torn` keeps a record whose checksum fails and `cut-too-far` drops the last whole record with a torn tail, and TLC reports `TraceMatches` violated at that recovery; `no-truncate` leaves the torn tail and `no-sync` writes the batch and acknowledges it without syncing (a write acknowledged before it is durable), and the spec cannot take the next step (deadlock). A faulty journal may leave a disk its own open refuses; the walk stops there and the trace up to it goes to TLC.
 
-## StoreLock.tla: one writer, and the start-up order
+## StoreLock.tla: one writer, the start and the stop
 
-`StoreLock.tla` is the store's lock (`Fs::lock`, taken first by `Store::open`; `docs/formats.md`, "One writer") and nexus-server's start-up order (`src/server/start_order.h`), for several processes on one store, each of which starts, takes its steps and dies at any point (kill -9, a crash, an exit), after which the operating system has released its lock and nothing answers on its socket. The journal is a sequence of records, each with the number its writer gave it (one past what that writer replayed and wrote) and whether its writer held the lock and the socket; what the journal does with them on disk is `Journal.tla`. The store starts with one session and one prompt queued.
+`StoreLock.tla` is the store's lock (`Fs::lock` on the store's directory, taken first by `Store::open`; `docs/formats.md`, "One writer") and nexus-server's start and stop (`src/server/start_order.h`, `Server::run`), for several server processes (`Writers`) and readers (`Readers`: `nexus-server store check`) on one store, each of which may start, take its steps and die at any point (kill -9, a crash), after which the operating system has released its lock and its socket's file answers no one. The journal is a sequence of records, each with the number its writer gave it (one past what that writer replayed and wrote), whether its writer held that store's lock, and whether it had bound its socket in that run; what the journal does with them on disk is `Journal.tla`. The store starts with one session and one prompt queued. The store's directory may be moved aside with a new store made at its name (`MoveAside`); a process holds the directory it locked, by its descriptor, and its socket is in the same server directory.
 
 | Action | The code |
 |---|---|
-| `Start(p)` | `nexus-server serve` starts |
-| `Probe(p)` | `Server::probeControl`: another server answers on the control socket, refused |
-| `Lock(p)` | `Store::open`, first: `Fs::lock(store/lock, Exclusive)`, never waiting on a writer; held by another, refused |
-| `Open(p)` | `Store::open`, then: the journal replayed; the process's view of it, and whether the queued prompt was sent |
-| `Listen(p)` | `Server::listenControl`: the socket bound, or refused when it answers |
-| `Restore(p)` | `Server::restore`: the sessions settled and the drivers restored; one record, which takes the queued prompt for a driver (sent, once) when this process's view still has it queued |
+| `Start(p)` | `nexus-server serve` started by a person |
+| `Restart(p)` | the service starting it again after any exit but 0 (or a death) |
+| `Probe(p)` | `Server::probeControl`: a live server answers on the control socket, refused (exit 0) |
+| `LockTry(p)` | one try of `PosixFs::lock(dir, Exclusive)`: taken when free; held by a writer, the start waits (`held`); only readers, a pause and another try, `ReaderWait` times, then failed (exit 1) |
+| `HeldTick(p)` | `StartOrder::Step::Wait`: a pause, the socket asked again: answered, refused; else the lock tried again, `HeldWait` tries in all, then stuck (exit 3) |
+| `Open(p)` | `Store::open`, after the lock: the journal replayed; the process's view of it, and whether the queued prompt was sent |
+| `Listen(p)` | `Server::listenControl`: the socket bound (a stale file removed), or refused when it answers |
+| `Restore(p)` | `Server::restoreAll`: the sessions settled and the drivers restored; one record, which takes the queued prompt for a driver (sent, once) when this process's view still has it queued |
 | `Write(p)` | a step of the running server, one record |
-| `Die(p)` | the process ends; the OS releases its lock, and its socket answers no one |
+| `Stop(p)` | `nexus-server stop`: the socket closed and its file removed if the name still names this server's (`unlinkOwnSocket`) |
+| `EndDrivers(p)` | the drivers ended: their last record, under the lock, still held |
+| `Exit(p)` | the process ends with the exit its state gives: 0 (refused, stopped) is not restarted, 1 and 3 are; a failed start removes its own socket's file |
+| `Die(p)` | kill -9 or a crash, at any point: the lock released, the socket's file left |
+| `RLock(r)`, `RRelease(r)` | a reader's shared lock (refused while a writer holds it), and its release (its copy done, or past its limit) |
+| `MoveAside` | the server's directory moved aside and a new store made at its name |
 
-`Bug` selects the reversed witnesses' orders: `"unlocked"` is the order before the lock (open, restore, listen, and no lock), `"restore_first"` keeps the lock but restores before the socket is held.
+`Bug` selects the reversed witnesses' builds: `"unlocked"` the order before the lock (open, restore, listen, and no lock); `"restore_first"` the lock kept, the drivers restored before the socket; `"held_refused"` a lock held by a writer taken as another server, exit 0 at once (this order's first cut); `"reader_refused"` readers that did not let go taken as another server, exit 0; `"by_path"` writes made by the store's name rather than through the held directory; `"unlink_by_path"` a stop that removes whatever socket file its name names.
 
 | Property | What it says |
 |---|---|
-| `OneWriter` | at most one process has the store open |
-| `OpenHoldsLock` | a process with the store open holds its lock |
-| `LockedWrites` | no record is written by a process that does not hold the lock |
-| `ListenedWrites` | no record is written before the socket is held too |
+| `OneWriter` | at most one process has each store open |
+| `OpenHoldsLock` | a process with a store open holds that store's lock, alone |
+| `LockedWrites` | no record is written by a process that does not hold that store's lock |
+| `ListenedWrites` | no record is written by a process that has not bound its socket in this run |
 | `SeqsUnique` | the records are numbered 1, 2, 3, ... with no number twice (what `Journal.tla`'s recovery needs) |
-| `SentOnce` | the queued prompt is written to a driver at most once |
-| `Holders` | the lock has at most one holder, and only it holds the socket |
+| `SentOnce` | each store's queued prompt is written to a driver at most once |
+| `Holders` | each lock has at most one writer, and never a writer and readers at once |
+| `SocketKept` | a server whose socket answers still has its socket's file: no other process removed it |
+| `Serves` (under `Live`) | once a writer is starting, some writer serves then or later: a start is never left with nothing serving. `Live` is weak fairness on each writer's own steps and on each reader's release; a person's start, a stop, a write, a death and a move happen or not |
 
 | Config | Instance | Result |
 |---|---|---|
-| `StoreLock.cfg` | two processes, each started up to twice, up to four records | 2,543 distinct states, depth 31, under 1 s |
-| `StoreLockThree.cfg` | three processes, each started up to twice, up to five records | 199,946 distinct states, depth 46, 1 s on four workers |
+| `StoreLock.cfg` | two servers and a reader, each server started up to twice, one stop, one death, up to three records; `Serves` under `Live` | 97,587 distinct states, depth 39, 4 s on four workers |
+| `StoreLockMove.cfg` | two servers, the directory moved aside once, one stop, one death; `Serves` under `Live` | 39,606 distinct states, depth 30, 2 s |
+| `StoreLockThree.cfg` | three servers, each started up to twice, one stop, one death, up to four records; safety only | 1,829,633 distinct states, depth 47, 15 s on four workers (with a reader too it is 17 million) |
 
-Reversed witnesses (in `witnesses/`, each one process start each, up to three records), each counterexample read against the code before the lock:
+Reversed witnesses (in `witnesses/`), each counterexample read against the code and failing for the reason given:
 
 | Witness | The break | Caught by | Counterexample |
 |---|---|---|---|
@@ -111,13 +121,17 @@ Reversed witnesses (in `witnesses/`, each one process start each, up to three re
 | `LUnlockedWrites` | the order before the lock | `LockedWrites` | one starts, opens, restores: a record with no lock |
 | `LUnlockedSeqs` | the order before the lock | `SeqsUnique` | both start, both open (both replay record 1), both restore: record 2 twice |
 | `LUnlockedSentTwice` | the order before the lock | `SentOnce` | both start, both open with the prompt queued, both restore: the prompt sent twice (main's order: `openStore` restored the drivers, and only then did `listenControl` find the other server) |
-| `LRestoreFirst` | the drivers restored before the socket | `ListenedWrites` | probe, lock, open, restore: a record before the socket is held |
+| `LRestoreFirst` | the drivers restored before the socket | `ListenedWrites` | probe, lock, open, restore: a record before the socket is bound |
+| `LByPath` | writes by the store's name | `LockedWrites` | a locks the store, opens, binds; the directory is moved aside; a's restore writes into the new store at the name, which it holds no lock on |
+| `LUnlinkByPath` | the stop removes the file its name names | `SocketKept` | a runs; the directory is moved aside; b locks the new store and binds at the name; a's stop removes b's socket file while b listens |
+| `LHeldRefused` | a held lock taken as another server (exit 0) | `Serves` | b runs; a starts; b is stopped (socket closed, drivers ending, lock held); a probes (no answer), finds the lock held, exits 0; b exits: nothing serves, nothing restarts |
+| `LReaderRefused` | readers that do not let go taken as another server (exit 0) | `Serves` | a starts, probes; the reader takes the lock shared; a's tries outlast the wait and it exits 0; the reader lets go: nothing serves, nothing restarts |
 
-What is outside: a server from before the lock beside one of this build (it takes no lock, so nothing this build does can stop it writing); the code's `Probe` is for that case, refusing to touch the store while such a server answers, and the model keeps the step. A reader's shared lock is outside too (it writes nothing); `store_unit_lock` and `store_functional` test it.
+What is outside: a server from before the lock beside one of this build (it takes no lock, so nothing this build does can stop it writing); the code's `Probe` is for that case, and `docs/formats.md` states the window that is left during the upgrade.
 
 ### The binding
 
-`tests/store/store_lock_walk.cpp` (`store_lock_walk <seed> <steps> [--faulty-unlocked | --faulty-restore-first] <out.tla>`) runs two processes on one `MemFs`, each with the real `StartOrder` and the real `Store::open` (whose lock is `MemFs::lock`: a process's lock goes when its `Store` is destroyed, as a process's goes when it ends), with the control socket kept by the walk. A seeded walk starts processes, takes each one's next step as its `StartOrder` gives it, commits steps of the running one, and kills any of them now and then. Each record is the step (the lock as `Store::open` takes it, through a filesystem that records it), with every process's state read off its `StartOrder`, the lock's holders from `MemFs`, the socket's holder, the record numbers in the log as they lie on the `MemFs`, and the sends of the queued prompt. `StoreLockTrace.tla` takes the `StoreLock` action each record names; `TraceMatches` requires the spec's state to be the code's, and every property is checked on the trace. Seeds 1 to 5 run per commit, 2000 steps each (seed 1: 2,106 trace steps, 423 starts, 261 refused, 421 deaths). The binding is shown to fail twice: `--faulty-unlocked` walks `StartOrder::Fault::Unlocked` (the store opened with no lock, `StoreOptions::test_unlocked`, then restored, then the socket), and `--faulty-restore-first` `StartOrder::Fault::RestoreFirst`; the spec cannot take the open with no lock before it, nor the restore before the socket, and TLC reports a deadlock at that step.
+`tests/store/store_lock_walk.cpp` (`store_lock_walk <seed> <steps> [--faulty-unlocked | --faulty-restore-first | --faulty-held-refused | --faulty-reader-busy] <out.tla>`) is a functional test: two server processes and a reader on one real store, a directory `<out.tla>.store` in the test's own directory, each server with its own `PosixFs` (the real `flock` on the directory, through the real `Store::open`) and the real `StartOrder` stepped by the real `take_step`, the dispatch `Server::run` takes its steps by; the reader takes `PosixFs::lock(dir, Shared)`, the lock `Store::inspect` takes first. The control socket is kept by the walk (whose file it is, and whether that server is listening). Time is a counter the walk advances by each pause: the waits are three retries on readers and three tries of a held lock (`ReaderWait` and `HeldWait` 3 in the trace instance), and the reader may let go during any pause on it. A seeded walk starts and restarts servers, takes each one's next step, writes, stops, exits and kills them now and then, and takes and releases the reader's lock. Each record is the step, with every process's state, how many hold the lock exclusive and shared (asked of the system with `flock` on a descriptor of the walk's own), whose the socket's file is, the record numbers in the log as they lie on the disk, and the sends of the queued prompt. `StoreLockTrace.tla` takes the `StoreLock` action each record names and requires the state it reaches to be the code's, so a step the spec cannot take, or takes elsewhere, has no successor; every safety property is checked on the trace. Seeds 1 to 5 run per commit, 2000 steps each (seed 1: 2,188 trace steps, 130 starts, 125 restarts, 121 locks, 90 waits on the reader, 35 waits on a held lock, 20 stops, 114 deaths, 586 reader locks). The binding is shown to fail four times, each at the fault's step: `--faulty-unlocked` (`StartOrder::Fault::Unlocked`: an open with no lock before it), `--faulty-restore-first` (a restore before the socket), `--faulty-held-refused` (`StartOrder::Fault::HeldRefused`: a held lock refused at once), and `--faulty-reader-busy` (the walk's filesystem reports readers that did not let go as a writer's lock: the start waits where the spec fails it). A fault the walk never reached is an error, so each rejection is the fault's.
 
 ## Running the checks
 
@@ -126,4 +140,4 @@ cmake --build build --target model_checks
 TLA2TOOLS_JAR=/path/to/tla2tools.jar ctest --test-dir build -R tlc_journal -L '^model$' -j "$(sysctl -n hw.ncpu)"
 ```
 
-`model` runs the two instances, the nine witnesses, five code traces (seeds 1 to 5, 1000 steps each) and the four faulty traces; `model_nightly` runs `JournalLarge`. `-R tlc_store_lock` runs StoreLock's two instances, five witnesses, five code traces and two faulty traces (CI shard `store-lock`). Each run has its own directory under `build/tests/store/tlc/<test>/` with its `tlc.log` (and the trace's `JournalTraceData.tla`), four TLC workers, and a 60 second cap (300 on the nightly). The runner is `tests/store/tlc.cmake`, which follows `tests/model/tlc.cmake`.
+`model` runs the two instances, the nine witnesses, five code traces (seeds 1 to 5, 1000 steps each) and the four faulty traces; `model_nightly` runs `JournalLarge`. `-R tlc_store_lock` runs StoreLock's three instances, nine witnesses, five code traces and four faulty traces (CI shard `store-lock`). Each run has its own directory under `build/tests/store/tlc/<test>/` with its `tlc.log` (and the trace's `JournalTraceData.tla`), four TLC workers, and a 60 second cap (300 on the nightly). The runner is `tests/store/tlc.cmake`, which follows `tests/model/tlc.cmake`.

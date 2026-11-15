@@ -143,10 +143,12 @@ void kill_and_reopen() {
     }
 }
 
-// The store's lock on the real filesystem (flock, PosixFs::lock): a second writer is Busy at once, in this process or
-// another; a reader is refused while a writer holds it and changes nothing; a writer waits for readers only, at most
-// kLockReaderWaitMs; the lock file is the user's alone; and a holder killed with SIGKILL leaves no lock behind (that is
-// kill_and_reopen, which opens again at once).
+// The store's lock on the real filesystem (flock on the store's directory, PosixFs::lock): no lock file is made; a
+// second writer is Busy at once, in this process or another, and by any name the directory is reached by; a reader is
+// refused while a writer holds it and changes and makes nothing; a writer waits for readers only, and past the wait
+// fails (never Busy, which is another writer); the holder of a directory moved aside goes on writing in it, never in a
+// new directory made at its old name; the refusals where locks cannot be trusted; and a holder killed with SIGKILL
+// leaves no lock behind (that is kill_and_reopen, which opens again at once).
 void locks() {
     std::unique_ptr<Fs> fs = make_posix_fs();
     std::unique_ptr<Store> a;
@@ -155,11 +157,12 @@ void locks() {
         return;
     }
     CHECK_OK(a->commit(1, made()));
-    struct stat st {};
-    CHECK(::stat("locked/lock", &st) == 0 && (st.st_mode & 0777) == 0600);
+    // The lock is the directory's: nothing is made for it.
+    CHECK(!std::filesystem::exists("locked/lock"));
     // A second open, on a descriptor of its own: Busy, whether in this process or a child.
+    std::unique_ptr<Fs> fs2 = make_posix_fs();
     std::unique_ptr<Store> b;
-    Status busy = Store::open(*fs, "locked", {}, b);
+    Status busy = Store::open(*fs2, "locked", {}, b);
     CHECK(busy.code() == Status::Code::Busy && b == nullptr);
     pid_t pid = fork();
     CHECK(pid >= 0);
@@ -171,17 +174,24 @@ void locks() {
     int status = 0;
     waitpid(pid, &status, 0);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    // A reader while the writer has it: refused, nothing read.
+    // The same directory by another name (a symbolic link to it from elsewhere, as a second server directory whose
+    // store is a link would reach it): the one lock, Busy.
+    std::filesystem::remove_all("elsewhere");
+    std::filesystem::create_directory("elsewhere");
+    std::filesystem::create_directory_symlink(std::filesystem::absolute("locked"), "elsewhere/store");
+    CHECK(Store::open(*fs2, "elsewhere/store", {}, b).code() == Status::Code::Busy && b == nullptr);
+    // A reader while the writer has it: refused, nothing read, nothing made.
     MemFs copy;
     std::unique_ptr<Store> r;
-    CHECK(Store::inspect(*fs, "locked", copy, r).code() == Status::Code::Busy && r == nullptr);
+    CHECK(Store::inspect(*fs2, "locked", copy, r).code() == Status::Code::Busy && r == nullptr);
     std::uintmax_t size = std::filesystem::file_size("locked/log");
     a.reset();
-    // Without it: read, and the files are as they were.
+    // Without it: read, and the files are as they were, and none made.
     MemFs copy2;
-    CHECK_OK(Store::inspect(*fs, "locked", copy2, r));
+    CHECK_OK(Store::inspect(*fs2, "locked", copy2, r));
     CHECK(r != nullptr && r->sessions().size() == 1);
     CHECK(std::filesystem::file_size("locked/log") == size);
+    CHECK(!std::filesystem::exists("locked/lock"));
     r.reset();
 
     // A writer waits for a reader that lets go within kLockReaderWaitMs, and has the store then. The reader is a child
@@ -194,7 +204,7 @@ void locks() {
         close(fds[0]);
         std::unique_ptr<Fs> cfs = make_posix_fs();
         std::unique_ptr<FileLock> held;
-        if (!cfs->lock("locked/lock", LockMode::Shared, held).is_ok()) {
+        if (!cfs->lock("locked", LockMode::Shared, held).is_ok()) {
             _exit(1);
         }
         char go = 1;
@@ -217,16 +227,78 @@ void locks() {
     waitpid(pid, &status, 0);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-    // One that holds on past kLockReaderWaitMs: the writer gives up, Busy.
+    // One that holds on past kLockReaderWaitMs: the writer gives up, Failed (a start that failed, not another server),
+    // saying that readers held it.
     std::unique_ptr<FileLock> reader;
-    CHECK_OK(fs->lock("locked/lock", LockMode::Shared, reader));
+    CHECK_OK(fs2->lock("locked", LockMode::Shared, reader));
     const auto start = std::chrono::steady_clock::now();
     busy = Store::open(*fs, "locked", {}, b);
     const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-    CHECK(busy.code() == Status::Code::Busy);
+    CHECK(busy.code() == Status::Code::Failed && b == nullptr);
+    CHECK(busy.message().find("held by readers only") != std::string::npos);
     CHECK(waited.count() >= static_cast<long long>(kLockReaderWaitMs));
-    std::printf("locks: a writer gave up on a reader after %lld ms\n", static_cast<long long>(waited.count()));
+    std::printf("locks: a writer gave up on a reader after %lld ms: %s\n", static_cast<long long>(waited.count()),
+                busy.message().c_str());
     reader.reset();
+
+    // The directory moved aside while its writer holds it, and a new store made at its old name: the writer's records
+    // and its compaction's renames go on in the moved directory, through its hold, and the new store is untouched.
+    {
+        std::filesystem::remove_all("moved");
+        std::unique_ptr<Fs> wfs = make_posix_fs();
+        std::unique_ptr<Store> w;
+        StoreOptions small;
+        small.compact_bytes = 300;
+        CHECK_OK(Store::open(*wfs, "locked", small, w));
+        std::filesystem::rename("locked", "moved");
+        std::unique_ptr<Fs> nfs = make_posix_fs();
+        std::unique_ptr<Store> fresh;
+        CHECK_OK(Store::open(*nfs, "locked", {}, fresh));     // its own directory, its own lock
+        CHECK_OK(fresh->commit(1, made()));
+        const std::uintmax_t newSize = std::filesystem::file_size("locked/log");
+        for (std::uint64_t i = 1; i <= 20; ++i) {
+            CHECK_OK(w->commit(1, prompt("old " + std::to_string(i))));
+        }
+        CHECK(std::filesystem::exists("moved/snapshot"));      // it compacted, in the moved directory
+        CHECK(!std::filesystem::exists("locked/snapshot"));
+        CHECK(std::filesystem::file_size("locked/log") == newSize);
+        w.reset();
+        fresh.reset();
+        std::unique_ptr<Store> back;
+        CHECK_OK(Store::open(*wfs, "moved", {}, back));
+        CHECK(back != nullptr && back->session(1) != nullptr && back->session(1)->transcript.size() == 20);
+        back.reset();
+        std::unique_ptr<Store> other;
+        CHECK_OK(Store::open(*nfs, "locked", {}, other));
+        CHECK(other != nullptr && other->session(1) != nullptr && other->session(1)->transcript.empty());
+        other.reset();
+        std::filesystem::remove_all("moved");
+    }
+
+    // Where locks cannot be trusted, nothing runs unlocked: a network filesystem (the seam reports one), and one where
+    // a second exclusive lock is granted beside the first (the seam grants it).
+    {
+        PosixOptions nfsLike;
+        nfsLike.test_fs_type = "nfs";
+        std::unique_ptr<Fs> net = make_posix_fs(nfsLike);
+        std::unique_ptr<Store> s;
+        const Status refused = Store::open(*net, "locked", {}, s);
+        CHECK(refused.code() == Status::Code::Failed && s == nullptr);
+        CHECK(refused.message().find("is on NFS, a network filesystem") != std::string::npos);
+        std::printf("locks: %s\n", refused.message().c_str());
+        MemFs c;
+        CHECK(Store::inspect(*net, "locked", c, s).code() == Status::Code::Failed);
+        PosixOptions ignored;
+        ignored.test_locks_ignored = true;
+        std::unique_ptr<Fs> lax = make_posix_fs(ignored);
+        const Status unkept = Store::open(*lax, "locked", {}, s);
+        CHECK(unkept.code() == Status::Code::Failed && s == nullptr);
+        CHECK(unkept.message().find("are not kept") != std::string::npos);
+        std::printf("locks: %s\n", unkept.message().c_str());
+        // Neither refusal left a lock behind.
+        CHECK_OK(Store::open(*fs, "locked", {}, s));
+    }
+    std::filesystem::remove_all("elsewhere");
     std::filesystem::remove_all("locked");
 }
 
