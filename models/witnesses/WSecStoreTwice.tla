@@ -7,7 +7,7 @@ StoreAgain(m) ==
     /\ file' = [file EXCEPT ![req[m.id].acct] = m.v]
     /\ stores' = [stores EXCEPT ![m.id] = @ + 1]
     /\ log' = {[id |-> m.id, event |-> "stored"]}
-    /\ UNCHANGED <<req, replies>> /\ transcript' = {}
+    /\ UNCHANGED <<req, replies, held>> /\ transcript' = {}
 
 Late(m) == IF m.kind = "secret" /\ req[m.id].st = "stored" THEN StoreAgain(m) ELSE DropLate(m)
 

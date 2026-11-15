@@ -6,7 +6,7 @@ EXTENDS MCSecrets
 Late(m) ==
     /\ replies' = replies \cup {Reply(m.id, "refused", "timeout")}
     /\ log' = {[id |-> m.id, event |-> "late"]}
-    /\ UNCHANGED <<req, file, stores>> /\ transcript' = {}
+    /\ UNCHANGED <<req, file, stores, held>> /\ transcript' = {}
 
 BrokenSpec == Init /\ [][NextWith(Ask, Sync, LAMBDA m : ReceiveWith(StoreOpen, Late, m), Timeout, Restart)]_vars
 =============================================================================

@@ -262,8 +262,25 @@ public:
     // A sign-in (or its loss) reported for an account: the server's own state, in memory only (every account needs
     // sign-in at a start until its driver or the sign-in reports it). Ignored for an account not set up; an account
     // removed loses its sign-in, so one set up again needs sign-in again (models/Accounts.tla, Report and AddAccount).
+    //
+    // A loss (a driver's no-credential) asks the person for the login in the window only when the login hook
+    // (loginsWith) says a paste can fix it, with its words as the dialog's reason: the first login, one not of a
+    // token's shape, or one the provider revoked or that ended with no way to renew it. Otherwise (the file there but
+    // not usable as it lies, say its mode) nothing is asked: the account's sessions are told why and the fix. Nothing
+    // is asked while a request for the account is open or its value held.
     void reportSignedIn(const std::string& account, bool signedIn);
     const std::set<std::string>& signedIn() const { return signedIn_; }
+    // Whether a paste would fix an account's lost login, and the words for it (server/login_life.h loginAsk).
+    struct LoginAsk {
+        bool ask = false;       // true: ask in the window, with `text` as the reason; false: tell the sessions `text`
+        std::string text;
+    };
+    void loginsWith(std::function<LoginAsk(const accounts::Account&)> hook) { loginAsk_ = std::move(hook); }
+    // An account's login has ended and cannot be renewed (server/login_life.h LoginWatch): it is signed out, and nexus
+    // asks for a new one in the window with `why`, unless a request for it is open or held.
+    void needsSignIn(const std::string& account, const std::string& why);
+    // A notice, `text`, in every session on `account` (its login's end coming, say), and in server.log.
+    void tellAccount(const std::string& account, const std::string& text);
     // What says, before any driver reports, whether an account is signed in (the server: its credential file is
     // there). Asked of each account when it first appears in the registry (at useAccounts() for every one), before the
     // sessions are settled; a driver's report afterwards overrides it. Set before useAccounts().
@@ -294,6 +311,16 @@ public:
     void expireSecrets();
     // When expireSecrets() next has something to do (by the clock given to secretsWith), or none.
     std::optional<std::uint64_t> secretDeadline() const { return desk_.deadline(); }
+    // The oldest held value whose time has come is written again (SecretDesk::retry).
+    void retrySecrets();
+    // When retrySecrets() next has something to do, or none.
+    std::optional<std::uint64_t> secretRetryAt() const { return desk_.retryAt(); }
+    // When the server's loop must next call expireSecrets() and retrySecrets(): the sooner of the two, or none.
+    std::optional<std::uint64_t> secretWake() const;
+    // nexus's own ask whose paste was refused malformed is asked again, one per call, unless a request for the account
+    // is open or held by then: the account asked for, or none.
+    std::optional<std::string> reaskSecrets();
+    bool reaskPending() const { return !reask_.empty(); }
     // The server is ending: every open request is dropped unanswered, each with its log line.
     void dropSecrets();
     const SecretDesk& secrets() const { return desk_; }
@@ -331,6 +358,8 @@ private:
     std::function<bool()> takers_;
     std::function<std::uint64_t()> clock_;
     std::map<SessionId, std::deque<std::uint64_t>> askTimes_;   // each asker's asks in the last kSecretAskWindowMs
+    std::function<LoginAsk(const accounts::Account&)> loginAsk_;
+    std::deque<std::pair<std::string, std::string>> reask_;     // nexus's own asks to make again: account, what
 };
 
 } // namespace nexus::sync

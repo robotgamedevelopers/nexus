@@ -273,6 +273,43 @@ publish that commit. The message names the file and the two ways out: make a new
 aside, start nexus-server, copy the two files in, `nexus-server config reload`), or rewrite the history so that no
 commit holds it; and if it was a credential, replace the credential. The server never creates the remote repository.
 
+## How long a login lasts
+
+The owner's rule (2026-11-14): a person pastes a key or signs in once, ever; nexus never loses it and never asks again.
+A login that can be renewed without a person, nexus renews before it ends, with no prompt. One that cannot, nexus knows
+the end of, and says so well ahead. The only time it asks for a second paste is a login the provider revoked or that
+ended with no way to renew it, and its dialog says which. Each account's login is that account's own: it is stored in
+that account's directory on the server it was pasted into, and used only for that account's sessions.
+
+| provider | what is stored | how long it lasts | renewed by | what nexus does | sources |
+|---|---|---|---|---|---|
+| `claude` | `oauth-token`: the token `claude setup-token` prints, for the account's Claude subscription | one year from when it was made | nothing: it has no refresh token; a person runs `claude setup-token` again | built: counts the year from the file's time, tells the account's sessions 30, 7 and 1 days ahead, and on the day asks for a new one in the window, saying why | code.claude.com/docs/en/authentication ("Generate a long-lived token": one year, no refresh); code.claude.com/docs/en/errors ("OAuth token has expired", "OAuth token revoked") |
+| codex (ChatGPT sign-in) | `~/.codex/auth.json`: access, ID and refresh tokens | access tokens are short; the CLI refreshes about every 8 days and on a 401, and the refresh token rotates | the Codex CLI itself; `codex login --device-auth` signs in without a browser on the machine | roadmap (`login-life-codex`): no codex driver yet | the Codex authentication docs; openai/codex `codex-rs/core/src/auth.rs` |
+| gemini (Google sign-in) | `oauth_creds.json`: access and refresh tokens | access tokens about an hour | google-auth-library refreshes them from the refresh token, unattended | roadmap (`login-life-gemini`): no gemini driver yet | geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli `packages/core/src/code_assist/oauth2.ts` |
+| an API key (Anthropic Console, OpenAI, Gemini, xAI) | the key | until it is revoked; an xAI key may carry an optional expiry chosen when it is made | nothing needed | roadmap (`login-life-api-keys`): no provider of nexus stores a key yet | each provider's key docs (docs.x.ai for the optional expiry) |
+
+**Claude, in full.** A claude account's login is the long-lived token from `claude setup-token`, which runs Claude Code
+on the account's Claude subscription rather than API billing. Anthropic documents it as lasting one year, with no
+refresh: the only renewal is to run `claude setup-token` again. (Claude Code's own interactive `/login` stores an access
+token, a refresh token and an expiry, and refreshes them itself; how to refresh is not documented for other programs,
+so nexus does not store or refresh those.) So nexus-server:
+
+- Counts the year from when the file was written (its modification time). A token made some days before it was pasted
+  ends that much sooner than the server counts; the 30 days' notice covers that.
+- Checks every stored claude login when it starts and once an hour. 30 days, 7 days and 1 day before the end it tells
+  every session on the account, and `server.log`, the date and that nothing changes until then; each notice once (a
+  restart tells the one due then again).
+- On the day, signs the account out and asks for a new token in the window: "a1's Claude login ended on 2027-11-14, a
+  year after it was pasted, and cannot be renewed: run claude setup-token and paste the token it prints".
+- When the driver reports the token was refused before its year is out, asks for a new one, saying it was refused by
+  the provider (revoked, or no longer valid), with the provider's words in `server.log`.
+- When the file is there but cannot be used as it lies (a symbolic link, another user's, open to other users, not
+  readable), asks for nothing: a paste would not fix it. It tells the account's sessions the fix (`chmod 600`, remove
+  the link) instead.
+- When the file is not one token (two words, empty), asks for a new one, saying so.
+
+At the start, an account whose login is missing, not one token, unusable as it lies, or past its year is not signed in.
+
 ## Known limits
 
 - The upgrade's mark (above, under History) is taken off once every session has moved. If the server cannot remove it

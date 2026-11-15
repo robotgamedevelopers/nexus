@@ -603,13 +603,45 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     signedIn_.erase(account);
     // An account with no login it can use: nexus itself asks for it in the window (docs/secrets.md), one paste, unless
-    // a request for it is open already. With no window that can take one, the ask is refused at once and logged.
+    // a request for it is open, or its value held, already. With no window that can take one, the ask is refused at
+    // once and logged.
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
-    if (secretKeeper_ != nullptr && a != nullptr && !loginFile(a->provider).empty() &&
-            std::none_of(desk_.open().begin(), desk_.open().end(),
-                         [&](const SecretRequest& r) { return r.account == account; })) {
-        askSecret(SecretAsker{}, account, loginFile(a->provider),
-                  account + " has no login it can use: paste its " + loginFile(a->provider) + " to sign it in");
+    if (secretKeeper_ == nullptr || a == nullptr || loginFile(a->provider).empty() || desk_.busy(account)) {
+        return;
+    }
+    const LoginAsk la = loginAsk_ ? loginAsk_(*a) : LoginAsk{true, account + " has no login it can use: paste its " +
+                                                                   loginFile(a->provider) + " to sign it in"};
+    if (la.ask) {
+        askSecret(SecretAsker{}, account, loginFile(a->provider), la.text);
+    } else {
+        tellAccount(account, la.text);
+    }
+}
+
+void Hub::needsSignIn(const std::string& account, const std::string& why) {
+    if (accounts_ && accounts_->account(account) == nullptr) {
+        return;
+    }
+    signedIn_.erase(account);
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (secretKeeper_ != nullptr && a != nullptr && !loginFile(a->provider).empty() && !desk_.busy(account)) {
+        askSecret(SecretAsker{}, account, loginFile(a->provider), why);
+    }
+}
+
+void Hub::tellAccount(const std::string& account, const std::string& text) {
+    for (SessionId id : store_.ids()) {
+        const StoredSession* s = store_.find(id);
+        if (s == nullptr || s->info.account != account) {
+            continue;
+        }
+        std::string failed;
+        if (store_.commit(id, {SessionChange{entry(EntryKind::Notice, text), {}}}, std::string(), 0, &failed)) {
+            refresh(id);
+        }
+    }
+    if (secretEvents_ != nullptr) {
+        secretEvents_->logged(SecretLog{0, account, "login", text});
     }
 }
 
@@ -667,8 +699,7 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
         while (!times.empty() && times.front() + kSecretAskWindowMs <= now) {
             times.pop_front();
         }
-        const bool pending = std::any_of(desk_.open().begin(), desk_.open().end(),
-                                         [&](const SecretRequest& r) { return r.asker == asker.session; });
+        const bool pending = desk_.waiting(asker.session);
         if (pending || times.size() >= kSecretAsksPerWindow) {
             secretEffects(desk_.refuseAtOnce(asker, account, what, pending ?
                 "one of its asks is open already" :
@@ -693,7 +724,39 @@ void Hub::expireSecrets() {
     }
 }
 
+void Hub::retrySecrets() {
+    if (clock_ && secretKeeper_ != nullptr) {
+        secretEffects(desk_.retry(clock_(), *secretKeeper_));
+    }
+}
+
+std::optional<std::uint64_t> Hub::secretWake() const {
+    const std::optional<std::uint64_t> a = desk_.deadline();
+    const std::optional<std::uint64_t> b = desk_.retryAt();
+    if (a && b) {
+        return std::min(*a, *b);
+    }
+    return a ? a : b;
+}
+
+std::optional<std::string> Hub::reaskSecrets() {
+    while (!reask_.empty()) {
+        const auto [account, what] = reask_.front();
+        reask_.pop_front();
+        // One open or held for the account already serves: nothing to ask.
+        if (desk_.busy(account)) {
+            continue;
+        }
+        if (askSecret(SecretAsker{}, account, what, "what was pasted for " + account + "'s " + what +
+                      " was not one token: paste it again, alone")) {
+            return account;
+        }
+    }
+    return std::nullopt;
+}
+
 void Hub::dropSecrets() {
+    reask_.clear();
     secretEffects(desk_.drop());
 }
 
@@ -713,25 +776,7 @@ bool Hub::secretAction(const Action& action, std::string* why, const std::string
         secretEffects(desk_.cancel(action.request));
         return true;
     }
-    const std::optional<SecretState> before = desk_.stateOf(action.request);
-    std::string account;
-    std::string what;
-    for (const SecretRequest& r : desk_.open()) {
-        if (r.id == action.request) {
-            account = r.account;
-            what = r.what;
-        }
-    }
-    secretEffects(desk_.answer(action.request, action.secret, *secretKeeper_));
-    if (before == SecretState::Open && desk_.stateOf(action.request) == SecretState::Stored) {
-        const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
-        if (a != nullptr && what == loginFile(a->provider)) {
-            reportSignedIn(account, true);
-            if (responder_ != nullptr) {
-                responder_->signedIn(account);
-            }
-        }
-    }
+    secretEffects(desk_.answer(action.request, action.secret, *secretKeeper_, clock_ ? clock_() : 0));
     return true;
 }
 
@@ -757,6 +802,22 @@ void Hub::secretEffects(const SecretEffects& effects) {
         }
         for (const SecretLog& l : effects.log) {
             secretEvents_->logged(l);
+        }
+    }
+    // nexus's own ask refused for a paste of the wrong shape: the person is asked again (reaskSecrets, next pass).
+    for (const SecretReply& r : effects.replies) {
+        if (r.asker.session == 0 && !r.stored && r.reason == reason::kMalformed) {
+            reask_.emplace_back(r.account, r.what);
+        }
+    }
+    // A login that became durable (at its answer or at a retry) signs its account in, without a restart.
+    for (const SecretRequest& r : effects.stored) {
+        const accounts::Account* a = accounts_ ? accounts_->account(r.account) : nullptr;
+        if (a != nullptr && r.what == loginFile(a->provider)) {
+            reportSignedIn(r.account, true);
+            if (responder_ != nullptr) {
+                responder_->signedIn(r.account);
+            }
         }
     }
 }

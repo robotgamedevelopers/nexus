@@ -8,12 +8,15 @@
 // shows a dialog for the oldest open one it has not answered (SecretPrompt). The person pastes the value once into one
 // window: it goes up that window's actions to the server alone (ActionKind::SecretAnswer), or Escape cancels it for
 // every window (SecretCancel). The server takes the first answer for an open request (SecretDesk): it writes the value
-// to the account's file (SecretKeeper) and answers the asker "stored"; a cancel, a deadline or a refusal at the ask
-// answers it "refused" with a reason. An answer for a request no longer open is dropped and logged without its value.
+// to the account's file (SecretKeeper) and answers the asker "stored" once it is durable, holding it and writing it
+// again until then; a cancel, a deadline, a paste not of the file's shape or a refusal at the ask answers it "refused"
+// with a reason. An answer for a request no longer open is dropped and logged without its value, unless it crossed the
+// deadline of the newest request of its account, which is still stored.
 //
-// Where a value may be: a window's open dialog (SecretPrompt::typed), the window's action in flight to the server, and
-// the account's file. Never the store, a transcript, a log line, a driver's input or another window's state: replies,
-// notes and log lines are built from the request alone, and a SecretValue has no way to print itself.
+// Where a value may be: a window's open dialog (SecretPrompt::typed), the window's action in flight to the server, the
+// server's memory while its file cannot yet be written (SecretDesk's held values), and the account's file. Never the
+// store, a transcript, a log line, a driver's input or another window's state: replies, notes and log lines are built
+// from the request alone, and a SecretValue has no way to print itself.
 
 #pragma once
 
@@ -105,19 +108,33 @@ struct SecretAsker {
     bool operator==(const SecretAsker&) const = default;
 };
 
-// The reasons an asker is refused (docs/secrets.md): one open already for the account (or for the asker, or it asked
-// too often); no window can take one; the person cancelled; nobody answered before the deadline. `unwritable` is the
-// code's alone (the model leaves the write to the code): the value arrived and the file could not be written.
-// `unconfirmed` goes with stored, never refused: the value is in its file, but the disk did not confirm the rename
-// durable (the directory's sync failed), so a crash may yet bring the old file back.
+// The reasons an asker is refused (docs/secrets.md, "What may end a request"): one open or held already for the account
+// (or for the asker, or it asked too often); no window can take one; the person cancelled; nobody answered before the
+// deadline; what was pasted is not the shape of the file asked for (secretShape). None of them is ever a failure of
+// nexus's own: a value that arrived in the right shape is never refused. When its file cannot be written, the server
+// holds it and writes it again until it is durable (SecretDesk::retry), and the asker hears "stored" only then.
+// `unwritable` and `unconfirmed` were a server's from before that (a write failure refused, and a rename whose
+// directory's sync failed answered stored); no server sends them now, and a driver still reads them.
 namespace reason {
 constexpr const char* kBusy = "busy";
 constexpr const char* kNoClient = "no-client";
 constexpr const char* kCancelled = "cancelled";
 constexpr const char* kTimeout = "timeout";
-constexpr const char* kUnwritable = "unwritable";
-constexpr const char* kUnconfirmed = "unconfirmed";
+constexpr const char* kMalformed = "malformed";
 } // namespace reason
+
+// Whether `value` has the shape of an account's file `what`: empty if so, else what is wrong with it, in words for
+// the person (never the value, its length or any of its bytes). Every file a provider documents today (secretFiles) is
+// one token: 1 to kSecretValueBytes bytes, each a printable ASCII character other than a space, so no line break, tab
+// or space inside it (the dialog has already cut those at its ends). A paste of a sentence, of two lines or of nothing
+// but spaces is refused at once, "malformed", and asked again, rather than stored and refused later by the harness.
+std::string secretShape(const std::string& what, const SecretValue& value);
+
+// How often a held value is written again: first 1 s after the write that failed, then twice as long each time, at most
+// a minute. A guess, not a measurement: soon enough that a fixed disk is used within a minute, rare enough that a disk
+// that stays broken costs a write and a log line a minute.
+constexpr std::uint64_t kSecretRetryFirstMs = 1000;
+constexpr std::uint64_t kSecretRetryMaxMs = 60 * 1000;
 
 // The one answer an asker hears for a request: stored, or refused with a reason. Never the value, its length, or which
 // window answered. Id 0: an ask refused before a request was made (Hub::askSecret).
@@ -125,7 +142,9 @@ struct SecretReply {
     std::uint64_t id = 0;
     SecretAsker asker;
     bool stored = false;
-    std::string reason;         // with refused; with stored, empty or unconfirmed
+    std::string reason;         // with refused; empty with stored
+    std::string account;        // the request's account and what was asked (empty for id 0): for the hub alone,
+    std::string what;           // never on the driver's line
 };
 
 // A line in the asker's session (what its AI reads back): "asked", "stored" or "refused", with the account and the
@@ -138,25 +157,30 @@ struct SecretNote {
     std::string text;
 };
 
-// A line of server.log: the request id, the account and what happened ("asked", "stored", "late", "dropped", or a
-// refusal's reason). Never a value.
+// A line of server.log: the request id, the account, what happened (one word: "asked", "stored", "holding", "late",
+// "lost", "dropped", or a refusal's reason) and, for some, more words (the filesystem's error for "holding"). Never a
+// value.
 struct SecretLog {
     std::uint64_t id = 0;
     std::string account;
     std::string event;
+    std::string detail;
     std::string line() const;
 };
 
-// What one step of the desk did: the answers to askers, the session lines, the log lines.
+// What one step of the desk did: the answers to askers, the session lines, the log lines, and the requests whose value
+// became durable in this step (the hub signs an account in when it was its login).
 struct SecretEffects {
     std::vector<SecretReply> replies;
     std::vector<SecretNote> notes;
     std::vector<SecretLog> log;
+    std::vector<SecretRequest> stored;
     bool changed = false;       // the open requests changed: the windows' state must be sent again
 };
 
 // How a keep went: the value is in its file and durable; in its file, but its durability unconfirmed (the rename was
-// made and the directory's sync failed); or not in its file (the old one, if any, is as it was).
+// made and the directory's sync failed); or not in its file (the old one, if any, is as it was). Only Durable ends a
+// held value: the desk keeps the other two and writes them again (SecretDesk::retry).
 enum class Kept : std::uint8_t { Durable, Unconfirmed, Failed };
 
 // Writes a value to `accounts/<account>/<what>`: the directory made 0700 if missing, the value written to a temporary
@@ -169,39 +193,62 @@ public:
                       std::string* why) = 0;
 };
 
-// The state a request ends in, or is in: open, stored, refused, or dropped (open when the server ended).
-enum class SecretState : std::uint8_t { Open, Stored, Refused, Dropped };
+// The state a request is in: open (in the windows' state, waiting for its answer); holding (its value arrived and the
+// server holds it, in memory alone, until its file is durable); stored; refused; expired (refused, timeout, but still
+// the newest request for its account, so an answer that crossed the deadline is still stored); or dropped (open or
+// holding when the server ended).
+enum class SecretState : std::uint8_t { Open, Stored, Refused, Dropped, Holding, Expired };
 
-// The server's side: the open requests, each answered once. Pure: the time is an argument, the file goes through a
-// SecretKeeper, and every effect is returned. The caller mints each id (Hub::askSecret, durably) before the ask.
+// The server's side: the open requests, each answered once, and the values held until they are durable. Pure: the
+// time is an argument, the file goes through a SecretKeeper, and every effect is returned. The caller mints each id
+// (Hub::askSecret, durably) before the ask.
+//
+// No answer loses a value that arrived in the right shape while the server runs (models/Secrets.tla
+// ReceivedNeverDropped): one for an open request, or for the newest request of its account that expired, is written
+// at once; if the write is not durable the value is held (Holding) and written again, with backoff, until it is. The
+// asker hears "stored" only once it is durable (StoredOnlyDurable). Only the server's end loses a held value ("lost",
+// logged); docs/secrets.md says so.
 class SecretDesk {
 public:
     // The open requests, oldest first: what every window that can take one receives.
     const std::vector<SecretRequest>& open() const { return open_; }
+    // The requests whose value is held, oldest first: in no window's state (the person's part is done).
+    std::vector<SecretRequest> holding() const;
+    // Whether a request for `account` is open or holding: a new one for it is busy.
+    bool busy(const std::string& account) const;
+    // Whether session `asker` has a request open or holding: its asker still waits for the answer.
+    bool waiting(SessionId asker) const;
 
     // A request `id` (minted, one past the last) for `account`'s `what`, from `asker`, with its reason. Refused at once,
-    // answering the asker: one is already open for the account (busy), or `takers` is false (no-client). Else it is
-    // open until its answer, a cancel, or now + kSecretDeadlineMs.
+    // answering the asker: one is already open or holding for the account (busy), or `takers` is false (no-client).
+    // Else it is open until its answer, a cancel, or now + kSecretDeadlineMs.
     SecretEffects ask(std::uint64_t id, const SecretAsker& asker, const std::string& account, const std::string& what,
                       const std::string& why, bool takers, std::uint64_t now);
     // An ask refused before any request is made (Hub::askSecret: the asker has one open, or asked too often): busy,
     // with `why` in its session line and log line, and id 0.
     SecretEffects refuseAtOnce(const SecretAsker& asker, const std::string& account, const std::string& what,
                                const std::string& why) const;
-    // A window's answer: for an open request the value is kept (stored; stored unconfirmed when the keeper could not
-    // confirm it durable; refused unwritable when it failed); for any other the answer is dropped and logged "late".
-    // The value is never put in any effect.
-    SecretEffects answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper);
+    // A window's answer, at `now`. For an open request, or the newest of its account that expired: a value not of the
+    // file's shape (secretShape) is refused "malformed" (an expired one's is only logged: its asker was answered);
+    // otherwise it is written, and stored when durable, else held for retry() (no answer to the asker yet). For any
+    // other request the answer is dropped and logged "late". The value is never put in any effect.
+    SecretEffects answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper, std::uint64_t now);
     // A window's cancel (Escape): an open request is refused, cancelled; any other is dropped and logged "late".
     SecretEffects cancel(std::uint64_t id);
-    // Every open request whose deadline is at or before `now` is refused, timeout.
+    // Every open request whose deadline is at or before `now` is refused, timeout, and expires.
     SecretEffects expire(std::uint64_t now);
-    // The server is ending: every open request is dropped, unanswered (its asker ends with the server).
+    // The oldest held value whose retry time is at or before `now` is written again: stored when durable (the asker,
+    // if not yet answered, hears "stored"), else held, its next retry twice as far off (at most kSecretRetryMaxMs).
+    SecretEffects retry(std::uint64_t now, SecretKeeper& keeper);
+    // The server is ending: every open request is dropped, unanswered (its asker ends with the server), and every held
+    // value is lost, logged "lost" (the one way a value that arrived is not stored). Expired requests are forgotten.
     SecretEffects drop();
     // When expire() next has something to do.
     std::optional<std::uint64_t> deadline() const;
-    // The state of request `id`: open, or how it ended; none for an id this desk never saw (or long ended: it keeps the
-    // most recent kKeptEnded).
+    // When retry() next has something to do.
+    std::optional<std::uint64_t> retryAt() const;
+    // The state of request `id`: open, holding, or how it ended; none for an id this desk never saw (or long ended: it
+    // keeps the most recent kKeptEnded).
     std::optional<SecretState> stateOf(std::uint64_t id) const;
     bool isOpen(std::uint64_t id) const;
 
@@ -213,12 +260,29 @@ public:
     void injectEchoFault() { echoFault_ = true; }
 
 private:
+    struct Held {
+        SecretRequest request;
+        SecretAsker asker;
+        SecretValue value;
+        bool answered = false;          // its asker heard "timeout" already (it expired before the answer arrived)
+        std::uint64_t at = 0;           // when it is written again
+        std::uint64_t backoff = 0;      // how long after the next failure
+    };
+    struct Ended {
+        SecretState state = SecretState::Refused;
+        SecretRequest request;
+        SecretAsker asker;
+    };
     void end(std::size_t index, SecretState state, SecretEffects& out);
-    void remember(std::uint64_t id, SecretState state);
+    void remember(const SecretRequest& r, SecretState state, const SecretAsker& asker);
+    bool newest(std::uint64_t id, const std::string& account) const;
+    void write(const SecretRequest& r, const SecretAsker& asker, const SecretValue& value, bool answered, bool first,
+               SecretKeeper& keeper, std::uint64_t now, std::uint64_t backoff, SecretEffects& out);
     std::vector<SecretRequest> open_;               // oldest first
     std::map<std::uint64_t, SecretAsker> askers_;   // each open request's asker (the ask number is not on the wire)
     std::map<std::uint64_t, std::uint64_t> due_;    // each open request's deadline
-    std::map<std::uint64_t, SecretState> ended_;    // the most recent requests ended, by id
+    std::map<std::uint64_t, Held> held_;            // each held value, by its request's id
+    std::map<std::uint64_t, Ended> ended_;          // the most recent requests ended, by id
     bool echoFault_ = false;
 };
 

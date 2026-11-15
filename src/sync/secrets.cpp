@@ -119,31 +119,67 @@ bool isSecretWhy(std::string_view why) {
     return true;
 }
 
+std::string secretShape(const std::string& what, const SecretValue& value) {
+    const std::string& b = value.bytes();
+    if (b.empty()) {
+        return "nothing was pasted";
+    }
+    if (b.size() > kSecretValueBytes) {
+        return "what was pasted is longer than any key or token (at most 16 KiB): paste the " + what + " alone";
+    }
+    for (const char c : b) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x21 || u > 0x7E) {
+            return "what was pasted is not one token (it holds a space, a line break or a character that is not plain "
+                "ASCII): paste the " + what + " alone";
+        }
+    }
+    return std::string();
+}
+
 std::string SecretLog::line() const {
-    return "secret request " + std::to_string(id) + " for " + account + ": " + event;
+    return "secret request " + std::to_string(id) + " for " + account + ": " + event +
+        (detail.empty() ? std::string() : ": " + detail);
+}
+
+std::vector<SecretRequest> SecretDesk::holding() const {
+    std::vector<SecretRequest> out;
+    for (const auto& [id, h] : held_) {
+        out.push_back(h.request);
+    }
+    return out;
+}
+
+bool SecretDesk::busy(const std::string& account) const {
+    return std::any_of(open_.begin(), open_.end(), [&](const SecretRequest& r) { return r.account == account; }) ||
+        std::any_of(held_.begin(), held_.end(), [&](const auto& h) { return h.second.request.account == account; });
+}
+
+bool SecretDesk::waiting(SessionId asker) const {
+    return std::any_of(open_.begin(), open_.end(), [&](const SecretRequest& r) { return r.asker == asker; }) ||
+        std::any_of(held_.begin(), held_.end(), [&](const auto& h) { return h.second.request.asker == asker; });
 }
 
 SecretEffects SecretDesk::ask(std::uint64_t id, const SecretAsker& asker, const std::string& account,
                               const std::string& what, const std::string& why, bool takers, std::uint64_t now) {
     SecretEffects out;
     SecretRequest r{id, account, what, asker.session, asker.name, why};
-    const bool busy = std::any_of(open_.begin(), open_.end(),
-        [&](const SecretRequest& o) { return o.account == account; });
-    if (busy || !takers) {
-        const std::string why2 = busy ? reason::kBusy : reason::kNoClient;
-        out.replies.push_back(SecretReply{id, asker, false, why2});
+    const bool isBusy = busy(account);
+    if (isBusy || !takers) {
+        const std::string why2 = isBusy ? reason::kBusy : reason::kNoClient;
+        out.replies.push_back(SecretReply{id, asker, false, why2, account, what});
         out.notes.push_back(SecretNote{id, asker.session, "refused", account,
-            note(r, busy ? "was not asked for: a request for it is open already" :
-                           "was not asked for: no window that can take it is connected")});
-        out.log.push_back(SecretLog{id, account, why2});
-        remember(id, SecretState::Refused);
+            note(r, isBusy ? "was not asked for: a request for it is open, or its value is being stored, already" :
+                             "was not asked for: no window that can take it is connected")});
+        out.log.push_back(SecretLog{id, account, why2, {}});
+        remember(r, SecretState::Refused, asker);
         return out;
     }
     open_.push_back(r);
     askers_[id] = asker;
     due_[id] = now + kSecretDeadlineMs;
     out.notes.push_back(SecretNote{id, asker.session, "asked", account, note(r, "was asked for in nexus's window")});
-    out.log.push_back(SecretLog{id, account, "asked"});
+    out.log.push_back(SecretLog{id, account, "asked", {}});
     out.changed = true;
     return out;
 }
@@ -151,61 +187,117 @@ SecretEffects SecretDesk::ask(std::uint64_t id, const SecretAsker& asker, const 
 SecretEffects SecretDesk::refuseAtOnce(const SecretAsker& asker, const std::string& account, const std::string& what,
                                        const std::string& why) const {
     SecretEffects out;
-    out.replies.push_back(SecretReply{0, asker, false, reason::kBusy});
+    out.replies.push_back(SecretReply{0, asker, false, reason::kBusy, account, what});
     out.notes.push_back(SecretNote{0, asker.session, "refused", account,
         "secret ask: " + account + "'s " + what + " was not asked for: " + why});
-    out.log.push_back(SecretLog{0, account, std::string(reason::kBusy) + " (not asked: session " +
-                                std::to_string(asker.session) + ": " + why + ")"});
+    out.log.push_back(SecretLog{0, account, reason::kBusy, "not asked: session " + std::to_string(asker.session) +
+                                ": " + why});
     return out;
 }
 
 void SecretDesk::end(std::size_t index, SecretState state, SecretEffects& out) {
-    const std::uint64_t id = open_[index].id;
+    const SecretRequest r = open_[index];
+    const SecretAsker asker = askers_[r.id];
     open_.erase(open_.begin() + static_cast<std::ptrdiff_t>(index));
-    askers_.erase(id);
-    due_.erase(id);
-    remember(id, state);
+    askers_.erase(r.id);
+    due_.erase(r.id);
+    remember(r, state, asker);
     out.changed = true;
 }
 
-void SecretDesk::remember(std::uint64_t id, SecretState state) {
-    ended_[id] = state;
+void SecretDesk::remember(const SecretRequest& r, SecretState state, const SecretAsker& asker) {
+    ended_[r.id] = Ended{state, r, asker};
     while (ended_.size() > kKeptEnded) {
         ended_.erase(ended_.begin());
     }
 }
 
-SecretEffects SecretDesk::answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper) {
-    SecretEffects out;
-    auto it = std::find_if(open_.begin(), open_.end(), [&](const SecretRequest& r) { return r.id == id; });
-    if (it == open_.end()) {
-        // Answered in another window, cancelled, past its deadline, or from before a restart: nothing is stored.
-        out.log.push_back(SecretLog{id, std::string(), "late"});
-        return out;
+// No request of `account` after `id` was open, held, stored or expired: each one asked since was refused (at its ask,
+// or cancelled). Then an answer for `id` is still what the person meant the account's file to hold.
+bool SecretDesk::newest(std::uint64_t id, const std::string& account) const {
+    if (busy(account)) {
+        return false;   // one open or held for the account is newer than any that ended
     }
-    const SecretRequest r = *it;
-    const SecretAsker asker = askers_[id];
+    for (auto it = ended_.upper_bound(id); it != ended_.end(); ++it) {
+        if (it->second.request.account == account && it->second.state != SecretState::Refused) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Writes `value` to `r`'s file: stored once durable; else held, to be written again at now + backoff.
+void SecretDesk::write(const SecretRequest& r, const SecretAsker& asker, const SecretValue& value, bool answered,
+                       bool first, SecretKeeper& keeper, std::uint64_t now, std::uint64_t backoff,
+                       SecretEffects& out) {
     std::string why;
     const Kept kept = keeper.keep(r.account, r.what, value, &why);
     if (kept == Kept::Durable) {
-        out.replies.push_back(SecretReply{id, asker, true, std::string()});
-        out.notes.push_back(SecretNote{id, r.asker, "stored", r.account, note(r, "was stored")});
-        out.log.push_back(SecretLog{id, r.account, echoFault_ ? "stored " + value.bytes() : std::string("stored")});
-        end(static_cast<std::size_t>(it - open_.begin()), SecretState::Stored, out);
-    } else if (kept == Kept::Unconfirmed) {
-        // The value is in its file: stored, and said so with what is true of it.
-        out.replies.push_back(SecretReply{id, asker, true, reason::kUnconfirmed});
-        out.notes.push_back(SecretNote{id, r.asker, "stored", r.account,
-            note(r, "was stored, but the disk did not confirm it durable; see server.log")});
-        out.log.push_back(SecretLog{id, r.account, std::string("stored, unconfirmed: ") + why});
-        end(static_cast<std::size_t>(it - open_.begin()), SecretState::Stored, out);
-    } else {
-        out.replies.push_back(SecretReply{id, asker, false, reason::kUnwritable});
-        out.notes.push_back(SecretNote{id, r.asker, "refused", r.account,
-            note(r, "was not stored: its file could not be written; see server.log")});
-        out.log.push_back(SecretLog{id, r.account, std::string(reason::kUnwritable) + ": " + why});
-        end(static_cast<std::size_t>(it - open_.begin()), SecretState::Refused, out);
+        if (!answered) {
+            out.replies.push_back(SecretReply{r.id, asker, true, std::string(), r.account, r.what});
+        }
+        out.notes.push_back(SecretNote{r.id, r.asker, "stored", r.account,
+            note(r, answered ? "was stored after all: its answer crossed the deadline" : "was stored")});
+        out.log.push_back(SecretLog{r.id, r.account, "stored", echoFault_ ? value.bytes() : std::string()});
+        out.stored.push_back(r);
+        remember(r, SecretState::Stored, asker);
+        return;
     }
+    const std::string said = kept == Kept::Unconfirmed ? why : "its file could not be written: " + why;
+    held_[r.id] = Held{r, asker, value, answered, now + backoff, std::min(backoff * 2, kSecretRetryMaxMs)};
+    out.log.push_back(SecretLog{r.id, r.account, "holding",
+        said + "; the value is held in memory and written again in " + std::to_string(backoff / 1000) + " s"});
+    if (first) {
+        out.notes.push_back(SecretNote{r.id, r.asker, "holding", r.account,
+            note(r, "arrived and is held: its file could not be written yet, so nexus writes it again until it can "
+                    "(server.log says why); nothing needs pasting again")});
+    }
+}
+
+SecretEffects SecretDesk::answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper,
+                                 std::uint64_t now) {
+    SecretEffects out;
+    auto it = std::find_if(open_.begin(), open_.end(), [&](const SecretRequest& r) { return r.id == id; });
+    SecretRequest r;
+    SecretAsker asker;
+    bool expired = false;
+    if (it != open_.end()) {
+        r = *it;
+        asker = askers_[id];
+    } else {
+        // Answered in another window, cancelled, held already, or from before a restart: nothing is stored. Past its
+        // deadline, and still the newest request of its account: the person pasted it for that file, so it is.
+        auto e = ended_.find(id);
+        if (e == ended_.end() || e->second.state != SecretState::Expired || !newest(id, e->second.request.account)) {
+            out.log.push_back(SecretLog{id, std::string(), "late", {}});
+            return out;
+        }
+        r = e->second.request;
+        asker = e->second.asker;
+        expired = true;
+    }
+    if (const std::string problem = secretShape(r.what, value); !problem.empty()) {
+        // The person's input, not nexus's failure: they are told, and asked again (nexus's own ask is made again by
+        // the hub; a friend's AI asks again itself).
+        if (expired) {
+            out.log.push_back(SecretLog{id, r.account, reason::kMalformed, problem + " (after its deadline)"});
+            return out;
+        }
+        out.replies.push_back(SecretReply{id, asker, false, reason::kMalformed, r.account, r.what});
+        out.notes.push_back(SecretNote{id, r.asker, "refused", r.account, note(r, "was not stored: " + problem)});
+        out.log.push_back(SecretLog{id, r.account, reason::kMalformed, problem});
+        end(static_cast<std::size_t>(it - open_.begin()), SecretState::Refused, out);
+        return out;
+    }
+    if (expired) {
+        ended_.erase(id);
+    } else {
+        open_.erase(it);
+        askers_.erase(id);
+        due_.erase(id);
+        out.changed = true;
+    }
+    write(r, asker, value, expired, true, keeper, now, kSecretRetryFirstMs, out);
     return out;
 }
 
@@ -213,13 +305,13 @@ SecretEffects SecretDesk::cancel(std::uint64_t id) {
     SecretEffects out;
     auto it = std::find_if(open_.begin(), open_.end(), [&](const SecretRequest& r) { return r.id == id; });
     if (it == open_.end()) {
-        out.log.push_back(SecretLog{id, std::string(), "late"});
+        out.log.push_back(SecretLog{id, std::string(), "late", {}});
         return out;
     }
     const SecretRequest r = *it;
-    out.replies.push_back(SecretReply{id, askers_[id], false, reason::kCancelled});
+    out.replies.push_back(SecretReply{id, askers_[id], false, reason::kCancelled, r.account, r.what});
     out.notes.push_back(SecretNote{id, r.asker, "refused", r.account, note(r, "was not stored: the person cancelled")});
-    out.log.push_back(SecretLog{id, r.account, reason::kCancelled});
+    out.log.push_back(SecretLog{id, r.account, reason::kCancelled, {}});
     end(static_cast<std::size_t>(it - open_.begin()), SecretState::Refused, out);
     return out;
 }
@@ -232,11 +324,25 @@ SecretEffects SecretDesk::expire(std::uint64_t now) {
             ++i;
             continue;
         }
-        out.replies.push_back(SecretReply{r.id, askers_[r.id], false, reason::kTimeout});
+        out.replies.push_back(SecretReply{r.id, askers_[r.id], false, reason::kTimeout, r.account, r.what});
         out.notes.push_back(SecretNote{r.id, r.asker, "refused", r.account,
             note(r, "was not stored: nobody answered within 10 minutes")});
-        out.log.push_back(SecretLog{r.id, r.account, reason::kTimeout});
-        end(i, SecretState::Refused, out);
+        out.log.push_back(SecretLog{r.id, r.account, reason::kTimeout, {}});
+        end(i, SecretState::Expired, out);
+    }
+    return out;
+}
+
+SecretEffects SecretDesk::retry(std::uint64_t now, SecretKeeper& keeper) {
+    SecretEffects out;
+    for (auto it = held_.begin(); it != held_.end(); ++it) {
+        if (it->second.at > now) {
+            continue;
+        }
+        Held h = std::move(it->second);
+        held_.erase(it);
+        write(h.request, h.asker, h.value, h.answered, false, keeper, now, h.backoff, out);
+        break;
     }
     return out;
 }
@@ -244,8 +350,21 @@ SecretEffects SecretDesk::expire(std::uint64_t now) {
 SecretEffects SecretDesk::drop() {
     SecretEffects out;
     while (!open_.empty()) {
-        out.log.push_back(SecretLog{open_.front().id, open_.front().account, "dropped"});
+        out.log.push_back(SecretLog{open_.front().id, open_.front().account, "dropped", {}});
         end(0, SecretState::Dropped, out);
+    }
+    while (!held_.empty()) {
+        const Held& h = held_.begin()->second;
+        out.log.push_back(SecretLog{h.request.id, h.request.account, "lost",
+            "the server ended before its file could be written, so the value is gone and must be pasted again"});
+        remember(h.request, SecretState::Dropped, h.asker);
+        held_.erase(held_.begin());
+    }
+    // A server that starts again knows no request of this one: an answer for one that expired is late there.
+    for (auto& [id, e] : ended_) {
+        if (e.state == SecretState::Expired) {
+            e.state = SecretState::Refused;
+        }
     }
     return out;
 }
@@ -260,15 +379,28 @@ std::optional<std::uint64_t> SecretDesk::deadline() const {
     return at;
 }
 
+std::optional<std::uint64_t> SecretDesk::retryAt() const {
+    std::optional<std::uint64_t> at;
+    for (const auto& [id, h] : held_) {
+        if (!at || h.at < *at) {
+            at = h.at;
+        }
+    }
+    return at;
+}
+
 std::optional<SecretState> SecretDesk::stateOf(std::uint64_t id) const {
     if (isOpen(id)) {
         return SecretState::Open;
+    }
+    if (held_.count(id) != 0) {
+        return SecretState::Holding;
     }
     auto it = ended_.find(id);
     if (it == ended_.end()) {
         return std::nullopt;
     }
-    return it->second;
+    return it->second.state;
 }
 
 bool SecretDesk::isOpen(std::uint64_t id) const {

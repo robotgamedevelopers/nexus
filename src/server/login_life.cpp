@@ -1,0 +1,184 @@
+#include "server/login_life.h"
+
+#include <cerrno>
+#include <cstring>
+#include <ctime>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+#include "store/fs.h"
+#include "sync/secrets.h"
+
+namespace nexus::server {
+
+namespace {
+
+// `long` when it is a safe line for the dialog (sync::isSecretWhy), else `short` (a long account name).
+std::string fit(const std::string& longer, const std::string& shorter) {
+    return sync::isSecretWhy(longer) ? longer : shorter;
+}
+
+std::string days(std::uint64_t n) {
+    return std::to_string(n) + (n == 1 ? " day" : " days");
+}
+
+} // namespace
+
+LoginTerm loginTerm(const std::string& provider) {
+    if (provider == "claude") {
+        return LoginTerm{365 * kDayMs, false, "Claude login", "run claude setup-token and paste the token it prints"};
+    }
+    return LoginTerm{0, false, provider + " login", "paste a new one"};
+}
+
+std::string dateOf(std::uint64_t ms) {
+    const std::time_t t = static_cast<std::time_t>(ms / 1000);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char out[16];
+    std::strftime(out, sizeof out, "%Y-%m-%d", &tm);
+    return out;
+}
+
+#ifndef _WIN32
+LoginSeen inspectLogin(const std::string& path) {
+    LoginSeen seen;
+    auto unusable = [&](const std::string& problem) {
+        seen.file = LoginSeen::File::Unusable;
+        seen.problem = problem;
+        return seen;
+    };
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            return seen;
+        }
+        if (errno == ELOOP) {
+            return unusable(path + " is a symbolic link; the login must be the file itself: remove the link");
+        }
+        return unusable(path + " cannot be read (" + std::strerror(errno) + "): make it readable by the user "
+                        "nexus-server runs as, mode 0600");
+    }
+    struct stat st {};
+    if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(fd);
+        return unusable(path + " is not a regular file: move it aside");
+    }
+    if (st.st_uid != ::getuid()) {
+        ::close(fd);
+        return unusable(path + " belongs to another user: remove it");
+    }
+    if ((st.st_mode & 077) != 0) {
+        ::close(fd);
+        return unusable(path + " is open to other users (mode 0" + std::to_string((st.st_mode >> 6) & 7) +
+                        std::to_string((st.st_mode >> 3) & 7) + std::to_string(st.st_mode & 7) + "): run chmod 600 " +
+                        path + ", and make a new login if anyone else could have read it");
+    }
+    std::string bytes;
+    if (st.st_size > 0 && static_cast<std::uint64_t>(st.st_size) <= sync::kSecretValueBytes + 2) {
+        bytes.resize(static_cast<std::size_t>(st.st_size));
+        const ssize_t n = ::read(fd, bytes.data(), bytes.size());
+        bytes.resize(n > 0 ? static_cast<std::size_t>(n) : 0);
+    }
+    ::close(fd);
+    // One token, with at most one line break after it (a file saved by hand).
+    while (!bytes.empty() && (bytes.back() == '\n' || bytes.back() == '\r')) {
+        bytes.pop_back();
+    }
+    sync::SecretValue value(bytes);
+    sync::wipeBytes(bytes);
+    if (const std::string problem = sync::secretShape(store::name_of(path), value); !problem.empty()) {
+        seen.file = LoginSeen::File::Malformed;
+        seen.problem = problem;
+        return seen;
+    }
+#if defined(__APPLE__)
+    seen.storedAtMs = static_cast<std::uint64_t>(st.st_mtimespec.tv_sec) * 1000 +
+        static_cast<std::uint64_t>(st.st_mtimespec.tv_nsec) / 1000000;
+#else
+    seen.storedAtMs = static_cast<std::uint64_t>(st.st_mtim.tv_sec) * 1000 +
+        static_cast<std::uint64_t>(st.st_mtim.tv_nsec) / 1000000;
+#endif
+    seen.file = LoginSeen::File::Usable;
+    return seen;
+}
+#endif
+
+bool loginLive(const std::string& provider, const LoginSeen& seen, std::uint64_t now) {
+    if (seen.file != LoginSeen::File::Usable) {
+        return false;
+    }
+    const LoginTerm term = loginTerm(provider);
+    return term.lifetimeMs == 0 || term.renewable || now < seen.storedAtMs + term.lifetimeMs;
+}
+
+sync::Hub::LoginAsk loginAsk(const std::string& account, const std::string& provider, const LoginSeen& seen,
+                             std::uint64_t now) {
+    const LoginTerm term = loginTerm(provider);
+    switch (seen.file) {
+        case LoginSeen::File::Missing:
+            return {true, fit(account + " has no " + term.name + " yet: " + term.makeNew,
+                              "this account has no " + term.name + " yet: " + term.makeNew)};
+        case LoginSeen::File::Malformed:
+            return {true, fit(account + "'s " + term.name + " file is not one token: " + term.makeNew,
+                              "this account's " + term.name + " file is not one token: " + term.makeNew)};
+        case LoginSeen::File::Unusable:
+            return {false, account + "'s " + term.name + " cannot be used as its file lies, and a paste would not fix "
+                           "it, so nexus asks nothing: " + seen.problem};
+        case LoginSeen::File::Usable:
+            break;
+    }
+    if (term.lifetimeMs != 0 && !term.renewable && now >= seen.storedAtMs + term.lifetimeMs) {
+        const std::string ended = dateOf(seen.storedAtMs + term.lifetimeMs);
+        return {true, fit(account + "'s " + term.name + " ended on " + ended + ", a year after it was pasted, and "
+                          "cannot be renewed: " + term.makeNew,
+                          "this account's " + term.name + " ended on " + ended + ": " + term.makeNew)};
+    }
+    // Usable as it lies and not past its end, yet refused by the provider: revoked, or no longer valid.
+    return {true, fit(account + "'s " + term.name + " was refused by the provider: revoked, or no longer valid "
+                      "(server.log has its words): " + term.makeNew,
+                      "this account's " + term.name + " was refused (revoked, or no longer valid): " + term.makeNew)};
+}
+
+std::vector<LoginWatch::Notice> LoginWatch::check(const std::vector<Login>& logins, std::uint64_t now) {
+    std::vector<Notice> out;
+    for (const Login& l : logins) {
+        const LoginTerm term = loginTerm(l.provider);
+        if (term.lifetimeMs == 0 || term.renewable) {
+            continue;
+        }
+        Told& told = told_[l.account];
+        if (told.storedAtMs != l.storedAtMs) {
+            told = Told{l.storedAtMs, 0};   // a login stored again: its notices start over
+        }
+        const std::uint64_t end = l.storedAtMs + term.lifetimeMs;
+        const std::uint64_t left = end > now ? (end - now + kDayMs - 1) / kDayMs : 0;
+        const int stage = left == 0 ? 4 : left <= 1 ? 3 : left <= 7 ? 2 : left <= 30 ? 1 : 0;
+        if (stage <= told.stage) {
+            continue;
+        }
+        told.stage = stage;
+        const std::string date = dateOf(end);
+        if (stage == 4) {
+            out.push_back(Notice{l.account, true,
+                fit(l.account + "'s " + term.name + " ended on " + date + ", a year after it was pasted, and cannot "
+                    "be renewed: " + term.makeNew,
+                    "this account's " + term.name + " ended on " + date + ": " + term.makeNew)});
+        } else {
+            out.push_back(Notice{l.account, false,
+                l.account + "'s " + term.name + " ends on " + date + ", in " + days(left) + ". " + term.name +
+                "s last a year and nexus cannot renew them: on that day nexus asks for a new one in its window ("
+                + term.makeNew + "). Until then nothing changes."});
+        }
+    }
+    return out;
+}
+
+} // namespace nexus::server

@@ -62,11 +62,13 @@ set_tests_properties(friends_unit_driver_table PROPERTIES LABELS unit TIMEOUT 30
 # The secret dialog (docs/secrets.md): the desk, the prompt, their codecs, the hub over the server's store, the account's
 # file at every crash point (all on MemFs: unit), and the leak test, which searches every output for the fake value.
 # files_disk is functional: the file's and its directory's modes on the real filesystem, in a directory of its own.
+# login_life is unit (a login's end, its notices, when a paste is asked for; time an argument); login_files is
+# functional: a login file as it lies on the real filesystem (missing, a link, open to others, not one token, usable).
 add_executable(secrets_test secrets_test.cpp)
 target_link_libraries(secrets_test PRIVATE nexus_durable nexus_driver)
 target_compile_options(secrets_test PRIVATE ${warnings})
 target_include_directories(secrets_test PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-foreach(group desk prompt codecs hub files files_crash leak leak_scan)
+foreach(group desk prompt codecs hub files files_crash leak leak_scan login_life)
     add_test(NAME secrets_unit_${group} COMMAND secrets_test ${group})
     set_tests_properties(secrets_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -75,6 +77,9 @@ if(NOT WIN32)
     add_test(NAME secrets_functional_files_disk COMMAND secrets_test files_disk
              WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/secrets_work)
     set_tests_properties(secrets_functional_files_disk PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME secrets_functional_login_files COMMAND secrets_test login_files
+             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/secrets_work)
+    set_tests_properties(secrets_functional_login_files PROPERTIES LABELS functional TIMEOUT 30)
 endif()
 
 # Each case in a directory of its own under the build tree.

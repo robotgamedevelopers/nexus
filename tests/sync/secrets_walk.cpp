@@ -16,6 +16,13 @@
 // answers in flight, each account's file as MemFs holds it, the writes of each request's value, the askers' answers,
 // and the step's session lines and log lines.
 //
+// The one-chance rule (models/Secrets.tla ReceivedNeverDropped): the walk's disk fails and heals (`diskfail`,
+// `diskheal`), and while it fails the keeper wrapped around AccountFiles fails a write, or lets it land and reports it
+// unconfirmed; the desk holds the value and the walk runs its retry when its time comes (`retry`). One paste in five
+// is a value not of a token's shape (refused malformed, and nexus asks again: an `ask` by nexus). Each record also
+// holds the disk, its failures so far, the value the server received for each request (`taken`), the value held for
+// each, and the values lost at a restart.
+//
 // The bytes each place received are what the trace says of a value there: a log line, an answer's driver line, a
 // session line (and any entry of the store) or a diff sent to a window that holds a value (tests/leak_scan.h: the
 // value, a run of 8 of its bytes, its hex or its base64) is written with that value's token in its record, so TLC sees
@@ -63,12 +70,14 @@ const std::vector<std::string> kClients{"c1", "c2", "c3"};
 const std::string kOld = "c3";             // a window from before secret requests (state format 2)
 constexpr std::uint64_t kMaxRequests = 16;
 constexpr std::uint64_t kMaxRestarts = 2;
+constexpr std::uint64_t kMaxFailures = 4;
 const char* const kNone = "none";
 const char* const kWhat = "oauth-token";
 
-// The fake values, made up here: never a real token. Each is a token of the model (v1, v2).
-const std::vector<std::string> kValues{"fakeWk7Hq2Lone", "fakeWk9Zx4Ptwo"};
-const std::vector<std::string> kTokens{"v1", "v2"};
+// The fake values, made up here: never a real token. Each is a token of the model (v1, v2; b1, not of the shape of a
+// token: two words, so the server refuses it "malformed").
+const std::vector<std::string> kValues{"fakeWk7Hq2Lone", "fakeWk9Zx4Ptwo", "fakeWk3Rb bad"};
+const std::vector<std::string> kTokens{"v1", "v2", "b1"};
 
 std::uint64_t rngState = 0;
 std::uint64_t next() {
@@ -93,7 +102,8 @@ std::string val(const std::string& token) { return token == kNone ? q(token) : t
 
 // The token of the value `text` gives away (leak_scan.h), or empty.
 std::string leaked(const std::string& text) {
-    static const std::vector<test::LeakScan> scans{test::LeakScan(kValues[0]), test::LeakScan(kValues[1])};
+    static const std::vector<test::LeakScan> scans{test::LeakScan(kValues[0]), test::LeakScan(kValues[1]),
+                                                   test::LeakScan(kValues[2])};
     for (std::size_t i = 0; i < scans.size(); ++i) {
         if (scans[i].in(text)) {
             return kTokens[i];
@@ -128,15 +138,28 @@ std::string tokenOf(const std::string& pasted) {
     fail("a value the walk never typed: " + std::to_string(pasted.size()) + " bytes");
 }
 
-// The accounts' files: the server's AccountFiles, over MemFs. Each value it writes is counted.
+// The accounts' files: the server's AccountFiles, over MemFs. Each value it writes durably is counted. While the walk's
+// disk fails (Secrets.tla DiskFails), a write either fails before the file is touched, or reaches the file and has its
+// durability unconfirmed (the directory's sync failed): the two ways AccountFiles reports a write that is not durable,
+// each of whose own paths secrets_test files_crash covers on MemFs.
 struct Keeper : sync::SecretKeeper {
     store::MemFs fs;
     server::AccountFiles files{fs, "accounts"};
     std::size_t writes = 0;
+    bool failing = false;
     sync::Kept keep(const std::string& account, const std::string& what, const sync::SecretValue& value,
                     std::string* why) override {
+        if (failing) {
+            if (pick(2) == 0) {
+                *why = "the disk is full (the walk's)";
+                return sync::Kept::Failed;
+            }
+            files.keep(account, what, value, why);
+            *why = "the sync of its directory failed (the walk's)";
+            return sync::Kept::Unconfirmed;
+        }
         const sync::Kept kept = files.keep(account, what, value, why);
-        if (kept != sync::Kept::Failed) {
+        if (kept == sync::Kept::Durable) {
             ++writes;
         }
         return kept;
@@ -217,6 +240,10 @@ struct Walk {
     std::vector<std::string> transcript;        // this step's lines, as model records
     std::vector<std::string> log;
     std::uint64_t restarts = 0;
+    std::uint64_t failures = 0;
+    std::map<std::uint64_t, std::string> taken;  // the token of each value the server took (Secrets.tla taken)
+    std::map<std::uint64_t, std::string> heldTok; // the token of each value the server holds while its state is holding
+    std::set<std::uint64_t> lost;               // the requests whose held value went with a restart
     std::uint64_t num = 0;
     std::map<sync::SessionId, std::string> askerNames{{0, "nexus"}};
     bool echoFault = false;
@@ -315,10 +342,25 @@ struct Walk {
         // Each request's state, as the hub reports it; one it no longer knows (from before a restart) keeps the last.
         for (auto& [id, r] : req) {
             if (const std::optional<sync::SecretState> s = hub->secrets().stateOf(id)) {
-                static const char* const names[] = {"open", "stored", "refused", "dropped"};
+                static const char* const names[] = {"open", "stored", "refused", "dropped", "holding", "expired"};
                 r.st = names[static_cast<int>(*s)];
             }
         }
+        // The server holds a value only while its request is holding.
+        for (auto it = heldTok.begin(); it != heldTok.end();) {
+            it = req[it->first].st == "holding" ? std::next(it) : heldTok.erase(it);
+        }
+    }
+
+    // A function of the ids to tokens, with "none" for an id not in `m`.
+    static std::string byId(const std::map<std::uint64_t, std::string>& m) {
+        std::string out = "(";
+        for (std::uint64_t id = 1; id <= kMaxRequests; ++id) {
+            auto it = m.find(id);
+            out += std::string(id == 1 ? "" : " @@ ") + std::to_string(id) + " :> " +
+                val(it == m.end() ? std::string(kNone) : it->second);
+        }
+        return out + ")";
     }
 
     // A diff sent to the window that gave a value away is a request in its view holding that value.
@@ -406,7 +448,15 @@ struct Walk {
             o << (id == 1 ? "" : " @@ ") << id << " :> " << (it == stores.end() ? 0 : it->second);
         }
         o << "), replies |-> " << set(std::vector<std::string>(replies.begin(), replies.end()))
-          << ", transcript |-> " << set(transcript) << ", log |-> " << set(log) << ", restarts |-> " << restarts;
+          << ", transcript |-> " << set(transcript) << ", log |-> " << set(log) << ", restarts |-> " << restarts
+          << ", disk |-> " << q(keeper.failing ? "failing" : "ok") << ", failures |-> " << failures
+          << ", held |-> " << byId(heldTok) << ", taken |-> " << byId(taken) << ", lost |-> {";
+        bool first = true;
+        for (std::uint64_t id : lost) {
+            o << (first ? "" : ", ") << id;
+            first = false;
+        }
+        o << "}";
         return o.str();
     }
 
@@ -488,17 +538,27 @@ int main(int argc, char** argv) {
         std::string fields;
         const std::size_t choice = pick(1000);
         Window& c = w.windows[pick(w.windows.size())];
-        if (choice < 15) {
+        if (w.hub->reaskPending() && choice < 60 && w.nextId() <= kMaxRequests) {
+            // nexus's own ask whose paste was refused malformed, asked again (Hub::reaskSecrets): an ask by nexus, or
+            // none when one is open or held for the account by now.
+            const std::uint64_t id = w.nextId();
+            const std::optional<std::string> acct = w.hub->reaskSecrets();
+            if (!acct) {
+                continue;
+            }
+            op = "ask";
+            w.req[id] = Req{"open", *acct, "nexus"};
+            fields = "asker |-> " + q("nexus") + ", acct |-> " + q(*acct);
+        } else if (choice < 15) {
             if (w.nextId() > kMaxRequests) {
                 continue;
             }
             const std::vector<sync::SessionId> askers{0, 1, 2};
             const sync::SessionId asker = askers[pick(askers.size())];
-            // A friend's AI with an ask open is refused before any request is made (Hub::askSecret), which the model
-            // leaves out: the walk asks only from an asker with none open.
-            const std::vector<sync::SecretRequest>& open = w.hub->secrets().open();
-            if (asker != 0 && std::any_of(open.begin(), open.end(),
-                                          [&](const sync::SecretRequest& r) { return r.asker == asker; })) {
+            // A friend's AI with an ask not yet answered (open, or its value held) is refused before any request is
+            // made (Hub::askSecret, SecretDesk::waiting), which the model leaves out: the walk asks only from an
+            // asker with none waiting.
+            if (asker != 0 && w.hub->secrets().waiting(asker)) {
                 continue;
             }
             op = "ask";
@@ -525,7 +585,8 @@ int main(int argc, char** argv) {
                 continue;
             }
             op = "type";
-            const std::size_t v = pick(kValues.size());
+            // Now and then a paste not of the shape of a token (b1), which the server refuses and asks again.
+            const std::size_t v = pick(5) == 0 ? 2 : pick(2);
             // A paste may bring a line break or spaces at its ends, which the dialog cuts at Enter: the field holds
             // what was pasted, and the model's dialog the value it carries.
             const char* pads[] = {"", " ", "\n", "\r\n"};
@@ -590,12 +651,23 @@ int main(int argc, char** argv) {
             if (actions.size() != 1) {
                 fail("an action in flight read back as " + std::to_string(actions.size()));
             }
-            const bool wasOpen = w.hub->secrets().isOpen(m.id);
+            const std::optional<sync::SecretState> before = w.hub->secrets().stateOf(m.id);
+            const bool wasOpen = before == sync::SecretState::Open;
             const std::size_t writes = w.keeper.writes;
             std::string why;
             w.hub->apply(actions[0], &why, "");
             clean(why, "the hub's reason");
-            if (faulty == "store-late" && !wasOpen && m.secret) {
+            // A value of the right shape the code took (its request open, or expired and still the newest of its
+            // account, now stored or holding): the model's taken, and while holding its held.
+            const std::optional<sync::SecretState> after = w.hub->secrets().stateOf(m.id);
+            if (m.secret && m.token != "b1" && (wasOpen || before == sync::SecretState::Expired) &&
+                    (after == sync::SecretState::Stored || after == sync::SecretState::Holding)) {
+                w.taken[m.id] = m.token;
+                if (after == sync::SecretState::Holding) {
+                    w.heldTok[m.id] = m.token;
+                }
+            }
+            if (faulty == "store-late" && !wasOpen && before != sync::SecretState::Expired && m.secret) {
                 std::string ignored;
                 w.keeper.keep(w.req[m.id].acct, kWhat, actions[0].secret, &ignored);
                 ++faults;
@@ -614,15 +686,51 @@ int main(int argc, char** argv) {
                     oldest = r.id;
                 }
             }
-            w.now = *due;
+            w.now = std::max(w.now, *due);
             w.hub->expireSecrets();
             fields = "id |-> " + std::to_string(oldest);
+        } else if (choice >= 956 && choice < 980) {
+            // A held value written again, at its retry time: never past a request's deadline, so that the walk's
+            // clock never expires two requests in one step.
+            const std::optional<std::uint64_t> due = w.hub->secretRetryAt();
+            const std::optional<std::uint64_t> deadline = w.hub->secretDeadline();
+            if (!due || (deadline && *due > *deadline)) {
+                continue;
+            }
+            op = "retry";
+            w.now = std::max(w.now, *due);
+            const std::size_t writes = w.keeper.writes;
+            w.hub->retrySecrets();
+            if (w.events.log.size() != 1) {
+                fail("a retry logged " + std::to_string(w.events.log.size()) + " lines");
+            }
+            const std::uint64_t id = w.events.log[0].id;
+            w.stores[id] += w.keeper.writes - writes;
+            fields = "id |-> " + std::to_string(id);
+        } else if (choice >= 980 && choice < 990) {
+            if (w.keeper.failing || w.failures >= kMaxFailures) {
+                continue;
+            }
+            op = "diskfail";
+            w.keeper.failing = true;
+            ++w.failures;
+        } else if (choice >= 990) {
+            if (!w.keeper.failing) {
+                continue;
+            }
+            op = "diskheal";
+            w.keeper.failing = false;
         } else {
             // A restart now and then, after the first third, so that most requests run their course first.
             if (w.restarts >= kMaxRestarts || choice >= 956 || step < steps / 3) {
                 continue;
             }
             op = "restart";
+            for (const auto& entry : w.req) {
+                if (w.hub->secrets().stateOf(entry.first) == sync::SecretState::Holding) {
+                    w.lost.insert(entry.first);
+                }
+            }
             w.hub->dropSecrets();
             w.take();  // the dropped requests, while the old hub still reports them
             const std::vector<std::string> lines = w.log;
@@ -650,14 +758,16 @@ int main(int argc, char** argv) {
            "\\* Written by tests/sync/secrets_walk: seed " << args[0] << ", " << steps << " steps"
         << (faulty.empty() ? std::string() : ", faulty " + faulty) << ".\n"
         << "EXTENDS TLC\n"
-        << "CONSTANTS v1, v2\n"
+        << "CONSTANTS v1, v2, b1\n"
         << "TraceClients == {\"c1\", \"c2\", \"c3\"}\n"
         << "TraceOldClients == {\"c3\"}\n"
         << "TraceAccounts == {\"a1\", \"a2\"}\n"
         << "TraceAskers == {\"nexus\", \"s1\", \"s2\"}\n"
-        << "TraceValues == {v1, v2}\n"
+        << "TraceValues == {v1, v2, b1}\n"
+        << "TraceBadValues == {b1}\n"
         << "TraceMaxRequests == " << kMaxRequests << "\n"
         << "TraceMaxRestarts == " << kMaxRestarts << "\n"
+        << "TraceMaxFailures == " << kMaxFailures << "\n"
         << "Trace == <<\n";
     for (std::size_t i = 0; i < records.size(); ++i) {
         out << "  " << records[i] << (i + 1 < records.size() ? ",\n" : "\n");
