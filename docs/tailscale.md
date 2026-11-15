@@ -312,3 +312,26 @@ Bottom up, each secured before the next starts. **Sign-in is path A, interactive
 
 The layer 1 API carries the control server's address as a parameter of start (empty for Tailscale's hosted service),
 so the later roadmap row on using your own control server needs nothing redone.
+
+### Later, not built: use your own control server (headscale)
+
+For people who run their own control server: they set headscale up themselves and give its address, and nexus's
+embedded nodes use it instead of Tailscale's hosted service (roadmap `ts-own-control`). Decided for that row, from a
+trial against a real headscale on 2026-11-15, so none of it is asked again:
+
+- **The address must be https.** With a plain http address to a public server, tsnet falls back to port 443 after a
+  recent dial; after a control outage a node in the trial stayed off control for over 5 minutes once the server was
+  back, until it was restarted. Over https the fallback is the same port, and the node was back within seconds.
+- **Enrolment, either of two ways.** A pre-auth key, minted on the server and pasted once through the product's secret
+  dialog, is the normal way and the only way a node gets a tag (the tag comes from the key; a node that asks for a tag
+  itself is refused). Or the server's admin approves the node's sign-in with their own command on the server
+  (`headscale auth register`), which the product shows them.
+- **Ready means peers are present**, not that the node reports running: a restarted node reports running before its
+  peers arrive.
+- **Expiry is read from status**, and on expiry the product starts the login again itself: headscale's expiry leaves a
+  node needing a login with no sign-in URL until something asks for one.
+- **Peers are matched by DNS name**, not host name: headscale renames a duplicate host name.
+- **A separate state folder per control server**, so each server's enrolment stays its own and switching back costs
+  nothing.
+
+Tailscale's hosted service stays interactive sign-in only.
