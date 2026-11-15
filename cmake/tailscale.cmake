@@ -128,7 +128,8 @@ if(WIN32)
     file(READ ${nexus_ts_source}/nts.def nexus_ts_def_text)
     string(REPLACE "LIBRARY nts" "LIBRARY nts_test" nexus_ts_def_text "${nexus_ts_def_text}")
     foreach(hook inject_panic start_offline log_libraries control_start control_approve control_expire
-            control_set_tags control_down control_up control_untrusted_url control_stop)
+            control_set_tags control_down control_up control_untrusted_url control_stop control_blackhole net_calls
+            inject_control_error host_trap host_trap_count)
         string(APPEND nexus_ts_def_text "    nts_test_${hook}\n")
     endforeach()
     file(CONFIGURE OUTPUT ${nexus_ts_out}/nts_test.def CONTENT "${nexus_ts_def_text}" @ONLY)
