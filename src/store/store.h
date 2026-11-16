@@ -54,6 +54,15 @@
 // crash during that leaves the older one, read again the same way). The older formats are never written.
 namespace nexus::store {
 
+// The formats this build writes, and the oldest format of a reader each declares it can be read by. Every older format
+// is still read. 3 and 4 frame each change, entry and session by its length, so that a later format's additions are
+// skipped by this build, as long as that format declares this one can read it. A placed build lists them in its
+// manifest (server/build_manifest.h), and a switch keeps the rule they make.
+constexpr std::uint8_t kRecordFormat = 3;       // 2: by session, unframed; 1: a friend tab's, by name, migrated
+constexpr std::uint8_t kRecordReader = 3;       // the oldest record format a reader must know to read ours
+constexpr std::uint8_t kSnapshotFormat = 4;     // 3: by session, unframed; 2: friend tabs; 1: before drivers
+constexpr std::uint8_t kSnapshotReader = 4;
+
 // An entry of a transcript. The store keeps kind as the server gives it (sync's EntryKind); an open entry (closed
 // false) is one that may still grow.
 struct Entry {

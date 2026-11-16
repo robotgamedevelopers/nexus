@@ -18,6 +18,9 @@ This page is the whole scheme. The code is `src/sync/formats.h` (the numbers, th
 4. A writer can declare that an older reader must refuse it: the state by its Hello's `min_peer`, the store by the
    oldest format a reader must know (a byte after the format). Nothing is declared incompatible today.
 
+Each installed build of the server records the formats it writes and reads in its `formats` file, and a build that
+cannot read what the current one writes is refused as current: `docs/builds.md`, "The formats rule".
+
 ## The sessions state (server to window)
 
 | Format | What it is |

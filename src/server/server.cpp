@@ -667,8 +667,10 @@ void Server::control(int fd) {
     // A start's (and `new`'s) question: answered only from this loop, so SERVING is true when said. Once `stop` is
     // accepted the loop takes no more requests, and the connections still queued are closed unanswered with the socket
     // (models/store/StoreLock.tla StopAccept, then CloseSocket; RefusedServes).
+    // Its second line, which a start's question does not read, is the build this server runs from (server/builds.h).
     if (request == kStatusRequest) {
-        writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\n");
+        writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\nbuild " +
+                         (paths_.build.empty() ? std::string("none") : paths_.build) + "\n");
         return;
     }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
@@ -1465,6 +1467,32 @@ int stop(const Paths& p) {
     for (int i = 0; i < 250 && access(p.socket.c_str(), F_OK) == 0; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     return 0;
+}
+
+int status(const Paths& p) {
+    signal(SIGPIPE, SIG_IGN);
+    const int fd = connectControl(p.socket);
+    if (fd < 0) {
+        std::fprintf(stderr, "nexus-server: %s\n", errnoText("no server answers on " + p.socket).c_str());
+        return 1;
+    }
+    std::string first;
+    std::string second;
+    const bool ok = writeAll(fd, std::string(kStatusRequest) + "\n") && readLine(fd, &first, kStatusReplyMs);
+    if (ok && first == kServingReply && !readLine(fd, &second, kStatusReplyMs)) {
+        second = "build unknown (a server from before builds were placed)";
+    }
+    close(fd);
+    if (!ok) {
+        std::fprintf(stderr, "nexus-server: the server on %s did not answer `status`; see %s\n", p.socket.c_str(),
+                     p.log.c_str());
+        return 1;
+    }
+    std::printf("%s\n", first.c_str());
+    if (!second.empty()) {
+        std::printf("%s\n", second.c_str());
+    }
+    return first == kServingReply ? 0 : 1;
 }
 
 } // namespace nexus::server

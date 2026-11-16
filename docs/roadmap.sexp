@@ -8,7 +8,7 @@
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused (in progress)")
-     ("takeover-placement" "2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs")
+     ("takeover-placement" "2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs: builds immutable, complete and named by their content hash under builds/, placed through a temporary folder synced and verified before one rename; tested bound to the whole folder's hash; current and previous switched in one rename under the builds directory's lock; a build a running server holds never pruned (docs/builds.md) (in progress)")
      ("takeover-handover" "3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk")
      ("takeover-supervision" "4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back")
      ("takeover-migration" "5. Old-layout migration and the store's format against rollback: a store from the old ~/.nexus layout moves once, and a store a newer build wrote stays readable by the build rolled back to")
@@ -25,7 +25,8 @@
      ))
   (:id "t-takeover-store-lock" :type :task :title "Store lock: one writer by the OS's lock, taken before the store is read; start-up order lock, replay, socket, drivers" :state :doing
    :evidence ("models/store/StoreLock.tla: ctest -L model tlc_store_lock_*" "tests/store/store_lock_walk.cpp: ctest -L model tlc_store_lock_trace_*" "tests/store/store_test.cpp: ctest -L unit store_unit_lock store_unit_start_order" "tests/store/store_functional_test.cpp: ctest -L functional store_functional" "tests/link/server_lock.cpp: ctest -L functional server_lock_functional"))
-  (:id "t-takeover-placement" :type :task :title "Side-by-side placement with one atomic switch" :state :todo)
+  (:id "t-takeover-placement" :type :task :title "Side-by-side placement with one atomic switch" :state :doing
+   :evidence ("models/placement/Placement.tla: ctest -L model tlc_placement_spec tlc_placement_seq tlc_placement_witness_*" "tests/server/builds_walk.cpp: ctest -L model tlc_placement_trace_*" "tests/server/builds_test.cpp: ctest -L unit builds_unit" "tests/server/builds_functional.cpp: ctest -L functional builds_functional" "docs/builds.md"))
   (:id "t-takeover-handover" :type :task :title "Handover as a durable, resumable state machine under an OS lock" :state :todo)
   (:id "t-takeover-supervision" :type :task :title "Supervision, systemd included, so a build that fails later still rolls back" :state :todo)
   (:id "t-takeover-migration" :type :task :title "Old-layout migration, and the store's format against rollback" :state :todo)
