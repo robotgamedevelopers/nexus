@@ -5,6 +5,8 @@
 
 #include "server/builds.h"
 #include "server/drain.h"
+#include "server/handover.h"
+#include "server/supervision.h"
 #include "store/fs.h"
 #include "store/store.h"
 
@@ -160,13 +162,49 @@ int main(int argc, char** argv) {
 
     std::string cmd = argc > 1 ? argv[1] : "";
     std::string dir;
+    std::vector<std::string> extraArgs;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dir") == 0 && i + 1 < argc) {
             dir = argv[++i];
+        } else {
+            extraArgs.push_back(argv[i]);
         }
     }
+    if (cmd == "supervise" && !dir.empty()) {
+        const char* envHome = std::getenv("HOME");
+        const std::string home = (envHome && *envHome) ? std::string(envHome) : dir;
+        server::supervision::Options opts;
+        if (const char* b = std::getenv("NEXUS_SUPERVISE_BACKOFF_MS")) {
+            opts.backoff_ms = std::strtoull(b, nullptr, 10);
+        }
+        if (const char* s = std::getenv("NEXUS_SUPERVISE_STABLE_MS")) {
+            opts.stable_ms = std::strtoull(s, nullptr, 10);
+        }
+        server::supervision::Result r;
+        const int code = server::supervision::command(dir, home, extraArgs, opts, r);
+        for (const std::string& l : r.out) {
+            std::printf("%s\n", l.c_str());
+        }
+        std::fflush(stdout);
+        for (const std::string& l : r.err) {
+            std::fprintf(stderr, "nexus-server: supervise: %s\n", l.c_str());
+        }
+        return code;
+    }
+    if (cmd == "handover" && !dir.empty()) {
+        server::handover::Result r;
+        const int code = server::handover::command(dir, extraArgs, {}, r);
+        for (const std::string& l : r.out) {
+            std::printf("%s\n", l.c_str());
+        }
+        std::fflush(stdout);
+        for (const std::string& l : r.err) {
+            std::fprintf(stderr, "nexus-server: handover: %s\n", l.c_str());
+        }
+        return code;
+    }
     if (cmd != "serve" || dir.empty()) {
-        std::fprintf(stderr, "fake_build_server: usage: nexus-server serve --dir <DIR>\n");
+        std::fprintf(stderr, "fake_build_server: usage: nexus-server serve|supervise|handover ... --dir <DIR>\n");
         return 2;
     }
 
@@ -250,10 +288,17 @@ int main(int argc, char** argv) {
     server::Drain drain(drainLimit);
     bool stopping = false;
     bool drained = false;
+    bool crashed = false;
     bool turnOpen = false;
     const bool legacy = (mode == "legacy");
+    const bool crashAfterServe = (mode == "crash-after-serve");
+    const std::uint64_t crashDeadline = nowMs() + 150;
 
     while (!stopping && !gStopSig) {
+        if (crashAfterServe && nowMs() >= crashDeadline) {
+            crashed = true;
+            break;
+        }
         if (drain.stopNow(turnOpen, nowMs())) {
             drained = true;
             break;
@@ -280,7 +325,12 @@ int main(int argc, char** argv) {
                             sendAll(cfd, "SERVING\n" + server::statusBuildLine(hold.hash(), drain.draining()) + "\n");
                         }
                     } else if (req == "stop") {
+                        server::supervision::noteIntentionalStop(dir);
                         sendAll(cfd, "OK\n");
+                        stopping = true;
+                    } else if (req == "crash") {
+                        sendAll(cfd, "OK\n");
+                        crashed = true;
                         stopping = true;
                     } else if (req == "drain") {
                         if (legacy) {
@@ -336,5 +386,8 @@ int main(int argc, char** argv) {
     ::close(listenFd);
     ::unlink(sockPath.c_str());
     st.reset();
+    if (crashed) {
+        return 1;
+    }
     return drained ? server::kDrainExit : 0;
 }

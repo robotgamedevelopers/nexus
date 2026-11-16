@@ -38,6 +38,7 @@
 #include "server/secret_lines.h"
 #include "server/signin_runner.h"
 #include "server/start_order.h"
+#include "server/supervise_state.h"
 #include "store/fs.h"
 #include "store/store.h"
 #include "sync/formats.h"
@@ -758,6 +759,7 @@ void Server::control(int fd) {
         return;
     }
     if (request == "stop") {
+        supervision::noteIntentionalStop(paths_.dir);
         writeAll(fd, "OK\n");
         stopping_ = true;
         return;
@@ -1793,6 +1795,7 @@ int stop(const Paths& p) {
         std::fprintf(stderr, "nexus-server: the server answered `stop` with: %s\n", reply.c_str());
         return 1;
     }
+    supervision::noteIntentionalStop(p.dir);
     // The server removes its socket as it ends: wait for that, so that a server started next does not find it.
     for (int i = 0; i < 250 && access(p.socket.c_str(), F_OK) == 0; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

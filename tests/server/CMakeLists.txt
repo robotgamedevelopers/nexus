@@ -456,7 +456,7 @@ endforeach()
 
 if(NOT WIN32)
     add_executable(nexus_fake_build_server fake_build_server.cpp)
-    target_link_libraries(nexus_fake_build_server PRIVATE nexus_handover nexus_builds nexus_store)
+    target_link_libraries(nexus_fake_build_server PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store)
     target_compile_options(nexus_fake_build_server PRIVATE ${warnings})
 
     add_executable(handover_functional handover_functional.cpp)
@@ -546,5 +546,110 @@ if(NOT WIN32)
         list(GET fs 1 seed)
         handover_tlc_test(tlc_handover_trace_${fault}_rejected HandoverTrace.cfg HandoverTrace pass
                           WALK ${seed} 600 --fault ${fault})
+    endforeach()
+endif()
+
+# Supervision (src/server/supervision.h, src/server/supervise_state.h, docs/builds.md, models/supervision):
+#   unit        supervision_test (supervision_unit_*): SuperviseState codec and atomic updates, deterministic systemd
+#               unit and launchd plist generation and escaping, cold start / drain-restart (75) / stop-stays-stopped (0)
+#               / --start, post-start failure rollback with stability window, dual-broken shunning and halt bound (78),
+#               and MemFs fail_at + crash recovery sweeps. No real files, processes, sockets or sleeps.
+#   functional  supervision_functional (supervision_functional_*): real supervise child processes over real sockets and
+#               OS locks in isolated temp dirs (start/stop/--start/SIGTERM, drain handover + adopted crash recovery,
+#               post-SERVING crash triggering automatic rollback to previous, dual-broken halt without ping-pong,
+#               offline unit generation/verification, busy lock, and unlockable filesystem refusals).
+#   model       TLC: Supervision.tla (spec, post-start rollback, dual-fail), 9 reversed witnesses, and supervision_walk
+#               traces checked against SupervisionTrace.tla (plus 9 faulty walks rejected).
+#   model_nightly  Supervision.tla on its larger 3-build, 2-handover, 2-supervisor-death instance.
+add_executable(supervision_test supervision_test.cpp)
+target_link_libraries(supervision_test PRIVATE nexus_supervision)
+target_compile_options(supervision_test PRIVATE ${warnings})
+foreach(group state units lifecycle rollback dual_fail crash)
+    add_test(NAME supervision_unit_${group} COMMAND supervision_test ${group})
+    set_tests_properties(supervision_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+if(NOT WIN32)
+    add_executable(supervision_functional supervision_functional.cpp)
+    target_link_libraries(supervision_functional PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store)
+    target_compile_options(supervision_functional PRIVATE ${warnings})
+    add_dependencies(supervision_functional nexus_fake_build_server)
+
+    set(supervision_func_base "/tmp/nexus-sup-${handover_build_hash}")
+    foreach(case start_and_stop drain_handover post_start_rollback dual_fail_halt units_and_locks)
+        add_test(NAME supervision_functional_${case} COMMAND supervision_functional
+                 $<TARGET_FILE:nexus_fake_build_server> ${case} ${supervision_func_base}-${case})
+        set_tests_properties(supervision_functional_${case} PROPERTIES LABELS functional TIMEOUT 120)
+    endforeach()
+
+    add_executable(supervision_walk supervision_walk.cpp)
+    target_link_libraries(supervision_walk PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store
+                          Threads::Threads)
+    target_compile_options(supervision_walk PRIVATE ${warnings})
+    add_dependencies(model_checks supervision_walk supervision_test)
+
+    set(supervision_models "${PROJECT_SOURCE_DIR}/models/supervision")
+    function(supervision_tlc_test name cfg module expect)
+        cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;CAP" "WALK" ${ARGN})
+        if(NOT T_WORKERS)
+            set(T_WORKERS 2)
+        endif()
+        set(label model)
+        if(NOT T_CAP)
+            set(T_CAP 60)
+        endif()
+        if(T_NIGHTLY)
+            set(label model_nightly)
+        endif()
+        math(EXPR ctest_timeout "${T_CAP} + 30")
+        set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${supervision_models} -DMODULE=${module}
+                 -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${T_CAP})
+        if(T_PROPERTY)
+            list(APPEND defs -DPROPERTY=${T_PROPERTY})
+        endif()
+        if(T_WALK)
+            string(REPLACE ";" "," walk_args "${T_WALK}")
+            list(APPEND defs -DWALK=$<TARGET_FILE:supervision_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=SupervisionTraceData.tla)
+        endif()
+        add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${placement_tlc})
+        set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    endfunction()
+
+    supervision_tlc_test(tlc_supervision_spec Supervision.cfg Supervision pass WORKERS 4)
+    supervision_tlc_test(tlc_supervision_rollback SupervisionRollback.cfg Supervision pass WORKERS 4)
+    supervision_tlc_test(tlc_supervision_dual_fail SupervisionDualFail.cfg Supervision pass WORKERS 4)
+    supervision_tlc_test(tlc_supervision_large SupervisionLarge.cfg Supervision pass WORKERS 8 NIGHTLY CAP 600)
+
+    supervision_tlc_test(tlc_supervision_witness_no_sup_lock witnesses/SNoSupLock.cfg Supervision invariant
+                         PROPERTY OneSupervisor)
+    supervision_tlc_test(tlc_supervision_witness_no_handover_lock witnesses/SNoHandoverLock.cfg Supervision invariant
+                         PROPERTY HandoverSerialized)
+    supervision_tlc_test(tlc_supervision_witness_serve_untested witnesses/SServeUntested.cfg Supervision invariant
+                         PROPERTY CurrentTested)
+    supervision_tlc_test(tlc_supervision_witness_stop_restarts witnesses/SStopRestarts.cfg Supervision action
+                         PROPERTY StopStaysStopped)
+    supervision_tlc_test(tlc_supervision_witness_drain_stops witnesses/SDrainStops.cfg Supervision action
+                         PROPERTY DrainRestartsCurrent)
+    supervision_tlc_test(tlc_supervision_witness_no_post_start_rollback witnesses/SNoPostStartRollback.cfg Supervision
+                         temporal PROPERTY SettledHealthy)
+    supervision_tlc_test(tlc_supervision_witness_ping_pong_rollback witnesses/SPingPongRollback.cfg Supervision action
+                         PROPERTY NeverRollsBackToShunned)
+    supervision_tlc_test(tlc_supervision_witness_in_memory_state witnesses/SInMemoryState.cfg Supervision action
+                         PROPERTY NeverRollsBackToShunned)
+    supervision_tlc_test(tlc_supervision_witness_no_halt_bound witnesses/SNoHaltBound.cfg Supervision temporal
+                         PROPERTY SupervisorSettles)
+
+    foreach(seed 1 2 3)
+        supervision_tlc_test(tlc_supervision_trace_seed_${seed} SupervisionTrace.cfg SupervisionTrace invariant
+                             PROPERTY TraceUnfinished WALK ${seed} 350)
+    endforeach()
+    foreach(fault_seed no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1
+                       ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1)
+        string(REPLACE ":" ";" fs "${fault_seed}")
+        list(GET fs 0 fault)
+        list(GET fs 1 seed)
+        supervision_tlc_test(tlc_supervision_trace_${fault}_rejected SupervisionTrace.cfg SupervisionTrace pass
+                             WALK ${seed} 350 --fault ${fault})
     endforeach()
 endif()

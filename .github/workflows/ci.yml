@@ -316,6 +316,20 @@ jobs:
           for pid in "${fs_walk_pids[@]}"; do
             wait "$pid"
           done
+          # supervision: every unit group (MemFs crashes, unit files, post-start rollback, shunning), then its walks
+          build/tests/server/supervision_test
+          supervision_pids=()
+          for seed in 1 2 3; do
+            mkdir -p "walks/supervision_$seed"
+            build/tests/server/supervision_walk "$seed" 350 "walks/supervision_$seed/trace.tla" & supervision_pids+=($!)
+          done
+          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
+            mkdir -p "walks/supervision_${fault_seed%%:*}"
+            build/tests/server/supervision_walk "${fault_seed#*:}" 350 --fault "${fault_seed%%:*}" "walks/supervision_${fault_seed%%:*}/trace.tla" & supervision_pids+=($!)
+          done
+          for pid in "${supervision_pids[@]}"; do
+            wait "$pid"
+          done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
@@ -629,11 +643,11 @@ jobs:
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test
+              nexus_versions_test builds_test handover_test supervision_test
           - part: walks
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -718,6 +732,8 @@ jobs:
           unit build/tests/server/builds_test
           # handover: every group (drain, state, handover, rollback, MemFs crash sweep, refusals)
           unit build/tests/server/handover_test
+          # supervision: every group (state, units, lifecycle, post-start rollback, dual-fail shunning, MemFs crashes)
+          unit build/tests/server/supervision_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           unit build/tests/wire/wire_test
@@ -857,6 +873,13 @@ jobs:
           for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
             walk build/tests/server/handover_walk "${fault_seed#*:}" 600 --fault "${fault_seed%%:*}"
           done
+          # supervision's walks on real files and OS locks, and their faults
+          for seed in 1 2 3; do
+            walk build/tests/server/supervision_walk "$seed" 350
+          done
+          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
+            walk build/tests/server/supervision_walk "${fault_seed#*:}" 350 --fault "${fault_seed%%:*}"
+          done
           while [ "$running" -gt 0 ]; do
             wait -n
             running=$((running - 1))
@@ -958,6 +981,14 @@ jobs:
             run: '^tlc_handover_'
             build: handover_walk
             skip: '^tlc_handover_(spec|cut_resume|legacy)$'
+          # Supervision (models/supervision/Supervision.tla): its temporal spec instances in a shard of their own
+          # (capped at 80 s), then the witnesses and the code's walks with their faults.
+          - shard: supervision-spec
+            run: '^tlc_supervision_(spec|rollback|dual_fail)$'
+          - shard: supervision-rest
+            run: '^tlc_supervision_'
+            build: supervision_walk
+            skip: '^tlc_supervision_(spec|rollback|dual_fail)$'
           # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
           # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
           - shard: claude-driver
@@ -1043,7 +1074,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

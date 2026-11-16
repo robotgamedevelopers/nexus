@@ -2,6 +2,7 @@
 // (models/handover/Handover.tla).
 
 #include "server/handover.h"
+#include "server/supervise_state.h"
 
 #include <algorithm>
 #include <atomic>
@@ -70,6 +71,14 @@ store::Bytes toBytes(const std::string& s) {
 
 std::string fromBytes(const store::Bytes& b) {
     return std::string(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+std::string siblingSuperviseDir(const std::string& handoverDir) {
+    const std::size_t slash = handoverDir.rfind('/');
+    if (slash == std::string::npos) {
+        return supervision::kSuperviseDir;
+    }
+    return handoverDir.substr(0, slash + 1) + supervision::kSuperviseDir;
 }
 
 class BuildsPlacement final : public PlacementPort {
@@ -811,6 +820,9 @@ struct Handover::Run {
                     adoptBuildsFailure(cr);
                     break;
                 }
+                if (!fault(Fault::InMemoryOnly)) {
+                    (void)supervision::noteHandoverBegin(h.fs_, siblingSuperviseDir(h.handoverDir_));
+                }
                 ServerSeen seen;
                 const Status ps = h.server_.probe(&seen);
                 if (!ps.is_ok()) {
@@ -820,6 +832,10 @@ struct Handover::Run {
                 }
                 if (cur == requestedHash && seen.serving && !seen.legacy && seen.build == requestedHash &&
                     !seen.draining) {
+                    if (!fault(Fault::InMemoryOnly)) {
+                        (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_),
+                                                              requestedHash);
+                    }
                     r.out.push_back("already serving " + requestedHash);
                     next = Step::Unlock;
                     break;
@@ -880,6 +896,9 @@ struct Handover::Run {
                     }
                     if (!seen.legacy && seen.build == rtgt && !seen.draining) {
                         if (didOwn) {
+                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                                (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
+                            }
                             r.out.push_back("serving " + rtgt +
                                             (rprev.empty() ? std::string() : " (previous " + rprev + ")"));
                         }
@@ -959,6 +978,9 @@ struct Handover::Run {
                     if (seen.serving && !seen.legacy && seen.build == rtgt && !seen.draining) {
                         h.server_.keepStarted();
                         if (didOwn) {
+                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                                (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
+                            }
                             r.out.push_back("serving " + rtgt +
                                             (rprev.empty() ? std::string() : " (previous " + rprev + ")"));
                         }
