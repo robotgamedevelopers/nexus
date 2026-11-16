@@ -381,7 +381,13 @@ void testE2eMigrationHandoverDrain(const std::string& fakeBin, const fs::path& b
     std::string reply;
     CHECK(askSocket(sock, "entries", &reply) && reply == "1");
 
-    // 4. Open turn on b1, start `handover <b2>` concurrently, complete turn -> drained with 0 lost entries!
+    // 4. Open turn on b1, plant a stray `~/.nexus/server.log` to prove `handover` skips `migrateOldLayout` when a
+    //    new-layout server is already serving on `sdir/server.sock` (no false `sdir/store` Busy failure!), start
+    //    `handover <b2>` concurrently, and complete turn -> drained with 0 lost entries!
+    {
+        const std::string strayLog = "stray-top-log\n";
+        CHECK(pfs->write_new((top / "server.log").string(), store::Bytes(strayLog.begin(), strayLog.end())).is_ok());
+    }
     CHECK(askSocket(sock, "turn open", &reply) && reply == "OK");
     const pid_t hoPid = spawnProc((sdir / "current/bin/nexus-server").string(),
                                   {"handover", b2, "--dir", sdir.string()}, home.string());

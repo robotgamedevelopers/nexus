@@ -1055,7 +1055,7 @@ struct Builds::Run {
     }
 
     // current <hash> (back: an empty hash): the pointer moved to the pair (target, current) by one rename.
-    int sw(const std::string& want, bool back, bool allowUntested = false) {
+    int sw(const std::string& want, bool back, bool allowUntested = false, bool waitStoreRelease = false) {
         Status s = begin();
         if (!s.is_ok()) {
             return finish(s);
@@ -1154,7 +1154,14 @@ struct Builds::Run {
                 po.test_locks_ignored = b.options_.test_locks_ignored;
                 std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
                 DiskFormats disk;
-                s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                const std::uint64_t storeWaitBegan = now();
+                for (;;) {
+                    s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                    if (s.code() != Status::Code::Busy || !waitStoreRelease || now() - storeWaitBegan >= 250) {
+                        break;
+                    }
+                    pause(kLockRetryMs);
+                }
                 if (s.code() == Status::Code::Busy) {
                     return finish(Status::refused("cannot switch back to build " + target +
                                                   " while a running server holds " + b.serverDir_ +
@@ -1615,7 +1622,7 @@ int Builds::rollbackTo(const std::string& hash, Result& r) {
     if (!hash.empty() && !isHash(hash)) {
         return run.end(Status::refused("`" + hash + "` is not a build's hash (64 hex digits; `builds list`)"));
     }
-    return run.sw(hash, true);
+    return run.sw(hash, true, false, true);
 }
 
 int Builds::prune(std::size_t keep, Result& r) {

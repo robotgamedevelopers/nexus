@@ -1320,32 +1320,6 @@ int command(const std::string& serverDir, const std::vector<std::string>& args, 
     fsOpts.test_locks_ignored = options.test_locks_ignored;
     std::unique_ptr<store::Fs> fs = store::make_posix_fs(fsOpts);
 
-    const bool statusVerb = (!args.empty() && args[0] == "status");
-    if (!statusVerb && !options.lock_already_held) {
-        if (const char* envHome = std::getenv("HOME"); envHome != nullptr && *envHome != '\0') {
-            std::string h = envHome;
-            while (h.size() > 1 && h.back() == '/') {
-                h.pop_back();
-            }
-            const std::string top = h + "/.nexus";
-            std::string sdir = serverDir;
-            while (sdir.size() > 1 && sdir.back() == '/') {
-                sdir.pop_back();
-            }
-            if (sdir == top + "/server") {
-                migration::Options mopts;
-                mopts.old_server_live = [&] { return migration::probeOldServerSocket(top + "/server.sock"); };
-                migration::Report rep;
-                const Status ms = migration::migrateOldLayout(*fs, top, sdir, mopts, &rep);
-                if (!ms.is_ok()) {
-                    r.err.push_back(ms.message());
-                    r.exit = rep.conflict ? kExitRefused : (ms.code() == Status::Code::Busy ? kExitBusy : kExitFailed);
-                    return r.exit;
-                }
-            }
-        }
-    }
-
     builds::Options bOpts;
     bOpts.now_ms = options.now_ms;
     bOpts.sleep_ms = options.sleep_ms;
@@ -1358,6 +1332,34 @@ int command(const std::string& serverDir, const std::vector<std::string>& args, 
     std::unique_ptr<PlacementPort> placement = makeBuildsPlacement(serverDir, bOpts);
     std::unique_ptr<ServerPort> server =
         makePosixServerPort(serverDir, options.now_ms, options.sleep_ms, options.adopted_pid_out);
+
+    const bool statusVerb = (!args.empty() && args[0] == "status");
+    if (!statusVerb && !options.lock_already_held) {
+        if (const char* envHome = std::getenv("HOME"); envHome != nullptr && *envHome != '\0') {
+            std::string h = envHome;
+            while (h.size() > 1 && h.back() == '/') {
+                h.pop_back();
+            }
+            const std::string top = h + "/.nexus";
+            std::string sdir = serverDir;
+            while (sdir.size() > 1 && sdir.back() == '/') {
+                sdir.pop_back();
+            }
+            ServerSeen liveSeen;
+            const bool newServerServing = server->probe(&liveSeen).is_ok() && liveSeen.serving;
+            if (sdir == top + "/server" && !newServerServing) {
+                migration::Options mopts;
+                mopts.old_server_live = [&] { return migration::probeOldServerSocket(top + "/server.sock"); };
+                migration::Report rep;
+                const Status ms = migration::migrateOldLayout(*fs, top, sdir, mopts, &rep);
+                if (!ms.is_ok()) {
+                    r.err.push_back(ms.message());
+                    r.exit = rep.conflict ? kExitRefused : (ms.code() == Status::Code::Busy ? kExitBusy : kExitFailed);
+                    return r.exit;
+                }
+            }
+        }
+    }
 
     Handover engine(*fs, *placement, *server, serverDir + "/" + kHandoverDir, options);
     if (args.empty() || args[0] == "resume") {

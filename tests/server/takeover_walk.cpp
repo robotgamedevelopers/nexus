@@ -74,11 +74,7 @@ std::uint64_t below(std::uint64_t n) {
     return n == 0 ? 0 : nextRng() % n;
 }
 
-[[noreturn]] void die(const std::string& why) {
-    std::fprintf(stderr, "takeover_walk: %s\n", why.c_str());
-    std::fflush(stderr);
-    std::_Exit(1);
-}
+fs::path gWorkRoot;
 
 void makeWritableTree(const fs::path& p) {
     std::error_code ec;
@@ -98,11 +94,18 @@ void makeWritableTree(const fs::path& p) {
 
 void removeAllSafe(const fs::path& root) {
     std::error_code ec;
-    if (fs::symlink_status(root, ec).type() == fs::file_type::not_found) {
+    if (root.empty() || fs::symlink_status(root, ec).type() == fs::file_type::not_found) {
         return;
     }
     makeWritableTree(root);
     fs::remove_all(root, ec);
+}
+
+[[noreturn]] void die(const std::string& why) {
+    std::fprintf(stderr, "takeover_walk: %s\n", why.c_str());
+    std::fflush(stderr);
+    removeAllSafe(gWorkRoot);
+    std::_Exit(1);
 }
 
 void writeHostFile(const fs::path& p, const std::string& content, bool exec) {
@@ -701,14 +704,22 @@ int main(int argc, char** argv) {
 
     gRng = seed * 0xD1B54A32D192ED03ULL + 1;
 
-    const fs::path workRoot =
-        fs::current_path() / ("takeover-walk-" + std::to_string(::getpid()) + "-" + std::to_string(seed));
+    const fs::path outFile(outPath);
+    if (!outFile.parent_path().empty()) {
+        fs::create_directories(outFile.parent_path());
+    }
+    const fs::path workRoot = (outFile.parent_path().empty() ? fs::path(".") : outFile.parent_path()) /
+                              (outFile.filename().string() + ".walk-files");
     removeAllSafe(workRoot);
     fs::create_directories(workRoot);
+    gWorkRoot = workRoot;
 
     struct Cleanup {
         fs::path root;
-        ~Cleanup() { removeAllSafe(root); }
+        ~Cleanup() {
+            removeAllSafe(root);
+            gWorkRoot.clear();
+        }
     } cleanup{workRoot};
 
     const fs::path staging = workRoot / "staging";
@@ -720,7 +731,7 @@ int main(int argc, char** argv) {
     fs::permissions(topDir, fs::perms(0700));
 
     // Pre-compute deterministic hashes for builds 1..3 (tested & untested).
-    std::map<int, std::string> testedTree, untestedTree, evidenceFile, hashById;
+    std::map<int, std::string> testedTree, untestedTree, evidenceFile, hashById, untestedHashById;
     std::map<std::string, int> idByHash;
     for (int id = 1; id <= 3; ++id) {
         std::string ev;
@@ -739,6 +750,7 @@ int main(int argc, char** argv) {
         if (!builds::hashTree(untestedTree[id], &uh).is_ok()) {
             die("hashTree untested failed");
         }
+        untestedHashById[id] = uh;
         idByHash[uh] = id;
     }
 
@@ -934,6 +946,7 @@ int main(int argc, char** argv) {
         return (it == idByHash.end()) ? 0 : it->second;
     };
 
+    bool diskStoreDirty = true;
     std::vector<TraceRow> trace;
     auto snapshot = [&](const std::string& op, int b = 0, int arg = 0) {
         TraceRow row;
@@ -946,24 +959,19 @@ int main(int argc, char** argv) {
         row.oldLayout = oldLive ? "live" : (hasOldFiles ? "cold" : "none");
         row.migrated = migrated;
 
-        // Read placed & tested & active directly from `<serverDir>/builds` on disk.
+        // Read placed & tested & active directly from `<serverDir>/builds` on disk without observer fsyncs.
         for (int id = 1; id <= 3; ++id) {
-            for (const std::string& h : {hashById[id]}) {
-                builds::Manifest m;
-                if (builds::checkBuild((serverDir / "builds").string(), h, &m).is_ok()) {
-                    row.placed.insert(id);
-                    if (m.tested) {
-                        row.tested.insert(id);
-                    }
+            builds::Manifest m;
+            if (builds::checkBuild((serverDir / "builds").string(), hashById[id], &m, builds::Fault::NoSync).is_ok()) {
+                row.placed.insert(id);
+                if (m.tested) {
+                    row.tested.insert(id);
                 }
             }
-            // Check untested variant too.
-            std::string uh;
-            if (builds::hashTree(untestedTree[id], &uh).is_ok()) {
-                builds::Manifest um;
-                if (builds::checkBuild((serverDir / "builds").string(), uh, &um).is_ok()) {
-                    row.placed.insert(id);
-                }
+            builds::Manifest um;
+            if (builds::checkBuild((serverDir / "builds").string(), untestedHashById[id], &um, builds::Fault::NoSync)
+                    .is_ok()) {
+                row.placed.insert(id);
             }
         }
 
@@ -1027,7 +1035,8 @@ int main(int argc, char** argv) {
         if (liveSrv.openStore) {
             row.maxReader = liveSrv.cachedMaxReader;
             row.sessions = liveSrv.cachedSessions;
-        } else if (fs::exists(serverDir / "store")) {
+            diskStoreDirty = false;
+        } else if (diskStoreDirty && fs::exists(serverDir / "store")) {
             store::StoreReaders sr;
             if (store::Store::inspect_readers(*obsFs, (serverDir / "store").string(), sr).is_ok() && sr.exists) {
                 std::uint32_t r = sr.record_reader;
@@ -1053,6 +1062,10 @@ int main(int argc, char** argv) {
                 row.maxReader = liveSrv.cachedMaxReader;
                 row.sessions = liveSrv.cachedSessions;
             }
+            diskStoreDirty = false;
+        } else {
+            row.maxReader = liveSrv.cachedMaxReader;
+            row.sessions = liveSrv.cachedSessions;
         }
 
         trace.push_back(std::move(row));
@@ -1096,6 +1109,7 @@ int main(int argc, char** argv) {
         const store::Status ms = migration::migrateOldLayout(*obsFs, topDir.string(), serverDir.string(), mopts);
         if (ms.is_ok()) {
             migrated = true;
+            diskStoreDirty = true;
         }
         snapshot("migrate");
     };
@@ -1151,6 +1165,7 @@ int main(int argc, char** argv) {
                 mopts.old_server_live = [] { return false; };
                 if (migration::migrateOldLayout(*obsFs, topDir.string(), serverDir.string(), mopts).is_ok()) {
                     migrated = true;
+                    diskStoreDirty = true;
                 }
             } else {
                 // Clean refusal before touching supervise/state.
@@ -1164,6 +1179,7 @@ int main(int argc, char** argv) {
                 die("supervise cold migration failed");
             }
             migrated = true;
+            diskStoreDirty = true;
         }
 
         supFs = store::make_posix_fs();

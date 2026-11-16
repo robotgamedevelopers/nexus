@@ -1923,14 +1923,22 @@ int command(const std::string& serverDir, const std::string& home, const std::ve
     if (!statusOnly && !home.empty()) {
         const std::string top = trimTrailingSlash(home) + "/.nexus";
         const std::string sdir = trimTrailingSlash(serverDir);
-        if (sdir == top + "/server") {
+        ServerSeen liveSeen;
+        const bool newServerServing = probeControlSocket(sdir + "/server.sock", &liveSeen).is_ok() && liveSeen.serving;
+        if (sdir == top + "/server" && !newServerServing) {
             migration::Options mopts;
             mopts.old_server_live = [&] { return migration::probeOldServerSocket(top + "/server.sock"); };
             migration::Report rep;
             const Status ms = migration::migrateOldLayout(*fs, top, sdir, mopts, &rep);
             if (!ms.is_ok()) {
                 r.err.push_back(ms.message());
-                r.exit = rep.conflict ? kExitRefused : kExitFailed;
+                if (rep.conflict) {
+                    r.exit = runOpts.launchd_mode ? kExitOk : kExitRefused;
+                } else if (ms.code() == Status::Code::Busy) {
+                    r.exit = kExitBusy;
+                } else {
+                    r.exit = kExitFailed;
+                }
                 return r.exit;
             }
         }
