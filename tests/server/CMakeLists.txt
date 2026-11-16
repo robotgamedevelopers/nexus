@@ -395,11 +395,11 @@ if(NOT WIN32)
 endif()
 
 # One pass of nexus-server's loop (models/LoopPass.tla): tick, hold, apply, flush, release, state and crashes.
-# Per commit, MCLoopPass.cfg (22,500 distinct states, with Converges) and MCLoopPassTwo.cfg (58,851 distinct states,
-# 1 s), all eleven reversed witnesses, five seeded code walks and five faulty walks run together in the loop-pass CI
-# shard (~12 s wall). Nightly, MCLoopPassWide.cfg (113,337 distinct states, 1 s) and MCLoopPassThree.cfg (681,678
-# distinct states, 4 s).
-tlc_test(tlc_loop_pass_spec MCLoopPass MCLoopPass.cfg pass WORKERS 4)
+# Per commit, MCLoopPass.cfg (22,500 distinct states, with Converges) runs in loop-pass-spec (SHARD: 80 s cap, no
+# walk build), and MCLoopPassTwo.cfg (58,851 distinct states), all eleven reversed witnesses, five seeded code walks
+# and five faulty walks run in loop-pass-rest. Nightly, MCLoopPassWide.cfg (113,337 distinct states) and
+# MCLoopPassThree.cfg (681,678 distinct states).
+tlc_test(tlc_loop_pass_spec MCLoopPass MCLoopPass.cfg pass WORKERS 4 SHARD)
 tlc_test(tlc_loop_pass_two  MCLoopPass MCLoopPassTwo.cfg pass WORKERS 4)
 tlc_test(tlc_loop_pass_wide  MCLoopPass MCLoopPassWide.cfg pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_loop_pass_three MCLoopPass MCLoopPassThree.cfg pass WORKERS 8 NIGHTLY)

@@ -980,10 +980,14 @@ jobs:
           - shard: reconnect
             run: '^tlc_reconnect'
             build: reconnect_walk
-          # One pass of nexus-server's loop (models/LoopPass.tla): its two per-commit instances, eleven reversed
-          # witnesses, five seeded code walks and five faulty walks.
-          - shard: loop-pass
+          # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
+          # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
+          # walks in loop-pass-rest.
+          - shard: loop-pass-spec
+            run: '^tlc_loop_pass_spec$'
+          - shard: loop-pass-rest
             run: '^tlc_loop_pass_'
+            skip: '^tlc_loop_pass_spec$'
             build: pass_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
