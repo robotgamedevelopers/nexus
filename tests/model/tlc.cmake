@@ -41,6 +41,11 @@
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
+#   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
+#               (./walk) runs under GO, offline, with the local toolchain (the module needs no other); it is run
+#               first and writes TailscaleTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of ready, url,
+#               close, table, down
+#   GO          with TSWALK: a go command, 1.21 or newer
 #   NOCHECK_DEADLOCK  optional: ON passes -deadlock (TLC then does not report deadlock)
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
@@ -182,6 +187,29 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
     if(NOT EXISTS "${WORK}/ClaudeDriverTraceData.tla")
         message(FATAL_ERROR "${program} wrote no ClaudeDriverTraceData.tla into ${WORK}")
+    endif()
+elseif(DEFINED TSWALK AND NOT "${TSWALK}" STREQUAL "")
+    if(NOT DEFINED GO OR "${GO}" STREQUAL "" OR GO MATCHES "NOTFOUND$")
+        message(FATAL_ERROR "No go on PATH or in ~/sdk/bin when this build was configured. The Tailscale lifecycle's "
+            "trace checks run its walk with Go 1.21 or newer (the fleet's sdk/bin has one): install it, configure again.")
+    endif()
+    set(walk_args "${SEED}" "${STEPS}" "${WORK}/TailscaleTraceData.tla")
+    if(FAULTY STREQUAL "ready" OR FAULTY STREQUAL "url" OR FAULTY STREQUAL "close" OR FAULTY STREQUAL "table" OR
+        FAULTY STREQUAL "down")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not ready, url, close, table or down")
+    endif()
+    # The module has no dependency: nothing is fetched (GOPROXY=off), and the local Go builds it (GOTOOLCHAIN=local),
+    # with the user's own build cache (Go locks it, so parallel tests share it safely).
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env GOTOOLCHAIN=local GOPROXY=off GOWORK=off GOENV=off GOFLAGS=-mod=mod
+            "${GO}" run ./walk ${walk_args}
+        WORKING_DIRECTORY "${TSWALK}"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 60)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "the Tailscale lifecycle's walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

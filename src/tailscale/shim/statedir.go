@@ -1,9 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/robotgamedevelopers/nexus/src/tailscale/lifecycle"
 )
 
 // logName is the file under the state directory that the node's user log goes to (nts.h).
@@ -65,10 +70,57 @@ func ensureDir(dir string) error {
 	return ownerOnly(dir, info)
 }
 
-// prepare holds dir (hold: refused while a node uses it), then opens its log file for appending, owner-only. Both are
-// the caller's to release and close.
-func prepare(dir string) (*dirLock, *cappedLog, error) {
-	held, err := hold(dir)
+// controlName is the file under the state directory that records its control server (lifecycle.Recorded's form).
+const controlName = "nexus-tailscale.control"
+
+// stateName is tsnet's file of the node's keys and state, under the state directory.
+const stateName = "tailscaled.state"
+
+// checkControl refuses a start whose control server (lifecycle.ControlURL's form) is not the one dir recorded, and
+// records it in a directory that has no record yet (owner-only). dir is held.
+func checkControl(dir, control string) error {
+	recordPath := filepath.Join(dir, controlName)
+	recorded := ""
+	text, err := os.ReadFile(recordPath)
+	switch {
+	case err == nil:
+		recorded = strings.TrimSpace(string(text))
+		if recorded == "" {
+			return fmt.Errorf("the state directory's record of its control server, %s, is empty; remove the "+
+				"directory's files if it holds no node you need, or give another directory", recordPath)
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("cannot read %s: %v", recordPath, err)
+	}
+	_, statErr := os.Stat(filepath.Join(dir, stateName))
+	// State that cannot be looked at counts as state: a start never guesses that a directory is empty.
+	hasState := statErr == nil || !errors.Is(statErr, fs.ErrNotExist)
+	write, err := lifecycle.CheckRecord(recorded, hasState, control)
+	if err != nil {
+		return fmt.Errorf("%s (%s)", err.Error(), dir)
+	}
+	if write == "" {
+		return nil
+	}
+	f, err := os.OpenFile(recordPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("cannot write %s: %v; the state directory must be writable by this user", recordPath, err)
+	}
+	if err := ownerOnlyFile(f); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(write + "\n"); err != nil {
+		f.Close()
+		return fmt.Errorf("cannot write %s: %v", recordPath, err)
+	}
+	return f.Close()
+}
+
+// prepare holds dir for owner (hold: refused while a node uses it), then opens its log file for appending,
+// owner-only. Both are the caller's to release and close.
+func prepare(dir string, owner int) (*dirLock, *cappedLog, error) {
+	held, err := hold(dir, owner)
 	if err != nil {
 		return nil, nil, err
 	}

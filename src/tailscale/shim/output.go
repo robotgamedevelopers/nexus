@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/robotgamedevelopers/nexus/src/tailscale/lifecycle"
 )
 
 // logCap is the size at which a node's log file is rotated: nexus-tailscale.log becomes nexus-tailscale.log.1
@@ -40,23 +42,68 @@ func openLog(path string) (*cappedLog, error) {
 	return &cappedLog{path: path, f: f, size: info.Size()}, nil
 }
 
-// Write appends p, first rotating the file when p would take it past logCap. If the new file cannot be opened, the
-// log stops (its lines are dropped) rather than going anywhere else.
+// Write appends p scrubbed (scrub: no URL, no auth key of a node of this process, no Tailscale key), first rotating
+// the file when it would take it past logCap. Everything that reaches a log file comes through here: tsnet's user log,
+// Go's log package, gVisor's logger and the text of a recovered panic. If the new file cannot be opened, the log stops
+// (its lines are dropped) rather than going anywhere else. It reports all of p written.
 func (l *cappedLog) Write(p []byte) (int, error) {
+	text := []byte(scrub(string(p)))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.f == nil {
 		return len(p), nil
 	}
-	if l.size > 0 && l.size+int64(len(p)) > logCap {
+	if l.size > 0 && l.size+int64(len(text)) > logCap {
 		l.rotate()
 		if l.f == nil {
 			return len(p), nil
 		}
 	}
-	n, err := l.f.Write(p)
+	n, err := l.f.Write(text)
 	l.size += int64(n)
-	return n, err
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// The auth keys of this process's nodes, by node id, from the start until the node closes: scrub withholds them
+// wherever they would be written or shown.
+var (
+	secretsMu sync.Mutex
+	secrets   = map[int]string{}
+)
+
+func addSecret(id int, key string) {
+	if key == "" {
+		return
+	}
+	secretsMu.Lock()
+	secrets[id] = key
+	secretsMu.Unlock()
+}
+
+func dropSecret(id int) {
+	secretsMu.Lock()
+	delete(secrets, id)
+	secretsMu.Unlock()
+}
+
+// scrub is text with every URL, every auth key of a node of this process and every Tailscale key withheld
+// (lifecycle.Scrub), uncut.
+func scrub(text string) string {
+	return scrubCut(text, 0)
+}
+
+// scrubCut is scrub, cut to at most max bytes (none when max is 0).
+func scrubCut(text string, max int) string {
+	secretsMu.Lock()
+	list := make([]string, 0, len(secrets))
+	for _, s := range secrets {
+		list = append(list, s)
+	}
+	secretsMu.Unlock()
+	return lifecycle.Scrub(text, list, max)
 }
 
 // rotate moves the file to path.1 and begins a new one. Windows cannot rename over an existing file, hence the

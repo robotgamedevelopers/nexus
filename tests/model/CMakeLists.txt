@@ -79,13 +79,19 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # FAULTY one of its faults (settings, refusal, latch); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
 # tests/driver.
+# With TSWALK, it is the Tailscale shim's lifecycle walk (src/tailscale/lifecycle/walk, run with the local Go: the
+# module has no dependency), and FAULTY one of its faults (ready, url, close, table, down). NODEADLOCK checks a spec
+# whose environment may come to rest (TLC's -deadlock).
 find_program(NEXUS_NODE node)
+find_program(NEXUS_GO_LOCAL go HINTS "$ENV{HOME}/sdk/bin")
 function(tlc_test name module cfg expect)
     # TLC and the walks run on Linux and macOS; a native Windows build defines none of them (NEXUS_SERVER_PARTS).
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    cmake_parse_arguments(T "NOSPRINT;NIGHTLY;LINKWALK;LABEL;OVERLAY;GLIDEWALK;SUPWALK;ACCWALK;SECWALK;DRIVERWALK;DRIVERTESTS;SHARD"
+    set(options NOSPRINT NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK DRIVERWALK DRIVERTESTS SHARD
+        TSWALK NODEADLOCK)
+    cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
@@ -144,6 +150,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
+    elseif(T_TSWALK)
+        list(APPEND defs -DTSWALK=${PROJECT_SOURCE_DIR}/src/tailscale/lifecycle -DGO=${NEXUS_GO_LOCAL} -DSEED=${T_SEED}
+             -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
     elseif(T_ACCWALK)
@@ -167,6 +176,9 @@ function(tlc_test name module cfg expect)
     endif()
     if(T_NOSPRINT)
         list(APPEND defs -DNOSPRINT=ON)
+    endif()
+    if(T_NODEADLOCK)
+        list(APPEND defs -DNOCHECK_DEADLOCK=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
@@ -386,3 +398,35 @@ tlc_test(tlc_secrets_witness_stored_before_durable WSecStoredBeforeDurable WSecS
 tlc_test(tlc_secrets_witness_malformed_stored WSecMalformedStored WSecMalformedStored.cfg invariant
          PROPERTY NoMalformedStored)
 tlc_test(tlc_secrets_witness_held_never_retried WSecHeldNeverRetried WSecHeldNeverRetried.cfg liveness)
+
+# The Tailscale shim's node lifecycle (src/tailscale/lifecycle, models/Tailscale.tla): the spec on its small instance,
+# every property (its environment comes to rest once every node is closed, hence NODEADLOCK); each reversed witness
+# rejected; the code's walks checked against the spec over several seeds; and each of the walk's faults rejected.
+tlc_test(tlc_tailscale_spec Tailscale MCTailscale.cfg pass WORKERS 8 SHARD NODEADLOCK)
+tlc_test(tlc_tailscale_spec_keys Tailscale MCTailscaleKeys.cfg pass WORKERS 8 SHARD NODEADLOCK)
+tlc_test(tlc_tailscale_spec_certs Tailscale MCTailscaleCerts.cfg pass WORKERS 8 SHARD NODEADLOCK)
+tlc_test(tlc_tailscale_witness_ready_without_peers Tailscale witnesses/WTsReadyWithoutPeers.cfg invariant NODEADLOCK
+         PROPERTY ReadyHasPeers)
+tlc_test(tlc_tailscale_witness_url_kept Tailscale witnesses/WTsURLKept.cfg invariant NODEADLOCK
+         PROPERTY URLOnlyInNeedsLogin)
+tlc_test(tlc_tailscale_witness_closed_runs Tailscale witnesses/WTsClosedRuns.cfg invariant NODEADLOCK
+         PROPERTY ClosedNeverRunning)
+tlc_test(tlc_tailscale_witness_table_ignores Tailscale witnesses/WTsTableIgnores.cfg invariant NODEADLOCK
+         PROPERTY OneNodePerDir)
+tlc_test(tlc_tailscale_witness_no_relogin Tailscale witnesses/WTsNoRelogin.cfg liveness NODEADLOCK)
+tlc_test(tlc_tailscale_witness_poll_ignored Tailscale witnesses/WTsPollIgnored.cfg liveness NODEADLOCK)
+tlc_test(tlc_tailscale_witness_cert_ignored Tailscale witnesses/WTsCertIgnored.cfg invariant NODEADLOCK
+         PROPERTY CertNeverReady)
+# Orders recorded from the real shim against the test control server: each must be a behaviour of the model's Next,
+# its world included (TailscaleOrders.tla: OrderNotReached violated means the model produces the whole order).
+foreach(order restart authkey cert starting)
+    tlc_test(tlc_tailscale_order_${order} TailscaleOrders TailscaleOrders_${order}.cfg invariant NODEADLOCK
+             PROPERTY OrderNotReached)
+endforeach()
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_tailscale_trace_seed_${seed} TailscaleTrace TailscaleTrace.cfg pass SEED ${seed} STEPS 1000 TSWALK)
+endforeach()
+foreach(fault ready url close table down)
+    tlc_test(tlc_tailscale_trace_faulty_${fault}_rejected TailscaleTrace TailscaleTrace.cfg deadlock SEED 1 STEPS 1000
+             TSWALK FAULTY ${fault})
+endforeach()

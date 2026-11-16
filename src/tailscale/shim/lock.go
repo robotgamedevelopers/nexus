@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/robotgamedevelopers/nexus/src/tailscale/lifecycle"
 )
 
 // errInUse is lockFile's answer when another open of the lock file holds it.
@@ -16,10 +18,11 @@ var errInUse = errors.New("in use")
 // A state directory is one node's at a time: two tsnet servers on one directory would share its keys and state files
 // and corrupt both. A start holds the directory for the node's life in two ways, each checked before anything in the
 // directory is opened: an entry in reserved (this process), then an OS lock on <dir>/nexus-tailscale.lock (any
-// process; flock on macOS and Linux, LockFileEx on Windows, dropped by the OS if the process ends).
+// process; flock on macOS and Linux, LockFileEx on Windows, dropped by the OS if the process ends). The entries are a
+// lifecycle.Table, the code models/Tailscale.tla's trace check binds (at most one node per state directory).
 var (
 	reservedMu sync.Mutex
-	reserved   = map[string]bool{}
+	reserved   lifecycle.Table
 )
 
 // dirKey is the name a directory is reserved under: cleaned, and on Windows, whose paths ignore case, lower-cased.
@@ -31,23 +34,23 @@ func dirKey(dir string) string {
 	return key
 }
 
-// dirLock is a state directory held by this process.
+// dirLock is a state directory held by this process, for owner (a node's handle, or a prepare's own number).
 type dirLock struct {
-	key  string
-	file *os.File
+	key   string
+	owner int
+	file  *os.File
 }
 
-// reserve claims dir in this process, or refuses if a node here holds it. It touches nothing on disk.
-func reserve(dir string) (*dirLock, error) {
+// reserve claims dir in this process for owner, or refuses if a node here holds it. It touches nothing on disk.
+func reserve(dir string, owner int) (*dirLock, error) {
 	key := dirKey(dir)
 	reservedMu.Lock()
 	defer reservedMu.Unlock()
-	if reserved[key] {
+	if ok, _ := reserved.Reserve(key, owner); !ok {
 		return nil, fmt.Errorf("the state directory %s is in use by a node this process started; close that node "+
 			"first, or give another directory", dir)
 	}
-	reserved[key] = true
-	return &dirLock{key: key}, nil
+	return &dirLock{key: key, owner: owner}, nil
 }
 
 // lockOS takes the OS lock on dir's lock file, which ensureDir has made exist. It refuses if another process holds it.
@@ -85,14 +88,14 @@ func (l *dirLock) release() {
 		l.file = nil
 	}
 	reservedMu.Lock()
-	delete(reserved, l.key)
+	reserved.Release(l.key, l.owner)
 	reservedMu.Unlock()
 }
 
 // hold is reserve, ensureDir and lockOS in turn, released again on any failure: what a start or a prepare does before
 // it opens anything else in dir.
-func hold(dir string) (*dirLock, error) {
-	l, err := reserve(dir)
+func hold(dir string, owner int) (*dirLock, error) {
+	l, err := reserve(dir, owner)
 	if err != nil {
 		return nil, err
 	}

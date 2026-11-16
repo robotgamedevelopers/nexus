@@ -1,6 +1,6 @@
-// The test hooks of the shim's test build (src/tailscale/shim/hooks_on.go, the nts_testhooks build tag), linked only
-// into the test program (nexus_link_tailscale(<target> TESTHOOKS), cmake/tailscale.cmake). nexus's build has none of
-// them.
+// The test hooks of the shim's test build (src/tailscale/shim/hooks_on.go and hooks_control.go, the nts_testhooks
+// build tag), linked only into the test program (nexus_link_tailscale(<target> TESTHOOKS), cmake/tailscale.cmake).
+// nexus's build has none of them.
 #ifndef NEXUS_TAILSCALE_NTS_TEST_HOOKS_H
 #define NEXUS_TAILSCALE_NTS_TEST_HOOKS_H
 
@@ -10,16 +10,66 @@
 extern "C" {
 #endif
 
-// Makes the export named where ("nts_start", "nts_close", ...; "nts_test_start_offline after open" panics after the
-// state directory is held and its log opened) panic on every later call, until called again with NULL.
+// Makes the export named where ("nts_start", "nts_close", ...; "nts_start after open" panics after the state directory
+// is held and its log opened) panic on every later call, until called again with NULL.
 NTS_API void nts_test_inject_panic(const char* where);
 
-// nts_start with the control server http://127.0.0.1:9 (nothing listens; refused at once) and the port mapper off: a
-// node that reaches no other machine. The same checks and refusals as nts_start.
-NTS_API int nts_test_start_offline(const char* dir, const char* hostname, char* err, size_t err_size);
+// nts_start with the control server http://127.0.0.1:9 (nothing listens; refused at once; params->control_url is
+// ignored) and the port mapper off: a node that reaches no other machine. The same checks and refusals as nts_start.
+NTS_API int nts_test_start_offline(const nts_start_params* params, char* err, size_t err_size);
 
 // Writes text through Go's log package and gVisor's logger (warning and info).
 NTS_API void nts_test_log_libraries(const char* text);
+
+// A control server of the test program's own, on 127.0.0.1 in this process: Tailscale's in-tree test control server
+// (tstest/integration/testcontrol at the pinned tailscale.com) with a DERP relay and a STUN server beside it. One at a
+// time. Starting it turns the port mapper off and makes tailscale's sockets plain ones, for the rest of the process.
+// Its URL (http://127.0.0.1:<port>) goes into url, and nts_start accepts it as a control URL while it runs. With
+// require_auth, a node without a key gets a sign-in URL; with auth_key non-empty, a node must present that key.
+NTS_API int nts_test_control_start(int require_auth, const char* auth_key, char* url, size_t url_size, char* err,
+                                   size_t err_size);
+
+// Completes the sign-in at login_url, as a person approving it would; first gives an unexpired key back to every node
+// whose key expired, as an admin would.
+NTS_API int nts_test_control_approve(const char* login_url, char* err, size_t err_size);
+
+// Expires the key of the node named hostname (a minute ago).
+NTS_API int nts_test_control_expire(const char* hostname, char* err, size_t err_size);
+
+// Gives the node named hostname the tags in tags, separated by spaces ("tag:a tag:b").
+NTS_API int nts_test_control_set_tags(const char* hostname, const char* tags, char* err, size_t err_size);
+
+// Takes the control server off the network (its port closed, its connections cut; the relay stays), and brings it
+// back on the same port with everything it knew.
+NTS_API int nts_test_control_down(char* err, size_t err_size);
+NTS_API int nts_test_control_up(char* err, size_t err_size);
+
+// The DERP relay's https URL (https://127.0.0.1:<port>), whose certificate no one trusts: a control URL that a node
+// refuses on its certificate.
+NTS_API int nts_test_control_untrusted_url(char* url, size_t url_size, char* err, size_t err_size);
+
+// Cuts every connection to the control server, then holds its port silently (connections accepted, never answered),
+// as a control server whose host stopped answering. nts_test_control_up ends it.
+NTS_API int nts_test_control_blackhole(char* err, size_t err_size);
+
+// How many calls into tsnet that send (a dial, a datagram sent) the shim has made in this process.
+NTS_API long long nts_test_net_calls(void);
+
+// Hands the node text as if control had sent it as an error (tsnet's ErrMessage), through the path a real one takes.
+NTS_API int nts_test_inject_control_error(int node, const char* text, char* err, size_t err_size);
+
+// Opens TCP and UDP traps on one free port of the host's 127.0.0.1, counting what reaches them: the port, or -1.
+NTS_API int nts_test_host_trap(char* err, size_t err_size);
+NTS_API long long nts_test_host_trap_count(void);
+
+// Calls the shim's post-target dial path directly for addr_port ("ip:port"), as when a peer was in target()'s snapshot
+// and left the node's map just before the dial: closes any connection opened and returns 1, or 0 with the reason in
+// err (nothing must reach the host's network).
+NTS_API int nts_test_dial_after_target(int node, const char* network, const char* addr_port, int timeout_ms, char* err,
+                                       size_t err_size);
+
+// Stops the control server, its relay and its STUN server.
+NTS_API int nts_test_control_stop(char* err, size_t err_size);
 
 #ifdef __cplusplus
 }

@@ -123,6 +123,9 @@ var goCommand = "go"
 // cmake/tailscale.cmake passes them. A module only an omitted feature imports is not linked, so not listed.
 var buildTags = ""
 
+// ownModules is the path prefix of nexus's own Go modules, which the shim requires by a directory replace.
+const ownModules = "github.com/robotgamedevelopers/nexus/"
+
 func deps(goos, goarch string) ([]string, error) {
 	cmd := exec.Command(goCommand, "list", "-deps", "-tags="+buildTags, "-f",
 		"{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{if .Replace}}{{.Replace.Dir}}{{else}}{{.Dir}}{{end}}{{end}}{{end}}",
@@ -151,6 +154,10 @@ func render() (string, error) {
 			f := strings.Split(line, "\t")
 			if len(f) != 3 {
 				return "", fmt.Errorf("go list printed %q", line)
+			}
+			if strings.HasPrefix(f[0], ownModules) {
+				// nexus's own code (src/tailscale/lifecycle), under nexus's licence: not a third party's notice.
+				continue
 			}
 			m := modules[f[0]]
 			if m == nil {

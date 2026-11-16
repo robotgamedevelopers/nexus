@@ -154,8 +154,9 @@ jobs:
       - name: Tests (arm64)
         if: ${{ steps.caches.outputs.build == 'true' }}
         run: ctest --test-dir build-tailscale -L tailscale -j "$TEST_JOBS" --output-on-failure --no-tests=error
-      # The x86_64 slice runs every group; the children that lock_two_process and quiet start are the program again,
-      # which macOS runs as its native (arm64) slice.
+      # The x86_64 slice runs every group (tests/tailscale/CMakeLists.txt's lists), side by side as ctest runs them; the
+      # children that lock_two_process and quiet start are the program again, which macOS runs as its native (arm64)
+      # slice.
       - name: Tests (x86_64, under Rosetta)
         if: ${{ steps.caches.outputs.build == 'true' }}
         shell: bash
@@ -165,13 +166,21 @@ jobs:
             echo "::error::Rosetta is not installed on $(hostname -s), so the shim's x86_64 slice cannot run here: install it (softwareupdate --install-rosetta --agree-to-license) through the fleet play"
             exit 1
           fi
-          test=build-tailscale/tests/tailscale/tailscale_test
-          arch -x86_64 "$test" version
-          for group in state_dir refusals lock lock_two_process panics log_cap quiet; do
-            (cd "build-tailscale/tests/tailscale/work_$group" && arch -x86_64 ../tailscale_test "$group")
+          pids=()
+          for group in version names handles start_checks panics_unit state_dir refusals lock lock_two_process panics \
+              log_cap quiet unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key \
+              long_sign_in control_error control_blackhole close_each_other; do
+            (cd "build-tailscale/tests/tailscale/work_$group" && arch -x86_64 ../tailscale_test "$group") &
+            pids+=("$!")
           done
           (cd build-tailscale/tests/tailscale/work_refuses_inherited_key &&
-            TS_AUTHKEY=a-value-that-must-not-be-shown arch -x86_64 ../tailscale_test refuses_inherited_key)
+            TS_AUTHKEY=a-value-that-must-not-be-shown arch -x86_64 ../tailscale_test refuses_inherited_key) &
+          pids+=("$!")
+          failed=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+          done
+          exit "$failed"
       - name: Primed
         if: ${{ steps.caches.outputs.build == 'true' }}
         shell: bash
