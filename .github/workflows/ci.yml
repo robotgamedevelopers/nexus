@@ -224,6 +224,10 @@ jobs:
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
             build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
+          build/tests/sync/secrets_walk 9 2000 --faulty-store-late walks/secrets.tla
+          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
+            build/tests/sync/secrets_walk 1 2000 "$fault" walks/secrets.tla
+          done
           # in-app sign-in: every unit group (the leak test among them), then its walks, each failing if a log line
           # holds a URL, a state, a code or a login
           build/tests/server/signin_test

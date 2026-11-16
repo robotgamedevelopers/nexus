@@ -85,8 +85,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (stay, harness). Called from tests/accounts.
 # With RECONNECTWALK, it is tests/sync's reconnect_walk (the window's link making its session again), and FAULTY one of
 # its faults (cached, no-reset). Called from tests/sync.
-# With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
-# one of its faults (store-late, echo). Called from tests/sync.
+# With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk, Drivers over a fake harness, and
+# the windows' prompts), and FAULTY one of its faults (store-late, echo, driver, driver-echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
 # FAULTY one of its faults (settings, refusal, latch, secret); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from

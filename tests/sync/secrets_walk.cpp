@@ -1,23 +1,27 @@
-// Trace walk: drives the secret dialog's code (src/sync/secrets.h, through src/sync/hub.h over a MemoryStore) with a
-// seeded random walk and writes the trace as SecretsTraceData.tla, for TLC to check against models/Secrets.tla
-// (models/SecretsTrace.tla). No real files, no clock, no sockets: the time is the walk's counter, the values' files are
-// the server's AccountFiles over MemFs, and the values are fake ones the walk makes up.
+// Trace walk: drives the secret dialog's code (src/sync/secrets.h, through src/sync/hub.h and src/server/drivers.h
+// over a MemoryStore) with a seeded random walk and writes the trace as SecretsTraceData.tla, for TLC to check against
+// models/Secrets.tla (models/SecretsTrace.tla). No real files, processes, clock or sockets: the time is the walk's
+// counter, the drivers run over an in-memory Drivers::Host harness, the values' files are the server's AccountFiles
+// over MemFs, and the values are fake ones the walk makes up.
 //
-//   secrets_walk <seed> <steps> [--format 3|4] [--faulty-store-late | --faulty-echo] <out.tla>
+//   secrets_walk <seed> <steps> [--format 3|4]
+//       [--faulty-store-late | --faulty-echo | --faulty-driver | --faulty-driver-echo] <out.tla>
 //
 // --format is the format of the windows that take requests and of their actions (3 unless given): CI walks both, so
 // both the hand-written codec and schema's tables carry the values the model checks.
 //
-// The pieces are the real ones, wired as the server and the windows wire them: the hub's askSecret, apply,
-// expireSecrets and dropSecrets (a restart is a new Hub over the same store); the server's AccountFiles writing each
-// value (server/secret_files.h) and its SecretLines making each answer's driver line and each log line
-// (server/secret_lines.h); each window's state is the hub's Sessions sent as a diff in the window's format (the walk's, 2 for
-// the old window, which never receives a request) and applied to the window's copy, then given to its SecretPrompt;
-// each answer or cancel is an Action encoded by Actions in that format and parsed back by Actions::parse before the hub
-// applies it. After each step the walk records the code's state as the model's variables: the next id (the store's
-// counter), each request's state as the hub reports it, each window's link, view, dialog and answered ids, the
-// answers in flight, each account's file as MemFs holds it, the writes of each request's value, the askers' answers,
-// and the step's session lines and log lines.
+// The pieces are the real ones, wired as nexus-server and the windows wire them: Drivers over an in-memory fake
+// harness (Drivers::Host) starting a driver per friend session, writing `server` (`features: ["secrets"]`) after each
+// `hello`, reading `ask-secret` from the driver's standard output in Drivers::serve, holding `secret` answers while the
+// step's batch is held (Drivers::hold) and flushing them to the driver's standard input on Drivers::release; the hub's
+// askSecret, apply, expireSecrets, retrySecrets and dropSecrets (a restart ends the old Drivers and Hub and starts new
+// ones over the same store); the server's AccountFiles writing each value (server/secret_files.h) and its SecretLines
+// sending each session answer to Drivers::tellSecret and each log line to server.log (server/secret_lines.h); each
+// window's state is the hub's Sessions sent as a diff in the window's format (the walk's, 2 for the old window, which
+// never receives a request) and applied to the window's copy, then given to its SecretPrompt; each answer or cancel is
+// an Action encoded by Actions in that format and parsed back by Actions::parse before the hub applies it. Each
+// session asker's reply in the trace is built solely from the `secret` line decoded off its driver's standard input
+// (driver::LineReader and decodeServerMessage).
 //
 // The one-chance rule (models/Secrets.tla ReceivedNeverDropped): the walk's disk fails and heals (`diskfail`,
 // `diskheal`), and while it fails the keeper wrapped around AccountFiles fails a write, or lets it land and reports it
@@ -26,19 +30,22 @@
 // holds the disk, its failures so far, the value the server received for each request (`taken`), the value held for
 // each, and the values lost at a restart.
 //
-// The bytes each place received are what the trace says of a value there: a log line, an answer's driver line, a
-// session line (and any entry of the store) or a diff sent to a window that holds a value (tests/leak_scan.h: the
-// value, a run of 8 of its bytes, its hex or its base64) is written with that value's token in its record, so TLC sees
-// the leak in the code (Secrets.tla NoSecretInLog, NoSecretToAsker, NoSecretInTranscript, NoSecretToWindows). An
-// action's description and the hub's refusals, which the model has no place for, fail the walk at once. The drivers
-// themselves are not in the walk (a process per asker); tests/server/drivers_functional and tests/link/link_e2e
-// `secret` run them, with the real server, and scan every output.
+// The bytes each place received are what the trace says of a value there: a log line, a `secret` line read on a
+// driver's standard input, a session line (and any entry of the store) or a diff sent to a window that holds a value
+// (tests/leak_scan.h: the value, a run of 8 of its bytes, its hex or its base64) is written with that value's token in
+// its record, so TLC sees the leak in the code (Secrets.tla NoSecretInLog, NoSecretToAsker, NoSecretInTranscript,
+// NoSecretToWindows). Every other line written to a driver's standard input, every driver command-line argument, an
+// action's description and the hub's refusals fail the walk at once if they carry a value.
 //
 // The faults show the binding can fail:
-//   --faulty-store-late  an answer for a request no longer open is written to the account's file anyway (played by
-//                        the walk after the step)
-//   --faulty-echo        a stored answer's log line carries the value: the hub's desk is told to leak it
-//                        (SecretDesk::injectEchoFault), in the code's own path
+//   --faulty-store-late   an answer for a request no longer open is written to the account's file anyway
+//   --faulty-echo         a stored answer's log line carries the value (SecretDesk::injectEchoFault)
+//   --faulty-driver       a session asker's `secret` line is dropped before Drivers::tellSecret, so its driver's
+//                         standard input never receives it (rejected by TraceMatches)
+//   --faulty-driver-echo  a stored answer's `secret` line written through Drivers::tellSecret carries the value on the
+//                         driver's standard input (rejected by CodeNoSecretToAsker)
+
+#include <errno.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -52,10 +59,14 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "accounts/registry.h"
+#include "driver/protocol.h"
 #include "leak_scan.h"
+#include "server/drivers.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
 #include "store/fs.h"
@@ -146,6 +157,236 @@ std::string tokenOf(const std::string& pasted) {
     fail("a value the walk never typed: " + std::to_string(pasted.size()) + " bytes");
 }
 
+// One `secret` line decoded off a fake driver's standard input, with the raw line bytes it arrived in.
+struct DriverAnswer {
+    pid_t pid = -1;
+    std::uint64_t ask = 0;
+    bool stored = false;
+    std::string reason;
+    std::string rawLine;
+};
+
+struct AskOrigin {
+    sync::SessionId session = 0;
+    std::uint64_t requestId = 0;
+};
+
+// In-memory stand-in for the friend sessions' driver processes (Drivers::Host): each spawned driver writes `hello` on
+// its standard output, checks that `server` (`features: ["secrets"]`) arrives on its standard input before `send`,
+// writes `ask-secret` lines when the walk asks as that session, and decodes every line arriving on its standard input
+// with driver::LineReader and decodeServerMessage.
+class FakeHarness final : public server::Drivers::Host {
+public:
+    pid_t spawn(const std::vector<std::string>& argv, int* in, int* out, std::string* why) override {
+        if (argv.empty()) {
+            *why = "empty driver argv";
+            return -1;
+        }
+        for (const std::string& a : argv) {
+            clean(a, "a driver's command line");
+        }
+        const pid_t pid = nextPid_++;
+        const int inFd = nextFd_++;
+        const int outFd = nextFd_++;
+        Proc p;
+        p.pid = pid;
+        p.inWriteFd = inFd;
+        p.outReadFd = outFd;
+        const driver::Encoded hello = driver::encode(driver::Hello{driver::kProtocolVersion, "claude", {"limit"}});
+        if (!hello.error.empty()) {
+            fail("could not encode fake driver hello: " + hello.error);
+        }
+        p.outBuf = hello.line;
+        procs_.emplace(pid, std::move(p));
+        inFdToPid_[inFd] = pid;
+        outFdToPid_[outFd] = pid;
+        *in = inFd;
+        *out = outFd;
+        return pid;
+    }
+
+    ssize_t write(int fd, const char* data, std::size_t size, int* err) override {
+        auto mapIt = inFdToPid_.find(fd);
+        if (mapIt == inFdToPid_.end()) {
+            *err = EBADF;
+            return -1;
+        }
+        auto it = procs_.find(mapIt->second);
+        if (it == procs_.end() || it->second.inClosed || it->second.dead) {
+            *err = EPIPE;
+            return -1;
+        }
+        Proc& p = it->second;
+        std::vector<driver::LineReader::Line> lines;
+        p.inLines.feed(std::string_view(data, size), lines);
+        for (const driver::LineReader::Line& l : lines) {
+            if (!l.error.empty()) {
+                fail("malformed line written to driver stdin: " + l.error);
+            }
+            const driver::Decoded<driver::ServerMessage> dec = driver::decodeServerMessage(l.text);
+            if (!dec.error.empty() || !dec.message) {
+                fail("undecodable server message on driver stdin: " + dec.error);
+            }
+            if (const auto* info = std::get_if<driver::ServerInfo>(&*dec.message)) {
+                clean(l.text, "a driver's server line");
+                if (p.sawSend) {
+                    fail("driver received `server` after `send`");
+                }
+                if (std::find(info->features.begin(), info->features.end(), "secrets") == info->features.end()) {
+                    fail("driver `server` line did not advertise `secrets`");
+                }
+                p.sawSecretsInfo = true;
+            } else if (std::holds_alternative<driver::Send>(*dec.message)) {
+                clean(l.text, "a driver's send line");
+                if (!p.sawSecretsInfo) {
+                    fail("driver received `send` before `server` (`secrets`)");
+                }
+                p.sawSend = true;
+            } else if (const auto* ans = std::get_if<driver::SecretAnswer>(&*dec.message)) {
+                if (!p.sawSecretsInfo) {
+                    fail("driver received `secret` before `server` (`secrets`)");
+                }
+                answers_.push_back(DriverAnswer{p.pid, ans->ask, ans->stored, ans->reason, l.text});
+                ++totalAnswers_;
+            } else {
+                clean(l.text, "a driver's standard input");
+            }
+        }
+        *err = 0;
+        return static_cast<ssize_t>(size);
+    }
+
+    ssize_t read(int fd, char* data, std::size_t size, int* err) override {
+        auto mapIt = outFdToPid_.find(fd);
+        if (mapIt == outFdToPid_.end()) {
+            *err = EBADF;
+            return -1;
+        }
+        auto it = procs_.find(mapIt->second);
+        if (it == procs_.end()) {
+            *err = 0;
+            return 0;
+        }
+        Proc& p = it->second;
+        if (!p.outBuf.empty()) {
+            const std::size_t n = std::min(size, p.outBuf.size());
+            std::memcpy(data, p.outBuf.data(), n);
+            p.outBuf.erase(0, n);
+            *err = 0;
+            return static_cast<ssize_t>(n);
+        }
+        if (p.outClosed || p.dead) {
+            *err = 0;
+            return 0;
+        }
+        *err = EAGAIN;
+        return -1;
+    }
+
+    void close(int fd) override {
+        if (auto inIt = inFdToPid_.find(fd); inIt != inFdToPid_.end()) {
+            if (auto pIt = procs_.find(inIt->second); pIt != procs_.end()) {
+                pIt->second.inClosed = true;
+            }
+            inFdToPid_.erase(inIt);
+        }
+        if (auto outIt = outFdToPid_.find(fd); outIt != outFdToPid_.end()) {
+            if (auto pIt = procs_.find(outIt->second); pIt != procs_.end()) {
+                pIt->second.outClosed = true;
+            }
+            outFdToPid_.erase(outIt);
+        }
+    }
+
+    void killGroup(pid_t pid, int sig) override {
+        if (auto it = procs_.find(pid); it != procs_.end()) {
+            it->second.dead = true;
+            it->second.killedSig = sig;
+        }
+    }
+
+    bool exited(pid_t pid) override {
+        auto it = procs_.find(pid);
+        return it != procs_.end() && it->second.dead;
+    }
+
+    std::string reap(pid_t pid) override {
+        int sig = 9;
+        if (auto it = procs_.find(pid); it != procs_.end()) {
+            sig = it->second.killedSig != 0 ? it->second.killedSig : 9;
+            procs_.erase(it);
+        }
+        return "was ended by signal " + std::to_string(sig);
+    }
+
+    bool ready(pid_t pid) const {
+        auto it = procs_.find(pid);
+        return it != procs_.end() && !it->second.dead && it->second.sawSecretsInfo && it->second.sawSend;
+    }
+
+    std::uint64_t emitAskSecret(pid_t pid, sync::SessionId session, std::uint64_t expectedReqId,
+                                const std::string& account, const std::string& what, const std::string& why) {
+        auto it = procs_.find(pid);
+        if (it == procs_.end() || it->second.dead) {
+            fail("cannot emit ask-secret from dead driver " + std::to_string(pid));
+        }
+        const std::uint64_t ask = ++it->second.nextAsk;
+        const driver::Encoded enc = driver::encode(driver::AskSecret{ask, account, what, why});
+        if (!enc.error.empty()) {
+            fail("could not encode ask-secret: " + enc.error);
+        }
+        asks_[{pid, ask}] = AskOrigin{session, expectedReqId};
+        it->second.outBuf += enc.line;
+        ++totalAsks_;
+        return ask;
+    }
+
+    AskOrigin lookupAsk(pid_t pid, std::uint64_t ask) const {
+        auto it = asks_.find({pid, ask});
+        if (it == asks_.end()) {
+            fail("driver " + std::to_string(pid) + " received `secret` for unknown ask " + std::to_string(ask));
+        }
+        return it->second;
+    }
+
+    bool hasAnswers() const { return !answers_.empty(); }
+
+    std::vector<DriverAnswer> takeAnswers() {
+        std::vector<DriverAnswer> out = std::move(answers_);
+        answers_.clear();
+        return out;
+    }
+
+    std::size_t totalAsks() const { return totalAsks_; }
+    std::size_t totalAnswers() const { return totalAnswers_; }
+
+private:
+    struct Proc {
+        pid_t pid = -1;
+        int inWriteFd = -1;
+        int outReadFd = -1;
+        std::string outBuf;
+        bool inClosed = false;
+        bool outClosed = false;
+        bool dead = false;
+        int killedSig = 0;
+        driver::LineReader inLines;
+        bool sawSecretsInfo = false;
+        bool sawSend = false;
+        std::uint64_t nextAsk = 0;
+    };
+
+    pid_t nextPid_ = 100;
+    int nextFd_ = 10;
+    std::map<pid_t, Proc> procs_;
+    std::map<int, pid_t> inFdToPid_;
+    std::map<int, pid_t> outFdToPid_;
+    std::map<std::pair<pid_t, std::uint64_t>, AskOrigin> asks_;
+    std::vector<DriverAnswer> answers_;
+    std::size_t totalAsks_ = 0;
+    std::size_t totalAnswers_ = 0;
+};
+
 // The accounts' files: the server's AccountFiles, over MemFs. Each value it writes durably is counted. While the walk's
 // disk fails (Secrets.tla DiskFails), a write either fails before the file is touched, or reaches the file and has its
 // durability unconfirmed (the directory's sync failed): the two ways AccountFiles reports a write that is not durable,
@@ -182,32 +423,61 @@ struct Keeper : sync::SecretKeeper {
     }
 };
 
-// The server's SecretLines, with the bytes of each driver line and log line it makes kept beside the effect it made
-// them from.
+// The server's SecretLines wired to Drivers::tellSecret, as nexus-server wires it (src/server/server.cpp). Answers for
+// nexus itself (session 0, which has no driver) are kept in nexusReplies; answers for session askers go to
+// Drivers::tellSecret and are read back only from each driver's standard input in FakeHarness.
 struct Events : server::SecretLines {
-    std::vector<sync::SecretReply> replies;     // this step's
-    std::vector<std::string> replyLines;        // the driver line of each (empty for nexus, which has no driver)
+    server::Drivers* drivers = nullptr;
+    Keeper* keeper = nullptr;
+    std::string fault;
+    std::size_t* faults = nullptr;
+    std::vector<sync::SecretReply> nexusReplies;    // session 0 only
     std::vector<sync::SecretNote> notes;
     std::vector<sync::SecretLog> log;
-    std::vector<std::string> logLines;          // the server.log line of each
-    std::string driverLine;
+    std::vector<std::string> logLines;              // the server.log line of each
     std::string logLine;
 
     Events()
-        : server::SecretLines([this](sync::SessionId, const std::string& line) { driverLine = line; },
+        : server::SecretLines([this](sync::SessionId session, const std::string& line) {
+                                  if (drivers != nullptr) {
+                                      drivers->tellSecret(session, line);
+                                  }
+                              },
                               [this](const std::string& line) { logLine = line; }) {}
+
     void answered(const sync::SecretReply& reply) override {
-        driverLine.clear();
+        if (reply.asker.session == 0) {
+            server::SecretLines::answered(reply);
+            nexusReplies.push_back(reply);
+            return;
+        }
+        if (fault == "driver") {
+            ++*faults;
+            return;     // dropped before Drivers::tellSecret: the driver's standard input never receives it
+        }
+        if (fault == "driver-echo" && reply.stored && keeper != nullptr && drivers != nullptr) {
+            if (const std::optional<std::string> secret = keeper->file(reply.account)) {
+                std::string line = driver::encode(driver::SecretAnswer{reply.asker.ask, true, {}}).line;
+                const std::size_t closeBrace = line.rfind("}\n");
+                if (closeBrace == std::string::npos) {
+                    fail("unexpected encoded secret line shape");
+                }
+                line.replace(closeBrace, 2, ",\"debug\":\"" + *secret + "\"}\n");
+                drivers->tellSecret(reply.asker.session, line);
+                ++*faults;
+                return;
+            }
+        }
         server::SecretLines::answered(reply);
-        replies.push_back(reply);
-        replyLines.push_back(driverLine);
     }
+
     void logged(const sync::SecretLog& line) override {
         logLine.clear();
         server::SecretLines::logged(line);
         log.push_back(line);
         logLines.push_back(logLine);
     }
+
     void noted(const sync::SecretNote& note) override { notes.push_back(note); }
 };
 
@@ -235,9 +505,11 @@ struct Req {
 
 struct Walk {
     sync::MemoryStore store;
-    std::unique_ptr<sync::Hub> hub;
+    FakeHarness harness;
     Keeper keeper;
     Events events;
+    std::unique_ptr<server::Drivers> drivers;
+    std::unique_ptr<sync::Hub> hub;
     std::uint64_t now = 1000;
     std::vector<Window> windows;
     std::vector<Flight> up;
@@ -249,14 +521,18 @@ struct Walk {
     std::vector<std::string> log;
     std::uint64_t restarts = 0;
     std::uint64_t failures = 0;
-    std::map<std::uint64_t, std::string> taken;  // the token of each value the server took (Secrets.tla taken)
+    std::map<std::uint64_t, std::string> taken;   // the token of each value the server took (Secrets.tla taken)
     std::map<std::uint64_t, std::string> heldTok; // the token of each value the server holds while its state is holding
     std::set<std::uint64_t> lost;               // the requests whose held value went with a restart
     std::uint64_t num = 0;
+    std::uint64_t driverNum = 0;
     std::map<sync::SessionId, std::string> askerNames{{0, "nexus"}};
     bool echoFault = false;
 
-    Walk() {
+    Walk(const std::string& faultyMode, std::size_t* faultCount) {
+        events.keeper = &keeper;
+        events.fault = faultyMode;
+        events.faults = faultCount;
         for (const std::string& c : kClients) {
             Window w;
             w.name = c;
@@ -265,14 +541,16 @@ struct Walk {
             windows.push_back(std::move(w));
         }
         // Two friends' sessions, whose AIs ask through their drivers.
-        hub = std::make_unique<sync::Hub>(store);
-        for (const char* f : {"f", "g"}) {
-            std::string why;
-            sync::Action a;
-            a.num = ++num;
-            a.kind = sync::ActionKind::Ensure;
-            a.friendName = f;
-            hub->apply(a, &why, "walk");
+        {
+            sync::Hub bootstrap(store);
+            for (const char* f : {"f", "g"}) {
+                std::string why;
+                sync::Action a;
+                a.num = ++num;
+                a.kind = sync::ActionKind::Ensure;
+                a.friendName = f;
+                bootstrap.apply(a, &why, "walk");
+            }
         }
         for (sync::SessionId id : store.ids()) {
             askerNames[id] = "s" + std::to_string(id);
@@ -280,13 +558,67 @@ struct Walk {
         if (askerNames.size() != 3 || askerNames.count(1) == 0 || askerNames.count(2) == 0) {
             fail("the askers' sessions are not 1 and 2");
         }
-        configure();
+        start();
     }
 
-    // The server's start: a hub over the store, with its accounts and the secret dialog wired.
+    ~Walk() { stopServer(); }
+
+    void stopServer() {
+        events.drivers = nullptr;
+        hub.reset();
+        drivers.reset();
+    }
+
+    // The server's start: Drivers and Hub over the store, with accounts, the secret dialog, and each friend session's
+    // driver started past its `hello` and `server` (`features: ["secrets"]`) into an open turn.
     void start() {
-        hub = std::make_unique<sync::Hub>(store);
+        server::Drivers::Options opts;
+        opts.table = "drivers";
+        opts.home = "/home/walk";
+        opts.clock = [this] { return static_cast<server::Millis>(now); };
+        opts.machine = "walk";
+        opts.secrets = true;
+        opts.host = &harness;
+        opts.quiet = true;
+        opts.readTable = [](std::string* text, std::string*) {
+            *text = "driver claude /fake/driver\n"
+                    "friend f claude /work/f\n"
+                    "friend g claude /work/g\n";
+            return true;
+        };
+        drivers = std::make_unique<server::Drivers>(store, std::move(opts));
+        hub = std::make_unique<sync::Hub>(store, sync::Limits{}, drivers.get());
+        drivers->attach(*hub);
+        events.drivers = drivers.get();
         configure();
+        if (!drivers->start(static_cast<server::Millis>(now))) {
+            fail("Drivers::start failed");
+        }
+        ensureDriverTurns();
+    }
+
+    void ensureDriverTurns() {
+        for (sync::SessionId id : {sync::SessionId(1), sync::SessionId(2)}) {
+            sync::Action a;
+            a.num = ++driverNum;
+            a.kind = sync::ActionKind::Send;
+            a.session = id;
+            a.text = "work";
+            std::string why;
+            if (!hub->apply(a, &why, "walk-drivers")) {
+                fail("driver turn send refused: " + why);
+            }
+        }
+        bool changed = false;
+        if (!drivers->serve(static_cast<server::Millis>(now), &changed)) {
+            fail("Drivers::serve failed at start");
+        }
+        for (sync::SessionId id : {sync::SessionId(1), sync::SessionId(2)}) {
+            const pid_t p = drivers->pid(id);
+            if (p <= 0 || !harness.ready(p)) {
+                fail("session " + std::to_string(id) + " has no ready driver after start");
+            }
+        }
     }
 
     void configure() {
@@ -305,6 +637,20 @@ struct Walk {
         hub->secretsWith(&keeper, &events, [this] {
             return std::any_of(windows.begin(), windows.end(), [](const Window& w) { return w.conn && !w.old; });
         }, [this] { return now; });
+    }
+
+    void holdBatch() {
+        if (harness.hasAnswers()) {
+            fail("uncollected driver secret answer before step");
+        }
+        drivers->hold();
+    }
+
+    void releaseBatch() {
+        if (harness.hasAnswers()) {
+            fail("a secret line reached a driver's standard input while Drivers::holding() was true");
+        }
+        drivers->release(static_cast<server::Millis>(now));
     }
 
     std::uint64_t nextId() const { return store.applied(sync::kSecretIdsClient) + 1; }
@@ -333,17 +679,28 @@ struct Walk {
             log.push_back("[id |-> " + std::to_string(l.id) + ", event |-> " +
                           orToken(events.logLines[i] + "\n" + l.line(), l.event) + "]");
         }
-        for (std::size_t i = 0; i < events.replies.size(); ++i) {
-            const sync::SecretReply& r = events.replies[i];
+        // nexus's own sign-in asks (session 0, no driver process).
+        for (const sync::SecretReply& r : events.nexusReplies) {
             if (!answeredIds.insert(r.id).second) {
                 fail("request " + std::to_string(r.id) + " was answered twice");
             }
-            replies.insert("[id |-> " + std::to_string(r.id) + ", asker |-> " + q(askerNames.at(r.asker.session)) +
+            replies.insert("[id |-> " + std::to_string(r.id) + ", asker |-> " + q(askerNames.at(0)) +
                            ", outcome |-> " + q(r.stored ? "stored" : "refused") + ", reason |-> " +
-                           orToken(events.replyLines[i] + "\n" + r.reason, r.stored ? kNone : r.reason) + "]");
+                           orToken(r.reason, r.stored ? kNone : r.reason) + "]");
         }
-        events.replies.clear();
-        events.replyLines.clear();
+        // Friend session asks (sessions 1 and 2): built exclusively from the `secret` lines decoded off each driver's
+        // standard input pipe.
+        for (const DriverAnswer& ans : harness.takeAnswers()) {
+            const AskOrigin origin = harness.lookupAsk(ans.pid, ans.ask);
+            if (!answeredIds.insert(origin.requestId).second) {
+                fail("request " + std::to_string(origin.requestId) + " was answered twice on driver stdin");
+            }
+            replies.insert("[id |-> " + std::to_string(origin.requestId) + ", asker |-> " +
+                           q(askerNames.at(origin.session)) + ", outcome |-> " +
+                           q(ans.stored ? "stored" : "refused") + ", reason |-> " +
+                           orToken(ans.rawLine + "\n" + ans.reason, ans.stored ? kNone : ans.reason) + "]");
+        }
+        events.nexusReplies.clear();
         events.notes.clear();
         events.log.clear();
         events.logLines.clear();
@@ -518,11 +875,15 @@ int main(int argc, char** argv) {
             faulty = "store-late";
         } else if (std::strcmp(argv[i], "--faulty-echo") == 0) {
             faulty = "echo";
+        } else if (std::strcmp(argv[i], "--faulty-driver") == 0) {
+            faulty = "driver";
+        } else if (std::strcmp(argv[i], "--faulty-driver-echo") == 0) {
+            faulty = "driver-echo";
         } else if (std::strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
             const unsigned long f = std::strtoul(argv[++i], nullptr, 10);
-            if (f != sync::kSecretsFormat && f != sync::kTablesFormat) {
-                std::fprintf(stderr, "secrets_walk: --format is %lu, not %u or %u\n", f, sync::kSecretsFormat,
-                    sync::kTablesFormat);
+            if (f != sync::kSecretsFormat && f != sync::kTablesFormat && f != sync::kStateFormat) {
+                std::fprintf(stderr, "secrets_walk: --format is %lu, not %u, %u or %u\n", f, sync::kSecretsFormat,
+                    sync::kTablesFormat, sync::kStateFormat);
                 return 2;
             }
             walkFormat = static_cast<std::uint32_t>(f);
@@ -531,14 +892,16 @@ int main(int argc, char** argv) {
         }
     }
     if (args.size() != 3) {
-        std::fprintf(stderr, "usage: secrets_walk <seed> <steps> [--format 3|4] [--faulty-store-late | --faulty-echo] "
-            "<out.tla>\n");
+        std::fprintf(stderr,
+            "usage: secrets_walk <seed> <steps> [--format 3|4|5] "
+            "[--faulty-store-late | --faulty-echo | --faulty-driver | --faulty-driver-echo] <out.tla>\n");
         return 2;
     }
     rngState = std::strtoull(args[0].c_str(), nullptr, 10) * 0x9E3779B97F4A7C15ULL + 1;
     const long steps = std::strtol(args[1].c_str(), nullptr, 10);
 
-    Walk w;
+    std::size_t faults = 0;
+    Walk w(faulty, &faults);
     if (faulty == "echo") {
         w.echoFault = true;
         w.hub->injectSecretEchoFault();
@@ -547,7 +910,6 @@ int main(int argc, char** argv) {
     std::vector<std::string> records;
     records.push_back("[op |-> \"init\", " + w.record() + "]");
     std::map<std::string, std::size_t> taken;
-    std::size_t faults = 0;
 
     for (long step = 0; step < steps; ++step) {
         ++w.now;
@@ -559,7 +921,9 @@ int main(int argc, char** argv) {
             // nexus's own ask whose paste was refused malformed, asked again (Hub::reaskSecrets): an ask by nexus, or
             // none when one is open or held for the account by now.
             const std::uint64_t id = w.nextId();
+            w.holdBatch();
             const std::optional<std::string> acct = w.hub->reaskSecrets();
+            w.releaseBatch();
             if (!acct) {
                 continue;
             }
@@ -584,11 +948,27 @@ int main(int argc, char** argv) {
             w.now += sync::kSecretAskWindowMs / sync::kSecretAsksPerWindow + 1;
             const std::string acct = kAccts[pick(kAccts.size())];
             const std::uint64_t id = w.nextId();
-            std::string refused;
-            const std::string friendName = asker == 0 ? std::string() : w.store.find(asker)->info.friendName;
-            if (!w.hub->askSecret(sync::SecretAsker{asker, id, friendName}, acct, kWhat, "the walk asks", &refused)) {
-                fail("an ask was refused: " + refused);
+            w.holdBatch();
+            if (asker == 0) {
+                std::string refused;
+                if (!w.hub->askSecret(sync::SecretAsker{0, id, std::string()}, acct, kWhat, "the walk asks", &refused)) {
+                    fail("an ask was refused: " + refused);
+                }
+            } else {
+                const pid_t pid = w.drivers->pid(asker);
+                if (pid <= 0) {
+                    fail("session " + std::to_string(asker) + " has no running driver");
+                }
+                w.harness.emitAskSecret(pid, asker, id, acct, kWhat, "the walk asks");
+                bool changed = false;
+                if (!w.drivers->serve(static_cast<server::Millis>(w.now), &changed)) {
+                    fail("Drivers::serve failed on ask-secret");
+                }
+                if (w.nextId() != id + 1) {
+                    fail("driver ask-secret did not mint request " + std::to_string(id));
+                }
             }
+            w.releaseBatch();
             w.req[id] = Req{"open", acct, w.askerNames.at(asker)};
             fields = "asker |-> " + q(w.askerNames.at(asker)) + ", acct |-> " + q(acct);
         } else if (choice < 400) {
@@ -672,7 +1052,9 @@ int main(int argc, char** argv) {
             const bool wasOpen = before == sync::SecretState::Open;
             const std::size_t writes = w.keeper.writes;
             std::string why;
+            w.holdBatch();
             w.hub->apply(actions[0], &why, "");
+            w.releaseBatch();
             clean(why, "the hub's reason");
             // A value of the right shape the code took (its request open, or expired and still the newest of its
             // account, now stored or holding): the model's taken, and while holding its held.
@@ -704,7 +1086,9 @@ int main(int argc, char** argv) {
                 }
             }
             w.now = std::max(w.now, *due);
+            w.holdBatch();
             w.hub->expireSecrets();
+            w.releaseBatch();
             fields = "id |-> " + std::to_string(oldest);
         } else if (choice >= 956 && choice < 980) {
             // A held value written again, at its retry time: never past a request's deadline, so that the walk's
@@ -717,7 +1101,9 @@ int main(int argc, char** argv) {
             op = "retry";
             w.now = std::max(w.now, *due);
             const std::size_t writes = w.keeper.writes;
+            w.holdBatch();
             w.hub->retrySecrets();
+            w.releaseBatch();
             if (w.events.log.size() != 1) {
                 fail("a retry logged " + std::to_string(w.events.log.size()) + " lines");
             }
@@ -751,7 +1137,7 @@ int main(int argc, char** argv) {
             w.hub->dropSecrets();
             w.take();  // the dropped requests, while the old hub still reports them
             const std::vector<std::string> lines = w.log;
-            w.hub.reset();
+            w.stopServer();
             w.start();
             ++w.restarts;
             w.log = lines;
@@ -768,6 +1154,10 @@ int main(int argc, char** argv) {
         w.take();
         records.push_back("[op |-> " + q(op) + (fields.empty() ? "" : ", " + fields) + ", " + w.record() + "]");
         ++taken[op];
+    }
+
+    if (faulty != "driver" && w.harness.totalAsks() > 0 && w.harness.totalAnswers() == 0) {
+        fail("drivers sent ask-secret lines, yet received no secret lines on standard input");
     }
 
     std::ofstream out(args[2]);
@@ -798,7 +1188,8 @@ int main(int argc, char** argv) {
     for (const auto& [name, n] : taken) {
         coverage += " " + name + "=" + std::to_string(n);
     }
-    std::printf("secrets_walk: %zu records; taken:%s%s\n", records.size(), coverage.c_str(),
+    std::printf("secrets_walk: %zu records, %zu driver asks, %zu driver stdin answers; taken:%s%s\n", records.size(),
+                w.harness.totalAsks(), w.harness.totalAnswers(), coverage.c_str(),
                 faulty.empty() ? "" : (", " + std::to_string(faults) + " faults played").c_str());
     if (!faulty.empty() && faults == 0) {
         std::fprintf(stderr, "secrets_walk: the faulty walk never hit its fault; try more steps\n");
