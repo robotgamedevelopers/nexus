@@ -273,7 +273,7 @@ tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistor
 # The friends from the server's list (sync/client.h applyFriends): Window.tla with add_friend and remove_friend, behind
 # the sprint tab with one friend (39,465 states, 9 s on four workers in a login session), and from an empty strip,
 # no sprint tab and no friend (1,930 states); and their reversed witnesses.
-tlc_test(tlc_spec_friends       MCWindow MCWindowFriends.cfg      pass WORKERS 4 SHARD)
+tlc_test(tlc_spec_friends       MCWindow MCWindowFriends.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_spec_friends_empty MCWindow MCWindowFriendsEmpty.cfg pass)
 tlc_test(tlc_witness_add_friend_twice     WAddFriendTwice     WAddFriendTwice.cfg     invariant PROPERTY NamesOnce)
 tlc_test(tlc_witness_add_friend_among_terminals WAddFriendAmongTerminals WAddFriendAmongTerminals.cfg invariant
@@ -335,10 +335,10 @@ tlc_test(tlc_trace_faulty_remove_friend_rejected WindowTrace WindowTrace.cfg inv
 # The friend tabs from the server's state (src/sync/friend_strip.h): FriendStrip.tla on two friends (three nightly), its
 # reversed witnesses (one a window writing its kept drafts over the file other windows share), and the code's random
 # walks checked against it, with two faulty walks that must be rejected.
-tlc_test(tlc_spec_strip MCFriendStrip MCFriendStrip.cfg pass)
+tlc_test(tlc_spec_strip MCFriendStrip MCFriendStrip.cfg pass WORKERS 4)
 tlc_test(tlc_spec_strip_three MCFriendStrip MCFriendStrip3.cfg pass WORKERS 8 NIGHTLY)
 # And with another window of the server sharing the kept drafts' file (150,016 states, about 22 s on 4 workers).
-tlc_test(tlc_spec_strip_shared MCFriendStrip MCFriendStripShared.cfg pass WORKERS 8)
+tlc_test(tlc_spec_strip_shared MCFriendStrip MCFriendStripShared.cfg pass WORKERS 8 SHARD)
 tlc_test(tlc_witness_strip_draft_goes   WStripDraftGoes         WStripDraftGoes.cfg         invariant PROPERTY DraftsKept)
 tlc_test(tlc_witness_strip_bad_name     WStripBadName           WStripBadName.cfg           invariant PROPERTY NamesValid)
 tlc_test(tlc_witness_strip_never_removes WStripNeverRemoves     WStripNeverRemoves.cfg      invariant PROPERTY StripExact)
