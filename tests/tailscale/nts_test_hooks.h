@@ -62,6 +62,12 @@ NTS_API int nts_test_inject_control_error(int node, const char* text, char* err,
 NTS_API int nts_test_host_trap(char* err, size_t err_size);
 NTS_API long long nts_test_host_trap_count(void);
 
+// Calls the shim's post-target dial path directly for addr_port ("ip:port"), as when a peer was in target()'s snapshot
+// and left the node's map just before the dial: closes any connection opened and returns 1, or 0 with the reason in
+// err (nothing must reach the host's network).
+NTS_API int nts_test_dial_after_target(int node, const char* network, const char* addr_port, int timeout_ms, char* err,
+                                       size_t err_size);
+
 // Stops the control server, its relay and its STUN server.
 NTS_API int nts_test_control_stop(char* err, size_t err_size);
 

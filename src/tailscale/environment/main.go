@@ -1,6 +1,6 @@
 // Command environment keeps the shim's environment policy current with the modules it links. It scans the Go source of
-// every package the shim (src/tailscale/shim) links on each platform nexus builds it for, other than the standard
-// library and nexus's own, for each read of the process environment: os.Getenv, os.LookupEnv, os.Environ,
+// every package the shim (src/tailscale/shim) links on each platform nexus builds it for (the standard library
+// included, nexus's own not), for each read of the process environment: os.Getenv, os.LookupEnv, os.Environ,
 // syscall.Getenv and every tailscale.com/envknob lookup. Every variable read by a literal name must be listed in
 // src/tailscale/environment.txt with what the shim does about it, and every read by a name the source computes must be
 // listed there by its place; a read that is not listed, or a line that names nothing the source reads, fails.

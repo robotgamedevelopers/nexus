@@ -492,6 +492,10 @@ func nts_status_wait(id C.int, after C.ulonglong, timeoutMs C.int, out *C.nts_st
 	defer stop()
 	for {
 		state, expiry, changed := n.snapshot()
+		if state.Closed {
+			failf(errOut, errSize, "nts_status_wait", "node %d was closed while waiting", int(id))
+			return -1
+		}
 		if state.Gen > uint64(after) {
 			fill(out, state, expiry)
 			write(errOut, errSize, "")
@@ -499,7 +503,15 @@ func nts_status_wait(id C.int, after C.ulonglong, timeoutMs C.int, out *C.nts_st
 		}
 		select {
 		case <-changed:
+		case <-n.stop:
+			failf(errOut, errSize, "nts_status_wait", "node %d was closed while waiting", int(id))
+			return -1
 		case <-timeout:
+			state, expiry, _ = n.snapshot()
+			if state.Closed {
+				failf(errOut, errSize, "nts_status_wait", "node %d was closed while waiting", int(id))
+				return -1
+			}
 			fill(out, state, expiry)
 			write(errOut, errSize, "")
 			return C.NTS_TIMEOUT

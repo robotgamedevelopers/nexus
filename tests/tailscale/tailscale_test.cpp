@@ -1148,6 +1148,60 @@ void threads() {
         w.join();
     }
     CHECK(silent.load() == 0);
+
+    // Closing a node from another thread ends an unbounded nts_status_wait (-1) with an error, whether after is the
+    // node's current generation or ahead of any generation the node ever reaches.
+    auto checkWaitClosed = [&](const char* sub, unsigned long long delta) {
+        int waiting = startOffline(work / sub, why);
+        CHECK(waiting > 0);
+        if (waiting <= 0) {
+            return;
+        }
+        nts_status st{};
+        CHECK(waitFor(waiting, [](const nts_status& s) { return s.reason == NTS_REASON_CONTROL_UNREACHABLE; }, st));
+        std::atomic<bool> entered{false};
+        std::atomic<bool> finished{false};
+        std::atomic<int> waitRc{-99};
+        char waitErr[512] = {};
+        nts_status waitOut{};
+        std::thread waiter([&] {
+            nts_status cur = st;
+            entered = true;
+            for (;;) {
+                int r = nts_status_wait(waiting, cur.generation + delta, -1, &waitOut, waitErr, sizeof waitErr);
+                if (r == 0 && waitOut.reason == NTS_REASON_CLOSED) {
+                    waitRc = 0;
+                    break;
+                }
+                if (r != 0) {
+                    waitRc = r;
+                    break;
+                }
+                cur = waitOut;
+            }
+            finished = true;
+        });
+        CHECK(eventually([&] { return entered.load(); }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        CHECK(closeNode(waiting));
+        auto until = Clock::now() + std::chrono::seconds(2);
+        while (!finished.load() && Clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(finished.load());
+        if (!finished.load()) {
+            std::fprintf(stderr, "threads (%s): nts_status_wait(after=+%llu, -1) hung after nts_close\n", sub, delta);
+            std::fflush(stderr);
+            std::_Exit(1);
+        }
+        waiter.join();
+        CHECK(waitRc.load() == -1 && waitErr[0] != 0);
+        char afterCloseErr[512] = {};
+        CHECK(nts_status_wait(waiting, 0, -1, &waitOut, afterCloseErr, sizeof afterCloseErr) == -1 &&
+              has(afterCloseErr, "is closed"));
+    };
+    checkWaitClosed("wait_current", 0);
+    checkWaitClosed("wait_ahead", 5);
 }
 
 // ---- functional groups: the test control server ----
@@ -1361,6 +1415,15 @@ void tailnet() {
                              has(err, "no peer")));
     }
     CHECK(nts_test_net_calls() == calls);
+    CHECK(nts_test_host_trap_count() == trapped);
+    // Even if a peer were in target()'s snapshot and left the node's map just before the dial, the post-target dial
+    // goes only through netstack and never falls back to the host's sockets.
+    CHECK(nts_test_dial_after_target(a, "tcp", ("127.0.0.1:" + port).c_str(), 1000, err, sizeof err) == 0 &&
+          has(err, "no longer a peer"));
+    CHECK(nts_test_dial_after_target(a, "udp", ("127.0.0.1:" + port).c_str(), 1000, err, sizeof err) == 0 &&
+          has(err, "no longer a peer"));
+    CHECK(nts_test_dial_after_target(a, "tcp", "100.64.99.99:7000", 1000, err, sizeof err) == 0 &&
+          has(err, "no longer a peer"));
     CHECK(nts_test_host_trap_count() == trapped);
 
     // Timeout 0: a dial is refused (it must wait for the peer); peers are answered from the node's own state; an

@@ -217,6 +217,12 @@ func TestRunningIsNotReadyUntilTheMapComesAgain(t *testing.T) {
 	expect(t, "restart", n, Running, ReasonNone)
 	n = run(start, backend("Running"), poll(true), backend("NeedsLogin"), backend("Running"))
 	expect(t, "after a login is needed again", n, Running, ReasonNone)
+	// A new login asked while ready clears peers until a new map arrives.
+	n = run(start, backend("Running"), poll(true), login)
+	expect(t, "after a new login while ready", n, Running, ReasonNone)
+	if n.Peers {
+		t.Fatal("a new login kept the old peer map")
+	}
 }
 
 func TestCloseIsFinal(t *testing.T) {

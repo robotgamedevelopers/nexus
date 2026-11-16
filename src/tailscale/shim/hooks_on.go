@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
@@ -179,4 +180,37 @@ func nts_test_host_trap(errOut *C.char, errSize C.size_t) (rc C.int) {
 //export nts_test_host_trap_count
 func nts_test_host_trap_count() C.longlong {
 	return C.longlong(trapCount.Load())
+}
+
+// nts_test_dial_after_target calls dialPeer directly on addrPort, as when a peer was in target()'s snapshot and left
+// the node's map just before the dial. Any connection opened writes one byte on UDP (so a host UDP socket reaches the
+// trap) and closes at once.
+//
+//export nts_test_dial_after_target
+func nts_test_dial_after_target(id C.int, network, addrPort *C.char, timeoutMs C.int, errOut *C.char,
+	errSize C.size_t) (rc C.int) {
+	defer recoverTo("nts_test_dial_after_target", errOut, errSize, &rc, 0)
+	n := nodeOf("nts_test_dial_after_target", id, errOut, errSize)
+	if n == nil {
+		return 0
+	}
+	to, err := netip.ParseAddrPort(goString(addrPort))
+	if err != nil {
+		failf(errOut, errSize, "nts_test_dial_after_target", "%v", err)
+		return 0
+	}
+	netName := goString(network)
+	ctx, cancel := within(n, timeoutMs)
+	defer cancel()
+	c, err := dialPeer(ctx, n, netName, to)
+	if err != nil {
+		failf(errOut, errSize, "nts_test_dial_after_target", "%v", err)
+		return 0
+	}
+	if netName == "udp" {
+		_, _ = c.Write([]byte{'x'})
+	}
+	c.Close()
+	write(errOut, errSize, "")
+	return 1
 }

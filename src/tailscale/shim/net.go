@@ -342,7 +342,7 @@ func dial(name string, id C.int, network string, address *C.char, timeoutMs C.in
 	ctx, cancel := within(n, timeoutMs)
 	defer cancel()
 	netCalls.Add(1)
-	c, err := n.server.Dial(ctx, network, to.String())
+	c, err := dialPeer(ctx, n, network, to)
 	if err != nil {
 		if ctx.Err() != nil && n.ctx.Err() == nil {
 			failf(errOut, errSize, name, "timed out: %v", err)
@@ -359,6 +359,33 @@ func dial(name string, id C.int, network string, address *C.char, timeoutMs C.in
 	}
 	write(errOut, errSize, "")
 	return C.int(h.id)
+}
+
+// dialPeer dials to, a peer's tailnet address, through n's embedded network stack alone: never tsnet's Server.Dial,
+// whose UserDial falls back to the host's OS sockets when the address is no longer in the node's map.
+func dialPeer(ctx context.Context, n *node, network string, to netip.AddrPort) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sys := n.server.Sys()
+	if sys == nil {
+		return nil, errors.New("the node's embedded network stack is not running")
+	}
+	d, ok := sys.Dialer.GetOK()
+	if !ok || d == nil || d.NetstackDialTCP == nil || d.NetstackDialUDP == nil {
+		return nil, errors.New("the node's embedded network stack is not running")
+	}
+	v4, v6 := n.server.TailscaleIPs()
+	if (to.Addr().Is4() && !v4.IsValid()) || (to.Addr().Is6() && !v6.IsValid()) {
+		return nil, errors.New("the node has no tailnet address yet; wait until it is ready")
+	}
+	if d.UseNetstackForIP == nil || !d.UseNetstackForIP(to.Addr()) {
+		return nil, fmt.Errorf("%s is no longer a peer of this tailnet", to.Addr())
+	}
+	if network == "udp" {
+		return d.NetstackDialUDP(ctx, to)
+	}
+	return d.NetstackDialTCP(ctx, to)
 }
 
 //export nts_dial_tcp

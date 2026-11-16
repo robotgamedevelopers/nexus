@@ -54,7 +54,6 @@ type node struct {
 	watchersDone sync.WaitGroup
 	relogged     bool // under mu: nts_login was called since the start (a map tsnet holds is then an old one)
 	wasInPoll    bool // the status watcher's own: the map poll was open at its last look
-	calling      bool // under mu: the notifier is running the host's callback
 	stopped      bool // under mu: the node is closing, and no callback starts again
 }
 
@@ -112,16 +111,10 @@ func (n *node) notify() {
 		gen, fn, user, poked, changed := n.state.Gen, n.watchFn, n.watchUser, n.poked, n.changed
 		n.poked = false
 		call := fn != nil && (poked || !called || gen != last)
-		// Marked under the lock that nts_close takes to stop the node: a callback either starts before the close
-		// (and the close may wait for it) or never.
-		n.calling = call
 		n.mu.Unlock()
 		if call {
 			called, last = true, gen
 			callWatch(fn, user, n.id, gen)
-			n.mu.Lock()
-			n.calling = false
-			n.mu.Unlock()
 		}
 		select {
 		case <-changed:
