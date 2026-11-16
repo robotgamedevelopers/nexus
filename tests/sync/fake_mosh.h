@@ -47,6 +47,7 @@ public:
     S current;
 
     FakeSender() { sent_.push_back({0, S()}); }
+    explicit FakeSender(S initial) : current(initial) { sent_.push_back({0, std::move(initial)}); }
 
     // One send, as tick() makes it, from the assumed receiver state: one picked at random among the states sent (the
     // newest sent within the retransmission timeout, the acknowledged one for the prospective resend), or with
@@ -85,6 +86,7 @@ public:
     }
 
     std::uint64_t acknowledged() const { return sent_.front().num; }
+    const S& acknowledgedState() const { return sent_.front().state; }
     std::uint64_t last() const { return sent_.back().num; }
     bool settled() const { return current == sent_.back().state && sent_.size() == 1; }
 
@@ -106,6 +108,7 @@ template <class S>
 class FakeReceiver {
 public:
     FakeReceiver() { states_.push_back({0, S()}); }
+    explicit FakeReceiver(S initial) : last_(initial) { states_.push_back({0, std::move(initial)}); }
 
     // Returns the acknowledgement it would send: the newest state's number.
     std::uint64_t receive(const Packet& p) {

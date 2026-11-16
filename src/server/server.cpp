@@ -331,7 +331,7 @@ struct Link {
 // answer (server/start_order.h kHeldWaitMs), in milliseconds, so that a test sees it run out without waiting 10 s.
 constexpr const char* kHeldWaitVariable = "NEXUS_TEST_HELD_WAIT_MS";
 
-class Server : private StartSteps {
+class Server : private StartSteps, private PassSteps {
 public:
     explicit Server(const Paths& p) : paths_(p) {}
     ~Server() override {
@@ -353,6 +353,22 @@ private:
     }
     void pause(std::uint64_t ms) override { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
     std::uint64_t now_ms() override { return static_cast<std::uint64_t>(nowMs()); }
+
+    // One pass's steps (server/pass.h, models/LoopPass.tla), each taken through take_pass_step.
+    void tick() override;
+    PassOrder::Outcome wait(std::string* why) override;
+    PassOrder::Outcome hold(bool holdDrivers, std::string* why) override;
+    PassOrder::Outcome apply(std::string* why) override;
+    PassOrder::Outcome flush(std::string* why) override;
+    void release() override;
+    void state() override;
+
+    struct Pass {
+        std::vector<pollfd> fds;
+        std::vector<std::size_t> owner;
+        std::size_t linkFds = 0;
+    };
+    Pass pass_;
 
     StartOrder::Outcome openStore(std::string* why);
     StartOrder::Outcome probeControl(std::string* why);
@@ -968,6 +984,228 @@ void Server::checkLogins() {
     }
 }
 
+void Server::tick() {
+    link::freezeClock();
+    std::string why;
+    for (Link& s : links_) {
+        if (!s.link->tick(&why))
+            std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
+                why.c_str());
+    }
+    bool linksEnded = false;
+    for (auto it = links_.begin(); it != links_.end();) {
+        if (it->link->ended()) {
+            std::fprintf(stderr, "nexus-server: link %llu ended by its client after %llu actions\n",
+                static_cast<unsigned long long>(it->id), static_cast<unsigned long long>(it->link->applied()));
+            // The sign-ins its window held are let go of, for another window to take over; with none left that
+            // can, signInWindowsChanged ends them and asks for a paste.
+            hub_->signInWindowGone(it->signIn);
+            it = links_.erase(it);
+            linksEnded = true;
+        } else {
+            ++it;
+        }
+    }
+    if (linksEnded) {
+        hub_->signInWindowsChanged();   // only older windows left: a paste instead of a sign-in
+        for (Link& s : links_) {
+            s.link->setState(hub_->stateFor(s.signIn));
+        }
+    }
+}
+
+PassOrder::Outcome Server::wait(std::string* why) {
+    (void)why;
+    // A commit to the config repository asked for a push: it runs as a child the loop watches, never here.
+    if (config_ && config_->pushWanted() && !config_->pushRunning()) {
+        std::string pushWhy;
+        if (!config_->pushStart(nowMs(), &pushWhy)) {
+            std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
+        }
+    }
+    pass_.fds = {pollfd{listen_, POLLIN, 0}};
+    pass_.owner = {0};
+    int waitMs = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+    if (const std::optional<std::uint64_t> due = hub_->secretWake()) {
+        const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
+        waitMs = std::min(waitMs, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
+    }
+    if (config_ && config_->pushRunning()) {
+        waitMs = std::min(waitMs, config_->pushWaitMs(nowMs()));
+    }
+    if (const std::optional<std::uint64_t> due = hub_->signInDeadline()) {
+        const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
+        waitMs = std::min(waitMs, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
+    }
+    if (signIns_ && signIns_->waitMs() >= 0) {
+        waitMs = std::min(waitMs, signIns_->waitMs());
+    }
+    for (std::size_t i = 0; i < links_.size(); ++i) {
+        waitMs = std::min(waitMs, std::max(0, links_[i].link->waitMs()));
+        for (int fd : links_[i].link->fds()) {
+            pass_.fds.push_back(pollfd{fd, POLLIN, 0});
+            pass_.owner.push_back(i);
+        }
+    }
+    // The drivers' pipes last: serve() below looks at every driver, so their events need no owner.
+    pass_.linkFds = pass_.fds.size();
+    for (const pollfd& p : drivers_->fds())
+        pass_.fds.push_back(p);
+    if (config_) {
+        for (int fd : config_->pushFds()) {
+            pass_.fds.push_back(pollfd{fd, POLLIN, 0});
+        }
+    }
+    // Sign-in's processes, helper and replays: serve() below looks at all of them.
+    if (signIns_) {
+        for (const pollfd& p : signIns_->fds()) {
+            pass_.fds.push_back(p);
+        }
+    }
+    if (::poll(pass_.fds.data(), static_cast<nfds_t>(pass_.fds.size()), waitMs) < 0 && errno != EINTR) {
+        std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
+        return PassOrder::Outcome::Stopped;
+    }
+    link::freezeClock();
+    std::string pushed;
+    if (config_ && config_->pushServe(nowMs(), &pushed)) {
+        std::fprintf(stderr, "nexus-server: config push: %s\n", pushed.c_str());
+    }
+    return PassOrder::Outcome::Ok;
+}
+
+// One batch per pass (group commit): every step this pass makes, from the drivers and from every window's actions, is
+// applied and appended, then made durable by one flush. Nothing of the batch leaves the server before that flush has
+// returned: no driver is told anything (Drivers::hold), no state is set on a link, and no link ticks (mosh's
+// acknowledgement of a window's actions goes out on its next tick).
+PassOrder::Outcome Server::hold(bool holdDrivers, std::string* why) {
+    if (!holdDrivers) {
+        *why = "an unheld pass is the trace binding's fault, never the server's";
+        return PassOrder::Outcome::Failed;
+    }
+    store_.beginBatch();
+    drivers_->hold();
+    return PassOrder::Outcome::Ok;
+}
+
+PassOrder::Outcome Server::apply(std::string* why) {
+    bool changed = false;
+    if (!drivers_->serve(nowMs(), &changed)) {
+        *why = "the store failed; stopping without acknowledging the actions since";
+        return PassOrder::Outcome::Failed;
+    }
+    // A secret request past its deadline is refused (timeout), and a held value whose time has come is written again
+    // (docs/secrets.md: a value that arrived is never dropped while the server runs), in this pass's batch like any
+    // step. nexus's own ask whose paste was refused malformed is asked again.
+    if (const std::optional<std::uint64_t> due = hub_->secretDeadline();
+            due && *due <= static_cast<std::uint64_t>(nowMs())) {
+        hub_->expireSecrets();
+        changed = true;
+    }
+    if (const std::optional<std::uint64_t> due = hub_->secretRetryAt();
+            due && *due <= static_cast<std::uint64_t>(nowMs())) {
+        hub_->retrySecrets();
+        changed = true;
+    }
+    if (hub_->reaskPending() && hub_->reaskSecrets()) {
+        changed = true;
+    }
+    // Sign-in: the processes' URLs, tokens and ends, the helper's lines, the replays; and the flows past their
+    // deadline. A token goes straight into the one-chance store in this pass's batch.
+    if (signIns_ && signIns_->serve()) {
+        changed = true;
+    }
+    if (const std::optional<std::uint64_t> due = hub_->signInDeadline();
+            due && *due <= static_cast<std::uint64_t>(nowMs())) {
+        hub_->expireSignIns();
+        changed = true;
+    }
+    // The stored logins' ends: notices ahead of one that cannot be renewed, and a new one asked for on its day.
+    if (nowMs() >= nextLoginCheck_) {
+        checkLogins();
+        nextLoginCheck_ = nowMs() + kLoginCheckMs;
+        changed = true;
+    }
+    std::string linkWhy;
+    for (std::size_t k = 1; k < pass_.linkFds; ++k) {
+        if (!(pass_.fds[k].revents & POLLIN))
+            continue;
+        Link& s = links_[pass_.owner[k]];
+        if (!s.link->receive(&linkWhy)) {
+            std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
+                linkWhy.c_str());
+            continue;
+        }
+        std::string problem;
+        // Each action is durable (with the client's counter), by the flush below, before the next tick can
+        // acknowledge it.
+        for (const sync::Action& a : s.link->take(&problem)) {
+            std::string refused;
+#ifdef NEXUS_LEAKY_SIGNIN_WITNESS
+            // The test-only leaky build alone (nexus-server-leaky, CMakeLists.txt): the leak link_e2e_signin's
+            // search of server.log must find. Never in nexus-server.
+            if (a.kind == sync::ActionKind::SignInCallback) {
+                std::fprintf(stderr, "nexus-server: leaky witness build: callback %s\n", a.secret.bytes().c_str());
+            }
+#endif
+            // The claim token a window claims by names its link: that link's state carries the URLs it holds.
+            if (a.kind == sync::ActionKind::SignInClaim && sync::isClaimToken(a.text) && s.signIn != a.text) {
+                hub_->signInWindowGone(s.signIn);
+                s.signIn = a.text;
+            }
+            // An opened or a callback counts only from the link that claimed by its token: no other window speaks
+            // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
+            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
+                    a.text != s.signIn) {
+                sync::Action named = a;
+                named.text = s.signIn;
+                hub_->apply(named, &refused, s.client);
+            } else {
+                hub_->apply(a, &refused, s.client);
+            }
+            changed = true;
+            if (!refused.empty())
+                std::fprintf(stderr, "nexus-server: link %llu, action %llu: %s\n",
+                    static_cast<unsigned long long>(s.id), static_cast<unsigned long long>(a.num),
+                    refused.c_str());
+            if (hub_->failed())
+                break;
+        }
+        if (!problem.empty())
+            std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
+                problem.c_str());
+        if (hub_->failed())
+            break;
+    }
+    if (hub_->failed()) {
+        // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store from
+        // what is durable, and the windows reconnect.
+        *why = "the store failed; stopping without acknowledging the actions since";
+        return PassOrder::Outcome::Failed;
+    }
+    return changed ? PassOrder::Outcome::Changed : PassOrder::Outcome::Unchanged;
+}
+
+PassOrder::Outcome Server::flush(std::string* why) {
+    std::string flushWhy;
+    if (!store_.flush(&flushWhy)) {
+        // The batch's flush failed: what reached the disk is unknown, so nothing of it is told to anyone.
+        *why = "the store failed (" + flushWhy + "); stopping without acknowledging the actions since";
+        return PassOrder::Outcome::Failed;
+    }
+    return PassOrder::Outcome::Ok;
+}
+
+void Server::release() {
+    drivers_->release(nowMs());
+}
+
+void Server::state() {
+    for (Link& s : links_) {
+        s.link->setState(hub_->stateFor(s.signIn));
+    }
+}
+
 int Server::run() {
     std::string why;
     if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why)) {
@@ -1041,207 +1279,27 @@ int Server::run() {
     std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
     int status = 0;
     while (!stopping_ && !gStop) {
-        link::freezeClock();
-        for (Link& s : links_) {
-            if (!s.link->tick(&why))
-                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
-                    why.c_str());
-        }
-        bool linksEnded = false;
-        for (auto it = links_.begin(); it != links_.end();) {
-            if (it->link->ended()) {
-                std::fprintf(stderr, "nexus-server: link %llu ended by its client after %llu actions\n",
-                    static_cast<unsigned long long>(it->id), static_cast<unsigned long long>(it->link->applied()));
-                // The sign-ins its window held are let go of, for another window to take over; with none left that
-                // can, signInWindowsChanged ends them and asks for a paste.
-                hub_->signInWindowGone(it->signIn);
-                it = links_.erase(it);
-                linksEnded = true;
-            } else {
-                ++it;
-            }
-        }
-        if (linksEnded) {
-            hub_->signInWindowsChanged();   // only older windows left: a paste instead of a sign-in
-            for (Link& s : links_) {
-                s.link->setState(hub_->stateFor(s.signIn));
-            }
-        }
-        // A commit to the config repository asked for a push: it runs as a child the loop watches, never here.
-        if (config_ && config_->pushWanted() && !config_->pushRunning()) {
-            std::string pushWhy;
-            if (!config_->pushStart(nowMs(), &pushWhy)) {
-                std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
-            }
-        }
-        std::vector<pollfd> fds{pollfd{listen_, POLLIN, 0}};
-        std::vector<std::size_t> owner{0};
-        int wait = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
-        if (const std::optional<std::uint64_t> due = hub_->secretWake()) {
-            const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
-            wait = std::min(wait, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
-        }
-        if (config_ && config_->pushRunning()) {
-            wait = std::min(wait, config_->pushWaitMs(nowMs()));
-        }
-        if (const std::optional<std::uint64_t> due = hub_->signInDeadline()) {
-            const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
-            wait = std::min(wait, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
-        }
-        if (signIns_ && signIns_->waitMs() >= 0) {
-            wait = std::min(wait, signIns_->waitMs());
-        }
-        for (std::size_t i = 0; i < links_.size(); ++i) {
-            wait = std::min(wait, std::max(0, links_[i].link->waitMs()));
-            for (int fd : links_[i].link->fds()) {
-                fds.push_back(pollfd{fd, POLLIN, 0});
-                owner.push_back(i);
-            }
-        }
-        // The drivers' pipes last: serve() below looks at every driver, so their events need no owner.
-        const std::size_t linkFds = fds.size();
-        for (const pollfd& p : drivers_->fds())
-            fds.push_back(p);
-        if (config_) {
-            for (int fd : config_->pushFds()) {
-                fds.push_back(pollfd{fd, POLLIN, 0});
-            }
-        }
-        // Sign-in's processes, helper and replays: serve() below looks at all of them.
-        if (signIns_) {
-            for (const pollfd& p : signIns_->fds()) {
-                fds.push_back(p);
-            }
-        }
-        if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), wait) < 0 && errno != EINTR) {
-            std::fprintf(stderr, "nexus-server: %s\n", errnoText("poll").c_str());
-            break;
-        }
-        link::freezeClock();
-        std::string pushed;
-        if (config_ && config_->pushServe(nowMs(), &pushed)) {
-            std::fprintf(stderr, "nexus-server: config push: %s\n", pushed.c_str());
-        }
-        bool changed = false;
-        // One batch per pass (group commit): every step this pass makes, from the drivers and from every window's
-        // actions, is applied and appended, then made durable by one flush. Nothing of the batch leaves the server
-        // before that flush has returned: no driver is told anything (Drivers::hold), no state is set on a link, and
-        // no link ticks (mosh's acknowledgement of a window's actions goes out on its next tick). With one flush per
-        // action, a window's burst of N actions held every window's state back for N flushes; now it is one.
-        store_.beginBatch();
-        drivers_->hold();
-        if (!drivers_->serve(nowMs(), &changed)) {
-            std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
-            status = 1;
-            break;
-        }
-        // A secret request past its deadline is refused (timeout), and a held value whose time has come is written
-        // again (docs/secrets.md: a value that arrived is never dropped while the server runs), in this pass's batch
-        // like any step. nexus's own ask whose paste was refused malformed is asked again.
-        if (const std::optional<std::uint64_t> due = hub_->secretDeadline();
-                due && *due <= static_cast<std::uint64_t>(nowMs())) {
-            hub_->expireSecrets();
-            changed = true;
-        }
-        if (const std::optional<std::uint64_t> due = hub_->secretRetryAt();
-                due && *due <= static_cast<std::uint64_t>(nowMs())) {
-            hub_->retrySecrets();
-            changed = true;
-        }
-        if (hub_->reaskPending() && hub_->reaskSecrets()) {
-            changed = true;
-        }
-        // Sign-in: the processes' URLs, tokens and ends, the helper's lines, the replays; and the flows past their
-        // deadline. A token goes straight into the one-chance store in this pass's batch.
-        if (signIns_ && signIns_->serve()) {
-            changed = true;
-        }
-        if (const std::optional<std::uint64_t> due = hub_->signInDeadline();
-                due && *due <= static_cast<std::uint64_t>(nowMs())) {
-            hub_->expireSignIns();
-            changed = true;
-        }
-        // The stored logins' ends: notices ahead of one that cannot be renewed, and a new one asked for on its day.
-        if (nowMs() >= nextLoginCheck_) {
-            checkLogins();
-            nextLoginCheck_ = nowMs() + kLoginCheckMs;
-            changed = true;
-        }
-        for (std::size_t k = 1; k < linkFds; ++k) {
-            if (!(fds[k].revents & POLLIN))
-                continue;
-            Link& s = links_[owner[k]];
-            if (!s.link->receive(&why)) {
-                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
-                    why.c_str());
-                continue;
-            }
-            std::string problem;
-            // Each action is durable (with the client's counter), by the flush below, before the next tick can
-            // acknowledge it.
-            for (const sync::Action& a : s.link->take(&problem)) {
-                std::string refused;
-#ifdef NEXUS_LEAKY_SIGNIN_WITNESS
-                // The test-only leaky build alone (nexus-server-leaky, CMakeLists.txt): the leak link_e2e_signin's
-                // search of server.log must find. Never in nexus-server.
-                if (a.kind == sync::ActionKind::SignInCallback) {
-                    std::fprintf(stderr, "nexus-server: leaky witness build: callback %s\n", a.secret.bytes().c_str());
-                }
-#endif
-                // The claim token a window claims by names its link: that link's state carries the URLs it holds.
-                if (a.kind == sync::ActionKind::SignInClaim && sync::isClaimToken(a.text) && s.signIn != a.text) {
-                    hub_->signInWindowGone(s.signIn);
-                    s.signIn = a.text;
-                }
-                // An opened or a callback counts only from the link that claimed by its token: no other window speaks
-                // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
-                if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
-                        a.text != s.signIn) {
-                    sync::Action named = a;
-                    named.text = s.signIn;
-                    hub_->apply(named, &refused, s.client);
-                } else {
-                    hub_->apply(a, &refused, s.client);
-                }
-                changed = true;
-                if (!refused.empty())
-                    std::fprintf(stderr, "nexus-server: link %llu, action %llu: %s\n",
-                        static_cast<unsigned long long>(s.id), static_cast<unsigned long long>(a.num),
-                        refused.c_str());
-                if (hub_->failed())
-                    break;
-            }
-            if (!problem.empty())
-                std::fprintf(stderr, "nexus-server: link %llu: %s\n", static_cast<unsigned long long>(s.id),
-                    problem.c_str());
-            if (hub_->failed())
+        // One pass of the loop, in its order (server/pass.h, models/LoopPass.tla), each step through take_pass_step,
+        // the dispatch the trace walk runs too: the links' ticks, the poll, the batch held, its steps applied, its one
+        // flush, the drivers released and the state staged for the next pass's tick.
+        PassOrder pass;
+        for (;;) {
+            take_pass_step(pass, *this, &why);
+            const PassOrder::Step at = pass.next();
+            if (at == PassOrder::Step::Done || at == PassOrder::Step::Stopped || at == PassOrder::Step::Failed) {
                 break;
+            }
         }
-        if (hub_->failed()) {
-            // What reached the disk is unknown: stop before acknowledging anything more. A restart reopens the store
-            // from what is durable, and the windows reconnect.
-            std::fprintf(stderr, "nexus-server: the store failed; stopping without acknowledging the actions since\n");
-            status = 1;
+        if (pass.next() == PassOrder::Step::Stopped) {
             break;
         }
-        // The flush, then the drivers released and the state set (server/pass.h).
-        const PassEnd end{
-            [&](std::string* w) { return store_.flush(w); },
-            [&] { drivers_->release(nowMs()); },
-            [&] {
-                for (Link& s : links_) {
-                    s.link->setState(hub_->stateFor(s.signIn));
-                }
-            }};
-        if (!endPass(end, changed, &why)) {
-            // The batch's flush failed: what reached the disk is unknown, so nothing of it is told to anyone.
-            std::fprintf(stderr, "nexus-server: the store failed (%s); stopping without acknowledging the actions "
-                "since\n", why.c_str());
+        if (pass.next() == PassOrder::Step::Failed) {
+            std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
             status = 1;
             break;
         }
         // The control socket last: a new link may end an earlier one, and the links' fds above are by index.
-        if (fds[0].revents & POLLIN) {
+        if (pass_.fds[0].revents & POLLIN) {
             const int fd = accept(listen_, nullptr, nullptr);
             if (fd >= 0) {
                 fcntl(fd, F_SETFL, 0);

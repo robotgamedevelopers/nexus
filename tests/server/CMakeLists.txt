@@ -30,12 +30,17 @@ target_compile_options(server_home_test PRIVATE ${warnings})
 add_test(NAME server_unit_home COMMAND server_home_test)
 set_tests_properties(server_unit_home PROPERTIES LABELS unit TIMEOUT 30)
 
-# The end of a pass of the server's loop: flush, then release and state (src/server/pass.h).
+# One pass of the server's loop (src/server/pass.h): unit test and trace walk (models/LoopPass.tla).
 add_executable(server_pass_test pass_test.cpp)
 target_include_directories(server_pass_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(server_pass_test PRIVATE ${warnings})
 add_test(NAME server_unit_pass COMMAND server_pass_test)
 set_tests_properties(server_unit_pass PROPERTIES LABELS unit TIMEOUT 30)
+
+add_executable(pass_walk pass_walk.cpp)
+target_link_libraries(pass_walk PRIVATE nexus_drivers nexus_durable)
+target_include_directories(pass_walk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync)
+target_compile_options(pass_walk PRIVATE ${warnings})
 
 add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
@@ -50,7 +55,7 @@ if(NOT WIN32)
     add_dependencies(drivers_functional nexus_fake_driver)
 endif()
 
-add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test)
+add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test server_pass_test pass_walk)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
               hub_friend_removed queue shutdown restart settings account place limit activity signin)
@@ -388,3 +393,44 @@ if(NOT WIN32)
                            WALK ${seed} 800 --fault ${fault})
     endforeach()
 endif()
+
+# One pass of nexus-server's loop (models/LoopPass.tla): tick, hold, apply, flush, release, state and crashes.
+# Per commit, MCLoopPass.cfg (22,500 distinct states, with Converges) and MCLoopPassTwo.cfg (58,851 distinct states,
+# 1 s), all eleven reversed witnesses, five seeded code walks and five faulty walks run together in the loop-pass CI
+# shard (~12 s wall). Nightly, MCLoopPassWide.cfg (113,337 distinct states, 1 s) and MCLoopPassThree.cfg (681,678
+# distinct states, 4 s).
+tlc_test(tlc_loop_pass_spec MCLoopPass MCLoopPass.cfg pass WORKERS 4)
+tlc_test(tlc_loop_pass_two  MCLoopPass MCLoopPassTwo.cfg pass WORKERS 4)
+tlc_test(tlc_loop_pass_wide  MCLoopPass MCLoopPassWide.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_loop_pass_three MCLoopPass MCLoopPassThree.cfg pass WORKERS 8 NIGHTLY)
+
+tlc_test(tlc_loop_pass_witness_release_before_flush WLoopReleaseBeforeFlush WLoopReleaseBeforeFlush.cfg invariant
+         PROPERTY PromptAtMostOnce)
+tlc_test(tlc_loop_pass_witness_state_before_flush   WLoopStateBeforeFlush   WLoopStateBeforeFlush.cfg   invariant
+         PROPERTY LinkStateDurable)
+tlc_test(tlc_loop_pass_witness_tick_before_flush    WLoopTickBeforeFlush    WLoopTickBeforeFlush.cfg    invariant
+         PROPERTY AckedOnlyDurable)
+tlc_test(tlc_loop_pass_witness_no_hold              WLoopNoHold              WLoopNoHold.cfg              invariant
+         PROPERTY PromptAtMostOnce)
+tlc_test(tlc_loop_pass_witness_release_on_fail      WLoopReleaseOnFail      WLoopReleaseOnFail.cfg      invariant
+         PROPERTY DriverOnlyDurable)
+tlc_test(tlc_loop_pass_witness_tick_on_fail         WLoopTickOnFail         WLoopTickOnFail.cfg         invariant
+         PROPERTY AckedOnlyDurable)
+tlc_test(tlc_loop_pass_witness_reset_applier        WLoopResetApplier        WLoopResetApplier.cfg        invariant
+         PROPERTY ExactlyOnce)
+tlc_test(tlc_loop_pass_witness_no_tick              WLoopNoTick              WLoopNoTick.cfg              liveness
+         PROPERTY Converges)
+tlc_test(tlc_loop_pass_witness_turn_reuse           WLoopTurnReuse           WLoopTurnReuse.cfg           invariant
+         PROPERTY TurnsIncrease)
+tlc_test(tlc_loop_pass_witness_crash_drops_durable  WLoopCrashDropsDurable  WLoopCrashDropsDurable.cfg  action
+         PROPERTY DurableMonotonic)
+tlc_test(tlc_loop_pass_witness_out_before_flush     WLoopOutBeforeFlush     WLoopOutBeforeFlush.cfg     action
+         PROPERTY NoOutBeforeFlush)
+
+foreach(seed 1 2 3 4 5)
+    tlc_test(tlc_loop_pass_trace_seed_${seed} LoopPassTrace LoopPassTrace.cfg pass PASSWALK SEED ${seed} STEPS 250)
+endforeach()
+foreach(fault release-before-flush state-before-flush tick-before-flush no-hold release-on-fail)
+    tlc_test(tlc_loop_pass_trace_faulty_${fault}_rejected LoopPassTrace LoopPassTrace.cfg deadlock
+             PASSWALK SEED 1 STEPS 80 FAULTY ${fault})
+endforeach()

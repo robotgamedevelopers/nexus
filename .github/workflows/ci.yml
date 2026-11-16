@@ -283,6 +283,14 @@ jobs:
           for pid in "${builds_pids[@]}"; do
             wait "$pid"
           done
+          # one pass of nexus-server's loop: unit checks, then its walks and their faults
+          build/tests/server/server_pass_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/server/pass_walk "$seed" 250 walks/loop_pass.tla
+          done
+          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
+            build/tests/server/pass_walk 1 80 --fault "$fault" walks/loop_pass.tla
+          done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
@@ -595,11 +603,12 @@ jobs:
           - part: units
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-              store_test durable_test driver_protocol_test supervisor_test wire_test nexus_versions_test builds_test
+              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+              nexus_versions_test builds_test
           - part: walks
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk builds_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -679,6 +688,7 @@ jobs:
           unit build/tests/driver/driver_protocol_test
           # the driver supervisor: every group
           unit build/tests/server/supervisor_test
+          unit build/tests/server/server_pass_test
           # placement: every group (the manifest, the hash, the evidence, the formats rule, the names, prune's choice)
           unit build/tests/server/builds_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
@@ -800,6 +810,13 @@ jobs:
           done
           for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
             walk build/tests/server/builds_walk "${fault_seed#*:}" 800 --fault "${fault_seed%%:*}"
+          done
+          # one pass of nexus-server's loop: its walks and their faults
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/pass_walk "$seed" 250
+          done
+          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
+            walk build/tests/server/pass_walk 1 80 --fault "$fault"
           done
           while [ "$running" -gt 0 ]; do
             wait -n
@@ -963,12 +980,17 @@ jobs:
           - shard: reconnect
             run: '^tlc_reconnect'
             build: reconnect_walk
+          # One pass of nexus-server's loop (models/LoopPass.tla): its two per-commit instances, eleven reversed
+          # witnesses, five seeded code walks and five faulty walks.
+          - shard: loop-pass
+            run: '^tlc_loop_pass_'
+            build: pass_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
