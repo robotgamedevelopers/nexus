@@ -909,13 +909,22 @@ jobs:
             run: '^tlc_(strip_|spec_strip)'
             skip: '^tlc_spec_strip_shared$'
             build: strip_walk
-          # In-app sign-in (models/SignIn.tla): its instances and witnesses, then its code's walks against
-          # SignInTrace.tla (about 400 to 800 records each, 6 to 8 s on two workers) and their faults.
-          - shard: signin
+          # In-app sign-in (models/SignIn.tla): its two large safety instances (MCSignInTwo, 371,695 states;
+          # MCSignInGate, 813,557 states) each in a shard of their own on eight workers, then its one-window spec and
+          # witnesses, and its code's walks against SignInTrace.tla (~800 records each) in two halves of four traces.
+          - shard: signin-two
+            run: '^tlc_signin_spec_two$'
+          - shard: signin-gate
+            run: '^tlc_signin_spec_gate$'
+          - shard: signin-rest
             run: '^tlc_signin_'
-            skip: '^tlc_signin_trace_'
-          - shard: signin-trace
+            skip: '^tlc_signin_(trace_|spec_two$|spec_gate$)'
+          - shard: signin-trace-1
+            run: '^tlc_signin_trace_seed_[1-4]$'
+            build: signin_walk
+          - shard: signin-trace-2
             run: '^tlc_signin_trace_'
+            skip: '^tlc_signin_trace_seed_[1-4]$'
             build: signin_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.

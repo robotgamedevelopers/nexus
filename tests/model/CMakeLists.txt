@@ -507,16 +507,16 @@ endforeach()
 # a bench run, not a test: an earlier form of the model was past 14 million states in 30 minutes on four workers,
 # unfinished. Bound to the code by trace checks: tests/sync's signin_walk, tlc_signin_trace_*.
 tlc_test(tlc_signin_spec_one MCSignIn MCSignInOne.cfg pass)
-tlc_test(tlc_signin_spec_two MCSignIn MCSignInTwo.cfg pass WORKERS 4)
-tlc_test(tlc_signin_spec_two_live MCSignIn MCSignInTwoLive.cfg pass WORKERS 4 NIGHTLY)
-tlc_test(tlc_signin_spec_gate MCSignIn MCSignInGate.cfg pass WORKERS 4)
+tlc_test(tlc_signin_spec_two MCSignIn MCSignInTwo.cfg pass WORKERS 8 SHARD)
+tlc_test(tlc_signin_spec_two_live MCSignIn MCSignInTwoLive.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_signin_spec_gate MCSignIn MCSignInGate.cfg pass WORKERS 8 SHARD)
 tlc_test(tlc_signin_witness_gate_taken WSignInGateTaken WSignInGateTaken.cfg invariant PROPERTY GateForEveryPage)
 tlc_test(tlc_signin_witness_late_dropped WSignInLateDropped WSignInLateDropped.cfg invariant PROPERTY EveryPrintTaken)
 tlc_test(tlc_signin_witness_claim_starts WSignInClaimStarts WSignInClaimStarts.cfg invariant
          PROPERTY OneProcessPerAccount)
 tlc_test(tlc_signin_witness_stray_forwards WSignInStrayForwards WSignInStrayForwards.cfg invariant
          PROPERTY GateForwardsOnlyMatching)
-tlc_test(tlc_signin_witness_stray_hostile WSignInStrayForwards WSignInStrayHostile.cfg pass WORKERS 4)
+tlc_test(tlc_signin_witness_stray_hostile WSignInStrayForwards WSignInStrayHostile.cfg pass WORKERS 8)
 tlc_test(tlc_signin_witness_replay_any WSignInStrayForwards WSignInReplayAny.cfg invariant
          PROPERTY CallbackOnlyMatching)
 tlc_test(tlc_signin_witness_drop_token WSignInDropToken WSignInDropToken.cfg invariant PROPERTY TokenNeverDropped)

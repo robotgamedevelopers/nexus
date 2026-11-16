@@ -138,11 +138,11 @@ tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg in
 # takes no takeover since the walk gained the late print and the fallback, so its fault is never played. Seed 22's walk
 # prints a login late while the paste the fallback asked for is open (it counts print-while-asked), which must close it.
 foreach(seed 1 2 3 4 22)
-    tlc_test(tlc_signin_trace_seed_${seed} SignInTrace SignInTrace.cfg pass SIGNWALK SEED ${seed} STEPS 6000)
+    tlc_test(tlc_signin_trace_seed_${seed} SignInTrace SignInTrace.cfg pass SIGNWALK SEED ${seed} STEPS 6000 CAP 80)
 endforeach()
 tlc_test(tlc_signin_trace_faulty_claim_rejected SignInTrace SignInTrace.cfg invariant
-         PROPERTY CodeOneProcessPerAccount SIGNWALK SEED 2 STEPS 6000 FAULTY claim)
+         PROPERTY CodeOneProcessPerAccount SIGNWALK SEED 2 STEPS 6000 FAULTY claim CAP 80)
 tlc_test(tlc_signin_trace_faulty_callback_rejected SignInTrace SignInTrace.cfg invariant
-         PROPERTY CodeOneCallbackPerFlow SIGNWALK SEED 1 STEPS 6000 FAULTY callback)
+         PROPERTY CodeOneCallbackPerFlow SIGNWALK SEED 1 STEPS 6000 FAULTY callback CAP 80)
 tlc_test(tlc_signin_trace_faulty_stray_rejected SignInTrace SignInTrace.cfg invariant
-         PROPERTY CodeGateForwardsOnlyMatching SIGNWALK SEED 1 STEPS 6000 FAULTY stray)
+         PROPERTY CodeGateForwardsOnlyMatching SIGNWALK SEED 1 STEPS 6000 FAULTY stray CAP 80)
