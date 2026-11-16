@@ -84,6 +84,7 @@ enum class Fault {
     NoHaltBound,
     InMemoryState,
     ServeUntested,
+    SpinOnFormatRefusal,
 };
 
 enum class ChildState { Down, Serving, Exited };

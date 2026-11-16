@@ -6,8 +6,11 @@
 #include "server/builds.h"
 #include "server/drain.h"
 #include "server/handover.h"
+#include "server/migration.h"
 #include "server/supervision.h"
+#include "store/codec.h"
 #include "store/fs.h"
+#include "store/journal.h"
 #include "store/store.h"
 
 #include <cerrno>
@@ -84,6 +87,61 @@ std::string readMode(const std::string& exe) {
         return word;
     }
     return "good";
+}
+
+store::StoreOptions readStoreOpts(const std::string& exe) {
+    store::StoreOptions opts;
+    const std::size_t binPos = exe.rfind("/bin/nexus-server");
+    if (binPos == std::string::npos) {
+        return opts;
+    }
+    std::ifstream in(exe.substr(0, binPos) + "/drivers/store_readers.txt");
+    int maxRec = 0;
+    int maxSnap = 0;
+    if (in >> maxRec >> maxSnap) {
+        opts.max_record_reader = static_cast<std::uint8_t>(maxRec);
+        opts.max_snapshot_reader = static_cast<std::uint8_t>(maxSnap);
+    }
+    return opts;
+}
+
+bool appendFormat5Record(store::Fs& fs, const std::string& storeDir, std::uint8_t readerByte, std::uint64_t sid) {
+    store::Writer rec;
+    rec.u8(5);
+    rec.u8(readerByte);
+    rec.u64(sid);
+    rec.u32(2);
+    {
+        store::Writer entryInner;
+        entryInner.u8(1);
+        entryInner.u8(1);
+        entryInner.str(readerByte >= 5 ? "format5-breaking-entry" : "format5-compat-entry");
+        entryInner.str("future-tail");
+        store::Writer changeFrame;
+        changeFrame.bytes(entryInner.out());
+        rec.u8(static_cast<std::uint8_t>(store::Change::Kind::Append));
+        rec.bytes(changeFrame.out());
+    }
+    {
+        store::Writer unknownFrame;
+        unknownFrame.str("future-unknown-change");
+        rec.u8(99);
+        rec.bytes(unknownFrame.out());
+    }
+    rec.str("");
+    rec.u64(0);
+    rec.str("future-record-tail");
+
+    std::unique_ptr<store::FileLock> lock;
+    if (!fs.lock(storeDir, store::LockMode::Exclusive, lock).is_ok()) {
+        return false;
+    }
+    store::Journal j(fs, storeDir);
+    store::Journal::Recovery recov;
+    if (!j.open(recov).is_ok()) {
+        return false;
+    }
+    return j.append(rec.out()).is_ok() && j.sync().is_ok();
 }
 
 bool sendAll(int fd, const std::string& s) {
@@ -229,11 +287,33 @@ int main(int argc, char** argv) {
     }
 
     std::unique_ptr<store::Fs> fs = store::make_posix_fs();
+    if (const char* envHome = std::getenv("HOME"); envHome != nullptr && *envHome != '\0') {
+        std::string h = envHome;
+        while (h.size() > 1 && h.back() == '/') {
+            h.pop_back();
+        }
+        std::string sdir = dir;
+        while (sdir.size() > 1 && sdir.back() == '/') {
+            sdir.pop_back();
+        }
+        const std::string top = h + "/.nexus";
+        if (sdir == top + "/server") {
+            server::migration::Options mopts;
+            mopts.old_server_live = [&] { return server::migration::probeOldServerSocket(top + "/server.sock"); };
+            server::migration::Report mrep;
+            const store::Status ms = server::migration::migrateOldLayout(*fs, top, sdir, mopts, &mrep);
+            if (!ms.is_ok()) {
+                std::fprintf(stderr, "fake_build_server: migration failed: %s\n", ms.message().c_str());
+                return mrep.conflict ? 3 : 1;
+            }
+        }
+    }
     if (!fs->private_dir(dir).is_ok() || !fs->private_dir(dir + "/store").is_ok()) {
         std::fprintf(stderr, "fake_build_server: cannot create store dir\n");
         return 1;
     }
 
+    const store::StoreOptions storeOpts = readStoreOpts(exe);
     std::unique_ptr<store::Store> st;
     store::OpenReport rep;
     store::Status openSt = store::Status::busy("waiting");
@@ -242,7 +322,7 @@ int main(int argc, char** argv) {
         if (probeExisting(sockPath)) {
             return 0;
         }
-        openSt = store::Store::open(*fs, dir + "/store", {}, st, &rep);
+        openSt = store::Store::open(*fs, dir + "/store", storeOpts, st, &rep);
         if (openSt.is_ok() || openSt.code() != store::Status::Code::Busy) {
             break;
         }
@@ -370,6 +450,32 @@ int main(int argc, char** argv) {
                             count += ses.transcript.size();
                         }
                         sendAll(cfd, std::to_string(count) + "\n");
+                    } else if (req == "sessions") {
+                        sendAll(cfd, std::to_string(st->sessions().size()) + "\n");
+                    } else if (req == "write-format5-compat" || req == "write-format5-break") {
+                        std::uint64_t sid = 0;
+                        if (st->sessions().empty()) {
+                            sid = st->next_session();
+                            store::Change mk;
+                            mk.kind = store::Change::Kind::SetInfo;
+                            mk.info.friend_name = "friend";
+                            mk.info.harness = "claude";
+                            const store::Change initChanges[] = {mk};
+                            (void)st->commit(sid, initChanges);
+                        } else {
+                            sid = st->sessions().begin()->first;
+                        }
+                        st.reset();
+                        const std::uint8_t rbyte = (req == "write-format5-break") ? 5 : 3;
+                        const bool wrote = appendFormat5Record(*fs, dir + "/store", rbyte, sid);
+                        const store::Status ro = store::Store::open(*fs, dir + "/store", storeOpts, st, &rep);
+                        if (wrote && ro.is_ok()) {
+                            sendAll(cfd, "OK\n");
+                        } else {
+                            sendAll(cfd, "ERROR format5 write failed\n");
+                            crashed = true;
+                            stopping = true;
+                        }
                     } else {
                         sendAll(cfd, "ERROR unknown request;\n");
                     }

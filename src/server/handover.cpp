@@ -2,6 +2,7 @@
 // (models/handover/Handover.tla).
 
 #include "server/handover.h"
+#include "server/migration.h"
 #include "server/supervise_state.h"
 
 #include <algorithm>
@@ -99,6 +100,11 @@ public:
     int makeCurrent(const std::string& hash, builds::Result& r, bool allowUntested) override {
         builds::Builds b(serverDir_, options_);
         return b.makeCurrent(hash, r, allowUntested);
+    }
+
+    int rollback(const std::string& hash, builds::Result& r) override {
+        builds::Builds b(serverDir_, options_);
+        return b.rollbackTo(hash, r);
     }
 
 private:
@@ -726,6 +732,7 @@ struct Handover::Run {
         std::string rtgt;
         std::string rprev;
         bool didOwn = false;
+        bool resumingExplicit = false;
         std::string startFailWhy;
         Status outcome = Status::ok();
         bool explicitExit = false;
@@ -763,6 +770,7 @@ struct Handover::Run {
                     }
                     rtgt = rec.target;
                     rprev = rec.previous;
+                    resumingExplicit = true;
                     didOwn = (!isTo || requestedHash == rec.target);
                     switch (rec.stage) {
                     case Stage::Switching:
@@ -903,7 +911,7 @@ struct Handover::Run {
                     }
                     if (!seen.legacy && seen.build == rtgt && !seen.draining) {
                         if (didOwn) {
-                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                            if ((isTo || resumingExplicit) && !fault(Fault::InMemoryOnly)) {
                                 (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
                             }
                             r.out.push_back("serving " + rtgt +
@@ -985,7 +993,7 @@ struct Handover::Run {
                     if (seen.serving && !seen.legacy && seen.build == rtgt && !seen.draining) {
                         h.server_.keepStarted();
                         if (didOwn) {
-                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                            if ((isTo || resumingExplicit) && !fault(Fault::InMemoryOnly)) {
                                 (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
                             }
                             r.out.push_back("serving " + rtgt +
@@ -1041,10 +1049,18 @@ struct Handover::Run {
                     (void)h.server_.stop();
                 }
                 builds::Result br;
-                if (h.placement_.makeCurrent(rprev, br, false) != builds::kExitOk) {
-                    adoptBuildsFailure(br);
-                } else {
+                const int rbRc = h.placement_.rollback(rprev, br);
+                if (rbRc == builds::kExitOk) {
                     next = Step::StartRb;
+                } else if (rbRc == builds::kExitRefused) {
+                    for (const std::string& e : br.err) {
+                        r.err.push_back(e);
+                    }
+                    explicitExit = true;
+                    explicitCode = kExitRefused;
+                    next = Step::Clear;
+                } else {
+                    adoptBuildsFailure(br);
                 }
                 break;
             }
@@ -1303,6 +1319,32 @@ int command(const std::string& serverDir, const std::vector<std::string>& args, 
     fsOpts.test_fs_type = options.test_fs_type;
     fsOpts.test_locks_ignored = options.test_locks_ignored;
     std::unique_ptr<store::Fs> fs = store::make_posix_fs(fsOpts);
+
+    const bool statusVerb = (!args.empty() && args[0] == "status");
+    if (!statusVerb && !options.lock_already_held) {
+        if (const char* envHome = std::getenv("HOME"); envHome != nullptr && *envHome != '\0') {
+            std::string h = envHome;
+            while (h.size() > 1 && h.back() == '/') {
+                h.pop_back();
+            }
+            const std::string top = h + "/.nexus";
+            std::string sdir = serverDir;
+            while (sdir.size() > 1 && sdir.back() == '/') {
+                sdir.pop_back();
+            }
+            if (sdir == top + "/server") {
+                migration::Options mopts;
+                mopts.old_server_live = [&] { return migration::probeOldServerSocket(top + "/server.sock"); };
+                migration::Report rep;
+                const Status ms = migration::migrateOldLayout(*fs, top, sdir, mopts, &rep);
+                if (!ms.is_ok()) {
+                    r.err.push_back(ms.message());
+                    r.exit = rep.conflict ? kExitRefused : (ms.code() == Status::Code::Busy ? kExitBusy : kExitFailed);
+                    return r.exit;
+                }
+            }
+        }
+    }
 
     builds::Options bOpts;
     bOpts.now_ms = options.now_ms;

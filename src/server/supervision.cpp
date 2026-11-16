@@ -3,6 +3,7 @@
 
 #include "server/supervision.h"
 
+#include "server/migration.h"
 #include "server/sha256.h"
 
 #include <algorithm>
@@ -1379,6 +1380,10 @@ struct SupervisorLoop::Run {
                         next = Step::Reap;
                         break;
                     }
+                    if (obs.state == ChildState::Down) {
+                        next = Step::Check;
+                        break;
+                    }
                     if (!sup.handoverGate_.isLockedByOther()) {
                         std::string curNow;
                         std::string prevNow;
@@ -1582,36 +1587,57 @@ struct SupervisorLoop::Run {
                     break;
                 }
 
-                builds::Result cr;
-                const bool prevTested =
-                    !prevNow.empty() && (sup.placement_.checkSwitch(prevNow, cr, false) == builds::kExitOk);
-                const bool canSwitch =
-                    prevTested && (fault(Fault::PingPongRollback) || sshunned.count(prevNow) == 0);
+                const bool eligible =
+                    !prevNow.empty() && (fault(Fault::PingPongRollback) || sshunned.count(prevNow) == 0);
 
                 std::set<std::string> newShun = sshunned;
                 if (!fault(Fault::PingPongRollback) && !curNow.empty()) {
                     newShun.insert(curNow);
                 }
 
-                if (canSwitch) {
+                if (eligible) {
                     builds::Result mr;
-                    if (sup.placement_.makeCurrent(prevNow, mr, false) != builds::kExitOk) {
+                    const int mrc = sup.placement_.rollback(prevNow, mr);
+                    if (mrc == builds::kExitOk) {
+                        r.out.push_back("rolled back from " + curNow + " to " + prevNow);
+                        sbuild = prevNow;
+                        scrashes = 0;
+                        sshunned = newShun;
+                        s = persistDisk(prevNow, 0, newShun, false, false);
+                        if (!s.is_ok()) {
+                            outcome = s;
+                        }
+                        next = Step::RbUnlock;
+                    } else if (mrc == builds::kExitRefused) {
+                        for (const std::string& e : mr.err) {
+                            r.err.push_back(e);
+                        }
+                        if (!fault(Fault::SpinOnFormatRefusal)) {
+                            sshunned.insert(prevNow);
+                        }
+                        if (!fault(Fault::NoHaltBound) && scrashes >= sup.options_.max_restarts) {
+                            s = persistDisk(sbuild, scrashes, sshunned, true, false);
+                            if (!s.is_ok()) {
+                                outcome = s;
+                            } else {
+                                haltedOutcome = true;
+                                markHalted(true);
+                                r.err.push_back("cannot roll back from " + curNow + "; halting supervision");
+                            }
+                        } else {
+                            s = persistDisk(sbuild, scrashes, sshunned, false, false);
+                            if (!s.is_ok()) {
+                                outcome = s;
+                            }
+                        }
+                        next = Step::RbUnlock;
+                    } else {
                         for (const std::string& e : mr.err) {
                             r.err.push_back(e);
                         }
                         outcome = Status::failed(mr.err.empty() ? "cannot switch to previous build" : mr.err.front());
                         next = Step::RbUnlock;
-                        break;
                     }
-                    r.out.push_back("rolled back from " + curNow + " to " + prevNow);
-                    sbuild = prevNow;
-                    scrashes = 0;
-                    sshunned = newShun;
-                    s = persistDisk(prevNow, 0, newShun, false, false);
-                    if (!s.is_ok()) {
-                        outcome = s;
-                    }
-                    next = Step::RbUnlock;
                 } else if (!fault(Fault::NoHaltBound) && scrashes >= sup.options_.max_restarts) {
                     s = persistDisk(sbuild, scrashes, sshunned, true, false);
                     if (!s.is_ok()) {
@@ -1893,6 +1919,22 @@ int command(const std::string& serverDir, const std::string& home, const std::ve
     fsOpts.test_fs_type = runOpts.test_fs_type;
     fsOpts.test_locks_ignored = runOpts.test_locks_ignored;
     std::unique_ptr<store::Fs> fs = store::make_posix_fs(fsOpts);
+
+    if (!statusOnly && !home.empty()) {
+        const std::string top = trimTrailingSlash(home) + "/.nexus";
+        const std::string sdir = trimTrailingSlash(serverDir);
+        if (sdir == top + "/server") {
+            migration::Options mopts;
+            mopts.old_server_live = [&] { return migration::probeOldServerSocket(top + "/server.sock"); };
+            migration::Report rep;
+            const Status ms = migration::migrateOldLayout(*fs, top, sdir, mopts, &rep);
+            if (!ms.is_ok()) {
+                r.err.push_back(ms.message());
+                r.exit = rep.conflict ? kExitRefused : kExitFailed;
+                return r.exit;
+            }
+        }
+    }
 
     builds::Options bOpts;
     bOpts.now_ms = runOpts.now_ms;

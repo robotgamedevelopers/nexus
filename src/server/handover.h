@@ -91,6 +91,7 @@ public:
     virtual int active(std::string* current, std::string* previous, builds::Result& r) = 0;
     virtual int checkSwitch(const std::string& hash, builds::Result& r, bool allowUntested) = 0;
     virtual int makeCurrent(const std::string& hash, builds::Result& r, bool allowUntested) = 0;
+    virtual int rollback(const std::string& hash, builds::Result& r) { return makeCurrent(hash, r, false); }
 };
 
 enum class DrainReply {

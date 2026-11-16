@@ -111,6 +111,10 @@ public:
     int checkSwitch(const std::string& hash, Result& r, bool allowUntested = false);
     // Makes previous current, and current previous.
     int back(Result& r);
+    // Rolls back to `hash` (or `previous` when `hash` is empty), inspecting what `<server dir>/store` and
+    // `nexus-config` on disk actually hold under the store's shared lock rather than refusing solely on the crashed
+    // build's declared format ceiling.
+    int rollbackTo(const std::string& hash, Result& r);
     // Removes every build but current, previous, those in use and the `keep` most recently placed of the rest.
     int prune(std::size_t keep, Result& r);
     // Removes the one build `hash` (not current, previous or in use).

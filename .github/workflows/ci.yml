@@ -293,12 +293,14 @@ jobs:
           for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
             build/tests/server/pass_walk 1 80 --fault "$fault" walks/loop_pass.tla
           done
-          # placement, handover and supervision: their unit groups (MemFs crashes, drain, rollback, unit files,
-          # shunning), then their real-file walks overlapped in one wave (250 steps for handover and 150 for
-          # supervision under APFS F_FULLFSYNC; sanitizers-linux and the model shards run the full 600 and 350)
+          # placement, handover, supervision, migration and end-to-end takeover: their unit groups (MemFs crashes,
+          # drain, rollback, unit files, shunning, old-layout migration, format-5 rollback checks), then their
+          # real-file walks overlapped in one wave under APFS F_FULLFSYNC
           build/tests/server/builds_test
           build/tests/server/handover_test
           build/tests/server/supervision_test
+          build/tests/server/migration_test
+          build/tests/server/takeover_test
           fs_walk_pids=()
           for seed in 1 2 3; do
             mkdir -p "walks/builds_$seed"
@@ -324,21 +326,23 @@ jobs:
             mkdir -p "walks/supervision_${fault_seed%%:*}"
             build/tests/server/supervision_walk "${fault_seed#*:}" 150 --fault "${fault_seed%%:*}" "walks/supervision_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
           done
-          for pid in "${fs_walk_pids[@]}"; do
-            wait "$pid"
-          done
-          # layer 5 migration and store format against rollback: unit groups, then real-file walks and their faults
-          build/tests/server/migration_test
-          mig_pids=()
           for seed in 1 2 3 4; do
             mkdir -p "walks/migration_$seed"
-            build/tests/server/migration_walk "$seed" 300 "walks/migration_$seed/trace.tla" & mig_pids+=($!)
+            build/tests/server/migration_walk "$seed" 150 "walks/migration_$seed/trace.tla" & fs_walk_pids+=($!)
           done
           for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
             mkdir -p "walks/migration_${fault_seed%%:*}"
-            build/tests/server/migration_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}" "walks/migration_${fault_seed%%:*}/trace.tla" & mig_pids+=($!)
+            build/tests/server/migration_walk "${fault_seed#*:}" 150 --fault "${fault_seed%%:*}" "walks/migration_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
           done
-          for pid in "${mig_pids[@]}"; do
+          for seed in 1 2 3 4; do
+            mkdir -p "walks/takeover_$seed"
+            build/tests/server/takeover_walk "$seed" 60 "walks/takeover_$seed/trace.tla" & fs_walk_pids+=($!)
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            mkdir -p "walks/takeover_$fault"
+            build/tests/server/takeover_walk 1 60 --fault "$fault" "walks/takeover_$fault/trace.tla" & fs_walk_pids+=($!)
+          done
+          for pid in "${fs_walk_pids[@]}"; do
             wait "$pid"
           done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
@@ -654,12 +658,12 @@ jobs:
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test
+              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
           - part: walks
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk
+              migration_walk takeover_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -748,6 +752,8 @@ jobs:
           unit build/tests/server/supervision_test
           # layer 5 migration and store format against rollback
           unit build/tests/server/migration_test
+          # layer 6 end-to-end takeover composition seams
+          unit build/tests/server/takeover_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           unit build/tests/wire/wire_test
@@ -901,6 +907,13 @@ jobs:
           for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
             walk build/tests/server/migration_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}"
           done
+          # layer 6 end-to-end takeover walks across all five layers and their eleven faults
+          for seed in 1 2 3 4; do
+            walk build/tests/server/takeover_walk "$seed" 120
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            walk build/tests/server/takeover_walk 1 120 --fault "$fault"
+          done
           while [ "$running" -gt 0 ]; do
             wait -n
             running=$((running - 1))
@@ -1015,6 +1028,15 @@ jobs:
           - shard: migration
             run: '^tlc_migration_'
             build: migration_walk
+          # End-to-end takeover composition across all five layers (models/takeover/Takeover.tla): its temporal spec
+          # instances in `takeover-spec`, and its eleven witnesses plus real five-layer walks and eleven faults in
+          # `takeover-rest`.
+          - shard: takeover-spec
+            run: '^tlc_takeover_(spec|format_rollback)$'
+          - shard: takeover-rest
+            run: '^tlc_takeover_'
+            build: takeover_walk
+            skip: '^tlc_takeover_(spec|format_rollback)$'
           # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
           # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
           - shard: claude-driver
@@ -1100,7 +1122,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

@@ -1071,11 +1071,13 @@ struct Builds::Run {
             if (!p.exists) {
                 return finish(Status::refused("no build is current, so there is none to switch back to"));
             }
-            if (p.previous.empty()) {
-                return finish(Status::refused("build " + p.current + " is current and there is no previous build to "
-                                              "switch back to"));
+            if (want.empty()) {
+                if (p.previous.empty()) {
+                    return finish(Status::refused("build " + p.current + " is current and there is no previous build "
+                                                  "to switch back to"));
+                }
+                target = p.previous;
             }
-            target = p.previous;
         }
         if (p.exists && target == p.current) {
             r.out.push_back("already current " + target);
@@ -1606,6 +1608,14 @@ int Builds::checkSwitch(const std::string& hash, Result& r, bool allowUntested) 
 int Builds::back(Result& r) {
     Run run(*this, r);
     return run.sw(std::string(), true);
+}
+
+int Builds::rollbackTo(const std::string& hash, Result& r) {
+    Run run(*this, r);
+    if (!hash.empty() && !isHash(hash)) {
+        return run.end(Status::refused("`" + hash + "` is not a build's hash (64 hex digits; `builds list`)"));
+    }
+    return run.sw(hash, true);
 }
 
 int Builds::prune(std::size_t keep, Result& r) {

@@ -34,13 +34,13 @@
 
 | feature | done |
 |---|:---:|
-| 1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused (in progress) | ❌ |
-| 2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs: builds immutable, complete and named by their content hash under builds/, placed through a temporary folder synced and verified before one rename; tested bound to the whole folder's hash; current and previous switched in one rename under the builds directory's lock; a build a running server holds never pruned (docs/builds.md) (in progress) | ❌ |
-| 3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk (docs/builds.md) (in progress) | ❌ |
-| 4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back (docs/builds.md) (in progress) | ❌ |
+| 1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused | ✅ |
+| 2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs: builds immutable, complete and named by their content hash under builds/, placed through a temporary folder synced and verified before one rename; tested bound to the whole folder's hash; current and previous switched in one rename under the builds directory's lock; a build a running server holds never pruned (docs/builds.md) | ✅ |
+| 3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk (docs/builds.md) | ✅ |
+| 4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back (docs/builds.md) | ✅ |
 | 5. Old-layout migration and the store's format against rollback: a store from the old ~/.nexus layout moves once, and a store a newer build wrote stays readable by the build rolled back to | ✅ |
-| 6. The model bound to the real steps: the takeover's TLA+ model checked against traces of the real placement, handover, supervision and migration in CI | ❌ |
-| complete | 16% |
+| 6. The model bound to the real steps: the takeover's TLA+ model checked against traces of the real placement, handover, supervision and migration in CI | ✅ |
+| complete | 100% |
 
 [Source data](roadmap.sexp)
 

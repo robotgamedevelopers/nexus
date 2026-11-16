@@ -517,8 +517,8 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
     if (framed) {
         // A framed format names the oldest one its reader must know: a later one this build can read says so.
         const std::uint8_t reader = r.u8();
-        if (reader > kRecordFormat) {
-            return tooNew(dir_, what, format, reader, kRecordFormat);
+        if (reader > options_.max_record_reader) {
+            return tooNew(dir_, what, format, reader, options_.max_record_reader);
         }
     }
     std::uint64_t session = 0;
@@ -655,8 +655,8 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
     const bool framed = format >= 4;
     if (framed) {
         const std::uint8_t reader = r.u8();
-        if (reader > kSnapshotFormat) {
-            return tooNew(dir_, what, format, reader, kSnapshotFormat);
+        if (reader > options_.max_snapshot_reader) {
+            return tooNew(dir_, what, format, reader, options_.max_snapshot_reader);
         }
     }
     const bool bySession = format >= 3;
