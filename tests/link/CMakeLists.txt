@@ -43,10 +43,13 @@ add_test(NAME link_e2e_friends COMMAND link_e2e ${server} ${e2e_dir}-friends fri
 add_test(NAME link_e2e_signin COMMAND link_e2e ${server} ${e2e_dir}-signin signin $<TARGET_FILE:nexus_fake_claude>)
 add_test(NAME link_e2e_signin_leaky COMMAND link_e2e $<TARGET_FILE:nexus-server-leaky> ${e2e_dir}-leaky signin
          $<TARGET_FILE:nexus_fake_claude> leaky)
+# The window's own link reconnecting by itself: after a clean stop (told by the server's shutdown, keeping a stopped
+# server stopped until the next starts, and resending unacknowledged actions), then after SIGKILL (found by silence).
+add_test(NAME link_e2e_takeover COMMAND link_e2e ${server} ${e2e_dir}-takeover takeover)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky)
+    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky link_e2e_takeover)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-takeover)
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

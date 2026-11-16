@@ -79,6 +79,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (turn, resume, queue).
 # With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
 # (stay, harness). Called from tests/accounts.
+# With RECONNECTWALK, it is tests/sync's reconnect_walk (the window's link making its session again), and FAULTY one of
+# its faults (cached, no-reset). Called from tests/sync.
 # With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
 # one of its faults (store-late, echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
@@ -95,8 +97,8 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK SIGNWALK DRIVERWALK
-        DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
+    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK SIGNWALK RECONNECTWALK
+        DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -161,6 +163,8 @@ function(tlc_test name module cfg expect)
              -DSTEPS=${T_STEPS})
     elseif(T_SIGNWALK)
         list(APPEND defs -DSIGNWALK=$<TARGET_FILE:signin_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_RECONNECTWALK)
+        list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
     elseif(T_ACCWALK)

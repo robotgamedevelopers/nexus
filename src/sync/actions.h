@@ -114,6 +114,16 @@ public:
     std::uint32_t format() const { return format_; }
     void setFormat(std::uint32_t format) { format_ = format; }
 
+    // Shares a close flag across copies of this state (mosh copies remote states from initial_remote): once closed,
+    // apply_string refuses new diffs so a stopping server's shutdown loop never acknowledges actions after its last
+    // store flush.
+    void trackClose() { closed_ = std::make_shared<bool>(false); }
+    void close() {
+        if (closed_) {
+            *closed_ = true;
+        }
+    }
+
     // The actions a diff carries, for the server, which reads them out of mosh's get_remote_diff(). Throws BadDiff.
     // `unknown` (when given) is how many fields and kinds of a later window's it skipped (from format 4), for the log.
     static std::vector<Action> parse(const std::string& diff, std::uint32_t format = kStateFormat,
@@ -123,6 +133,7 @@ private:
     std::uint64_t first_ = 1;
     std::shared_ptr<const std::vector<Action>> held_;
     std::uint32_t format_ = kStateFormat;
+    std::shared_ptr<bool> closed_;
 };
 
 // The server's side of one client's list: applies each action exactly once, in number order. apply() takes the actions

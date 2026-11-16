@@ -45,6 +45,10 @@ void freezeClock() {
     freeze_timestamp();
 }
 
+std::uint64_t clockMs() {
+    return frozen_timestamp();
+}
+
 // Both ends start from the empty states (mosh's state 0, which each end assumes the other holds); the server's sessions
 // are its first change.
 // Every state the server's end holds is in the link's format, so each diff mosh takes is written in it.
@@ -54,9 +58,12 @@ static sync::Sessions inFormat(sync::Sessions state, std::uint32_t format) {
 }
 
 // The actions up, in the link's format too: framed from format 3, schema's tables from 4 (sync/actions.h).
-static sync::Actions actionsIn(std::uint64_t next, std::uint32_t format) {
+static sync::Actions actionsIn(std::uint64_t next, std::uint32_t format, bool trackClose = false) {
     sync::Actions actions(next);
     actions.setFormat(format);
+    if (trackClose) {
+        actions.trackClose();
+    }
     return actions;
 }
 
@@ -67,7 +74,7 @@ struct ServerSession::Impl {
     ServerTransport transport;
     sync::Applier applier;
     Impl(const sync::Sessions& state, std::uint64_t applied, std::uint64_t next, std::uint32_t f)
-        : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(actionsIn(next, f)),
+        : format(f), initialMine(inFormat(sync::Sessions(), f)), initialRemote(actionsIn(next, f, true)),
           transport(initialMine, initialRemote, nullptr, nullptr), applier(applied) {
         transport.set_current_state(inFormat(state, format));
     }
@@ -137,6 +144,19 @@ bool ServerSession::ended() const {
     return impl_->transport.counterparty_shutdown_ack_sent();
 }
 
+void ServerSession::shutdown() {
+    impl_->initialRemote.close();
+    impl_->transport.start_shutdown();
+}
+
+bool ServerSession::shutdownDone() const {
+    return impl_->transport.shutdown_acknowledged() || impl_->transport.shutdown_ack_timed_out();
+}
+
+bool ServerSession::shutdownAcknowledged() const {
+    return impl_->transport.shutdown_acknowledged();
+}
+
 std::uint64_t ServerSession::applied() const {
     return impl_->applier.applied();
 }
@@ -145,6 +165,8 @@ struct ClientSession::Impl {
     sync::Actions initialMine;
     sync::Sessions initialRemote;
     ClientTransport transport;
+    std::uint64_t lastStateNum = 0;
+    std::uint64_t lastStateAt = 0;
     Impl(const std::string& key, const std::string& ip, const std::string& port, std::uint64_t next,
          std::uint32_t format)
         : initialMine(actionsIn(next, format)), initialRemote(inFormat(sync::Sessions(), format)),
@@ -165,7 +187,14 @@ std::vector<int> ClientSession::fds() const {
 }
 
 bool ClientSession::receive(std::string* why) {
-    return guarded([&] { impl_->transport.recv(); }, why);
+    const bool ok = guarded([&] { impl_->transport.recv(); }, why);
+    const std::uint64_t num = impl_->transport.get_remote_state_num();
+    // mosh numbers its shutdown instruction ~0ULL (transportsender-impl.h): it ends the session, and is not a state.
+    if (num != 0 && num != ~std::uint64_t(0)) {
+        impl_->lastStateNum = num;
+        impl_->lastStateAt = impl_->transport.get_latest_remote_state().timestamp;
+    }
+    return ok;
 }
 
 std::uint64_t ClientSession::add(sync::Action action) {
@@ -177,11 +206,16 @@ const sync::Sessions& ClientSession::state() const {
 }
 
 std::uint64_t ClientSession::stateNum() const {
-    return impl_->transport.get_remote_state_num();
+    return impl_->lastStateNum;
+}
+
+std::uint64_t ClientSession::heardAtMs() const {
+    return impl_->lastStateAt;
 }
 
 std::uint64_t ClientSession::heardMsAgo() const {
-    const std::uint64_t at = impl_->transport.get_latest_remote_state().timestamp;
+    const std::uint64_t at = impl_->lastStateNum > 0 ? impl_->lastStateAt :
+        impl_->transport.get_latest_remote_state().timestamp;
     const std::uint64_t now = frozen_timestamp();
     return now > at ? now - at : 0;
 }
@@ -190,6 +224,18 @@ bool ClientSession::allAcknowledged() const {
     // mosh subtracts the acknowledged state from the current one on every tick (rationalize_states): what is left
     // is what the server has not acknowledged.
     return impl_->transport.get_current_state().held().empty();
+}
+
+std::uint64_t ClientSession::firstUnacknowledged() const {
+    return impl_->transport.get_current_state().first();
+}
+
+std::vector<sync::Action> ClientSession::unacknowledged() const {
+    return impl_->transport.get_current_state().held();
+}
+
+bool ClientSession::serverEnded() const {
+    return impl_->transport.counterparty_shutdown_ack_sent();
 }
 
 bool ClientSession::tick(std::string* why) {

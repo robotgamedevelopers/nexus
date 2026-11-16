@@ -46,6 +46,8 @@
 #               SignInTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of claim, callback, stray
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
+#   RECONNECTWALK optional, in place of WALK: tests/sync's reconnect_walk; it is run first and writes
+#               ReconnectTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of cached, no-reset
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
 #   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
@@ -230,6 +232,19 @@ elseif(DEFINED ACCWALK AND NOT "${ACCWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "accounts_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED RECONNECTWALK AND NOT "${RECONNECTWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "cached" OR FAULTY STREQUAL "no-reset")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not cached or no-reset")
+    endif()
+    execute_process(COMMAND "${RECONNECTWALK}" ${walk_args} "${WORK}/ReconnectTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "reconnect_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

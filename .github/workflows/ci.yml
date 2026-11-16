@@ -204,6 +204,14 @@ jobs:
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
           done
+          # the link making its session again: the rules, then their walks and faults
+          build/tests/sync/redial_test
+          for seed in 1 2 3 4; do
+            build/tests/sync/reconnect_walk "$seed" 1000 walks/reconnect.tla
+          done
+          for fault in --faulty-cached --faulty-no-reset; do
+            build/tests/sync/reconnect_walk 1 1000 "$fault" walks/reconnect.tla
+          done
           # the secret dialog: every unit group (the leak test among them), then its walks, each failing if a value's
           # bytes reach anything but the keeper
           build/tests/server/secrets_test
@@ -581,12 +589,12 @@ jobs:
         include:
           - part: units
             targets: >-
-              model_test overlay_test sync_test secrets_test signin_test store_test durable_test driver_protocol_test
-              supervisor_test wire_test nexus_versions_test builds_test
+              model_test overlay_test sync_test redial_test secrets_test signin_test store_test durable_test
+              driver_protocol_test supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk strip_walk link_walk secrets_walk signin_walk journal_walk store_lock_walk
-              supervisor_walk builds_walk
+              overlay_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk journal_walk
+              store_lock_walk supervisor_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -652,6 +660,7 @@ jobs:
           unit build/tests/model/model_test
           unit build/tests/model/overlay_test
           unit build/tests/sync/sync_test
+          unit build/tests/sync/redial_test
           # the secret dialog: every unit group, the leak test among them
           unit build/tests/server/secrets_test
           # in-app sign-in: every unit group, the leak test among them
@@ -730,6 +739,13 @@ jobs:
           done
           for fault in --faulty-applier --faulty-mirror --faulty-tail; do
             walk build/tests/sync/link_walk 1 1000 2 "$fault"
+          done
+          # the link making its session again: its walks and faults
+          for seed in 1 2 3 4; do
+            walk build/tests/sync/reconnect_walk "$seed" 1000
+          done
+          for fault in --faulty-cached --faulty-no-reset; do
+            walk build/tests/sync/reconnect_walk 1 1000 "$fault"
           done
           # the secret dialog's walks, each failing if a value's bytes reach anything but the keeper
           for seed in 1 2 3 4 5 6 7 8; do
@@ -926,12 +942,16 @@ jobs:
             run: '^tlc_signin_trace_'
             skip: '^tlc_signin_trace_seed_[1-4]$'
             build: signin_walk
+          # The window's link making its session again (models/Reconnect.tla): spec, witnesses and the code's walks.
+          - shard: reconnect
+            run: '^tlc_reconnect'
+            build: reconnect_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$|signin)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

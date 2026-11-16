@@ -39,6 +39,12 @@
 //       flow let go of when its window's link ends and taken over by the other, the forwarded callback replayed, the
 //       token in a1's file, `config sign-in`, and every file and the other window's states searched for the values;
 //       `leaky`, with nexus-server-leaky: the search must find the leak that build writes to server.log
+//   link_e2e <nexus-server> <dir> takeover
+//       the window's own link thread connected to a server the test started; the server stops cleanly (ending its link
+//       session), a stopped server stays stopped across reconnect attempts while an action is queued, and once the
+//       test starts the next server (as the service does) the window reconnects by itself, applies the queued action
+//       and a live one once each, and prints the time to live state in ms; then the server is killed (no shutdown
+//       reaches the window) and started again, and the window finds it lost by its silence and reconnects the same way
 //   link_e2e <nexus-server> stop <dir>...
 //       stops the server in each directory, if one runs, and removes the directory
 
@@ -1516,6 +1522,165 @@ int signin(const std::string& binary, const std::string& dir, const std::string&
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
+// ---- takeover: the window's own link reconnects when its server stops or crashes ----
+
+// One request on the server's control socket in `dir`, and its one-line reply (empty when none answers).
+std::string control(const std::string& dir, const std::string& request) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::snprintf(addr.sun_path, sizeof addr.sun_path, "%s", (dir + "/server.sock").c_str());
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    std::string line;
+    if (connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == 0) {
+        const std::string out = request + "\n";
+        if (write(fd, out.data(), out.size()) == static_cast<ssize_t>(out.size())) {
+            char c = 0;
+            while (read(fd, &c, 1) == 1 && c != '\n') {
+                line += c;
+            }
+        }
+    }
+    close(fd);
+    return line;
+}
+
+// How many sessions the server log says were made (`new` answered): one line per CONNECT.
+std::size_t sessionsLogged(const std::string& dir) {
+    return static_cast<std::size_t>(count(readFile(dir + "/server.log"), " on UDP port "));
+}
+
+// The window's own link thread (link/client.h), as the app runs it, connected to a server the test started (as the
+// service does). First, the server stops cleanly (ending its mosh session): while no server runs, a prompt queued in
+// the window stays unacknowledged and the link's reconnect attempts (NEXUS_ASK_RUNNING=1) start no server; once the
+// next server starts on the same store, the window reconnects by itself, sends the unacknowledged prompt under its own
+// number, and shows the new server's state with every prompt applied once. Second, the server is killed with SIGKILL
+// (no shutdown reaches the window) and started again: the window finds it lost after kQuietMs of silence, its cursor
+// grey meanwhile, and reconnects the same way.
+int takeover(const std::string& binary, const std::string& dir) {
+    Server server(binary, dir);
+    CHECK(::mkdir(dir.c_str(), 0700) == 0);
+    pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+
+    Model model(kFriends, true);
+    sync::Mirror mirror;
+    link::ClientLink::Options options;
+    options.bootstrap = server.bootstrap("localhost");
+    link::ClientLink link(options);
+    link::ClientLink::Snapshot s;
+    auto pump = [&] {
+        if (link.poll(&s)) {
+            mirror.apply(model, s.sessions);
+        }
+    };
+    auto until = [&](const std::function<bool()>& done) {
+        return whileProgressing([&] { pump(); return done(); },
+            [&] { return s.stateNum * 2 + (s.acknowledged ? 1 : 0); },
+            [] { std::this_thread::sleep_for(std::chrono::milliseconds(5)); });
+    };
+    CHECK(waitFor([&] { pump(); return s.phase == sync::LinkPhase::Connected; }, 10 + kStallSeconds * 2));
+    if (s.phase != sync::LinkPhase::Connected) {
+        std::fprintf(stderr, "link_e2e: the link did not connect: %s\n", s.problem.c_str());
+    }
+    for (const sync::Action& a : ensures()) {
+        link.send(a);
+    }
+    link.send(act(sync::ActionKind::Send, sid("ada"), "before the stop"));
+    const std::size_t ada = tabOf(model, "ada");
+    CHECK(until([&] { return s.acknowledged && model.tab(ada).transcript.size() == 2; }));
+    CHECK(sessionsLogged(dir) == 1);
+
+    // Clean stop: the server ends its link session as it exits.
+    CHECK(control(dir, "stop") == "OK");
+    int status = 0;
+    CHECK(waitpid(pid, &status, 0) == pid);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    const auto gone = Clock::now();
+    // While stopped: a prompt handed to the link waits for the next session, and reconnect attempts with
+    // NEXUS_ASK_RUNNING=1 start no server of their own.
+    link.send(act(sync::ActionKind::Send, sid("ada"), "while stopped"));
+    bool lost = false;
+    const auto holdUntil = Clock::now() + std::chrono::milliseconds(600);
+    while (Clock::now() < holdUntil) {
+        pump();
+        lost = lost || sync::linkLost(s.phase, s.heardMsAgo);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(!answering(dir));
+    CHECK(lost);
+
+    // The next server on the same store, as the service starts it.
+    pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    const auto up = Clock::now();
+    bool live = false;
+    auto lastPrint = Clock::now();
+    while (!live && seconds(gone) < 20) {
+        pump();
+        lost = lost || sync::linkLost(s.phase, s.heardMsAgo);
+        live = sessionsLogged(dir) >= 2 && s.phase == sync::LinkPhase::Connected && s.heardMsAgo < sync::kQuietMs &&
+            s.stateNum > 0 && s.reconnects >= 1;
+        if (Clock::now() - lastPrint >= std::chrono::seconds(1)) {
+            lastPrint = Clock::now();
+            std::printf("  %.1f s after the exit: phase %d, heard %llu ms ago, state %llu, sessions made %zu\n",
+                seconds(gone), static_cast<int>(s.phase), static_cast<unsigned long long>(s.heardMsAgo),
+                static_cast<unsigned long long>(s.stateNum), sessionsLogged(dir));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const double ms = seconds(gone) * 1000;
+    const double fromUp = std::chrono::duration<double>(Clock::now() - up).count() * 1000;
+    CHECK(live);
+    CHECK(lost);
+    std::printf("stop to live state: %.0f ms from the old server's exit (600 ms held stopped), "
+        "%.0f ms from the new one answering\n", ms, fromUp);
+    // The prompt sent while stopped arrives once, then one sent now arrives once.
+    CHECK(until([&] { return s.acknowledged && model.tab(ada).transcript.size() == 4; }));
+    link.send(act(sync::ActionKind::Send, sid("ada"), "after the stop"));
+    CHECK(until([&] { return s.acknowledged && model.tab(ada).transcript.size() == 6; }));
+    {
+        const std::vector<Entry>& t = model.tab(ada).transcript;
+        CHECK(t.size() == 6);
+        if (t.size() == 6) {
+            CHECK(t[0].text == "before the stop" && t[2].text == "while stopped" && t[4].text == "after the stop");
+        }
+    }
+    CHECK(sessionsAsMinted(s.sessions));
+
+    // A server that ends without a word (SIGKILL: no shutdown reaches the window), and the next one started: the
+    // window finds it lost by its silence (kQuietMs), its cursor grey, and reconnects by itself as before.
+    CHECK(kill(pid, SIGKILL) == 0);
+    CHECK(waitpid(pid, &status, 0) == pid);
+    const auto killed = Clock::now();
+    pid = startServe(binary, dir);
+    CHECK(pid > 0);
+    CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
+    const std::uint64_t before = s.reconnects;
+    lost = false;
+    live = false;
+    while (!live && seconds(killed) < 30) {
+        pump();
+        lost = lost || sync::linkLost(s.phase, s.heardMsAgo);
+        live = s.reconnects > before && s.phase == sync::LinkPhase::Connected && s.heardMsAgo < sync::kQuietMs &&
+            s.stateNum > 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(live);
+    CHECK(lost);
+    std::printf("killed server to live state: %.0f ms (silence of %llu ms first)\n", seconds(killed) * 1000,
+        static_cast<unsigned long long>(sync::kQuietMs));
+    link.send(act(sync::ActionKind::Send, sid("ada"), "after the kill"));
+    CHECK(until([&] { return s.acknowledged && model.tab(ada).transcript.size() == 8; }));
+    CHECK(model.tab(ada).transcript.size() == 8);
+    if (model.tab(ada).transcript.size() == 8) {
+        CHECK(model.tab(ada).transcript[6].text == "after the kill");
+    }
+    std::printf("takeover: %s\n", failures == 0 ? "ok" : "FAILED");
+    return failures == 0 ? 0 : 1;   // the link shuts down, then the Server stops the new server
+}
+
 // ---- older_server: nexus-server new of this build asking a server from before formats ----
 
 // A stand-in for a running server from before formats, on <dir>/server.sock: it answers each request as such a server
@@ -1596,9 +1761,13 @@ int main(int argc, char** argv) {
     if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
         return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
     }
+    if (argc == 4 && std::strcmp(argv[3], "takeover") == 0) {
+        return takeover(argv[1], argv[2]);
+    }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
-                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | signin <fake claude> [leaky]\n"
+                         "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | "
+                         "signin <fake claude> [leaky] | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

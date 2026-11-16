@@ -1,6 +1,14 @@
 // The window's link to nexus-server: a thread of its own that resolves the host, runs nexus-server new over ssh
 // (link/bootstrap.h) and then keeps mosh's session (link/mosh_link.h). The window hands it prompts (send) and reads
 // the server's sessions and the link's state each frame (poll); the thread wakes the window when either changed.
+//
+// When the session is lost (the server ended it, as one stopping or replaced does, or it has not been heard for
+// kQuietMs), the thread runs the bootstrap again by itself, with the backoff sync/redial.h decides, and the new
+// session goes on from the window's first action the server has not acknowledged: it sends those again under their
+// own numbers, with the window's client id, and the server skips any it applied (server/server.h). Until the new
+// session is heard, the snapshot keeps the last sessions the window had and its phase is not Connected, so the cursor
+// is grey (sync/client.h cursorOf); nothing asks the person anything. Every wait, the bootstrap's included, is on this
+// thread, never the window's. The decision is models/Reconnect.tla, bound to sync::Redial by its trace.
 
 #pragma once
 
@@ -25,6 +33,9 @@ public:
         Bootstrap bootstrap;
         std::string ip;                     // the server's numeric address; empty: resolveHost
         std::function<void()> wake;         // called on the link's thread when poll has something new
+        // The window's client id (server/server.h validClientId); empty: one made for this link, "window-" and 16
+        // random hex digits, so that two windows, or two launches of one, never share one.
+        std::string client;
     };
 
     struct Snapshot {
@@ -35,6 +46,7 @@ public:
         sync::Sessions sessions;            // the server's latest state
         std::uint64_t sent = 0;             // actions handed to the link
         bool acknowledged = true;           // the server has acknowledged every one
+        std::uint64_t reconnects = 0;       // sessions made after the first (the bootstrap run again)
     };
 
     explicit ClientLink(Options options);
