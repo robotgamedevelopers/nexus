@@ -112,6 +112,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> trace{
         stepRecord("init", osGroup, shared, seen, recheck, pollActive, frameActive, false, false)};
     int overlaps = 0;
+    int faults = 0;
 
     for (long k = 0; k < steps; ++k) {
         std::vector<int> enabled;
@@ -152,6 +153,9 @@ int main(int argc, char** argv) {
             break;
         case 3:
             if (fault == Fault::Aba) {
+                if (frameGroup != seen.group || frameRemote != seen.remote) {
+                    ++faults;
+                }
                 seen = ForegroundSeen{seen.seq + 1, frameGroup, frameRemote};
                 askedRecheck = false;
             } else {
@@ -181,6 +185,7 @@ int main(int argc, char** argv) {
                 changed = true;
                 askedRecheck = false;
                 ++overlaps;
+                ++faults;
             } else {
                 const PollCommit c = commitPollForeground(shared, pollSnap, pollGroup, pollRemote);
                 changed = c.changed;
@@ -215,6 +220,14 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < trace.size(); ++i)
         out << "  " << trace[i] << (i + 1 < trace.size() ? ",\n" : "\n");
     out << ">>\n====\n";
-    std::printf("watch_walk: %zu records, %d overlapped commits\n", trace.size(), overlaps);
+    std::printf("watch_walk: %zu records, %d overlapped commits, %d faults\n", trace.size(), overlaps, faults);
+    if (fault == Fault::None && overlaps == 0) {
+        std::fprintf(stderr, "watch_walk: walk never exercised an overlapped commit; try more steps\n");
+        return 1;
+    }
+    if (fault != Fault::None && faults == 0) {
+        std::fprintf(stderr, "watch_walk: faulty walk never hit its fault; try more steps\n");
+        return 1;
+    }
     return 0;
 }
