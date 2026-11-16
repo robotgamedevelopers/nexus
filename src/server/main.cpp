@@ -14,10 +14,14 @@
 //        nexus-server store check [--dir DIR]
 //                                         reads the store without changing it; refused while a server has it
 //        nexus-server stop [--dir DIR]    stops the running server
+//        nexus-server drain [--dir DIR]   asks the running server to finish open turns and exit for a handover
 //        nexus-server status [--dir DIR]  asks the running server: SERVING, and the build it runs from
 //        nexus-server builds <verb> ... [--dir DIR]
 //                                         the installed builds under DIR/builds (server/builds.h, docs/builds.md):
 //                                         place, hash, formats, list, verify, current, back, prune, remove, help
+//        nexus-server handover [<hash>|resume|status|help] [--dir DIR]
+//                                         replaces the running server with a placed build under an OS lock, or
+//                                         resumes an interrupted handover (server/handover.h, docs/builds.md)
 //        nexus-server config <verb> [--dir DIR]
 //                                         the accounts and friends, DIR/nexus-config/accounts.json and friends.json
 //                                         (docs/accounts.md): path, check, reload, history, restore <commit>,
@@ -50,6 +54,7 @@
 #include "link/bootstrap.h"
 #include "no_core.h"
 #include "server/builds.h"
+#include "server/handover.h"
 #include "server/home.h"
 #include "server/server.h"
 #include "sync/formats.h"
@@ -58,8 +63,9 @@ namespace {
 
 int usage() {
     std::fprintf(stderr, "usage: nexus-server new [--dir DIR] [--client ID --next N]\n"
-                         "       nexus-server serve|stop|status [--dir DIR]\n"
+                         "       nexus-server serve|stop|drain|status [--dir DIR]\n"
                          "       nexus-server builds <verb> ... [--dir DIR]   (`nexus-server builds help`)\n"
+                         "       nexus-server handover [<hash>|resume|status|help] [--dir DIR]\n"
                          "       nexus-server config path|check|reload|history [--dir DIR]\n"
                          "       nexus-server config restore <commit> | remote [<url>|--clear] [--dir DIR]\n"
                          "       nexus-server config sign-in <account> [--dir DIR]\n"
@@ -132,7 +138,7 @@ int main(int argc, char** argv) {
             haveNext = true;
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
-        } else if (command == "config" || command == "store" || command == "builds") {
+        } else if (command == "config" || command == "store" || command == "builds" || command == "handover") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -200,6 +206,9 @@ int main(int argc, char** argv) {
     if (command == "stop") {
         return nexus::server::stop(paths);
     }
+    if (command == "drain") {
+        return nexus::server::drain(paths);
+    }
     if (command == "status") {
         return nexus::server::status(paths);
     }
@@ -212,6 +221,18 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         for (const std::string& line : r.err) {
             std::fprintf(stderr, "nexus-server: builds: %s\n", line.c_str());
+        }
+        return code;
+    }
+    if (command == "handover") {
+        nexus::server::handover::Result r;
+        const int code = nexus::server::handover::command(paths.dir, configArgs, {}, r);
+        for (const std::string& line : r.out) {
+            std::printf("%s\n", line.c_str());
+        }
+        std::fflush(stdout);
+        for (const std::string& line : r.err) {
+            std::fprintf(stderr, "nexus-server: handover: %s\n", line.c_str());
         }
         return code;
     }

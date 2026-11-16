@@ -295,6 +295,20 @@ jobs:
           for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
             build/tests/server/pass_walk 1 80 --fault "$fault" walks/loop_pass.tla
           done
+          # handover: every unit group (MemFs crashes, drain, rollback), then its walks on real files and their faults
+          build/tests/server/handover_test
+          handover_pids=()
+          for seed in 1 2 3; do
+            mkdir -p "walks/handover_$seed"
+            build/tests/server/handover_walk "$seed" 600 "walks/handover_$seed/trace.tla" & handover_pids+=($!)
+          done
+          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
+            mkdir -p "walks/handover_${fault_seed%%:*}"
+            build/tests/server/handover_walk "${fault_seed#*:}" 600 --fault "${fault_seed%%:*}" "walks/handover_${fault_seed%%:*}/trace.tla" & handover_pids+=($!)
+          done
+          for pid in "${handover_pids[@]}"; do
+            wait "$pid"
+          done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           build/tests/wire/wire_test
@@ -608,11 +622,11 @@ jobs:
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test
+              nexus_versions_test builds_test handover_test
           - part: walks
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -695,6 +709,8 @@ jobs:
           unit build/tests/server/server_pass_test
           # placement: every group (the manifest, the hash, the evidence, the formats rule, the names, prune's choice)
           unit build/tests/server/builds_test
+          # handover: every group (drain, state, handover, rollback, MemFs crash sweep, refusals)
+          unit build/tests/server/handover_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           unit build/tests/wire/wire_test
@@ -827,6 +843,13 @@ jobs:
           for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
             walk build/tests/server/pass_walk 1 80 --fault "$fault"
           done
+          # handover's walks on real files and OS locks, and their faults
+          for seed in 1 2 3; do
+            walk build/tests/server/handover_walk "$seed" 600
+          done
+          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
+            walk build/tests/server/handover_walk "${fault_seed#*:}" 600 --fault "${fault_seed%%:*}"
+          done
           while [ "$running" -gt 0 ]; do
             wait -n
             running=$((running - 1))
@@ -920,6 +943,10 @@ jobs:
             run: '^tlc_placement_'
             build: builds_walk
             skip: '^tlc_placement_spec$'
+          # Handover (models/handover/Handover.tla): its instances, witnesses and the code's walks with their faults.
+          - shard: handover
+            run: '^tlc_handover_'
+            build: handover_walk
           # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
           # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
           - shard: claude-driver
@@ -1005,7 +1032,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

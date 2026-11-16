@@ -434,3 +434,117 @@ foreach(fault release-before-flush state-before-flush tick-before-flush no-hold 
     tlc_test(tlc_loop_pass_trace_faulty_${fault}_rejected LoopPassTrace LoopPassTrace.cfg deadlock
              PASSWALK SEED 1 STEPS 80 FAULTY ${fault})
 endforeach()
+
+# Handover (src/server/handover.h, src/server/drain.h, docs/builds.md, models/handover):
+#   unit        handover_test (handover_unit_*): Drain, status second-line formatting/parsing, StateRecord codec,
+#               handover/drain/legacy/cold-start over MemFs, broken-build rollback, cut-and-resume at every hook step
+#               and every MemFs::fail_at + crash point, and refusals. No real files, processes, sockets or clock.
+#   functional  handover_functional (handover_functional_*): two-build drain (idle, open turn with durable store commit,
+#               drain deadline, pre-drain legacy stop), broken-build rollback (crash and hung store-lock holder),
+#               fork/_exit crash at every hook step followed by resume, concurrent handovers, and unlockable filesystem
+#               refusals.
+#   model       TLC: Handover.tla (spec, cut-and-resume, legacy), 11 reversed witnesses, and handover_walk traces
+#               checked against HandoverTrace.tla (plus 8 faulty walks rejected).
+#   model_nightly  Handover.tla on its larger two-actor, two-command, two-crash instance.
+add_executable(handover_test handover_test.cpp)
+target_link_libraries(handover_test PRIVATE nexus_handover)
+target_compile_options(handover_test PRIVATE ${warnings})
+foreach(group drain state handover rollback crash refusals)
+    add_test(NAME handover_unit_${group} COMMAND handover_test ${group})
+    set_tests_properties(handover_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+if(NOT WIN32)
+    add_executable(nexus_fake_build_server fake_build_server.cpp)
+    target_link_libraries(nexus_fake_build_server PRIVATE nexus_handover nexus_builds nexus_store)
+    target_compile_options(nexus_fake_build_server PRIVATE ${warnings})
+
+    add_executable(handover_functional handover_functional.cpp)
+    target_link_libraries(handover_functional PRIVATE nexus_handover nexus_builds nexus_store)
+    target_compile_options(handover_functional PRIVATE ${warnings})
+    add_dependencies(handover_functional nexus_fake_build_server)
+
+    string(MD5 handover_build_hash "${CMAKE_BINARY_DIR}")
+    string(SUBSTRING "${handover_build_hash}" 0 10 handover_build_hash)
+    set(handover_func_base "/tmp/nexus-ho-${handover_build_hash}")
+    foreach(case drain_idle_and_turn drain_deadline_and_legacy rollback_crash_and_hang crash_every_step
+                 concurrent_and_locks)
+        add_test(NAME handover_functional_${case} COMMAND handover_functional
+                 $<TARGET_FILE:nexus_fake_build_server> ${case} ${handover_func_base}-${case})
+        set_tests_properties(handover_functional_${case} PROPERTIES LABELS functional TIMEOUT 120)
+    endforeach()
+
+    add_executable(handover_walk handover_walk.cpp)
+    target_link_libraries(handover_walk PRIVATE nexus_handover nexus_builds nexus_store Threads::Threads)
+    target_compile_options(handover_walk PRIVATE ${warnings})
+    add_dependencies(model_checks handover_walk handover_test)
+
+    set(handover_models "${PROJECT_SOURCE_DIR}/models/handover")
+    function(handover_tlc_test name cfg module expect)
+        cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;CAP" "WALK" ${ARGN})
+        if(NOT T_WORKERS)
+            set(T_WORKERS 2)
+        endif()
+        set(label model)
+        if(NOT T_CAP)
+            set(T_CAP 60)
+        endif()
+        if(T_NIGHTLY)
+            set(label model_nightly)
+        endif()
+        math(EXPR ctest_timeout "${T_CAP} + 30")
+        set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${handover_models} -DMODULE=${module}
+                 -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${T_CAP})
+        if(T_PROPERTY)
+            list(APPEND defs -DPROPERTY=${T_PROPERTY})
+        endif()
+        if(T_WALK)
+            string(REPLACE ";" "," walk_args "${T_WALK}")
+            list(APPEND defs -DWALK=$<TARGET_FILE:handover_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=HandoverTraceData.tla)
+        endif()
+        add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${placement_tlc})
+        set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    endfunction()
+
+    handover_tlc_test(tlc_handover_spec Handover.cfg Handover pass WORKERS 4)
+    handover_tlc_test(tlc_handover_cut_resume HandoverCutResume.cfg Handover pass WORKERS 4)
+    handover_tlc_test(tlc_handover_legacy HandoverLegacy.cfg Handover pass WORKERS 4)
+    handover_tlc_test(tlc_handover_large HandoverLarge.cfg Handover pass WORKERS 8 NIGHTLY CAP 600)
+
+    handover_tlc_test(tlc_handover_witness_no_lock witnesses/HNoLock.cfg Handover invariant
+                      PROPERTY OneHandover)
+    handover_tlc_test(tlc_handover_witness_no_sync witnesses/HNoSync.cfg Handover invariant
+                      PROPERTY IdleCurrentWorks)
+    handover_tlc_test(tlc_handover_witness_in_memory_only witnesses/HInMemoryOnly.cfg Handover invariant
+                      PROPERTY IdleCurrentWorks)
+    handover_tlc_test(tlc_handover_witness_overwrite_prev witnesses/HOverwritePrev.cfg Handover invariant
+                      PROPERTY StateValid)
+    handover_tlc_test(tlc_handover_witness_no_rollback witnesses/HNoRollback.cfg Handover invariant
+                      PROPERTY IdleCurrentWorks)
+    handover_tlc_test(tlc_handover_witness_stop_cuts witnesses/HStopCutsTurn.cfg Handover action
+                      PROPERTY DrainCutsOnlyLate)
+    handover_tlc_test(tlc_handover_witness_stop_idle witnesses/HStopIdleNonLegacy.cfg Handover action
+                      PROPERTY StopOnlyLegacy)
+    handover_tlc_test(tlc_handover_witness_no_drain_deadline witnesses/HNoDrainDeadline.cfg Handover temporal
+                      PROPERTY HandoverEnds)
+    handover_tlc_test(tlc_handover_witness_untested_target witnesses/HUntestedTarget.cfg Handover invariant
+                      PROPERTY CurrentTested)
+    handover_tlc_test(tlc_handover_witness_serve_broken witnesses/HServeBroken.cfg Handover invariant
+                      PROPERTY NeverServesBroken)
+    handover_tlc_test(tlc_handover_witness_resume_ignores_state witnesses/HResumeIgnoresState.cfg Handover temporal
+                      PROPERTY AlwaysRecoversToServing)
+
+    foreach(seed 1 2 3)
+        handover_tlc_test(tlc_handover_trace_seed_${seed} HandoverTrace.cfg HandoverTrace invariant
+                          PROPERTY TraceUnfinished WALK ${seed} 600)
+    endforeach()
+    foreach(fault_seed no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1
+                       allow-untested:1 serve-broken:1)
+        string(REPLACE ":" ";" fs "${fault_seed}")
+        list(GET fs 0 fault)
+        list(GET fs 1 seed)
+        handover_tlc_test(tlc_handover_trace_${fault}_rejected HandoverTrace.cfg HandoverTrace pass
+                          WALK ${seed} 600 --fault ${fault})
+    endforeach()
+endif()

@@ -219,6 +219,13 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_builds PUBLIC src)
     target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_builds PUBLIC nexus_store)
+
+    # Handover (src/server/handover.h, src/server/drain.h, docs/builds.md): durable, resumable handover state machine
+    # under an OS lock, draining the old server and rolling back to previous when a target build fails to serve.
+    add_library(nexus_handover STATIC src/server/drain.cpp src/server/handover.cpp)
+    target_include_directories(nexus_handover PUBLIC src)
+    target_compile_options(nexus_handover PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_handover PUBLIC nexus_builds nexus_store)
 endif()
 
 # The window's gate for in-app sign-in with the server on another machine (src/signin_gate.h): one loopback listener
@@ -324,7 +331,7 @@ if(NEXUS_LINK)
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
-        nexus_signin_runner)
+        nexus_signin_runner nexus_handover)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
@@ -340,7 +347,7 @@ if(NEXUS_LINK)
     target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
     target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
     target_link_libraries(nexus_server_leaky PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo
-        nexus_builds nexus_signin_runner)
+        nexus_builds nexus_signin_runner nexus_handover)
     add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
     target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server-leaky PRIVATE nexus_server_leaky)

@@ -173,3 +173,57 @@ $ nexus-server builds list
 and the trace walk that binds the code to it. The tests: `builds_unit_*` (unit: the text and the decisions),
 `builds_functional_*` (functional: real files, real crashes), `tlc_placement_*` (the model, its witnesses and the
 walks).
+
+## Handover
+
+Layer 3 (`docs/roadmap.sexp`, `takeover-handover`; `src/server/handover.h`, `src/server/drain.h`,
+`models/handover/Handover.tla`) replaces the running server with a placed build under an OS lock, keeping durable
+step-by-step state on disk so a handover cut anywhere resumes from what is on disk.
+
+Under `<server dir>/`:
+
+```
+handover/
+  gate                    writers' gate (store/fs.h)
+  state                   active handover record (absent when no handover is in flight)
+  .state-*                interrupted state write, removed by the next holder after syncing handover/
+```
+
+`handover/state` is written through a synced `.state-*` file, renamed over `state`, with `handover/` synced before each
+stage acts:
+
+```
+nexus-handover 1
+target 3f2a...
+previous 9be0...
+stage switching
+end
+```
+
+`stage` is one of `switching`, `draining`, `starting`, or `rolling-back`; `previous` is `none` when no working build
+was current before.
+
+### Steps and crash recovery
+
+Every `nexus-server handover <hash>` or `nexus-server handover [resume]` takes `flock(LOCK_EX)` on `handover/`'s own
+descriptor (checked with `unlockable_filesystem` and `locks_kept`), syncs `handover/`, removes `.state-*` leftovers,
+and inspects `handover/state` first:
+
+1. **Unfinished `handover/state` present**: whatever command acquired the lock finishes resuming that interrupted
+   handover first before starting any new target, so `previous` (the last working build) is never overwritten by a
+   broken build that never reached `SERVING`.
+2. **`switching`**: switches `builds/active` atomically to `(target, previous)` (`Builds::makeCurrent`).
+3. **`draining`**: asks the running server on `server.sock` to `drain` (`nexus-server drain`). While draining, the
+   server keeps answering `SERVING` (`build <hash> draining`) and serving open windows until no session has an open
+   turn or starting driver (or its 10-minute drain deadline passes), then closes `server.sock`, ends its drivers, and
+   exits `75` (`EX_TEMPFAIL`). A server from before `drain` is stopped with `stop`.
+4. **`starting`**: starts `<server dir>/current/bin/nexus-server serve --dir <server dir>` and waits up to 30 s for
+   `status` to answer `SERVING` with `build <target>`.
+5. **`rolling-back`**: if `target` exits non-zero or does not answer `SERVING` in time, any hung started child is
+   ended, `rolling-back` is synced to `handover/state`, `builds/active` is switched back to `previous`, `previous` is
+   started until it answers `SERVING`, and `handover/state` is removed and synced.
+
+Exit statuses of `nexus-server handover`: `0` ok (for `resume`, recovered to `SERVING`); `1` failed; `2` usage; `3`
+refused (not placed, untested, incompatible formats, no current build); `4` lock busy; `5` target failed to serve and
+rolled back to `previous`. Layer 4 (`takeover-supervision`) adds service supervision (`launchd`/`systemd`) and rollback
+for builds that fail after reaching `SERVING`.

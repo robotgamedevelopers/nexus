@@ -26,6 +26,7 @@
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
 #include "server/config_repo.h"
+#include "server/drain.h"
 #include "server/driver_table.h"
 #include "server/drivers.h"
 #include "server/durable.h"
@@ -424,6 +425,7 @@ private:
     std::uint64_t nextId_ = 1;
     int listen_ = -1;
     bool stopping_ = false;
+    Drain drain_;
 };
 
 StartOrder::Outcome Server::open(bool unlocked, std::string* why) {
@@ -760,13 +762,19 @@ void Server::control(int fd) {
         stopping_ = true;
         return;
     }
+    if (request == "drain") {
+        drain_.request(static_cast<std::uint64_t>(nowMs()));
+        writeAll(fd, "OK\n");
+        return;
+    }
     // A start's (and `new`'s) question: answered only from this loop, so SERVING is true when said. Once `stop` is
     // accepted the loop takes no more requests, and the connections still queued are closed unanswered with the socket
     // (models/store/StoreLock.tla StopAccept, then CloseSocket; RefusedServes).
-    // Its second line, which a start's question does not read, is the build this server runs from (server/builds.h).
+    // Its second line, which a start's question does not read, is the build this server runs from (server/builds.h,
+    // server/drain.h).
     if (request == kStatusRequest) {
-        writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\nbuild " +
-                         (paths_.build.empty() ? std::string("none") : paths_.build) + "\n");
+        writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\n" +
+                         statusBuildLine(paths_.build, drain_.draining()) + "\n");
         return;
     }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
@@ -781,8 +789,8 @@ void Server::control(int fd) {
     if (!parseNewRequest(request, &client)) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
-            "` format <n>` and then ` hello <hello>`, `status`, `stop`, `config reload`, `config restore <commit>` and "
-            "`config sign-in <account>`\n");
+            "` format <n>` and then ` hello <hello>`, `status`, `drain`, `stop`, `config reload`, "
+            "`config restore <commit>` and `config sign-in <account>`\n");
         return;
     }
     // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
@@ -1026,6 +1034,9 @@ PassOrder::Outcome Server::wait(std::string* why) {
     pass_.fds = {pollfd{listen_, POLLIN, 0}};
     pass_.owner = {0};
     int waitMs = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+    if (const std::optional<std::uint64_t> due = drain_.untilDeadline(static_cast<std::uint64_t>(nowMs()))) {
+        waitMs = std::min(waitMs, static_cast<int>(std::min<std::uint64_t>(*due, static_cast<std::uint64_t>(kMaxWaitMs))));
+    }
     if (const std::optional<std::uint64_t> due = hub_->secretWake()) {
         const std::uint64_t now = static_cast<std::uint64_t>(nowMs());
         waitMs = std::min(waitMs, *due > now ? static_cast<int>(std::min<std::uint64_t>(*due - now, kMaxWaitMs)) : 0);
@@ -1276,9 +1287,21 @@ int Server::run() {
             return kFailedExit;
         }
     }
+    if (const char* drainEnv = std::getenv(kDrainLimitVariable)) {
+        char* end = nullptr;
+        const unsigned long long ms = std::strtoull(drainEnv, &end, 10);
+        if (end != drainEnv && *end == 0) {
+            drain_ = Drain(static_cast<std::uint64_t>(ms));
+        }
+    }
     std::fprintf(stderr, "nexus-server: serving on %s\n", paths_.socket.c_str());
     int status = 0;
+    bool drained = false;
     while (!stopping_ && !gStop) {
+        if (drain_.stopNow(drivers_->busy(), static_cast<std::uint64_t>(nowMs()))) {
+            drained = true;
+            break;
+        }
         // One pass of the loop, in its order (server/pass.h, models/LoopPass.tla), each step through take_pass_step,
         // the dispatch the trace walk runs too: the links' ticks, the poll, the batch held, its steps applied, its one
         // flush, the drivers released and the state staged for the next pass's tick.
@@ -1307,6 +1330,10 @@ int Server::run() {
                 close(fd);
             }
         }
+        if (drain_.stopNow(drivers_->busy(), static_cast<std::uint64_t>(nowMs()))) {
+            drained = true;
+            break;
+        }
     }
     // The stop, in its order (models/store/StoreLock.tla Stop, EndDrivers, Exit): the control socket first, closed and
     // its file removed (only if it is still this server's), so that from now on no probe finds a server that is going
@@ -1326,14 +1353,14 @@ int Server::run() {
             "the server next starts\n");
         status = 1;
     }
-    // On a clean stop, each window is told the session ended (mosh's shutdown), so it makes a session with the next
-    // server at once rather than after kQuietMs of silence (sync/redial.h). Skipped when the store failed: a failed
-    // pass broke out before ticking its links so unflushed actions stay unacknowledged. Bounded: a window that does
-    // not acknowledge within kLinkShutdownMs learns by the silence instead.
+    // On a clean stop or drain, each window is told the session ended (mosh's shutdown), so it makes a session with
+    // the next server at once rather than after kQuietMs of silence (sync/redial.h). Skipped when the store failed: a
+    // failed pass broke out before ticking its links so unflushed actions stay unacknowledged. Bounded: a window that
+    // does not acknowledge within kLinkShutdownMs learns by the silence instead.
     const std::size_t told = status == 0 ? shutDownLinks() : 0;
-    std::fprintf(stderr, "nexus-server: stopped, %zu link%s open, %zu acknowledged its end\n", links_.size(),
-        links_.size() == 1 ? "" : "s", told);
-    return status;
+    std::fprintf(stderr, "nexus-server: %s, %zu link%s open, %zu acknowledged its end\n",
+        drained ? "drained" : "stopped", links_.size(), links_.size() == 1 ? "" : "s", told);
+    return status != 0 ? status : (drained ? kDrainExit : 0);
 }
 
 // Starts `self serve --dir <dir>` as a server of its own: a new session (no terminal), standard input from /dev/null,
@@ -1769,6 +1796,21 @@ int stop(const Paths& p) {
     // The server removes its socket as it ends: wait for that, so that a server started next does not find it.
     for (int i = 0; i < 250 && access(p.socket.c_str(), F_OK) == 0; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return 0;
+}
+
+int drain(const Paths& p) {
+    signal(SIGPIPE, SIG_IGN);
+    std::string reply;
+    std::string why;
+    if (!ask(p, "drain", std::string(), &reply, &why)) {
+        std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+        return 1;
+    }
+    if (reply != "OK") {
+        std::fprintf(stderr, "nexus-server: the server answered `drain` with: %s\n", reply.c_str());
+        return 1;
+    }
     return 0;
 }
 
