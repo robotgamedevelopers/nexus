@@ -894,8 +894,15 @@ jobs:
             run: '^tlc_placement_'
             build: builds_walk
             skip: '^tlc_placement_spec$'
-          - shard: claude
+          # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
+          # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
+          - shard: claude-driver
+            run: '^tlc_claude_driver$'
+          - shard: claude-secrets
+            run: '^tlc_claude_driver_secrets$'
+          - shard: claude-rest
             run: '^tlc_claude'
+            skip: '^tlc_claude_driver(_secrets)?$'
             node: true
           - shard: witnesses
             run: '^tlc_witness'

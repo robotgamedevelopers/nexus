@@ -55,12 +55,12 @@ if(NOT WIN32)
     endif()
 endif()
 
-# The Claude driver's turns (models/ClaudeDriver.tla), label model: the spec on its small instance, every property;
-# a reversed witness per property, each a bug TLC must reject; and the driver's traces, each a behaviour of the spec:
-# its unit tests' and its walk's (drivers/claude/test/walk.ts) over several seeds, with three faulty walks rejected.
-# The traces need Node and the driver built (npm ci && npm run build in drivers/claude), as the model job does.
-tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4)
-tlc_test(tlc_claude_driver_secrets ClaudeDriver MCClaudeDriverSecrets.cfg pass WORKERS 4)
+# The Claude driver's turns (models/ClaudeDriver.tla), label model: the spec on its two per-commit instances, each in
+# a CI shard of its own (SHARD: capped at 80 s, with no Node build); a reversed witness per property, each a bug TLC
+# must reject; and the driver's traces, each a behaviour of the spec: its unit tests' and its walk's
+# (drivers/claude/test/walk.ts) over several seeds, with four faulty walks rejected, in claude-rest (node: true).
+tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4 SHARD)
+tlc_test(tlc_claude_driver_secrets ClaudeDriver MCClaudeDriverSecrets.cfg pass WORKERS 4 SHARD)
 # Nightly: both settings (model and effort), two turns: 127,240 states, 16 s on four workers in CI; and three turns
 # with two secret asks and two setting values (197,452 states, 20 s on eight workers).
 tlc_test(tlc_claude_driver_two_settings ClaudeDriver MCClaudeDriverTwo.cfg pass WORKERS 8 NIGHTLY)
