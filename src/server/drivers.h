@@ -175,6 +175,7 @@ private:
     std::vector<std::string> keepsOut() const;
     ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
+    Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);
     std::vector<sync::SessionChange> changes(const Output& out, const Supervisor& sup) const;
@@ -196,6 +197,7 @@ private:
     Output pendingOut_;
     std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
     Millis resolveAt_ = 0;
+    bool started_ = false;
     bool holding_ = false;
     // What a step told a driver while holding, in order: a signal (sig) to its process group, or (sig 0) its input
     // carried out as far as it was told.

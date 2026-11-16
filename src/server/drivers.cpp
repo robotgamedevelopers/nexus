@@ -380,6 +380,7 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
 }
 
 bool Drivers::start(Millis now) {
+    started_ = true;
     for (sync::SessionId id : store_.ids()) {
         const sync::StoredSession* stored = store_.find(id);
         sync::DriverState state = stored->driver;
@@ -418,11 +419,12 @@ Supervisor& Drivers::pending(sync::SessionId id, const ResolvedDriver& driver, M
     if (it != slots_.end()) {
         pendingSup_ = it->second.sup;
         // A friend whose driver no longer resolves has none: what is queued stays queued until it has one again. Its
-        // directory stays the session's: a driver that does not resolve names none, and a driver already running
-        // there is not moved by it.
+        // directory stays the session's: a driver that does not resolve, or whose friend is out of friends.json (so
+        // its instances are not read), names none, and a driver already running or waiting there is not moved by it.
         const bool none = !driver.problem.empty();
+        const bool keepCwd = none || !listed(id);
         append(pendingOut_, pendingSup_->configure(none ? std::vector<std::string>{} : driver.command,
-            none ? pendingSup_->cwd() : driver.cwd, options_.table, now));
+            keepCwd ? pendingSup_->cwd() : driver.cwd, options_.table, now));
     } else {
         const sync::StoredSession* stored = store_.find(id);
         pendingSup_.emplace(config(id, driver), stored != nullptr ? stored->driver : sync::DriverState{}, now,
@@ -509,6 +511,53 @@ void Drivers::sent(sync::SessionId id, bool committed) {
     run(id, std::move(pendingOut_), options_.clock(), true);
 }
 
+// Brings a slot's supervisor to the session's settings, account, limit, place and resolved command as the store, the
+// accounts and the drivers file hold them now, tightening before opening: a move off this machine or a command that no
+// longer resolves holds back before anything can take from the queue, and the limit and account are set before a
+// resolved command or a move onto this machine lets what waits go on.
+Output Drivers::syncSlot(sync::SessionId id, Supervisor& sup, Millis now) {
+    const sync::StoredSession* s = store_.find(id);
+    if (s == nullptr) {
+        return {};
+    }
+    const ResolvedDriver r = resolve(id);
+    if (r.problem.empty()) {
+        unresolved_.erase(id);
+    } else {
+        unresolved_.insert(id);
+    }
+    const bool none = !r.problem.empty();
+    std::string dir;
+    bool here = true;
+    if (const accounts::Instance* in = instanceOf(s->info)) {
+        here = sameMachine(in->machine, options_.machine, options_.hostName);
+        dir = in->dir;
+    } else {
+        // No instance (its friend has none now): the drivers file's directory, on this machine, so that a session
+        // whose instance was elsewhere is never left not here.
+        const ResolvedDriver line = resolveFriend(s->info.friendName, nullptr);
+        dir = line.problem.empty() ? line.cwd : sup.cwd();
+    }
+    Output out;
+    if (!here) {
+        append(out, sup.setPlace(dir, false, now));
+    }
+    if (none) {
+        append(out, sup.configure({}, dir, options_.table, now));
+    }
+    append(out, sup.setOptions(s->info.model, s->info.effort, now));
+    append(out, sup.setAccount(s->info.account, now));
+    append(out, sup.setLimited(limitedOf(s->info), now));
+    append(out, sup.setKeepsOut(keepsOut(), now));
+    if (!none) {
+        append(out, sup.configure(r.command, dir, options_.table, now));
+    }
+    if (here) {
+        append(out, sup.setPlace(dir, true, now));
+    }
+    return out;
+}
+
 // The session's account, model, effort or instance changed, durably: a supervisor already running takes them from its
 // next turn (one started later reads them from the store and the accounts). An account change ends its driver once no
 // turn is open, so the next starts under the new account, with the same session and transcript; so does a change of
@@ -516,25 +565,16 @@ void Drivers::sent(sync::SessionId id, bool committed) {
 // the instance to another machine (then none starts here). A session left with no instance works in the drivers file's
 // directory, here.
 void Drivers::configured(sync::SessionId id, const sync::SessionInfo& info) {
+    (void)info;
     auto it = slots_.find(id);
     if (it == slots_.end()) {
+        if (started_) {
+            showResolved(id, resolve(id));
+        }
         return;
     }
     const Millis now = options_.clock();
-    Output out = it->second.sup.setOptions(info.model, info.effort, now);
-    append(out, it->second.sup.setAccount(info.account, now));
-    append(out, it->second.sup.setLimited(limitedOf(info), now));
-    append(out, it->second.sup.setKeepsOut(keepsOut(), now));
-    if (const accounts::Instance* in = instanceOf(info)) {
-        const bool here = sameMachine(in->machine, options_.machine, options_.hostName);
-        append(out, it->second.sup.setPlace(in->dir, here, now));
-    } else {
-        // No instance (its friend has none now): the drivers file's directory, on this machine, so that a session
-        // whose instance was elsewhere is never left not here.
-        const ResolvedDriver line = resolveFriend(info.friendName, nullptr);
-        append(out, it->second.sup.setPlace(line.problem.empty() ? line.cwd : it->second.sup.cwd(), true, now));
-    }
-    run(id, std::move(out), now, false);
+    run(id, syncSlot(id, it->second.sup, now), now, false);
 }
 
 void Drivers::made(sync::SessionId id) {
@@ -554,10 +594,10 @@ void Drivers::signedIn(const std::string& account) {
 }
 
 // The hub has committed the notice of a friend taken out, or settled a session whose friend is back: its supervisor is
-// told (stopping what runs, or letting what waits go on). Put back, it first takes the limit and the directories kept
-// out that the friend's record says now (accounts::limitedFor), which may differ from those it held when the friend was
-// taken out, so that the next driver starts under them. With none, a session put back with prompts queued gets one,
-// which reads them as it starts and takes the oldest; otherwise only what it shows changes.
+// told (stopping what runs, or letting what waits go on). Put back, it first takes the settings, account, command,
+// limit, directories kept out and place that the session and the friend's record say now, which may differ from those
+// it held when the friend was taken out, so that the next driver starts under them. With none, a session put back with
+// prompts queued gets one, which reads them as it starts and takes the oldest; otherwise only what it shows changes.
 void Drivers::present(sync::SessionId id, bool present) {
     auto it = slots_.find(id);
     if (it == slots_.end()) {
@@ -571,10 +611,7 @@ void Drivers::present(sync::SessionId id, bool present) {
     }
     Output out;
     if (present) {
-        if (const sync::StoredSession* s = store_.find(id)) {
-            out = it->second.sup.setLimited(limitedOf(s->info), now);
-            append(out, it->second.sup.setKeepsOut(keepsOut(), now));
-        }
+        out = syncSlot(id, it->second.sup, now);
     }
     append(out, it->second.sup.setPresent(present, now));
     run(id, std::move(out), now, false);

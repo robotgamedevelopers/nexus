@@ -730,6 +730,11 @@ KeptDraftsStore fileKeptDraftsStore(std::string path) {
             ::close(fd);
             return false;
         }
+        if (::fchmod(fd, 0600) != 0) {
+            *error = "its lock " + lock + " cannot be made private (" + std::strerror(errno) + ")";
+            ::close(fd);
+            return false;
+        }
         KeptFile file;
         std::string text;
         bool exists = false;

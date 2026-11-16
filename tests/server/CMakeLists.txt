@@ -89,7 +89,8 @@ if(NOT WIN32)
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account
                  friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
-                 friend_back_limited_queue no_registry no_registry_listed instance_dir instance_elsewhere instance_moved
+                 friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
+                 instance_dir instance_elsewhere instance_moved
                  instance_default instance_removed held secret_ask secret_sign_in secret_leak_witness)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})

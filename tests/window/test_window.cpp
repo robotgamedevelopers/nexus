@@ -522,7 +522,7 @@ void keptDraftsTextRoundTrips() {
 
 // What can key a draft: a host as ssh takes it, never a space or a control byte.
 void keptServersAreOneWord() {
-    CHECK(keptServer("studio") && keptServer("glenn@studio.local") && keptServer("10.0.0.2") && keptServer("[::1]"));
+    CHECK(keptServer("studio") && keptServer("me@studio.local") && keptServer("10.0.0.2") && keptServer("[::1]"));
     CHECK(!keptServer("") && !keptServer("two words") && !keptServer("tab\there") && !keptServer("line\n") &&
           !keptServer(std::string("nul\0", 4)) && !keptServer("del\x7f") && !keptServer(std::string(256, 'h')));
     CHECK(keptServer(std::string(255, 'h')));

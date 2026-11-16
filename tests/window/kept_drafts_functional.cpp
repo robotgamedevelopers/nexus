@@ -170,7 +170,7 @@ void twoServers(const std::string& dir) {
     }
     // A window of another server with a friend of the same name: nothing of studio's is given to it, or taken.
     {
-        Window mini(path, "glenn@mini");
+        Window mini(path, "me@mini");
         mini.take({"ada"});
         CHECK(mini.draft("ada").empty());
         mini.type("ada", "for mini's ada");
@@ -178,12 +178,12 @@ void twoServers(const std::string& dir) {
     }
     KeptFile file = fileOf(path);
     CHECK(file.size() == 2 && kept(file, "studio", "ada") == "for studio's ada");
-    CHECK(kept(file, "glenn@mini", "ada") == "for mini's ada");
+    CHECK(kept(file, "me@mini", "ada") == "for mini's ada");
     Window studio(path, "studio");
     studio.take({"ada"});
     CHECK(studio.draft("ada") == "for studio's ada");
     file = fileOf(path);
-    CHECK(file.size() == 1 && kept(file, "glenn@mini", "ada") == "for mini's ada");
+    CHECK(file.size() == 1 && kept(file, "me@mini", "ada") == "for mini's ada");
     privateFiles(dir);
 }
 
