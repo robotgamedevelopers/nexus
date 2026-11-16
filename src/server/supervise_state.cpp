@@ -1,4 +1,4 @@
-// Durable supervision state codec and atomic updates (server/supervise_state.h).
+// Durable supervision state codec and atomic marker updates (server/supervise_state.h).
 
 #include "server/supervise_state.h"
 
@@ -30,6 +30,13 @@ store::Bytes toBytes(const std::string& s) {
 
 std::string fromBytes(const store::Bytes& b) {
     return std::string(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+std::string trimCrLf(std::string s) {
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
+        s.pop_back();
+    }
+    return s;
 }
 
 bool parseUint32(const std::string& text, std::uint32_t* out) {
@@ -64,6 +71,34 @@ bool superviseDirExists(store::Fs& fs, const std::string& superviseDir) {
     return fs.list(superviseDir, entries).is_ok();
 }
 
+Status writeAtomicFile(store::Fs& fs, const std::string& superviseDir, const char* tmpPrefix, const char* dstName,
+                       const std::string& content) {
+    const std::string tmp = superviseDir + "/" + tmpPrefix + uniqueSuffix();
+    const std::string dst = superviseDir + "/" + dstName;
+    Status s = fs.write_new(tmp, toBytes(content));
+    if (!s.is_ok()) {
+        (void)fs.remove(tmp);
+        return s;
+    }
+    s = fs.rename(tmp, dst);
+    if (!s.is_ok()) {
+        (void)fs.remove(tmp);
+        return s;
+    }
+    return fs.sync_dir(superviseDir);
+}
+
+Status removeSynced(store::Fs& fs, const std::string& superviseDir, const char* name) {
+    const Status s = fs.remove(superviseDir + "/" + name);
+    if (s.code() == Status::Code::NotFound) {
+        return Status::ok();
+    }
+    if (!s.is_ok()) {
+        return s;
+    }
+    return fs.sync_dir(superviseDir);
+}
+
 Status loadExistingOrDefault(store::Fs& fs, const std::string& superviseDir, SuperviseState* out) {
     *out = SuperviseState{};
     store::Bytes raw;
@@ -79,6 +114,15 @@ Status loadExistingOrDefault(store::Fs& fs, const std::string& superviseDir, Sup
         *out = SuperviseState{};
     }
     return Status::ok();
+}
+
+std::string readPickedToken(store::Fs& fs, const std::string& superviseDir) {
+    store::Bytes raw;
+    if (!fs.read_all(superviseDir + "/" + kPickedFile, raw).is_ok()) {
+        return std::string();
+    }
+    const std::string token = trimCrLf(fromBytes(raw));
+    return builds::isHash(token) ? token : std::string();
 }
 
 } // namespace
@@ -213,27 +257,74 @@ bool readState(const std::string& text, SuperviseState* out, std::string* why) {
 }
 
 Status writeStateFile(store::Fs& fs, const std::string& superviseDir, const SuperviseState& st) {
-    const std::string tmp = superviseDir + "/" + kStateTmpPrefix + uniqueSuffix();
-    const std::string dst = superviseDir + "/" + kStateFile;
-    Status s = fs.write_new(tmp, toBytes(formatState(st)));
-    if (!s.is_ok()) {
-        (void)fs.remove(tmp);
-        return s;
+    return writeAtomicFile(fs, superviseDir, kStateTmpPrefix, kStateFile, formatState(st));
+}
+
+Status writeStoppedMarker(store::Fs& fs, const std::string& superviseDir) {
+    return writeAtomicFile(fs, superviseDir, kStoppedTmpPrefix, kStoppedFile, "1\n");
+}
+
+Status clearStoppedMarker(store::Fs& fs, const std::string& superviseDir) {
+    return removeSynced(fs, superviseDir, kStoppedFile);
+}
+
+bool hasStoppedMarker(store::Fs& fs, const std::string& superviseDir) {
+    store::Bytes raw;
+    return fs.read_all(superviseDir + "/" + kStoppedFile, raw).is_ok();
+}
+
+Status writePickedBuild(store::Fs& fs, const std::string& superviseDir, const std::string& target) {
+    if (!builds::isHash(target)) {
+        return Status::refused("invalid picked build hash `" + target + "`");
     }
-    s = fs.rename(tmp, dst);
-    if (!s.is_ok()) {
-        (void)fs.remove(tmp);
-        return s;
+    return writeAtomicFile(fs, superviseDir, kPickedTmpPrefix, kPickedFile, target + "\n");
+}
+
+bool hasPickedBuild(store::Fs& fs, const std::string& superviseDir, const std::string& build) {
+    return !build.empty() && readPickedToken(fs, superviseDir) == build;
+}
+
+Status clearPickedBuild(store::Fs& fs, const std::string& superviseDir, const std::string& build) {
+    if (build.empty() || readPickedToken(fs, superviseDir) != build) {
+        return Status::ok();
     }
-    return fs.sync_dir(superviseDir);
+    return removeSynced(fs, superviseDir, kPickedFile);
+}
+
+Status loadEffectiveState(store::Fs& fs, const std::string& superviseDir, SuperviseState* out) {
+    *out = SuperviseState{};
+    const std::string statePath = superviseDir + "/" + kStateFile;
+    store::Bytes raw;
+    const Status rs = fs.read_all(statePath, raw);
+    if (!rs.is_ok() && rs.code() != Status::Code::NotFound) {
+        return rs;
+    }
+    if (rs.is_ok()) {
+        std::string why;
+        if (!readState(fromBytes(raw), out, &why)) {
+            return Status::failed(statePath + " is damaged: " + why);
+        }
+    }
+    if (hasStoppedMarker(fs, superviseDir)) {
+        out->stopped = true;
+    }
+    const std::string picked = readPickedToken(fs, superviseDir);
+    if (!picked.empty()) {
+        out->picked = picked;
+    }
+    return Status::ok();
 }
 
 Status noteHandoverBegin(store::Fs& fs, const std::string& superviseDir) {
     if (!superviseDirExists(fs, superviseDir)) {
         return Status::ok();
     }
+    Status s = clearStoppedMarker(fs, superviseDir);
+    if (!s.is_ok()) {
+        return s;
+    }
     SuperviseState st;
-    Status s = loadExistingOrDefault(fs, superviseDir, &st);
+    s = loadExistingOrDefault(fs, superviseDir, &st);
     if (!s.is_ok()) {
         return s;
     }
@@ -249,8 +340,16 @@ Status noteHandoverTarget(store::Fs& fs, const std::string& superviseDir, const 
     if (!superviseDirExists(fs, superviseDir)) {
         return Status::ok();
     }
+    Status s = clearStoppedMarker(fs, superviseDir);
+    if (!s.is_ok()) {
+        return s;
+    }
+    s = writePickedBuild(fs, superviseDir, target);
+    if (!s.is_ok()) {
+        return s;
+    }
     SuperviseState st;
-    Status s = loadExistingOrDefault(fs, superviseDir, &st);
+    s = loadExistingOrDefault(fs, superviseDir, &st);
     if (!s.is_ok()) {
         return s;
     }
@@ -267,24 +366,25 @@ Status noteIntentionalStop(store::Fs& fs, const std::string& superviseDir) {
     if (!superviseDirExists(fs, superviseDir)) {
         return Status::ok();
     }
-    SuperviseState st;
-    Status s = loadExistingOrDefault(fs, superviseDir, &st);
-    if (!s.is_ok()) {
-        return s;
-    }
-    if (st.stopped) {
+    if (hasStoppedMarker(fs, superviseDir)) {
         return Status::ok();
     }
-    st.stopped = true;
-    return writeStateFile(fs, superviseDir, st);
+    return writeStoppedMarker(fs, superviseDir);
+}
+
+void noteIntentionalStopAt(const std::string& superviseDir) {
+    if (superviseDir.empty()) {
+        return;
+    }
+    std::unique_ptr<store::Fs> fs = store::make_posix_fs();
+    (void)noteIntentionalStop(*fs, superviseDir);
 }
 
 void noteIntentionalStop(const std::string& serverDir) {
     if (serverDir.empty()) {
         return;
     }
-    std::unique_ptr<store::Fs> fs = store::make_posix_fs();
-    (void)noteIntentionalStop(*fs, serverDir + "/" + kSuperviseDir);
+    noteIntentionalStopAt(serverDir + "/" + kSuperviseDir);
 }
 
 } // namespace nexus::server::supervision

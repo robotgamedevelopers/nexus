@@ -100,11 +100,11 @@ class WalkHandoverGate final : public HandoverGate {
 public:
     nexus::store::Fs& fs;
     std::string handoverDir;
+    std::string superviseDir;
     bool& extLocked;
-    std::string& explicitPick;
 
-    WalkHandoverGate(nexus::store::Fs& f, std::string dir, bool& ext, std::string& pick)
-        : fs(f), handoverDir(std::move(dir)), extLocked(ext), explicitPick(pick) {}
+    WalkHandoverGate(nexus::store::Fs& f, std::string hdir, std::string sdir, bool& ext)
+        : fs(f), handoverDir(std::move(hdir)), superviseDir(std::move(sdir)), extLocked(ext) {}
 
     bool isLockedByOther() override { return extLocked; }
 
@@ -116,14 +116,32 @@ public:
         return fs.lock(handoverDir, nexus::store::LockMode::Exclusive, out);
     }
 
-    nexus::store::Status resumeIfNeeded() override { return nexus::store::Status::ok(); }
+    nexus::store::Status resumeIfNeeded(bool lockAlreadyHeld = false) override {
+        const nexus::store::Status ds = fs.private_dir(handoverDir);
+        if (!ds.is_ok()) {
+            return ds;
+        }
+        std::unique_ptr<nexus::store::Fs> probeFs = nexus::store::make_posix_fs();
+        std::unique_ptr<nexus::store::FileLock> probeHold;
+        const nexus::store::Status ls = probeFs->lock(handoverDir, nexus::store::LockMode::Exclusive, probeHold);
+        if (lockAlreadyHeld) {
+            if (ls.code() != nexus::store::Status::Code::Busy) {
+                return nexus::store::Status::failed("rollback resumeIfNeeded(true) called without holding handover lock");
+            }
+            return nexus::store::Status::ok();
+        }
+        if (ls.code() == nexus::store::Status::Code::Busy) {
+            return ls;
+        }
+        return ls;
+    }
 
-    bool hasExplicitPick(const std::string& build) override { return !build.empty() && explicitPick == build; }
+    bool hasExplicitPick(const std::string& build) override {
+        return hasPickedBuild(fs, superviseDir, build);
+    }
 
     void clearExplicitPick(const std::string& build) override {
-        if (explicitPick == build) {
-            explicitPick.clear();
-        }
+        (void)clearPickedBuild(fs, superviseDir, build);
     }
 };
 
@@ -442,7 +460,6 @@ int main(int argc, char** argv) {
         bool extHoLocked = false;
         int extHoTarget = 0;
         std::unique_ptr<nexus::store::FileLock> extHoHold;
-        std::string explicitPick;
 
         Actor a1;
         a1.name = "s1";
@@ -460,7 +477,7 @@ int main(int argc, char** argv) {
             bo.now_ms = [ap] { return ap->clockMs; };
             bo.sleep_ms = [ap](std::uint64_t d) { ap->clockMs += d; };
             ap->placement = handover::makeBuildsPlacement(serverDir, bo);
-            ap->gate = std::make_unique<WalkHandoverGate>(*ap->fs, handoverDir, extHoLocked, explicitPick);
+            ap->gate = std::make_unique<WalkHandoverGate>(*ap->fs, handoverDir, superviseDir, extHoLocked);
             ap->child = std::make_unique<WalkChildPort>(simChild, idByHash, hashById, startupBroken);
 
             Options opts;
@@ -531,15 +548,10 @@ int main(int argc, char** argv) {
         };
 
         auto formatDiskRecord = [&]() -> std::string {
-            nexus::store::Bytes raw;
-            const nexus::store::Status rs = envFs->read_all(superviseDir + "/" + kStateFile, raw);
             SuperviseState st;
-            if (rs.is_ok()) {
-                std::string why;
-                const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
-                if (!readState(text, &st, &why)) {
-                    throw std::runtime_error("corrupt supervise/state in walk: " + why);
-                }
+            const nexus::store::Status rs = loadEffectiveState(*envFs, superviseDir, &st);
+            if (!rs.is_ok()) {
+                throw std::runtime_error("corrupt supervise/state in walk: " + rs.message());
             }
             const int bid = st.build.empty() ? 0 : idByHash[st.build];
             std::set<int> sh;
@@ -691,8 +703,9 @@ int main(int argc, char** argv) {
                                                    throw std::runtime_error("handover makeCurrent failed");
                                                }
                                            }
-                                           explicitPick = hashById[t];
-                                           if (fault != Fault::InMemoryState) {
+                                           if (fault == Fault::InMemoryState) {
+                                               (void)writePickedBuild(*envFs, superviseDir, hashById[t]);
+                                           } else {
                                                (void)noteHandoverTarget(*envFs, superviseDir, hashById[t]);
                                            }
                                        }

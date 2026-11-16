@@ -83,6 +83,7 @@ public:
 
     bool externalLocked = false;
     int resumeCalls = 0;
+    bool lastResumeLockHeld = false;
     std::set<std::string> picks;
 
     bool isLockedByOther() override { return externalLocked; }
@@ -98,8 +99,9 @@ public:
         return fs_.lock(dir_, store::LockMode::Exclusive, out);
     }
 
-    store::Status resumeIfNeeded() override {
+    store::Status resumeIfNeeded(bool lockAlreadyHeld = false) override {
         ++resumeCalls;
+        lastResumeLockHeld = lockAlreadyHeld;
         return store::Status::ok();
     }
 
@@ -176,12 +178,8 @@ public:
 };
 
 SuperviseState loadStateFromMem(store::Fs& fs, const std::string& dir = "/supervise") {
-    store::Bytes raw;
-    CHECK(fs.read_all(dir + "/" + kStateFile, raw).is_ok());
-    const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
     SuperviseState st;
-    std::string why;
-    CHECK(readState(text, &st, &why));
+    CHECK(loadEffectiveState(fs, dir, &st).is_ok());
     return st;
 }
 
@@ -247,7 +245,20 @@ void testState() {
     CHECK(afterTarget.shunned.count(kB3) == 1);
 
     CHECK(noteIntentionalStop(fs, "/supervise").is_ok());
+    CHECK(hasStoppedMarker(fs, "/supervise"));
+    CHECK(hasPickedBuild(fs, "/supervise", kB2));
     CHECK(loadStateFromMem(fs).stopped);
+
+    // Concurrent background `supervise/state` write (`stopped = false`, `picked = ""`) must not clobber the atomic
+    // `supervise/stopped` or `supervise/picked` markers.
+    SuperviseState bgWrite;
+    bgWrite.build = kB1;
+    bgWrite.crashes = 0;
+    bgWrite.shunned = {kB2, kB3};
+    CHECK(writeStateFile(fs, "/supervise", bgWrite).is_ok());
+    const SuperviseState merged = loadStateFromMem(fs);
+    CHECK(merged.stopped);
+    CHECK(merged.picked == kB2);
 }
 
 void testUnits() {
@@ -273,17 +284,19 @@ void testUnits() {
                                            "/Users/op<1>", "/usr/local/bin:/usr/bin");
     CHECK(plist.find("<string>/opt/a&amp;b/current/bin/nexus-server</string>") != std::string::npos);
     CHECK(plist.find("<string>supervise</string>") != std::string::npos);
+    CHECK(plist.find("<string>--launchd</string>") != std::string::npos);
     CHECK(plist.find("<string>--dir</string>") != std::string::npos);
     CHECK(plist.find("<key>SuccessfulExit</key>\n        <false/>") != std::string::npos);
     CHECK(plist.find("<string>/Users/op&lt;1&gt;</string>") != std::string::npos);
 
-    // systemd specifier (`%`), space (`\x20` in WorkingDirectory), quote (`"`), and backslash (`\`) escaping.
-    const std::string unit = systemdUnit("/srv/100%/current/bin/nexus-server", "/srv/100%", "/home/op\"x\\y",
-                                         "/usr/local/bin:/usr/bin");
-    CHECK(unit.find("WorkingDirectory=/srv/100%%\n") != std::string::npos);
-    CHECK(unit.find("ExecStart=\"/srv/100%%/current/bin/nexus-server\" supervise --dir \"/srv/100%%\"") !=
-          std::string::npos);
+    // systemd specifier (`%`), spaces in WorkingDirectory, quote (`"`), backslash (`\`), and `KillMode=process`.
+    const std::string unit = systemdUnit("/srv/with space/100%/current/bin/nexus-server", "/srv/with space/100%",
+                                         "/home/op\"x\\y", "/usr/local/bin:/usr/bin");
+    CHECK(unit.find("WorkingDirectory=/srv/with space/100%%\n") != std::string::npos);
+    CHECK(unit.find("ExecStart=\"/srv/with space/100%%/current/bin/nexus-server\" supervise --dir "
+                    "\"/srv/with space/100%%\"") != std::string::npos);
     CHECK(unit.find("Environment=\"HOME=/home/op\\\"x\\\\y\"") != std::string::npos);
+    CHECK(unit.find("KillMode=process\n") != std::string::npos);
     CHECK(unit.find("Restart=on-failure\n") != std::string::npos);
     CHECK(unit.find("RestartPreventExitStatus=3 78\n") != std::string::npos);
     CHECK(unit.find("WantedBy=default.target\n") != std::string::npos);
@@ -382,6 +395,7 @@ void testRollback() {
 
     std::uint64_t clockMs = 10'000;
     bool sawHandoverLockOnRollback = false;
+    bool sawResumeWithHeldLock = false;
     bool stopSig = false;
     int b1HealthyWatches = 0;
 
@@ -397,6 +411,9 @@ void testRollback() {
     opts.hook = [&](const std::string& step) {
         if (step == "rollback") {
             sawHandoverLockOnRollback = loopPtr->holdsHandoverLock();
+        }
+        if (step == "rb_unlock") {
+            sawResumeWithHeldLock = gate.lastResumeLockHeld;
         }
         if (step == "watch") {
             if (child.current.build == kB2 || child.crashQuota[kB1] > 0) {
@@ -422,6 +439,7 @@ void testRollback() {
     Result r;
     CHECK(loop.run(r) == kExitOk);
     CHECK(sawHandoverLockOnRollback);
+    CHECK(sawResumeWithHeldLock);
     CHECK(placement.cur == kB1);
     CHECK(placement.prev == kB2);
     // kB2 spawned twice (post-start crash x2 -> rollback), kB1 spawned twice (1 transient crash -> stable!).
@@ -470,6 +488,15 @@ void testDualFail() {
     SupervisorLoop second(fs, placement, gate, child, "/supervise", opts);
     CHECK(second.run(r) == kExitHalted);
     CHECK(child.spawned.empty());
+
+    // Under launchd (`launchd_mode = true`), a permanently halted supervisor still records the halt message and keeps
+    // `halted == true` on disk, while exiting 0 so `KeepAlive.SuccessfulExit=false` stops respawning it every 10s.
+    Options launchdOpts = opts;
+    launchdOpts.launchd_mode = true;
+    SupervisorLoop third(fs, placement, gate, child, "/supervise", launchdOpts);
+    CHECK(third.run(r) == kExitOk);
+    CHECK(child.spawned.empty());
+    CHECK(loadStateFromMem(fs).halted);
 }
 
 void testCrashSweep() {

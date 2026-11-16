@@ -192,6 +192,97 @@ bool waitForServingBuild(const std::string& sockPath, const std::string& expecte
     return false;
 }
 
+int countZombieChildren(pid_t parentPid) {
+    if (parentPid <= 0) {
+        return 0;
+    }
+#if defined(__linux__)
+    int zombies = 0;
+    std::error_code ec;
+    for (const fs::directory_entry& de : fs::directory_iterator("/proc", ec)) {
+        if (ec || !de.is_directory(ec)) {
+            continue;
+        }
+        const std::string name = de.path().filename().string();
+        if (name.empty() || name[0] < '0' || name[0] > '9') {
+            continue;
+        }
+        std::ifstream st(de.path() / "stat");
+        std::string line;
+        if (!std::getline(st, line)) {
+            continue;
+        }
+        const std::size_t rp = line.rfind(')');
+        if (rp == std::string::npos || rp + 2 >= line.size()) {
+            continue;
+        }
+        const char state = line[rp + 2];
+        long ppid = -1;
+        if (std::sscanf(line.c_str() + rp + 3, "%ld", &ppid) == 1 && ppid == static_cast<long>(parentPid) &&
+            state == 'Z') {
+            ++zombies;
+        }
+    }
+    return zombies;
+#else
+    int pipefd[2]{-1, -1};
+    if (::pipe(pipefd) != 0) {
+        return 0;
+    }
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], 1);
+    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
+    std::string p0 = "/bin/ps";
+    std::string p1 = "-axo";
+    std::string p2 = "ppid=,stat=";
+    char* argv[] = {p0.data(), p1.data(), p2.data(), nullptr};
+    pid_t psPid = -1;
+    const int rc = ::posix_spawn(&psPid, p0.c_str(), &fa, nullptr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    ::close(pipefd[1]);
+    if (rc != 0) {
+        ::close(pipefd[0]);
+        return 0;
+    }
+    std::string out;
+    char buf[512];
+    ssize_t n = 0;
+    while ((n = ::read(pipefd[0], buf, sizeof buf)) > 0) {
+        out.append(buf, static_cast<std::size_t>(n));
+    }
+    ::close(pipefd[0]);
+    int status = 0;
+    (void)::waitpid(psPid, &status, 0);
+    int zombies = 0;
+    std::size_t pos = 0;
+    while (pos < out.size()) {
+        const std::size_t nl = out.find('\n', pos);
+        const std::string line = out.substr(pos, nl == std::string::npos ? std::string::npos : (nl - pos));
+        pos = (nl == std::string::npos) ? out.size() : (nl + 1);
+        long ppid = -1;
+        char statBuf[32]{};
+        if (std::sscanf(line.c_str(), "%ld %31s", &ppid, statBuf) == 2 && ppid == static_cast<long>(parentPid) &&
+            statBuf[0] == 'Z') {
+            ++zombies;
+        }
+    }
+    return zombies;
+#endif
+}
+
+void writeInterruptedHandoverState(const fs::path& sdir, const std::string& target, const std::string& previous,
+                                   handover::Stage stage) {
+    const fs::path hdir = sdir / handover::kHandoverDir;
+    fs::create_directories(hdir);
+    fs::permissions(hdir, fs::perms(0700));
+    std::ofstream out(hdir / handover::kStateFile, std::ios::binary);
+    out << handover::formatState(handover::StateRecord{target, previous, stage});
+    out.close();
+    CHECK(static_cast<bool>(out));
+}
+
 struct ChildProc {
     pid_t pid = -1;
 
@@ -371,9 +462,27 @@ void caseDrainHandover(const std::string& fakeBin, const fs::path& work) {
     const std::string sock = (sdir / "server.sock").string();
     const std::string supLog = (work / "sup.log").string();
 
+    // Plant an interrupted `handover/state` (`stage starting`, `target = b1`) AND mark `b2` shunned on disk so cold
+    // start exercises `PosixHandoverGate::resumeIfNeeded(false)` + child PID adoption (zero `<defunct>` zombies), and
+    // the subsequent concurrent drain handover to `b2` exercises `supervise/picked` un-shunning without RMW clobber.
+    writeInterruptedHandoverState(sdir, b1, std::string(), handover::Stage::Starting);
+    {
+        std::unique_ptr<nexus::store::Fs> fs = nexus::store::make_posix_fs();
+        CHECK(fs->private_dir((sdir / kSuperviseDir).string()).is_ok());
+        SuperviseState seeded;
+        seeded.build = b1;
+        seeded.shunned = {b2};
+        CHECK(writeStateFile(*fs, (sdir / kSuperviseDir).string(), seeded).is_ok());
+    }
+
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
     CHECK(waitForServingBuild(sock, b1, 5000));
+    const std::uint64_t resumeClearDeadline = nowMs() + 2000;
+    while (nowMs() < resumeClearDeadline && fs::exists(sdir / handover::kHandoverDir / handover::kStateFile)) {
+        sleepMs(10);
+    }
+    CHECK(!fs::exists(sdir / handover::kHandoverDir / handover::kStateFile));
 
     // Open a turn on b1, run concurrent handover to b2 while finishing the turn cleanly.
     std::string reply;
@@ -389,12 +498,20 @@ void caseDrainHandover(const std::string& fakeBin, const fs::path& work) {
     CHECK(handover::command(sdir.string(), {b2}, {}, hr) == handover::kExitOk);
     finisher.join();
 
-    // Supervisor stayed alive across the drain (exit 75), adopted b2, and durable store entry is intact!
+    // Supervisor stayed alive across the drain (exit 75), adopted b2, un-shunned b2 via `supervise/picked`, reaped the
+    // `resumeIfNeeded`-spawned b1 with zero `<defunct>` zombies, and kept the durable store entry intact!
     CHECK(sup.pid > 0);
     int dummy = 0;
     CHECK(!sup.waitExit(&dummy, 80));
     CHECK(waitForServingBuild(sock, b2, 5000));
     CHECK(askSocket(sock, "entries", &reply) && reply == "1");
+    CHECK(countZombieChildren(sup.pid) == 0);
+    {
+        Result sr;
+        CHECK(command(sdir.string(), home.string(), {"status"}, {}, sr) == kExitOk);
+        CHECK(sr.out.size() == 3);
+        CHECK(sr.out[0].find("shunned 0") != std::string::npos);
+    }
 
     // Now crash the adopted b2 (`crash` on server.sock): supervisor detects adopted crash and respawns b2!
     CHECK(askSocket(sock, "crash", &reply) && reply == "OK");
@@ -431,8 +548,14 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
     handover::Result hr;
     CHECK(handover::command(sdir.string(), {bLate}, {}, hr) == handover::kExitOk);
 
+    // Plant an interrupted `handover/state` (`stage starting`, `target = bLate`, `previous = b1`) so `Step::Rollback`
+    // exercises `PosixHandoverGate::resumeIfNeeded(true)` while holding `<dir>/handover`'s exclusive flock (`rbHold`),
+    // verifying zero self-lock contention, full `handover/state` cleanup, rollback to `b1`, and zero zombies.
+    writeInterruptedHandoverState(sdir, bLate, b1, handover::Stage::Starting);
+
     // bLate then crashes post-start; supervisor retries once, sees second post-start crash, acquires handover lock,
-    // shuns bLate, switches builds/active back to b1, and brings b1 to SERVING!
+    // resumes/clears `handover/state` under `rbHold`, shuns bLate, switches builds/active back to b1, and brings b1 to
+    // SERVING!
     const std::uint64_t deadline = nowMs() + 8000;
     bool rolledBackAndServing = false;
     while (nowMs() < deadline) {
@@ -449,6 +572,8 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
         sleepMs(40);
     }
     CHECK(rolledBackAndServing);
+    CHECK(!fs::exists(sdir / handover::kHandoverDir / handover::kStateFile));
+    CHECK(countZombieChildren(sup.pid) == 0);
 
     // Confirm supervise status shows shunned == 1 and b1 stably serving.
     Result sr;
@@ -501,6 +626,16 @@ void caseDualFailHalt(const std::string& fakeBin, const fs::path& work) {
     sup2.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
     CHECK(sup2.waitExit(&code, 2000));
     CHECK(code == kExitHalted);
+
+    // Under launchd (`--launchd`), a permanently halted supervisor exits 0 (preventing 10s infinite respawn churn)
+    // while keeping `supervise halted` durable in `supervise status`.
+    ChildProc supLaunchd;
+    supLaunchd.spawn(supExe, {"supervise", "--launchd", "--dir", sdir.string()}, home.string(), supLog);
+    CHECK(supLaunchd.waitExit(&code, 2000));
+    CHECK(code == kExitOk);
+    Result sr;
+    CHECK(command(sdir.string(), home.string(), {"status"}, {}, sr) == kExitOk);
+    CHECK(!sr.out.empty() && sr.out[0].find("supervise halted ") == 0);
 }
 
 int runOfflineTool(const std::string& prog, const std::vector<std::string>& args) {
@@ -547,6 +682,7 @@ void caseUnitsAndLocks(const std::string& fakeBin, const fs::path& work) {
     for (const std::string& l : ur.out) {
         unitText += l + "\n";
     }
+    CHECK(unitText.find("KillMode=process\n") != std::string::npos);
     CHECK(unitText.find("Restart=on-failure\n") != std::string::npos);
     CHECK(unitText.find("RestartPreventExitStatus=3 78\n") != std::string::npos);
     CHECK(unitText.find(" supervise --dir ") != std::string::npos);
@@ -557,10 +693,32 @@ void caseUnitsAndLocks(const std::string& fakeBin, const fs::path& work) {
         out << unitText;
     }
 #if defined(__linux__)
-    // Offline verification of the generated unit file when systemd-analyze is installed (never touches systemctl).
+    // Offline verification of the generated unit file (including spaces and `%` in `--dir`) when systemd-analyze is
+    // installed (never touches systemctl).
     if (::access("/usr/bin/systemd-analyze", X_OK) == 0 || ::access("/bin/systemd-analyze", X_OK) == 0) {
         const int vrc = runOfflineTool("systemd-analyze", {"--man=no", "verify", unitFile.string()});
         CHECK(vrc == 0);
+
+        const fs::path spacedDir = work / "srv space 100%";
+        ensurePrivateServerDir(home, spacedDir);
+        const std::string bSpaced = placeFakeBuild(work, spacedDir, fakeBin, "good", "spaced");
+        {
+            builds::Builds sb(spacedDir.string(), {});
+            builds::Result sbr;
+            CHECK(sb.makeCurrent(bSpaced, sbr, false) == builds::kExitOk);
+        }
+        Result sur;
+        CHECK(command(spacedDir.string(), home.string(),
+                      {"unit", "--kind", "systemd", "--home", home.string(), "--path", "/usr/local/bin:/usr/bin:/bin"},
+                      {}, sur) == kExitOk);
+        const fs::path spacedUnitFile = unitScratch / "nexus-server-spaced.service";
+        {
+            std::ofstream out(spacedUnitFile, std::ios::binary);
+            for (const std::string& l : sur.out) {
+                out << l << "\n";
+            }
+        }
+        CHECK(runOfflineTool("systemd-analyze", {"--man=no", "verify", spacedUnitFile.string()}) == 0);
     }
 #endif
 
@@ -575,6 +733,7 @@ void caseUnitsAndLocks(const std::string& fakeBin, const fs::path& work) {
     }
     CHECK(plistText.find("<string>com.robotgamedevelopers.nexus-server</string>") != std::string::npos);
     CHECK(plistText.find("<string>supervise</string>") != std::string::npos);
+    CHECK(plistText.find("<string>--launchd</string>") != std::string::npos);
     const fs::path plistFile = unitScratch / "com.robotgamedevelopers.nexus-server.plist";
     {
         std::ofstream out(plistFile, std::ios::binary);

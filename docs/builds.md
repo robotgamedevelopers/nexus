@@ -239,8 +239,10 @@ Under `<server dir>/`:
 ```
 supervise/
   gate                    writers' gate (store/fs.h)
-  state                   durable supervision record
-  .state-*                interrupted state write, removed by the next holder after syncing supervise/
+  state                   durable supervision record (written under supervise/'s flock)
+  stopped                 atomic intentional-stop marker (created by stop / Reap(0))
+  picked                  atomic explicit-handover target marker (<hash>\n)
+  .state-*                interrupted state/marker writes, removed by the next holder after syncing supervise/
 ```
 
 `supervise/state` is written through a synced `.state-*` file, renamed over `state`, with `supervise/` synced:
@@ -271,11 +273,11 @@ At most one supervisor runs per `<server dir>` under `flock(LOCK_EX)` on `superv
    `<server dir>/current/bin/nexus-server serve --dir <server dir>`.
 2. **Drain (`exit 75`)**: when `serve` finishes draining open turns and exits `75`, the supervisor resets `crashes` to
    `0` and adopts or starts the active `current` build once `handover/` is unlocked.
-3. **Intentional stop (`exit 0`) vs OS shutdown (`SIGTERM`)**: `nexus-server stop` writes `stopped 1` to
-   `supervise/state` before `serve` exits `0`, so the supervisor exits `0` and any subsequent restart honors `stopped 1`
-   and stays stopped until `nexus-server supervise --start` or `nexus-server handover <hash>` clears it. `SIGTERM` or
-   `SIGINT` sent to `supervise` during OS shutdown stops `serve` cleanly and exits `0` without setting `stopped 1`, so
-   the next boot starts `current`.
+3. **Intentional stop (`exit 0`) vs OS shutdown (`SIGTERM`)**: `nexus-server stop` creates the atomic marker
+   `supervise/stopped` before `serve` exits `0`, so background `supervise/state` writes never clobber an intentional
+   stop, the supervisor exits `0`, and any subsequent restart stays stopped until `nexus-server supervise --start` or
+   `nexus-server handover <hash>` clears `supervise/stopped`. `SIGTERM` or `SIGINT` sent to `supervise` during OS
+   shutdown stops `serve` cleanly and exits `0` without setting `supervise/stopped`, so the next boot starts `current`.
 4. **Post-start failure rollback and shunning**: if `current` crashes (`exit != 0, 75`) `2` times
    (`kDefaultMaxCrashesBeforeRollback`) after starting and an unshunned `previous` build exists in `builds/active`, the
    supervisor acquires `handover/`'s exclusive lock, records the failed build in `shun`, switches `builds/active` back
@@ -291,11 +293,12 @@ At most one supervisor runs per `<server dir>` under `flock(LOCK_EX)` on `superv
 `systemctl` or `launchctl`:
 
 - **Linux and WSL2 (`systemd` user unit, `~/.config/systemd/user/nexus-server.service`)**: `ExecStart` runs
-  `<server dir>/current/bin/nexus-server supervise --dir <server dir>` with `Restart=on-failure`,
+  `<server dir>/current/bin/nexus-server supervise --dir <server dir>` with `KillMode=process`, `Restart=on-failure`,
   `RestartPreventExitStatus=3 78`, and `WantedBy=default.target`.
 - **macOS (`launchd` LaunchAgent, `~/Library/LaunchAgents/com.robotgamedevelopers.nexus-server.plist`)**:
-  `ProgramArguments` runs `[program, "supervise", "--dir", serverDir]` with `RunAtLoad=true`,
-  `KeepAlive.SuccessfulExit=false`, and `ThrottleInterval=10`.
+  `ProgramArguments` runs `[program, "supervise", "--launchd", "--dir", serverDir]` with `RunAtLoad=true`,
+  `KeepAlive.SuccessfulExit=false`, and `ThrottleInterval=10` (`--launchd` persists `halted 1` and exits `0` when
+  permanently halted or refused so `launchd` does not respawn a permanently halted supervisor every 10 s).
 - Non-default `--dir` paths append a deterministic 12-hex SHA-256 suffix to the unit/label name so isolated instances
   never collide.
 

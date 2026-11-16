@@ -167,7 +167,8 @@ jobs:
           set -euo pipefail
           launcher=()
           if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
@@ -292,10 +293,12 @@ jobs:
           for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
             build/tests/server/pass_walk 1 80 --fault "$fault" walks/loop_pass.tla
           done
-          # placement and handover: their unit groups (MemFs crashes, drain, rollback), then their real-file walks
-          # overlapped in one wave (250 steps for handover under APFS F_FULLFSYNC; the model shard runs the full 600)
+          # placement, handover and supervision: their unit groups (MemFs crashes, drain, rollback, unit files,
+          # shunning), then their real-file walks overlapped in one wave (250 steps for handover and 150 for
+          # supervision under APFS F_FULLFSYNC; sanitizers-linux and the model shards run the full 600 and 350)
           build/tests/server/builds_test
           build/tests/server/handover_test
+          build/tests/server/supervision_test
           fs_walk_pids=()
           for seed in 1 2 3; do
             mkdir -p "walks/builds_$seed"
@@ -313,21 +316,15 @@ jobs:
             mkdir -p "walks/handover_${fault_seed%%:*}"
             build/tests/server/handover_walk "${fault_seed#*:}" 250 --fault "${fault_seed%%:*}" "walks/handover_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
           done
-          for pid in "${fs_walk_pids[@]}"; do
-            wait "$pid"
-          done
-          # supervision: every unit group (MemFs crashes, unit files, post-start rollback, shunning), then its walks
-          build/tests/server/supervision_test
-          supervision_pids=()
           for seed in 1 2 3; do
             mkdir -p "walks/supervision_$seed"
-            build/tests/server/supervision_walk "$seed" 350 "walks/supervision_$seed/trace.tla" & supervision_pids+=($!)
+            build/tests/server/supervision_walk "$seed" 150 "walks/supervision_$seed/trace.tla" & fs_walk_pids+=($!)
           done
           for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
             mkdir -p "walks/supervision_${fault_seed%%:*}"
-            build/tests/server/supervision_walk "${fault_seed#*:}" 350 --fault "${fault_seed%%:*}" "walks/supervision_${fault_seed%%:*}/trace.tla" & supervision_pids+=($!)
+            build/tests/server/supervision_walk "${fault_seed#*:}" 150 --fault "${fault_seed%%:*}" "walks/supervision_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
           done
-          for pid in "${supervision_pids[@]}"; do
+          for pid in "${fs_walk_pids[@]}"; do
             wait "$pid"
           done
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in

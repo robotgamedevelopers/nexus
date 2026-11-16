@@ -11,7 +11,9 @@
 //                           released by the OS however the process ends) keeps at most one supervisor running
 //   supervise/state         durable supervision record: `build`, `crashes`, `halted`, `stopped`, `picked`, and `shun`
 //                           (builds already rolled back from so a dual-broken pair never ping-pongs across restarts)
-//   supervise/.state-*      interrupted state write, removed under the lock after syncing `supervise/`
+//   supervise/stopped       atomic intentional-stop marker written by `nexus-server stop` / `Reap(0)`
+//   supervise/picked        atomic explicit-handover target marker (`<hash>\n`) written by `handover <target>`
+//   supervise/.state-*      interrupted state/marker writes, removed under the lock after syncing `supervise/`
 
 #pragma once
 
@@ -98,7 +100,8 @@ public:
     virtual ~HandoverGate() = default;
     virtual bool isLockedByOther() = 0;
     virtual store::Status tryLock(std::unique_ptr<store::FileLock>& out) = 0;
-    virtual store::Status resumeIfNeeded() = 0;
+    virtual store::Status resumeIfNeeded(bool lockAlreadyHeld = false) = 0;
+    virtual pid_t takeResumedPid() { return -1; }
     virtual bool hasExplicitPick(const std::string& build) { (void)build; return false; }
     virtual void clearExplicitPick(const std::string& build) { (void)build; }
 };
@@ -109,6 +112,10 @@ public:
     virtual ~ChildPort() = default;
     virtual store::Status inspect(ChildObs* out) = 0;
     virtual store::Status spawn(const std::string& expectedBuild, std::uint64_t limit_ms, ChildObs* out) = 0;
+    virtual void adoptSpawned(pid_t pid, const std::string& build) {
+        (void)pid;
+        (void)build;
+    }
     virtual store::Status drainToExit() = 0;
     virtual store::Status stopToExit() = 0;
     virtual int consumeExit() = 0;
@@ -129,6 +136,7 @@ struct Options {
     std::uint64_t backoff_ms = kBackoffMs;
     std::uint64_t poll_ms = kPollMs;
     bool clear_stopped_on_start = false;
+    bool launchd_mode = false;
     bool* service_stopped = nullptr;
     bool* service_halted = nullptr;
     std::string test_fs_type;
@@ -179,7 +187,7 @@ std::unique_ptr<ChildPort> makePosixChildPort(const std::string& serverDir,
                                               const std::function<std::uint64_t()>& now_ms = {},
                                               const std::function<void(std::uint64_t)>& sleep_ms = {});
 
-// `nexus-server supervise [--start | status | unit [--kind systemd|launchd] [--home HOME] [--path PATH] | help]`
+// `nexus-server supervise [--start] [--launchd] | status | unit [--kind systemd|launchd] [--home HOME] [--path PATH] | help`
 int command(const std::string& serverDir, const std::string& home, const std::vector<std::string>& args,
             const Options& options, Result& r);
 std::string help(const std::string& verb);

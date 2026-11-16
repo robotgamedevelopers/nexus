@@ -759,7 +759,7 @@ void Server::control(int fd) {
         return;
     }
     if (request == "stop") {
-        supervision::noteIntentionalStop(paths_.dir);
+        supervision::noteIntentionalStopAt(dirNow(supervision::kSuperviseDir));
         writeAll(fd, "OK\n");
         stopping_ = true;
         return;

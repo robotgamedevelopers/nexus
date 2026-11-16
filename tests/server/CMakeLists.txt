@@ -616,9 +616,9 @@ if(NOT WIN32)
         set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
     endfunction()
 
-    supervision_tlc_test(tlc_supervision_spec Supervision.cfg Supervision pass WORKERS 4)
-    supervision_tlc_test(tlc_supervision_rollback SupervisionRollback.cfg Supervision pass WORKERS 4)
-    supervision_tlc_test(tlc_supervision_dual_fail SupervisionDualFail.cfg Supervision pass WORKERS 4)
+    supervision_tlc_test(tlc_supervision_spec Supervision.cfg Supervision pass WORKERS 4 CAP 80)
+    supervision_tlc_test(tlc_supervision_rollback SupervisionRollback.cfg Supervision pass WORKERS 4 CAP 80)
+    supervision_tlc_test(tlc_supervision_dual_fail SupervisionDualFail.cfg Supervision pass WORKERS 4 CAP 80)
     supervision_tlc_test(tlc_supervision_large SupervisionLarge.cfg Supervision pass WORKERS 8 NIGHTLY CAP 600)
 
     supervision_tlc_test(tlc_supervision_witness_no_sup_lock witnesses/SNoSupLock.cfg Supervision invariant

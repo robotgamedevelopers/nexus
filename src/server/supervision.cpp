@@ -136,25 +136,6 @@ std::string systemdEscapePlain(const std::string& s) {
     return out;
 }
 
-std::string systemdEscapePath(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) {
-        if (c == '\r' || c == '\n') {
-            continue;
-        } else if (c == '\\') {
-            out += "\\\\";
-        } else if (c == ' ') {
-            out += "\\x20";
-        } else if (c == '%') {
-            out += "%%";
-        } else {
-            out.push_back(c);
-        }
-    }
-    return out;
-}
-
 bool socketAddress(const std::string& path, sockaddr_un* addr) {
     std::memset(addr, 0, sizeof *addr);
     addr->sun_family = AF_UNIX;
@@ -316,6 +297,7 @@ public:
         : serverDir_(std::move(serverDir)),
           handoverDir_(serverDir_ + "/" + handover::kHandoverDir),
           statePath_(handoverDir_ + "/" + handover::kStateFile),
+          superviseDir_(serverDir_ + "/" + kSuperviseDir),
           now_(now_ms ? std::move(now_ms) : std::function<std::uint64_t()>(steadyMs)),
           sleep_(sleep_ms ? std::move(sleep_ms) : std::function<void(std::uint64_t)>(realSleep)) {
         store::PosixOptions fsOpts;
@@ -336,18 +318,24 @@ public:
         return fs_->lock(handoverDir_, store::LockMode::Exclusive, out);
     }
 
-    Status resumeIfNeeded() override {
+    Status resumeIfNeeded(bool lockAlreadyHeld = false) override {
+        resumedPid_ = -1;
         if (::access(statePath_.c_str(), F_OK) != 0) {
             return Status::ok();
         }
         handover::Options hOpts;
         hOpts.now_ms = now_;
         hOpts.sleep_ms = sleep_;
-        hOpts.lock_wait_ms = 2000;
+        hOpts.lock_wait_ms = handover::kLockWaitMs;
+        hOpts.lock_already_held = lockAlreadyHeld;
+        hOpts.adopted_pid_out = &resumedPid_;
         handover::Result hr;
         const int rc = handover::command(serverDir_, {"resume"}, hOpts, hr);
-        if (rc == handover::kExitOk || rc == handover::kExitRolledBack || rc == handover::kExitBusy) {
+        if (rc == handover::kExitOk || rc == handover::kExitRolledBack) {
             return Status::ok();
+        }
+        if (!lockAlreadyHeld && rc == handover::kExitBusy) {
+            return Status::busy("another handover holds the lock on " + handoverDir_);
         }
         if (::access(statePath_.c_str(), F_OK) != 0) {
             return Status::ok();
@@ -355,13 +343,29 @@ public:
         return Status::failed(hr.err.empty() ? ("cannot resume interrupted handover in " + statePath_) : hr.err.front());
     }
 
+    pid_t takeResumedPid() override {
+        const pid_t pid = resumedPid_;
+        resumedPid_ = -1;
+        return pid;
+    }
+
+    bool hasExplicitPick(const std::string& build) override {
+        return hasPickedBuild(*fs_, superviseDir_, build);
+    }
+
+    void clearExplicitPick(const std::string& build) override {
+        (void)clearPickedBuild(*fs_, superviseDir_, build);
+    }
+
 private:
     std::string serverDir_;
     std::string handoverDir_;
     std::string statePath_;
+    std::string superviseDir_;
     std::function<std::uint64_t()> now_;
     std::function<void(std::uint64_t)> sleep_;
     std::unique_ptr<store::Fs> fs_;
+    pid_t resumedPid_ = -1;
 };
 
 class PosixChildPort final : public ChildPort {
@@ -382,6 +386,23 @@ public:
 
     ~PosixChildPort() override {
         killDirectChild();
+        reapStrayChildren();
+    }
+
+    void adoptSpawned(pid_t pid, const std::string& build) override {
+        if (pid <= 0 || build.empty()) {
+            return;
+        }
+        if (directPid_ > 0 && directPid_ != pid) {
+            killDirectChild();
+        }
+        directPid_ = pid;
+        activeBuild_ = build;
+        adopted_ = false;
+        adoptedSawDrain_ = false;
+        hasExited_ = false;
+        exitedBuild_.clear();
+        lastExit_ = 0;
     }
 
     Status inspect(ChildObs* out) override {
@@ -408,6 +429,7 @@ public:
             }
             directPid_ = -1;
         }
+        reapStrayChildren();
         if (adopted_) {
             ServerSeen seen;
             const Status ps = probeControlSocket(socketPath_, &seen);
@@ -656,6 +678,7 @@ public:
                 restoreUnstoppedFlag();
             }
         }
+        reapStrayChildren();
         activeBuild_.clear();
         hasExited_ = true;
         exitedBuild_ = buildBefore;
@@ -718,17 +741,21 @@ private:
         }
     }
 
-    bool readStoppedFlag() const {
-        store::Bytes raw;
-        if (!fs_->read_all(superviseDir_ + "/" + kStateFile, raw).is_ok()) {
-            return false;
+    void reapStrayChildren() {
+        if (directPid_ <= 0) {
+            int status = 0;
+            while (::waitpid(-1, &status, WNOHANG) > 0) {
+            }
         }
+    }
+
+    bool readStoppedFlag() const {
         SuperviseState st;
-        std::string why;
-        return readState(fromBytes(raw), &st, &why) && st.stopped;
+        return loadEffectiveState(*fs_, superviseDir_, &st).is_ok() && st.stopped;
     }
 
     void restoreUnstoppedFlag() {
+        (void)clearStoppedMarker(*fs_, superviseDir_);
         store::Bytes raw;
         if (!fs_->read_all(superviseDir_ + "/" + kStateFile, raw).is_ok()) {
             return;
@@ -799,6 +826,7 @@ std::string launchdPlist(const std::string& label, const std::string& program, c
     out += "    <array>\n";
     out += "        <string>" + xmlEscape(program) + "</string>\n";
     out += "        <string>supervise</string>\n";
+    out += "        <string>--launchd</string>\n";
     out += "        <string>--dir</string>\n";
     out += "        <string>" + xmlEscape(serverDir) + "</string>\n";
     out += "    </array>\n";
@@ -842,7 +870,7 @@ std::string systemdUnit(const std::string& program, const std::string& serverDir
     out += "Description=nexus-server supervisor (" + systemdEscapePlain(serverDir) + ")\n\n";
     out += "[Service]\n";
     out += "Type=simple\n";
-    out += "WorkingDirectory=" + systemdEscapePath(serverDir) + "\n";
+    out += "WorkingDirectory=" + systemdEscapePlain(serverDir) + "\n";
     if (!home.empty()) {
         out += "Environment=\"HOME=" + systemdEscapeQuoted(home) + "\"\n";
     }
@@ -851,6 +879,7 @@ std::string systemdUnit(const std::string& program, const std::string& serverDir
     }
     out += "ExecStart=\"" + systemdEscapeQuoted(program) + "\" supervise --dir \"" +
            systemdEscapeQuoted(serverDir) + "\"\n";
+    out += "KillMode=process\n";
     out += "Restart=on-failure\n";
     out += "RestartPreventExitStatus=3 78\n";
     out += "RestartSec=2\n";
@@ -863,13 +892,11 @@ std::string systemdUnit(const std::string& program, const std::string& serverDir
 struct SupervisorLoop::Run {
     SupervisorLoop& sup;
     Result& r;
-    std::string statePath;
     std::unique_ptr<store::FileLock> hold;
     std::unique_ptr<store::FileLock> rbHold;
     bool pastLock = false;
 
-    Run(SupervisorLoop& s, Result& res)
-        : sup(s), r(res), statePath(s.superviseDir_ + "/" + kStateFile) {}
+    Run(SupervisorLoop& s, Result& res) : sup(s), r(res) {}
 
     ~Run() {
         rbHold.reset();
@@ -945,7 +972,8 @@ struct SupervisorLoop::Run {
         }
         std::vector<std::string> leftovers;
         for (const std::string& n : entries) {
-            if (n.rfind(kStateTmpPrefix, 0) == 0) {
+            if (n.rfind(kStateTmpPrefix, 0) == 0 || n.rfind(kStoppedTmpPrefix, 0) == 0 ||
+                n.rfind(kPickedTmpPrefix, 0) == 0) {
                 leftovers.push_back(n);
             }
         }
@@ -960,26 +988,21 @@ struct SupervisorLoop::Run {
     }
 
     Status readDisk(SuperviseState* out) {
-        *out = SuperviseState{};
-        store::Bytes raw;
-        const Status rs = sup.fs_.read_all(statePath, raw);
-        if (!rs.is_ok()) {
-            if (rs.code() == Status::Code::NotFound) {
-                return Status::ok();
-            }
-            return rs;
-        }
-        std::string why;
-        if (!readState(fromBytes(raw), out, &why)) {
-            return Status::failed(statePath + " is damaged: " + why);
-        }
-        return Status::ok();
+        return loadEffectiveState(sup.fs_, sup.superviseDir_, out);
     }
 
     Status persistDisk(const std::string& b, std::uint32_t crashes, const std::set<std::string>& shunned, bool halted,
                        bool stopped) {
         if (fault(Fault::InMemoryState)) {
             return Status::ok();
+        }
+        if (stopped) {
+            const Status ms = writeStoppedMarker(sup.fs_, sup.superviseDir_);
+            if (!ms.is_ok()) {
+                return ms;
+            }
+        } else if (fault(Fault::StopRestarts)) {
+            (void)clearStoppedMarker(sup.fs_, sup.superviseDir_);
         }
         SuperviseState st;
         st.build = b;
@@ -1072,6 +1095,14 @@ struct SupervisorLoop::Run {
                     break;
                 }
                 if (sup.options_.clear_stopped_on_start && (disk.stopped || disk.halted)) {
+                    if (!fault(Fault::InMemoryState)) {
+                        s = clearStoppedMarker(sup.fs_, sup.superviseDir_);
+                        if (!s.is_ok()) {
+                            outcome = s;
+                            next = Step::Unlock;
+                            break;
+                        }
+                    }
                     disk.stopped = false;
                     disk.halted = false;
                     disk.crashes = 0;
@@ -1125,11 +1156,23 @@ struct SupervisorLoop::Run {
                     pause(sup.options_.poll_ms);
                     break;
                 }
-                s = sup.handoverGate_.resumeIfNeeded();
+                s = sup.handoverGate_.resumeIfNeeded(false);
+                if (s.code() == Status::Code::Busy) {
+                    pause(sup.options_.poll_ms);
+                    break;
+                }
                 if (!s.is_ok()) {
                     outcome = s;
                     next = Step::Unlock;
                     break;
+                }
+                if (const pid_t rpid = sup.handoverGate_.takeResumedPid(); rpid > 0) {
+                    std::string rcur;
+                    std::string rprev;
+                    builds::Result rbr;
+                    if (sup.placement_.active(&rcur, &rprev, rbr) == builds::kExitOk && !rcur.empty()) {
+                        sup.child_.adoptSpawned(rpid, rcur);
+                    }
                 }
 
                 SuperviseState diskNow;
@@ -1155,6 +1198,10 @@ struct SupervisorLoop::Run {
                     break;
                 }
                 if (cur.empty()) {
+                    if (sup.options_.launchd_mode) {
+                        (void)persistDisk(std::string(), scrashes, sshunned, true, false);
+                        markHalted(true);
+                    }
                     refusedOutcome = true;
                     r.err.push_back("no build is current (`nexus-server builds current <hash>` chooses one)");
                     next = Step::Unlock;
@@ -1348,7 +1395,7 @@ struct SupervisorLoop::Run {
                             break;
                         }
                     }
-                    if (obs.state == ChildState::Serving && scrashes > 0 &&
+                    if (!sup.handoverGate_.isLockedByOther() && obs.state == ChildState::Serving && scrashes > 0 &&
                         now() - servingSince >= sup.options_.stable_ms) {
                         scrashes = 0;
                         s = persistDisk(sbuild, 0, sshunned, false, false);
@@ -1508,11 +1555,19 @@ struct SupervisorLoop::Run {
 
             case Step::Rollback: {
                 at("rollback");
-                s = sup.handoverGate_.resumeIfNeeded();
+                s = sup.handoverGate_.resumeIfNeeded(!fault(Fault::NoHandoverLock));
                 if (!s.is_ok()) {
                     outcome = s;
                     next = Step::RbUnlock;
                     break;
+                }
+                if (const pid_t rpid = sup.handoverGate_.takeResumedPid(); rpid > 0) {
+                    std::string rcur;
+                    std::string rprev;
+                    builds::Result rbr;
+                    if (sup.placement_.active(&rcur, &rprev, rbr) == builds::kExitOk && !rcur.empty()) {
+                        sup.child_.adoptSpawned(rpid, rcur);
+                    }
                 }
 
                 std::string curNow;
@@ -1597,10 +1652,10 @@ struct SupervisorLoop::Run {
             return finish(Status::ok(), true, kExitOk);
         }
         if (refusedOutcome) {
-            return finish(Status::ok(), true, kExitRefused);
+            return finish(Status::ok(), true, sup.options_.launchd_mode ? kExitOk : kExitRefused);
         }
         if (haltedOutcome) {
-            return finish(Status::ok(), true, kExitHalted);
+            return finish(Status::ok(), true, sup.options_.launchd_mode ? kExitOk : kExitHalted);
         }
         return finish(Status::ok());
     }
@@ -1651,19 +1706,16 @@ int SupervisorLoop::status(Result& r) {
     }
 
     SuperviseState disk;
-    store::Bytes raw;
-    const Status rs = fs_.read_all(superviseDir_ + "/" + kStateFile, raw);
-    if (!rs.is_ok() && rs.code() != Status::Code::NotFound) {
-        r.err.push_back(rs.message());
-        r.exit = exitOf(rs);
-        return r.exit;
-    }
-    if (rs.is_ok()) {
-        std::string why;
-        if (!readState(fromBytes(raw), &disk, &why) && !lockBusy) {
-            r.err.push_back(superviseDir_ + "/" + kStateFile + " is damaged: " + why);
-            r.exit = kExitFailed;
+    const Status rs = loadEffectiveState(fs_, superviseDir_, &disk);
+    if (!rs.is_ok()) {
+        if (!lockBusy) {
+            r.err.push_back(rs.message());
+            r.exit = exitOf(rs);
             return r.exit;
+        }
+        disk = SuperviseState{};
+        if (hasStoppedMarker(fs_, superviseDir_)) {
+            disk.stopped = true;
         }
     }
 
@@ -1704,7 +1756,8 @@ std::unique_ptr<ChildPort> makePosixChildPort(const std::string& serverDir,
 std::string help(const std::string& verb) {
     if (verb.empty() || verb == "help") {
         return "nexus-server supervise: keep the current placed build serving, restarting and rolling back\n"
-               "  supervise [--start]   run the supervisor loop under DIR/supervise (--start clears stopped/halted)\n"
+               "  supervise [--start] [--launchd]\n"
+               "                        run the supervisor loop under DIR/supervise (--start clears stopped/halted)\n"
                "  supervise status      print DIR/supervise/state, current/previous, and the running server\n"
                "  supervise unit [--kind systemd|launchd] [--home HOME] [--path PATH]\n"
                "                        print the deterministic systemd user unit or launchd LaunchAgent plist\n"
@@ -1819,12 +1872,19 @@ int command(const std::string& serverDir, const std::string& home, const std::ve
     Options runOpts = options;
     if (args.size() == 1 && args[0] == "status") {
         statusOnly = true;
-    } else if (args.size() == 1 && args[0] == "--start") {
-        runOpts.clear_stopped_on_start = true;
-    } else if (!args.empty()) {
-        r.err.push_back("usage: nexus-server supervise [--start | status | unit ... | help] [--dir DIR]");
-        r.exit = kExitUsage;
-        return r.exit;
+    } else {
+        for (const std::string& arg : args) {
+            if (arg == "--start") {
+                runOpts.clear_stopped_on_start = true;
+            } else if (arg == "--launchd") {
+                runOpts.launchd_mode = true;
+            } else {
+                r.err.push_back(
+                    "usage: nexus-server supervise [--start] [--launchd] | status | unit ... | help [--dir DIR]");
+                r.exit = kExitUsage;
+                return r.exit;
+            }
+        }
     }
 
     store::PosixOptions fsOpts;
