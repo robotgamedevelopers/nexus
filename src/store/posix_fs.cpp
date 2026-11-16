@@ -442,8 +442,14 @@ public:
     Status size(const std::string& path, std::uint64_t& out) override {
         const At at = where(path);
         struct stat st;
-        if (::fstatat(at.fd, at.name.c_str(), &st, 0) != 0) {
+        if (::fstatat(at.fd, at.name.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
             return os_error("stat", path);
+        }
+        if (S_ISLNK(st.st_mode)) {
+            return Status::failed(path + " is a symbolic link; it must be a regular file (remove the link)");
+        }
+        if (!S_ISREG(st.st_mode)) {
+            return Status::failed(path + " is not a regular file");
         }
         out = std::uint64_t(st.st_size);
         return Status::ok();
@@ -452,13 +458,26 @@ public:
     Status read(const std::string& path, std::uint64_t off, std::uint64_t n, Bytes& out) override {
         out.clear();
         const At at = where(path);
-        Fd fd(::openat(at.fd, at.name.c_str(), O_RDONLY | O_CLOEXEC));
+        Fd fd(::openat(at.fd, at.name.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
         if (fd.get() < 0) {
+            if (errno == ELOOP
+#ifdef EMLINK
+                || errno == EMLINK
+#endif
+#ifdef EFTYPE
+                || errno == EFTYPE
+#endif
+            ) {
+                return Status::failed(path + " is a symbolic link; it must be a regular file (remove the link)");
+            }
             return os_error("open", path);
         }
         struct stat st;
         if (::fstat(fd.get(), &st) != 0) {
             return os_error("fstat", path);
+        }
+        if (!S_ISREG(st.st_mode)) {
+            return Status::failed(path + " is not a regular file");
         }
         std::uint64_t total = std::uint64_t(st.st_size);
         if (off >= total) {

@@ -92,9 +92,19 @@ std::string dstPathOf(const std::string& dir, const std::string& part) {
     return dir + "/" + part;
 }
 
-bool fileExists(Fs& fs, const std::string& path) {
+Status probeFile(Fs& fs, const std::string& path, bool* exists) {
     std::uint64_t sz = 0;
-    return fs.size(path, sz).is_ok();
+    const Status s = fs.size(path, sz);
+    if (s.is_ok()) {
+        *exists = true;
+        return Status::ok();
+    }
+    if (s.code() == Status::Code::NotFound) {
+        *exists = false;
+        return Status::ok();
+    }
+    *exists = false;
+    return s;
 }
 
 // Removes uncommitted `.migrating.tmp` and `.mig-*` staging files in `d` (if `d` exists).
@@ -278,7 +288,11 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
         return s;
     }
     const std::string planPath = dir + "/" + kPlanFile;
-    if (!hasAnyOldTop(topNames) && !fileExists(fs, planPath)) {
+    bool planPresent = false;
+    if (!(s = probeFile(fs, planPath, &planPresent)).is_ok()) {
+        return s;
+    }
+    if (!hasAnyOldTop(topNames) && !planPresent) {
         return Status::ok();
     }
 
@@ -315,6 +329,9 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
                                   "`), then start nexus-server again");
         }
         if (contains(topNames, "store")) {
+            if (!(s = fs.private_dir(top + "/store")).is_ok()) {
+                return s;
+            }
             s = fs.list(top + "/store", oldStoreNames);
             if (!s.is_ok()) {
                 return Status::failed(top + "/store is not a readable directory (" + s.message() +
@@ -331,6 +348,9 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
             }
         }
     } else if (contains(topNames, "store")) {
+        if (!(s = fs.private_dir(top + "/store")).is_ok()) {
+            return s;
+        }
         s = fs.list(top + "/store", oldStoreNames);
         if (!s.is_ok()) {
             return s;
@@ -343,12 +363,17 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
     }
     std::unique_ptr<FileLock> newStoreLock;
     if (contains(dirNames, "store")) {
-        s = fs.lock(dir + "/store", LockMode::Exclusive, newStoreLock);
-        if (s.code() == Status::Code::Busy) {
-            return Status::busy("a running nexus-server holds " + dir + "/store open");
+        if (!(s = fs.private_dir(dir + "/store")).is_ok()) {
+            return s;
         }
-        if (!s.is_ok()) {
-            return Status::failed(dir + "/store: its lock cannot be taken: " + s.message());
+        if (options.fault != Fault::NoLock) {
+            s = fs.lock(dir + "/store", LockMode::Exclusive, newStoreLock);
+            if (s.code() == Status::Code::Busy) {
+                return Status::busy("a running nexus-server holds " + dir + "/store open");
+            }
+            if (!s.is_ok()) {
+                return Status::failed(dir + "/store: its lock cannot be taken: " + s.message());
+            }
         }
     }
 
@@ -506,14 +531,25 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
     bool storeMoved = false;
     for (const std::string& part : planOrder) {
         const std::string dst = dstPathOf(dir, part);
-        if (!clobber && fileExists(fs, dst)) {
+        bool dstExists = false;
+        if (!(s = probeFile(fs, dst, &dstExists)).is_ok()) {
+            return s;
+        }
+        if (!clobber && dstExists) {
             continue;
         }
         const std::string src = srcPathOf(top, part);
         Bytes bytes;
         s = fs.read_all(src, bytes);
-        if (s.code() == Status::Code::NotFound && fileExists(fs, dst)) {
-            continue;
+        if (s.code() == Status::Code::NotFound) {
+            bool nowExists = false;
+            if (!(s = probeFile(fs, dst, &nowExists)).is_ok()) {
+                return s;
+            }
+            if (nowExists) {
+                continue;
+            }
+            s = Status::not_found("missing " + src);
         }
         if (!s.is_ok()) {
             return s;
@@ -530,7 +566,11 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
         }
         at("stage", part);
         const std::string stg = stagePathOf(dir, part);
-        if (fileExists(fs, stg) && !(s = fs.remove(stg)).is_ok()) {
+        bool stgExists = false;
+        if (!(s = probeFile(fs, stg, &stgExists)).is_ok()) {
+            return s;
+        }
+        if (stgExists && !(s = fs.remove(stg)).is_ok()) {
             return s;
         }
         if (!(s = fs.create(stg)).is_ok() || !(s = fs.append(stg, bytes)).is_ok()) {
@@ -559,10 +599,14 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
 
     if (placedAny && syncs) {
         at("sync_placed");
-        if (fileExists(fs, dir + "/store/log") || fileExists(fs, dir + "/store/snapshot")) {
-            if (!(s = fs.sync_dir(dir + "/store")).is_ok()) {
-                return s;
-            }
+        bool hasLog = false;
+        bool hasSnap = false;
+        if (!(s = probeFile(fs, dir + "/store/log", &hasLog)).is_ok() ||
+            !(s = probeFile(fs, dir + "/store/snapshot", &hasSnap)).is_ok()) {
+            return s;
+        }
+        if ((storeMoved || hasLog || hasSnap) && !(s = fs.sync_dir(dir + "/store")).is_ok()) {
+            return s;
         }
         if (!(s = fs.sync_dir(dir)).is_ok()) {
             return s;
@@ -643,9 +687,13 @@ Status migrateOldLayout(Fs& fs, const std::string& top, const std::string& dir, 
     }
 
     // 6. finish: remove `.migrating` and sync `dir`.
-    if (hasPlan || wrotePlan || fileExists(fs, planPath)) {
+    bool planLeft = false;
+    if (!(s = probeFile(fs, planPath, &planLeft)).is_ok()) {
+        return s;
+    }
+    if (hasPlan || wrotePlan || planLeft) {
         at("finish");
-        if (fileExists(fs, planPath) && !(s = fs.remove(planPath)).is_ok()) {
+        if (planLeft && !(s = fs.remove(planPath)).is_ok()) {
             return s;
         }
         if (syncs && !(s = fs.sync_dir(dir)).is_ok()) {

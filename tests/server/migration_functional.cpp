@@ -456,6 +456,80 @@ void caseCrashResumeAndConflict() {
         CHECK(readAll(top / "store" / "log") == oldLogBefore);
         CHECK(readAll(serverDir / "store" / "log") == newLogBefore);
     }
+
+    // Symlink, FIFO, directory and open-mode hardening:
+    //   - symlinked ~/.nexus/store -> external directory is refused before touching external snapshot/log or writing .migrating;
+    //   - symlinked ~/.nexus/config -> outside secret file is refused without copying target bytes;
+    //   - FIFO ~/.nexus/server.log and directory ~/.nexus/drivers are refused immediately without blocking or mutating server/;
+    //   - pre-existing 0755 ~/.nexus/server/store on resume is refused cleanly.
+    {
+        auto pfs = store::make_posix_fs();
+
+        // 3b. Symlinked ~/.nexus/store -> external store directory.
+        const fs::path ext = root / "ext-store";
+        const fs::path symStoreHome = root / "sym-store";
+        const fs::path symStoreTop = symStoreHome / ".nexus";
+        const fs::path symStoreDir = symStoreTop / "server";
+        fs::create_directories(ext);
+        ::chmod(ext.c_str(), 0700);
+        writeFile(ext / "snapshot", "ext-snap-bytes", false, 0600);
+        writeFile(ext / "log", "ext-log-bytes", false, 0600);
+        fs::create_directories(symStoreTop);
+        ::chmod(symStoreTop.c_str(), 0700);
+        CHECK(::symlink(ext.c_str(), (symStoreTop / "store").c_str()) == 0);
+        const store::Status stStoreLink = migration::migrateOldLayout(*pfs, symStoreTop.string(), symStoreDir.string());
+        CHECK(stStoreLink.code() == store::Status::Code::Failed);
+        CHECK(has(stStoreLink.message(), "symbolic link"));
+        CHECK(fs::exists(ext / "snapshot") && readAll(ext / "snapshot") == "ext-snap-bytes");
+        CHECK(fs::exists(ext / "log") && readAll(ext / "log") == "ext-log-bytes");
+        CHECK(!fs::exists(symStoreDir / migration::kPlanFile));
+
+        // 3c. Symlinked ~/.nexus/config -> outside file.
+        const fs::path secret = root / "outside-secret";
+        const fs::path symCfgTop = root / "sym-cfg" / ".nexus";
+        const fs::path symCfgDir = symCfgTop / "server";
+        writeFile(secret, "do-not-copy-secret\n", false, 0600);
+        fs::create_directories(symCfgTop);
+        ::chmod(symCfgTop.c_str(), 0700);
+        CHECK(::symlink(secret.c_str(), (symCfgTop / "config").c_str()) == 0);
+        const store::Status stCfgLink = migration::migrateOldLayout(*pfs, symCfgTop.string(), symCfgDir.string());
+        CHECK(stCfgLink.code() == store::Status::Code::Failed);
+        CHECK(has(stCfgLink.message(), "symbolic link"));
+        CHECK(!fs::exists(symCfgDir / "config"));
+        CHECK(readAll(secret) == "do-not-copy-secret\n");
+
+        // 3d. FIFO at ~/.nexus/server.log and directory at ~/.nexus/drivers: neither blocks nor writes server/drivers.
+        const fs::path nonRegTop = root / "nonreg" / ".nexus";
+        const fs::path nonRegDir = nonRegTop / "server";
+        fs::create_directories(nonRegTop / "drivers");
+        ::chmod(nonRegTop.c_str(), 0700);
+        ::chmod((nonRegTop / "drivers").c_str(), 0700);
+        const store::Status stDir = migration::migrateOldLayout(*pfs, nonRegTop.string(), nonRegDir.string());
+        CHECK(stDir.code() == store::Status::Code::Failed);
+        CHECK(has(stDir.message(), "not a regular file"));
+        CHECK(!fs::exists(nonRegDir / "drivers"));
+
+        fs::remove_all(nonRegTop / "drivers");
+        CHECK(::mkfifo((nonRegTop / "server.log").c_str(), 0600) == 0);
+        const store::Status stFifo = migration::migrateOldLayout(*pfs, nonRegTop.string(), nonRegDir.string());
+        CHECK(stFifo.code() == store::Status::Code::Failed);
+        CHECK(has(stFifo.message(), "not a regular file"));
+        CHECK(!fs::exists(nonRegDir / "server.log"));
+
+        // 3e. Resume when ~/.nexus/server/store is mode 0755: refused cleanly before unlocking as migrated.
+        const fs::path modeTop = root / "mode-resume" / ".nexus";
+        const fs::path modeDir = modeTop / "server";
+        fs::create_directories(modeTop);
+        fs::create_directories(modeDir / "store");
+        ::chmod(modeTop.c_str(), 0700);
+        ::chmod(modeDir.c_str(), 0700);
+        writeFile(modeDir / migration::kPlanFile, "log\n", false, 0600);
+        writeFile(modeDir / "store" / "log", "", false, 0600);
+        ::chmod((modeDir / "store").c_str(), 0755);
+        const store::Status stMode = migration::migrateOldLayout(*pfs, modeTop.string(), modeDir.string());
+        CHECK(stMode.code() == store::Status::Code::Failed);
+        CHECK(has(stMode.message(), "open to other users"));
+    }
 }
 
 fs::path makeBuildTree(const std::string& name, const std::string& formatsText) {
