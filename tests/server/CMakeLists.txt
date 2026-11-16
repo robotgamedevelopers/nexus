@@ -507,9 +507,9 @@ if(NOT WIN32)
         set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
     endfunction()
 
-    handover_tlc_test(tlc_handover_spec Handover.cfg Handover pass WORKERS 4)
-    handover_tlc_test(tlc_handover_cut_resume HandoverCutResume.cfg Handover pass WORKERS 4)
-    handover_tlc_test(tlc_handover_legacy HandoverLegacy.cfg Handover pass WORKERS 4)
+    handover_tlc_test(tlc_handover_spec Handover.cfg Handover pass WORKERS 4 CAP 80)
+    handover_tlc_test(tlc_handover_cut_resume HandoverCutResume.cfg Handover pass WORKERS 4 CAP 80)
+    handover_tlc_test(tlc_handover_legacy HandoverLegacy.cfg Handover pass WORKERS 4 CAP 80)
     handover_tlc_test(tlc_handover_large HandoverLarge.cfg Handover pass WORKERS 8 NIGHTLY CAP 600)
 
     handover_tlc_test(tlc_handover_witness_no_lock witnesses/HNoLock.cfg Handover invariant
