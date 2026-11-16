@@ -15,7 +15,9 @@
 // foreground process group for its tab's label (sysctl, foreground.h), reading the arguments of a new one. The label
 // must see the foreground as of each new title (remote.h TabLabel: a title ssh's remote side sets is the session's),
 // so a frame whose title changed reads the group itself, one small system call, and the arguments only if the group
-// is new: once per command, never once a frame. A tab opened shows at once, empty, and its shell
+// is new: once per command, never once a frame, and commits its observation to the shared watch state
+// (terminal_watch.h, models/TerminalWatch.tla) so a session that starts and ends within one poll window is still seen
+// to end. A tab opened shows at once, empty, and its shell
 // appears in it once started; a shell that cannot start closes its tab. A terminal is used by one thread at a time
 // (pr/terminal.h): the start thread hands each one it made to the frame thread, and the frame thread hands back each
 // one to end, using it no more. What must be asked of a terminal on its own thread, the directory its shell works in
@@ -29,7 +31,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -47,6 +48,7 @@
 #include "pr/terminal.h"
 
 #include "remote.h"
+#include "terminal_watch.h"
 #include "view.h"
 
 namespace nexus {
@@ -119,12 +121,6 @@ private:
         std::string dir;
         float scale;
     };
-    // A terminal's foreground process group and the remote label of what it runs (remote.h), as read at `at`.
-    struct Seen {
-        int group = -1;
-        std::string remote;
-        std::chrono::steady_clock::time_point at{};
-    };
     // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
     // line its tab shows if no shell can run here at all (problem).
     struct Started {
@@ -156,7 +152,7 @@ private:
     std::map<std::size_t, PrTerminal*> terminals_;
     std::map<std::size_t, TabLabel> labels_;
     std::map<std::size_t, int> pids_;           // each terminal's shell, by process id; absent if not found
-    std::map<std::size_t, Seen> seen_;          // each terminal's foreground as the label last saw it
+    std::map<std::size_t, ForegroundSeen> seen_; // each terminal's foreground as the label last saw it
     std::map<std::size_t, std::string> titles_; // each terminal's title at the label's last observation
     std::map<std::size_t, std::string> asked_;  // shells asked for and not yet taken, with the directory asked for
     std::set<std::size_t> failed_;              // shells that could not start, until their tab closes
@@ -171,12 +167,13 @@ private:
     std::mutex mutex_;
     std::condition_variable wake_;
     bool ending_ = false;
+    bool recheck_ = false;
     std::deque<Start> starts_;
     std::vector<PrTerminal*> ends_;
     std::vector<Started> started_;
     std::map<std::size_t, int> shells_;         // each terminal's shell, by process id, for the start thread to read
     std::vector<Machine> watched_;              // `machines`, as the frame thread last handed them over
-    std::map<std::size_t, Seen> watch_;         // each terminal's foreground as the start thread last saw it change
+    std::map<std::size_t, ForegroundSeen> watch_; // latest committed foreground observation per tracked shell
     std::thread thread_;                        // last: it starts once everything above is made
 };
 

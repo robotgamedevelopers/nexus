@@ -70,6 +70,14 @@ target_link_libraries(nexus_terminal_launch_tests PRIVATE nexus_terminal_launch)
 add_test(NAME terminal_launch_unit COMMAND nexus_terminal_launch_tests)
 set_tests_properties(terminal_launch_unit PROPERTIES LABELS unit)
 
+# Synchronization of a terminal tab's foreground process group between the background poll thread and the frame thread
+# (src/terminal_watch.h, models/TerminalWatch.tla). Pure logic, on every platform.
+add_executable(nexus_terminal_watch_tests test_terminal_watch.cpp)
+target_compile_options(nexus_terminal_watch_tests PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_terminal_watch_tests PRIVATE nexus_terminal_watch)
+add_test(NAME terminal_watch_unit COMMAND nexus_terminal_watch_tests)
+set_tests_properties(terminal_watch_unit PROPERTIES LABELS unit)
+
 # A Windows terminal tab's shell for real: the probe through wsl.exe and the launch line on a Windows pseudoconsole
 # through Prax's lib/process, in the default WSL2 distribution of the user who runs it. A functional test (processes,
 # WSL2, real time), Windows only, labelled wsl2_terminal as well: Windows services (such as CI runners under NETWORK

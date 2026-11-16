@@ -285,6 +285,7 @@ void aTabInSshNamesTheMachine() {
     const std::pair<const char*, const char*> sessions[] = {
         {"ssh -p 22 nova@hetzner2.tailbd3740.ts.net", "hetzner2"},
         {"ssh -o BatchMode=yes glenn@unknown.example", "unknown.example"},
+        {"ssh -o BatchMode=yes nova@fast.example", "fast.example"},
     };
     for (const auto& [command, label] : sessions) {
         h.typeLine(command);

@@ -47,7 +47,11 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(strip_walk PRIVATE nexus_sync)
     target_compile_options(strip_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk strip_walk)
+    add_executable(watch_walk watch_walk.cpp)
+    target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
+    target_compile_options(watch_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk strip_walk watch_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -97,8 +101,8 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK SIGNWALK RECONNECTWALK
-        DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
+    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK ACCWALK SECWALK SIGNWALK
+        RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -180,6 +184,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
     elseif(DEFINED T_SEED AND T_OVERLAY)
         list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_WATCHWALK)
+        list(APPEND defs -DWATCHWALK=$<TARGET_FILE:watch_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
         list(APPEND defs -DWALK=$<TARGET_FILE:label_walk> -DDATA=TabLabelTraceData -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
              -DFRIENDS=${T_FRIENDS})
@@ -429,6 +435,32 @@ tlc_test(tlc_overlay_trace_faulty_hide_unkeyed_rejected OverlayTrace OverlayTrac
          OVERLAY SEED 1 STEPS 1000 FAULTY hide-unkeyed)
 tlc_test(tlc_overlay_trace_faulty_hotkey_hides_rejected OverlayTrace OverlayTrace.cfg invariant PROPERTY TraceMatches
          OVERLAY SEED 1 STEPS 1000 FAULTY hotkey-hides)
+
+# Foreground-group synchronization between the background poll thread and the frame thread (src/terminal_watch.h,
+# TerminalWatch.tla): the whole bounded state space with temporal liveness, a witness per property, code traces, and
+# faulty ABA / stale-poll traces rejected.
+tlc_test(tlc_watch_spec TerminalWatch TerminalWatch.cfg pass)
+tlc_test(tlc_watch_witness_aba               WWatchAba             WWatchAba.cfg             liveness)
+tlc_test(tlc_watch_witness_one_way_seq       WWatchOneWaySeq       WWatchOneWaySeq.cfg       invariant
+         PROPERTY SeqOrdered)
+tlc_test(tlc_watch_witness_stale_remote      WWatchStaleRemote     WWatchStaleRemote.cfg     invariant
+         PROPERTY RemoteMatchesGroup)
+tlc_test(tlc_watch_witness_seq_rewinds       WWatchSeqRewinds      WWatchSeqRewinds.cfg      action
+         PROPERTY SeqMonotone)
+tlc_test(tlc_watch_witness_frame_drops_title WWatchFrameDropsTitle WWatchFrameDropsTitle.cfg action
+         PROPERTY FrameSeesTitleGroup)
+tlc_test(tlc_watch_witness_stale_poll        WWatchStalePoll       WWatchStalePoll.cfg       action
+         PROPERTY PollNeverClobbersFrame)
+tlc_test(tlc_watch_witness_frame_no_recheck  WWatchFrameNoRecheck  WWatchFrameNoRecheck.cfg  action
+         PROPERTY OverlapAsksRecheck)
+foreach(seed 1 2 3)
+    tlc_test(tlc_watch_trace_seed_${seed} TerminalWatchTrace TerminalWatchTrace.cfg pass WATCHWALK SEED ${seed}
+             STEPS 1000)
+endforeach()
+tlc_test(tlc_watch_trace_faulty_aba_rejected TerminalWatchTrace TerminalWatchTrace.cfg invariant PROPERTY TraceMatches
+         WATCHWALK SEED 1 STEPS 1000 FAULTY aba)
+tlc_test(tlc_watch_trace_faulty_stale_rejected TerminalWatchTrace TerminalWatchTrace.cfg invariant PROPERTY TraceMatches
+         WATCHWALK SEED 1 STEPS 1000 FAULTY stale)
 
 # The secret dialog (docs/secrets.md): Secrets.tla on four small instances (MCSecretsBad: a paste not of a token's
 # shape and a failing disk), every property, and a witness per

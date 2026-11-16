@@ -160,20 +160,25 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks, wire_test and nexus_versions_test
-        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test nexus_versions_test
+      - name: Build the model checks, wire_test, nexus_versions_test and nexus_terminal_watch_tests
+        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test nexus_versions_test nexus_terminal_watch_tests
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
           set -euo pipefail
           build/tests/model/model_test
           build/tests/model/overlay_test
+          build/tests/window/nexus_terminal_watch_tests
           mkdir -p walks
           for seed in 1 2 3; do
             build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
+            build/tests/model/watch_walk "$seed" 1000 walks/watch.tla
           done
           for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
             build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
+          done
+          for fault in --faulty-aba --faulty-stale; do
+            build/tests/model/watch_walk 1 1000 "$fault" walks/watch.tla
           done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
@@ -589,12 +594,12 @@ jobs:
         include:
           - part: units
             targets: >-
-              model_test overlay_test sync_test redial_test secrets_test signin_test store_test durable_test
-              driver_protocol_test supervisor_test wire_test nexus_versions_test builds_test
+              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+              store_test durable_test driver_protocol_test supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk journal_walk
-              store_lock_walk supervisor_walk builds_walk
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -659,6 +664,7 @@ jobs:
           }
           unit build/tests/model/model_test
           unit build/tests/model/overlay_test
+          unit build/tests/window/nexus_terminal_watch_tests
           unit build/tests/sync/sync_test
           unit build/tests/sync/redial_test
           # the secret dialog: every unit group, the leak test among them
@@ -708,9 +714,13 @@ jobs:
           }
           for seed in 1 2 3; do
             walk build/tests/model/overlay_walk "$seed" 1000
+            walk build/tests/model/watch_walk "$seed" 1000
           done
           for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
             walk build/tests/model/overlay_walk 1 1000 "$fault"
+          done
+          for fault in --faulty-aba --faulty-stale; do
+            walk build/tests/model/watch_walk 1 1000 "$fault"
           done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
@@ -897,11 +907,11 @@ jobs:
           - shard: secrets-trace
             run: '^tlc_secrets_trace_'
             build: secrets_walk
-          # The board's scroller and the overlay: their specs, witnesses and walks (about 25 short tests), split from
-          # window, which ran 50 s at p50 and 112 s at worst with them.
+          # The board's scroller, the overlay and terminal foreground synchronization: their specs, witnesses and walks
+          # (short tests), split from window, which ran 50 s at p50 and 112 s at worst with them.
           - shard: glide-overlay
-            run: '^tlc_(glide|overlay)_'
-            build: overlay_walk glide_walk
+            run: '^tlc_(glide|overlay|watch)_'
+            build: overlay_walk glide_walk watch_walk
           # The Tailscale shim's node lifecycle (models/Tailscale.tla): the three liveness instances (47,169 to 74,329
           # states) each in a shard of their own on eight workers, then the witnesses, recorded orders and Go walks.
           - shard: tailscale-spec
@@ -951,7 +961,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
