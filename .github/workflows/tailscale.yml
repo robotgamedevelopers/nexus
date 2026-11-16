@@ -167,9 +167,9 @@ jobs:
             exit 1
           fi
           pids=()
-          for group in version names handles start_checks panics_unit state_dir refusals lock lock_two_process panics \
-              log_cap quiet unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key \
-              long_sign_in control_error control_blackhole close_each_other; do
+          for group in version licences_unit names handles start_checks panics_unit licences state_dir refusals lock \
+              lock_two_process panics log_cap quiet unreachable certificate watch threads sign_in tailnet restart \
+              expiry control_down auth_key long_sign_in control_error control_blackhole close_each_other; do
             (cd "build-tailscale/tests/tailscale/work_$group" && arch -x86_64 ../tailscale_test "$group") &
             pids+=("$!")
           done

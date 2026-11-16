@@ -109,6 +109,11 @@ extern "C" {
 // The versions the shim was built with, as "tailscale.com v1.104.7 go1.27.4": static, never freed.
 NTS_API const char* nts_version(void);
 
+// The licence texts of the Go standard library and every Go module the shim links (src/tailscale/NOTICES.md), UTF-8
+// with LF line ends and NUL-terminated; when len is not NULL, *len is set to its length in bytes (without the NUL):
+// static, never freed.
+NTS_API const char* nts_licences(size_t* len);
+
 // The names of a state and a reason ("ready", "control-unreachable"): static, never freed; "unknown" for any other.
 NTS_API const char* nts_state_name(int state);
 NTS_API const char* nts_reason_name(int reason);
