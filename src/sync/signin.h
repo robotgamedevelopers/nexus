@@ -339,7 +339,7 @@ private:
 // does), taken only once
 // its line stands (an LF ends it; a CR followed by anything but LF starts the line over, and what was on it before is
 // not text) and only when parseSignInUrl accepts it: the first such. Holds no more of the output than one URL's bytes,
-// in a buffer reserved once and wiped as it goes.
+// in a fixed buffer wiped as it goes.
 class UrlScanner {
 public:
     explicit UrlScanner(std::string provider);
@@ -353,8 +353,10 @@ public:
 private:
     void endRun();
     void endLine();
+    void wipeRun();
     std::string provider_;
-    std::string run_;           // the run of URL bytes under way, while it may be one; capacity reserved once
+    char run_[kSignInUrlBytes] = {};    // the run of URL bytes under way, while it may be one
+    std::size_t runBytes_ = 0;
     SecretValue line_;          // a URL on the line under way, taken when the line stands
     SecretValue url_;
     bool found_ = false;

@@ -907,12 +907,22 @@ void Hub::dropSignIns() {
     signInEffects(signIns_.drop());
 }
 
+std::vector<SignInOffer> Hub::publicOffers() const {
+    std::vector<SignInOffer> offers = signIns_.offers();
+    for (SignInOffer& o : offers) {
+        o.url.clear();
+        if (!o.opener.empty()) {
+            o.opener = kSignInHeldBy;
+        }
+    }
+    return offers;
+}
+
 Sessions Hub::stateFor(const std::string& opener) const {
-    if (opener.empty() || state_.offers().empty()) {
+    std::vector<SignInOffer> offers = signIns_.offers();
+    if (opener.empty() || offers.empty()) {
         return state_;
     }
-    Sessions s = state_;
-    std::vector<SignInOffer> offers = signIns_.offers();
     for (SignInOffer& o : offers) {
         if (o.opener != opener) {
             o.url.clear();
@@ -921,6 +931,7 @@ Sessions Hub::stateFor(const std::string& opener) const {
             }
         }
     }
+    Sessions s = state_;
     s.setOffers(std::move(offers));
     return s;
 }
@@ -972,14 +983,7 @@ void Hub::signInEffects(const SignInEffects& effects) {
         }
     }
     if (effects.changed) {
-        std::vector<SignInOffer> offers = signIns_.offers();
-        for (SignInOffer& o : offers) {
-            o.url.clear();
-            if (!o.opener.empty()) {
-                o.opener = kSignInHeldBy;
-            }
-        }
-        state_.setOffers(std::move(offers));
+        state_.setOffers(publicOffers());
     }
     if (signInHooks_) {
         for (const std::string& account : effects.stop) {
@@ -1420,6 +1424,7 @@ void Hub::refresh(SessionId id) {
     Sessions next(std::move(sessions));
     next.setRequests(desk_.open());
     next.shareFriends(state_);
+    next.setOffers(publicOffers());
     state_ = std::move(next);
 }
 

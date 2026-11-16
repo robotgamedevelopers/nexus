@@ -98,6 +98,10 @@ void urls() {
              std::string("https://claude.com/a?redirect_uri=http://localhost.evil.example:9/cb&state=s"),
              std::string("https://claude.com/a?redirect_uri=http://localhost:9/cb&state=s\r\nX: y"),
              std::string("https://claude.com/a?redirect_uri=http://localhost:9/cb&state=s\x01"),
+             std::string("https://claude.com/a?redirect_uri=http%3A%2F%2Flocalhost%3A9%2Fcb%20x&state=s"),
+             std::string("https://claude.com/a?redirect_uri=http%3A%2F%2Flocalhost%3A9%2Fcb%0d%0aX%3Ay&state=s"),
+             std::string("https://claude.com/a?redirect_uri=http%3A%2F%2Flocalhost%3A9%2Fcb%00x&state=s"),
+             std::string("https://claude.com/a?redirect_uri=http%3A%2F%2Flocalhost%3A9%2Fcb%7fx&state=s"),
              std::string("https://claude.com/a"), std::string()}) {
         CHECK(!sync::parseSignInUrl("claude", bad, &t));
     }
@@ -477,25 +481,35 @@ std::string scanUrl(const std::vector<std::string>& chunks) {
 }
 
 // `text` cut in two at every byte, and fed a byte at a time: the token scanner finds `want` (empty: nothing) each way.
-bool tokenEveryCut(const std::string& text, const std::string& want) {
+bool tokenEveryCut(std::string_view text, std::string_view want) {
     bool ok = true;
     for (std::size_t cut = 0; cut <= text.size(); ++cut) {
-        if (scanToken({text.substr(0, cut), text.substr(cut)}) != want) {
+        sync::TokenScanner s;
+        s.feed(text.substr(0, cut));
+        s.feed(text.substr(cut));
+        const std::string got = s.finish() ? s.take().bytes() : std::string();
+        if (got != want) {
             std::fprintf(stderr, "  cut at %zu of %zu\n", cut, text.size());
             ok = false;
         }
     }
-    std::vector<std::string> bytes;
-    for (char c : text) {
-        bytes.emplace_back(1, c);
+    sync::TokenScanner bytewise;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        bytewise.feed(text.substr(i, 1));
     }
-    return ok && scanToken(bytes) == want;
+    const std::string got = bytewise.finish() ? bytewise.take().bytes() : std::string();
+    return ok && got == want;
 }
 
-bool urlEveryCut(const std::string& text, const std::string& want) {
+bool urlEveryCut(std::string_view text, std::string_view want) {
     bool ok = true;
     for (std::size_t cut = 0; cut <= text.size(); ++cut) {
-        if (scanUrl({text.substr(0, cut), text.substr(cut)}) != want) {
+        sync::UrlScanner s("claude");
+        std::string got;
+        if (s.feed(text.substr(0, cut)) || s.feed(text.substr(cut))) {
+            got = s.take().bytes();
+        }
+        if (got != want) {
             std::fprintf(stderr, "  cut at %zu of %zu\n", cut, text.size());
             ok = false;
         }
@@ -886,6 +900,19 @@ void hub() {
         CHECK(o.size() == 1 && o[0].id == 1 && o[0].account == "a1" && o[0].host == "studio.local");
         CHECK(s.store.applied(sync::kSignInIdsClient) == 1 && s.runner.started.empty());
         CHECK(s.hub->state().requests().empty() && holds(s.transcript(1), "a1 needs signing in"));
+        // Session refreshes (the drivers setting activity at startup, a connecting window ensuring a friend's session)
+        // keep the live offers intact in state() and stateFor().
+        CHECK(s.hub->setActivity(1, sync::Activity::Down));
+        {
+            sync::Action ensureOther;
+            ensureOther.num = ++s.num;
+            ensureOther.kind = sync::ActionKind::Ensure;
+            ensureOther.friendName = "g";
+            std::string why;
+            CHECK(s.hub->apply(ensureOther, &why, "c1"));
+        }
+        CHECK(s.hub->state().offers().size() == 1 && s.hub->state().offers()[0].id == 1);
+        CHECK(s.hub->stateFor("w1").offers().size() == 1 && s.hub->stateFor("w1").offers()[0].id == 1);
         // A driver's no-credential, an AI's ask: the flow is live, nothing more is minted.
         s.hub->reportSignedIn("a1", false);
         std::string said;
@@ -907,6 +934,15 @@ void hub() {
         CHECK(s.hub->stateFor("w1").offers()[0].opener == "w1" && s.hub->stateFor("w2").offers()[0].opener == sync::kSignInHeldBy);
         CHECK(s.hub->stateFor("w1").offers()[0].url.bytes() == kUrl);
         CHECK(s.hub->stateFor("w2").offers()[0].url.empty() && s.hub->stateFor("").offers()[0].url.empty());
+        // Streaming text or notices in sessions while the URL is out keep the offer and its per-window URL isolation.
+        CHECK(s.hub->setOpen(1, "growing text"));
+        s.hub->tellAccount("a2", "a2 notice");
+        CHECK(s.hub->state().offers().size() == 1 && s.hub->state().offers()[0].url.empty() &&
+              s.hub->state().offers()[0].opener == sync::kSignInHeldBy);
+        CHECK(s.hub->stateFor("w1").offers().size() == 1 && s.hub->stateFor("w1").offers()[0].url.bytes() == kUrl &&
+              s.hub->stateFor("w1").offers()[0].opener == "w1");
+        CHECK(s.hub->stateFor("w2").offers().size() == 1 && s.hub->stateFor("w2").offers()[0].url.empty() &&
+              s.hub->stateFor("w2").offers()[0].opener == sync::kSignInHeldBy);
         CHECK(!leaks(sync::stateFile(s.hub->stateFor("w1"))));
         // Opened, a stray callback dropped, the matching one replayed once to the URL's redirect.
         CHECK(s.act(sync::ActionKind::SignInOpened, 1, "w1"));

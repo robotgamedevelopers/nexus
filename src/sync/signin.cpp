@@ -189,7 +189,7 @@ bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarge
     if (path.empty()) {
         path = "/";
     }
-    if (path[0] != '/' || path.find_first_of("?#") != std::string_view::npos) {
+    if (path[0] != '/' || !isQueryBytes(path) || path.find_first_of("?#") != std::string_view::npos) {
         return false;
     }
     out->port = static_cast<std::uint16_t>(port);
@@ -839,13 +839,19 @@ bool isUrlByte(char c) {
 
 } // namespace
 
-UrlScanner::UrlScanner(std::string provider) : provider_(std::move(provider)) {
-    // Reserved once: the run never outgrows it, so no copy of its bytes is left behind by a growth.
-    run_.reserve(kSignInUrlBytes + 1);
-}
+UrlScanner::UrlScanner(std::string provider) : provider_(std::move(provider)) {}
 
 UrlScanner::~UrlScanner() {
-    wipeBytes(run_);
+    runBytes_ = sizeof run_;
+    wipeRun();
+}
+
+void UrlScanner::wipeRun() {
+    volatile char* p = run_;
+    for (std::size_t i = 0; i < runBytes_; ++i) {
+        p[i] = 0;
+    }
+    runBytes_ = 0;
 }
 
 SecretValue UrlScanner::take() {
@@ -855,13 +861,14 @@ SecretValue UrlScanner::take() {
 }
 
 void UrlScanner::endRun() {
-    if (run_.size() > kUrlStart.size() && run_.compare(0, kUrlStart.size(), kUrlStart) == 0 && line_.empty()) {
+    if (runBytes_ > kUrlStart.size() && std::string_view(run_, kUrlStart.size()) == kUrlStart && line_.empty()) {
+        const std::string_view candidate(run_, runBytes_);
         SignInTarget t;
-        if (parseSignInUrl(provider_, run_, &t)) {
-            line_ = SecretValue(run_);
+        if (parseSignInUrl(provider_, candidate, &t)) {
+            line_ = SecretValue(candidate);
         }
     }
-    wipeBytes(run_);
+    wipeRun();
 }
 
 void UrlScanner::endLine() {
@@ -909,13 +916,20 @@ bool UrlScanner::feed(std::string_view bytes) {
             endRun();
             continue;
         }
-        run_.push_back(c);
-        // Only what may start a URL is kept: a run of URL bytes is dropped as soon as it cannot be one.
-        const std::size_t n = std::min(run_.size(), kUrlStart.size());
-        if (run_.compare(0, n, kUrlStart.substr(0, n)) != 0 || run_.size() > kSignInUrlBytes) {
-            wipeBytes(run_);
+        if (runBytes_ == kSignInUrlBytes) {
+            wipeRun();
             if (c == 'h') {
-                run_.push_back(c);      // it may start one
+                run_[runBytes_++] = c;
+            }
+            continue;
+        }
+        run_[runBytes_++] = c;
+        // Only what may start a URL is kept: a run of URL bytes is dropped as soon as it cannot be one.
+        const std::size_t n = std::min(runBytes_, kUrlStart.size());
+        if (std::string_view(run_, n) != kUrlStart.substr(0, n)) {
+            wipeRun();
+            if (c == 'h') {
+                run_[runBytes_++] = c;  // it may start one
             }
         }
     }
@@ -926,12 +940,13 @@ bool UrlScanner::feed(std::string_view bytes) {
 // TokenScanner
 
 TokenScanner::~TokenScanner() {
+    runBytes_ = sizeof run_;
     wipeRun();
 }
 
 void TokenScanner::wipeRun() {
     volatile char* p = run_;
-    for (std::size_t i = 0; i < sizeof run_; ++i) {
+    for (std::size_t i = 0; i < runBytes_; ++i) {
         p[i] = 0;
     }
     runBytes_ = 0;

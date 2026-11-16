@@ -24,6 +24,7 @@
 // The values are made up (FAKE in each) and of letters the tests find in nothing else (tests/leak_scan.h).
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -120,9 +121,18 @@ bool terminal(int fd) { return isatty(fd) == 1; }
 bool environmentAsPromised() {
     const char* dir = std::getenv("CLAUDE_CONFIG_DIR");
     struct stat st{};
-    return terminal(0) && terminal(1) && terminal(2) && dir != nullptr && stat(dir, &st) == 0 && S_ISDIR(st.st_mode) &&
-        std::getenv("BROWSER") != nullptr && std::getenv("ANTHROPIC_API_KEY") == nullptr &&
-        std::getenv("ANTHROPIC_AUTH_TOKEN") == nullptr && std::getenv("CLAUDE_CODE_OAUTH_TOKEN") == nullptr;
+    if (!terminal(0) || !terminal(1) || !terminal(2) || fcntl(3, F_GETFL) < 0 || dir == nullptr ||
+            stat(dir, &st) != 0 || !S_ISDIR(st.st_mode) || std::getenv("BROWSER") == nullptr ||
+            std::getenv("ANTHROPIC_API_KEY") != nullptr || std::getenv("ANTHROPIC_AUTH_TOKEN") != nullptr ||
+            std::getenv("CLAUDE_CODE_OAUTH_TOKEN") != nullptr) {
+        return false;
+    }
+    for (int fd = 4; fd < 64; ++fd) {
+        if (fcntl(fd, F_GETFL) != -1) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void openInBrowser(const std::string& url) {

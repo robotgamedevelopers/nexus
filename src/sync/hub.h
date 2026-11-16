@@ -394,6 +394,7 @@ public:
     void injectSignInCallbackFault() { signIns_.injectCallbackFault(); }
 
 private:
+    std::vector<SignInOffer> publicOffers() const;
     void needSignIn(const std::string& account);
     void needAll();
     // Windows that take a paste are linked, and none reads sign-ins: a paste is asked for instead of a sign-in.

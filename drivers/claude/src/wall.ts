@@ -234,7 +234,9 @@ export const kRunsLaterUnderHome = [
 ] as const;
 
 /** The names nexus-server keeps in its directory, ~/.nexus/server (src/server/home.h), whether they exist yet or not. */
-const kServerNames = ['config', 'drivers', 'nexus-config', 'store', 'server.sock', 'server.log', 'accounts', 'harness'];
+const kServerNames = [
+    'config', 'drivers', 'nexus-config', 'store', 'server.sock', 'server.log', 'signin.sock', 'signin-bin', 'accounts', 'harness',
+];
 
 /**
  * Everything under ~/.nexus but the session's own Claude state `configDir`: at each level from ~/.nexus down to the

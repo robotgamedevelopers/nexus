@@ -51,6 +51,19 @@ bool nonblocking(int fd) {
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 && fcntl(fd, F_SETFD, FD_CLOEXEC) == 0;
 }
 
+int aboveNine(int fd) {
+    if (fd >= 0 && fd < 10) {
+        const int high = ::fcntl(fd, F_DUPFD_CLOEXEC, 10);
+        ::close(fd);
+        return high;
+    }
+    if (fd >= 0 && ::fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 // The first `claude` on `path`, or empty.
 std::string onPath(const std::string& path) {
     std::size_t at = 0;
@@ -259,12 +272,7 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
     // the server inherits it, and given to the process alone as its fd 3.
     // Kept above fd 9, so that the dup2 onto fd 3 is never of a descriptor onto itself (which would leave it
     // close-on-exec) and never lands on one of the terminal's.
-    int lock = ::open((configDir + "/lock").c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (lock >= 0 && lock < 10) {
-        const int high = ::fcntl(lock, F_DUPFD_CLOEXEC, 10);
-        ::close(lock);
-        lock = high;
-    }
+    int lock = aboveNine(::open((configDir + "/lock").c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600));
     if (lock < 0 || ::flock(lock, LOCK_EX | LOCK_NB) != 0) {
         if (lock >= 0) {
             ::close(lock);
@@ -273,7 +281,7 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
         fail("cannot lock its config directory: " + std::string(std::strerror(errno)));
         return;
     }
-    const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+    int master = ::posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0 || ::grantpt(master) != 0 || ::unlockpt(master) != 0) {
         if (master >= 0) {
             ::close(master);
@@ -284,9 +292,15 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
         return;
     }
     const char* slaveName = ::ptsname(master);
-    const int slave = slaveName == nullptr ? -1 : ::open(slaveName, O_RDWR | O_NOCTTY);
-    if (slave < 0) {
-        ::close(master);
+    const int slave = aboveNine(slaveName == nullptr ? -1 : ::open(slaveName, O_RDWR | O_NOCTTY | O_CLOEXEC));
+    master = aboveNine(master);
+    if (slave < 0 || master < 0 || !nonblocking(master)) {
+        if (slave >= 0) {
+            ::close(slave);
+        }
+        if (master >= 0) {
+            ::close(master);
+        }
         ::close(lock);
         std::filesystem::remove_all(configDir, ec);
         fail("its pseudo-terminal did not open");
@@ -331,6 +345,12 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
     flags |= POSIX_SPAWN_SETPGROUP;     // its own group, numbered by its pid
     posix_spawnattr_setpgroup(&attr, 0);
 #endif
+    // No other file of this process: on macOS by POSIX_SPAWN_CLOEXEC_DEFAULT, on Linux by glibc's addclosefrom_np.
+#if defined(__APPLE__)
+    flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#else
+    posix_spawn_file_actions_addclosefrom_np(&files, 4);
+#endif
     posix_spawnattr_setflags(&attr, flags);
     sigset_t none;
     sigemptyset(&none);
@@ -366,7 +386,6 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
             ::close(fd);
         }
     }
-    nonblocking(master);
     auto [it, made] = procs_.try_emplace(account);
     (void)made;
     Proc& p = it->second;

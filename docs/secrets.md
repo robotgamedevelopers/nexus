@@ -342,9 +342,8 @@ descriptor, never in an environment, and keeps every tool its AI has out of the 
 below). The sign-in's own `CLAUDE_CONFIG_DIR`, `.signin`, is inside that directory, so it is behind the wall too while
 it exists, and the driver copies nothing from it into Claude's state (`drivers/claude` unit test, below).
 
-**Not built here.** Accounts of other providers sign in by a paste. The server replays to
-127.0.0.1 only. Whether `claude setup-token` under WSL2 calls the helper or opens a browser by its own path
-is not measured; the terminal's URL is the fallback either way.
+**Not built here.** Accounts of other providers sign in by a paste. Whether `claude setup-token` under WSL2 calls the
+helper or opens a browser by its own path is not measured; the terminal's URL is the fallback either way.
 
 ## Versions
 

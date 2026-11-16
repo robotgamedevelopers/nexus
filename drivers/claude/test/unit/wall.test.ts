@@ -310,7 +310,8 @@ void test('nothing under ~/.nexus is writable but the session\'s own Claude stat
     };
     const got = nexusOutsideState('/h', '/h/.nexus/server/harness/claude/main', (d) => dirs[d] ?? []);
     for (const p of ['/h/.nexus/other', '/h/.nexus/server/drivers', '/h/.nexus/server/config', '/h/.nexus/server/nexus-config',
-        '/h/.nexus/server/store', '/h/.nexus/server/accounts', '/h/.nexus/server/harness/claude/work']) {
+        '/h/.nexus/server/store', '/h/.nexus/server/signin.sock', '/h/.nexus/server/signin-bin',
+        '/h/.nexus/server/accounts', '/h/.nexus/server/harness/claude/work']) {
         assert.ok(got.includes(p), p);
     }
     for (const p of ['/h/.nexus', '/h/.nexus/server', '/h/.nexus/server/harness', '/h/.nexus/server/harness/claude',
