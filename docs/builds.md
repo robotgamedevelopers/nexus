@@ -84,12 +84,23 @@ that build is removed and placed again.
 ## The formats rule
 
 The formats file lists `format <name> <writes> <reader>`: the version the build writes, and the oldest reader that
-can read it (`nexus-server builds formats` prints this program's). `current` and `back` refuse, in one line, a build
-that cannot read what the current one writes: for each of `store-record`, `store-snapshot` (store/store.h) and
-`config` (accounts.json and friends.json), the current build's `reader` must be at most the target's `writes`. The
-link's state format and the driver protocol are agreed between their two ends at each connection, and are listed but
-not checked. Whether the store holds anything the target cannot read is the store's own check, at layer 5; this rule
-goes by the versions alone.
+can read it (`nexus-server builds formats` prints this program's). `current` refuses, in one line, a build that cannot
+read what the current one writes: for each of `store-record`, `store-snapshot` (store/store.h) and `config`
+(accounts.json and friends.json), the current build's `reader` must be at most the target's `writes`. The link's state
+format and the driver protocol are agreed between their two ends at each connection, and are listed but not checked.
+
+When `current` downgrades `writes` on any checked format (including a multi-hop step such as `5/5 -> 5/3 -> 3/3` where
+the adjacent versions pass `formatsRefusal`), and whenever `back` switches to an older writer or past a format bump,
+`builds` also inspects what `<serverDir>/store` and `<serverDir>/nexus-config/{accounts,friends}.json` hold on disk
+under the store's shared lock (`src/server/migration.h` `readDiskFormats`, `diskFormatsRefusal`; refused while a running
+server holds the store open for writing):
+
+- If a newer build (`5/5`) failed or stopped before writing a format-5 record or snapshot, the store on disk still
+  needs only reader `3`/`4`, so `nexus-server builds back` to `3/3` succeeds.
+- Once a record, snapshot or config file on disk requires a reader higher than the target build's `writes`, both `back`
+  and `current` refuse (exit 3), naming the build, the format, the record or file and both versions.
+- `nexus-server store check --for <build-hash>` runs the same non-mutating check on demand (exit 0 when `<build-hash>`
+  can read the store and config on disk, exit 3 when refused).
 
 ## The lock
 

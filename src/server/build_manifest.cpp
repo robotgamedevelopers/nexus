@@ -236,6 +236,35 @@ std::string formatsRefusal(const Formats& target, const std::string& targetHash,
     return std::string();
 }
 
+std::string diskFormatsRefusal(const Formats& target, const std::string& targetHash, const DiskFormats& disk) {
+    auto check = [&](const std::string& name, std::uint32_t need, const std::string& where) -> std::string {
+        if (need == 0) {
+            return std::string();
+        }
+        const Format* t = findFormat(target, name);
+        if (t == nullptr) {
+            return "build " + targetHash + " states no " + name + " format, and " + where + " requires " + name +
+                   " reader " + std::to_string(need) + "; a build that does not say it reads that cannot open it";
+        }
+        if (t->writes < need) {
+            return "build " + targetHash + " reads " + name + " up to version " + std::to_string(t->writes) + ", and " +
+                   where + " requires a reader of at least " + std::to_string(need) + "; switching to it would leave "
+                   "the store or config unreadable, so it is refused";
+        }
+        return std::string();
+    };
+    if (std::string r = check("store-snapshot", disk.storeSnapshotReader, "the store's snapshot"); !r.empty()) {
+        return r;
+    }
+    if (std::string r = check("store-record", disk.storeRecordReader,
+                              "record " + std::to_string(disk.storeRecordSeq) + " of the store's journal");
+        !r.empty()) {
+        return r;
+    }
+    return check("config", disk.configVersion,
+                 disk.configFile.empty() ? std::string("nexus-config") : "nexus-config/" + disk.configFile);
+}
+
 bool readEvidence(const std::string& text, Evidence* out, std::string* why) {
     *out = Evidence();
     const std::vector<std::string> ls = lines(text);

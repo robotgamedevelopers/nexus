@@ -653,3 +653,104 @@ if(NOT WIN32)
                              WALK ${seed} 350 --fault ${fault})
     endforeach()
 endif()
+
+# Layer 5 migration and rollback-format checks (src/server/migration.h, models/migration):
+add_executable(migration_test migration_test.cpp)
+target_link_libraries(migration_test PRIVATE nexus_builds)
+target_compile_options(migration_test PRIVATE ${warnings})
+foreach(group move refusals crash formats)
+    add_test(NAME migration_unit_${group} COMMAND migration_test ${group})
+    set_tests_properties(migration_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+if(NOT WIN32)
+    add_executable(migration_functional migration_functional.cpp)
+    target_link_libraries(migration_functional PRIVATE nexus_builds nexus_durable nexus_config_repo nexus_supervisor)
+    target_compile_options(migration_functional PRIVATE ${warnings})
+    foreach(case old_to_new live_old_refused crash_resume_and_conflict rollback_formats)
+        add_test(NAME migration_functional_${case} COMMAND migration_functional ${case}
+                 ${CMAKE_CURRENT_BINARY_DIR}/mig-${case})
+        set_tests_properties(migration_functional_${case} PROPERTIES LABELS functional TIMEOUT 120)
+    endforeach()
+
+    add_executable(migration_walk migration_walk.cpp)
+    target_link_libraries(migration_walk PRIVATE nexus_builds Threads::Threads)
+    target_compile_options(migration_walk PRIVATE ${warnings})
+    add_dependencies(model_checks migration_walk migration_test)
+
+    set(migration_models "${PROJECT_SOURCE_DIR}/models/migration")
+    set(migration_tlc "${PROJECT_SOURCE_DIR}/tests/store/tlc.cmake")
+    function(migration_tlc_test name cfg module expect)
+        cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;CAP" "WALK" ${ARGN})
+        if(NOT T_WORKERS)
+            set(T_WORKERS 2)
+        endif()
+        set(label model)
+        if(NOT T_CAP)
+            set(T_CAP 60)
+        endif()
+        if(T_NIGHTLY)
+            set(label model_nightly)
+        endif()
+        math(EXPR ctest_timeout "${T_CAP} + 30")
+        set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${migration_models} -DMODULE=${module}
+                 -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${T_CAP})
+        if(T_PROPERTY)
+            list(APPEND defs -DPROPERTY=${T_PROPERTY})
+        endif()
+        if(T_WALK)
+            string(REPLACE ";" "," walk_args "${T_WALK}")
+            list(APPEND defs -DWALK=$<TARGET_FILE:migration_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=MigrationTraceData.tla)
+        endif()
+        add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${migration_tlc})
+        set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    endfunction()
+
+    # The spec on its small instances and liveness (CutAnywhereResumes):
+    # spec: 15,350 states, ~1 s on 4 workers; conflict: 268 states, <1 s; rollback: 2,278 states, <1 s;
+    # wide (nightly): 72,813 states, ~8 s on 8 workers.
+    migration_tlc_test(tlc_migration_spec Migration.cfg Migration pass WORKERS 4)
+    migration_tlc_test(tlc_migration_conflict MigrationConflict.cfg Migration pass WORKERS 4)
+    migration_tlc_test(tlc_migration_rollback MigrationRollback.cfg Migration pass WORKERS 4)
+    migration_tlc_test(tlc_migration_wide MigrationWide.cfg Migration pass WORKERS 8 NIGHTLY CAP 600)
+
+    # Reversed witnesses: each broken variant must be rejected by the invariant or temporal property named.
+    migration_tlc_test(tlc_migration_witness_no_lock witnesses/MNoLock.cfg Migration invariant PROPERTY LockHeld)
+    migration_tlc_test(tlc_migration_witness_ignore_live_old witnesses/MIgnoreLiveOld.cfg Migration invariant
+                       PROPERTY LiveOldRefused)
+    migration_tlc_test(tlc_migration_witness_clobber_new witnesses/MClobberNew.cfg Migration invariant
+                       PROPERTY NeverClobbersNewStore)
+    migration_tlc_test(tlc_migration_witness_no_sync witnesses/MNoSync.cfg Migration invariant
+                       PROPERTY OldDataNeverLost)
+    migration_tlc_test(tlc_migration_witness_no_plan witnesses/MNoPlan.cfg Migration invariant
+                       PROPERTY OldDataNeverLost)
+    migration_tlc_test(tlc_migration_witness_leave_old witnesses/MLeaveOld.cfg Migration invariant PROPERTY MovesOnce)
+    migration_tlc_test(tlc_migration_witness_blind_back witnesses/MBlindBack.cfg Migration invariant
+                       PROPERTY CurAlwaysReadsStore)
+    migration_tlc_test(tlc_migration_witness_multihop witnesses/MMultiHop.cfg Migration invariant
+                       PROPERTY CurAlwaysReadsStore)
+    migration_tlc_test(tlc_migration_witness_refuse_unknown_change witnesses/MRefuseUnknownChange.cfg Migration
+                       invariant PROPERTY RollbackReadable)
+    migration_tlc_test(tlc_migration_witness_stuck_lock_file witnesses/MStuckLockFile.cfg Migration temporal
+                       PROPERTY CutAnywhereResumes)
+
+    # Trace binding: walks on real POSIX files and locks checked against Migration.tla (seed 1: live old server on
+    # server.sock; seed 2: live old process holding store flock; seed 3: cold migration + switches/rollbacks; seed 4:
+    # conflict refusal).
+    foreach(seed 1 2 3 4)
+        migration_tlc_test(tlc_migration_trace_seed_${seed} MigrationTrace.cfg MigrationTrace invariant
+                           PROPERTY TraceUnfinished WALK ${seed} 300)
+    endforeach()
+
+    # Reversed fault walks: each diverges from Migration.tla (Bug = "none"), so no behaviour reaches the end of the
+    # trace (`pass` is rejection).
+    foreach(fault_seed no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3
+                       blind-back:1 multihop:1 refuse-unknown-change:1)
+        string(REPLACE ":" ";" fs "${fault_seed}")
+        list(GET fs 0 fault)
+        list(GET fs 1 seed)
+        migration_tlc_test(tlc_migration_trace_${fault}_rejected MigrationTrace.cfg MigrationTrace pass
+                           WALK ${seed} 300 --fault ${fault})
+    endforeach()
+endif()

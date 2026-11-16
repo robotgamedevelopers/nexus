@@ -551,6 +551,14 @@ public:
         return Status::ok();
     }
 
+    Status remove_dir(const std::string& dir) override {
+        const At at = where(dir);
+        if (::unlinkat(at.fd, at.name.c_str(), AT_REMOVEDIR) != 0) {
+            return os_error("rmdir", dir);
+        }
+        return Status::ok();
+    }
+
     Status write_new(const std::string& path, std::span<const std::uint8_t> data) override {
         const At at = where(path);
         Fd fd(::openat(at.fd, at.name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));

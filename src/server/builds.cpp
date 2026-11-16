@@ -5,6 +5,7 @@
 
 #include "accounts/registry.h"
 #include "driver/protocol.h"
+#include "server/migration.h"
 #include "server/sha256.h"
 #include "store/fs.h"
 #include "store/store.h"
@@ -1103,9 +1104,69 @@ struct Builds::Run {
                 return finish(Status::failed("the current build " + p.current + " is damaged: " +
                                              (s.is_ok() ? why : s.message()) + "; `nexus-server builds verify`"));
             }
+            bool downgradeWrites = false;
+            for (const std::string& name : kCheckedFormats) {
+                const Format* c = findFormat(cur.formats, name);
+                const Format* t = findFormat(m.formats, name);
+                if (c != nullptr && (t == nullptr || t->writes < c->writes)) {
+                    downgradeWrites = true;
+                    break;
+                }
+            }
             const std::string refusal = formatsRefusal(m.formats, target, cur.formats, p.current);
-            if (!refusal.empty()) {
-                return finish(Status::refused(refusal));
+            if (!back) {
+                if (!refusal.empty()) {
+                    return finish(Status::refused(refusal));
+                }
+                if (downgradeWrites && !fault(Fault::MultiHopNoStoreCheck)) {
+                    store::PosixOptions po;
+                    po.now_ms = b.options_.now_ms;
+                    po.sleep_ms = b.options_.sleep_ms;
+                    po.test_fs_type = b.options_.test_fs_type;
+                    po.test_locks_ignored = b.options_.test_locks_ignored;
+                    std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
+                    DiskFormats disk;
+                    s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                    if (s.code() == Status::Code::Busy) {
+                        return finish(Status::refused("cannot switch to build " + target +
+                                                      " while a running server holds " + b.serverDir_ +
+                                                      "/store open, because it reads older formats than " + p.current +
+                                                      " writes; stop the server first (`nexus-server stop`)"));
+                    }
+                    if (!s.is_ok()) {
+                        return finish(s);
+                    }
+                    const std::string diskRef = diskFormatsRefusal(m.formats, target, disk);
+                    if (!diskRef.empty()) {
+                        return finish(Status::refused(diskRef));
+                    }
+                }
+            } else if (downgradeWrites || !refusal.empty()) {
+                // Rolling back (`back`): inspect what the store and nexus-config on disk actually hold under the
+                // store's shared lock, so a build that crashed before writing a newer format rolls back cleanly, while
+                // a store that holds a record or snapshot the previous build cannot read is refused.
+                store::PosixOptions po;
+                po.now_ms = b.options_.now_ms;
+                po.sleep_ms = b.options_.sleep_ms;
+                po.test_fs_type = b.options_.test_fs_type;
+                po.test_locks_ignored = b.options_.test_locks_ignored;
+                std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
+                DiskFormats disk;
+                s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                if (s.code() == Status::Code::Busy) {
+                    return finish(Status::refused("cannot switch back to build " + target +
+                                                  " while a running server holds " + b.serverDir_ +
+                                                  "/store open; stop it first (`nexus-server stop`)"));
+                }
+                if (!s.is_ok()) {
+                    return finish(s);
+                }
+                if (!fault(Fault::BlindBack)) {
+                    const std::string diskRef = diskFormatsRefusal(m.formats, target, disk);
+                    if (!diskRef.empty()) {
+                        return finish(Status::refused(diskRef));
+                    }
+                }
             }
         }
         s = stableLink();
@@ -1661,9 +1722,9 @@ const std::map<std::string, std::string>& helps() {
          "nexus-server builds current <hash> [--dir DIR]\n"
          "  Makes the build current and the current build previous, in one rename of the pointer.\n"
          "  Refused (nothing changes) unless the build is placed, reads back whole against its manifest, is\n"
-         "  tested, and reads what the current build writes: for each of store-record, store-snapshot and config,\n"
-         "  the current build's reader is at most this build's writes. Whether the store holds anything this build\n"
-         "  cannot read is not checked here.\n"
+         "  tested, reads what the current build writes (for store-record, store-snapshot and config, the current\n"
+         "  build's reader is at most this build's writes), and, when this build writes an older format than the\n"
+         "  current one, DIR/store and DIR/nexus-config hold nothing above what this build reads.\n"
          "  Steps: lock, settle, clean as place; the checks; DIR/current made a link to builds/active/current if it\n"
          "  is not; a pair folder made (links current and previous), synced, renamed to pair-<new>-<old>, the\n"
          "  directory synced; a new pointer link made and renamed over builds/active; the directory synced; the\n"
@@ -1672,8 +1733,11 @@ const std::map<std::string, std::string>& helps() {
          "  Exit: 0; 1 a filesystem call failed or the build is damaged; 2 usage; 3 refused; 4 lock busy.\n"},
         {"back",
          "nexus-server builds back [--dir DIR]\n"
-         "  Makes previous current and current previous, by the steps and checks of `current`.\n"
-         "  Exit: as current; 3 also when there is no previous build.\n"},
+         "  Makes previous current and current previous, by the steps of `current`, checking DIR/store and\n"
+         "  DIR/nexus-config on disk under the store's shared lock when previous writes an older format than current\n"
+         "  (so a build that failed before writing a newer format rolls back cleanly, while an unreadable store is\n"
+         "  refused).\n"
+         "  Exit: as current; 3 also when there is no previous build or the store holds a newer format.\n"},
         {"prune",
          "nexus-server builds prune [--keep <n>] [--dir DIR]\n"
          "  Removes every build but current, previous and the n (default 2) most recently placed of the rest.\n"

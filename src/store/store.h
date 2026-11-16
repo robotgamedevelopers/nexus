@@ -118,6 +118,9 @@ struct StoreOptions {
     // Test-only, for the trace binding's negative check (tests/store/store_lock_walk.cpp --faulty-unlocked), which TLC
     // must reject: open without the lock, as nexus-server did before it had one. Never set by the server or a tool.
     bool test_unlocked = false;
+    // Test-only, for migration_walk --fault refuse-unknown-change: replay_record refuses a framed record on a session
+    // whose only changes are unknown Change::Kinds, as the store before layer 5 did.
+    bool test_refuse_unknown_change = false;
 };
 
 // What open() found.
@@ -126,6 +129,18 @@ struct OpenReport {
     std::uint64_t records = 0;   // records replayed after the snapshot
     std::uint64_t cut_bytes = 0; // bytes of torn tail cut from the log
     std::uint64_t migrated = 0;  // sessions made from the friend tabs of an older format (then compacted into this one)
+    std::uint64_t skipped = 0;   // unknown changes and frames with trailing fields from a later format skipped on replay
+};
+
+// The oldest format versions a reader must know to open the store in `dir` as it lies on disk (layer 5's check for
+// `builds back`, write-downgrade `builds current`, and `nexus-server store check --for <build>`). 0 when the store has
+// no records or no snapshot.
+struct StoreReaders {
+    bool exists = false;                    // a store with a snapshot or at least one record is in `dir`
+    std::uint32_t record_reader = 0;        // highest reader required by any record after the snapshot (0: none)
+    std::uint64_t record_seq = 0;           // sequence number of a record requiring `record_reader`
+    std::uint32_t snapshot_reader = 0;      // reader required by the snapshot (0: no snapshot)
+    std::uint64_t snapshot_seq = 0;
 };
 
 class Store {
@@ -148,6 +163,13 @@ public:
     // NotFound when there is no store in `dir`. `now_ms` empty: the steady clock.
     static Status inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out,
                           OpenReport* report = nullptr, const std::function<std::uint64_t()>& now_ms = {});
+
+    // Reads only the format reader versions required by the snapshot and records in `dir`, under the shared lock and
+    // kReaderCopyLimitMs bound of inspect(), changing and making nothing on disk. Succeeds even when `dir` holds a
+    // format newer than this build can replay, so a rollback check learns the version on disk. Missing `dir`: Ok with
+    // `out.exists` false and zeros. Busy while a writer holds the lock.
+    static Status inspect_readers(Fs& fs, const std::string& dir, StoreReaders& out,
+                                  const std::function<std::uint64_t()>& now_ms = {});
 
     // One durable step, all or none: `changes` to session `session`, and, when `client` is not empty, that client's
     // counter set to `num`. A session the store does not hold is made only by a step to next_session() whose first
@@ -204,6 +226,7 @@ private:
     std::map<std::string, std::uint64_t> applied_;
     std::map<std::string, std::uint64_t> legacy_;   // while an older format is read: each tab's session
     std::uint64_t migrated_ = 0;
+    std::uint64_t skipped_ = 0;
     bool legacy_read_ = false;                      // an older format was read: compact at open
 };
 

@@ -31,7 +31,8 @@
    :evidence ("models/handover/Handover.tla: ctest -L model tlc_handover_spec tlc_handover_cut_resume tlc_handover_legacy tlc_handover_witness_*" "tests/server/handover_walk.cpp: ctest -L model tlc_handover_trace_*" "tests/server/handover_test.cpp: ctest -L unit handover_unit_*" "tests/server/handover_functional.cpp: ctest -L functional handover_functional_*" "docs/builds.md"))
   (:id "t-takeover-supervision" :type :task :title "Supervision, systemd included, so a build that fails later still rolls back" :state :doing
    :evidence ("models/supervision/Supervision.tla: ctest -L model tlc_supervision_spec tlc_supervision_rollback tlc_supervision_dual_fail tlc_supervision_witness_*" "tests/server/supervision_walk.cpp: ctest -L model tlc_supervision_trace_*" "tests/server/supervision_test.cpp: ctest -L unit supervision_unit_*" "tests/server/supervision_functional.cpp: ctest -L functional supervision_functional_*" "docs/builds.md"))
-  (:id "t-takeover-migration" :type :task :title "Old-layout migration, and the store's format against rollback" :state :todo)
+  (:id "t-takeover-migration" :type :task :title "Old-layout migration, and the store's format against rollback" :state :done
+   :evidence ("models/migration/Migration.tla: ctest -L model tlc_migration_spec tlc_migration_conflict tlc_migration_rollback tlc_migration_witness_*; -L model_nightly tlc_migration_wide" "tests/server/migration_walk.cpp, models/migration/MigrationTrace.tla: ctest -L model tlc_migration_trace_*" "tests/server/migration_test.cpp, tests/store/store_test.cpp: ctest -L unit migration_unit_* store_unit_formats" "tests/server/migration_functional.cpp: ctest -L functional migration_functional_*" "docs/builds.md, docs/formats.md"))
   (:id "t-takeover-binding" :type :task :title "The takeover's model bound to the real steps by trace checks in CI" :state :todo)
   (:id "layers" :type :roadmap :title "Layers"
    :rows (

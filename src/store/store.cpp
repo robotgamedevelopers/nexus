@@ -23,13 +23,16 @@ void put_entry(Writer& w, const Entry& e) {
 }
 
 // An entry of a framed format: what it adds past the text is skipped.
-bool get_entry(Reader& r, Entry& e) {
+bool get_entry(Reader& r, Entry& e, std::uint64_t* skipped) {
     const Bytes frame = r.bytes();
     Reader in(frame);
     e.kind = in.u8();
     const std::uint8_t closed = in.u8();
     e.text = in.str();
     e.closed = closed == 1;
+    if (in.ok() && !in.done() && skipped != nullptr) {
+        ++*skipped;
+    }
     return in.ok() && closed <= 1;
 }
 
@@ -205,13 +208,16 @@ Status Store::open(Fs& fs, const std::string& dir, const StoreOptions& options, 
         report->records = rec.records.size();
         report->cut_bytes = rec.cut_bytes;
         report->migrated = s->migrated_;
+        report->skipped = s->skipped_;
     }
     out = std::move(s);
     return Status::ok();
 }
 
-Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report,
-                      const std::function<std::uint64_t()>& now_ms) {
+namespace {
+
+Status copy_under_shared_lock(Fs& fs, const std::string& dir, MemFs& copy,
+                              const std::function<std::uint64_t()>& now_ms) {
     std::function<std::uint64_t()> now = now_ms;
     if (!now) {
         now = [] {
@@ -227,72 +233,129 @@ Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_p
     if (!st.is_ok()) {
         return st;
     }
-    {
-        std::unique_ptr<FileLock> lock;
-        st = fs.lock(dir, LockMode::Shared, lock);
-        if (st.code() == Status::Code::Busy) {
-            return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock; it is not "
-                                "read while a server writes it (`nexus-server stop` stops the server)");
+    std::unique_ptr<FileLock> lock;
+    st = fs.lock(dir, LockMode::Shared, lock);
+    if (st.code() == Status::Code::Busy) {
+        return Status::busy("store " + dir + " is open in a running nexus-server, which holds its lock; it is not "
+                            "read while a server writes it (`nexus-server stop` stops the server)");
+    }
+    if (st.code() == Status::Code::Refused) {
+        return Status::busy("store " + dir + " has a nexus-server starting on it (it waits for the store's lock, and "
+                            "a reader gives way to it), so it was not read; try again once the server serves, or "
+                            "after `nexus-server stop`");
+    }
+    if (!st.is_ok()) {
+        return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
+    }
+    const std::uint64_t start = now();
+    if (!(st = copy.make_dir(dir)).is_ok()) {
+        return st;
+    }
+    const Status late = Status::failed("store " + dir + ": its copy took longer than " +
+                                       std::to_string(kReaderCopyLimitMs) + " ms under its shared lock, so it was "
+                                       "given up and the lock let go, so that no starting server waits on this "
+                                       "reader; nothing was read (check the disk, then try again)");
+    for (const char* name : {"log", "snapshot", "snapshot.tmp", "log.new"}) {
+        const std::string path = dir + "/" + name;
+        std::uint64_t size = 0;
+        st = fs.size(path, size);
+        if (st.code() == Status::Code::NotFound) {
+            continue;
         }
-        if (st.code() == Status::Code::Refused) {
-            return Status::busy("store " + dir + " has a nexus-server starting on it (it waits for the store's lock, and "
-                                "a reader gives way to it), so it was not read; try again once the server serves, or "
-                                "after `nexus-server stop`");
-        }
-        if (!st.is_ok()) {
-            return Status::failed("store " + dir + ": its lock cannot be taken: " + st.message());
-        }
-        const std::uint64_t start = now();
-        if (!(st = copy.make_dir(dir)).is_ok()) {
+        if (!st.is_ok() || !(st = copy.create(path)).is_ok()) {
             return st;
         }
-        const Status late = Status::failed("store " + dir + ": its copy took longer than " +
-                                           std::to_string(kReaderCopyLimitMs) + " ms under its shared lock, so it was "
-                                           "given up and the lock let go, so that no starting server waits on this "
-                                           "reader; nothing was read (check the disk, then try again)");
-        // The journal's files, as they are under the lock (through the hold, so the directory locked is the one read);
-        // the temporaries of a compaction too, which open removes; nothing else. Each is read in chunks of
-        // kReaderChunkBytes with the clock asked between them, so one slow read cannot hold the lock past the limit by
-        // more than a chunk's read: a copy that outlasts it lets the lock go and fails this reader, never a server
-        // waiting to start.
-        for (const char* name : {"log", "snapshot", "snapshot.tmp", "log.new"}) {
-            const std::string path = dir + "/" + name;
-            std::uint64_t size = 0;
-            st = fs.size(path, size);
-            if (st.code() == Status::Code::NotFound) {
-                continue;
-            }
-            if (!st.is_ok() || !(st = copy.create(path)).is_ok()) {
-                return st;
-            }
-            for (std::uint64_t off = 0; off < size;) {
-                if (now() - start > kReaderCopyLimitMs) {
-                    return late;
-                }
-                Bytes bytes;
-                if (!(st = fs.read(path, off, kReaderChunkBytes, bytes)).is_ok()) {
-                    return st;
-                }
-                if (bytes.empty()) {
-                    break;      // the file is shorter than it was: a writer cut it, which no writer does under the lock
-                }
-                if (!(st = copy.append(path, bytes)).is_ok()) {
-                    return st;
-                }
-                off += bytes.size();
-            }
+        for (std::uint64_t off = 0; off < size;) {
             if (now() - start > kReaderCopyLimitMs) {
                 return late;
             }
-            if (!(st = copy.sync(path)).is_ok()) {
+            Bytes bytes;
+            if (!(st = fs.read(path, off, kReaderChunkBytes, bytes)).is_ok()) {
                 return st;
             }
+            if (bytes.empty()) {
+                break;
+            }
+            if (!(st = copy.append(path, bytes)).is_ok()) {
+                return st;
+            }
+            off += bytes.size();
         }
-        if (!(st = copy.sync_dir(dir)).is_ok()) {
+        if (now() - start > kReaderCopyLimitMs) {
+            return late;
+        }
+        if (!(st = copy.sync(path)).is_ok()) {
             return st;
         }
     }
+    return copy.sync_dir(dir);
+}
+
+} // namespace
+
+Status Store::inspect(Fs& fs, const std::string& dir, MemFs& copy, std::unique_ptr<Store>& out, OpenReport* report,
+                      const std::function<std::uint64_t()>& now_ms) {
+    const Status st = copy_under_shared_lock(fs, dir, copy, now_ms);
+    if (!st.is_ok()) {
+        return st;
+    }
     return open(copy, dir, StoreOptions{}, out, report);
+}
+
+Status Store::inspect_readers(Fs& fs, const std::string& dir, StoreReaders& out,
+                              const std::function<std::uint64_t()>& now_ms) {
+    out = StoreReaders{};
+    MemFs copy;
+    Status st = copy_under_shared_lock(fs, dir, copy, now_ms);
+    if (st.code() == Status::Code::NotFound) {
+        return Status::ok();
+    }
+    if (!st.is_ok()) {
+        return st;
+    }
+    Journal j(copy, dir);
+    Journal::Recovery rec;
+    st = j.open(rec);
+    if (!st.is_ok()) {
+        return st;
+    }
+    if (rec.snapshot_seq > 0) {
+        if (rec.snapshot.empty() || rec.snapshot[0] == 0) {
+            return unreadable(dir, "its snapshot");
+        }
+        const std::uint8_t fmt = rec.snapshot[0];
+        if (fmt >= 4 && rec.snapshot.size() < 2) {
+            return unreadable(dir, "its snapshot");
+        }
+        out.snapshot_reader = fmt >= 4 ? rec.snapshot[1] : fmt;
+        if (out.snapshot_reader == 0 || out.snapshot_reader > fmt) {
+            return unreadable(dir, "its snapshot");
+        }
+        out.snapshot_seq = rec.snapshot_seq;
+        out.exists = true;
+    }
+    for (std::size_t i = 0; i < rec.records.size(); ++i) {
+        const Bytes& r = rec.records[i];
+        const std::uint64_t seq = rec.snapshot_seq + i + 1;
+        const std::string what = "record " + std::to_string(seq) + " of its journal";
+        if (r.empty() || r[0] == 0) {
+            return unreadable(dir, what);
+        }
+        const std::uint8_t fmt = r[0];
+        if (fmt >= 3 && r.size() < 2) {
+            return unreadable(dir, what);
+        }
+        const std::uint32_t reader = fmt >= 3 ? r[1] : fmt;
+        if (reader == 0 || reader > fmt) {
+            return unreadable(dir, what);
+        }
+        out.exists = true;
+        if (reader > out.record_reader) {
+            out.record_reader = reader;
+            out.record_seq = seq;
+        }
+    }
+    return Status::ok();
 }
 
 const Session* Store::session(std::uint64_t id) const {
@@ -466,6 +529,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         tab = r.str();
     }
     std::uint32_t n = r.u32();
+    std::uint32_t skipped_changes = 0;
     std::vector<Change> changes;
     for (std::uint32_t i = 0; i < n && r.ok(); ++i) {
         Change c;
@@ -478,7 +542,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         Reader& in = framed ? framedIn : r;
         if (kind == std::uint8_t(Change::Kind::Append)) {
             c.kind = Change::Kind::Append;
-            if (framed ? !get_entry(in, c.entry) : !get_unframed_entry(in, c.entry)) {
+            if (framed ? !get_entry(in, c.entry, &skipped_) : !get_unframed_entry(in, c.entry)) {
                 return unreadable(dir_, what, "an entry of kind " + std::to_string(c.entry.kind) + ", which format " +
                     std::to_string(format) + " does not have, or a bad closed flag");
             }
@@ -500,12 +564,17 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
                 get_info_tail(in, c.info);
             }
         } else if (framed) {
+            ++skipped_;
+            ++skipped_changes;
             continue;   // a change a later format adds: skipped, its frame read past
         } else {
             return unreadable(dir_, what, "a change of kind " + std::to_string(kind));
         }
         if (framed && !framedIn.ok()) {
             return unreadable(dir_, what);
+        }
+        if (framed && !framedIn.done()) {
+            ++skipped_;
         }
         changes.push_back(std::move(c));
     }
@@ -514,6 +583,9 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
     // An unframed record ends there; a framed one may go on with what a later format adds, which is skipped.
     if (!r.ok() || (!framed && !r.done())) {
         return unreadable(dir_, what);
+    }
+    if (framed && !r.done()) {
+        ++skipped_;
     }
     if (format == 1) {
         // A friend tab's record: its tab is a session, made (as the next) if no snapshot or record named it before.
@@ -524,6 +596,15 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
         if (!changes.empty()) {
             session = legacy_session(tab, true);
         }
+    }
+    // When every change in a framed record was of a kind a later server added, `changes` is empty even though the
+    // record named a session: the session must already be held, and any client counter on the record still advances.
+    if (framed && !options_.test_refuse_unknown_change && n > 0 && skipped_changes == n) {
+        if (session == 0 || this->session(session) == nullptr) {
+            return unreadable(dir_, what, "session " + std::to_string(session) + " is not held");
+        }
+        apply(0, changes, client, num);
+        return Status::ok();
     }
     const std::string refused = refusal(session, changes);
     if (!refused.empty()) {
@@ -616,7 +697,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
         std::uint32_t entries = in.u32();
         for (std::uint32_t k = 0; k < entries && in.ok(); ++k) {
             Entry e;
-            if (framed ? !get_entry(in, e) : !get_unframed_entry(in, e)) {
+            if (framed ? !get_entry(in, e, &skipped_) : !get_unframed_entry(in, e)) {
                 return unreadable(dir_, what, "session " + std::to_string(id) + " has an entry of kind " +
                     std::to_string(e.kind) + ", which format " + std::to_string(format) + " does not have, or a bad "
                     "closed flag");
@@ -640,6 +721,9 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
         if (framed && !framedIn.ok()) {
             return unreadable(dir_, what);
         }
+        if (framed && !framedIn.done()) {
+            ++skipped_;
+        }
     }
     std::uint32_t clients = r.u32();
     for (std::uint32_t i = 0; i < clients && r.ok(); ++i) {
@@ -648,6 +732,9 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
     }
     if (!r.ok() || (!framed && !r.done())) {
         return unreadable(dir_, what);
+    }
+    if (framed && !r.done()) {
+        ++skipped_;
     }
     return Status::ok();
 }

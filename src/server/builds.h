@@ -49,7 +49,17 @@ constexpr std::size_t kDefaultKeep = 2;          // prune keeps current, previou
 // name and what evidence is checked against) leaves out the driver tree. ReuseTmp: a half-placed folder is kept and
 // carried on with. PruneInUse: prune takes no lock on the folder it removes. TwoRenames: a switch renames previous,
 // then current, as two pointer changes.
-enum class Fault { None, NoLock, NoSync, TestedProgramOnly, ReuseTmp, PruneInUse, TwoRenames };
+enum class Fault {
+    None,
+    NoLock,
+    NoSync,
+    TestedProgramOnly,
+    ReuseTmp,
+    PruneInUse,
+    TwoRenames,
+    BlindBack,
+    MultiHopNoStoreCheck
+};
 
 struct Options {
     // Called before each step a mutating verb takes, with its name, which is then phase() (the model's pc: lock,
