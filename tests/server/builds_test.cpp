@@ -121,11 +121,16 @@ void manifest() {
     const std::size_t at = tampered.find(sha256Hex("driver 1"));
     tampered.replace(at, 64, sha256Hex("driver 2"));
     CHECK(!readManifest(tampered, &back, &why) && has(why, "not the hash"));
-    // A tested line for another tree (a stale mark) is refused.
+    // A tested line for another tree (a stale mark), before `tree`, or followed by a second `tree` is refused.
     std::string stale = text;
     const std::size_t tl = stale.find("tested ");
     stale.replace(tl + 7, 64, kH1);
     CHECK(!readManifest(stale, &back, &why) && has(why, "tested"));
+    std::string beforeTree = "nexus-build 1\ntested  pass early\n" + text.substr(std::strlen("nexus-build 1\n"));
+    CHECK(!readManifest(beforeTree, &back, &why));
+    std::string twoTrees = "nexus-build 1\ntree " + kH1 + "\ntested " + kH1 + " pass other\ntree " + m.tree + "\n" +
+                           formatsText(m.formats) + entriesText(m.entries) + "end\n";
+    CHECK(!readManifest(twoTrees, &back, &why) && has(why, "twice"));
     // A line it does not know, and one after end.
     CHECK(!readManifest(text + "more\n", &back, &why) && has(why, "after `end`"));
     CHECK(!readManifest("nexus-build 2\n", &back, &why));

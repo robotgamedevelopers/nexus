@@ -459,9 +459,31 @@ std::vector<Entry> sortedEntries(std::vector<Entry> v) {
     return v;
 }
 
-// The modes a placed build's entries have: directories 0555, files 0555 or 0444. The path of the first that differs,
-// or empty.
+// The modes a placed build's entries have: the folder and directories 0555, files (the manifest included) 0555 or
+// 0444. The path of the first that differs, or empty.
 std::string modeProblem(int root, const std::vector<Entry>& entries) {
+    auto badMode = [](const std::string& what, const struct stat& st, mode_t want) {
+        if ((st.st_mode & 07777) == want) {
+            return std::string();
+        }
+        char mode[8];
+        std::snprintf(mode, sizeof mode, "%04o", static_cast<unsigned>(st.st_mode & 07777));
+        return what + " has mode " + mode + ", not " + (want == 0555 ? "0555" : "0444") + " (read-only)";
+    };
+    struct stat rootSt;
+    if (::fstat(root, &rootSt) != 0) {
+        return "the build folder cannot be read";
+    }
+    if (const std::string bad = badMode("the build folder", rootSt, 0555); !bad.empty()) {
+        return bad;
+    }
+    struct stat manSt;
+    if (::fstatat(root, kManifest, &manSt, AT_SYMLINK_NOFOLLOW) != 0) {
+        return std::string(kManifest) + " cannot be read";
+    }
+    if (const std::string bad = badMode(kManifest, manSt, 0444); !bad.empty()) {
+        return bad;
+    }
     for (const Entry& e : entries) {
         if (e.kind == EntryKind::Link) {
             continue;
@@ -471,10 +493,8 @@ std::string modeProblem(int root, const std::vector<Entry>& entries) {
             return e.path + " cannot be read";
         }
         const mode_t want = e.kind == EntryKind::Dir || e.exec ? 0555 : 0444;
-        if ((st.st_mode & 07777) != want) {
-            char mode[8];
-            std::snprintf(mode, sizeof mode, "%04o", static_cast<unsigned>(st.st_mode & 07777));
-            return e.path + " has mode " + mode + ", not " + (want == 0555 ? "0555" : "0444") + " (read-only)";
+        if (const std::string bad = badMode(e.path, st, want); !bad.empty()) {
+            return bad;
         }
     }
     return std::string();
@@ -619,6 +639,10 @@ struct Builds::Run {
             for (std::size_t i = 1; i <= full.size(); ++i) {
                 if (i == full.size() || full[i] == '/') {
                     at = full.substr(0, i);
+                    struct stat st;
+                    if (::stat(at.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                        continue;
+                    }
                     if (::mkdir(at.c_str(), 0700) != 0 && errno != EEXIST) {
                         return osError("mkdir", at);
                     }
@@ -909,6 +933,9 @@ struct Builds::Run {
                 return drop(tmp, osError("write", tmpPath + "/" + kManifest, ENOSPC));
             }
             s = writeAll(mf.get(), manifest.data(), manifest.size(), tmpPath + "/" + kManifest);
+            if (s.is_ok() && ::fchmod(mf.get(), 0444) != 0) {
+                s = osError("chmod", tmpPath + "/" + kManifest);
+            }
             if (s.is_ok() && syncs()) {
                 s = fullSync(mf.get(), tmpPath + "/" + kManifest);
             }
@@ -1391,6 +1418,17 @@ struct Builds::Run {
                 why = "its previous link is not ../" + p.previous;
             } else if (!exists(dir.get(), p.current) || (!p.previous.empty() && !exists(dir.get(), p.previous))) {
                 why = "a build it names is not placed";
+            } else {
+                Manifest cm;
+                std::string text;
+                std::string mwhy;
+                const Status cs = readFileAt(dir.get(), p.current + "/" + kManifest,
+                                             path + "/" + p.current + "/" + kManifest, &text);
+                if (!cs.is_ok() || !readManifest(text, &cm, &mwhy, leaveOutDrivers())) {
+                    why = "the current build " + p.current + " is damaged";
+                } else if (!cm.tested) {
+                    why = "the current build " + p.current + " is untested";
+                }
             }
             if (why.empty()) {
                 r.out.push_back("ok pointer " + p.pair);
@@ -1720,11 +1758,44 @@ void BuildHold::release() {
 Status holdBuild(const std::string& program, BuildHold& out, const std::function<std::uint64_t()>& now_ms,
                  const std::function<void(std::uint64_t)>& sleep_ms, std::uint64_t wait_ms) {
     out.release();
-    const std::string hash = buildOfProgram(program);
+    std::string resolved = program;
+    if (resolved == "/proc/self/exe") {
+        std::string link;
+        if (readLinkAt(AT_FDCWD, resolved, resolved, &link).is_ok()) {
+            resolved = link;
+        }
+    }
+    const std::string del = " (deleted)";
+    bool deleted = false;
+    if (resolved.size() > del.size() && resolved.compare(resolved.size() - del.size(), del.size(), del) == 0) {
+        resolved.erase(resolved.size() - del.size());
+        deleted = true;
+    }
+    const std::string tail = std::string("/") + kProgram;
+    const std::string builds = std::string("/") + kBuildsDir;
+    if (resolved.size() >= tail.size() + builds.size() + 2 &&
+        resolved.compare(resolved.size() - tail.size(), tail.size(), tail) == 0) {
+        const std::string folderPart = resolved.substr(0, resolved.size() - tail.size());
+        const std::size_t slash = folderPart.rfind('/');
+        if (slash != std::string::npos) {
+            const std::string parent = folderPart.substr(0, slash);
+            const std::string entry = folderPart.substr(slash + 1);
+            if (parent.size() >= builds.size() &&
+                parent.compare(parent.size() - builds.size(), builds.size(), builds) == 0) {
+                const NameKind kind = classify(entry);
+                if (kind == NameKind::Gone || kind == NameKind::Tmp || (kind == NameKind::Build && deleted)) {
+                    return Status::failed("build " + entry + " was removed as this server started, so it does not "
+                                          "start from it; start it from the current build (`nexus-server builds "
+                                          "list`)");
+                }
+            }
+        }
+    }
+    const std::string hash = buildOfProgram(resolved);
     if (hash.empty()) {
         return Status::ok();
     }
-    const std::string folder = program.substr(0, program.size() - std::strlen(kProgram) - 1);
+    const std::string folder = resolved.substr(0, resolved.size() - std::strlen(kProgram) - 1);
     Fd fd(::open(folder.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (fd.get() < 0) {
         return osError("open", folder);

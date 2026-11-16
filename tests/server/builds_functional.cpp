@@ -55,6 +55,34 @@ fs::path root;
 std::string serverDir;
 std::string buildsDir;
 
+void removeAll(const fs::path& p) {
+    std::error_code ec;
+    const fs::file_status top = fs::symlink_status(p, ec);
+    if (ec || !fs::exists(top)) {
+        return;
+    }
+    if (fs::is_directory(top)) {
+        fs::permissions(p, fs::perms::owner_all, fs::perm_options::add, ec);
+    }
+    ec.clear();
+    for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator();
+         it.increment(ec)) {
+        std::error_code iec;
+        const fs::file_status st = it->symlink_status(iec);
+        if (!iec && fs::is_directory(st)) {
+            fs::permissions(it->path(), fs::perms::owner_all, fs::perm_options::add, iec);
+        } else if (!iec && fs::is_regular_file(st)) {
+            fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, iec);
+        }
+    }
+    ec.clear();
+    fs::remove_all(p, ec);
+    if (ec) {
+        std::fprintf(stderr, "cannot remove %s: %s\n", p.c_str(), ec.message().c_str());
+        ++failures;
+    }
+}
+
 void writeFile(const fs::path& p, const std::string& text, bool exec = false) {
     fs::create_directories(p.parent_path());
     std::ofstream out(p, std::ios::binary | std::ios::trunc);
@@ -62,6 +90,7 @@ void writeFile(const fs::path& p, const std::string& text, bool exec = false) {
     out.close();
     if (!out) {
         std::fprintf(stderr, "cannot write %s\n", p.c_str());
+        removeAll(root);
         std::exit(1);
     }
     fs::permissions(p, exec ? fs::perms(0755) : fs::perms(0644));
@@ -72,21 +101,6 @@ std::string readAll(const fs::path& p) {
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
-}
-
-void removeAll(const fs::path& p) {
-    std::error_code ec;
-    if (!fs::exists(fs::symlink_status(p, ec))) {
-        return;
-    }
-    for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
-        if (it->is_directory(ec) && !it->is_symlink(ec)) {
-            fs::permissions(it->path(), fs::perms::owner_all, fs::perm_options::add, ec);
-        }
-    }
-    fs::permissions(p, fs::perms::owner_all, fs::perm_options::add, ec);
-    fs::remove_all(p, ec);
 }
 
 // A tree as a build of nexus-server is assembled: the program, a driver tree with a link, the formats file.
@@ -686,10 +700,14 @@ void holdCase() {
     auto s = holdBuild(folder + "/" + kProgram, hold, [&] { return now; }, [&](std::uint64_t ms) { now += ms; }, 100);
     CHECK(!s.is_ok() && has(s.message(), "being removed"));
     ::close(fd);
-    // Removed: refused.
+    // Removed (including Linux's /proc/self/exe paths after a rename to .gone-* or unlink): refused.
     CHECK(run({"remove", hb}).exit == kExitOk);
     s = holdBuild(folder + "/" + kProgram, hold);
     CHECK(!s.is_ok());
+    const std::string buildsReal = folder.substr(0, folder.rfind('/'));
+    CHECK(!holdBuild(buildsReal + "/.gone-1-1/" + kProgram, hold).is_ok());
+    CHECK(!holdBuild(folder + "/" + kProgram + " (deleted)", hold).is_ok());
+    CHECK(holdBuild((a / "bin" / "nexus-server").string() + " (deleted)", hold).is_ok() && hold.hash().empty());
     // Two servers of one build: both hold it.
     char* again = ::realpath((serverDir + "/current/bin/nexus-server").c_str(), nullptr);
     BuildHold second;
@@ -697,6 +715,8 @@ void holdCase() {
         CHECK(holdBuild(again, hold).is_ok() && holdBuild(again, second).is_ok());
         std::free(again);
     }
+    // A dangling symlink alongside read-only placed builds does not stop removeAll from cleaning the test root.
+    fs::create_symlink("missing/target", root / "00-dangling");
 }
 
 void helpCase() {
@@ -732,11 +752,11 @@ int main(int argc, char** argv) {
     for (const auto& [name, fn] : cases) {
         if (name == c) {
             fn();
+            removeAll(root);
             if (failures != 0) {
                 std::fprintf(stderr, "builds_functional %s: %d failed\n", c.c_str(), failures);
                 return 1;
             }
-            removeAll(root);
             std::printf("builds_functional %s: ok\n", c.c_str());
             return 0;
         }

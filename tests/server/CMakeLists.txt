@@ -282,8 +282,8 @@ if(NOT WIN32)
     # seq: 73,043 states, 9 s on 4 workers.
     placement_tlc_test(tlc_placement_spec Placement.cfg Placement pass WORKERS 4 CAP 80)
     placement_tlc_test(tlc_placement_seq PlacementSeq.cfg Placement pass WORKERS 4)
-    placement_tlc_test(tlc_placement_large PlacementLarge.cfg Placement pass WORKERS 8 NIGHTLY CAP 1800)
-    placement_tlc_test(tlc_placement_seq_three PlacementSeqThree.cfg Placement pass WORKERS 8 NIGHTLY CAP 1800)
+    placement_tlc_test(tlc_placement_large PlacementLarge.cfg Placement pass WORKERS 8 NIGHTLY CAP 600)
+    placement_tlc_test(tlc_placement_seq_three PlacementSeqThree.cfg Placement pass WORKERS 8 NIGHTLY CAP 600)
 
     # Reversed witnesses: each broken variant must be rejected by the invariant named.
     placement_tlc_test(tlc_placement_witness_two_renames witnesses/PTwoRenames.cfg Placement invariant

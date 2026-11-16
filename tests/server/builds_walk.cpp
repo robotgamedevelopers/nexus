@@ -161,16 +161,25 @@ void writeFile(const fs::path& p, const std::string& text, bool exec) {
 
 void removeAll(const fs::path& p) {
     std::error_code ec;
-    if (!fs::exists(fs::symlink_status(p, ec))) {
+    const fs::file_status top = fs::symlink_status(p, ec);
+    if (ec || !fs::exists(top)) {
         return;
     }
+    if (fs::is_directory(top)) {
+        fs::permissions(p, fs::perms::owner_all, fs::perm_options::add, ec);
+    }
+    ec.clear();
     for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator();
          it.increment(ec)) {
-        if (it->is_directory(ec) && !it->is_symlink(ec)) {
-            fs::permissions(it->path(), fs::perms::owner_all, fs::perm_options::add, ec);
+        std::error_code iec;
+        const fs::file_status st = it->symlink_status(iec);
+        if (!iec && fs::is_directory(st)) {
+            fs::permissions(it->path(), fs::perms::owner_all, fs::perm_options::add, iec);
+        } else if (!iec && fs::is_regular_file(st)) {
+            fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, iec);
         }
     }
-    fs::permissions(p, fs::perms::owner_all, fs::perm_options::add, ec);
+    ec.clear();
     fs::remove_all(p, ec);
     if (ec) {
         die("cannot remove " + p.string() + ": " + ec.message());
@@ -512,6 +521,7 @@ struct Walk {
             a.thread.join();
         }
         hold.release();
+        removeAll(work);
     }
 
     void write(const std::string& out) const {

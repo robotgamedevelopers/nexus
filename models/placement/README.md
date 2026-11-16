@@ -60,7 +60,7 @@ forced to start, and no death, crash or server start).
 | `Placement.cfg` | two actors, one verb each, from build 1 current alone; trees 1 to 3, tested 1 and 2; a death, a crash and a server start | per commit | pass: 306,768 distinct states, depth 30, 50 s on 4 workers |
 | `PlacementSeq.cfg` | one actor, two verbs in a row | per commit | pass: 73,043 distinct states, depth 30, 9 s on 4 workers |
 | `PlacementSeqThree.cfg` | one actor, three verbs in a row | nightly | pass: 883,490 distinct states, depth 43, 2 min 15 s on 2 workers |
-| `PlacementLarge.cfg` | two actors, two verbs each | nightly | PLACEMENT_LARGE |
+| `PlacementLarge.cfg` | two actors, two verbs each (safety) | nightly | pass: 5,477,244 distinct states, depth 56, 1 min 16 s on 8 workers |
 
 ## Reversed witnesses
 

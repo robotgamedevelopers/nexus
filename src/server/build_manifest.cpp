@@ -302,6 +302,10 @@ bool readManifest(const std::string& text, Manifest* out, std::string* why, bool
             continue;
         }
         if (l.rfind("tree ", 0) == 0) {
+            if (!out->tree.empty()) {
+                *why = at + "`tree` is given twice";
+                return false;
+            }
             out->tree = l.substr(5);
             if (!isHash(out->tree)) {
                 *why = at + "the tree is not a hash";
@@ -315,7 +319,7 @@ bool readManifest(const std::string& text, Manifest* out, std::string* why, bool
         }
         if (l.rfind("tested ", 0) == 0) {
             const std::vector<std::string> f = split(l, ' ');
-            if (f.size() < 3 || f[1] != out->tree || f[2] != "pass") {
+            if (out->tree.empty() || out->tested || f.size() < 3 || f[1] != out->tree || f[2] != "pass") {
                 *why = at + "a `tested` line that is not `tested <this tree> pass <run>`";
                 return false;
             }
