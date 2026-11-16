@@ -8,11 +8,11 @@
 (* drivers/claude/test/walk.ts (a seeded random walk over the scripted     *)
 (* query) and the driver's unit tests (test/unit/driver.test.ts) write     *)
 (* ClaudeDriverTraceData.tla beside this module. It defines the instance   *)
-(* (TraceMaxTurn, TraceFields, TraceValues) and Traces: one trace per      *)
-(* driver's life, each a sequence of records. A trace's first record is    *)
-(* the start (op "init"); each later one names the step and what it was   *)
-(* given (turn, changes, kind, code), then the driver's state after it and *)
-(* what it wrote.                                                          *)
+(* (TraceMaxTurn, TraceMaxAsk, TraceFields, TraceValues) and Traces: one   *)
+(* trace per driver's life, each a sequence of records. A trace's first    *)
+(* record is the start (op "init"); each later one names the step and what *)
+(* it was given (turn, ask, changes, kind, code), then the driver's state  *)
+(* after it and what it wrote.                                             *)
 (*                                                                         *)
 (* TLC picks each trace in turn (k) and takes, at each record, the action  *)
 (* it names. TraceMatches requires the spec's state to equal the code's,   *)
@@ -22,10 +22,10 @@
 EXTENDS Integers, Sequences, TLC, ClaudeDriverTraceData
 
 VARIABLES phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
-          sent, dones, wrote, want, turnWant, act, k, l
+          secrets, asking, asks, sent, dones, wrote, want, turnWant, act, k, l
 
-D == INSTANCE ClaudeDriver WITH MaxTurn <- TraceMaxTurn, Fields <- TraceFields, Values <- TraceValues,
-                                Resumes <- {"none", "given"}
+D == INSTANCE ClaudeDriver WITH MaxTurn <- TraceMaxTurn, MaxAsk <- TraceMaxAsk, Fields <- TraceFields,
+                                Values <- TraceValues, Resumes <- {"none", "given"}
 
 ASSUME Len(Traces) >= 1 /\ \A i \in 1..Len(Traces) : Len(Traces[i]) >= 1 /\ Traces[i][1].op = "init"
 
@@ -42,14 +42,19 @@ Matches(r) ==
     /\ carry = r.carry
     /\ inUse = r.inUse
     /\ last = r.last
+    /\ secrets = r.secrets
+    /\ asking = r.asking
+    /\ asks = r.asks
     /\ wrote = r.wrote
 
 TraceMatches == Matches(Traces[k][l])
 
 Step(r) ==
-    CASE r.op = "send"            -> D!S(D!Send(r.turn))
+    CASE r.op = "server"          -> D!S(D!ServerSecrets)
+      [] r.op = "send"            -> D!S(D!Send(r.turn))
       [] r.op = "stop"            -> D!Stop(r.turn)
       [] r.op = "settings"        -> D!S(D!Settings(r.changes))
+      [] r.op = "secret"          -> D!Secret(r.ask)
       [] r.op = "end"             -> D!S(D!EndInput)
       [] r.op = "checked"         -> D!S(D!CheckPass)
       [] r.op = "apply"           -> D!S(D!Apply)
@@ -60,6 +65,8 @@ Step(r) ==
       [] r.op = "block-end"       -> D!S(D!BlockEnd)
       [] r.op = "block-text"      -> D!S(D!BlockText)
       [] r.op = "tool"            -> D!S(D!Tool)
+      [] r.op = "ask"             -> D!S(D!AskSent)
+      [] r.op = "ask-refused"     -> D!S(D!AskRefused)
       [] r.op = "assistant-error" -> D!S(D!AssistantError(r.code))
       [] r.op = "result"          -> D!S(D!Result(r.kind))
       [] r.op = "refused"         -> D!S(D!Refuse)
@@ -68,7 +75,7 @@ Step(r) ==
       [] OTHER                    -> FALSE
 
 traceVars == <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
-               sent, dones, wrote, want, turnWant, act, k, l>>
+               secrets, asking, asks, sent, dones, wrote, want, turnWant, act, k, l>>
 
 TraceInit == k \in 1..Len(Traces) /\ l = 1 /\ D!InitWith(Traces[k][1].resume)
 
@@ -88,7 +95,10 @@ ClaudeDriverSpec == D!SafeSpec
 TypeOK == D!TypeOK
 OneDone == D!OneDone
 StopNeverLater == D!StopNeverLater
+AskOnlyRunning == D!AskOnlyRunning
 NoDoneInBlock == D!NoDoneInBlock
+AskGate == D!AskGate
+SecretMatchesAsk == D!SecretMatchesAsk
 SettingsNeverChangeOpen == D!SettingsNeverChangeOpen
 SettingsFromNextSend == D!SettingsFromNextSend
 StopEndsWhatRuns == D!StopEndsWhatRuns

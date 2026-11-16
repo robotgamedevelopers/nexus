@@ -27,6 +27,7 @@ import { after, test } from 'node:test';
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 import { accountsDir, configDirOf, openConfigDir, type Account } from '../../src/account.js';
+import { kSecretMcpToolName, kSecretToolName, secretMcpServer } from '../../src/driver.js';
 import { harnessEnv } from '../../src/env.js';
 import { LeakScan } from '../leak-scan.js';
 import {
@@ -228,6 +229,12 @@ const kRoutes: Probe[] = [
     expect: 'git-works' },
     { route: 'own state: memory is writable', tool: 'Write',
         input: { file_path: '@CONFIG@/projects/memory-probe.md', content: 'remembered\n' }, expect: 'success' },
+    { route: 'own work: nexus_ask_secret reaches the driver\'s MCP server', tool: kSecretMcpToolName,
+        input: { account: 'main', what: 'oauth-token', why: 'the login expired' },
+        expect: 'asked main oauth-token: the login expired' },
+    { route: 'own work: nexus_ask_secret alias resolves to the MCP tool', tool: kSecretToolName,
+        input: { account: 'main', what: 'oauth-token', why: 'alias' },
+        expect: 'asked main oauth-token: alias' },
     // An unlimited friend (the default before friends.json had "limit") reads the rest of the home directory.
     { route: 'unlimited: the shell reads a file outside the work directory', tool: 'Bash', expect: kOutsideWord,
         input: { command: `cat "$HOME/${kOutside}" 2>&1; true` } },
@@ -310,6 +317,9 @@ const kLimitedRoutes: Probe[] = [
         input: { command: 'cc -o hello hello.c 2>&1 && ./hello' } },
     { route: 'limited: git status and commit in its directory', tool: 'Bash', expect: 'git-works', input: { command:
         'cd repo && echo a > a && git status --short && git add a && git -c user.name=a -c user.email=a@b commit -q -m a 2>&1 && echo git-works' } },
+    { route: 'limited: nexus_ask_secret works under the limit', tool: kSecretToolName,
+        input: { account: 'main', what: 'oauth-token', why: 'the login expired' },
+        expect: 'asked main oauth-token: the login expired' },
 ];
 
 // NEXUS_WALL_PROBES names a JSON file of probes to run instead, once, with the whole wall, reported and not checked: a
@@ -592,6 +602,10 @@ async function runWall(name: string, hook: boolean, limited: boolean, probes: Pr
             permissionMode: 'bypassPermissions',
             allowDangerouslySkipPermissions: true,
             canUseTool: (_n, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
+            mcpServers: {
+                nexus: secretMcpServer((acct, what, why) => Promise.resolve(`asked ${acct} ${what}: ${why}`)),
+            },
+            toolAliases: { [kSecretToolName]: kSecretMcpToolName },
             maxTurns: probes.length + 4,
             // The wall from the environment the driver hands it (main.ts: the server's, scrubbed), which names the
             // sandbox's tools (NEXUS_SANDBOX_BIN) as programs to protect.
@@ -653,6 +667,7 @@ function check(name: string, run: Run, hook: boolean, probes: Probe[]): void {
         assert.deepEqual(run.wroteOutside, [], `${name}: a limited friend wrote outside its directory`);
     }
     assert.ok(run.authenticated, `${name}: Claude did not authenticate with the token`);
+    assert.ok(run.tools.has(kSecretMcpToolName), `${name}: Claude did not expose ${kSecretMcpToolName}`);
     // What the driver's subscription check reads (driver.ts): the token Claude uses is the account's OAuth token.
     assert.equal(run.tokenSource, 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', `${name}: Claude names another token source`);
 }

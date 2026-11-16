@@ -215,6 +215,21 @@ auto errorOf(ErrorCode code) {
     };
 }
 
+auto askOf(std::uint64_t ask) {
+    return [ask](const std::vector<DriverReader::Item>& items) {
+        return has<AskSecret>(items, [ask](const AskSecret& a) { return a.ask == ask; });
+    };
+}
+
+std::string gatheredText(const std::vector<DriverReader::Item>& items, std::uint64_t turn) {
+    std::string out;
+    for (const DriverReader::Item& item : items)
+        if (item.message)
+            if (const Text* t = std::get_if<Text>(&*item.message); t != nullptr && t->turn == turn)
+                out += t->delta;
+    return out;
+}
+
 // The rules every stream keeps: each line decodes; hello first; text blocks closed before a tool, a done or another
 // block; one done per turn, its last message, and only for a turn the server sent; no error but a protocol refusal for
 // a turn not open.
@@ -358,6 +373,43 @@ void eofWhileOpen(Child& d) {
     checkStream(d.items(), {2});
 }
 
+// Server offers "secrets": the driver writes ask-secret, waits for the matching secret line, and reports stored or
+// refused: <reason>.
+void secretAsk(Child& d) {
+    CHECK(d.readUntil([](const auto& items) { return !items.empty(); }));
+    d.send(ServerInfo{{"secrets"}});
+    d.send(Send{1, "ask-secret"});
+    CHECK(d.readUntil(askOf(1)));
+    CHECK(has<AskSecret>(d.items(), [](const AskSecret& a) {
+        return a.ask == 1 && a.account == "work" && a.what == "oauth-token" && a.why == "the login expired";
+    }));
+    d.send(SecretAnswer{1, true, ""});
+    CHECK(d.readUntil(doneOf(1)));
+    CHECK(gatheredText(d.items(), 1) == "stored");
+    d.send(Send{2, "ask-secret"});
+    CHECK(d.readUntil(askOf(2)));
+    d.send(SecretAnswer{2, false, "no-client"});
+    CHECK(d.readUntil(doneOf(2)));
+    CHECK(gatheredText(d.items(), 2) == "refused: no-client");
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1, 2});
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+}
+
+// Older server (no server line before send): the driver answers refused: no-client without writing ask-secret.
+void secretWithoutServer(Child& d) {
+    CHECK(d.readUntil([](const auto& items) { return !items.empty(); }));
+    d.send(Send{1, "ask-secret"});
+    CHECK(d.readUntil(doneOf(1)));
+    CHECK(!has<AskSecret>(d.items(), [](const AskSecret&) { return true; }));
+    CHECK(gatheredText(d.items(), 1) == "refused: no-client");
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    checkStream(d.items(), {1});
+    CHECK(count(d.items(), ErrorCode::Protocol) == 0);
+}
+
 // The fake driver's script for each case: "reply" and "wait" sends, in the order the case sends them.
 std::string fakeScript(const std::string& name) {
     const std::string hello = "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"fake\"}\n";
@@ -371,6 +423,20 @@ std::string fakeScript(const std::string& name) {
         return hello + reply;
     if (name == "send_while_open" || name == "eof_while_open")
         return hello + wait;
+    if (name == "secret_ask")
+        return hello +
+            "send\nraw {\"kind\":\"ask-secret\",\"ask\":1,\"account\":\"work\",\"what\":\"oauth-token\","
+            "\"why\":\"the login expired\"}\nawait-secret conformance-secret-ask.heard\n"
+            "emit {\"kind\":\"text\",\"delta\":\"stored\"}\nemit {\"kind\":\"text-end\"}\n"
+            "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+            "send\nraw {\"kind\":\"ask-secret\",\"ask\":2,\"account\":\"work\",\"what\":\"oauth-token\","
+            "\"why\":\"the login expired\"}\nawait-secret conformance-secret-ask.heard\n"
+            "emit {\"kind\":\"text\",\"delta\":\"refused: no-client\"}\nemit {\"kind\":\"text-end\"}\n"
+            "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    if (name == "secret_without_server")
+        return hello +
+            "send\nemit {\"kind\":\"text\",\"delta\":\"refused: no-client\"}\nemit {\"kind\":\"text-end\"}\n"
+            "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
     return hello;
 }
 
@@ -386,7 +452,8 @@ int main(int argc, char** argv) {
     const std::string name = argv[1];
     const std::string kind = argv[2];
     const std::map<std::string, void (*)(Child&)> cases = {{"exchange", exchange}, {"refused", refused},
-        {"not_json", notJson}, {"order", order}, {"send_while_open", sendWhileOpen}, {"eof_while_open", eofWhileOpen}};
+        {"not_json", notJson}, {"order", order}, {"send_while_open", sendWhileOpen}, {"eof_while_open", eofWhileOpen},
+        {"secret_ask", secretAsk}, {"secret_without_server", secretWithoutServer}};
     const auto found = cases.find(name);
     if (found == cases.end() || (kind != "fake" && kind != "prompted")) {
         std::fprintf(stderr, "driver_conformance_test: no case %s of kind %s\n", name.c_str(), kind.c_str());

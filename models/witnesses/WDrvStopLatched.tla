@@ -17,7 +17,7 @@ FiringTake ==
     /\ wrote' = <<>>
     /\ act' = [a |-> "step", n |-> 0]
     /\ latch' = FALSE
-    /\ UNCHANGED <<phase, resume, open, textOpen, failure, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, textOpen, failure, pending, carry, inUse, last, secretVars, ghost>>
 
 Others == NextWith(LAMBDA n : FALSE, Apply, Result, Refuse, NotFound) /\ UNCHANGED latch
 

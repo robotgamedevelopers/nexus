@@ -30,13 +30,25 @@ export interface Settings {
     effort?: string;
 }
 
+export interface ServerInfo {
+    kind: 'server';
+    features: string[];
+}
+
+export interface SecretAnswer {
+    kind: 'secret';
+    ask: number;
+    outcome: 'stored' | 'refused';
+    reason?: string;
+}
+
 /** A kind this version does not define: skipped. */
 export interface Unknown {
     kind: 'unknown';
     name: string;
 }
 
-export type ServerMessage = Send | Stop | Settings | Unknown;
+export type ServerMessage = Send | Stop | Settings | ServerInfo | SecretAnswer | Unknown;
 
 /** A line read: the message, or why it was refused and the turn it named if that was readable. */
 export type Decoded = { message: ServerMessage } | { error: string; turn?: number };
@@ -62,7 +74,8 @@ export type DriverMessage =
     | { kind: 'text-end'; turn: number }
     | { kind: 'tool'; turn: number; name: string; summary: string }
     | { kind: 'done'; turn: number; outcome: Outcome; session_cost_usd?: number; usage?: Usage }
-    | { kind: 'error'; cause: string; fix: string; turn?: number; code: ErrorCode };
+    | { kind: 'error'; cause: string; fix: string; turn?: number; code: ErrorCode }
+    | { kind: 'ask-secret'; ask: number; account: string; what: string; why: string };
 
 // ---- Reading ----
 
@@ -210,6 +223,52 @@ export function decodeServerLine(bytes: Uint8Array): Decoded {
             }
             return { message };
         }
+        case 'server': {
+            const features = member(value, 'features');
+            if (features === undefined) {
+                return field('has no "features"');
+            }
+            if (!Array.isArray(features) || !features.every((e): e is string => typeof e === 'string')) {
+                return field('has "features" that is not an array of strings');
+            }
+            return { message: { kind: 'server', features } };
+        }
+        case 'secret': {
+            const ask = member(value, 'ask');
+            if (!isTurn(ask)) {
+                return field(ask === undefined ? 'has no "ask"' : 'has "ask" that is not a whole number from 1 to 9007199254740991');
+            }
+            const outcome = member(value, 'outcome');
+            if (typeof outcome !== 'string') {
+                return field(outcome === undefined ? 'has no "outcome"' : 'has "outcome" that is not a string');
+            }
+            const reason = member(value, 'reason');
+            if (outcome === 'stored') {
+                if (reason === undefined) {
+                    return { message: { kind: 'secret', ask, outcome } };
+                }
+                if (typeof reason !== 'string') {
+                    return field('has "reason" that is not a string');
+                }
+                if (reason === '') {
+                    return field('has an empty "reason"');
+                }
+                return { message: { kind: 'secret', ask, outcome, reason } };
+            }
+            if (outcome === 'refused') {
+                if (reason === undefined) {
+                    return field('has no "reason"');
+                }
+                if (typeof reason !== 'string') {
+                    return field('has "reason" that is not a string');
+                }
+                if (reason === '') {
+                    return field('has an empty "reason"');
+                }
+                return { message: { kind: 'secret', ask, outcome, reason } };
+            }
+            return field(`has "outcome" "${outcome}"; it is one of stored, refused`);
+        }
         default:
             return { message: { kind: 'unknown', name: kind } };
     }
@@ -304,6 +363,31 @@ export function cut(s: string, max: number): string {
         end--;
     }
     return s.slice(0, end) + '…';
+}
+
+/** The longest reason an ask-secret may carry, in UTF-8 bytes (docs/secrets.md). */
+export const kMaxSecretWhyBytes = 200;
+
+/**
+ * Whether `why` is a valid ask-secret reason (src/sync/secrets.cpp isSecretWhy): whole UTF-8 characters, at most 200
+ * bytes, with no control (C0, DEL or C1), bidirectional, zero-width or line/paragraph-separator characters.
+ */
+export function isSecretWhy(why: string): boolean {
+    if (!why.isWellFormed() || Buffer.byteLength(why, 'utf8') > kMaxSecretWhyBytes) {
+        return false;
+    }
+    for (const ch of why) {
+        const cp = ch.codePointAt(0) ?? 0;
+        const control = cp < 0x20 || (cp >= 0x7f && cp <= 0x9f);
+        const bidi = cp === 0x061c || cp === 0x200e || cp === 0x200f || (cp >= 0x202a && cp <= 0x202e)
+            || (cp >= 0x2066 && cp <= 0x2069);
+        const zeroWidth = (cp >= 0x200b && cp <= 0x200d) || cp === 0x2060 || cp === 0xfeff;
+        const separator = cp === 0x2028 || cp === 0x2029;
+        if (control || bidi || zeroWidth || separator) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /** A message as one line ending in a newline. */

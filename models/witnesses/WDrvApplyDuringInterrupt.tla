@@ -11,7 +11,7 @@ BrokenApply ==
     /\ inUse' = Over(inUse, carry)
     /\ carry' = NoChanges
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, last, secretVars, ghost>>
 
 BrokenSpec == Init /\ [][NextWith(Stop, BrokenApply, Result, Refuse, NotFound)]_vars
 =============================================================================

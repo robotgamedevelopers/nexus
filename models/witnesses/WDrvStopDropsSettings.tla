@@ -11,8 +11,9 @@ DroppingStop ==
     /\ stopping' = FALSE
     /\ textOpen' = FALSE
     /\ failure' = None
+    /\ asking' = 0
     /\ carry' = NoChanges
-    /\ UNCHANGED <<phase, resume, intFor, pending, inUse, last, sent, want, turnWant>>
+    /\ UNCHANGED <<phase, resume, intFor, pending, inUse, last, secrets, asks, sent, want, turnWant>>
 
 BrokenStop(n) == StopWith(n, DroppingStop, StopRunning(n))
 

@@ -176,10 +176,10 @@ if((DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "") OR (DEFINED DRIVERTE
     endif()
     if(DEFINED DRIVERWALK AND NOT "${DRIVERWALK}" STREQUAL "")
         set(walk_args "${DRIVERWALK}" "${SEED}" "${STEPS}")
-        if(FAULTY STREQUAL "settings" OR FAULTY STREQUAL "refusal" OR FAULTY STREQUAL "latch")
+        if(FAULTY STREQUAL "settings" OR FAULTY STREQUAL "refusal" OR FAULTY STREQUAL "latch" OR FAULTY STREQUAL "secret")
             list(APPEND walk_args "--faulty-${FAULTY}")
         elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
-            message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not settings, refusal or latch")
+            message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not settings, refusal, latch or secret")
         endif()
         execute_process(COMMAND "${NODE}" ${walk_args} "${WORK}/ClaudeDriverTraceData.tla"
             RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)

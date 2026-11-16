@@ -622,4 +622,10 @@ void test('the hook refuses a limited friend\'s file tools every path outside it
     }
     // Unlimited, the same reads outside go on.
     assert.equal(toolRefusal('Read', { file_path: '/h/notes' }, wall, '/w', '/h', d), undefined);
+    // The secret dialog's MCP tool opens no file and runs no command: allowed on both unlimited and limited friends.
+    for (const name of ['nexus_ask_secret', 'mcp__nexus__nexus_ask_secret']) {
+        const args = { account: 'main', what: 'oauth-token', why: 'the login expired' };
+        assert.equal(toolRefusal(name, args, wall, '/w', '/h', d), undefined, name);
+        assert.equal(refuseL(name, args), undefined, `limited ${name}`);
+    }
 });

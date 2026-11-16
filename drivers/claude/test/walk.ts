@@ -2,11 +2,12 @@
 // (ClaudeDriverTraceData.tla) for models/ClaudeDriverTrace.tla, under which TLC checks that each trace is a behaviour
 // of models/ClaudeDriver.tla.
 //
-//   node dist/test/walk.js <seed> <steps> [--faulty-settings | --faulty-refusal | --faulty-latch] <out.tla>
+//   node dist/test/walk.js <seed> <steps> [--faulty-settings | --faulty-refusal | --faulty-latch | --faulty-secret] <out.tla>
 //
-// The walk plays the server (sends, each after the last turn's done; stops for any turn; settings; the end of input)
-// and the query (the credential check's answer, reading prompts or holding them, settings and interrupts answered
-// late, text, tools, an assistant's error, results, refusals, the stream failing, a --resume id it does not know).
+// The walk plays the server (its features before the first send; sends, each after the last turn's done; stops for any
+// turn; settings; secret answers, including late ones for stopped turns; the end of input) and the query (the
+// credential check's answer, reading prompts or holding them, settings and interrupts answered late, text, tools,
+// nexus_ask_secret calls, an assistant's error, results, refusals, the stream failing, a --resume id it does not know).
 // Each driver's life is one trace; when a driver exits, the next life starts, with or without a --resume id.
 //
 // It is a pure function of its arguments: its random numbers come from the seed (splitmix64), never from the clock
@@ -14,8 +15,9 @@
 //
 // --faulty-settings walks a driver whose stop drops the settings of a turn stopped before it began;
 // --faulty-refusal one whose refusal leaves an open text block unended before its done; --faulty-latch one that keeps
-// a stop that found its turn not open and stops the next turn with it. TLC must reject each one's traces; that is the
-// negative check that shows the binding can fail.
+// a stop that found its turn not open and stops the next turn with it; --faulty-secret one that writes ask-secret even
+// when no server line named "secrets". TLC must reject each one's traces; that is the negative check that shows the
+// binding can fail.
 
 import type { AccountInfo, EffortLevel, SDKControlInterruptResponse } from '@anthropic-ai/claude-agent-sdk';
 
@@ -75,6 +77,7 @@ class Query extends FakeHarness {
     readonly interrupts: Deferred<SDKControlInterruptResponse | undefined>[] = [];
     readonly applies: Deferred<undefined>[] = [];
     readonly session: string;
+    asking = 0;
 
     constructor(start: HarnessStart) {
         super(start);
@@ -84,12 +87,22 @@ class Query extends FakeHarness {
         this.setModel = (model) => { this.calls.push(`model ${model ?? ''}`); return deferred(this.applies); };
         this.applyFlagSettings = (s) => { this.calls.push(`effort ${String(s.effortLevel)}`); return deferred(this.applies); };
     }
+
+    callAskSecret(account: string, what: string, why: string): void {
+        this.asking++;
+        void this.start.askSecret(account, what, why).finally(() => {
+            this.asking--;
+        });
+    }
 }
 
 class WalkHost implements Host {
     readonly trace = new Trace();
     readonly queries: Query[] = [];
+    readonly asks: number[] = [];
     exited = false;
+    serverSent = false;
+    sentAny = false;
     /** The turns the server has sent and has not yet seen the done of: at most one. */
     awaiting = 0;
     private ids = 0;
@@ -99,6 +112,8 @@ class WalkHost implements Host {
         const m = JSON.parse(line) as DriverMessage;
         if (m.kind === 'done' && m.turn === this.awaiting) {
             this.awaiting = 0;
+        } else if (m.kind === 'ask-secret') {
+            this.asks.push(m.ask);
         }
         this.trace.wrote(m);
     }
@@ -164,7 +179,9 @@ function replace(name: string, m: Method): void {
 }
 
 interface OpenTurn {
-    open?: { turn: number; textOpen: boolean; held: string };
+    open?: { turn: number; pushed: boolean; stopping: boolean; textOpen: boolean; held: string };
+    secrets?: boolean;
+    write?: (m: DriverMessage) => void;
 }
 
 function fault(name: string): void {
@@ -204,8 +221,20 @@ function fault(name: string): void {
             });
             return;
         }
+        case 'secret': {
+            // Writes ask-secret even when no server line named "secrets".
+            const askSecret = method('askSecret');
+            replace('askSecret', function (this: unknown, ...args: unknown[]) {
+                const d = this as OpenTurn;
+                if (d.secrets === false && d.open?.pushed === true && !d.open.stopping && args[1] !== '') {
+                    d.write?.({ kind: 'ask-secret', ask: 1, account: String(args[1]), what: String(args[2]), why: '' });
+                }
+                return askSecret.apply(this, args);
+            });
+            return;
+        }
         default:
-            throw new Error(`unknown fault ${name}: one of settings, refusal, latch`);
+            throw new Error(`unknown fault ${name}: one of settings, refusal, latch, secret`);
     }
 }
 
@@ -225,11 +254,18 @@ async function event(rng: Rng, host: WalkHost, driver: Driver, last: { turn: num
         }
     };
     // the server
+    if (!host.sentAny && !host.serverSent) {
+        add(5, () => {
+            host.serverSent = true;
+            driver.feed(line({ kind: 'server', features: rng.chance(75) ? ['secrets'] : ['other'] }));
+        });
+    }
     if (host.awaiting === 0) {
         add(6, () => {
             const turn = last.turn + 1 + rng.below(2);
             last.turn = turn;
             host.awaiting = turn;
+            host.sentAny = true;
             driver.feed(line({ kind: 'send', turn, prompt: `prompt ${String(turn)}` }));
         });
     }
@@ -247,6 +283,16 @@ async function event(rng: Rng, host: WalkHost, driver: Driver, last: { turn: num
         }
         driver.feed(line(m));
     });
+    if (host.asks.length > 0) {
+        add(q.asking > 0 ? 5 : 2, () => {
+            const latest = host.asks[host.asks.length - 1] ?? 1;
+            const ask = q.asking > 0 && rng.chance(75) ? latest : rng.pick(host.asks);
+            const stored = rng.chance(60);
+            driver.feed(line(stored
+                ? { kind: 'secret', ask, outcome: 'stored' }
+                : { kind: 'secret', ask, outcome: 'refused', reason: rng.pick(['no-client', 'busy', 'cancelled', 'timeout', 'malformed']) }));
+        });
+    }
     add(rng.chance(15) ? 1 : 0, () => { driver.end(); });
     // the query's answers
     if (q.checks.length > 0) {
@@ -297,21 +343,30 @@ async function event(rng: Rng, host: WalkHost, driver: Driver, last: { turn: num
         ids.n++;
         q.emit(toolUse(s, `t${String(ids.n)}`, 'Bash', { command: 'ls' }));
     });
+    add(2 * running, () => {
+        if (rng.chance(15)) {
+            q.callAskSecret(rng.chance(50) ? '' : 'work', 'oauth-token', 'bad\nwhy');
+        } else {
+            q.callAskSecret('work', 'oauth-token', 'the login expired');
+        }
+    });
     add(rng.chance(30) ? running : 0, () => {
         ids.n++;
         const code = rng.chance(30) ? 'authentication_failed' : 'rate_limit';
         q.emit(assistant(s, `e${String(ids.n)}`, [{ type: 'text', text: 'failed' }], code));
     });
-    add(3 * running, () => {
-        const r = rng.below(100);
-        if (r < 60) {
-            q.emit(init(s), result(s));
-        } else if (r < 75 || q.start.resume === undefined) {
-            q.emit(result(s, { subtype: 'error_during_execution', errors: ['it failed'] }));
-        } else {
-            q.emit(result(s, { subtype: 'error_during_execution', errors: [`${kLost}: ${q.start.resume}`] }));
-        }
-    });
+    if (q.asking === 0) {
+        add(3 * running, () => {
+            const r = rng.below(100);
+            if (r < 60) {
+                q.emit(init(s), result(s));
+            } else if (r < 75 || q.start.resume === undefined) {
+                q.emit(result(s, { subtype: 'error_during_execution', errors: ['it failed'] }));
+            } else {
+                q.emit(result(s, { subtype: 'error_during_execution', errors: [`${kLost}: ${q.start.resume}`] }));
+            }
+        });
+    }
     add(rng.chance(20) ? 1 : 0, () => {
         q.emit(rng.chance(50) ? rateLimit(s, { isUsingOverage: true }) : init(s, 'apiKeyHelper'));
     });
@@ -333,7 +388,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const seed = Number(seedArg);
     const steps = Number(stepsArg);
     if (args.length !== 3 || out === undefined || !Number.isSafeInteger(seed) || !Number.isSafeInteger(steps) || steps < 1) {
-        process.stderr.write('usage: walk <seed> <steps> [--faulty-settings | --faulty-refusal | --faulty-latch] <out.tla>\n');
+        process.stderr.write('usage: walk <seed> <steps> [--faulty-settings | --faulty-refusal | --faulty-latch | --faulty-secret] <out.tla>\n');
         return 2;
     }
     for (const f of faults) {
@@ -366,7 +421,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const count = (op: string): number => traces.reduce((n, t) => n + t.records.filter((r) => r['op'] === op).length, 0);
     writeTraceModule(out, traces, `walk seed ${String(seed)}, ${String(steps)} events${faults.map((f) => `, faulty ${f}`).join('')}`);
     process.stdout.write(`walk seed ${String(seed)}: ${String(lives)} lives, ${String(records)} steps; `
-        + ['send', 'stop', 'settings', 'apply', 'push', 'take', 'answered', 'result', 'refused', 'failed', 'lost', 'end']
+        + ['server', 'send', 'stop', 'settings', 'ask', 'ask-refused', 'secret', 'apply', 'push', 'take', 'answered', 'result', 'refused', 'failed', 'lost', 'end']
             .map((op) => `${op} ${String(count(op))}`).join(', ') + '\n');
     return 0;
 }
