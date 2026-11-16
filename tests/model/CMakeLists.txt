@@ -402,9 +402,9 @@ tlc_test(tlc_secrets_witness_held_never_retried WSecHeldNeverRetried WSecHeldNev
 # The Tailscale shim's node lifecycle (src/tailscale/lifecycle, models/Tailscale.tla): the spec on its small instance,
 # every property (its environment comes to rest once every node is closed, hence NODEADLOCK); each reversed witness
 # rejected; the code's walks checked against the spec over several seeds; and each of the walk's faults rejected.
-tlc_test(tlc_tailscale_spec Tailscale MCTailscale.cfg pass NODEADLOCK)
-tlc_test(tlc_tailscale_spec_keys Tailscale MCTailscaleKeys.cfg pass NODEADLOCK)
-tlc_test(tlc_tailscale_spec_certs Tailscale MCTailscaleCerts.cfg pass NODEADLOCK)
+tlc_test(tlc_tailscale_spec Tailscale MCTailscale.cfg pass WORKERS 8 SHARD NODEADLOCK)
+tlc_test(tlc_tailscale_spec_keys Tailscale MCTailscaleKeys.cfg pass WORKERS 8 SHARD NODEADLOCK)
+tlc_test(tlc_tailscale_spec_certs Tailscale MCTailscaleCerts.cfg pass WORKERS 8 SHARD NODEADLOCK)
 tlc_test(tlc_tailscale_witness_ready_without_peers Tailscale witnesses/WTsReadyWithoutPeers.cfg invariant NODEADLOCK
          PROPERTY ReadyHasPeers)
 tlc_test(tlc_tailscale_witness_url_kept Tailscale witnesses/WTsURLKept.cfg invariant NODEADLOCK
