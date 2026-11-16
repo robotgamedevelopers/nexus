@@ -775,6 +775,11 @@ jobs:
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/sync/secrets_walk "$seed" 2000
             walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 5
+          done
+          walk build/tests/sync/secrets_walk 9 2000 --faulty-store-late
+          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
+            walk build/tests/sync/secrets_walk 1 2000 "$fault"
           done
           # in-app sign-in's walks, each failing if a log line holds a URL, a state, a code or a login
           for seed in 1 2 3 4 5 6 7 8; do
@@ -929,9 +934,11 @@ jobs:
             run: '^tlc_witness'
           # The secret dialog's instances and witnesses (models/Secrets.tla), then its code's walks against
           # SecretsTrace.tla (about 90 records each) and their faults.
-          - shard: secrets
+          - shard: secrets-spec
+            run: '^tlc_secrets_spec$'
+          - shard: secrets-rest
             run: '^tlc_secrets_'
-            skip: '^tlc_secrets_trace_'
+            skip: '^tlc_secrets_(spec$|trace_)'
           - shard: secrets-trace
             run: '^tlc_secrets_trace_'
             build: secrets_walk

@@ -150,10 +150,16 @@ foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_tables_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
              FORMAT 4)
 endforeach()
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_secrets_trace_format5_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
+             FORMAT 5)
+endforeach()
 tlc_test(tlc_secrets_trace_tables_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
          SECWALK SEED 1 STEPS 2000 FAULTY echo FORMAT 4)
 tlc_test(tlc_secrets_trace_tables_faulty_driver_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
          SECWALK SEED 1 STEPS 2000 FAULTY driver FORMAT 4)
+tlc_test(tlc_secrets_trace_tables_faulty_driver-echo_rejected SecretsTrace SecretsTrace.cfg invariant
+         PROPERTY CodeNoSecretToAsker SECWALK SEED 1 STEPS 2000 FAULTY driver-echo FORMAT 4)
 # Seed 9: a walk with late answers in it (two, both played); with the held values in the walk, seed 1 has none.
 tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
          SECWALK SEED 9 STEPS 2000 FAULTY store-late)

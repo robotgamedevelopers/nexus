@@ -468,7 +468,7 @@ tlc_test(tlc_watch_trace_faulty_stale_rejected TerminalWatchTrace TerminalWatchT
 # shape and a failing disk), every property, and a witness per
 # property, per commit (each a second or two); its four larger instances nightly (MCSecretsTwo.cfg took 7 s of the
 # model job's 2 minutes; MCSecretsBadTwo.cfg, two requests, 57 s, past the per-commit cap). Bound to the code by trace checks: tests/sync's secrets_walk, tlc_secrets_trace_*.
-tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
+tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
 tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)
 tlc_test(tlc_secrets_spec_two  MCSecrets MCSecretsTwo.cfg   pass WORKERS 4 NIGHTLY)
