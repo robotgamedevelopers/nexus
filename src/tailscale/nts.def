@@ -3,6 +3,7 @@
 LIBRARY nts
 EXPORTS
     nts_version
+    nts_licences
     nts_state_name
     nts_reason_name
     nts_prepare

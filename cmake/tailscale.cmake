@@ -64,8 +64,9 @@ set(nexus_ts_target_nts nexus_tailscale)
 set(nexus_ts_target_nts_test nexus_tailscale_testhooks)
 set(nexus_go_build ${NEXUS_GO} build -trimpath -buildvcs=false)
 file(GLOB nexus_ts_go_sources CONFIGURE_DEPENDS ${nexus_ts_source}/shim/*.go ${nexus_ts_source}/lifecycle/*.go)
-set(nexus_ts_depends ${nexus_ts_go_sources} ${nexus_ts_source}/go.mod ${nexus_ts_source}/go.sum
-    ${nexus_ts_source}/lifecycle/go.mod ${nexus_ts_source}/nts.h ${nexus_ts_source}/pins.cmake)
+set(nexus_ts_depends ${nexus_ts_go_sources} ${nexus_ts_source}/shim/licences.txt ${nexus_ts_source}/go.mod
+    ${nexus_ts_source}/go.sum ${nexus_ts_source}/lifecycle/go.mod ${nexus_ts_source}/nts.h
+    ${nexus_ts_source}/pins.cmake)
 
 if(WIN32)
     # A fetched llvm-mingw holds the sha256 of the archive it came from (nexus-zip.sha256, written before the rename
@@ -226,8 +227,8 @@ else()
 endif()
 
 # go vet over the shim (both builds: nexus's and the test hooks') and the notices program, for the first architecture
-# built here (CI runs it on every OS); src/tailscale/NOTICES.md against what the notices program writes at these pins
-# (CI runs it on Linux); and nexus_tailscale_notices, which rewrites it.
+# built here (CI runs it on every OS); src/tailscale/NOTICES.md and src/tailscale/shim/licences.txt against what the
+# notices program writes at these pins (CI runs it on every OS); and nexus_tailscale_notices, which rewrites both.
 add_custom_target(nexus_tailscale_vet
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${nexus_ts_host_env} ${NEXUS_GO} vet -tags=${nexus_ts_tags} ./...
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${nexus_ts_host_env} ${NEXUS_GO} vet
@@ -241,12 +242,12 @@ add_custom_target(nexus_tailscale_notices_check
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO} run ./notices -check -go ${NEXUS_GO}
         -tags ${nexus_ts_tags}
     WORKING_DIRECTORY ${nexus_ts_source}
-    COMMENT "src/tailscale/NOTICES.md against the modules the shim links"
+    COMMENT "src/tailscale/NOTICES.md and shim/licences.txt against the modules the shim links"
     VERBATIM)
 add_custom_target(nexus_tailscale_notices
     COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} ${NEXUS_GO} run ./notices -go ${NEXUS_GO} -tags ${nexus_ts_tags}
     WORKING_DIRECTORY ${nexus_ts_source}
-    COMMENT "Writing src/tailscale/NOTICES.md"
+    COMMENT "Writing src/tailscale/NOTICES.md and src/tailscale/shim/licences.txt"
     VERBATIM)
 # The environment policy: every environment read in the Go source the shim links, on every platform nexus builds it
 # for, against src/tailscale/environment.txt, and shim/environment.go against what the file generates (it fails when

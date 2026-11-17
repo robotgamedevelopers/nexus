@@ -14,12 +14,14 @@ import "C"
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -87,16 +89,22 @@ func checkEnvironment() error {
 	return nil
 }
 
+//go:embed licences.txt
+var embeddedLicences string
+
 var (
 	// orderMu guards order: the running nodes, oldest first. The library loggers' sink follows the last.
 	orderMu sync.Mutex
 	order   []*node
 
-	// The static strings nts_version, nts_state_name and nts_reason_name return, made once and never freed.
-	versionText *C.char
-	stateNames  []*C.char
-	reasonNames []*C.char
-	unknownText *C.char
+	// The static strings nts_version, nts_licences, nts_state_name and nts_reason_name return, made once and never
+	// freed.
+	versionText  *C.char
+	licencesText *C.char
+	licencesLen  C.size_t
+	stateNames   []*C.char
+	reasonNames  []*C.char
+	unknownText  *C.char
 )
 
 func init() {
@@ -108,6 +116,9 @@ func init() {
 	log.SetFlags(log.LstdFlags | log.LUTC | log.Lmicroseconds)
 	gvlog.SetTarget(gvlog.GoogleEmitter{Writer: &gvlog.Writer{Next: sink}})
 	versionText = C.CString(versions())
+	licences := strings.ReplaceAll(embeddedLicences, "\r\n", "\n")
+	licencesText = C.CString(licences)
+	licencesLen = C.size_t(len(licences))
 	for p := lifecycle.NotStarted; p <= lifecycle.Failed; p++ {
 		stateNames = append(stateNames, C.CString(p.String()))
 	}
@@ -203,6 +214,24 @@ func nts_version() (v *C.char) {
 	}()
 	testPanic("nts_version")
 	return versionText
+}
+
+//export nts_licences
+func nts_licences(outLen *C.size_t) (v *C.char) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(sink, "nts_licences: panic: %v\n%s", r, debug.Stack())
+			if outLen != nil {
+				*outLen = licencesLen
+			}
+			v = licencesText
+		}
+	}()
+	testPanic("nts_licences")
+	if outLen != nil {
+		*outLen = licencesLen
+	}
+	return licencesText
 }
 
 //export nts_state_name

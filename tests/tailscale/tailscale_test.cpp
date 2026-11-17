@@ -4,6 +4,8 @@
 //
 // Unit groups: no OS (no file, socket or thread of their own), no clock, no network.
 //   version      the versions the shim reports are the pins: tailscale.com v1.104.7 and go1.27.4
+//   licences_unit  nts_licences returns the embedded UTF-8 licence bundle, static and NUL-terminated, with every
+//                  section carrying non-empty licence text
 //   names        nts_state_name and nts_reason_name for every state and reason, and "unknown" for others
 //   handles      every call that takes a handle refuses one never issued, a null out-pointer, and a bad port, with a
 //                reason; the reason is cut to the caller's buffer
@@ -16,6 +18,7 @@
 // machine only. Offline nodes (nts_test_start_offline) use a control server on 127.0.0.1 that refuses at once; the
 // test control server (nts_test_control_start) is Tailscale's in-tree one, run in this process on 127.0.0.1 with its
 // own DERP relay and STUN server. No test reaches another machine, Tailscale's hosted service, or a real tailnet.
+//   licences     every module@version and licence file in src/tailscale/NOTICES.md is in nts_licences, 1-to-1
 //   state_dir    the state directory and its log file created owner-only (0700 and 0600; on Windows a protected ACL
 //                granting only this user), an existing one tightened
 //   refusals     the refusals that need the filesystem: a null, empty or relative path, a file in the way, an
@@ -312,6 +315,156 @@ void version() {
     CHECK(nts_version() == v);
 }
 
+struct LicenceFile {
+    std::string name;
+    std::string body;
+};
+
+struct LicenceSection {
+    std::string header;
+    std::vector<LicenceFile> files;
+};
+
+std::string trimSpace(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n')) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r' || s[end - 1] == '\n')) {
+        --end;
+    }
+    return s.substr(start, end - start);
+}
+
+bool validUtf8(const std::string& s) {
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == 0) {
+            return false;
+        }
+        size_t need = 0;
+        unsigned int code = 0;
+        unsigned int minCode = 0;
+        if (c < 0x80) {
+            ++i;
+            continue;
+        } else if ((c & 0xE0) == 0xC0) {
+            need = 1;
+            code = c & 0x1F;
+            minCode = 0x80;
+        } else if ((c & 0xF0) == 0xE0) {
+            need = 2;
+            code = c & 0x0F;
+            minCode = 0x800;
+        } else if ((c & 0xF8) == 0xF0) {
+            need = 3;
+            code = c & 0x07;
+            minCode = 0x10000;
+        } else {
+            return false;
+        }
+        if (i + need >= s.size()) {
+            return false;
+        }
+        for (size_t j = 1; j <= need; ++j) {
+            unsigned char cc = static_cast<unsigned char>(s[i + j]);
+            if ((cc & 0xC0) != 0x80) {
+                return false;
+            }
+            code = (code << 6) | (cc & 0x3F);
+        }
+        if (code < minCode || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
+            return false;
+        }
+        i += need + 1;
+    }
+    return true;
+}
+
+std::vector<LicenceSection> parseLicenceBundle(const std::string& bundle) {
+    const std::string rule(80, '=');
+    const std::string marker = "\n" + rule + "\n";
+    std::vector<LicenceSection> sections;
+    size_t pos = bundle.find(marker);
+    while (pos != std::string::npos) {
+        size_t headerStart = pos + marker.size();
+        size_t headerEnd = bundle.find("\n" + rule + "\n", headerStart);
+        if (headerEnd == std::string::npos) {
+            break;
+        }
+        size_t bodyStart = headerEnd + rule.size() + 2;
+        size_t nextPos = bundle.find(marker, bodyStart);
+        std::string body =
+            nextPos == std::string::npos ? bundle.substr(bodyStart) : bundle.substr(bodyStart, nextPos - bodyStart);
+        LicenceSection sec;
+        sec.header = bundle.substr(headerStart, headerEnd - headerStart);
+        std::string withLeadingNewline = "\n" + body;
+        size_t fpos = withLeadingNewline.find("\n--- ");
+        while (fpos != std::string::npos) {
+            size_t lineEnd = withLeadingNewline.find(" ---\n", fpos + 5);
+            if (lineEnd == std::string::npos) {
+                break;
+            }
+            std::string fname = withLeadingNewline.substr(fpos + 5, lineEnd - (fpos + 5));
+            size_t contentStart = lineEnd + 5;
+            size_t nextFile = withLeadingNewline.find("\n--- ", contentStart);
+            std::string fbody = nextFile == std::string::npos
+                                    ? withLeadingNewline.substr(contentStart)
+                                    : withLeadingNewline.substr(contentStart, nextFile - contentStart);
+            sec.files.push_back(LicenceFile{fname, trimSpace(fbody)});
+            fpos = nextFile;
+        }
+        sections.push_back(std::move(sec));
+        pos = nextPos;
+    }
+    return sections;
+}
+
+void licencesUnit() {
+    size_t len = 0;
+    const char* raw = nts_licences(&len);
+    CHECK(raw != nullptr);
+    if (raw == nullptr) {
+        return;
+    }
+    CHECK(nts_licences(nullptr) == raw);
+    CHECK(len > 100000);
+    CHECK(std::strlen(raw) == len);
+    std::string bundle(raw, len);
+    CHECK(!has(bundle, "\r"));
+    CHECK(validUtf8(bundle));
+    std::vector<LicenceSection> sections = parseLicenceBundle(bundle);
+    CHECK(sections.size() >= 38);
+    if (sections.empty()) {
+        return;
+    }
+    CHECK(sections[0].header == "Go standard library and runtime go1.27.4 (BSD-3-Clause)");
+    CHECK(sections[0].files.size() == 1 && sections[0].files[0].name == "LICENSE" &&
+          has(sections[0].files[0].body, "Redistribution and use in source and binary forms"));
+    bool sawTailscale = false;
+    std::string prevModule;
+    for (size_t i = 1; i < sections.size(); ++i) {
+        const LicenceSection& s = sections[i];
+        size_t at = s.header.find('@');
+        CHECK(at != std::string::npos && at > 0);
+        if (at != std::string::npos) {
+            std::string mod = s.header.substr(0, at);
+            CHECK(prevModule.empty() || prevModule < mod);
+            prevModule = mod;
+        }
+        if (s.header == "tailscale.com@v1.104.7 (BSD-3-Clause)") {
+            sawTailscale = true;
+        }
+        CHECK(!s.files.empty());
+        for (const LicenceFile& f : s.files) {
+            CHECK(!f.name.empty());
+            CHECK(f.body.size() >= 100);
+        }
+    }
+    CHECK(sawTailscale);
+}
+
 void names() {
     const char* states[] = {"not-started", "starting", "needs-login", "running",
                             "ready",       "expired",  "stopped",     "failed"};
@@ -511,6 +664,10 @@ void panicsUnit() {
     }
     nts_test_inject_panic("nts_version");
     CHECK(nts_version() != nullptr && std::string(nts_version()) == "tailscale.com v1.104.7 go1.27.4");
+    size_t licenceLen = 0;
+    nts_test_inject_panic("nts_licences");
+    const char* lic = nts_licences(&licenceLen);
+    CHECK(lic != nullptr && licenceLen > 0 && std::strlen(lic) == licenceLen);
     nts_test_inject_panic("nts_state_name");
     CHECK(std::string(nts_state_name(NTS_STATE_READY)) == "unknown");
     nts_test_inject_panic("nts_reason_name");
@@ -520,6 +677,93 @@ void panicsUnit() {
 }
 
 // ---- functional groups: the filesystem, offline nodes ----
+
+// Every row of src/tailscale/NOTICES.md is carried in nts_licences(), 1-to-1 in order, with each named licence file's
+// text non-empty.
+void licences() {
+    std::string notices = readFile(NEXUS_TAILSCALE_NOTICES_MD);
+    CHECK(!notices.empty());
+    struct NoticeRow {
+        std::string header;
+        std::vector<std::string> files;
+    };
+    std::vector<NoticeRow> rows;
+    size_t lineStart = 0;
+    while (lineStart < notices.size()) {
+        size_t lineEnd = notices.find('\n', lineStart);
+        if (lineEnd == std::string::npos) {
+            lineEnd = notices.size();
+        }
+        std::string line = trimSpace(notices.substr(lineStart, lineEnd - lineStart));
+        lineStart = lineEnd + 1;
+        if (line.size() < 2 || line[0] != '|' || has(line, "| Module |") || has(line, "|---|")) {
+            continue;
+        }
+        std::vector<std::string> cells;
+        size_t pos = 1;
+        while (pos < line.size()) {
+            size_t bar = line.find('|', pos);
+            if (bar == std::string::npos) {
+                break;
+            }
+            cells.push_back(trimSpace(line.substr(pos, bar - pos)));
+            pos = bar + 1;
+        }
+        CHECK(cells.size() == 5);
+        if (cells.size() != 5) {
+            continue;
+        }
+        NoticeRow row;
+        row.header = cells[0] + "@" + cells[1] + " (" + cells[2] + ")";
+        size_t fpos = 0;
+        while (fpos < cells[3].size()) {
+            size_t comma = cells[3].find(',', fpos);
+            std::string part =
+                comma == std::string::npos ? cells[3].substr(fpos) : cells[3].substr(fpos, comma - fpos);
+            std::string clean = trimSpace(part);
+            if (!clean.empty()) {
+                row.files.push_back(clean);
+            }
+            if (comma == std::string::npos) {
+                break;
+            }
+            fpos = comma + 1;
+        }
+        CHECK(!row.files.empty());
+        rows.push_back(std::move(row));
+    }
+    CHECK(rows.size() >= 37);
+
+    size_t len = 0;
+    const char* raw = nts_licences(&len);
+    CHECK(raw != nullptr);
+    if (raw == nullptr) {
+        return;
+    }
+    std::vector<LicenceSection> sections = parseLicenceBundle(std::string(raw, len));
+    CHECK(sections.size() == rows.size() + 1);
+    if (sections.size() != rows.size() + 1) {
+        std::fprintf(stderr, "licences: NOTICES.md lists %zu modules, nts_licences holds %zu sections\n", rows.size(),
+                     sections.size());
+        return;
+    }
+    CHECK(sections[0].header == "Go standard library and runtime go1.27.4 (BSD-3-Clause)");
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const NoticeRow& want = rows[i];
+        const LicenceSection& got = sections[i + 1];
+        CHECK(got.header == want.header);
+        if (got.header != want.header) {
+            std::fprintf(stderr, "licences: row %zu: want \"%s\", got \"%s\"\n", i, want.header.c_str(),
+                         got.header.c_str());
+            continue;
+        }
+        CHECK(got.files.size() == want.files.size());
+        for (size_t j = 0; j < want.files.size() && j < got.files.size(); ++j) {
+            CHECK(got.files[j].name == want.files[j]);
+            CHECK(got.files[j].body.size() >= 100);
+        }
+    }
+}
 
 void stateDir() {
     fs::path work = fresh("state_dir");
@@ -763,10 +1007,15 @@ void panics() {
     nts_status status{};
     nts_test_inject_panic("nts_status_get");
     CHECK(nts_status_get(node, &status, err, sizeof err) == -1 && has(err, kPanicReason));
+    size_t licenceLen = 0;
+    nts_test_inject_panic("nts_licences");
+    CHECK(nts_licences(&licenceLen) != nullptr);
     nts_test_inject_panic(nullptr);
     CHECK(nts_status_get(node, &status, err, sizeof err) == 0);
     CHECK(closeNode(node));
-    CHECK(has(readFile(dir / "nexus-tailscale.log"), "nts test panic injected at nts_status_get"));
+    std::string logText = readFile(dir / "nexus-tailscale.log");
+    CHECK(has(logText, "nts test panic injected at nts_status_get"));
+    CHECK(has(logText, "nts test panic injected at nts_licences"));
 }
 
 // A node's log is capped: past 1 MiB (logCap in src/tailscale/shim/output.go) nexus-tailscale.log moves to
@@ -1840,10 +2089,12 @@ struct Group {
 
 const Group kGroups[] = {
     {"version", version},
+    {"licences_unit", licencesUnit},
     {"names", names},
     {"handles", handles},
     {"start_checks", startChecks},
     {"panics_unit", panicsUnit},
+    {"licences", licences},
     {"state_dir", stateDir},
     {"refusals", refusals},
     {"refuses_inherited_key", refusesInheritedKey},

@@ -2,8 +2,8 @@
 # here is labelled tailscale too, so that CI's tailscale jobs run exactly these (ctest -L tailscale):
 #   unit           no OS, no time, no network: tailscale_unit_lifecycle (the node's state code, src/tailscale/lifecycle,
 #                  in Go: the state mapping, the start's checks, the record of the control server, the poll's settling,
-#                  the state directory table), and the test program's unit groups (version, names, handles,
-#                  start_checks, panics_unit)
+#                  the state directory table), and the test program's unit groups (version, licences_unit, names,
+#                  handles, start_checks, panics_unit)
 #   functional     the real filesystem in a directory of the test's own, and nodes on this machine only: offline nodes
 #                  (a control server on 127.0.0.1 that refuses at once), and Tailscale's in-tree test control server run
 #                  inside the test program on 127.0.0.1 with its own DERP relay and STUN server
@@ -13,6 +13,7 @@
 
 add_executable(tailscale_test tailscale_test.cpp)
 target_compile_options(tailscale_test PRIVATE ${NEXUS_WARNINGS})
+target_compile_definitions(tailscale_test PRIVATE NEXUS_TAILSCALE_NOTICES_MD="${nexus_ts_source}/NOTICES.md")
 nexus_link_tailscale(tailscale_test TESTHOOKS)
 if(WIN32)
     target_link_libraries(tailscale_test PRIVATE advapi32)
@@ -31,7 +32,13 @@ add_test(NAME tailscale_unit_lifecycle
     WORKING_DIRECTORY ${nexus_ts_source}/lifecycle)
 set_tests_properties(tailscale_unit_lifecycle PROPERTIES LABELS "unit;tailscale" TIMEOUT 120)
 
-foreach(group version names handles start_checks panics_unit)
+# The notices generator's Go unit tests, with the pinned Go.
+add_test(NAME tailscale_unit_notices
+    COMMAND ${CMAKE_COMMAND} -E env ${nexus_go_env} CGO_ENABLED=0 ${NEXUS_GO} test -count=1 ./notices
+    WORKING_DIRECTORY ${nexus_ts_source})
+set_tests_properties(tailscale_unit_notices PROPERTIES LABELS "unit;tailscale" TIMEOUT 60)
+
+foreach(group version licences_unit names handles start_checks panics_unit)
     set(work ${CMAKE_CURRENT_BINARY_DIR}/work_${group})
     file(MAKE_DIRECTORY ${work})
     add_test(NAME tailscale_unit_${group} COMMAND tailscale_test ${group} WORKING_DIRECTORY ${work})
@@ -39,8 +46,8 @@ foreach(group version names handles start_checks panics_unit)
 endforeach()
 
 # The groups, here and in .github/workflows/tailscale.yml's list for macOS's x86_64 slice.
-set(NEXUS_TAILSCALE_FUNCTIONAL state_dir refusals refuses_inherited_key lock lock_two_process panics log_cap quiet
-    unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key long_sign_in
+set(NEXUS_TAILSCALE_FUNCTIONAL licences state_dir refusals refuses_inherited_key lock lock_two_process panics log_cap
+    quiet unreachable certificate watch threads sign_in tailnet restart expiry control_down auth_key long_sign_in
     control_error control_blackhole close_each_other)
 foreach(group ${NEXUS_TAILSCALE_FUNCTIONAL})
     set(work ${CMAKE_CURRENT_BINARY_DIR}/work_${group})

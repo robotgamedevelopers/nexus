@@ -1,3 +1,6 @@
 # Code the schema compiler generates (cmake/schema.cmake): collapsed in diffs, never edited by hand.
 schema/gen/** linguist-generated=true
 tests/wire/next/gen/** linguist-generated=true
+
+# Licence texts generated from the Tailscale shim's pinned modules (src/tailscale/notices): LF on every OS, collapsed.
+src/tailscale/shim/licences.txt text eol=lf linguist-generated=true

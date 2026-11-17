@@ -122,8 +122,8 @@ cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release        # ad
 cmake --build build-tailscale --target tailscale_test
 ctest --test-dir build-tailscale -L tailscale                                  # -C Release on Windows
 cmake --build build-tailscale --target nexus_tailscale_vet                     # go vet
-cmake --build build-tailscale --target nexus_tailscale_notices_check           # src/tailscale/NOTICES.md is current
-cmake --build build-tailscale --target nexus_tailscale_notices                 # rewrite it
+cmake --build build-tailscale --target nexus_tailscale_notices_check           # NOTICES.md and shim/licences.txt are current
+cmake --build build-tailscale --target nexus_tailscale_notices                 # rewrite both
 ```
 
 Or from the top level: `cmake -S . -B build -DNEXUS_TAILSCALE=ON`. The caches are cache variables, so that CI keeps them
@@ -209,7 +209,12 @@ socket, clock or network:
   and auth key rules (every spelling of the hosted service's name, IDNA, ports, zones); the control record (and state
   with no record refused); the poll's close as control-down while ready; a map for an expired key not ready; the dial
   decision (`DialTarget`: peers only); the scrub of URLs, keys and long texts.
-- `tailscale_unit_version`: the versions are the pins. `tailscale_unit_names`: every state's and reason's name, and
+- `tailscale_unit_notices`: `go test` of `src/tailscale/notices`: classifying licence files, scanning linked
+  subpackages and Apache-2.0 `NOTICE` files, refusing licences nexus cannot link, and catching missing, empty or
+  unlisted sections in `shim/licences.txt`.
+- `tailscale_unit_version`: the versions are the pins. `tailscale_unit_licences_unit`: `nts_licences` returns the
+  embedded UTF-8 licence bundle, static and NUL-terminated, with the Go standard library's licence and every module
+  section carrying non-empty text. `tailscale_unit_names`: every state's and reason's name, and
   "unknown" past them. `tailscale_unit_handles`: every call that takes a handle refuses one never issued, a null
   out-pointer or a bad port, with the reason cut to the caller's buffer. `tailscale_unit_start_checks`: a start is
   refused for an http, user, path, query or hosted-service control URL (also spelled with a trailing dot, in upper
@@ -220,6 +225,8 @@ socket, clock or network:
 
 Functional tests, on the real filesystem in a directory of the test's own, and where said on sockets of this machine:
 
+- `tailscale_functional_licences`: every row and licence file in `src/tailscale/NOTICES.md` is present in
+  `nts_licences` 1-to-1 in order, with non-empty text.
 - `tailscale_functional_state_dir`: on the real filesystem, in a directory of the test's own: the directory and its
   missing parents created 0700 and the log file 0600 (on Windows: the directory and the parent created on the way with
   a protected ACL granting only this user, and the log file inheriting it); an existing directory and log file open to
@@ -339,15 +346,24 @@ size stands for the cost. A universal macOS build carries both architectures, ab
 
 `src/tailscale/NOTICES.md` lists every Go module the shim links on darwin/arm64, darwin/amd64, linux/amd64 and
 windows/amd64, with the licence its licence files state, measured by `go list -deps -tags <the omissions> ./shim` per
-platform (`src/tailscale/notices`, which fails on a licence it cannot name or one nexus may not link). At these pins
-and omissions: 37 modules, BSD-3-Clause 17, MIT 11, Apache-2.0 5, BSD-2-Clause 2, and 2 whose licence file carries
-Apache-2.0, MIT and BSD-3-Clause together (klauspost/compress, gvisor); plus the Go standard library and runtime,
-BSD-3-Clause. Every one may be combined with nexus's AGPL-3.0. The omissions took out five modules (coder/websocket,
-godbus/dbus, mitchellh/go-ps, golang.org/x/oauth2 and web-client-prebuilt, whose embedded web UI carried a font). CI
-fails when the file differs from what the program writes.
+platform (`src/tailscale/notices`, which scans each module's root and the directories of the packages the shim links
+inside it for licence and Apache-2.0 `NOTICE` files, and fails on a licence it cannot name or one nexus may not link).
+At these pins and omissions: 37 modules, BSD-3-Clause 17, MIT 11, Apache-2.0 5, BSD-2-Clause 2, and 2 that carry
+Apache-2.0, MIT and BSD-3-Clause together (`klauspost/compress`, including its linked `internal/snapref/LICENSE` and
+`zstd/internal/xxhash/LICENSE.txt`, and `gvisor`); plus the Go standard library and runtime, BSD-3-Clause. Every one
+may be combined with nexus's AGPL-3.0. The omissions took out five modules (coder/websocket, godbus/dbus,
+mitchellh/go-ps, golang.org/x/oauth2 and web-client-prebuilt, whose embedded web UI carried a font).
 
-These licences require their texts to go with any binary that links the shim, and nothing carries them yet: no nexus
-binary that links the shim ships until one does (`docs/roadmap.sexp`, `t-ts-licence-texts`).
+The verbatim licence and notice texts — the pinned Go toolchain's `LICENSE` (`go env GOROOT`) followed by the 39
+licence files across those 37 modules — are generated by `src/tailscale/notices` into `src/tailscale/shim/licences.txt`
+(139,410 bytes, UTF-8 with LF line ends), embedded into `src/tailscale/shim` by `//go:embed`, and exposed through
+`nts_licences(size_t* len)` (`src/tailscale/nts.h`), so every binary that links the shim carries them with no external
+file dependency. On Linux x86_64 (`clang` and `lld`, Release), embedding `shim/licences.txt` adds +142,816 bytes
+unstripped (44,049,344 to 44,192,160) and +140,928 bytes stripped (23,748,680 to 23,889,608, +0.14 MB) to a program
+linking `libnts.a` (+147,296 bytes in `libnts.a` itself, 61,737,980 to 61,885,276). CI's `tailscale_checks` runs
+`nexus_tailscale_notices_check` (`go run ./notices -check`), failing when either `NOTICES.md` or `shim/licences.txt`
+differs from what `notices` writes at the pins or when any module or file in `NOTICES.md` is missing or empty in
+`shim/licences.txt`, and `tailscale_functional_licences` checks `nts_licences` 1-to-1 against `NOTICES.md`.
 
 ### Not seen headless: the first-run OS prompts (a layer 2 check)
 
@@ -382,7 +398,7 @@ nothing in nexus-server or the client calls it yet.
 | `nts_peers`, `nts_peer_find(dns_name)`, `nts_whois_addr(remote)` | the tailnet's peers, one by DNS name, who is behind an address |
 | `nts_listen_tcp`, `nts_accept`, `nts_dial_tcp`, `nts_dial_udp`, `nts_listen_udp` | TCP and UDP through the node's embedded network stack |
 | `nts_read`, `nts_write`, `nts_recv_from`, `nts_send_to`, `nts_local_addr`, `nts_remote_addr`, `nts_handle_close` | I/O with timeouts, addresses, closing a handle |
-| `nts_version`, `nts_state_name`, `nts_reason_name` | the pins; names of states and reasons |
+| `nts_version`, `nts_licences`, `nts_state_name`, `nts_reason_name` | the pins; the embedded licence texts; names of states and reasons |
 
 Nothing goes through the host's network: every dial, listen and name lookup is tsnet's userspace stack, so the host's
 routes, DNS and firewall are never touched. **A dial or a datagram goes only to a peer.** tsnet's own `Dial` would
