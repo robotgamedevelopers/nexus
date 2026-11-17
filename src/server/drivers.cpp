@@ -37,10 +37,6 @@ sync::EntryRef entry(EntryKind kind, std::string text) {
     return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, std::move(text), true});
 }
 
-void log(sync::SessionId id, const std::string& what) {
-    std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(id), what.c_str());
-}
-
 // How a process ended, as a notice says it after "ada's driver ".
 std::string howEnded(int status) {
     if (WIFEXITED(status)) {
@@ -198,9 +194,50 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
     return text + "[nexus: the person's prompt follows.]\n\n";
 }
 
+class PosixHost : public Drivers::Host {
+public:
+    pid_t spawn(const std::vector<std::string>& argv, int* in, int* out, std::string* why) override {
+        return spawnDriver(argv, in, out, why);
+    }
+    ssize_t write(int fd, const char* data, std::size_t size, int* err) override {
+        const ssize_t n = ::write(fd, data, size);
+        *err = n < 0 ? errno : 0;
+        return n;
+    }
+    ssize_t read(int fd, char* data, std::size_t size, int* err) override {
+        const ssize_t n = ::read(fd, data, size);
+        *err = n < 0 ? errno : 0;
+        return n;
+    }
+    void close(int fd) override { ::close(fd); }
+    void killGroup(pid_t pid, int sig) override { ::killpg(pid, sig); }
+    bool exited(pid_t pid) override {
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == pid;
+    }
+    std::string reap(pid_t pid) override {
+        int status = 0;
+        while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        return howEnded(status);
+    }
+};
+
+Drivers::Host& posixHost() {
+    static PosixHost host;
+    return host;
+}
+
 } // namespace
 
-Drivers::Drivers(const sync::SessionStore& store, Options options) : store_(store), options_(std::move(options)) {}
+Drivers::Drivers(const sync::SessionStore& store, Options options)
+    : store_(store), options_(std::move(options)), host_(options_.host != nullptr ? options_.host : &posixHost()) {}
+
+void Drivers::log(sync::SessionId id, const std::string& what) const {
+    if (!options_.quiet) {
+        std::fprintf(stderr, "nexus-server: session %llu: %s\n", static_cast<unsigned long long>(id), what.c_str());
+    }
+}
 
 Drivers::~Drivers() {
     for (auto& [id, t] : slots_) {
@@ -208,15 +245,13 @@ Drivers::~Drivers() {
             continue;
         }
         if (t.proc->in >= 0) {
-            ::close(t.proc->in);
+            host_->close(t.proc->in);
         }
         if (t.proc->out >= 0) {
-            ::close(t.proc->out);
+            host_->close(t.proc->out);
         }
-        ::killpg(t.proc->pid, SIGKILL);
-        int status = 0;
-        while (::waitpid(t.proc->pid, &status, 0) < 0 && errno == EINTR) {
-        }
+        host_->killGroup(t.proc->pid, SIGKILL);
+        host_->reap(t.proc->pid);
     }
 }
 
@@ -322,17 +357,26 @@ std::vector<std::string> Drivers::keepsOut() const {
 }
 
 ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
-    std::ifstream in(options_.tableNow ? options_.tableNow() : options_.table);
     std::string text;
-    if (in) {
-        std::ostringstream all;
-        all << in.rdbuf();
-        text = all.str();
-    } else if (errno != ENOENT) {
-        ResolvedDriver r;
-        r.problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) + "), so the prompt to " +
-            friendName + " was not sent. Make the file readable by this user.";
-        return r;
+    if (options_.readTable) {
+        std::string problem;
+        if (!options_.readTable(&text, &problem)) {
+            ResolvedDriver r;
+            r.problem = problem;
+            return r;
+        }
+    } else {
+        std::ifstream in(options_.tableNow ? options_.tableNow() : options_.table);
+        if (in) {
+            std::ostringstream all;
+            all << in.rdbuf();
+            text = all.str();
+        } else if (errno != ENOENT) {
+            ResolvedDriver r;
+            r.problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) +
+                "), so the prompt to " + friendName + " was not sent. Make the file readable by this user.";
+            return r;
+        }
     }
     DriverTable parsed = parseDriverTable(text, options_.home);
     ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
@@ -772,7 +816,7 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
             }
             auto proc = std::make_unique<Process>();
             std::string why;
-            proc->pid = spawnDriver(c.argv, &proc->in, &proc->out, &why);
+            proc->pid = host_->spawn(c.argv, &proc->in, &proc->out, &why);
             if (proc->pid < 0) {
                 more.push_back(t.sup.exited("could not be started: " + why, now));
                 return;
@@ -808,7 +852,7 @@ void Drivers::carryOut(sync::SessionId id, Slot& t, const Command& c, std::vecto
                 if (holding_) {
                     held_.push_back(Held{p->pid, sig});
                 } else {
-                    ::killpg(p->pid, sig);
+                    host_->killGroup(p->pid, sig);
                 }
             }
             return;
@@ -825,7 +869,7 @@ void Drivers::release(Millis now) {
     holding_ = false;
     for (const Held& h : held_) {
         if (h.sig != 0) {
-            ::killpg(h.pid, h.sig);
+            host_->killGroup(h.pid, h.sig);
             continue;
         }
         for (auto& [id, t] : slots_) {
@@ -856,16 +900,17 @@ void Drivers::tell(Process& p, const std::string& line, Millis now) {
 // Writes what the driver will take now; a driver that stopped reading its input loses what is left.
 void Drivers::flushInput(Process& p, Millis now) {
     while (!p.pending.empty() && p.in >= 0) {
-        const ssize_t n = ::write(p.in, p.pending.data(), p.pending.size());
+        int err = 0;
+        const ssize_t n = host_->write(p.in, p.pending.data(), p.pending.size(), &err);
         if (n > 0) {
             p.pending.erase(0, static_cast<std::size_t>(n));
-        } else if (n < 0 && errno == EINTR) {
+        } else if (n < 0 && err == EINTR) {
             continue;
-        } else if (n < 0 && errno == EAGAIN) {
+        } else if (n < 0 && err == EAGAIN) {
             return;
         } else {
             p.pending.clear();
-            ::close(p.in);
+            host_->close(p.in);
             p.in = -1;
             if (!p.brokenSince) {
                 p.brokenSince = now;
@@ -874,7 +919,7 @@ void Drivers::flushInput(Process& p, Millis now) {
         }
     }
     if (p.closeInput && p.pending.empty() && p.in >= 0) {
-        ::close(p.in);
+        host_->close(p.in);
         p.in = -1;
     }
 }
@@ -886,17 +931,18 @@ void Drivers::readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std
     char buffer[16 * 1024];
     std::size_t total = 0;
     while (p.out >= 0 && total < limit) {
-        const ssize_t n = ::read(p.out, buffer, sizeof buffer);
+        int err = 0;
+        const ssize_t n = host_->read(p.out, buffer, sizeof buffer, &err);
         if (n > 0) {
             p.reader.feed(std::string_view(buffer, static_cast<std::size_t>(n)), items);
             total += static_cast<std::size_t>(n);
-        } else if (n < 0 && errno == EINTR) {
+        } else if (n < 0 && err == EINTR) {
             continue;
-        } else if (n < 0 && errno == EAGAIN) {
+        } else if (n < 0 && err == EAGAIN) {
             break;
         } else {
             p.reader.finish(items);
-            ::close(p.out);
+            host_->close(p.out);
             p.out = -1;
             if (!p.brokenSince) {
                 p.brokenSince = now;
@@ -929,16 +975,13 @@ void Drivers::readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std
 // The driver's exit, if it has exited: what it wrote before, then the exit.
 void Drivers::collect(sync::SessionId id, Slot& t, Output& out, Millis now) {
     Process& p = *t.proc;
-    siginfo_t info{};
-    if (::waitid(P_PID, static_cast<id_t>(p.pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0 || info.si_pid != p.pid) {
+    if (!host_->exited(p.pid)) {
         return;
     }
     // What it started in its process group (its harness) goes with it, while its pid, not yet collected, still names
     // the group: a next driver for the session never works beside it.
-    ::killpg(p.pid, SIGKILL);
-    int status = 0;
-    while (::waitpid(p.pid, &status, 0) < 0 && errno == EINTR) {
-    }
+    host_->killGroup(p.pid, SIGKILL);
+    const std::string ended = host_->reap(p.pid);
     readSome(id, t, out, now, kReadChunk);
     if (p.out >= 0) {
         // Its output is still held open (by a process it started): what is read so far is all it gets.
@@ -947,14 +990,14 @@ void Drivers::collect(sync::SessionId id, Slot& t, Output& out, Millis now) {
         for (driver::DriverReader::Item& item : rest) {
             append(out, item.message ? t.sup.message(*item.message, now) : t.sup.refused(item.error, now));
         }
-        ::close(p.out);
+        host_->close(p.out);
     }
     if (p.in >= 0) {
-        ::close(p.in);
+        host_->close(p.in);
     }
-    log(id, "driver " + std::to_string(p.pid) + " " + howEnded(status));
+    log(id, "driver " + std::to_string(p.pid) + " " + ended);
     t.proc.reset();
-    append(out, t.sup.exited(howEnded(status), now));
+    append(out, t.sup.exited(ended, now));
 }
 
 std::vector<pollfd> Drivers::fds() const {

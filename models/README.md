@@ -490,6 +490,45 @@ Properties: `DialsLive` (every session made is with the server running then, nev
 Instance, per commit: `MCReconnect.cfg` (three servers in turn: 320 distinct states). Witnesses (`WReconnect*`): `WReconnectCached` (a session made again from the kept `CONNECT` line with no server: `DialsLive`), and, as temporal violations of `Reconnects`, `WReconnectOnce` (the bootstrap only while no session was ever made: the window before this module), `WReconnectOnlyEnded` (a session made again only when its server said it ended, never after a crash) and `WReconnectGivesUp` (a backoff that never ends).
 
 The binding: `tests/sync/reconnect_walk.cpp` (`reconnect_walk <seed> <steps> [--faulty-cached | --faulty-no-reset] <out.tla>`) drives the real `Redial` as the link thread does, with a seeded walk and a made-up clock (from 1000 s), playing servers started and gone (up to eight), the shutdown reaching the window or not, bootstraps run exactly when `Redial::due` says, the server heard, and the clock moving past backoffs and `kQuietMs`; `ReconnectTrace.tla` checks that each record is a step of the spec. Seeds 1 to 4 run per commit, 1000 steps each (CI shard `reconnect`). The binding is shown to fail twice: `--faulty-cached` makes a session again from the old line with no server running, `--faulty-no-reset` starts a new backoff when a server is heard; TLC must reject both. What the model leaves out (the backoff's lengths, the actions resent from `--next`, the real bootstrap and mosh) is `sync_unit_redial`, `link_unit` `bootstrap_command_reconnect` and `link_e2e_takeover`, which stops a server cleanly and kills one, under a throwaway HOME, and checks the window keeps a stopped server stopped, shows the new server's state once started, and applies every action once.
+## LoopPass.tla: one pass of nexus-server's loop
+
+`LoopPass.tla` models one pass of `nexus-server`'s serving loop (`src/server/pass.h` `PassOrder` and `take_pass_step`, `src/server/server.cpp` `Server::run`, `src/server/drivers.cpp` `Drivers::hold` and `release`, `src/server/durable.cpp` `DurableStore::beginBatch` and `flush`), repeated across passes, batches of client actions and driver messages, store failures and crashes at any point.
+
+Each pass runs in `DefaultOrder`: `"tick"` (every link ticks at the top of the pass: the state staged at the end of the previous pass leaves on the wire as `sentSnap`, and mosh acknowledges only client actions received before that flush, `acked`), `"hold"` (`DurableStore::beginBatch` and `Drivers::hold`: commits append to `batch` in memory without syncing, and commands told to a driver wait in `heldCmds`), `"apply"` (driver `Hello` / `Done` through `Drivers::serve`, and client `Send` / `Queue` / `Stop` ranges received and applied in order through `Applier`, `Hub::apply` and `Drivers`), `"flush"` (`DurableStore::flush`: one sync makes every record of `batch` durable on `disk`), `"release"` (`Drivers::release`: held commands go out to the live driver in order), and `"state"` (when the pass changed anything, `ServerSession::setState` stages `linkSnap` for the next pass's tick). A failed apply or flush stops the loop (`failed = TRUE`) before release, state or another tick. `Crash(k)` may happen at any point, keeping any prefix `0..Len(batch)` of the current batch's records on disk (covering volatile loss and torn batch writes between `log_->append` and `log_->sync` on `MemFs`), cutting any open turn with a notice without resending its prompt, taking the oldest queued prompt when nothing waits, and reconnecting each window from `acked[c] + 1` with `Applier(disk.applied[c])`.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK` | invariant | every variable, counter and phase stays in range |
+| `ExactlyOnce` | invariant | every window's actions are applied in order `1..applied[c]`, each at most once, across crashes, torn batch prefixes and reconnections |
+| `PromptAtMostOnce` | invariant | each prompt is written to a driver at most once across all passes, partial flushes and crashes |
+| `TurnsIncrease` | invariant | turn numbers written to drivers start at 1 and strictly increase across crashes |
+| `DriverOnlyDurable` | invariant | nothing reaches a driver (neither a prompt's send nor a stop) before the batch that decided it is durable on disk |
+| `LinkStateDurable` | invariant | neither the state staged on links (`linkSnap`) nor any state sent to windows (`sentSnap`) holds uncommitted entries or uncommitted queued prompts |
+| `AckedOnlyDurable` | invariant | no client action is acknowledged by a link tick before its batch is durable on disk |
+| `DurableMonotonic` | action | durable transcripts, next turn numbers, durable applied counters and acknowledgements never go backward, even across crashes |
+| `NoOutBeforeFlush` | action | driver writes, staged link states and acknowledgements never advance while an unflushed batch holds uncommitted records |
+| `Converges` | temporal | under fairness of pass steps, service restart after failure and driver answers, every action becomes durable, acknowledged and shown, and every turn settles |
+
+Instances: per commit, `MCLoopPass.cfg` (one window, two actions, one crash, one failure, with `Converges`: 22,500 distinct states) and `MCLoopPassTwo.cfg` (two windows, one action each, one crash, one failure: 58,851 distinct states, 1 s); nightly, `MCLoopPassWide.cfg` (two windows, two crashes, one failure: 113,337 distinct states, 1 s) and `MCLoopPassThree.cfg` (one window, three actions, two crashes, one failure: 681,678 distinct states, 4 s).
+
+Reversed witnesses (`witnesses/WLoop*.tla`), each rejected by TLC:
+
+| Witness | The break | Rejected by |
+|---|---|---|
+| `WLoopReleaseBeforeFlush` | `Drivers::release` runs before `DurableStore::flush` | `PromptAtMostOnce` |
+| `WLoopStateBeforeFlush` | `setState` stages the batch's state before `DurableStore::flush` | `LinkStateDurable` |
+| `WLoopTickBeforeFlush` | links tick after `Apply` and before `DurableStore::flush` | `AckedOnlyDurable` |
+| `WLoopNoHold` | the batch begins without `Drivers::hold` | `PromptAtMostOnce` |
+| `WLoopReleaseOnFail` | a failed flush goes on to `Drivers::release` anyway | `DriverOnlyDurable` |
+| `WLoopTickOnFail` | a failed flush loops to the next pass's tick instead of stopping | `AckedOnlyDurable` |
+| `WLoopResetApplier` | reconnect initializes `Applier` to 0 instead of `disk.applied[c]` | `ExactlyOnce` |
+| `WLoopNoTick` | `Tick` advances the pass without sending state or acknowledgements | `Converges` |
+| `WLoopTurnReuse` | recovery resets the next turn number to 1 after cutting an open turn | `TurnsIncrease` |
+| `WLoopCrashDropsDurable` | a crash wipes the durable store instead of recovering from disk | `DurableMonotonic` |
+| `WLoopOutBeforeFlush` | `Hold` writes a send straight out while adding a record to the batch | `NoOutBeforeFlush` |
+
+The binding: `tests/server/pass_walk.cpp` (`pass_walk <seed> <steps> [--fault release-before-flush | state-before-flush | tick-before-flush | no-hold | release-on-fail] <out.tla>`) drives `PassOrder` and `take_pass_step` (the same dispatch `Server::run` runs each pass through) over the real `DurableStore`, `Store`, `Journal` and `MemFs` (injecting `fail_at` before log append, between log append and sync, and inside compaction, and `MemFs::crash` with reverted, kept and random torn plans), `Hub`, `Drivers` and `Supervisor` over an in-memory `Drivers::Host` whose pipe writes are decoded by `driver::ServerReader`, and two windows over `FakeSender`/`FakeReceiver` and `Applier`. At every step it reopens a volatile-reverted copy of `MemFs` to record `disk` directly from durable bytes without shadow state. `LoopPassTrace.tla` checks five seeded walks per commit and rejects all five faulty pass configurations (`tlc_loop_pass_trace_faulty_*_rejected`).
+
 ## Running the checks
 
 TLC needs Java 11 or newer and `tla2tools.jar`. The tests find the jar through `TLA2TOOLS_JAR`, and java through `JAVA` or `PATH`. Without `TLA2TOOLS_JAR` every `model` test fails and says what to set.

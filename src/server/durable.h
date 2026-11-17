@@ -40,6 +40,11 @@ public:
     // until flush() has returned true. False, with why, when the sync failed: then nothing of the batch may be told.
     void beginBatch();
     bool flush(std::string* why);
+    bool batching() const { return store_ != nullptr && store_->batching(); }
+    std::uint64_t durableSeq() const { return store_ == nullptr ? 0 : store_->journal().durable_seq(); }
+    std::uint64_t unflushed() const {
+        return store_ == nullptr ? 0 : store_->journal().last_seq() - store_->journal().durable_seq();
+    }
 
 private:
     std::unique_ptr<store::Store> store_;

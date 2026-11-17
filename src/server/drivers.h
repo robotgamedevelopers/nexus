@@ -67,6 +67,20 @@ constexpr std::size_t kReadChunk = 64 * 1024;
 
 class Drivers : public sync::Responder {
 public:
+    // Process and pipe seam so tests and trace walks (tests/server/pass_walk.cpp) run Drivers over in-memory pipes
+    // with no OS processes, files or clock; null Options::host uses PosixHost.
+    class Host {
+    public:
+        virtual ~Host() = default;
+        virtual pid_t spawn(const std::vector<std::string>& argv, int* in, int* out, std::string* why) = 0;
+        virtual ssize_t write(int fd, const char* data, std::size_t size, int* err) = 0;
+        virtual ssize_t read(int fd, char* data, std::size_t size, int* err) = 0;
+        virtual void close(int fd) = 0;
+        virtual void killGroup(pid_t pid, int sig) = 0;
+        virtual bool exited(pid_t pid) = 0;
+        virtual std::string reap(pid_t pid) = 0;
+    };
+
     struct Options {
         std::string table;              // the drivers file's path
         std::string home;               // the home directory, for a friend with no directory
@@ -82,6 +96,9 @@ public:
         std::function<std::string()> tableNow{};   // the drivers file's present path, read each time (the server
                                                    // gives it through its held server directory, so a directory moved
                                                    // aside keeps its file); `table` by name when empty
+        Host* host = nullptr;           // null: PosixHost
+        std::function<bool(std::string* text, std::string* problem)> readTable{};
+        bool quiet = false;
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.
@@ -187,9 +204,11 @@ private:
     void tell(Process& p, const std::string& line, Millis now);
     void readSome(sync::SessionId id, Slot& t, Output& out, Millis now, std::size_t limit);
     void collect(sync::SessionId id, Slot& t, Output& out, Millis now);
+    void log(sync::SessionId id, const std::string& what) const;
 
     const sync::SessionStore& store_;
     Options options_;
+    Host* host_ = nullptr;
     sync::Hub* hub_ = nullptr;
     std::map<sync::SessionId, Slot> slots_;
     // A send between send() and sent().
