@@ -291,12 +291,18 @@ At most one supervisor runs per `<server dir>` under `flock(LOCK_EX)` on `superv
    shutdown stops `serve` cleanly and exits `0` without setting `supervise/stopped`, so the next boot starts `current`.
 4. **Post-start failure rollback and shunning**: if `current` crashes (`exit != 0, 75`) `2` times
    (`kDefaultMaxCrashesBeforeRollback`) after starting and an unshunned `previous` build exists in `builds/active`, the
-   supervisor acquires `handover/`'s exclusive lock, records the failed build in `shun`, switches `builds/active` back
-   to `previous`, and starts `previous`. Persisting `shun` in `supervise/state` prevents a dual-broken pair from
-   ping-ponging across supervisor restarts; an explicit `nexus-server handover <hash>` unshuns `<hash>`. Once a build
-   serves stably for `60 s` (`kStableMs`), `crashes` resets to `0` while keeping `shun`.
-5. **Bounded halt (`exit 78`)**: if no unshunned `previous` build exists, the supervisor backs off and halts after `5`
-   consecutive crashes (`kDefaultMaxRestarts`), persisting `halted 1` and exiting `78` (`EX_CONFIG`).
+   supervisor acquires `handover/`'s exclusive lock, checks whether `previous` can read `<server dir>/store` and
+   `nexus-config` on disk via `Builds::rollbackTo`, and either switches `builds/active` back to `previous` (recording
+   the failed build in `shun`) or, when `current` already wrote a newer breaking format to disk that `previous` cannot
+   read, shuns `previous` without spinning so `current` finishes its remaining retries cleanly. Persisting `shun` in
+   `supervise/state` prevents a dual-broken pair or a refused format rollback from ping-ponging or spinning across
+   supervisor restarts; an explicit `nexus-server handover <hash>` (including one resumed after a mid-handover cut)
+   unshuns `<hash>`. Once a build serves stably for `60 s` (`kStableMs`), `crashes` resets to `0` while keeping `shun`.
+5. **Bounded halt (`exit 78`) and old-layout entry guard**: if no unshunned, format-compatible `previous` build exists,
+   the supervisor backs off and halts after `5` consecutive crashes (`kDefaultMaxRestarts`), persisting `halted 1` and
+   exiting `78` (`EX_CONFIG`). Before entering the supervision loop (or running `nexus-server handover` on
+   `~/.nexus/server`), `migrateOldLayout` moves any cold pre-`~/.nexus/server` state once and exits `1` cleanly if an
+   old server still answers on `~/.nexus/server.sock` without counting crashes against `current`.
 
 ### OS service units
 

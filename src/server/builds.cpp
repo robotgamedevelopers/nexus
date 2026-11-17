@@ -1055,7 +1055,7 @@ struct Builds::Run {
     }
 
     // current <hash> (back: an empty hash): the pointer moved to the pair (target, current) by one rename.
-    int sw(const std::string& want, bool back, bool allowUntested = false) {
+    int sw(const std::string& want, bool back, bool allowUntested = false, bool waitStoreRelease = false) {
         Status s = begin();
         if (!s.is_ok()) {
             return finish(s);
@@ -1071,11 +1071,13 @@ struct Builds::Run {
             if (!p.exists) {
                 return finish(Status::refused("no build is current, so there is none to switch back to"));
             }
-            if (p.previous.empty()) {
-                return finish(Status::refused("build " + p.current + " is current and there is no previous build to "
-                                              "switch back to"));
+            if (want.empty()) {
+                if (p.previous.empty()) {
+                    return finish(Status::refused("build " + p.current + " is current and there is no previous build "
+                                                  "to switch back to"));
+                }
+                target = p.previous;
             }
-            target = p.previous;
         }
         if (p.exists && target == p.current) {
             r.out.push_back("already current " + target);
@@ -1152,7 +1154,14 @@ struct Builds::Run {
                 po.test_locks_ignored = b.options_.test_locks_ignored;
                 std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
                 DiskFormats disk;
-                s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                const std::uint64_t storeWaitBegan = now();
+                for (;;) {
+                    s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                    if (s.code() != Status::Code::Busy || !waitStoreRelease || now() - storeWaitBegan >= 250) {
+                        break;
+                    }
+                    pause(kLockRetryMs);
+                }
                 if (s.code() == Status::Code::Busy) {
                     return finish(Status::refused("cannot switch back to build " + target +
                                                   " while a running server holds " + b.serverDir_ +
@@ -1563,6 +1572,38 @@ struct Builds::Run {
             if (!refusal.empty()) {
                 return end(Status::refused(refusal));
             }
+            bool downgradeWrites = false;
+            for (const std::string& name : kCheckedFormats) {
+                const Format* c = findFormat(cur.formats, name);
+                const Format* t = findFormat(m.formats, name);
+                if (c != nullptr && (t == nullptr || t->writes < c->writes)) {
+                    downgradeWrites = true;
+                    break;
+                }
+            }
+            if (downgradeWrites && !fault(Fault::MultiHopNoStoreCheck)) {
+                store::PosixOptions po;
+                po.now_ms = b.options_.now_ms;
+                po.sleep_ms = b.options_.sleep_ms;
+                po.test_fs_type = b.options_.test_fs_type;
+                po.test_locks_ignored = b.options_.test_locks_ignored;
+                std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
+                DiskFormats disk;
+                s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                if (s.code() == Status::Code::Busy) {
+                    return end(Status::refused("cannot switch to build " + target +
+                                               " while a running server holds " + b.serverDir_ +
+                                               "/store open, because it reads older formats than " + p.current +
+                                               " writes; stop the server first (`nexus-server stop`)"));
+                }
+                if (!s.is_ok()) {
+                    return end(s);
+                }
+                const std::string diskRef = diskFormatsRefusal(m.formats, target, disk);
+                if (!diskRef.empty()) {
+                    return end(Status::refused(diskRef));
+                }
+            }
         }
         const std::string link = b.serverDir_ + "/" + kStable;
         struct stat st;
@@ -1606,6 +1647,14 @@ int Builds::checkSwitch(const std::string& hash, Result& r, bool allowUntested) 
 int Builds::back(Result& r) {
     Run run(*this, r);
     return run.sw(std::string(), true);
+}
+
+int Builds::rollbackTo(const std::string& hash, Result& r) {
+    Run run(*this, r);
+    if (!hash.empty() && !isHash(hash)) {
+        return run.end(Status::refused("`" + hash + "` is not a build's hash (64 hex digits; `builds list`)"));
+    }
+    return run.sw(hash, true, false, true);
 }
 
 int Builds::prune(std::size_t keep, Result& r) {

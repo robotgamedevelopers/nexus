@@ -121,6 +121,10 @@ struct StoreOptions {
     // Test-only, for migration_walk --fault refuse-unknown-change: replay_record refuses a framed record on a session
     // whose only changes are unknown Change::Kinds, as the store before layer 5 did.
     bool test_refuse_unknown_change = false;
+    // Test-only, so simulated newer-format builds (e.g. 5/5 in takeover_walk and fake_build_server) can open and
+    // replay records/snapshots they wrote above kRecordFormat / kSnapshotFormat.
+    std::uint8_t max_record_reader = kRecordFormat;
+    std::uint8_t max_snapshot_reader = kSnapshotFormat;
 };
 
 // What open() found.

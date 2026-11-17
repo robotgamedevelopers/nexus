@@ -754,3 +754,99 @@ if(NOT WIN32)
                            WALK ${seed} 300 --fault ${fault})
     endforeach()
 endif()
+
+# Layer 6 end-to-end takeover composition & trace binding (models/takeover):
+add_executable(takeover_test takeover_test.cpp)
+target_link_libraries(takeover_test PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store)
+target_compile_options(takeover_test PRIVATE ${warnings})
+foreach(group format_rollback_handover format_rollback_supervision format_refused_shuns_and_halts migration_guards)
+    add_test(NAME takeover_unit_${group} COMMAND takeover_test ${group})
+    set_tests_properties(takeover_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
+endforeach()
+
+if(NOT WIN32)
+    add_executable(takeover_functional takeover_functional.cpp)
+    target_link_libraries(takeover_functional PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store)
+    target_compile_options(takeover_functional PRIVATE ${warnings})
+    add_dependencies(takeover_functional nexus_fake_build_server)
+
+    set(takeover_func_base "/tmp/nexus-tk-${handover_build_hash}")
+    foreach(case e2e_migration_handover_drain e2e_post_start_crash_format5_compat_rollback
+                 e2e_breaking_format5_refuses_rollback_and_halts)
+        add_test(NAME takeover_functional_${case} COMMAND takeover_functional
+                 $<TARGET_FILE:nexus_fake_build_server> ${case} ${takeover_func_base}-${case})
+        set_tests_properties(takeover_functional_${case} PROPERTIES LABELS functional TIMEOUT 120)
+    endforeach()
+
+    add_executable(takeover_walk takeover_walk.cpp)
+    target_link_libraries(takeover_walk PRIVATE nexus_supervision nexus_handover nexus_builds nexus_store
+                          Threads::Threads)
+    target_compile_options(takeover_walk PRIVATE ${warnings})
+    add_dependencies(model_checks takeover_walk takeover_test)
+
+    set(takeover_models "${PROJECT_SOURCE_DIR}/models/takeover")
+    function(takeover_tlc_test name cfg module expect)
+        cmake_parse_arguments(T "NIGHTLY" "PROPERTY;WORKERS;CAP" "WALK" ${ARGN})
+        if(NOT T_WORKERS)
+            set(T_WORKERS 2)
+        endif()
+        set(label model)
+        if(NOT T_CAP)
+            set(T_CAP 60)
+        endif()
+        if(T_NIGHTLY)
+            set(label model_nightly)
+        endif()
+        math(EXPR ctest_timeout "${T_CAP} + 30")
+        set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${takeover_models} -DMODULE=${module}
+                 -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${T_CAP})
+        if(T_PROPERTY)
+            list(APPEND defs -DPROPERTY=${T_PROPERTY})
+        endif()
+        if(T_WALK)
+            string(REPLACE ";" "," walk_args "${T_WALK}")
+            list(APPEND defs -DWALK=$<TARGET_FILE:takeover_walk> -DWALK_ARGS=${walk_args}
+                 -DWALK_OUT=TakeoverTraceData.tla)
+        endif()
+        add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${placement_tlc})
+        set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
+    endfunction()
+
+    takeover_tlc_test(tlc_takeover_spec Takeover.cfg Takeover pass WORKERS 4 CAP 80)
+    takeover_tlc_test(tlc_takeover_format_rollback TakeoverFormatRollback.cfg Takeover pass WORKERS 4 CAP 80)
+    takeover_tlc_test(tlc_takeover_large TakeoverLarge.cfg Takeover pass WORKERS 8 NIGHTLY CAP 600)
+
+    takeover_tlc_test(tlc_takeover_witness_ignore_live_old witnesses/WTakeoverIgnoreLiveOld.cfg Takeover action
+                      PROPERTY LiveOldUntouched)
+    takeover_tlc_test(tlc_takeover_witness_skip_migration witnesses/WTakeoverSkipMigration.cfg Takeover invariant
+                      PROPERTY OldMigratedBeforeServe)
+    takeover_tlc_test(tlc_takeover_witness_serve_untested witnesses/WTakeoverServeUntested.cfg Takeover invariant
+                      PROPERTY CurrentAlwaysTested)
+    takeover_tlc_test(tlc_takeover_witness_no_handover_lock witnesses/WTakeoverNoHandoverLock.cfg Takeover invariant
+                      PROPERTY HandoverLockSerialized)
+    takeover_tlc_test(tlc_takeover_witness_blind_rollback witnesses/WTakeoverBlindRollback.cfg Takeover invariant
+                      PROPERTY NeverIncompatibleCurrent)
+    takeover_tlc_test(tlc_takeover_witness_drain_cuts_turn witnesses/WTakeoverDrainCutsTurn.cfg Takeover action
+                      PROPERTY OpenTurnPreserved)
+    takeover_tlc_test(tlc_takeover_witness_stop_restarts witnesses/WTakeoverStopRestarts.cfg Takeover action
+                      PROPERTY StopHonored)
+    takeover_tlc_test(tlc_takeover_witness_drain_stops witnesses/WTakeoverDrainStops.cfg Takeover action
+                      PROPERTY DrainNeverStops)
+    takeover_tlc_test(tlc_takeover_witness_version_only_rollback witnesses/WTakeoverVersionOnlyRollback.cfg Takeover
+                      temporal PROPERTY WorkingFallbackServes)
+    takeover_tlc_test(tlc_takeover_witness_spin_on_format_refusal witnesses/WTakeoverSpinOnFormatRefusal.cfg Takeover
+                      temporal PROPERTY SettlesOrHalts)
+    takeover_tlc_test(tlc_takeover_witness_blame_build_for_live_old witnesses/WTakeoverBlameBuildForLiveOld.cfg Takeover
+                      temporal PROPERTY WorkingFallbackServes)
+
+    foreach(seed 1 2 3 4)
+        takeover_tlc_test(tlc_takeover_trace_seed_${seed} TakeoverTrace.cfg TakeoverTrace invariant
+                          PROPERTY TraceUnfinished WALK ${seed} 120)
+    endforeach()
+
+    foreach(fault ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn
+                  stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old)
+        takeover_tlc_test(tlc_takeover_trace_${fault}_rejected TakeoverTrace.cfg TakeoverTrace pass
+                          WALK 1 120 --fault ${fault})
+    endforeach()
+endif()

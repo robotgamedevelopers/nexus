@@ -170,11 +170,19 @@ jobs:
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
                       -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF "${launcher[@]}" \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
+            "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
             "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the model checks, wire_test, nexus_versions_test and nexus_terminal_watch_tests
-        run: cmake --build build --parallel "$JOBS" --target model_checks wire_test nexus_versions_test nexus_terminal_watch_tests
+      - name: Build the unit and walk programs
+        run: >-
+          cmake --build build --parallel "$JOBS" --target
+          model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+          store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+          nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+          overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+          journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+          migration_walk takeover_walk
       - name: Unit tests and trace walks under the sanitizers
         shell: bash
         run: |
@@ -182,169 +190,172 @@ jobs:
           build/tests/model/model_test
           build/tests/model/overlay_test
           build/tests/window/nexus_terminal_watch_tests
-          mkdir -p walks
-          for seed in 1 2 3; do
-            build/tests/model/overlay_walk "$seed" 1000 walks/overlay.tla
-            build/tests/model/watch_walk "$seed" 1000 walks/watch.tla
-          done
-          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
-            build/tests/model/overlay_walk 1 1000 "$fault" walks/overlay.tla
-          done
-          for fault in --faulty-aba --faulty-stale; do
-            build/tests/model/watch_walk 1 1000 "$fault" walks/watch.tla
-          done
-          for friends in 0 1 2 3; do
-            for seed in 1 2 3 4 5 6 7 8; do
-              build/tests/model/trace_walk "$seed" 1000 "$friends" walks/walk.tla
-            done
-            build/tests/model/trace_walk 1 1000 "$friends" --no-sprint walks/walk.tla
-          done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
-            build/tests/model/trace_walk 1 1000 3 "$fault" walks/walk.tla
-          done
-          # the friends coming and going, and the friend strip's walks and faults
-          build/tests/model/trace_walk 10 1000 3 --friends-churn walks/walk.tla
-          build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn walks/walk.tla
-          build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend walks/walk.tla
-          for seed in 1 2 3; do
-            build/tests/model/strip_walk "$seed" 400 2 walks/strip.tla
-          done
-          build/tests/model/strip_walk 4 400 3 walks/strip.tla
-          for fault in --faulty-forget --faulty-wait; do
-            build/tests/model/strip_walk 1 400 2 "$fault" walks/strip.tla
-          done
           build/tests/sync/sync_test
-          for windows in 1 2 3 4; do
-            for seed in 1 2 3 4; do
-              build/tests/sync/link_walk "$seed" 1000 "$windows" walks/link.tla
-            done
-          done
-          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
-            build/tests/sync/link_walk 1 1000 2 "$fault" walks/link.tla
-          done
-          # the link making its session again: the rules, then their walks and faults
           build/tests/sync/redial_test
-          for seed in 1 2 3 4; do
-            build/tests/sync/reconnect_walk "$seed" 1000 walks/reconnect.tla
-          done
-          for fault in --faulty-cached --faulty-no-reset; do
-            build/tests/sync/reconnect_walk 1 1000 "$fault" walks/reconnect.tla
-          done
-          # the secret dialog: every unit group (the leak test among them), then its walks, each failing if a value's
-          # bytes reach anything but the keeper
           build/tests/server/secrets_test
-          for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
-            build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
-          done
-          build/tests/sync/secrets_walk 9 2000 --faulty-store-late walks/secrets.tla
-          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
-            build/tests/sync/secrets_walk 1 2000 "$fault" walks/secrets.tla
-          done
-          # in-app sign-in: every unit group (the leak test among them), then its walks, each failing if a log line
-          # holds a URL, a state, a code or a login
           build/tests/server/signin_test
-          for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/sync/signin_walk "$seed" 6000 walks/signin.tla
-          done
-          # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
-          # journal's walks
           build/tests/store/store_test
           build/tests/store/durable_test
-          for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/store/journal_walk "$seed" 1000 walks/journal.tla
-          done
-          for fault in accept-torn cut-too-far no-truncate no-sync; do
-            build/tests/store/journal_walk 1 1000 --fault "$fault" walks/journal.tla
-          done
-          # the store's lock and the start-up order: their walks and the faulty orders, all at once (each on real files,
-          # about 9 s under the sanitizers, each with its own trace and store directory; any failure fails the step)
-          lock_pids=()
-          for seed in 1 2 3 4 5; do
-            build/tests/store/store_lock_walk "$seed" 2000 "walks/store_lock_$seed.tla" & lock_pids+=($!)
-          done
-          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
-            build/tests/store/store_lock_walk 1 2000 "$fault" "walks/store_lock$fault.tla" & lock_pids+=($!)
-          done
-          for pid in "${lock_pids[@]}"; do
-            wait "$pid"
-          done
-          # the driver protocol: every group (the parser and the reader over every chunking)
           build/tests/driver/driver_protocol_test
-          # the driver supervisor: every group, then its walks and their faults
           build/tests/server/supervisor_test
-          for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/server/supervisor_walk "$seed" 1000 walks/supervisor.tla
-          done
-          for fault in --faulty-turn --faulty-resume; do
-            build/tests/server/supervisor_walk 1 1000 "$fault" walks/supervisor.tla
-          done
-          # the friend taken out of friends.json and put back, and a start holding no friends list, and their faults
-          for seed in 13 14 15; do
-            build/tests/server/supervisor_walk "$seed" 600 --friends-churn walks/supervisor.tla
-          done
-          build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove walks/supervisor.tla
-          build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown walks/supervisor.tla
-          # one pass of nexus-server's loop: unit checks, then its walks and their faults
           build/tests/server/server_pass_test
-          for seed in 1 2 3 4 5 6 7 8; do
-            build/tests/server/pass_walk "$seed" 250 walks/loop_pass.tla
-          done
-          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
-            build/tests/server/pass_walk 1 80 --fault "$fault" walks/loop_pass.tla
-          done
-          # placement, handover and supervision: their unit groups (MemFs crashes, drain, rollback, unit files,
-          # shunning), then their real-file walks overlapped in one wave (250 steps for handover and 150 for
-          # supervision under APFS F_FULLFSYNC; sanitizers-linux and the model shards run the full 600 and 350)
           build/tests/server/builds_test
           build/tests/server/handover_test
           build/tests/server/supervision_test
-          fs_walk_pids=()
-          for seed in 1 2 3; do
-            mkdir -p "walks/builds_$seed"
-            build/tests/server/builds_walk "$seed" 800 "walks/builds_$seed/trace.tla" & fs_walk_pids+=($!)
-          done
-          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
-            mkdir -p "walks/builds_${fault_seed%%:*}"
-            build/tests/server/builds_walk "${fault_seed#*:}" 800 --fault "${fault_seed%%:*}" "walks/builds_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
-          done
-          for seed in 1 2 3; do
-            mkdir -p "walks/handover_$seed"
-            build/tests/server/handover_walk "$seed" 250 "walks/handover_$seed/trace.tla" & fs_walk_pids+=($!)
-          done
-          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
-            mkdir -p "walks/handover_${fault_seed%%:*}"
-            build/tests/server/handover_walk "${fault_seed#*:}" 250 --fault "${fault_seed%%:*}" "walks/handover_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
-          done
-          for seed in 1 2 3; do
-            mkdir -p "walks/supervision_$seed"
-            build/tests/server/supervision_walk "$seed" 150 "walks/supervision_$seed/trace.tla" & fs_walk_pids+=($!)
-          done
-          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
-            mkdir -p "walks/supervision_${fault_seed%%:*}"
-            build/tests/server/supervision_walk "${fault_seed#*:}" 150 --fault "${fault_seed%%:*}" "walks/supervision_${fault_seed%%:*}/trace.tla" & fs_walk_pids+=($!)
-          done
-          for pid in "${fs_walk_pids[@]}"; do
-            wait "$pid"
-          done
-          # layer 5 migration and store format against rollback: unit groups, then real-file walks and their faults
           build/tests/server/migration_test
-          mig_pids=()
-          for seed in 1 2 3 4; do
-            mkdir -p "walks/migration_$seed"
-            build/tests/server/migration_walk "$seed" 300 "walks/migration_$seed/trace.tla" & mig_pids+=($!)
-          done
-          for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
-            mkdir -p "walks/migration_${fault_seed%%:*}"
-            build/tests/server/migration_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}" "walks/migration_${fault_seed%%:*}/trace.tla" & mig_pids+=($!)
-          done
-          for pid in "${mig_pids[@]}"; do
-            wait "$pid"
-          done
-          # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
-          # schema's own tables and in nexus's state and actions
+          build/tests/server/takeover_test
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
+          # Bash 3.2-compatible parallel walk runner (macOS /bin/bash has no `wait -n`, and `set -u` rejects empty
+          # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under $RUNNER_TEMP/nexus-walks
+          # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
+          # every exit status.
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
+          launched=0
+          in_batch=0
+          batch_pids=()
+          flush_walks() {
+            if [ "$in_batch" -gt 0 ]; then
+              for pid in "${batch_pids[@]}"; do
+                wait "$pid"
+              done
+            fi
+            batch_pids=()
+            in_batch=0
+          }
+          walk() {
+            local dir="$walks_root/$launched"
+            mkdir -p "$dir"
+            ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
+            batch_pids+=($!)
+            in_batch=$((in_batch + 1))
+            launched=$((launched + 1))
+            if [ "$in_batch" -ge "$TEST_JOBS" ]; then
+              flush_walks
+            fi
+          }
+          for seed in 1 2 3; do
+            walk build/tests/model/overlay_walk "$seed" 1000
+            walk build/tests/model/watch_walk "$seed" 1000
+          done
+          for fault in --faulty-hide-unkeyed --faulty-hotkey-hides; do
+            walk build/tests/model/overlay_walk 1 1000 "$fault"
+          done
+          for fault in --faulty-aba --faulty-stale; do
+            walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for friends in 0 1 2 3; do
+            for seed in 1 2 3 4 5 6 7 8; do
+              walk build/tests/model/trace_walk "$seed" 1000 "$friends"
+            done
+            walk build/tests/model/trace_walk 1 1000 "$friends" --no-sprint
+          done
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
+            walk build/tests/model/trace_walk 1 1000 3 "$fault"
+          done
+          walk build/tests/model/trace_walk 10 1000 3 --friends-churn
+          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --friends-churn
+          walk build/tests/model/trace_walk 1 300 3 --friends-churn --faulty-remove-friend
+          for seed in 1 2 3; do
+            walk build/tests/model/strip_walk "$seed" 400 2
+          done
+          walk build/tests/model/strip_walk 4 400 3
+          for fault in --faulty-forget --faulty-wait; do
+            walk build/tests/model/strip_walk 1 400 2 "$fault"
+          done
+          for windows in 1 2 3 4; do
+            for seed in 1 2 3 4; do
+              walk build/tests/sync/link_walk "$seed" 1000 "$windows"
+            done
+          done
+          for fault in --faulty-applier --faulty-mirror --faulty-tail; do
+            walk build/tests/sync/link_walk 1 1000 2 "$fault"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/sync/reconnect_walk "$seed" 1000
+          done
+          for fault in --faulty-cached --faulty-no-reset; do
+            walk build/tests/sync/reconnect_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/secrets_walk "$seed" 2000
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+            walk build/tests/sync/secrets_walk "$seed" 2000 --format 5
+          done
+          walk build/tests/sync/secrets_walk 9 2000 --faulty-store-late
+          for fault in --faulty-echo --faulty-driver --faulty-driver-echo; do
+            walk build/tests/sync/secrets_walk 1 2000 "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/signin_walk "$seed" 6000
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/store/journal_walk "$seed" 1000
+          done
+          for fault in accept-torn cut-too-far no-truncate no-sync; do
+            walk build/tests/store/journal_walk 1 1000 --fault "$fault"
+          done
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/supervisor_walk "$seed" 1000
+          done
+          for fault in --faulty-turn --faulty-resume; do
+            walk build/tests/server/supervisor_walk 1 1000 "$fault"
+          done
+          for seed in 13 14 15; do
+            walk build/tests/server/supervisor_walk "$seed" 600 --friends-churn
+          done
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-remove
+          walk build/tests/server/supervisor_walk 13 600 --friends-churn --faulty-unknown
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/server/pass_walk "$seed" 250
+          done
+          for fault in release-before-flush state-before-flush tick-before-flush no-hold release-on-fail; do
+            walk build/tests/server/pass_walk 1 80 --fault "$fault"
+          done
+          for seed in 1 2 3 4 5; do
+            walk build/tests/store/store_lock_walk "$seed" 2000
+          done
+          for fault in --faulty-unlocked --faulty-restore-first --faulty-held-refused --faulty-reader-busy --faulty-no-gate; do
+            walk build/tests/store/store_lock_walk 1 2000 "$fault"
+          done
+          # Real-file takeover walks bounded for APFS F_FULLFSYNC (sanitizers-linux and the model shards run the full
+          # 800, 600, 350, 300 and 120 step counts).
+          for seed in 1 2 3; do
+            walk build/tests/server/builds_walk "$seed" 300
+          done
+          for fault_seed in no-lock:1 no-sync:1 tested-program-only:1 reuse-tmp:1 prune-in-use:6 two-renames:1; do
+            walk build/tests/server/builds_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/server/handover_walk "$seed" 200
+          done
+          for fault_seed in no-lock:1 no-sync:1 in-memory-only:1 overwrite-prev:2 no-rollback:1 stop-cuts:1 allow-untested:1 serve-broken:1; do
+            walk build/tests/server/handover_walk "${fault_seed#*:}" 200 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/server/supervision_walk "$seed" 120
+          done
+          for fault_seed in no-sup-lock:1 no-handover-lock:1 drain-stops:1 stop-restarts:1 no-post-start-rollback:1 ping-pong-rollback:2 no-halt-bound:2 in-memory-state:1 serve-untested:1; do
+            walk build/tests/server/supervision_walk "${fault_seed#*:}" 120 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/server/migration_walk "$seed" 100
+          done
+          for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
+            walk build/tests/server/migration_walk "${fault_seed#*:}" 100 --fault "${fault_seed%%:*}"
+          done
+          for seed in 1 2 3 4; do
+            walk build/tests/server/takeover_walk "$seed" 40
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            walk build/tests/server/takeover_walk 1 40 --fault "$fault"
+          done
+          flush_walks
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
+          echo "$launched walks passed"
 
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
   # tests (a scripted query: no process, clock or network), and the protocol's conformance cases run against it as a
@@ -480,9 +491,10 @@ jobs:
           fi
           # The runs' directories under a temporary directory of this runner's own: two Claude sandboxes at once whose
           # working directories share an ancestor a few levels up fail each other's commands now and then (bwrap:
-          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). A short path: under the
-          # job's runner.temp the sandbox could not make its sockets ("Failed to create bridge sockets").
-          own="${TMPDIR:-/tmp}/$RUNNER_NAME"
+          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
+          # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
+          # limit on long runner names).
+          own="/tmp/$RUNNER_NAME"
           mkdir -p "$own"
           echo "TMPDIR=$own" >> "$GITHUB_ENV"
           caches="$HOME/.cache/nexus-ci"
@@ -654,12 +666,12 @@ jobs:
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test
+              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
           - part: walks
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk
+              migration_walk takeover_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -748,6 +760,8 @@ jobs:
           unit build/tests/server/supervision_test
           # layer 5 migration and store format against rollback
           unit build/tests/server/migration_test
+          # layer 6 end-to-end takeover composition seams
+          unit build/tests/server/takeover_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
           unit build/tests/wire/wire_test
@@ -759,17 +773,21 @@ jobs:
           echo "$launched unit programs passed"
       # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
       # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
-      # once, at most TEST_JOBS at a time, each in a directory of its own under walks/ holding its trace and its output.
-      # Any failure fails the step, with that walk's command and output.
+      # once, at most TEST_JOBS at a time, each in a directory of its own under $RUNNER_TEMP/nexus-walks (outside
+      # $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout) holding its trace and its
+      # output. Any failure fails the step, with that walk's command and output.
       - name: Trace walks and their faults under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
         run: |
           set -euo pipefail
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           launched=0
           running=0
           walk() {
-            local dir="walks/$launched"
+            local dir="$walks_root/$launched"
             mkdir -p "$dir"
             ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
             launched=$((launched + 1))
@@ -901,10 +919,19 @@ jobs:
           for fault_seed in no-lock:1 ignore-live-old:1 clobber-new:1 no-sync:3 no-plan:3 leave-old:3 blind-back:1 multihop:1 refuse-unknown-change:1; do
             walk build/tests/server/migration_walk "${fault_seed#*:}" 300 --fault "${fault_seed%%:*}"
           done
+          # layer 6 end-to-end takeover walks across all five layers and their eleven faults
+          for seed in 1 2 3 4; do
+            walk build/tests/server/takeover_walk "$seed" 120
+          done
+          for fault in ignore-live-old skip-migration serve-untested no-handover-lock blind-rollback drain-cuts-turn stop-restarts drain-stops version-only-rollback spin-on-format-refusal blame-build-for-live-old; do
+            walk build/tests/server/takeover_walk 1 120 --fault "$fault"
+          done
           while [ "$running" -gt 0 ]; do
             wait -n
             running=$((running - 1))
           done
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           echo "$launched walks passed"
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
@@ -1015,6 +1042,15 @@ jobs:
           - shard: migration
             run: '^tlc_migration_'
             build: migration_walk
+          # End-to-end takeover composition across all five layers (models/takeover/Takeover.tla): its temporal spec
+          # instances in `takeover-spec`, and its eleven witnesses plus real five-layer walks and eleven faults in
+          # `takeover-rest`.
+          - shard: takeover-spec
+            run: '^tlc_takeover_(spec|format_rollback)$'
+          - shard: takeover-rest
+            run: '^tlc_takeover_'
+            build: takeover_walk
+            skip: '^tlc_takeover_(spec|format_rollback)$'
           # The Claude driver's turn and ask-secret instances (models/ClaudeDriver.tla), each in a shard of its own
           # with no Node setup, and its twelve witnesses and nine code traces in claude-rest (node: true).
           - shard: claude-driver
@@ -1100,7 +1136,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang
