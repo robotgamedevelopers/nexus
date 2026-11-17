@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { isApiKeyVariable, scrub } from '../../src/env.js';
-import { cut, decodeServerLine, encode, isSessionId, kMaxLineBytes, LineReader, oneLine } from '../../src/protocol.js';
+import {
+    cut, decodeServerLine, encode, isSecretWhy, isSessionId, kMaxLineBytes, kMaxSecretWhyBytes, LineReader, oneLine,
+} from '../../src/protocol.js';
 
 function decode(text: string): ReturnType<typeof decodeServerLine> {
     return decodeServerLine(Buffer.from(text));
@@ -23,6 +25,17 @@ void test('the server\'s messages', () => {
     assert.deepEqual(decode('{"kind":"stop","turn":9007199254740991}'), { message: { kind: 'stop', turn: 9007199254740991 } });
     assert.deepEqual(decode('{"kind":"settings","model":"opus"}'), { message: { kind: 'settings', model: 'opus' } });
     assert.deepEqual(decode('{"kind":"settings","model":null,"effort":"low"}'), { message: { kind: 'settings', effort: 'low' } });
+    assert.deepEqual(decode('{"kind":"server","features":["secrets","later"]}'),
+        { message: { kind: 'server', features: ['secrets', 'later'] } });
+    assert.deepEqual(decode('{"kind":"server","features":[]}'), { message: { kind: 'server', features: [] } });
+    assert.deepEqual(decode('{"kind":"secret","ask":4,"outcome":"stored"}'),
+        { message: { kind: 'secret', ask: 4, outcome: 'stored' } });
+    assert.deepEqual(decode('{"kind":"secret","ask":4,"outcome":"stored","reason":null}'),
+        { message: { kind: 'secret', ask: 4, outcome: 'stored' } });
+    assert.deepEqual(decode('{"kind":"secret","ask":4,"outcome":"stored","reason":"unconfirmed"}'),
+        { message: { kind: 'secret', ask: 4, outcome: 'stored', reason: 'unconfirmed' } });
+    assert.deepEqual(decode('{"kind":"secret","ask":9007199254740991,"outcome":"refused","reason":"timeout"}'),
+        { message: { kind: 'secret', ask: 9007199254740991, outcome: 'refused', reason: 'timeout' } });
     assert.deepEqual(decode('{"kind":"pause"}'), { message: { kind: 'unknown', name: 'pause' } });
     assert.deepEqual(decode('{"kind":"stop","turn":1,"turn":2}'), { message: { kind: 'stop', turn: 2 } });
 });
@@ -39,6 +52,22 @@ void test('refusals, each with its cause and the turn when it is readable', () =
         ['{"kind":"settings"}', /neither/],
         ['{"kind":"settings","model":""}', /empty "model"/],
         ['{"kind":"settings","effort":3}', /not a string/],
+        ['{"kind":"server"}', /no "features"/],
+        ['{"kind":"server","features":null}', /no "features"/],
+        ['{"kind":"server","features":"secrets"}', /not an array of strings/],
+        ['{"kind":"server","features":["secrets",1]}', /not an array of strings/],
+        ['{"kind":"secret","outcome":"stored"}', /no "ask"/],
+        ['{"kind":"secret","ask":0,"outcome":"stored"}', /"ask"/],
+        ['{"kind":"secret","ask":1.5,"outcome":"stored"}', /"ask"/],
+        ['{"kind":"secret","ask":9007199254740992,"outcome":"stored"}', /"ask"/],
+        ['{"kind":"secret","ask":4}', /no "outcome"/],
+        ['{"kind":"secret","ask":4,"outcome":5}', /not a string/],
+        ['{"kind":"secret","ask":4,"outcome":"maybe"}', /stored, refused/],
+        ['{"kind":"secret","ask":4,"outcome":"refused"}', /no "reason"/],
+        ['{"kind":"secret","ask":4,"outcome":"refused","reason":""}', /empty "reason"/],
+        ['{"kind":"secret","ask":4,"outcome":"refused","reason":3}', /not a string/],
+        ['{"kind":"secret","ask":4,"outcome":"stored","reason":""}', /empty "reason"/],
+        ['{"kind":"secret","ask":4,"outcome":"stored","reason":3}', /not a string/],
         ['{"turn":3}', /no "kind"/, 3],
         ['{"kind":""}', /no "kind"/],
         ['[1]', /not an object/],
@@ -92,6 +121,17 @@ void test('the line limit: refused once when passed, dropped to its newline, the
 void test('the lines the driver writes', () => {
     assert.equal(encode({ kind: 'hello', protocol: 1, harness: 'claude' }), '{"kind":"hello","protocol":1,"harness":"claude"}\n');
     assert.equal(encode({ kind: 'error', cause: 'c', fix: 'f', code: 'harness', turn: 2 }), '{"kind":"error","cause":"c","fix":"f","code":"harness","turn":2}\n');
+    assert.equal(encode({ kind: 'ask-secret', ask: 1, account: 'work', what: 'oauth-token', why: 'the login expired' }),
+        '{"kind":"ask-secret","ask":1,"account":"work","what":"oauth-token","why":"the login expired"}\n');
+    assert.equal(kMaxSecretWhyBytes, 200);
+    for (const ok of ['', 'the login expired', 'a'.repeat(200), 'é'.repeat(100), 'café ✓ 🚀']) {
+        assert.ok(isSecretWhy(ok), JSON.stringify(ok));
+    }
+    for (const bad of ['a'.repeat(201), 'é'.repeat(100) + 'a', 'two\nlines', 'a\rb', 'a\tb', '\u0000', '\u001f',
+        '\u007f', '\u0085', '\u009f', '\u061c', '\u200e', '\u200f', '\u202a', '\u202e', '\u2066', '\u2069',
+        '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff', '\u2028', '\u2029', '\ud83d']) {
+        assert.ok(!isSecretWhy(bad), JSON.stringify(bad));
+    }
     assert.equal(encode({ kind: 'text', turn: 1, delta: 'a b' }).split('\n').length, 2);
     assert.equal(oneLine(' a\tb\r\nc d\u0085 '), 'a b c d');
     assert.equal(oneLine('\ud83d'), '�');

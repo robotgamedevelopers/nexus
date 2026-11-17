@@ -15,7 +15,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Account } from './account.js';
-import type { Harness, HarnessStart } from './driver.js';
+import { kSecretMcpToolName, kSecretToolName, secretMcpServer, type Harness, type HarnessStart } from './driver.js';
 import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 import { sandboxHomeFiles, sandboxTools } from './tools.js';
@@ -82,6 +82,8 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             allowDangerouslySkipPermissions: true,
             canUseTool: (_name, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
             includePartialMessages: true,
+            mcpServers: { nexus: secretMcpServer(start.askSecret) },
+            toolAliases: { [kSecretToolName]: kSecretMcpToolName },
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data), egressPort,
                 env, { hook: true }, start.limited, start.keepsOut),

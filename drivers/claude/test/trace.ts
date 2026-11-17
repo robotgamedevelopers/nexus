@@ -7,8 +7,8 @@ import { writeFileSync } from 'node:fs';
 import type { Changes, DriverState, StepArgs } from '../src/driver.js';
 import type { DriverMessage } from '../src/protocol.js';
 
-/** What a step wrote, as the model names it: a kind and the turn (0 for none). The hello, credential and session
- * lines are not the model's; a run of text pieces is one `text`. */
+/** What a step wrote, as the model names it: a kind and the turn or ask number (0 for none). The hello, credential
+ * and session lines are not the model's; a run of text pieces is one `text`. */
 interface Wire {
     k: string;
     t: number;
@@ -43,6 +43,9 @@ export class Trace {
             case 'tool':
                 w = { k: 'tool', t: m.turn };
                 break;
+            case 'ask-secret':
+                w = { k: 'ask-secret', t: m.ask };
+                break;
             case 'done':
                 w = { k: `done-${m.outcome}`, t: m.turn };
                 break;
@@ -62,6 +65,7 @@ export class Trace {
         this.records.push({
             op,
             turn: args.turn ?? 0,
+            ask: args.ask ?? 0,
             changes: settings(args.changes ?? {}, 'none'),
             kind: args.kind ?? 'none',
             code: args.code ?? 'none',
@@ -77,6 +81,9 @@ export class Trace {
             carry: settings(state.carry, 'none'),
             inUse: settings(state.inUse, 'start'),
             last: state.last,
+            secrets: state.secrets,
+            asking: state.asking,
+            asks: state.asks,
             wrote,
         });
     }
@@ -109,6 +116,7 @@ function tla(v: Value): string {
 /** The module ClaudeDriverTraceData: the instance and the traces. */
 export function traceModule(traces: readonly Trace[], comment: string): string {
     let maxTurn = 1;
+    let maxAsk = 0;
     const values = new Set<string>();
     for (const t of traces) {
         for (const r of t.records) {
@@ -117,6 +125,26 @@ export function traceModule(traces: readonly Trace[], comment: string): string {
                 if (typeof n === 'number' && n > maxTurn) {
                     maxTurn = n;
                 }
+            }
+            for (const key of ['ask', 'asking', 'asks']) {
+                const n = r[key];
+                if (typeof n === 'number' && n > maxAsk) {
+                    maxAsk = n;
+                }
+            }
+            const wrote = r['wrote'];
+            if (Array.isArray(wrote)) {
+                for (const w of wrote) {
+                    if (typeof w === 'object' && !Array.isArray(w) && w['k'] === 'ask-secret') {
+                        const a = w['t'];
+                        if (typeof a === 'number' && a > maxAsk) {
+                            maxAsk = a;
+                        }
+                    }
+                }
+            }
+            if ((r['op'] === 'server' || r['op'] === 'ask-refused') && maxAsk < 1) {
+                maxAsk = 1;
             }
             for (const key of ['changes', 'pending', 'carry', 'inUse']) {
                 for (const v of Object.values(r[key] as Record<string, Value>)) {
@@ -131,6 +159,7 @@ export function traceModule(traces: readonly Trace[], comment: string): string {
         '---- MODULE ClaudeDriverTraceData ----',
         `\\* ${comment}`,
         `TraceMaxTurn == ${String(maxTurn)}`,
+        `TraceMaxAsk == ${String(maxAsk)}`,
         `TraceFields == {${kFields.map((f) => JSON.stringify(f)).join(', ')}}`,
         `TraceValues == {${[...values].sort().map((v) => JSON.stringify(v)).join(', ')}}`,
         'Traces == <<',

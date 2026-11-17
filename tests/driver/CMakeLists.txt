@@ -34,7 +34,8 @@ if(NOT WIN32)
 
     set(conformance_dir "${CMAKE_CURRENT_BINARY_DIR}/conformance")
     file(MAKE_DIRECTORY "${conformance_dir}")
-    set(conformance_cases exchange refused not_json order send_while_open eof_while_open)
+    set(conformance_cases exchange refused not_json order send_while_open eof_while_open
+        secret_ask secret_without_server)
     foreach(case ${conformance_cases})
         add_test(NAME driver_conformance_fake_${case}
             COMMAND driver_conformance_test ${case} fake $<TARGET_FILE:nexus_fake_driver>
@@ -54,18 +55,27 @@ if(NOT WIN32)
     endif()
 endif()
 
-# The Claude driver's turns (models/ClaudeDriver.tla), label model: the spec on its small instance, every property;
-# a reversed witness per property, each a bug TLC must reject; and the driver's traces, each a behaviour of the spec:
-# its unit tests' and its walk's (drivers/claude/test/walk.ts) over several seeds, with three faulty walks rejected.
-# The traces need Node and the driver built (npm ci && npm run build in drivers/claude), as the model job does.
-tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4)
-# Nightly: both settings (model and effort), two turns: 127,240 states, 16 s on four workers in CI.
+# The Claude driver's turns (models/ClaudeDriver.tla), label model: the spec on its two per-commit instances, each in
+# a CI shard of its own (SHARD: capped at 80 s, with no Node build); a reversed witness per property, each a bug TLC
+# must reject; and the driver's traces, each a behaviour of the spec: its unit tests' and its walk's
+# (drivers/claude/test/walk.ts) over several seeds, with four faulty walks rejected, in claude-rest (node: true).
+tlc_test(tlc_claude_driver ClaudeDriver MCClaudeDriver.cfg pass WORKERS 4 SHARD)
+tlc_test(tlc_claude_driver_secrets ClaudeDriver MCClaudeDriverSecrets.cfg pass WORKERS 4 SHARD)
+# Nightly: both settings (model and effort), two turns: 127,240 states, 16 s on four workers in CI; and three turns
+# with two secret asks and two setting values (197,452 states, 20 s on eight workers).
 tlc_test(tlc_claude_driver_two_settings ClaudeDriver MCClaudeDriverTwo.cfg pass WORKERS 8 NIGHTLY)
+tlc_test(tlc_claude_driver_secrets_wide ClaudeDriver MCClaudeDriverSecretsWide.cfg pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_claude_driver_witness_done_left_open WDrvDoneLeftOpen WDrvDoneLeftOpen.cfg invariant PROPERTY OneDone)
 tlc_test(tlc_claude_driver_witness_apply_during_interrupt WDrvApplyDuringInterrupt WDrvApplyDuringInterrupt.cfg
          invariant PROPERTY StopNeverLater)
+tlc_test(tlc_claude_driver_witness_ask_blocks_stop WDrvAskBlocksStop WDrvAskBlocksStop.cfg invariant
+         PROPERTY AskOnlyRunning)
 tlc_test(tlc_claude_driver_witness_refusal_in_block WDrvRefusalInBlock WDrvRefusalInBlock.cfg action
          PROPERTY NoDoneInBlock)
+tlc_test(tlc_claude_driver_witness_ask_without_secrets WDrvAskWithoutSecrets WDrvAskWithoutSecrets.cfg action
+         PROPERTY AskGate)
+tlc_test(tlc_claude_driver_witness_two_asks_open WDrvTwoAsksOpen WDrvTwoAsksOpen.cfg action PROPERTY AskGate)
+tlc_test(tlc_claude_driver_witness_stale_secret WDrvStaleSecret WDrvStaleSecret.cfg action PROPERTY SecretMatchesAsk)
 tlc_test(tlc_claude_driver_witness_lost_start_settings WDrvLostStartSettings WDrvLostStartSettings.cfg action
          PROPERTY SettingsNeverChangeOpen)
 tlc_test(tlc_claude_driver_witness_stop_drops_settings WDrvStopDropsSettings WDrvStopDropsSettings.cfg action
@@ -80,13 +90,16 @@ foreach(seed 1 2 3 4)
              SEED ${seed} STEPS 600)
 endforeach()
 # The binding can fail: a driver that drops a stopped turn's settings (seed 1 stops a turn that carries settings), one
-# whose refusal leaves a text block open (seed 5 refuses mid-block), and one that keeps a stop for a later turn.
+# whose refusal leaves a text block open (seed 3 refuses mid-block), one that keeps a stop for a later turn, and one
+# that writes ask-secret without a server line naming secrets.
 tlc_test(tlc_claude_driver_trace_faulty_settings_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
          PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY settings)
 tlc_test(tlc_claude_driver_trace_faulty_refusal_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
-         PROPERTY TraceMatches DRIVERWALK SEED 5 STEPS 600 FAULTY refusal)
+         PROPERTY TraceMatches DRIVERWALK SEED 3 STEPS 600 FAULTY refusal)
 tlc_test(tlc_claude_driver_trace_faulty_latch_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
          PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY latch)
+tlc_test(tlc_claude_driver_trace_faulty_secret_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
+         PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY secret)
 
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).
 add_dependencies(model_checks driver_protocol_test)

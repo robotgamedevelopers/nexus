@@ -22,23 +22,30 @@
 (*   inUse     the settings the harness runs with ("start": the driver's   *)
 (*             own arguments)                                              *)
 (*   last      the last turn sent                                          *)
+(*   secrets   the server's features line before the first send named      *)
+(*             "secrets" (docs/secrets.md)                                 *)
+(*   asking    the ask number of the open ask-secret the running turn      *)
+(*             waits on, 0 for none                                        *)
+(*   asks      the last ask number this driver minted                      *)
 (*                                                                         *)
 (* History, for the properties: sent (the turns sent), dones (the dones    *)
 (* written per turn), wrote (what the last step wrote), want (the latest   *)
 (* value of each setting received), turnWant (want at the open turn's     *)
-(* send), act (whether the last step was a stop, and of which turn).       *)
+(* send), act (whether the last step was a stop or secret, and which id).  *)
 (*                                                                         *)
-(* The server is the environment: sends (each after the last turn's done,  *)
-(* sequence rule 3), stops for any turn at any time, settings, and the end *)
-(* of input. So is the harness: the credential check's answer, the query   *)
-(* reading a prompt, text, tools, an assistant's error, the result, a      *)
-(* refusal (an API key, overage), the stream failing, a --resume id it     *)
+(* The server is the environment: its features before any send, sends      *)
+(* (each after the last turn's done, sequence rule 3), stops for any turn  *)
+(* at any time, settings, secret answers, and the end of input. So is the  *)
+(* harness: the credential check's answer, the query reading a prompt,     *)
+(* text, tools, nexus_ask_secret calls, an assistant's error, the result,  *)
+(* a refusal (an API key, overage), the stream failing, a --resume id it   *)
 (* does not know, and an interrupt's answer.                               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC
 
 CONSTANTS
     MaxTurn,    \* turns are 1..MaxTurn
+    MaxAsk,     \* secret asks are 1..MaxAsk (0 in instances without them)
     Fields,     \* the settings (the code has model and effort)
     Values,     \* their values
     Resumes     \* how the driver may be started: "none", or "given" (--resume)
@@ -46,18 +53,22 @@ CONSTANTS
 None == "none"
 Start == "start"
 Turns == 1..MaxTurn
+Asks == 1..MaxAsk
+Ids == (0..MaxTurn) \cup (0..MaxAsk)
 Stages == {"none", "waiting", "applying", "pushed", "taken"}
 Failures == {None, "harness", "no-credential"}
 NoChanges == [f \in Fields |-> None]
 Changes == [Fields -> Values \cup {None}]
 Settled == [Fields -> Values \cup {Start}]
-Kinds == {"text", "text-end", "tool", "done-ok", "done-stopped", "done-error",
+Kinds == {"text", "text-end", "tool", "ask-secret", "done-ok", "done-stopped", "done-error",
           "error-harness", "error-no-credential", "error-session-not-found"}
 
 VARIABLES phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
-          sent, dones, wrote, want, turnWant, act
+          secrets, asking, asks, sent, dones, wrote, want, turnWant, act
 
-driver == <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last>>
+secretVars == <<secrets, asking, asks>>
+driver == <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+            secrets, asking, asks>>
 ghost == <<sent, dones, want, turnWant>>
 vars == <<driver, ghost, wrote, act>>
 
@@ -75,9 +86,12 @@ TypeOK ==
     /\ carry \in Changes
     /\ inUse \in Settled
     /\ last \in 0..MaxTurn
+    /\ secrets \in BOOLEAN
+    /\ asks \in 0..MaxAsk
+    /\ asking \in 0..asks
     /\ sent \subseteq Turns
     /\ dones \in [Turns -> Nat]
-    /\ wrote \in Seq([k : Kinds, t : 0..MaxTurn])
+    /\ wrote \in Seq([k : Kinds, t : Ids])
     /\ want \in Settled
     /\ turnWant \in Settled
 
@@ -102,6 +116,9 @@ InitWith(r) ==
     /\ carry = NoChanges
     /\ inUse = [f \in Fields |-> Start]
     /\ last = 0
+    /\ secrets = FALSE
+    /\ asking = 0
+    /\ asks = 0
     /\ sent = {}
     /\ dones = [n \in Turns |-> 0]
     /\ wrote = <<>>
@@ -112,7 +129,7 @@ InitWith(r) ==
 Init == \E r \in Resumes : InitWith(r)
 
 \* The open turn ends with its done (finish): its unapplied settings go back to wait for the next send, under any
-\* newer ones. `before` is what is written ahead of the done.
+\* newer ones, and any open secret ask is dropped. `before` is what is written ahead of the done.
 FinishWith(outcome, before) ==
     /\ wrote' = before \o <<W("done-" \o outcome, open)>>
     /\ dones' = [dones EXCEPT ![open] = @ + 1]
@@ -121,9 +138,10 @@ FinishWith(outcome, before) ==
     /\ stopping' = FALSE
     /\ textOpen' = FALSE
     /\ failure' = None
+    /\ asking' = 0
     /\ carry' = NoChanges
     /\ pending' = Over(carry, pending)
-    /\ UNCHANGED <<phase, resume, intFor, inUse, last, sent, want, turnWant>>
+    /\ UNCHANGED <<phase, resume, intFor, inUse, last, secrets, asks, sent, want, turnWant>>
 
 Finish(outcome) == FinishWith(outcome, CloseText)
 
@@ -138,14 +156,15 @@ RefuseWith(close) ==
     /\ stopping' = FALSE
     /\ textOpen' = FALSE
     /\ failure' = None
+    /\ asking' = 0
     /\ carry' = NoChanges
-    /\ UNCHANGED <<resume, intFor, pending, inUse, last, sent, want, turnWant>>
+    /\ UNCHANGED <<resume, intFor, pending, inUse, last, secrets, asks, sent, want, turnWant>>
 
 Refuse == RefuseWith(CloseText)
 
-\* Claude does not know the --resume id (sequence rule 10): the old harness is closed (with any interrupt unanswered),
-\* a new session starts with the settings in use, and the open turn's prompt goes into it once its credential check
-\* passes. A turn being stopped ends there: nothing runs any more.
+\* Claude does not know the --resume id (sequence rule 10): the old harness is closed (with any interrupt unanswered
+\* and any open ask cancelled), a new session starts with the settings in use, and the open turn's prompt goes into it
+\* once its credential check passes. A turn being stopped ends there: nothing runs any more.
 NotFoundStopping(settings) ==
     /\ phase # "ended"
     /\ resume = "given"
@@ -153,6 +172,7 @@ NotFoundStopping(settings) ==
     /\ resume' = "none"
     /\ phase' = "checking"
     /\ intFor' = 0
+    /\ asking' = 0
     /\ inUse' = settings
     /\ wrote' = CloseText \o <<W("error-session-not-found", open), W("done-stopped", open)>>
     /\ dones' = [dones EXCEPT ![open] = @ + 1]
@@ -163,7 +183,7 @@ NotFoundStopping(settings) ==
     /\ failure' = None
     /\ carry' = NoChanges
     /\ pending' = Over(carry, pending)
-    /\ UNCHANGED <<last, sent, want, turnWant>>
+    /\ UNCHANGED <<last, secrets, asks, sent, want, turnWant>>
 
 \* (A witness takes NotFoundOn alone: a turn being stopped waits again, with nothing left to stop.)
 NotFoundOn(settings) ==
@@ -172,12 +192,13 @@ NotFoundOn(settings) ==
     /\ resume' = "none"
     /\ phase' = "checking"
     /\ intFor' = 0
+    /\ asking' = 0
     /\ inUse' = settings
     /\ wrote' = CloseText \o <<W("error-session-not-found", open)>>
     /\ stage' = IF stage \in {"applying", "pushed", "taken"} THEN "waiting" ELSE stage
     /\ textOpen' = FALSE
     /\ failure' = None
-    /\ UNCHANGED <<open, stopping, pending, carry, last, sent, dones, want, turnWant>>
+    /\ UNCHANGED <<open, stopping, pending, carry, last, secrets, asks, sent, dones, want, turnWant>>
 
 NotFoundGoingOn(settings) == ~(open # 0 /\ stopping) /\ NotFoundOn(settings)
 
@@ -187,11 +208,25 @@ NotFound == NotFoundStopping(inUse) \/ NotFoundGoingOn(inUse)
 Fail ==
     /\ phase # "ended"
     /\ phase' = "ended"
+    /\ asking' = 0
     /\ wrote' = <<W("error-harness", open)>>
-    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secrets, asks, ghost>>
 
 -----------------------------------------------------------------------------
 \* The server.
+
+\* The server's features line, written right after hello and before any send (docs/driver-protocol.md).
+ServerSecrets ==
+    /\ MaxAsk > 0
+    /\ phase # "ended"
+    /\ ~secrets
+    /\ last = 0
+    /\ open = 0
+    /\ secrets' = TRUE
+    /\ wrote' = <<>>
+    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   asking, asks, ghost>>
 
 Send(n) ==
     /\ phase # "ended"
@@ -205,15 +240,17 @@ Send(n) ==
     /\ sent' = sent \cup {n}
     /\ turnWant' = want
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, stopping, textOpen, failure, intFor, inUse, dones, want>>
+    /\ UNCHANGED <<phase, resume, stopping, textOpen, failure, intFor, inUse, secretVars, dones, want>>
 
 \* A stop ends what runs when it arrives: a prompt not yet read by the query is withdrawn and the turn ends at once;
-\* one the query runs is interrupted. A stop for a turn that is not open, or already stopping, changes nothing.
+\* one the query runs is interrupted, and any open secret ask is cancelled so the tool call settles without waiting on
+\* the server's dialog. A stop for a turn that is not open, or already stopping, changes nothing.
 StopRunning(n) ==
     /\ stopping' = TRUE
     /\ intFor' = n
+    /\ asking' = 0
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stage, textOpen, failure, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stage, textOpen, failure, pending, carry, inUse, last, secrets, asks, ghost>>
 
 StopIgnored == UNCHANGED <<driver, ghost>> /\ wrote' = <<>>
 
@@ -234,13 +271,27 @@ Settings(c) ==
     /\ want' = Over(want, c)
     /\ wrote' = <<>>
     /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, intFor, carry, inUse, last,
-                   sent, dones, turnWant>>
+                   secretVars, sent, dones, turnWant>>
+
+\* The server's answer to ask `a`: settles the open ask when `a` is it, and is skipped otherwise (docs/secrets.md).
+SecretWith(a, match) ==
+    /\ phase # "ended"
+    /\ a \in Asks
+    /\ act' = [a |-> "secret", n |-> a]
+    /\ asking' = IF match THEN 0 ELSE asking
+    /\ wrote' = <<>>
+    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secrets, asks, ghost>>
+
+Secret(a) == SecretWith(a, a = asking)
 
 EndInput ==
     /\ phase # "ended"
     /\ phase' = "ended"
+    /\ asking' = 0
     /\ wrote' = <<>>
-    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secrets, asks, ghost>>
 
 -----------------------------------------------------------------------------
 \* The driver's own steps.
@@ -249,7 +300,8 @@ CheckPass ==
     /\ phase = "checking"
     /\ phase' = "ready"
     /\ wrote' = <<>>
-    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secretVars, ghost>>
 
 \* A turn's start, behind every operation before it: an interrupt not yet answered holds it.
 Apply ==
@@ -261,14 +313,15 @@ Apply ==
     /\ inUse' = Over(inUse, carry)
     /\ carry' = NoChanges
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, last, secretVars, ghost>>
 
 Push ==
     /\ phase = "ready"
     /\ stage = "applying"
     /\ stage' = "pushed"
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secretVars, ghost>>
 
 -----------------------------------------------------------------------------
 \* The harness.
@@ -278,19 +331,22 @@ Take ==
     /\ stage = "pushed"
     /\ stage' = "taken"
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secretVars, ghost>>
 
 Answer ==
     /\ phase # "ended"
     /\ intFor # 0
     /\ intFor' = 0
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, pending, carry, inUse, last,
+                   secretVars, ghost>>
 
 \* What the query writes is the open turn's while its prompt is in the query; otherwise it is dropped.
 Running == phase = "ready" /\ stage \in {"pushed", "taken"}
 
-Unchanged == UNCHANGED <<phase, resume, open, stage, stopping, failure, intFor, pending, carry, inUse, last, ghost>>
+Unchanged == UNCHANGED <<phase, resume, open, stage, stopping, failure, intFor, pending, carry, inUse, last,
+                         secretVars, ghost>>
 
 Delta ==
     /\ Running
@@ -317,15 +373,43 @@ Tool ==
     /\ wrote' = CloseText \o <<W("tool", open)>>
     /\ Unchanged
 
+\* The AI calls nexus_ask_secret(account, what, why) (docs/secrets.md): while a turn runs without stopping, after a
+\* server line naming secrets, with no other ask open, the driver mints the next ask number, writes ask-secret and
+\* waits for its secret line; otherwise it answers the tool locally (no-client, busy or cancelled) without writing.
+AskSent ==
+    /\ Running
+    /\ ~stopping
+    /\ secrets
+    /\ asking = 0
+    /\ asks < MaxAsk
+    /\ asks' = asks + 1
+    /\ asking' = asks + 1
+    /\ wrote' = <<W("ask-secret", asks + 1)>>
+    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
+                   secrets, ghost>>
+
+AskRefused ==
+    /\ MaxAsk > 0
+    /\ Running
+    /\ (~secrets \/ asking # 0 \/ stopping)
+    /\ wrote' = <<>>
+    /\ UNCHANGED <<driver, ghost>>
+
+Ask == AskSent \/ AskRefused
+
 AssistantError(code) ==
     /\ Running
     /\ failure' = code
     /\ wrote' = <<>>
-    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, intFor, pending, carry, inUse, last, ghost>>
+    /\ UNCHANGED <<phase, resume, open, stage, stopping, textOpen, intFor, pending, carry, inUse, last,
+                   secretVars, ghost>>
 
-\* The query's result: "ok", "error", or "lost" (an error saying Claude does not know the session).
+\* The query's result: "ok", "error", or "lost" (an error saying Claude does not know the session). While an ask is
+\* open in the driver, the query waits on the tool call and emits no result until the ask settles (by its secret line
+\* or a stop).
 ResultWith(kind, refuse, lost) ==
     /\ Running
+    /\ asking = 0
     /\ IF stopping THEN Finish("stopped")
        ELSE IF kind = "ok" /\ failure = None THEN Finish("ok")
        ELSE IF failure = "no-credential" THEN refuse
@@ -341,14 +425,16 @@ Ended == phase = "ended" /\ UNCHANGED vars
 
 -----------------------------------------------------------------------------
 
-\* Every step but a stop leaves `act` saying only that it was not a stop.
+\* Every step but a stop or a secret answer leaves `act` saying only that it was neither.
 S(A) == A /\ act' = [a |-> "step", n |-> 0]
 
-\* A witness passes its broken stop, apply, result, refusal or lost session in place of the real one.
-NextWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
+\* A witness passes its broken stop, apply, result, refusal, lost session, ask or secret in place of the real one.
+NextSecretsWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp, AskOp, SecretOp(_)) ==
+    \/ S(ServerSecrets)
     \/ \E n \in Turns : S(Send(n))
     \/ \E n \in Turns : StopOp(n)
     \/ \E c \in Changes : S(Settings(c))
+    \/ \E a \in Asks : SecretOp(a)
     \/ S(EndInput)
     \/ S(CheckPass)
     \/ S(ApplyOp)
@@ -359,6 +445,7 @@ NextWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
     \/ S(BlockEnd)
     \/ S(BlockText)
     \/ S(Tool)
+    \/ S(AskOp)
     \/ \E code \in {"harness", "no-credential"} : S(AssistantError(code))
     \/ \E k \in ResultKinds : S(ResultOp(k))
     \/ S(RefuseOp)
@@ -366,15 +453,20 @@ NextWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
     \/ S(NotFoundOp)
     \/ Ended
 
+NextWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp) ==
+    NextSecretsWith(StopOp, ApplyOp, ResultOp, RefuseOp, NotFoundOp, Ask, Secret)
+
 Next == NextWith(Stop, Apply, Result, Refuse, NotFound)
 
-\* The driver's own steps and the harness's answers are taken up; the server need do nothing. The credential check
-\* answers (but a refusal or failure later is never forced). (TLC takes no operator arguments in a temporal formula,
-\* so a liveness witness writes its own.)
+\* The driver's own steps, the harness's answers, and the server's bounded reply to an open secret ask (Secrets.tla
+\* EveryRequestEnds: answered at once or by its deadline) are taken up; otherwise the server need do nothing. The
+\* credential check answers (but a refusal or failure later is never forced). (TLC takes no operator arguments in a
+\* temporal formula, so a liveness witness writes its own.)
 Spec ==
     /\ Init /\ [][Next]_vars
     /\ WF_vars(S(phase = "checking" /\ (CheckPass \/ Refuse \/ Fail \/ NotFound)))
     /\ WF_vars(S(Apply)) /\ WF_vars(S(Push)) /\ WF_vars(S(Take)) /\ WF_vars(S(Answer))
+    /\ WF_vars(\E a \in Asks : asking = a /\ Secret(a))
     /\ WF_vars(\E k \in ResultKinds : S(Result(k)))
 
 \* Without the fairness: what a finite code trace is checked against.
@@ -390,6 +482,9 @@ OneDone == \A n \in Turns : dones[n] = IF n \in sent /\ n # open THEN 1 ELSE 0
 \* An interrupt lands on the turn it was sent for: while it has not answered, no later turn's prompt is in the query.
 StopNeverLater == intFor # 0 /\ stage \in {"pushed", "taken"} => open = intFor
 
+\* An ask is open in the driver only while a turn runs without stopping, on a server that offered secrets.
+AskOnlyRunning == asking # 0 => Running /\ ~stopping /\ secrets
+
 \* What one step writes keeps the wire's text blocks (protocol rule 5): a text-end only for an open block, and no tool
 \* or done while one is open.
 RECURSIVE BlocksKept(_, _)
@@ -402,6 +497,19 @@ BlocksKept(o, s) ==
            [] OTHER                                       -> BlocksKept(o, Tail(s))
 
 NoDoneInBlock == [][BlocksKept(textOpen, wrote')]_vars
+
+HasAsk(s) == \E i \in 1..Len(s) : s[i].k = "ask-secret"
+
+\* An ask-secret is written only while a turn runs without stopping, after a server line naming secrets, with no other
+\* ask open, and with the next ask number; secrets is enabled only before the first send.
+AskGate ==
+    [][/\ HasAsk(wrote') => secrets /\ Running /\ ~stopping /\ asking = 0 /\ asks' = asks + 1 /\ asking' = asks'
+       /\ ~secrets /\ secrets' => last = 0 /\ open = 0]_vars
+
+\* Only the open ask's own secret answer settles it; an answer for any other ask (its turn stopped) changes nothing.
+SecretMatchesAsk ==
+    [][/\ act'.a = "secret" /\ act'.n # asking => UNCHANGED driver /\ wrote' = <<>>
+       /\ act'.a = "secret" /\ act'.n = asking => asking' = 0 /\ wrote' = <<>>]_vars
 
 \* Settings never change a turn whose prompt is in the query.
 SettingsNeverChangeOpen == [][open # 0 /\ open' = open /\ stage \in {"pushed", "taken"} => inUse' = inUse]_vars

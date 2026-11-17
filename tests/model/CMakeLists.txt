@@ -88,7 +88,7 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
 # one of its faults (store-late, echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
-# FAULTY one of its faults (settings, refusal, latch); with DRIVERTESTS, the traces are those of the driver's unit
+# FAULTY one of its faults (settings, refusal, latch, secret); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
 # tests/driver.
 # With TSWALK, it is the Tailscale shim's lifecycle walk (src/tailscale/lifecycle/walk, run with the local Go: the

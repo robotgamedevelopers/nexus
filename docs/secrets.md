@@ -184,8 +184,9 @@ version change. They land with the code, in the same pull request as `src/driver
 | server to driver | `secret` | `ask` (required), `outcome` (required: `"stored"` or `"refused"`), `reason` (required with `refused`: `"busy"`, `"no-client"`, `"cancelled"`, `"timeout"` or `"malformed"`; older servers also sent `"unwritable"`, and `"unconfirmed"` with `stored`) | the one answer to an `ask-secret`, sent only once the value is durable or the ask has ended; never carries the value |
 
 The driver gives its AI one tool, such as `nexus_ask_secret(account, what, why)`, which writes `ask-secret` and returns
-`stored` or `refused: <reason>` from the `secret` line. The server's side (the `server` line and both kinds) is in; the
-Claude driver's tool is on the roadmap (`claude-ask-secret-tool`). The AI then uses what the account can now do (its
+`stored` or `refused: <reason>` from the `secret` line. Both the server's side (the `server` line and both kinds) and
+the Claude driver's tool (`drivers/claude/src/driver.ts` `secretMcpServer`, an in-process SDK MCP server exposing
+`nexus_ask_secret` and checking `account`, `what` and `why` locally before writing `ask-secret`) are in. The AI then uses what the account can now do (its
 driver starts with the credential, or the server's sign-in goes on). The design is that the AI never reads the value,
 and that each driver keeps the harness's own tools out of `~/.nexus/server/accounts/`. The Claude driver does: it hands
 the token to the harness on a descriptor, never in an environment, and walls the directory off from every tool its AI

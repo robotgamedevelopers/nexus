@@ -3,7 +3,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { Driver, parseArguments, toolSummary } from '../../src/driver.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+import {
+    Driver, kSecretMcpToolName, kSecretToolName, parseArguments, secretMcpServer, toolSummary,
+} from '../../src/driver.js';
 import type { DriverMessage } from '../../src/protocol.js';
 import {
     assistant,
@@ -16,6 +21,7 @@ import {
     streamedText,
     toolUse,
 } from '../fake-harness.js';
+import { LeakScan } from '../leak-scan.js';
 import { line, settle, started, TestHost } from './host.js';
 
 const S = 'session-1';
@@ -715,4 +721,243 @@ void test('toolSummary is one line of what the tool acts on', () => {
     assert.equal(toolSummary('X', {}), 'X');
     assert.equal(toolSummary('X', { n: 1 }), '{"n":1}');
     assert.equal(toolSummary('Bash', { command: 'x'.repeat(500) }).length, 200);
+    assert.equal(toolSummary(kSecretToolName, { account: 'work', what: 'oauth-token', why: 'login expired' }),
+        'work oauth-token: login expired');
+    assert.equal(toolSummary(kSecretMcpToolName, { account: 'work', what: 'oauth-token', why: '' }),
+        'work oauth-token');
+});
+
+void test('nexus_ask_secret over the SDK MCP server: writes ask-secret after server secrets, returns stored or refused', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    const mcp = secretMcpServer(host.harness.start.askSecret);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await mcp.instance.connect(serverSide);
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await client.connect(clientSide);
+    try {
+        const listed = await client.listTools();
+        assert.deepEqual(listed.tools.map((t) => t.name), [kSecretToolName]);
+        const spec = listed.tools[0];
+        assert.ok(spec !== undefined);
+        assert.deepEqual(spec.inputSchema.required, ['account', 'what', 'why']);
+        assert.equal(spec._meta?.['anthropic/alwaysLoad'], true);
+
+        driver.feed(line({ kind: 'send', turn: 1, prompt: 'sign in' }));
+        await settle();
+        const call1 = client.callTool({
+            name: kSecretToolName,
+            arguments: { account: 'work', what: 'oauth-token', why: 'the login expired' },
+        });
+        await settle();
+        assert.deepEqual(host.take(), [
+            { kind: 'ask-secret', ask: 1, account: 'work', what: 'oauth-token', why: 'the login expired' },
+        ]);
+        driver.feed(line({ kind: 'secret', ask: 1, outcome: 'stored', reason: 'unconfirmed' }));
+        const got1 = await call1;
+        assert.deepEqual(got1.content, [{ type: 'text', text: 'stored' }]);
+        assert.equal(got1.isError, undefined);
+        host.harness.emit(result(S));
+        await settle();
+        assert.deepEqual(host.take().map((m) => m.kind), ['done']);
+
+        driver.feed(line({ kind: 'send', turn: 2, prompt: 'again' }));
+        await settle();
+        const call2 = client.callTool({
+            name: kSecretToolName,
+            arguments: { account: 'work', what: 'oauth-token', why: '' },
+        });
+        await settle();
+        assert.deepEqual(host.take(), [
+            { kind: 'ask-secret', ask: 2, account: 'work', what: 'oauth-token', why: '' },
+        ]);
+        driver.feed(line({ kind: 'secret', ask: 2, outcome: 'refused', reason: 'timeout' }));
+        const got2 = await call2;
+        assert.deepEqual(got2.content, [{ type: 'text', text: 'refused: timeout' }]);
+        host.harness.emit(result(S));
+        await settle();
+
+        const scan = new LeakScan('ZxCvBnMqWeRtYuIoPaSdFgHjKl', 'work');
+        for (const m of host.out) {
+            assert.equal(scan.find(JSON.stringify(m)), '');
+        }
+        for (const l of host.logs) {
+            assert.equal(scan.find(l), '');
+        }
+    } finally {
+        await client.close();
+        await mcp.instance.close();
+    }
+});
+
+void test('nexus_ask_secret without a server line naming secrets answers refused: no-client without writing ask-secret', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    assert.equal(await host.harness.start.askSecret('work', 'oauth-token', 'expired'), 'refused: no-client');
+    assert.deepEqual(host.take(), []);
+    host.harness.emit(result(S));
+    await settle();
+
+    // A server line that does not name "secrets" leaves asks refused locally too.
+    const other = await started();
+    other.driver.feed(line({ kind: 'server', features: ['later'] }));
+    other.driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    assert.equal(await other.host.harness.start.askSecret('work', 'oauth-token', 'expired'), 'refused: no-client');
+    assert.deepEqual(other.host.take(), []);
+    other.host.harness.emit(result(S));
+    await settle();
+});
+
+void test('a second concurrent nexus_ask_secret is refused busy locally while the first stays open', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    const first = host.harness.start.askSecret('work', 'oauth-token', 'first');
+    await settle();
+    assert.equal(await host.harness.start.askSecret('work', 'oauth-token', 'second'), 'refused: busy');
+    assert.deepEqual(host.take(), [
+        { kind: 'ask-secret', ask: 1, account: 'work', what: 'oauth-token', why: 'first' },
+    ]);
+    driver.feed(line({ kind: 'secret', ask: 1, outcome: 'stored' }));
+    assert.equal(await first, 'stored');
+    host.harness.emit(result(S));
+    await settle();
+});
+
+void test('stopping a turn cancels its open ask at once, and a late secret answer from that ask is skipped', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'one' }));
+    await settle();
+    const ask1 = host.harness.start.askSecret('work', 'oauth-token', 'expired');
+    await settle();
+    assert.deepEqual(host.take(), [
+        { kind: 'ask-secret', ask: 1, account: 'work', what: 'oauth-token', why: 'expired' },
+    ]);
+    driver.feed(line({ kind: 'stop', turn: 1 }));
+    assert.equal(await ask1, 'refused: cancelled');
+    assert.equal(await host.harness.start.askSecret('work', 'oauth-token', 'while stopping'), 'refused: cancelled');
+    host.harness.emit(result(S, { subtype: 'error_during_execution' }));
+    await settle();
+    assert.deepEqual(host.take().map((m) => m.kind), ['done']);
+
+    // Turn 2 asks; the server's late answer to ask 1 arrives first and must not settle ask 2.
+    driver.feed(line({ kind: 'send', turn: 2, prompt: 'two' }));
+    await settle();
+    let settled2: string | undefined;
+    const ask2 = host.harness.start.askSecret('work', 'oauth-token', 'again').then((v) => { settled2 = v; return v; });
+    await settle();
+    assert.deepEqual(host.take(), [
+        { kind: 'ask-secret', ask: 2, account: 'work', what: 'oauth-token', why: 'again' },
+    ]);
+    driver.feed(line({ kind: 'secret', ask: 1, outcome: 'stored' }));
+    driver.feed(line({ kind: 'secret', ask: 99, outcome: 'stored' }));
+    await settle();
+    assert.equal(settled2, undefined);
+    driver.feed(line({ kind: 'secret', ask: 2, outcome: 'refused', reason: 'no-client' }));
+    assert.equal(await ask2, 'refused: no-client');
+    host.harness.emit(result(S));
+    await settle();
+});
+
+void test('a lost --resume id, a credential refusal, a crash or EOF cancels an open secret ask', async () => {
+    // Lost --resume id while an ask is open: cancelled on the old harness, and the new harness can ask cleanly.
+    const lostHost = new TestHost();
+    const lostDriver = new Driver(lostHost, { account: 'main', cwd: '/work', resume: 'gone-ask', settingSources: [] });
+    lostDriver.start();
+    await settle();
+    lostHost.take();
+    lostDriver.feed(line({ kind: 'server', features: ['secrets'] }));
+    lostDriver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    const oldHarness = lostHost.harness;
+    const lostAsk = oldHarness.start.askSecret('work', 'oauth-token', 'expired');
+    await settle();
+    oldHarness.finish(new Error('Claude Code returned an error result: No conversation found with session ID: gone-ask'));
+    assert.equal(await lostAsk, 'refused: cancelled');
+    await settle();
+    // Stale call on the replaced harness does nothing.
+    assert.equal(await oldHarness.start.askSecret('work', 'oauth-token', 'stale'), 'refused: cancelled');
+    const freshAsk = lostHost.harness.start.askSecret('work', 'oauth-token', 'fresh');
+    await settle();
+    lostDriver.feed(line({ kind: 'secret', ask: 2, outcome: 'stored' }));
+    assert.equal(await freshAsk, 'stored');
+    lostHost.harness.emit(result('session-1'));
+    await settle();
+
+    // Overage refusal mid-ask.
+    const over = await started();
+    over.driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    over.driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    const overAsk = over.host.harness.start.askSecret('work', 'oauth-token', 'expired');
+    over.host.harness.emit(rateLimit(S, { isUsingOverage: true }));
+    assert.equal(await overAsk, 'refused: cancelled');
+
+    // EOF mid-ask.
+    const eof = await started();
+    eof.driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    eof.driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    const eofAsk = eof.host.harness.start.askSecret('work', 'oauth-token', 'expired');
+    eof.driver.end();
+    assert.equal(await eofAsk, 'refused: cancelled');
+});
+
+void test('invalid nexus_ask_secret arguments are refused locally without writing a malformed ask-secret line', async () => {
+    const { host, driver } = await started();
+    driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    // Outside a turn: cancelled locally.
+    assert.equal(await host.harness.start.askSecret('work', 'oauth-token', 'before send'), 'refused: cancelled');
+    driver.feed(line({ kind: 'send', turn: 1, prompt: 'ask' }));
+    await settle();
+    const badCalls: [string, string, string][] = [
+        ['', 'oauth-token', 'ok'],
+        ['-flag', 'oauth-token', 'ok'],
+        ['.dot', 'oauth-token', 'ok'],
+        ['a/b', 'oauth-token', 'ok'],
+        ['x'.repeat(65), 'oauth-token', 'ok'],
+        ['work', '', 'ok'],
+        ['work', '../oauth-token', 'ok'],
+        ['work', 'oauth-token', 'two\nlines'],
+        ['work', 'oauth-token', '\u202ereversed'],
+        ['work', 'oauth-token', 'a'.repeat(201)],
+    ];
+    for (const [account, what, why] of badCalls) {
+        const answer = await host.harness.start.askSecret(account, what, why);
+        assert.match(answer, /^refused: malformed/, `${account} ${what} ${why}`);
+    }
+    assert.deepEqual(host.take(), []);
+    assert.equal(host.exitCode, undefined);
+    host.harness.emit(result(S));
+    await settle();
+});
+
+void test('a malformed, duplicate or late server line, or a malformed secret line, is refused with exit 3', async () => {
+    for (const bytes of [
+        line({ kind: 'server' }),
+        line({ kind: 'secret', ask: 1, outcome: 'refused' }),
+    ]) {
+        const host = await refusedLine(bytes);
+        assert.equal(errorOf(host.take()).code, 'protocol');
+        assert.equal(host.exitCode, 3);
+    }
+    const dup = await started();
+    dup.host.untraced = 'a line the driver refuses';
+    dup.driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    dup.driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    await settle();
+    assert.equal(errorOf(dup.host.take()).code, 'protocol');
+    assert.equal(dup.host.exitCode, 3);
+
+    const late = await started();
+    late.host.untraced = 'a line the driver refuses';
+    late.driver.feed(line({ kind: 'send', turn: 1, prompt: 'a' }));
+    late.driver.feed(line({ kind: 'server', features: ['secrets'] }));
+    await settle();
+    assert.equal(errorOf(late.host.take()).code, 'protocol');
+    assert.equal(late.host.exitCode, 3);
 });

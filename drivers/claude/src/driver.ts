@@ -23,6 +23,7 @@ import { isAbsolute } from 'node:path';
 import type {
     AccountInfo,
     EffortLevel,
+    McpSdkServerConfigWithInstance,
     Query,
     SDKAssistantMessage,
     SDKMessage,
@@ -30,12 +31,15 @@ import type {
     SDKUserMessage,
     SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 
-import { kTokenFile } from './account.js';
+import { isAccountName, kTokenFile } from './account.js';
 import {
     cut,
     decodeServerLine,
     encode,
+    isSecretWhy,
     isSessionId,
     kProtocolVersion,
     LineReader,
@@ -44,6 +48,7 @@ import {
     type Billing,
     type DriverMessage,
     type ErrorCode,
+    type SecretAnswer,
     type Settings,
     type Usage,
 } from './protocol.js';
@@ -64,6 +69,7 @@ export interface HarnessStart {
     claudePath?: string;
     limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
+    askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
 
 /** Model and effort changes; an absent field is no change (in `inUse`, the value the driver was started with). */
@@ -86,11 +92,15 @@ export interface DriverState {
     carry: Changes;                     // the open turn's settings, not yet applied
     inUse: Changes;                     // the settings the harness runs with
     last: number;                       // the last turn sent
+    secrets: boolean;                   // the server offered "secrets" before the first send
+    asking: number;                     // the open ask-secret number, 0 for none
+    asks: number;                       // the last ask-secret number minted
 }
 
-/** What a recorded step was given: a turn, settings, or what kind of result or failure. */
+/** What a recorded step was given: a turn, an ask, settings, or what kind of result or failure. */
 export interface StepArgs {
     turn?: number;
+    ask?: number;
     changes?: Changes;
     kind?: 'ok' | 'error' | 'lost';
     code?: 'harness' | 'no-credential';
@@ -289,6 +299,12 @@ function message(e: unknown): string {
 /** A tool use in one line: what it acts on, from its input. */
 export function toolSummary(name: string, input: unknown): string {
     const o = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+    if ((name === kSecretToolName || name === kSecretMcpToolName)
+        && typeof o['account'] === 'string' && o['account'] !== ''
+        && typeof o['what'] === 'string' && o['what'] !== '') {
+        const why = typeof o['why'] === 'string' && o['why'] !== '' ? `: ${o['why']}` : '';
+        return cut(oneLine(`${o['account']} ${o['what']}${why}`), 200);
+    }
     for (const key of ['command', 'file_path', 'notebook_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt']) {
         const v = o[key];
         if (typeof v === 'string' && v !== '') {
@@ -297,6 +313,38 @@ export function toolSummary(name: string, input: unknown): string {
     }
     const json = JSON.stringify(input) as string | undefined;
     return cut(oneLine(json === undefined || json === '{}' ? name : json), 200);
+}
+
+export const kSecretToolName = 'nexus_ask_secret';
+export const kSecretMcpToolName = `mcp__nexus__${kSecretToolName}`;
+/** Past the server's 10-minute dialog deadline (docs/secrets.md), so the server's timeout answers first. */
+export const kSecretToolTimeoutMs = 11 * 60 * 1000;
+
+/** The in-process SDK MCP server that gives Claude the nexus_ask_secret(account, what, why) tool (docs/secrets.md). */
+export function secretMcpServer(askSecret: HarnessStart['askSecret']): McpSdkServerConfigWithInstance {
+    return createSdkMcpServer({
+        name: 'nexus',
+        version: '0.1.0',
+        alwaysLoad: true,
+        timeout: kSecretToolTimeoutMs,
+        tools: [
+            tool(
+                kSecretToolName,
+                'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this friend is '
+                    + 'linked to (for a claude account, what is "oauth-token"). Writes ask-secret and waits for the '
+                    + 'person\'s answer, returning "stored" once the file is saved or "refused: <reason>" ("no-client", '
+                    + '"busy", "cancelled", "timeout" or "malformed"); the secret value never crosses this tool.',
+                {
+                    account: z.string().describe('The account name in accounts.json (1 to 64 letters, digits, -, _ or .)'),
+                    what: z.string().describe('The secret file the account\'s provider documents (for claude, "oauth-token")'),
+                    why: z.string().describe('One short line shown in the dialog saying why the secret is needed (at most 200 UTF-8 bytes)'),
+                },
+                async ({ account, what, why }) => ({
+                    content: [{ type: 'text' as const, text: await askSecret(account, what, why) }],
+                }),
+            ),
+        ],
+    });
 }
 
 export class Driver {
@@ -320,6 +368,10 @@ export class Driver {
     private session = '';
     private cost: number | undefined;
     private plan = '';
+    private sawServer = false;                   // a server line arrived
+    private secrets = false;                     // the server line named "secrets"
+    private asks = 0;                            // the last ask-secret number minted
+    private asking: { ask: number; resolve: (answer: string) => void } | undefined;
 
     constructor(host: Host, args: Arguments) {
         this.host = host;
@@ -391,14 +443,26 @@ export class Driver {
             carry: { ...(t?.changes ?? {}) },
             inUse: { ...this.inUse },
             last: this.lastTurn,
+            secrets: this.secrets,
+            asking: this.asking?.ask ?? 0,
+            asks: this.asks,
         };
     }
 
     private quit(code: number): void {
         this.ended = true;
+        this.cancelAsk();
         this.prompts.close();
         this.harness?.close();
         this.host.exit(code);
+    }
+
+    private cancelAsk(): void {
+        const open = this.asking;
+        if (open !== undefined) {
+            this.asking = undefined;
+            open.resolve('refused: cancelled');
+        }
     }
 
     private write(m: DriverMessage): void {
@@ -427,7 +491,8 @@ export class Driver {
         this.prompts = new Prompts((m) => { this.took(m); });
         this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
-            limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])] };
+            limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])],
+            askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {
@@ -523,6 +588,7 @@ export class Driver {
      */
     private notFound(old: Harness): void {
         old.close();
+        this.cancelAsk();
         const id = this.args.resume ?? '';
         const t = this.open;
         if (t !== undefined) {
@@ -563,6 +629,7 @@ export class Driver {
     }
 
     private refuseCredential(cause: string, fix: string): void {
+        this.cancelAsk();
         const turn = this.open?.turn;
         if (this.open !== undefined) {
             this.closeText(this.open);
@@ -654,6 +721,22 @@ export class Driver {
                 break;
             case 'settings':
                 this.settings(m);
+                break;
+            case 'server':
+                if (this.sawServer) {
+                    this.refuse('a second server message arrived; the server writes its features once, before any send');
+                } else if (this.lastTurn > 0) {
+                    this.refuse(`a server message arrived after turn ${this.lastTurn}'s send; it comes before any send`);
+                } else {
+                    this.sawServer = true;
+                    if (m.features.includes('secrets')) {
+                        this.secrets = true;
+                        this.record('server');
+                    }
+                }
+                break;
+            case 'secret':
+                this.secret(m);
                 break;
             case 'unknown':
                 break;
@@ -764,6 +847,7 @@ export class Driver {
             return;
         }
         t.stopping = true;
+        this.cancelAsk();
         if (!t.pushed || (t.message !== undefined && this.prompts.withdraw(t.message))) {
             // The prompt never reached the query: nothing runs, nothing to interrupt.
             this.finish(t, 'stopped');
@@ -1024,7 +1108,55 @@ export class Driver {
         this.finish(t, 'error', r);
     }
 
+    private secret(m: SecretAnswer): void {
+        const open = this.asking;
+        if (open?.ask === m.ask) {
+            this.asking = undefined;
+            open.resolve(m.outcome === 'stored' ? 'stored' : `refused: ${m.reason ?? 'unknown'}`);
+        }
+        this.record('secret', { ask: m.ask });
+    }
+
+    /**
+     * The AI's nexus_ask_secret(account, what, why) tool (docs/secrets.md). Checked locally first so a malformed AI
+     * argument never writes a line the server refuses; then gated on an active turn and a server offering "secrets".
+     */
+    private askSecret(generation: number, account: string, what: string, why: string): Promise<string> {
+        if (!isAccountName(account)) {
+            return Promise.resolve('refused: malformed (account must be 1 to 64 letters, digits, -, _ or ., not starting with . or -)');
+        }
+        if (!isAccountName(what)) {
+            return Promise.resolve('refused: malformed (what must be a secret file name of 1 to 64 letters, digits, -, _ or ., not starting with . or -)');
+        }
+        if (!isSecretWhy(why)) {
+            return Promise.resolve('refused: malformed (why must be one line of at most 200 UTF-8 bytes with no control, bidirectional or zero-width characters)');
+        }
+        const t = this.current();
+        if (this.ended || !this.ready || generation !== this.generation || t === undefined) {
+            return Promise.resolve('refused: cancelled');
+        }
+        if (t.stopping) {
+            this.record('ask-refused');
+            return Promise.resolve('refused: cancelled');
+        }
+        if (!this.secrets) {
+            this.record('ask-refused');
+            return Promise.resolve('refused: no-client');
+        }
+        if (this.asking !== undefined) {
+            this.record('ask-refused');
+            return Promise.resolve('refused: busy');
+        }
+        const ask = ++this.asks;
+        return new Promise<string>((resolve) => {
+            this.asking = { ask, resolve };
+            this.write({ kind: 'ask-secret', ask, account, what, why });
+            this.record('ask');
+        });
+    }
+
     private finish(t: Turn, outcome: 'ok' | 'stopped' | 'error', r?: SDKResultMessage): void {
+        this.cancelAsk();
         this.closeText(t);
         this.restore(t.changes);
         t.changes = {};
