@@ -132,6 +132,29 @@ int main(int argc, char** argv) {
         CHECK(chmod((dir + "/config").c_str(), 0600) == 0);
     }
 
+    // Old ~/.nexus layout migrates once into ~/.nexus/server on `new`, keeping ~/.nexus/client untouched.
+    run("rm -rf '" + home + "'", &out);
+    CHECK(mkdir(home.c_str(), 0755) == 0 && mkdir(top.c_str(), 0700) == 0);
+    CHECK(mkdir((top + "/client").c_str(), 0700) == 0);
+    CHECK(writeFile(top + "/client/config", "server local\n"));
+    CHECK(writeFile(top + "/config", "port 7\n"));
+    CHECK(run("'" + server + "' new", &out) == 0 && has(out, "NEXUS CONNECT"));
+    CHECK(exists(dir + "/config") && !exists(top + "/config"));
+    CHECK(exists(top + "/client/config"));
+    CHECK(run("'" + server + "' stop", &out) == 0);
+    for (int i = 0; i < 100 && exists(dir + "/server.sock"); ++i) {
+        usleep(50 * 1000);
+    }
+    int checkRc = 1;
+    for (int i = 0; i < 100; ++i) {
+        checkRc = run("'" + server + "' store check", &out);
+        if (checkRc == 0) {
+            break;
+        }
+        usleep(50 * 1000);
+    }
+    CHECK(checkRc == 0 && has(out, "OK store"));
+
     // No HOME: refused, with --dir too.
     CHECK(unsetenv("HOME") == 0);
     CHECK(run("'" + server + "' stop", &out) == 1 && has(out, "HOME is not set"));

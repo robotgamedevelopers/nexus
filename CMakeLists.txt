@@ -215,7 +215,8 @@ if(NEXUS_SERVER_PARTS)
 
     # Placement (src/server/builds.h, docs/builds.md): the installed builds, each immutable and named by its content's
     # hash, and the one pointer to the current and previous. POSIX files and locks; no time but what is passed in.
-    add_library(nexus_builds STATIC src/server/sha256.cpp src/server/build_manifest.cpp src/server/builds.cpp)
+    add_library(nexus_builds STATIC src/server/sha256.cpp src/server/build_manifest.cpp src/server/builds.cpp
+                src/server/migration.cpp)
     target_include_directories(nexus_builds PUBLIC src)
     target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_builds PUBLIC nexus_store)

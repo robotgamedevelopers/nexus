@@ -1281,10 +1281,74 @@ void test_formats() {
         if (reader == 4) {
             CHECK_OK(o.st);
             CHECK(o.s != nullptr && texts(o.s->session(1)) == "[3:ls]|" && o.s->applied("w1") == 4);
+            CHECK(o.report.skipped > 0);
         } else {
             CHECK(o.st.code() == Status::Code::Failed);
             CHECK(o.st.message().find("its snapshot is in format 6") != std::string::npos);
         }
+    }
+    // Rollback across a record whose ONLY change on a held session is an unknown Change::Kind (9), carrying a client's
+    // counter: the unknown change is skipped, the client's counter still advances, and a later compaction and reopen
+    // keep the session and the unknown entry kind intact (models/migration/Migration.tla RollbackReadable).
+    {
+        Writer unknownOnly;
+        unknownOnly.u8(5);
+        unknownOnly.u8(3);
+        unknownOnly.u64(1);     // session 1
+        unknownOnly.u32(1);     // one change, unknown to this build
+        unknownOnly.u8(9);
+        {
+            Writer frame;
+            frame.str("future session attribute");
+            unknownOnly.bytes(frame.out());
+        }
+        unknownOnly.str("w1");
+        unknownOnly.u64(4);
+        MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(3),
+                              unknownOnly.out()});
+        StoreOptions compactSoon;
+        compactSoon.compact_bytes = 1;
+        Opened o = open_store(fs, compactSoon);
+        CHECK_OK(o.st);
+        CHECK(o.report.skipped >= 4);
+        if (o.s != nullptr) {
+            CHECK(o.s->applied("w1") == 4);
+            CHECK_OK(o.s->commit(1, std::vector<Change>{append("after rollback", 0)}, "w1", 5));
+            o.s.reset();
+            Opened o2 = open_store(fs);
+            CHECK_OK(o2.st);
+            CHECK(o2.s != nullptr && o2.s->applied("w1") == 5 &&
+                  texts(o2.s->session(1)).find("[7:from a later server][0:after rollback]") != std::string::npos);
+        }
+        // An unknown-only change naming a session not held (99) is still refused as damage.
+        Writer unheld;
+        unheld.u8(5);
+        unheld.u8(3);
+        unheld.u64(99);
+        unheld.u32(1);
+        unheld.u8(9);
+        unheld.bytes(Bytes{1});
+        unheld.str("");
+        unheld.u64(0);
+        MemFs badFs = journaled({fixture(kMainRecord2First), unheld.out()});
+        CHECK(open_store(badFs).st.code() == Status::Code::Failed);
+    }
+    // Store::inspect_readers: reports the store's actual reader floor on disk, even for a format newer than this build
+    // can replay, without mutating anything.
+    {
+        MemFs empty;
+        StoreReaders r;
+        CHECK_OK(Store::inspect_readers(empty, "store", r));
+        CHECK(!r.exists && r.record_reader == 0 && r.snapshot_reader == 0);
+
+        MemFs compat = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(3)});
+        CHECK_OK(Store::inspect_readers(compat, "store", r));
+        CHECK(r.exists && r.record_reader == 3 && r.record_seq == 3 && r.snapshot_reader == 0);
+
+        MemFs breaking = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second), later_record(5)});
+        const std::uint64_t callsBefore = breaking.calls();
+        CHECK_OK(Store::inspect_readers(breaking, "store", r));
+        CHECK(r.exists && r.record_reader == 5 && r.record_seq == 3 && breaking.calls() == callsBefore);
     }
 }
 

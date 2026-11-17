@@ -62,7 +62,7 @@ Status MemFs::step(const char* what, const std::string& path) {
 
 MemFs::File* MemFs::file(const std::string& path) {
     auto d = dirs_.find(dir_of(path));
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return nullptr;
     auto n = d->second.now.find(name_of(path));
     return n == d->second.now.end() ? nullptr : &files_[std::size_t(n->second)];
@@ -70,7 +70,7 @@ MemFs::File* MemFs::file(const std::string& path) {
 
 const MemFs::File* MemFs::file(const std::string& path) const {
     auto d = dirs_.find(dir_of(path));
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return nullptr;
     auto n = d->second.now.find(name_of(path));
     return n == d->second.now.end() ? nullptr : &files_[std::size_t(n->second)];
@@ -220,7 +220,8 @@ Status MemFs::lock(const std::string& dir, LockMode mode, std::unique_ptr<FileLo
     if (dead_) {
         return Status::failed("memfs: lock " + dir + " after an injected crash");
     }
-    if (dirs_.find(dir) == dirs_.end()) {
+    auto d = dirs_.find(dir);
+    if (d == dirs_.end() || !d->second.present) {
         return Status::not_found("memfs: no directory " + dir);
     }
     const std::uint64_t exclusive = lock_holders(dir, LockMode::Exclusive);
@@ -248,7 +249,7 @@ Status MemFs::open_append(const std::string& path, std::unique_ptr<AppendFile>& 
     if (dead_)
         return Status::failed("memfs: open " + path + " after an injected crash");
     auto d = dirs_.find(dir_of(path));
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return Status::not_found("memfs: no file " + path);
     auto n = d->second.now.find(name_of(path));
     if (n == d->second.now.end())
@@ -266,8 +267,11 @@ Status MemFs::make_dir(const std::string& dir) {
         std::size_t slash = dir.find('/', start);
         std::size_t end = slash == std::string::npos ? dir.size() : slash;
         at = dir.substr(0, end);
-        if (!at.empty())
-            dirs_.try_emplace(at);
+        if (!at.empty()) {
+            Dir& d = dirs_[at];
+            d.present = true;
+            d.present_dur = true;
+        }
         if (slash == std::string::npos)
             break;
         start = slash + 1;
@@ -295,14 +299,14 @@ Status MemFs::write_new(const std::string& path, std::span<const std::uint8_t> d
 Status MemFs::list(const std::string& dir, std::vector<std::string>& names) {
     names.clear();
     auto d = dirs_.find(dir);
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return Status::not_found("memfs: no directory " + dir);
     for (const auto& [n, ino] : d->second.now)
         names.push_back(n);
     // Its directories too, as a real directory's listing names them (AccountFiles::sweep walks them).
     const std::string prefix = dir + "/";
     for (auto c = dirs_.upper_bound(prefix); c != dirs_.end() && c->first.compare(0, prefix.size(), prefix) == 0; ++c) {
-        if (c->first.find('/', prefix.size()) == std::string::npos) {
+        if (c->second.present && c->first.find('/', prefix.size()) == std::string::npos) {
             names.push_back(c->first.substr(prefix.size()));
         }
     }
@@ -335,7 +339,7 @@ Status MemFs::create(const std::string& path) {
     if (!s.is_ok())
         return s;
     auto d = dirs_.find(dir_of(path));
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return Status::not_found("memfs: no directory " + dir_of(path));
     if (d->second.now.count(name_of(path)) != 0)
         return Status::failed("memfs: create " + path + ": the name is taken");
@@ -383,10 +387,21 @@ Status MemFs::sync_dir(const std::string& dir) {
     if (!s.is_ok())
         return s;
     auto d = dirs_.find(dir);
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return Status::not_found("memfs: no directory " + dir);
     d->second.dur = d->second.now;
     d->second.pending.clear();
+    const std::string prefix = dir + "/";
+    for (auto c = dirs_.upper_bound(prefix); c != dirs_.end() && c->first.compare(0, prefix.size(), prefix) == 0;) {
+        if (c->first.find('/', prefix.size()) == std::string::npos) {
+            c->second.present_dur = c->second.present;
+            if (!c->second.present) {
+                c = dirs_.erase(c);
+                continue;
+            }
+        }
+        ++c;
+    }
     collect();
     return Status::ok();
 }
@@ -398,7 +413,7 @@ Status MemFs::rename(const std::string& from, const std::string& to) {
     if (dir_of(from) != dir_of(to))
         return Status::failed("memfs: rename across directories: " + from + " to " + to);
     auto d = dirs_.find(dir_of(from));
-    if (d == dirs_.end() || d->second.now.count(name_of(from)) == 0)
+    if (d == dirs_.end() || !d->second.present || d->second.now.count(name_of(from)) == 0)
         return Status::not_found("memfs: no file " + from);
     int ino = d->second.now[name_of(from)];
     d->second.now.erase(name_of(from));
@@ -412,10 +427,28 @@ Status MemFs::remove(const std::string& path) {
     if (!s.is_ok())
         return s;
     auto d = dirs_.find(dir_of(path));
-    if (d == dirs_.end() || d->second.now.count(name_of(path)) == 0)
+    if (d == dirs_.end() || !d->second.present || d->second.now.count(name_of(path)) == 0)
         return Status::not_found("memfs: no file " + path);
     d->second.now.erase(name_of(path));
     d->second.pending.push_back(DirOp{name_of(path), "", -1});
+    return Status::ok();
+}
+
+Status MemFs::remove_dir(const std::string& dir) {
+    Status s = step("remove_dir", dir);
+    if (!s.is_ok())
+        return s;
+    auto d = dirs_.find(dir);
+    if (d == dirs_.end() || !d->second.present)
+        return Status::not_found("memfs: no directory " + dir);
+    if (!d->second.now.empty())
+        return Status::failed("memfs: remove_dir " + dir + ": directory not empty");
+    const std::string prefix = dir + "/";
+    for (auto c = dirs_.upper_bound(prefix); c != dirs_.end() && c->first.compare(0, prefix.size(), prefix) == 0; ++c) {
+        if (c->second.present)
+            return Status::failed("memfs: remove_dir " + dir + ": directory not empty");
+    }
+    d->second.present = false;
     return Status::ok();
 }
 
@@ -426,6 +459,9 @@ void MemFs::fail_at(std::uint64_t k) {
 MemFs::CrashPlan MemFs::plan(Rng& rng) const {
     CrashPlan p;
     for (const auto& [path, d] : dirs_) {
+        if (d.present != d.present_dur) {
+            p.rmdir_keep[path] = (rng.below(2) == 1);
+        }
         std::vector<bool> keep;
         for (std::size_t i = 0; i < d.pending.size(); ++i)
             keep.push_back(rng.below(2) == 1);
@@ -456,6 +492,9 @@ MemFs::CrashPlan MemFs::plan(Rng& rng) const {
 MemFs::CrashPlan MemFs::plan_all(bool all) const {
     CrashPlan p;
     for (const auto& [path, d] : dirs_) {
+        if (d.present != d.present_dur) {
+            p.rmdir_keep[path] = all;
+        }
         std::vector<bool> keep(d.pending.size(), all);
         std::map<std::string, int> after = apply_kept(d.dur, d.pending, &keep);
         p.dir_keep[path] = keep;
@@ -471,12 +510,24 @@ MemFs::CrashPlan MemFs::plan_all(bool all) const {
 }
 
 void MemFs::crash(const CrashPlan& plan) {
-    for (auto& [path, d] : dirs_) {
-        auto k = plan.dir_keep.find(path);
+    for (auto it = dirs_.begin(); it != dirs_.end();) {
+        Dir& d = it->second;
+        if (d.present != d.present_dur) {
+            auto rk = plan.rmdir_keep.find(it->first);
+            const bool keep_rm = rk != plan.rmdir_keep.end() && rk->second;
+            d.present = keep_rm ? d.present : d.present_dur;
+            d.present_dur = d.present;
+        }
+        if (!d.present) {
+            it = dirs_.erase(it);
+            continue;
+        }
+        auto k = plan.dir_keep.find(it->first);
         std::map<std::string, int> after = apply_kept(d.dur, d.pending, k == plan.dir_keep.end() ? nullptr : &k->second);
         d.now = after;
         d.dur = after;
         d.pending.clear();
+        ++it;
     }
     std::vector<bool> done(files_.size(), false);
     for (auto& [path, d] : dirs_) {
@@ -527,13 +578,13 @@ const Bytes& MemFs::durable(const std::string& path) const {
 const std::vector<MemFs::DirOp>& MemFs::pending(const std::string& dir) const {
     static const std::vector<DirOp> kNone;
     auto d = dirs_.find(dir);
-    return d == dirs_.end() ? kNone : d->second.pending;
+    return (d == dirs_.end() || !d->second.present) ? kNone : d->second.pending;
 }
 
 std::map<std::string, std::uint64_t> MemFs::sizes(const std::string& dir) const {
     std::map<std::string, std::uint64_t> out;
     auto d = dirs_.find(dir);
-    if (d == dirs_.end())
+    if (d == dirs_.end() || !d->second.present)
         return out;
     for (const auto& [n, ino] : d->second.now)
         out[n] = files_[std::size_t(ino)].data.size();

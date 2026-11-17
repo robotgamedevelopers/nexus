@@ -102,6 +102,10 @@ public:
     virtual Status sync_dir(const std::string& dir) = 0;
     virtual Status rename(const std::string& from, const std::string& to) = 0;  // replaces `to`
     virtual Status remove(const std::string& path) = 0;
+    // Removes an empty directory; NotFound if missing, Failed if non-empty.
+    virtual Status remove_dir(const std::string& dir) {
+        return Status::failed("remove_dir is not supported on " + dir);
+    }
     // A new file holding `data`, durable when this returns: created mode 0600 (Failed if the name is taken, a symbolic
     // link among them), written and synced through the one descriptor that created it, never opened again by name.
     virtual Status write_new(const std::string& path, std::span<const std::uint8_t> data) = 0;
@@ -186,6 +190,7 @@ public:
     // fate. A file or directory not named keeps its durable state.
     struct CrashPlan {
         std::map<std::string, std::vector<bool>> dir_keep;
+        std::map<std::string, bool> rmdir_keep;
         std::map<std::string, FileFate> files;
     };
     struct DirOp {
@@ -222,6 +227,7 @@ public:
     Status sync_dir(const std::string& dir) override;
     Status rename(const std::string& from, const std::string& to) override;
     Status remove(const std::string& path) override;
+    Status remove_dir(const std::string& dir) override;
     Status write_new(const std::string& path, std::span<const std::uint8_t> data) override;   // create, append, sync
     Status private_dir(const std::string& dir) override;                                      // make_dir
 
@@ -251,6 +257,8 @@ private:
         Bytes dur;
     };
     struct Dir {
+        bool present = true;
+        bool present_dur = true;
         std::map<std::string, int> now;
         std::map<std::string, int> dur;
         std::vector<DirOp> pending;

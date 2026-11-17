@@ -38,9 +38,9 @@
 | 2. Side-by-side placement with one atomic switch: a new build is placed beside the running one, and one atomic step makes it the one that runs: builds immutable, complete and named by their content hash under builds/, placed through a temporary folder synced and verified before one rename; tested bound to the whole folder's hash; current and previous switched in one rename under the builds directory's lock; a build a running server holds never pruned (docs/builds.md) (in progress) | ❌ |
 | 3. Handover as a durable, resumable state machine under an OS lock: the old server drains and hands over, and a handover cut anywhere resumes from what is on disk (docs/builds.md) (in progress) | ❌ |
 | 4. Supervision, systemd included: the service starts, restarts and rolls back, so that a build that fails later (after it has started) still rolls back (docs/builds.md) (in progress) | ❌ |
-| 5. Old-layout migration and the store's format against rollback: a store from the old ~/.nexus layout moves once, and a store a newer build wrote stays readable by the build rolled back to | ❌ |
+| 5. Old-layout migration and the store's format against rollback: a store from the old ~/.nexus layout moves once, and a store a newer build wrote stays readable by the build rolled back to | ✅ |
 | 6. The model bound to the real steps: the takeover's TLA+ model checked against traces of the real placement, handover, supervision and migration in CI | ❌ |
-| complete | 0% |
+| complete | 16% |
 
 [Source data](roadmap.sexp)
 

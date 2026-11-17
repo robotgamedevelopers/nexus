@@ -25,6 +25,7 @@
 
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
+#include "server/builds.h"
 #include "server/config_repo.h"
 #include "server/drain.h"
 #include "server/driver_table.h"
@@ -32,6 +33,7 @@
 #include "server/durable.h"
 #include "server/flush_gate.h"
 #include "server/home.h"
+#include "server/migration.h"
 #include "server/pass.h"
 #include "server/login_life.h"
 #include "server/secret_files.h"
@@ -459,6 +461,11 @@ StartOrder::Outcome Server::openStore(std::string* why) {
         std::fprintf(stderr, "nexus-server: store %s: its %llu friend tab%s read as session%s, one each, and "
             "written in the sessions format\n", paths_.store.c_str(), static_cast<unsigned long long>(r.migrated),
             r.migrated == 1 ? "" : "s", r.migrated == 1 ? "" : "s");
+    }
+    if (r.skipped > 0) {
+        std::fprintf(stderr, "nexus-server: store %s: %llu unknown field%s or change%s from a later server skipped\n",
+            paths_.store.c_str(), static_cast<unsigned long long>(r.skipped), r.skipped == 1 ? "" : "s",
+            r.skipped == 1 ? "" : "s");
     }
     return StartOrder::Outcome::Ok;
 }
@@ -1221,7 +1228,28 @@ void Server::state() {
 
 int Server::run() {
     std::string why;
-    if (!ensureHome(paths_, &why) || !readConfig(paths_.config, &settings_, &why)) {
+    if (!ensureHome(paths_, &why)) {
+        std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
+        return kFailedExit;
+    }
+    // Migrate an old ~/.nexus layout once into ~/.nexus/server before reading config or opening the store, unless a
+    // live server already answers on ~/.nexus/server/server.sock (which StartOrder::Probe below refuses with exit 0).
+    if (!paths_.top.empty() && !serving(paths_.socket)) {
+        std::unique_ptr<store::Fs> migFs = store::make_posix_fs();
+        migration::Options migOpts;
+        migOpts.old_server_live = [this] { return migration::probeOldServerSocket(paths_.top + "/" + kSocketName); };
+        migration::Report migReport;
+        const store::Status migSt = migration::migrateOldLayout(*migFs, paths_.top, paths_.dir, migOpts, &migReport);
+        if (!migSt.is_ok()) {
+            std::fprintf(stderr, "nexus-server: %s\n", migSt.message().c_str());
+            return kFailedExit;
+        }
+        if (migReport.migrated) {
+            std::fprintf(stderr, "nexus-server: migrated the old layout in %s to %s%s\n", paths_.top.c_str(),
+                paths_.dir.c_str(), migReport.resumed ? " (resumed)" : "");
+        }
+    }
+    if (!readConfig(paths_.config, &settings_, &why)) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return kFailedExit;
     }
@@ -1480,16 +1508,17 @@ bool ask(const Paths& p, const std::string& request, const std::string& self, st
 bool paths(const std::string& dir, Paths* out, std::string* why) {
     // HOME is needed with --dir too: a friend's directory in the drivers file may start with ~, and a driver finds its
     // account under it.
-    std::string d;
-    if (!serverHome(std::getenv("HOME"), &out->home, &out->top, &d, why)) {
+    std::string defaultDir;
+    if (!serverHome(std::getenv("HOME"), &out->home, &out->top, &defaultDir, why)) {
         return false;
     }
-    if (!dir.empty()) {
-        d = dir;
+    std::string d = dir.empty() ? defaultDir : dir;
+    while (d.size() > 1 && d.back() == '/') {
+        d.pop_back();
+    }
+    if (d != defaultDir) {
         out->top.clear();
     }
-    while (d.size() > 1 && d.back() == '/')
-        d.pop_back();
     out->dir = d;
     out->config = d + "/config";
     out->socket = d + "/" + kSocketName;
@@ -1665,12 +1694,50 @@ int config(const Paths& p, const std::vector<std::string>& args) {
 }
 
 int storeCommand(const Paths& p, const std::vector<std::string>& args) {
-    if (args.size() != 1 || args[0] != "check") {
-        std::fprintf(stderr, "usage: nexus-server store check [--dir DIR]\n"
-                             "Reads DIR/store without changing it; refused while a server has it open\n");
+    std::string forBuild;
+    if (args.size() == 3 && args[0] == "check" && args[1] == "--for") {
+        forBuild = args[2];
+    } else if (args.size() != 1 || args[0] != "check") {
+        std::fprintf(stderr, "usage: nexus-server store check [--for <build-hash>] [--dir DIR]\n"
+                             "Reads DIR/store without changing it; --for checks whether placed build <build-hash>\n"
+                             "can read DIR/store and DIR/nexus-config\n");
         return 2;
     }
     std::unique_ptr<store::Fs> fs = store::make_posix_fs();
+    if (!forBuild.empty()) {
+        if (!builds::isHash(forBuild)) {
+            std::fprintf(stderr, "nexus-server: `%s` is not a build's hash (64 hex digits; `nexus-server builds list`)\n",
+                         forBuild.c_str());
+            return builds::kExitRefused;
+        }
+        builds::Manifest m;
+        const store::Status ms = builds::checkBuild(p.dir + "/" + builds::kBuildsDir, forBuild, &m);
+        if (ms.code() == store::Status::Code::NotFound) {
+            std::fprintf(stderr, "nexus-server: build %s is not placed (`nexus-server builds list`)\n",
+                         forBuild.c_str());
+            return builds::kExitRefused;
+        }
+        if (!ms.is_ok()) {
+            std::fprintf(stderr, "nexus-server: %s\n", ms.message().c_str());
+            return 1;
+        }
+        builds::DiskFormats disk;
+        const store::Status ds = migration::readDiskFormats(*fs, p.dir, &disk);
+        if (!ds.is_ok()) {
+            std::fprintf(stderr, "nexus-server: %s\n", ds.message().c_str());
+            return 1;
+        }
+        const std::string ref = builds::diskFormatsRefusal(m.formats, forBuild, disk);
+        if (!ref.empty()) {
+            std::fprintf(stderr, "nexus-server: %s\n", ref.c_str());
+            return builds::kExitRefused;
+        }
+        std::printf("OK store %s and config are readable by build %s (readers: store-record %u, store-snapshot %u, "
+                    "config %u); nothing was changed\n",
+                    p.store.c_str(), forBuild.c_str(), disk.storeRecordReader, disk.storeSnapshotReader,
+                    disk.configVersion);
+        return 0;
+    }
     store::MemFs copy;
     std::unique_ptr<store::Store> s;
     store::OpenReport r;
@@ -1679,11 +1746,14 @@ int storeCommand(const Paths& p, const std::vector<std::string>& args) {
         std::fprintf(stderr, "nexus-server: %s\n", st.message().c_str());
         return 1;
     }
+    const std::string skippedText = r.skipped == 0 ? std::string() :
+        ", " + std::to_string(r.skipped) + " later-format field" + (r.skipped == 1 ? "" : "s") + " skipped";
     std::printf("OK store %s: %s, %zu session%s, next session %llu, %llu record%s after the snapshot, %llu bytes of torn "
-                "tail a server's open would cut; nothing was changed\n", p.store.c_str(), r.fresh ? "empty" : "read",
+                "tail a server's open would cut%s; nothing was changed\n",
+                p.store.c_str(), r.fresh ? "empty" : "read",
                 s->sessions().size(), s->sessions().size() == 1 ? "" : "s",
                 static_cast<unsigned long long>(s->next_session()), static_cast<unsigned long long>(r.records),
-                r.records == 1 ? "" : "s", static_cast<unsigned long long>(r.cut_bytes));
+                r.records == 1 ? "" : "s", static_cast<unsigned long long>(r.cut_bytes), skippedText.c_str());
     return 0;
 }
 

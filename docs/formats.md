@@ -128,10 +128,19 @@ server's state is.
 - An unframed format holding an entry kind it never had is refused, naming the store, the record (or snapshot) and
   the kind. That is damage, not a later version.
 - A framed record or snapshot of a later format is read. A change of a kind this build does not know is skipped
-  whole; fields after the known ones are skipped; an entry kind it does not know is kept as it is, and the server
-  shows it as a notice (`server/durable.cpp`).
+  whole (including a record on a held session whose only changes are unknown kinds, still advancing any client counter
+  on that record); fields after the known ones are skipped (`OpenReport::skipped` counts skipped frames and trailing
+  tails, logged once on `serve` and shown by `nexus-server store check`); an entry kind it does not know is kept as it
+  is, and the server shows it as a notice (`server/durable.cpp`).
 - It is refused only when its reader byte names a format later than this build reads. The message names the store,
-  the record and both formats, and says to run the newer nexus-server.
+  the record and both formats, and says to run the newer nexus-server. `Store::inspect_readers` (`nexus-server store
+  check --for <hash>`, `builds back`, and write-downgrading `builds current`) scans the snapshot's and journal records'
+  reader bytes under the store's shared lock without mutating anything on disk (`models/migration/Migration.tla`).
+- A server layout from before `~/.nexus/server` existed (`~/.nexus/{store,drivers,config,server.log}` and a stale
+  `~/.nexus/server.sock`) moves once into `~/.nexus/server` at startup (`src/server/migration.cpp`), under
+  `~/.nexus/server`'s exclusive `flock`: refusing while an old server answers on `~/.nexus/server.sock` or holds
+  `~/.nexus/store`, refusing rather than overwriting a populated `~/.nexus/server/store` or differing `drivers`/`config`,
+  and recording `.migrating` synced before copying so any kill or crash resumes cleanly without losing or tearing a file.
 
 ### One writer: the store's lock
 

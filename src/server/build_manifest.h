@@ -78,10 +78,22 @@ std::string formatsText(const Formats& formats);
 // The link and the driver protocol are agreed between their two ends at each connection, and not checked.
 inline const std::vector<std::string> kCheckedFormats{"store-record", "store-snapshot", "config"};
 // The rule a switch keeps (current/back): the build made current must read what the current build writes, for every
-// checked format: current's reader <= the target's writes. Empty when it does; else the plain line. Whether the store
-// holds anything a build cannot read is layer 5's check; this one goes by the versions alone.
+// checked format: current's reader <= the target's writes. Empty when it does; else the plain line.
 std::string formatsRefusal(const Formats& target, const std::string& targetHash, const Formats& current,
                            const std::string& currentHash);
+
+// What the server directory's store and config files on disk actually require a reader to know (0: nothing written for
+// that format yet). Checked by `builds back` and write-downgrading `builds current` (layer 5, models/migration).
+struct DiskFormats {
+    std::uint32_t storeRecordReader = 0;
+    std::uint64_t storeRecordSeq = 0;
+    std::uint32_t storeSnapshotReader = 0;
+    std::uint32_t configVersion = 0;
+    std::string configFile;
+};
+// Empty when `target` reads every format present in `disk`; else the one-line refusal naming the build, the format,
+// what is on disk and what `target` reads up to.
+std::string diskFormatsRefusal(const Formats& target, const std::string& targetHash, const DiskFormats& disk);
 
 // The evidence that a tree passed its tests: written by whatever ran them, after they ran, naming the hash of the tree
 // as it was then (`nexus-server builds hash <dir>`).
