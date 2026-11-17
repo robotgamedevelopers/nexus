@@ -877,6 +877,10 @@ struct Handover::Run {
                 builds::Result br;
                 if (h.placement_.makeCurrent(rtgt, br, fault(Fault::AllowUntested)) != builds::kExitOk) {
                     adoptBuildsFailure(br);
+                    if (br.exit == builds::kExitRefused && !resumingExplicit) {
+                        didOwn = true;
+                        next = Step::Clear;
+                    }
                 } else {
                     next = Step::WDrain;
                 }

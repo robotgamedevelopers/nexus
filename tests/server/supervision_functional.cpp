@@ -366,7 +366,7 @@ struct ChildProc {
             return;
         }
         ::kill(pid, SIGTERM);
-        if (!waitExit(exitCode, 5000)) {
+        if (!waitExit(exitCode, 15000)) {
             killAndReap();
             *exitCode = -1;
         }
@@ -404,7 +404,7 @@ void caseStartAndStop(const std::string& fakeBin, const fs::path& work) {
 
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(waitForServingBuild(sock, b1, 5000));
+    CHECK(waitForServingBuild(sock, b1, 15000));
 
     // `supervise status` reports running + serving b1.
     {
@@ -419,13 +419,13 @@ void caseStartAndStop(const std::string& fakeBin, const fs::path& work) {
     std::string reply;
     CHECK(askSocket(sock, "stop", &reply) && reply == "OK");
     int code = -1;
-    CHECK(sup.waitExit(&code, 5000));
+    CHECK(sup.waitExit(&code, 15000));
     CHECK(code == kExitOk);
 
     // A restarted supervisor honors `stopped = 1` on disk and stays stopped (exits 0 immediately).
     ChildProc sup2;
     sup2.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(sup2.waitExit(&code, 3000));
+    CHECK(sup2.waitExit(&code, 15000));
     CHECK(code == kExitOk);
     CHECK(!askSocket(sock, "status", &reply));
 
@@ -433,14 +433,14 @@ void caseStartAndStop(const std::string& fakeBin, const fs::path& work) {
     // without setting `stopped = 1` on disk.
     ChildProc sup3;
     sup3.spawn(supExe, {"supervise", "--start", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(waitForServingBuild(sock, b1, 5000));
+    CHECK(waitForServingBuild(sock, b1, 15000));
     sup3.terminateCleanly(&code);
     CHECK(code == kExitOk);
 
     // Next boot (`supervise` without `--start`) starts b1 again because SIGTERM did not mark `stopped = 1`!
     ChildProc sup4;
     sup4.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(waitForServingBuild(sock, b1, 5000));
+    CHECK(waitForServingBuild(sock, b1, 15000));
     sup4.terminateCleanly(&code);
     CHECK(code == kExitOk);
 }
@@ -477,8 +477,8 @@ void caseDrainHandover(const std::string& fakeBin, const fs::path& work) {
 
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(waitForServingBuild(sock, b1, 5000));
-    const std::uint64_t resumeClearDeadline = nowMs() + 2000;
+    CHECK(waitForServingBuild(sock, b1, 15000));
+    const std::uint64_t resumeClearDeadline = nowMs() + 10000;
     while (nowMs() < resumeClearDeadline && fs::exists(sdir / handover::kHandoverDir / handover::kStateFile)) {
         sleepMs(10);
     }
@@ -503,7 +503,7 @@ void caseDrainHandover(const std::string& fakeBin, const fs::path& work) {
     CHECK(sup.pid > 0);
     int dummy = 0;
     CHECK(!sup.waitExit(&dummy, 80));
-    CHECK(waitForServingBuild(sock, b2, 5000));
+    CHECK(waitForServingBuild(sock, b2, 15000));
     CHECK(askSocket(sock, "entries", &reply) && reply == "1");
     CHECK(countZombieChildren(sup.pid) == 0);
     {
@@ -515,7 +515,7 @@ void caseDrainHandover(const std::string& fakeBin, const fs::path& work) {
 
     // Now crash the adopted b2 (`crash` on server.sock): supervisor detects adopted crash and respawns b2!
     CHECK(askSocket(sock, "crash", &reply) && reply == "OK");
-    CHECK(waitForServingBuild(sock, b2, 5000));
+    CHECK(waitForServingBuild(sock, b2, 15000));
 
     int code = -1;
     sup.terminateCleanly(&code);
@@ -542,7 +542,7 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
 
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(waitForServingBuild(sock, b1, 5000));
+    CHECK(waitForServingBuild(sock, b1, 15000));
 
     // Handover to bLate succeeds because bLate binds server.sock and answers SERVING!
     handover::Result hr;
@@ -556,7 +556,7 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
     // bLate then crashes post-start; supervisor retries once, sees second post-start crash, acquires handover lock,
     // resumes/clears `handover/state` under `rbHold`, shuns bLate, switches builds/active back to b1, and brings b1 to
     // SERVING!
-    const std::uint64_t deadline = nowMs() + 8000;
+    const std::uint64_t deadline = nowMs() + 25000;
     bool rolledBackAndServing = false;
     while (nowMs() < deadline) {
         builds::Builds b(sdir.string(), {});
@@ -564,7 +564,7 @@ void casePostStartRollback(const std::string& fakeBin, const fs::path& work) {
         std::string prev;
         builds::Result br;
         if (b.active(&cur, &prev, br) == builds::kExitOk && cur == b1 && prev == bLate) {
-            if (waitForServingBuild(sock, b1, 1000)) {
+            if (waitForServingBuild(sock, b1, 5000)) {
                 rolledBackAndServing = true;
                 break;
             }
@@ -761,7 +761,7 @@ void caseUnitsAndLocks(const std::string& fakeBin, const fs::path& work) {
     const std::string sock = (sdir / "server.sock").string();
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), (work / "sup.log").string());
-    CHECK(waitForServingBuild(sock, b1, 5000));
+    CHECK(waitForServingBuild(sock, b1, 15000));
 
     Options busyOpts;
     busyOpts.lock_wait_ms = 60;

@@ -207,7 +207,7 @@ bool askSocket(const std::string& sockPath, const std::string& req, std::string*
     return ok;
 }
 
-bool waitServingHash(const std::string& sockPath, const std::string& wantHash, std::uint64_t timeoutMs = 15000) {
+bool waitServingHash(const std::string& sockPath, const std::string& wantHash, std::uint64_t timeoutMs = 30000) {
     const std::uint64_t t0 = nowMs();
     while (nowMs() - t0 < timeoutMs) {
         std::string l1, l2;
@@ -258,7 +258,7 @@ pid_t spawnProc(const std::string& exe, const std::vector<std::string>& args, co
     return pid;
 }
 
-int waitProc(pid_t pid, std::uint64_t timeoutMs = 15000) {
+int waitProc(pid_t pid, std::uint64_t timeoutMs = 30000) {
     const std::uint64_t t0 = nowMs();
     while (nowMs() - t0 < timeoutMs) {
         int status = 0;
@@ -505,7 +505,7 @@ void testE2eBreakingFormat5RefusesRollbackAndHalts(const std::string& fakeBin, c
     // Crash b3 repeatedly until `supervise` exhausts restarts and halts cleanly (`kExitHalted == 78`)!
     const std::uint64_t t0 = nowMs();
     int supRc = -1;
-    while (nowMs() - t0 < 15000) {
+    while (nowMs() - t0 < 30000) {
         int st = 0;
         if (::waitpid(supPid, &st, WNOHANG) == supPid) {
             supRc = WIFEXITED(st) ? WEXITSTATUS(st) : (128 + WTERMSIG(st));

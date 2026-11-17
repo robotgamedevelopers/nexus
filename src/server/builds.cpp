@@ -1572,6 +1572,38 @@ struct Builds::Run {
             if (!refusal.empty()) {
                 return end(Status::refused(refusal));
             }
+            bool downgradeWrites = false;
+            for (const std::string& name : kCheckedFormats) {
+                const Format* c = findFormat(cur.formats, name);
+                const Format* t = findFormat(m.formats, name);
+                if (c != nullptr && (t == nullptr || t->writes < c->writes)) {
+                    downgradeWrites = true;
+                    break;
+                }
+            }
+            if (downgradeWrites && !fault(Fault::MultiHopNoStoreCheck)) {
+                store::PosixOptions po;
+                po.now_ms = b.options_.now_ms;
+                po.sleep_ms = b.options_.sleep_ms;
+                po.test_fs_type = b.options_.test_fs_type;
+                po.test_locks_ignored = b.options_.test_locks_ignored;
+                std::unique_ptr<store::Fs> fs = store::make_posix_fs(std::move(po));
+                DiskFormats disk;
+                s = migration::readDiskFormats(*fs, b.serverDir_, &disk, b.options_.now_ms);
+                if (s.code() == Status::Code::Busy) {
+                    return end(Status::refused("cannot switch to build " + target +
+                                               " while a running server holds " + b.serverDir_ +
+                                               "/store open, because it reads older formats than " + p.current +
+                                               " writes; stop the server first (`nexus-server stop`)"));
+                }
+                if (!s.is_ok()) {
+                    return end(s);
+                }
+                const std::string diskRef = diskFormatsRefusal(m.formats, target, disk);
+                if (!diskRef.empty()) {
+                    return end(Status::refused(diskRef));
+                }
+            }
         }
         const std::string link = b.serverDir_ + "/" + kStable;
         struct stat st;
