@@ -2,6 +2,7 @@
 // (models/handover/Handover.tla).
 
 #include "server/handover.h"
+#include "server/supervise_state.h"
 
 #include <algorithm>
 #include <atomic>
@@ -70,6 +71,14 @@ store::Bytes toBytes(const std::string& s) {
 
 std::string fromBytes(const store::Bytes& b) {
     return std::string(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+std::string siblingSuperviseDir(const std::string& handoverDir) {
+    const std::size_t slash = handoverDir.rfind('/');
+    if (slash == std::string::npos) {
+        return supervision::kSuperviseDir;
+    }
+    return handoverDir.substr(0, slash + 1) + supervision::kSuperviseDir;
 }
 
 class BuildsPlacement final : public PlacementPort {
@@ -204,13 +213,14 @@ struct LineReader {
 class PosixServerPort final : public ServerPort {
 public:
     PosixServerPort(std::string serverDir, std::function<std::uint64_t()> now_ms,
-                    std::function<void(std::uint64_t)> sleep_ms)
+                    std::function<void(std::uint64_t)> sleep_ms, pid_t* adopted_pid_out)
         : serverDir_(std::move(serverDir)),
           socketPath_(serverDir_ + "/server.sock"),
           logPath_(serverDir_ + "/server.log"),
           programPath_(serverDir_ + "/" + builds::kStable + "/" + builds::kProgram),
           now_(now_ms ? std::move(now_ms) : std::function<std::uint64_t()>(steadyMs)),
-          sleep_(sleep_ms ? std::move(sleep_ms) : std::function<void(std::uint64_t)>(realSleep)) {}
+          sleep_(sleep_ms ? std::move(sleep_ms) : std::function<void(std::uint64_t)>(realSleep)),
+          adoptedOut_(adopted_pid_out) {}
 
     ~PosixServerPort() override {
         abortStarted();
@@ -348,6 +358,9 @@ public:
     }
 
     void keepStarted() override {
+        if (adoptedOut_ != nullptr && child_ > 0) {
+            *adoptedOut_ = child_;
+        }
         child_ = -1;
         spawned_ = false;
     }
@@ -405,6 +418,7 @@ private:
     std::string programPath_;
     std::function<std::uint64_t()> now_;
     std::function<void(std::uint64_t)> sleep_;
+    pid_t* adoptedOut_ = nullptr;
     pid_t child_ = -1;
     bool spawned_ = false;
 };
@@ -644,7 +658,9 @@ struct Handover::Run {
         }
 
         at("lock");
-        if (!fault(Fault::NoLock)) {
+        if (h.options_.lock_already_held) {
+            h.locked_ = true;
+        } else if (!fault(Fault::NoLock)) {
             const std::uint64_t waitBegan = now();
             for (;;) {
                 s = h.fs_.lock(h.handoverDir_, store::LockMode::Exclusive, hold);
@@ -811,6 +827,9 @@ struct Handover::Run {
                     adoptBuildsFailure(cr);
                     break;
                 }
+                if (!fault(Fault::InMemoryOnly)) {
+                    (void)supervision::noteHandoverBegin(h.fs_, siblingSuperviseDir(h.handoverDir_));
+                }
                 ServerSeen seen;
                 const Status ps = h.server_.probe(&seen);
                 if (!ps.is_ok()) {
@@ -820,6 +839,10 @@ struct Handover::Run {
                 }
                 if (cur == requestedHash && seen.serving && !seen.legacy && seen.build == requestedHash &&
                     !seen.draining) {
+                    if (!fault(Fault::InMemoryOnly)) {
+                        (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_),
+                                                              requestedHash);
+                    }
                     r.out.push_back("already serving " + requestedHash);
                     next = Step::Unlock;
                     break;
@@ -880,6 +903,9 @@ struct Handover::Run {
                     }
                     if (!seen.legacy && seen.build == rtgt && !seen.draining) {
                         if (didOwn) {
+                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                                (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
+                            }
                             r.out.push_back("serving " + rtgt +
                                             (rprev.empty() ? std::string() : " (previous " + rprev + ")"));
                         }
@@ -959,6 +985,9 @@ struct Handover::Run {
                     if (seen.serving && !seen.legacy && seen.build == rtgt && !seen.draining) {
                         h.server_.keepStarted();
                         if (didOwn) {
+                            if (isTo && !fault(Fault::InMemoryOnly)) {
+                                (void)supervision::noteHandoverTarget(h.fs_, siblingSuperviseDir(h.handoverDir_), rtgt);
+                            }
                             r.out.push_back("serving " + rtgt +
                                             (rprev.empty() ? std::string() : " (previous " + rprev + ")"));
                         }
@@ -1198,8 +1227,9 @@ std::unique_ptr<PlacementPort> makeBuildsPlacement(const std::string& serverDir,
 
 std::unique_ptr<ServerPort> makePosixServerPort(const std::string& serverDir,
                                                 const std::function<std::uint64_t()>& now_ms,
-                                                const std::function<void(std::uint64_t)>& sleep_ms) {
-    return std::make_unique<PosixServerPort>(serverDir, now_ms, sleep_ms);
+                                                const std::function<void(std::uint64_t)>& sleep_ms,
+                                                pid_t* adopted_pid_out) {
+    return std::make_unique<PosixServerPort>(serverDir, now_ms, sleep_ms, adopted_pid_out);
 }
 
 std::string help(const std::string& verb) {
@@ -1280,8 +1310,12 @@ int command(const std::string& serverDir, const std::vector<std::string>& args, 
     bOpts.lock_wait_ms = options.lock_wait_ms;
     bOpts.test_fs_type = options.test_fs_type;
     bOpts.test_locks_ignored = options.test_locks_ignored;
+    if (options.adopted_pid_out != nullptr) {
+        *options.adopted_pid_out = -1;
+    }
     std::unique_ptr<PlacementPort> placement = makeBuildsPlacement(serverDir, bOpts);
-    std::unique_ptr<ServerPort> server = makePosixServerPort(serverDir, options.now_ms, options.sleep_ms);
+    std::unique_ptr<ServerPort> server =
+        makePosixServerPort(serverDir, options.now_ms, options.sleep_ms, options.adopted_pid_out);
 
     Handover engine(*fs, *placement, *server, serverDir + "/" + kHandoverDir, options);
     if (args.empty() || args[0] == "resume") {

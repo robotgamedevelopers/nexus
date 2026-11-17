@@ -225,5 +225,82 @@ and inspects `handover/state` first:
 
 Exit statuses of `nexus-server handover`: `0` ok (for `resume`, recovered to `SERVING`); `1` failed; `2` usage; `3`
 refused (not placed, untested, incompatible formats, no current build); `4` lock busy; `5` target failed to serve and
-rolled back to `previous`. Layer 4 (`takeover-supervision`) adds service supervision (`launchd`/`systemd`) and rollback
-for builds that fail after reaching `SERVING`.
+rolled back to `previous`.
+
+## Supervision
+
+Layer 4 (`docs/roadmap.sexp`, `takeover-supervision`; `src/server/supervision.h`, `src/server/supervise_state.h`,
+`models/supervision/Supervision.tla`) keeps the active placed build running across boots, drain handovers (`exit 75`),
+intentional stops (`exit 0`), and post-start build failures (a build that reaches `SERVING` during handover and crashes
+later).
+
+Under `<server dir>/`:
+
+```
+supervise/
+  gate                    writers' gate (store/fs.h)
+  state                   durable supervision record (written under supervise/'s flock)
+  stopped                 atomic intentional-stop marker (created by stop / Reap(0))
+  picked                  atomic explicit-handover target marker (<hash>\n)
+  .state-*                interrupted state/marker writes, removed by the next holder after syncing supervise/
+```
+
+`supervise/state` is written through a synced `.state-*` file, renamed over `state`, with `supervise/` synced:
+
+```
+nexus-supervise 1
+build 3f2a...
+crashes 0
+halted 0
+stopped 0
+shun 7cd1...
+end
+```
+
+### Lifecycle, post-start rollback, and shunning
+
+`launchd` (macOS LaunchAgent) and `systemd` (Linux and WSL2 user unit) run:
+
+```
+<server dir>/current/bin/nexus-server supervise --dir <server dir>
+```
+
+At most one supervisor runs per `<server dir>` under `flock(LOCK_EX)` on `supervise/`'s own descriptor:
+
+1. **Cold start and handover adoption**: checks `handover/`'s lock (waiting if an external `handover` is in flight, and
+   resuming any interrupted `handover/state` left unlocked on disk), verifies `builds/active`'s `current` build has
+   passing test evidence, and either adopts an already-serving `current` server or spawns
+   `<server dir>/current/bin/nexus-server serve --dir <server dir>`.
+2. **Drain (`exit 75`)**: when `serve` finishes draining open turns and exits `75`, the supervisor resets `crashes` to
+   `0` and adopts or starts the active `current` build once `handover/` is unlocked.
+3. **Intentional stop (`exit 0`) vs OS shutdown (`SIGTERM`)**: `nexus-server stop` creates the atomic marker
+   `supervise/stopped` before `serve` exits `0`, so background `supervise/state` writes never clobber an intentional
+   stop, the supervisor exits `0`, and any subsequent restart stays stopped until `nexus-server supervise --start` or
+   `nexus-server handover <hash>` clears `supervise/stopped`. `SIGTERM` or `SIGINT` sent to `supervise` during OS
+   shutdown stops `serve` cleanly and exits `0` without setting `supervise/stopped`, so the next boot starts `current`.
+4. **Post-start failure rollback and shunning**: if `current` crashes (`exit != 0, 75`) `2` times
+   (`kDefaultMaxCrashesBeforeRollback`) after starting and an unshunned `previous` build exists in `builds/active`, the
+   supervisor acquires `handover/`'s exclusive lock, records the failed build in `shun`, switches `builds/active` back
+   to `previous`, and starts `previous`. Persisting `shun` in `supervise/state` prevents a dual-broken pair from
+   ping-ponging across supervisor restarts; an explicit `nexus-server handover <hash>` unshuns `<hash>`. Once a build
+   serves stably for `60 s` (`kStableMs`), `crashes` resets to `0` while keeping `shun`.
+5. **Bounded halt (`exit 78`)**: if no unshunned `previous` build exists, the supervisor backs off and halts after `5`
+   consecutive crashes (`kDefaultMaxRestarts`), persisting `halted 1` and exiting `78` (`EX_CONFIG`).
+
+### OS service units
+
+`nexus-server supervise unit --kind systemd|launchd` prints the deterministic service definition without invoking
+`systemctl` or `launchctl`:
+
+- **Linux and WSL2 (`systemd` user unit, `~/.config/systemd/user/nexus-server.service`)**: `ExecStart` runs
+  `<server dir>/current/bin/nexus-server supervise --dir <server dir>` with `KillMode=process`, `Restart=on-failure`,
+  `RestartPreventExitStatus=3 78`, and `WantedBy=default.target`.
+- **macOS (`launchd` LaunchAgent, `~/Library/LaunchAgents/com.robotgamedevelopers.nexus-server.plist`)**:
+  `ProgramArguments` runs `[program, "supervise", "--launchd", "--dir", serverDir]` with `RunAtLoad=true`,
+  `KeepAlive.SuccessfulExit=false`, and `ThrottleInterval=10` (`--launchd` persists `halted 1` and exits `0` when
+  permanently halted or refused so `launchd` does not respawn a permanently halted supervisor every 10 s).
+- Non-default `--dir` paths append a deterministic 12-hex SHA-256 suffix to the unit/label name so isolated instances
+  never collide.
+
+Exit statuses of `nexus-server supervise`: `0` stopped cleanly; `1` failed; `2` usage; `3` refused (no current build or
+untested); `4` lock busy; `78` halted after exhausting rollback and restart bounds.

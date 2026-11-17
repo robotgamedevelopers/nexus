@@ -132,6 +132,8 @@ struct Options {
     std::uint64_t poll_ms = kPollMs;
     std::string test_fs_type;
     bool test_locks_ignored = false;
+    bool lock_already_held = false;
+    pid_t* adopted_pid_out = nullptr;
     Fault fault = Fault::None;
 };
 
@@ -178,7 +180,8 @@ std::unique_ptr<PlacementPort> makeBuildsPlacement(const std::string& serverDir,
                                                    const builds::Options& options = {});
 std::unique_ptr<ServerPort> makePosixServerPort(const std::string& serverDir,
                                                 const std::function<std::uint64_t()>& now_ms = {},
-                                                const std::function<void(std::uint64_t)>& sleep_ms = {});
+                                                const std::function<void(std::uint64_t)>& sleep_ms = {},
+                                                pid_t* adopted_pid_out = nullptr);
 
 // `nexus-server handover [<hash>|resume|status|help]`: exit status as above.
 int command(const std::string& serverDir, const std::vector<std::string>& args, const Options& options, Result& r);
