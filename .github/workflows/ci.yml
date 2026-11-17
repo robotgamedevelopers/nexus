@@ -207,8 +207,12 @@ jobs:
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
           # Bash 3.2-compatible parallel walk runner (macOS /bin/bash has no `wait -n`, and `set -u` rejects empty
-          # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under walks/, checking every
-          # exit status.
+          # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under $RUNNER_TEMP/nexus-walks
+          # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
+          # every exit status.
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           launched=0
           in_batch=0
           batch_pids=()
@@ -222,7 +226,7 @@ jobs:
             in_batch=0
           }
           walk() {
-            local dir="walks/$launched"
+            local dir="$walks_root/$launched"
             mkdir -p "$dir"
             ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
             batch_pids+=($!)
@@ -349,6 +353,8 @@ jobs:
             walk build/tests/server/takeover_walk 1 40 --fault "$fault"
           done
           flush_walks
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           echo "$launched walks passed"
 
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
@@ -485,9 +491,10 @@ jobs:
           fi
           # The runs' directories under a temporary directory of this runner's own: two Claude sandboxes at once whose
           # working directories share an ancestor a few levels up fail each other's commands now and then (bwrap:
-          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). A short path: under the
-          # job's runner.temp the sandbox could not make its sockets ("Failed to create bridge sockets").
-          own="${TMPDIR:-/tmp}/$RUNNER_NAME"
+          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
+          # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
+          # limit on long runner names).
+          own="/tmp/$RUNNER_NAME"
           mkdir -p "$own"
           echo "TMPDIR=$own" >> "$GITHUB_ENV"
           caches="$HOME/.cache/nexus-ci"
@@ -766,17 +773,21 @@ jobs:
           echo "$launched unit programs passed"
       # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
       # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
-      # once, at most TEST_JOBS at a time, each in a directory of its own under walks/ holding its trace and its output.
-      # Any failure fails the step, with that walk's command and output.
+      # once, at most TEST_JOBS at a time, each in a directory of its own under $RUNNER_TEMP/nexus-walks (outside
+      # $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout) holding its trace and its
+      # output. Any failure fails the step, with that walk's command and output.
       - name: Trace walks and their faults under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
         run: |
           set -euo pipefail
+          walks_root="$RUNNER_TEMP/nexus-walks"
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           launched=0
           running=0
           walk() {
-            local dir="walks/$launched"
+            local dir="$walks_root/$launched"
             mkdir -p "$dir"
             ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
             launched=$((launched + 1))
@@ -919,6 +930,8 @@ jobs:
             wait -n
             running=$((running - 1))
           done
+          chmod -R u+w "$walks_root" 2>/dev/null || true
+          rm -rf "$walks_root"
           echo "$launched walks passed"
 
   # The TLA+ models and their trace checks, on the fleet's Linux runners: TLC is Java and checks the same on every
