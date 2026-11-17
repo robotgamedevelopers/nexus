@@ -45,14 +45,27 @@ struct Bootstrap {
     // none, as a window before formats did. From format 4 (kTablesFormat) the window also states its Hello, the format
     // as its proto and sync::kMinPeer; a format below 4 states no Hello, as a window from before Hello did.
     std::uint32_t stateFormat = sync::kStateFormat;
+    // The window's client id and the number of its first action in the session: `--client <id> --next <n>` after the
+    // command (server/server.h), so that a session made again sends again, under their own numbers, the actions it has
+    // no acknowledgement for, and the server skips those it applied. Empty: the window names itself not.
+    std::string client;
+    std::uint64_t next = 1;
+    // Ask only a running server, and start none: kAskRunningVariable=1 in nexus-server new's environment, which a
+    // server from before it ignores (it starts one when none runs, as before). The window's link sets it once it has
+    // heard a server (sync/redial.h).
+    bool askRunning = false;
 };
+
+// The variable that tells nexus-server new to ask only a running server.
+inline const char* const kAskRunningVariable = "NEXUS_ASK_RUNNING";
 
 // The Hello the bootstrap states, if it states one.
 bool statesHello(const Bootstrap& b, sync::Hello* out);
 
 // The ssh command that runs it: no terminal, never a password prompt (BatchMode: the window has no terminal to ask in).
-// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format, with `NEXUS_HELLO=<hello>`
-// when it states a Hello: the format for a nexus-server from before Hello, which ignores the Hello.
+// The command runs under `env NEXUS_STATE_FORMAT=<n>` when the bootstrap states a format, `NEXUS_HELLO=<hello>` when
+// it states a Hello, and `NEXUS_ASK_RUNNING=1` with askRunning; `--client <id> --next <n>` follows it when the
+// bootstrap names a client.
 Command bootstrapCommand(const Bootstrap& b);
 
 // Runs the command over ssh with `run` and reads its output for the CONNECT line. False, with why (what ssh or the

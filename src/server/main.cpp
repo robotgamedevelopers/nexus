@@ -4,7 +4,9 @@
 //                                         a session for a window: prints `NEXUS CONNECT <port> <key>` and exits; with
 //                                         --client, the window's id and the number of its first action in the session;
 //                                         NEXUS_STATE_FORMAT in its environment, the state format the window reads
-//                                         (sync/formats.h), which the line then states after the key
+//                                         (sync/formats.h), which the line then states after the key; with
+//                                         NEXUS_ASK_RUNNING=1 there, it asks only a running server and starts none
+//                                         (a window reconnecting: link/bootstrap.h)
 //        nexus-server serve [--dir DIR]   the server itself (new starts it when none runs); exits 0, saying so, only
 //                                         when another server answers that it is serving; 3 when the store's lock is
 //                                         held for the whole wait by a server neither serving nor ending; 1 when it
@@ -45,6 +47,7 @@
 #include <string>
 #include <vector>
 
+#include "link/bootstrap.h"
 #include "no_core.h"
 #include "server/builds.h"
 #include "server/home.h"
@@ -164,7 +167,12 @@ int main(int argc, char** argv) {
                     nexus::sync::kHelloVariable, helloWhy.c_str());
             }
         }
-        return nexus::server::newSession(paths, selfPath(), client);
+        // A window that has heard a server asks only a running one (link/bootstrap.h kAskRunningVariable): a server
+        // stopped on purpose stays stopped, and a replacement build comes up by the service, never by a window's
+        // reconnect.
+        const char* askRunning = std::getenv(nexus::link::kAskRunningVariable);
+        const bool start = askRunning == nullptr || std::strcmp(askRunning, "1") != 0;
+        return nexus::server::newSession(paths, start ? selfPath() : std::string(), client);
     }
     if (command == "serve") {
         // The sandbox's bwrap and socat that the build made beside this program on Linux (cmake/sandbox.cmake), for

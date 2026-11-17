@@ -19,6 +19,8 @@
 namespace nexus::link {
 
 void freezeClock();
+// mosh's frozen monotonic clock, in milliseconds: call freezeClock() first.
+std::uint64_t clockMs();
 
 // nexus-server's end of one client's session.
 class ServerSession {
@@ -49,6 +51,12 @@ public:
     bool tick(std::string* why);
     int waitMs();
     bool ended() const;         // the client shut the session down, and its shutdown was acknowledged
+    // The server's end of the session, as the server stops: mosh's shutdown, so the window learns at once that it has
+    // to make a session again (link/client.h). Tick until shutdownDone(); setState is not called after it, and any
+    // diff arriving from the client after it is refused without advancing mosh's acknowledgement.
+    void shutdown();
+    bool shutdownDone() const;  // acknowledged, or given up on
+    bool shutdownAcknowledged() const;
     std::uint64_t applied() const;
     std::uint32_t format() const;   // the state format the link agreed
 
@@ -74,8 +82,15 @@ public:
     std::uint64_t add(sync::Action action);    // its num ignored: the next number
     const sync::Sessions& state() const;        // the server's latest
     std::uint64_t stateNum() const;         // its number: 0 until the server is first heard
+    std::uint64_t heardAtMs() const;        // clockMs() when the latest state arrived, or 0 before the first
     std::uint64_t heardMsAgo() const;       // since the server's latest state arrived
     bool allAcknowledged() const;           // the server has acknowledged every action added
+    // The number of the oldest action the server has not acknowledged (the next one's when it has acknowledged every
+    // one), and those actions, in number order: what a session made again starts from and sends again.
+    std::uint64_t firstUnacknowledged() const;
+    std::vector<sync::Action> unacknowledged() const;
+    // The server ended the session (mosh's shutdown, which this end acknowledged): it is gone.
+    bool serverEnded() const;
     bool tick(std::string* why);
     int waitMs();
     void shutdown();                        // starts mosh's shutdown; tick until shutdownDone()

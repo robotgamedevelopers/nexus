@@ -154,6 +154,29 @@ void bootstrap_command_shape() {
     CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new"}));
 }
 
+// A link making its session again names its client and its first action, and asks only a running server: the variable
+// after the format's and Hello's, and the client after the command.
+void bootstrap_command_reconnect() {
+    Bootstrap b;
+    b.host = "studio";
+    b.client = "window-0123456789abcdef";
+    b.next = 7;
+    b.askRunning = true;
+    const std::string format = "NEXUS_STATE_FORMAT=" + std::to_string(sync::kStateFormat);
+    const std::string hello = "NEXUS_HELLO=" + sync::helloText(sync::kHello);
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"env", format, hello, "NEXUS_ASK_RUNNING=1",
+        "nexus-server", "new", "--client", "window-0123456789abcdef", "--next", "7"}));
+    b.stateFormat = 3;
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"env", "NEXUS_STATE_FORMAT=3", "NEXUS_ASK_RUNNING=1",
+        "nexus-server", "new", "--client", "window-0123456789abcdef", "--next", "7"}));
+    b.stateFormat = 0;
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"env", "NEXUS_ASK_RUNNING=1", "nexus-server", "new",
+        "--client", "window-0123456789abcdef", "--next", "7"}));
+    b.askRunning = false;
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"nexus-server", "new", "--client",
+        "window-0123456789abcdef", "--next", "7"}));
+}
+
 CommandResult result(CommandResult::End end, int code, std::string out, std::string err) {
     CommandResult r;
     r.end = end;
@@ -247,6 +270,7 @@ const Case kCases[] = {
     {"connect_line_refusals", connect_line_refusals},
     {"remote_line_quotes_each_word", remote_line_quotes_each_word},
     {"bootstrap_command_shape", bootstrap_command_shape},
+    {"bootstrap_command_reconnect", bootstrap_command_reconnect},
     {"bootstrap_reads_connect_line", bootstrap_reads_connect_line},
     {"bootstrap_failures_say_why_without_key", bootstrap_failures_say_why_without_key},
     {"resolve_host_uses_ssh_hostname", resolve_host_uses_ssh_hostname},

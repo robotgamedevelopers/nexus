@@ -539,10 +539,18 @@ void newDuringStop(const std::string& server, const std::string& top) {
     CHECK(has(readFile(dir + "/new.log"), "NEXUS CONNECT"));
     std::printf("new during a stop: connected once the lock was let go after 6 s\n");
     stopServer(server, dir);
-    for (int i = 0; i < 250 && answering(dir); ++i) {
+    // A clean stop closes server.sock first and then spends up to kLinkShutdownMs (500 ms) telling open links their
+    // session ended while still holding dir/store, so wait for both the socket and the lock to let go.
+    fd = -1;
+    for (int i = 0; i < 250; ++i) {
+        if (!answering(dir)) {
+            fd = holdStore(dir, LOCK_EX);
+            if (fd >= 0) {
+                break;
+            }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    fd = holdStore(dir, LOCK_EX);
     CHECK(fd >= 0);
     asker = spawn({"/usr/bin/env", "NEXUS_TEST_HELD_WAIT_MS=300", server, "new", "--dir", dir}, dir + "/new2.log");
     const int exit = waitExit(asker, 20);

@@ -16,7 +16,12 @@ target_link_libraries(sync_test PRIVATE nexus_sync)
 target_compile_definitions(sync_test PRIVATE NEXUS_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 target_compile_options(sync_test PRIVATE ${warnings})
 
-add_dependencies(model_checks sync_test)
+# The window's link making its session again (src/sync/redial.h): logic only, so it builds everywhere sync_test does.
+add_executable(redial_test redial_test.cpp)
+target_link_libraries(redial_test PRIVATE nexus_sync)
+target_compile_options(redial_test PRIVATE ${warnings})
+
+add_dependencies(model_checks sync_test redial_test)
 
 # A measurement, not a test: encode and decode times of the sessions diff and the actions in each format
 # (wire_bench.cpp says which messages). Run by hand (`cmake --build build --target wire_bench`); it reads the clock, and
@@ -44,11 +49,34 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(signin_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     target_compile_options(signin_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks link_walk secrets_walk signin_walk)
+    add_executable(reconnect_walk reconnect_walk.cpp)
+    target_link_libraries(reconnect_walk PRIVATE nexus_sync)
+    target_compile_options(reconnect_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks link_walk secrets_walk signin_walk reconnect_walk)
 endif()
 
 add_test(NAME sync_unit COMMAND sync_test)
 set_tests_properties(sync_unit PROPERTIES LABELS unit TIMEOUT 30)
+add_test(NAME sync_unit_redial COMMAND redial_test)
+set_tests_properties(sync_unit_redial PROPERTIES LABELS unit TIMEOUT 30)
+
+# Reconnect.tla (models/Reconnect.tla): the spec with every property on three servers in turn, its reversed witnesses
+# (the link that never makes a session again, the one that does only when its server says it ended, a backoff that
+# never ends, and a session made from a kept CONNECT line), and the code's walks (reconnect_walk) checked against it,
+# with two faulty walks rejected (no step of the spec reaches their next state: a deadlock).
+tlc_test(tlc_reconnect_spec Reconnect MCReconnect.cfg pass)
+tlc_test(tlc_reconnect_witness_once       WReconnectOnce      WReconnectOnce.cfg      liveness)
+tlc_test(tlc_reconnect_witness_only_ended WReconnectOnlyEnded WReconnectOnlyEnded.cfg liveness)
+tlc_test(tlc_reconnect_witness_gives_up   WReconnectGivesUp   WReconnectGivesUp.cfg   liveness)
+tlc_test(tlc_reconnect_witness_cached     WReconnectCached    WReconnectCached.cfg    action PROPERTY DialsLive)
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_reconnect_trace_seed_${seed} ReconnectTrace ReconnectTrace.cfg pass RECONNECTWALK SEED ${seed} STEPS 1000)
+endforeach()
+tlc_test(tlc_reconnect_trace_faulty_cached_rejected ReconnectTrace ReconnectTrace.cfg deadlock
+         RECONNECTWALK SEED 1 STEPS 1000 FAULTY cached)
+tlc_test(tlc_reconnect_trace_faulty_no_reset_rejected ReconnectTrace ReconnectTrace.cfg deadlock
+         RECONNECTWALK SEED 1 STEPS 1000 FAULTY no-reset)
 
 # TLC (tlc_test is tests/model's): Link.tla on six instances, all properties (states and times on four workers in a
 # login session on the studio). MCLink.cfg is two windows sharing one friend's session, one send, queue or stop each,

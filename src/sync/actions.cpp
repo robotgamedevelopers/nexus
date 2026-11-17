@@ -111,6 +111,9 @@ std::vector<Action> Actions::parse(const std::string& diff, std::uint32_t format
 }
 
 void Actions::apply_string(const std::string& diff) {
+    if (closed_ && *closed_) {
+        throw BadDiff("the session is shutting down");
+    }
     const std::vector<Action> actions = parse(diff, format_);
     if (actions.empty())
         return;

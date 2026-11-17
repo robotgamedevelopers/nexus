@@ -2500,6 +2500,32 @@ void stop_never_filtered_by_the_window() {
     CHECK(store.applied("w") == 5);
 }
 
+// Once ServerSession::shutdown closes its remote Actions state, every copy mosh holds refuses new client diffs so
+// mosh's shutdown loop never advances ack_num past the last store flush.
+void actions_close_refuses_new_diffs() {
+    Actions initial;
+    initial.trackClose();
+    Actions copy = initial;
+    Actions sent;
+    sent.add(act(ActionKind::Send, sid("ada"), "flushed"));
+    copy.apply_string(sent.init_diff());
+    CHECK(copy.next() == 2);
+
+    const Actions before = copy;
+    sent.add(act(ActionKind::Send, sid("ada"), "after-stop"));
+    const std::string diff = sent.diff_from(before);
+    initial.close();
+    Actions next = copy;
+    bool threw = false;
+    try {
+        next.apply_string(diff);
+    } catch (const BadDiff& e) {
+        threw = std::string(e.what()).find("shutting down") != std::string::npos;
+    }
+    CHECK(threw);
+    CHECK(next == before);
+}
+
 struct Case {
     const char* name;
     void (*fn)();
@@ -2584,6 +2610,7 @@ const Case kCases[] = {
     {"format4_read_fuzz", format4_read_fuzz},
     {"state_files", state_files},
     {"cursor_from_the_servers_state", cursor_from_the_servers_state},
+    {"actions_close_refuses_new_diffs", actions_close_refuses_new_diffs},
 };
 
 } // namespace

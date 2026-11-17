@@ -138,15 +138,26 @@ std::string remoteLine(const std::vector<std::string>& command) {
 }
 
 Command bootstrapCommand(const Bootstrap& b) {
-    std::vector<std::string> command;
+    std::vector<std::string> variables;
     if (b.stateFormat != 0) {
-        command = {"env", std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat)};
+        variables.push_back(std::string(sync::kStateFormatVariable) + "=" + std::to_string(b.stateFormat));
     }
     sync::Hello hello;
     if (statesHello(b, &hello)) {
-        command.push_back(std::string(sync::kHelloVariable) + "=" + sync::helloText(hello));
+        variables.push_back(std::string(sync::kHelloVariable) + "=" + sync::helloText(hello));
+    }
+    if (b.askRunning) {
+        variables.push_back(std::string(kAskRunningVariable) + "=1");
+    }
+    std::vector<std::string> command;
+    if (!variables.empty()) {
+        command = {"env"};
+        command.insert(command.end(), variables.begin(), variables.end());
     }
     command.insert(command.end(), b.command.begin(), b.command.end());
+    if (!b.client.empty()) {
+        command.insert(command.end(), {"--client", b.client, "--next", std::to_string(b.next)});
+    }
     const std::string line = remoteLine(command);
     Command c;
     c.program = b.ssh;

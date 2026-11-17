@@ -54,6 +54,9 @@ constexpr int kControlTimeoutMs = 2000;     // for one request or reply on the c
 // stop's end, so that only a server neither serving nor exiting reaches it.
 constexpr std::uint64_t kNewLimitMs = 30000;
 constexpr int kMaxWaitMs = 1000;
+// The longest a stopping server waits for its windows to acknowledge that their sessions ended: an acknowledgement
+// takes one round trip, which on loopback or a tailnet is well under it (chosen, not measured past that).
+constexpr int kLinkShutdownMs = 500;
 constexpr std::uint64_t kWaitProgressMs = 1000;    // how often a start waiting for the store's lock says so
 constexpr const char* kSocketName = "server.sock";  // the control socket, in the server's directory
 
@@ -375,6 +378,7 @@ private:
     ino_t socketIno_ = 0;
     void control(int fd);
     bool endDrivers();
+    std::size_t shutDownLinks();
     void configApply(int fd, const std::string& request);
     Paths paths_;
     std::unique_ptr<store::Fs> fs_;
@@ -870,6 +874,57 @@ void Server::configApply(int fd, const std::string& request) {
     writeAll(fd, reply);
 }
 
+// mosh's shutdown on every link, ticked until each is acknowledged or given up on, or kLinkShutdownMs: how many were
+// acknowledged.
+std::size_t Server::shutDownLinks() {
+    if (links_.empty()) {
+        return 0;
+    }
+    link::freezeClock();
+    for (Link& s : links_) {
+        s.link->shutdown();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLinkShutdownMs);
+    std::string why;
+    for (;;) {
+        link::freezeClock();
+        bool done = true;
+        std::vector<pollfd> fds;
+        int wait = kLinkShutdownMs;
+        for (Link& s : links_) {
+            s.link->tick(&why);
+            done = done && s.link->shutdownDone();
+            wait = std::min(wait, std::max(0, s.link->waitMs()));
+            for (int fd : s.link->fds()) {
+                fds.push_back(pollfd{fd, POLLIN, 0});
+            }
+        }
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+            std::chrono::steady_clock::now()).count();
+        if (done || left <= 0) {
+            break;
+        }
+        ::poll(fds.data(), static_cast<nfds_t>(fds.size()), std::min(wait, static_cast<int>(left)));
+        link::freezeClock();
+        for (const pollfd& p : fds) {
+            if (p.revents & POLLIN) {
+                for (Link& s : links_) {
+                    for (int fd : s.link->fds()) {
+                        if (fd == p.fd) {
+                            s.link->receive(&why);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::size_t acknowledged = 0;
+    for (const Link& s : links_) {
+        acknowledged += s.link->shutdownAcknowledged() ? 1 : 0;
+    }
+    return acknowledged;
+}
+
 // Ends every driver (input closed, then SIGTERM, then SIGKILL, each after its grace period) and waits for them. False
 // when the store failed on the way; the drivers are killed and collected even then.
 bool Server::endDrivers() {
@@ -1213,8 +1268,13 @@ int Server::run() {
             "the server next starts\n");
         status = 1;
     }
-    std::fprintf(stderr, "nexus-server: stopped, %zu link%s open\n", links_.size(),
-        links_.size() == 1 ? "" : "s");
+    // On a clean stop, each window is told the session ended (mosh's shutdown), so it makes a session with the next
+    // server at once rather than after kQuietMs of silence (sync/redial.h). Skipped when the store failed: a failed
+    // pass broke out before ticking its links so unflushed actions stay unacknowledged. Bounded: a window that does
+    // not acknowledge within kLinkShutdownMs learns by the silence instead.
+    const std::size_t told = status == 0 ? shutDownLinks() : 0;
+    std::fprintf(stderr, "nexus-server: stopped, %zu link%s open, %zu acknowledged its end\n", links_.size(),
+        links_.size() == 1 ? "" : "s", told);
     return status;
 }
 
