@@ -1,9 +1,6 @@
 // Format 4 on: the actions as schema's ActionsDiff table (sync/codec.h), the half of the codec tables_codec.cpp (the
 // sessions) does not hold. Its rules are that file's: nothing here encodes a byte by hand.
 
-#include <cstdlib>
-#include <cstring>
-
 #include "sync/tables_shared.h"
 
 namespace nexus::sync::codec {
@@ -31,8 +28,15 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SetDefault: return wire::ActionKind::SetDefault;
         case ActionKind::SecretAnswer: return wire::ActionKind::SecretAnswer;
         case ActionKind::SecretCancel: return wire::ActionKind::SecretCancel;
+        case ActionKind::SignInClaim: return wire::ActionKind::SignInClaim;
+        case ActionKind::SignInOpened: return wire::ActionKind::SignInOpened;
+        case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
     }
     return wire::ActionKind::None;
+}
+
+bool isSignIn(ActionKind k) {
+    return k == ActionKind::SignInClaim || k == ActionKind::SignInOpened || k == ActionKind::SignInCallback;
 }
 
 // A kind this build does not know (None: a later window's) is Unknown, which the server counts and never applies.
@@ -54,50 +58,24 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SetDefault: return ActionKind::SetDefault;
         case wire::ActionKind::SecretAnswer: return ActionKind::SecretAnswer;
         case wire::ActionKind::SecretCancel: return ActionKind::SecretCancel;
+        case wire::ActionKind::SignInClaim: return ActionKind::SignInClaim;
+        case wire::ActionKind::SignInOpened: return ActionKind::SignInOpened;
+        case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;
         default: return ActionKind::Unknown;
     }
 }
 
-// A builder's memory, every byte overwritten when it is freed: for an actions diff that holds a secret's value, which
-// the builder copied into its arena (sync/secrets.h: where a value may be). Each block keeps its size in front of it.
-constexpr std::size_t kWipeHeader = 16;
-
-void* wipingAlloc(void*, int64_t bytes) {
-    if (bytes <= 0) {
-        return nullptr;
-    }
-    const std::size_t size = static_cast<std::size_t>(bytes);
-    auto* block = static_cast<unsigned char*>(std::calloc(1, size + kWipeHeader));
-    if (block == nullptr) {
-        return nullptr;
-    }
-    std::memcpy(block, &size, sizeof size);
-    return block + kWipeHeader;
-}
-
-void wipingFree(void*, void* pointer) {
-    if (pointer == nullptr) {
-        return;
-    }
-    unsigned char* block = static_cast<unsigned char*>(pointer) - kWipeHeader;
-    std::size_t size = 0;
-    std::memcpy(&size, block, sizeof size);
-    volatile unsigned char* bytes = block;
-    for (std::size_t i = 0; i < size + kWipeHeader; ++i) {
-        bytes[i] = 0;
-    }
-    std::free(block);
-}
-
 } // namespace
 
-std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from) {
+std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from,
+                               std::uint32_t format) {
+    const bool signIn = format >= kSignInFormat;
     bool secret = false;
     for (std::size_t i = from; i < held.size(); ++i) {
         secret = secret || !held[i].secret.empty();
     }
-    const wire::TableAllocator wiping{wipingAlloc, wipingFree, nullptr};
-    wire::ActionsDiffBuilder b(secret ? wiping : wire::TableDefaultAllocator());
+    const wire::TableAllocator wipes = wiping();
+    wire::ActionsDiffBuilder b(secret ? wipes : wire::TableDefaultAllocator());
     wire::ActionsDiff* d = b.GetRoot();
     if (d == nullptr) {
         throw std::bad_alloc();
@@ -107,27 +85,27 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
     for (std::size_t i = from; i < held.size(); ++i) {
         const Action& a = held[i];
         wire::Action* x = added(wire::ActionsDiffActionsAdd(b.main, d->actions));
+        if (isSignIn(a.kind) && !signIn) {
+            // A link below 5 carries no sign-in: a stop naming session 0 and nothing else, refused by every server,
+            // so the numbers stay unbroken and nothing of the sign-in leaves.
+            x->kind = wire::ActionKind::Stop;
+            continue;
+        }
         x->kind = actionOut(a.kind);
         x->session = a.session;
         putText(b.main, x->friend_name, a.friendName, scratch);
         putText(b.main, x->text, a.text, scratch);
         putText(b.main, x->account, a.account, scratch);
         x->request = a.request;
-        if (!a.secret.empty()) {
-            const std::string& value = a.secret.bytes();
-            std::uint8_t* to = wire::TableBytesEmplace(b.main, x->secret, static_cast<int64_t>(value.size()));
-            if (to == nullptr) {
-                throw std::bad_alloc();
-            }
-            std::memcpy(to, value.data(), value.size());
-        }
+        putBytes(b.main, x->secret, a.secret.bytes());
     }
     return saved(b, [](const wire::ActionsDiffBuilder& x) { return wire::ActionsDiffMeasure(x); },
         [](const wire::ActionsDiffBuilder& x, std::uint8_t* to, int64_t n) { return wire::ActionsDiffSave(x, to, n); },
         "actions diff");
 }
 
-std::vector<Action> readActionsTables(const std::string& diff, int* unknown) {
+std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t format, int* unknown) {
+    const bool signIn = format >= kSignInFormat;
     const auto* bytes = reinterpret_cast<const std::uint8_t*>(diff.data());
     const int64_t size = static_cast<int64_t>(diff.size());
     const std::size_t space = readNeed(diff, [](const std::uint8_t* b, int64_t n) {
@@ -160,17 +138,16 @@ std::vector<Action> readActionsTables(const std::string& diff, int* unknown) {
         Action a;
         a.num = num++;
         a.kind = actionIn(x.kind);
+        if (isSignIn(a.kind) && !signIn) {
+            a.kind = ActionKind::Unknown;     // taken only from a link of 5 or later; nothing of it is kept
+        }
         if (a.kind != ActionKind::Unknown) {
             a.session = x.session;
             a.friendName = textOf(x.friend_name);
             a.text = textOf(x.text);
             a.account = textOf(x.account);
             a.request = x.request;
-            const wire::TableBytesView value = wire::TableBytesAt(x.secret);
-            if (value.data != nullptr && value.length > 0) {
-                a.secret = SecretValue(std::string_view(reinterpret_cast<const char*>(value.data),
-                    static_cast<std::size_t>(value.length)));
-            }
+            a.secret = bytesOf(x.secret);
         }
         out.push_back(std::move(a));
     }

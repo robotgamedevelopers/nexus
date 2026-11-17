@@ -206,6 +206,15 @@ its `machine` equals, ignoring case, either that name or the full host name: on 
 `studio.local`, both `studio` and `studio.local` are this machine. When the host name cannot be read and the config
 names none, the server has no machine: no instance is on it, and it says so in its log.
 
+The same config may say `claude <absolute path>`: the `claude` program a claude account's sign-in runs
+(`claude setup-token`, docs/secrets.md "Sign-in"). Without it the sign-in runs the first `claude` on the server's PATH.
+
+To have an account signed in, an AI runs `nexus-server config sign-in <account>` (over ssh too). It waits, asking the
+server once a second, and prints one line: `signed in` (at once when the account already is), or `refused: <why>`
+(no such account, a provider without in-app sign-in, no server, or not signed in within the sign-in's 10 minutes and
+one more). The person signs the account in in the browser from nexus's window; the AI sees nothing of the sign-in. A
+driver started after a sign-in runs under its friend's `limit` as every driver start does (below).
+
 ## limit: a friend kept to its directory
 
 `"limit": true` keeps the friend's AI, its shell and its file tools, inside the directory of the instance its session

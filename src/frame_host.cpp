@@ -109,6 +109,78 @@ void FrameHost::takeFriends(const sync::Sessions& state) {
     }
 }
 
+void LinkSignIn::lost() {
+    opener.lost();
+    gate_.reset();
+    gateFlow_ = 0;
+}
+
+namespace {
+
+bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
+    const LinkSignIn* s = static_cast<const LinkSignIn*>(context);
+    return sync::sameMachine(s->serverArg, offer.host, s->local);
+}
+
+} // namespace
+
+void LinkSignIn::step() {
+    if (port == nullptr) {
+        return;
+    }
+    // The gate's flow left the state (it ended, or another window took it), or the link was lost: the gate closes.
+    if (gate_ != nullptr && opener.gate() != gateFlow_) {
+        gate_.reset();
+        gateFlow_ = 0;
+    }
+    if (gate_ != nullptr) {
+        sync::Action action;
+        std::string why;
+        if (gate_->take(&action.secret)) {
+            action.kind = sync::ActionKind::SignInCallback;
+            action.request = gateFlow_;
+            action.text = opener.token();
+            port->send(std::move(action));
+            gate_.reset();
+            gateFlow_ = 0;
+            opener.gateClosed();
+        } else if (gate_->failed(&why)) {
+            // The flow stays where it is and ends at its deadline; the window says why its browser cannot finish.
+            problem = why;
+            gate_.reset();
+            gateFlow_ = 0;
+            opener.gateClosed();
+        }
+    }
+    sync::SignInOpener::Step next = opener.next(onThisMachine, this);
+    if (next.kind == sync::SignInOpener::Step::Kind::Claim) {
+        sync::Action action;
+        action.kind = sync::ActionKind::SignInClaim;
+        action.request = next.id;
+        action.text = opener.token();
+        port->send(std::move(action));
+    } else if (next.kind == sync::SignInOpener::Step::Kind::Refused) {
+        // The window's own check of the page's host (sync::parseSignInUrl): nothing is opened, and the flow ends at its
+        // deadline. The URL is never shown.
+        problem = next.account + "'s sign-in page is not one of Claude's: it was not opened";
+    } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
+        if (next.gate) {
+            gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target);
+            gateFlow_ = next.id;
+        }
+        // Handed to the window's UrlOpener (main.cpp), which opens it off the frame thread: this returns at once.
+        if (openUrl) {
+            openUrl(next.url.bytes());
+        }
+        next.url.clear();
+        sync::Action action;
+        action.kind = sync::ActionKind::SignInOpened;
+        action.request = next.id;
+        action.text = opener.token();
+        port->send(std::move(action));
+    }
+}
+
 void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
@@ -118,6 +190,13 @@ void FrameHost::pollLink() {
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
+    if (signIn.port != nullptr) {
+        if (s.phase == sync::LinkPhase::Connected) {
+            signIn.received(s.sessions);
+        } else {
+            signIn.lost();
+        }
+    }
     if (s.phase == sync::LinkPhase::Connected)
         view->promptOpen = true;
     // The open secret requests, from the server's state; a link not connected loses the dialog and what was typed.
@@ -173,6 +252,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     host = serverHost;
     secrets.port = port;
     view->secrets = &secrets;
+    signIn.port = port;
+    signIn.serverArg = serverHost;
+    signIn.local = localHostName();
+    if (signIn.opener.token().empty()) {
+        signIn.opener.setToken(newClaimToken());
+    }
     view->promptOpen = false;
     view->status = sync::linkStatus(sync::LinkPhase::Connecting, host, 0, "");
     view->submit = [this](std::size_t i, bool queue) {
@@ -238,6 +323,11 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     {
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
+        signIn.step();
+        if (!signIn.problem.empty()) {
+            view->problem = std::move(signIn.problem);
+            signIn.problem.clear();
+        }
     }
     {
         HitchScope scope(hitch, Phase::Layout);

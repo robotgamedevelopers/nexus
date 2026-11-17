@@ -6,6 +6,8 @@
 //   store/            the sessions and the applied counters (src/store)
 //   server.sock       the control socket, mode 0600
 //   server.log        the log of a server `new` started
+//   signin.sock       in-app sign-in's helper socket, mode 0600 (server/signin_runner.h)
+//   signin-bin/       the browser-helper programs in-app sign-in puts first on `claude setup-token`'s PATH
 //   nexus-config/     the accounts and friends: accounts.json and friends.json, a git repository of their own
 //                     (server/config_repo.h, docs/accounts.md); no credential is ever in it
 //   accounts/<name>/  one harness login per directory: the Claude driver's --account (drivers/claude), always
@@ -25,12 +27,14 @@
 namespace nexus::server {
 
 // The keys the server's config takes: machine, the name this machine has in the fleet, which a friend's instance
-// here names (accounts/registry.h; by default the short form of its host name).
-inline const std::vector<std::string> kServerConfigKeys{"machine"};
+// here names (accounts/registry.h; by default the short form of its host name); and claude, the absolute path of the
+// `claude` program in-app sign-in runs (`claude setup-token`; by default the first `claude` on the server's PATH).
+inline const std::vector<std::string> kServerConfigKeys{"machine", "claude"};
 
 // The server's settings, as its config gives them (empty: not given).
 struct ServerSettings {
     std::string machine;
+    std::string claude;
 };
 
 // The machine this server runs on, by the name a friend's instance gives it: `configured` (the config's machine) when

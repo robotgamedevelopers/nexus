@@ -1,6 +1,7 @@
 // Unit tests of nexus itself across versions: this build's real wire code (sync::Sessions, sync::Actions, the Hello of
-// sync/formats.h) against a later version's generated code (tests/wire/next/NexusNext.schema, wire_next.cpp), each
-// writing what the other reads, both ways. In memory only: no time, no sockets, no files.
+// sync/formats.h) against a later version's generated code (tests/wire/next/NexusNext.schema, wire_next.cpp) and an
+// earlier one's, format 4 (tests/wire/prev/NexusPrev.schema, wire_prev.cpp), each writing what the other reads, both
+// ways. In memory only: no time, no sockets, no files.
 //
 //   nexus_versions_test           runs every group
 //   nexus_versions_test <group>   runs one:
@@ -14,6 +15,11 @@
 //     hello      each version's Hello read by the other: the added field is skipped and counted; the decision
 //                (sync::refusalOfServer, sync::refusalOfWindow) refuses only when the other's proto is below this
 //                end's min_peer
+//     signin     format 4 (tests/wire/prev: nexus before the in-app sign-in) against this build's 5, both ways: the
+//                link of 4 from the Hellos, on which no window acts on a sign-in (so the server asks for a paste);
+//                the flows' field skipped and counted by a format 4 window; a format 5 window's sign-in actions read
+//                as None by a format 4 server, and written on the link of 4 as a stop naming session 0; this build's
+//                server reading a sign-in kind on the link of 4 as unknown, alone; a format 4 server's state whole
 
 #include "versions.h"
 
@@ -124,6 +130,13 @@ void test_sessions() {
         CHECK(b.activity == Activity::Busy);    // Waiting, which this build does not know, shows as busy
         CHECK(b.entries.size() == 1);
     }
+    // The sign-in flows, which both know: read whole, the held one's URL as its bytes.
+    CHECK(window.offers().size() == 2);
+    if (window.offers().size() == 2) {
+        CHECK(window.offers()[0].id == 4 && window.offers()[0].opener == "w1" && window.offers()[0].host == "studio");
+        CHECK(window.offers()[0].url.bytes() == "https://claude.com/cai/oauth/authorize?state=test-state");
+        CHECK(window.offers()[1].id == 5 && window.offers()[1].opener == "*" && window.offers()[1].url.empty());
+    }
 
     // This build's server's diffs, read by a later window: a first diff, then one that grows an open entry.
     const Sessions empty;
@@ -230,6 +243,105 @@ void test_hello() {
     CHECK(ours.proto == kStateFormat && ours.minPeer == kMinPeer);
 }
 
+// Format 4 (nexus before the in-app sign-in, tests/wire/prev) and this build's format 5, both ways.
+void test_signin() {
+    using Names = std::vector<std::string>;
+    using Ids = std::vector<std::uint64_t>;
+
+    // The Hello says it all: a format 4 end works with this build, the link is of 4, and a window on it does not act
+    // on a sign-in, whichever end is the older.
+    Hello prev;
+    std::string why;
+    int unknown = -1;
+    CHECK(readHello(hex(wiretest::prevHello()), &prev, &why, &unknown));
+    CHECK(prev == (Hello{kTablesFormat, 1}) && unknown == 0);
+    CHECK(refusalOfWindow(prev).empty() && refusalOfServer(prev).empty());
+    const std::uint32_t link = linkFormat(prev.proto, kStateFormat);
+    CHECK(link == kTablesFormat && link == linkFormat(kStateFormat, prev.proto));
+    CHECK(!takesSignIn(link) && takesSignIn(linkFormat(kStateFormat, kStateFormat)));
+
+    // A format 5 server's state with flows, read by a format 4 window: the flows' field skipped and counted, the
+    // sessions and the requests whole. (A server never writes it so to a window of 4; this is what such a window would
+    // make of it.)
+    Sessions server({session(7, "rowan", Activity::Busy, {entry(nexus::EntryKind::Person, "hi")})});
+    server.setRequests({SecretRequest{3, "a1", "oauth-token", 0, "nexus", "a1 has no login"}});
+    server.setOffers({SignInOffer{4, "a1", "claude", "w1", "studio", SecretValue("https://claude.com/?state=test")},
+                      SignInOffer{5, "a2", "claude", "*", "studio", SecretValue()}});
+    const wiretest::Read skipped = wiretest::prevReadSessions(bytes(server.init_diff()));
+    CHECK(skipped.loaded && !skipped.damaged && !skipped.refused);
+    CHECK(skipped.unknown == 2);    // the skipped field counts once for each flow it holds (measured: 1 for one flow)
+    CHECK(skipped.sessions == 1 && skipped.friendName == "rowan" && (skipped.kinds == Names{"Person"}));
+    CHECK((skipped.requests == Ids{3}));
+    // What this server sends on the link of 4: no flows at all, so nothing unknown; the requests as before.
+    Sessions onLink = server;
+    onLink.setFormat(link);
+    const wiretest::Read four = wiretest::prevReadSessions(bytes(onLink.init_diff()));
+    CHECK(four.loaded && !four.damaged && !four.refused && four.unknown == 0);
+    CHECK(four.sessions == 1 && (four.requests == Ids{3}));
+
+    // A format 5 window's actions, sign-in kinds among them, read by a format 4 server: those kinds read None (which
+    // such a server refuses one by one, never the link), counted, the rest as written, the numbers unbroken.
+    Actions window(5);
+    Action send;
+    send.kind = ActionKind::Send;
+    send.session = 7;
+    send.text = "hi";
+    window.add(send);
+    Action claim;
+    claim.kind = ActionKind::SignInClaim;
+    claim.request = 4;
+    claim.text = "w1";
+    window.add(claim);
+    Action callback = claim;
+    callback.kind = ActionKind::SignInCallback;
+    callback.secret = SecretValue("code=test-code&state=test");
+    window.add(callback);
+    Action answer;
+    answer.kind = ActionKind::SecretAnswer;
+    answer.request = 3;
+    answer.secret = SecretValue("test-value");
+    window.add(answer);
+    const std::string fromFive = window.diff_from(Actions(5));
+    const wiretest::ReadActions none = wiretest::prevReadActions(bytes(fromFive));
+    CHECK(none.loaded && !none.damaged && !none.refused && none.unknown == 2);
+    CHECK(none.start == 5 && (none.kinds == Names{"Send", "None", "None", "SecretAnswer"}));
+    CHECK(none.secrets.size() == 4 && none.secrets[3] == "test-value");
+    // What this window sends on the link of 4: each sign-in action a stop naming session 0 and nothing else, which
+    // every server refuses; nothing of the sign-in leaves.
+    Actions windowOnLink = window;
+    windowOnLink.setFormat(link);
+    const wiretest::ReadActions stops = wiretest::prevReadActions(bytes(windowOnLink.diff_from(Actions(5))));
+    CHECK(stops.loaded && !stops.damaged && !stops.refused && stops.unknown == 0);
+    CHECK((stops.kinds == Names{"Send", "Stop", "Stop", "SecretAnswer"}));
+    CHECK((stops.sessions == Ids{7, 0, 0, 0}) && (stops.texts == Names{"hi", "", "", ""}));
+    CHECK((stops.requests == Ids{0, 0, 0, 3}) && (stops.secrets == Names{"", "", "", "test-value"}));
+    // This build's server on the link of 4: a format 4 window's actions whole; and should a sign-in kind come on it,
+    // unknown, nothing of it kept, the rest read.
+    int skippedUp = -1;
+    const std::vector<Action> fromFour = Actions::parse(text(wiretest::prevActions()), link, &skippedUp);
+    CHECK(skippedUp == 0 && fromFour.size() == 2);
+    if (fromFour.size() == 2) {
+        CHECK(fromFour[0].kind == ActionKind::Send && fromFour[0].text == "hi");
+        CHECK(fromFour[1].kind == ActionKind::SecretAnswer && fromFour[1].secret.bytes() == "test-value");
+    }
+    const std::vector<Action> unknownUp = Actions::parse(fromFive, link);
+    CHECK(unknownUp.size() == 4);
+    if (unknownUp.size() == 4) {
+        CHECK(unknownUp[0].kind == ActionKind::Send && unknownUp[3].kind == ActionKind::SecretAnswer);
+        for (const std::size_t i : {std::size_t(1), std::size_t(2)}) {
+            CHECK(unknownUp[i].kind == ActionKind::Unknown && unknownUp[i].text.empty() && unknownUp[i].request == 0 &&
+                  unknownUp[i].secret.empty());
+        }
+    }
+
+    // The reverse: a format 4 server's state, read by this build's window on the link of 4: whole, nothing unknown,
+    // no flows.
+    Sessions newer;
+    newer.setFormat(link);
+    newer.apply_string(text(wiretest::prevSessions()));
+    CHECK(newer.unknown() == 0 && newer.offers().empty() && newer.sessions().size() == 1 && newer.requests().size() == 1);
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -239,6 +351,7 @@ const Group groups[] = {
     {"sessions", test_sessions},
     {"actions", test_actions},
     {"hello", test_hello},
+    {"signin", test_signin},
 };
 
 } // namespace

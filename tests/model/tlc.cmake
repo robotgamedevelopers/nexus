@@ -42,6 +42,8 @@
 #   SECWALK     optional, in place of WALK: tests/sync's secrets_walk; it is run first and writes
 #               SecretsTraceData.tla into WORK, with SEED and STEPS, FORMAT (3 or 4, the windows' and actions'
 #               format; 3 unless given), and FAULTY one of store-late, echo
+#   SIGNWALK    optional, in place of WALK: tests/sync's signin_walk; it is run first and writes
+#               SignInTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of claim, callback, stray
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
@@ -244,6 +246,19 @@ elseif(DEFINED SECWALK AND NOT "${SECWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "secrets_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED SIGNWALK AND NOT "${SIGNWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "claim" OR FAULTY STREQUAL "callback" OR FAULTY STREQUAL "stray")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not claim, callback or stray")
+    endif()
+    execute_process(COMMAND "${SIGNWALK}" ${walk_args} "${WORK}/SignInTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "signin_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

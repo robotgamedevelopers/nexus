@@ -211,6 +211,12 @@ jobs:
             build/tests/sync/secrets_walk "$seed" 2000 walks/secrets.tla
             build/tests/sync/secrets_walk "$seed" 2000 --format 4 walks/secrets.tla
           done
+          # in-app sign-in: every unit group (the leak test among them), then its walks, each failing if a log line
+          # holds a URL, a state, a code or a login
+          build/tests/server/signin_test
+          for seed in 1 2 3 4 5 6 7 8; do
+            build/tests/sync/signin_walk "$seed" 6000 walks/signin.tla
+          done
           # the store: every unit group (MemFs, crashes at every write and sync), the server's tabs on it, then the
           # journal's walks
           build/tests/store/store_test
@@ -552,11 +558,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          changed=$(git status --porcelain -- schema tests/wire/next)
+          changed=$(git status --porcelain -- schema tests/wire/next tests/wire/prev)
           if [ -n "$changed" ]; then
             echo "$changed"
-            git --no-pager diff --stat -- schema tests/wire/next
-            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen and tests/wire/next/gen"
+            git --no-pager diff --stat -- schema tests/wire/next tests/wire/prev
+            echo "::error::the generated code differs from what schema at the pin makes of the schema files: run cmake -P cmake/schema.cmake (or build the target schema_generate) and commit schema/gen, tests/wire/next/gen and tests/wire/prev/gen"
             exit 1
           fi
 
@@ -575,12 +581,12 @@ jobs:
         include:
           - part: units
             targets: >-
-              model_test overlay_test sync_test secrets_test store_test durable_test driver_protocol_test
+              model_test overlay_test sync_test secrets_test signin_test store_test durable_test driver_protocol_test
               supervisor_test wire_test nexus_versions_test builds_test
           - part: walks
             targets: >-
-              overlay_walk trace_walk strip_walk link_walk secrets_walk journal_walk store_lock_walk supervisor_walk
-              builds_walk
+              overlay_walk trace_walk strip_walk link_walk secrets_walk signin_walk journal_walk store_lock_walk
+              supervisor_walk builds_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -608,41 +614,67 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          generator=()
+          if command -v ninja >/dev/null && { [ ! -f build/CMakeCache.txt ] || grep -q '^CMAKE_GENERATOR:INTERNAL=Ninja$' build/CMakeCache.txt; }; then
+            generator=(-G Ninja)
+          fi
           launcher=()
           if command -v ccache >/dev/null; then
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
           fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
+          cmake -S . -B build "${generator[@]}" -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
             -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
             "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
       # Exactly the programs this part runs (model_checks would add the accounts' and the glide's, which it does not).
       - name: Build the programs it runs
         run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      # Every unit program here runs in memory (MemFs where it has files; no sockets, processes or shared paths), so
+      # they are independent: they run at once, at most TEST_JOBS at a time, each with its own output under units/.
       - name: Unit tests under the sanitizers
         if: matrix.part == 'units'
         shell: bash
         run: |
           set -euo pipefail
-          build/tests/model/model_test
-          build/tests/model/overlay_test
-          build/tests/sync/sync_test
+          launched=0
+          running=0
+          unit() {
+            local dir="units/$launched"
+            mkdir -p "$dir"
+            ( "$@" >"$dir/output" 2>&1 || { echo "::error::unit failed: $*"; cat "$dir/output"; exit 1; } ) &
+            launched=$((launched + 1))
+            running=$((running + 1))
+            if [ "$running" -ge "$TEST_JOBS" ]; then
+              wait -n
+              running=$((running - 1))
+            fi
+          }
+          unit build/tests/model/model_test
+          unit build/tests/model/overlay_test
+          unit build/tests/sync/sync_test
           # the secret dialog: every unit group, the leak test among them
-          build/tests/server/secrets_test
+          unit build/tests/server/secrets_test
+          # in-app sign-in: every unit group, the leak test among them
+          unit build/tests/server/signin_test
           # the store: every unit group (MemFs, crashes at every write and sync, the lock, the start-up order), and
           # the server's tabs on it
-          build/tests/store/store_test
-          build/tests/store/durable_test
+          unit build/tests/store/store_test
+          unit build/tests/store/durable_test
           # the driver protocol: every group (the parser and the reader over every chunking)
-          build/tests/driver/driver_protocol_test
+          unit build/tests/driver/driver_protocol_test
           # the driver supervisor: every group
-          build/tests/server/supervisor_test
+          unit build/tests/server/supervisor_test
           # placement: every group (the manifest, the hash, the evidence, the formats rule, the names, prune's choice)
-          build/tests/server/builds_test
+          unit build/tests/server/builds_test
           # the formats as schema's tables: every table read back, and two versions reading each other both ways, in
           # schema's own tables and in nexus's state and actions
-          build/tests/wire/wire_test
-          build/tests/wire/nexus_versions_test
+          unit build/tests/wire/wire_test
+          unit build/tests/wire/nexus_versions_test
+          while [ "$running" -gt 0 ]; do
+            wait -n
+            running=$((running - 1))
+          done
+          echo "$launched unit programs passed"
       # Each walk drives its code in memory (MemFs where it has files; the store lock's walk on real files in a store
       # directory beside its own trace) and writes only the trace it is given, so they are independent: they run at
       # once, at most TEST_JOBS at a time, each in a directory of its own under walks/ holding its trace and its output.
@@ -703,6 +735,10 @@ jobs:
           for seed in 1 2 3 4 5 6 7 8; do
             walk build/tests/sync/secrets_walk "$seed" 2000
             walk build/tests/sync/secrets_walk "$seed" 2000 --format 4
+          done
+          # in-app sign-in's walks, each failing if a log line holds a URL, a state, a code or a login
+          for seed in 1 2 3 4 5 6 7 8; do
+            walk build/tests/sync/signin_walk "$seed" 6000
           done
           # the journal's walks
           for seed in 1 2 3 4 5 6 7 8; do
@@ -873,12 +909,29 @@ jobs:
             run: '^tlc_(strip_|spec_strip)'
             skip: '^tlc_spec_strip_shared$'
             build: strip_walk
+          # In-app sign-in (models/SignIn.tla): its two large safety instances (MCSignInTwo, 371,695 states;
+          # MCSignInGate, 813,557 states) each in a shard of their own on eight workers, then its one-window spec and
+          # witnesses, and its code's walks against SignInTrace.tla (~800 records each) in two halves of four traces.
+          - shard: signin-two
+            run: '^tlc_signin_spec_two$'
+          - shard: signin-gate
+            run: '^tlc_signin_spec_gate$'
+          - shard: signin-rest
+            run: '^tlc_signin_'
+            skip: '^tlc_signin_(trace_|spec_two$|spec_gate$)'
+          - shard: signin-trace-1
+            run: '^tlc_signin_trace_seed_[1-4]$'
+            build: signin_walk
+          - shard: signin-trace-2
+            run: '^tlc_signin_trace_'
+            skip: '^tlc_signin_trace_seed_[1-4]$'
+            build: signin_walk
           # The rest: every model test no shard above names. Its skip is one alternative per family of shards above; a
           # new family adds its prefix there.
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|claude|witness|secrets|glide|overlay|tailscale|strip_|spec_strip|spec_friends$|signin)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

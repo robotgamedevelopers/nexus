@@ -25,13 +25,21 @@ namespace nexus::sync {
 //      fields and values in the .schema file and does not raise the format; a new format number is for a change an
 //      older reader cannot read through. Formats 1 to 3 are the hand-written codecs, kept for windows and servers from
 //      before 4 and never extended.
-constexpr std::uint32_t kStateFormat = 4;
+//   5  format 4's tables with the in-app sign-in (sync/signin.h): SessionsDiff.signins, the live flows as each window
+//      sees them, and the action kinds SignInClaim, SignInOpened and SignInCallback. A format 4 reader reads through
+//      them (the field skipped, the kinds unknown and refused alone) but would never act on a flow, so the server
+//      must know which windows do, and that is the link's format, from the Hello: it writes the flows and takes the
+//      sign-in actions only on a link of 5 or later, and while no linked window is, it asks for a login by a paste.
+constexpr std::uint32_t kStateFormat = 5;
 
 // The first format that carries secret requests down and secret answers up.
 constexpr std::uint32_t kSecretsFormat = 3;
 
 // The first format written as schema's tables.
 constexpr std::uint32_t kTablesFormat = 4;
+
+// The first format that carries sign-ins down and the sign-in actions up.
+constexpr std::uint32_t kSignInFormat = 5;
 
 // The oldest format of the other end this build still works with: its Hello's min_peer. A window refuses a server
 // below it, and a server a window below it, each with one plain line. Every format is, today.
@@ -70,6 +78,13 @@ constexpr const char* kHelloVariable = "NEXUS_HELLO";
 // The format a link uses: the newer of the two that both ends read, so the older of the two stated.
 inline std::uint32_t linkFormat(std::uint32_t window, std::uint32_t server) {
     return window < server ? window : server;
+}
+
+// Whether a window on a link of `format` (linkFormat of the two Hellos' protos) acts on the in-app sign-in: the one way
+// the server knows it, with no second capability mechanism. With no such window linked, a login is asked for by a
+// paste (sync/hub.h SignInHooks::takers).
+inline bool takesSignIn(std::uint32_t format) {
+    return format >= kSignInFormat;
 }
 
 // Empty when a window stating `window` can be served by a server whose floor is `oldest`; otherwise the one plain

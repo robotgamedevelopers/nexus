@@ -452,6 +452,16 @@ void testFailedStarts() {
 
 // ---- sign-in: the secret dialog stored the account's login (Supervisor.tla SignIn) ----
 
+bool hasArgs(const Output& o, const std::vector<std::string>& args) {
+    for (const Command& c : o.commands) {
+        if (c.kind == Kind::Start &&
+                std::search(c.argv.begin(), c.argv.end(), args.begin(), args.end()) != c.argv.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // A session held for want of a credential starts its driver for the prompt waiting the moment the login arrives,
 // without a restart or another prompt; so does one held by failed starts, from a count of 0. One not held is left as
 // it is.
@@ -484,6 +494,41 @@ void testSignIn() {
         CHECK(s.held() && s.state().waiting.empty());
         Output o = s.signedIn(kStart + 4);
         CHECK(!s.held() && o.commands.empty() && s.phase() == Phase::None);
+    }
+    // The driver started after a sign-in runs under the limit its friend's record gives the session (Config::limited,
+    // kept by setLimited), as every driver start does: limited, `--limit cwd`; not, no --limit at all.
+    for (const bool limited : {true, false}) {
+        Config c = config();
+        c.limited = limited;
+        Output first;
+        Supervisor s(c, {}, kStart, &first);
+        s.prompt("first", kStart);
+        s.prompt("waits", kStart + 1);
+        s.message(Hello{1, "h", {"limit"}}, kStart + 2);
+        s.message(Credential{Billing::None, ""}, kStart + 3);
+        s.exited("exited with status 0", kStart + 4);
+        CHECK(s.held());
+        Output o = s.signedIn(kStart + 5);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && s.driverLimited() == limited);
+        const bool flag = !o.commands.empty() && std::find(o.commands[0].argv.begin(), o.commands[0].argv.end(),
+                                                           "--limit") != o.commands[0].argv.end();
+        CHECK(!o.commands.empty() && flag == limited);
+        CHECK(!limited || hasArgs(o, {"--limit", "cwd"}));
+    }
+    // Its friend's record changed while the session was held: the start after the sign-in takes the new limit.
+    {
+        Config c = config();
+        c.limited = false;
+        Output first;
+        Supervisor s(c, {}, kStart, &first);
+        s.prompt("first", kStart);
+        s.prompt("waits", kStart + 1);
+        s.message(Hello{1, "h", {"limit"}}, kStart + 2);
+        s.message(Credential{Billing::None, ""}, kStart + 3);
+        s.exited("exited with status 0", kStart + 4);
+        s.setLimited(true, kStart + 5);
+        Output o = s.signedIn(kStart + 6);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && hasArgs(o, {"--limit", "cwd"}) && s.driverLimited());
     }
     {
         // Not held: nothing changes.
@@ -661,16 +706,6 @@ void testAccount() {
     CHECK(ended(u, o) && written(o).empty() && u.state().waiting.size() == 1);
     o = u.exited("exited with status 0", kStart + 3);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
-}
-
-bool hasArgs(const Output& o, const std::vector<std::string>& args) {
-    for (const Command& c : o.commands) {
-        if (c.kind == Kind::Start &&
-                std::search(c.argv.begin(), c.argv.end(), args.begin(), args.end()) != c.argv.end()) {
-            return true;
-        }
-    }
-    return false;
 }
 
 bool resumes(const Output& o) {

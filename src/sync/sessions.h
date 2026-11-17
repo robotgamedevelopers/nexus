@@ -31,6 +31,7 @@
 #include "model.h"
 #include "sync/formats.h"
 #include "sync/secrets.h"
+#include "sync/signin.h"
 
 namespace nexus::sync {
 
@@ -128,6 +129,11 @@ public:
     void clearFriends();
     // The friends of `from`, known or not, its list shared and not copied.
     void shareFriends(const Sessions& from);
+    // The live sign-in flows (sync/signin.h), by id, after the secret requests: schema's SessionsDiff.signins, on a
+    // link of format 5 or later only (a window of 4 would skip them and never act). The URL is in an offer only in the
+    // state of the link of the window that holds it (Hub::stateFor); never in a state file.
+    const std::vector<SignInOffer>& offers() const { return *offers_; }
+    void setOffers(std::vector<SignInOffer> offers);
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -159,6 +165,7 @@ private:
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
     std::shared_ptr<const std::vector<ServerFriend>> friends_;
     bool friendsKnown_ = false;
+    std::shared_ptr<const std::vector<SignInOffer>> offers_;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
 };

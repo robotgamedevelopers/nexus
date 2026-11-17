@@ -152,7 +152,8 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
 # From state format 4 the bytes are schema's tables (nexus_wire, cmake/schema.cmake); before it the hand-written codecs.
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
     src/sync/legacy_codec.cpp src/sync/tables_codec.cpp src/sync/tables_actions.cpp
-    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/friend_strip.cpp src/sync/secrets.cpp)
+    src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/friend_strip.cpp src/sync/secrets.cpp
+    src/sync/signin.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire)
@@ -197,6 +198,15 @@ if(NEXUS_SERVER_PARTS)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
 
+    # In-app sign-in's processes (src/server/signin_runner.h): `claude setup-token` under a pty, the helper's socket,
+    # the callback's replay on loopback; and the helper itself, nexus-signin-open, which stands in for a browser.
+    add_library(nexus_signin_runner STATIC src/server/signin_runner.cpp)
+    target_include_directories(nexus_signin_runner PUBLIC src)
+    target_compile_options(nexus_signin_runner PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_signin_runner PUBLIC nexus_sync)
+    add_executable(nexus-signin-open src/server/signin_open.cpp)
+    target_compile_options(nexus-signin-open PRIVATE ${NEXUS_WARNINGS})
+
     # The accounts and friends' config repository (src/server/config_repo.h): the files, and git as a child process.
     add_library(nexus_config_repo STATIC src/server/config_repo.cpp)
     target_include_directories(nexus_config_repo PUBLIC src)
@@ -209,6 +219,17 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_builds PUBLIC src)
     target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_builds PUBLIC nexus_store)
+endif()
+
+# The window's gate for in-app sign-in with the server on another machine (src/signin_gate.h): one loopback listener
+# for one callback, on a thread of its own. Built everywhere, Windows included, where the window runs.
+find_package(Threads REQUIRED)
+add_library(nexus_signin_gate STATIC src/signin_gate.cpp)
+target_include_directories(nexus_signin_gate PUBLIC src)
+target_compile_options(nexus_signin_gate PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(nexus_signin_gate PUBLIC nexus_sync Threads::Threads)
+if(WIN32)
+    target_link_libraries(nexus_signin_gate PUBLIC ws2_32)
 endif()
 
 # The window's hitch detector (src/hitch.h): each frame's main-thread work against the budget, its phases, a fixed ring
@@ -274,12 +295,16 @@ if(NEXUS_WINDOW)
         prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
         prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
 
-    # What the window does around the view each frame (src/frame_host.h): built by the app, and driven by the
-    # frame-budget test.
-    add_library(nexus_frame STATIC src/frame_host.cpp)
+    # What the window does around the view each frame (src/frame_host.h), and its links opened in the system's browser
+    # off the frame thread (src/url_opener.h): built by the app, and driven by the frame-budget test.
+    add_library(nexus_frame STATIC src/frame_host.cpp src/url_opener.cpp)
     target_include_directories(nexus_frame PUBLIC src)
     target_compile_options(nexus_frame PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_frame PUBLIC nexus_view nexus_terminals nexus_board nexus_sync nexus_hitch)
+    target_link_libraries(nexus_frame PUBLIC nexus_view nexus_terminals nexus_board nexus_sync nexus_hitch
+        nexus_signin_gate Threads::Threads)
+    if(WIN32)
+        target_link_libraries(nexus_frame PUBLIC shell32 ole32)
+    endif()
 endif()
 
 if(NEXUS_LINK)
@@ -292,13 +317,28 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds)
+    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
+        nexus_signin_runner)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
     if(NEXUS_SANDBOX_TOOLS)
         add_dependencies(nexus-server nexus_sandbox_tools)
     endif()
+    # The helper goes beside nexus-server: the server finds it there.
+    add_dependencies(nexus-server nexus-signin-open)
+    # A test's alone, never shipped: nexus-server built to write each forwarded sign-in callback's query to its log, the
+    # reversed witness that link_e2e_signin's search of server.log finds such a leak (link_e2e_signin_leaky). Built
+    # only as link_e2e's dependency.
+    add_library(nexus_server_leaky STATIC EXCLUDE_FROM_ALL src/server/server.cpp src/server/flush_gate.cpp)
+    target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
+    target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
+    target_link_libraries(nexus_server_leaky PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo
+        nexus_builds nexus_signin_runner)
+    add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
+    target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus-server-leaky PRIVATE nexus_server_leaky)
+    add_dependencies(nexus-server-leaky nexus-signin-open)
 endif()
 
 if(NEXUS_WINDOW AND (APPLE OR WIN32))

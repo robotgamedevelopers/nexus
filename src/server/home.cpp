@@ -40,6 +40,14 @@ bool readServerConfig(const std::string& text, const std::string& path, ServerSe
                 "'-' or '.', not starting with '-' or '.', as a friend's instance names it (docs/accounts.md)");
         }
     }
+    auto claude = c.values.find("claude");
+    if (claude != c.values.end()) {
+        if (!claude->second.empty() && claude->second[0] == '/') {
+            out->claude = claude->second;
+        } else {
+            errors.push_back(path + ": claude " + claude->second + " is not an absolute path to the claude program");
+        }
+    }
     for (const std::string& e : errors) {
         *why += (why->empty() ? "" : "; ") + e;
     }

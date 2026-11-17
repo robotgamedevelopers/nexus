@@ -143,6 +143,11 @@ const std::shared_ptr<const std::vector<ServerFriend>>& noFriends() {
     return none;
 }
 
+const std::shared_ptr<const std::vector<SignInOffer>>& noOffers() {
+    static const auto none = std::make_shared<const std::vector<SignInOffer>>();
+    return none;
+}
+
 } // namespace
 
 void Sessions::setRequests(std::vector<SecretRequest> requests) {
@@ -163,6 +168,10 @@ void Sessions::clearFriends() {
 void Sessions::shareFriends(const Sessions& from) {
     friends_ = from.friends_;
     friendsKnown_ = from.friendsKnown_;
+}
+
+void Sessions::setOffers(std::vector<SignInOffer> offers) {
+    offers_ = offers.empty() ? noOffers() : std::make_shared<const std::vector<SignInOffer>>(std::move(offers));
 }
 
 bool SessionView::operator==(const SessionView& x) const {
@@ -208,10 +217,12 @@ SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& 
     return t;
 }
 
-Sessions::Sessions() : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()),
-    friends_(noFriends()) {}
+Sessions::Sessions()
+    : sessions_(std::make_shared<const std::vector<SessionRef>>()), requests_(noRequests()), friends_(noFriends()),
+      offers_(noOffers()) {}
 
-Sessions::Sessions(std::vector<SessionRef> sessions) : requests_(noRequests()), friends_(noFriends()) {
+Sessions::Sessions(std::vector<SessionRef> sessions)
+    : requests_(noRequests()), friends_(noFriends()), offers_(noOffers()) {
     for (std::size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i]->id == 0) {
             throw std::logic_error("Sessions: a session with id 0");
@@ -269,7 +280,11 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         change.friendsKnown = friendsKnown_;
         change.friends = *friends_;
     }
-    return tables ? codec::writeTables(change) : codec::writeLegacy(change, format_);
+    // The sign-in flows ride only on a link of 5 or later (sync/formats.h); a window below it gets none.
+    if (format_ >= kSignInFormat) {
+        change.offers = *offers_;
+    }
+    return tables ? codec::writeTables(change, format_) : codec::writeLegacy(change, format_);
 }
 
 std::string Sessions::init_diff() const {
@@ -283,6 +298,9 @@ void Sessions::apply_string(const std::string& diff) {
     int unknown = 0;
     codec::SessionsChange change = format_ >= kTablesFormat ? codec::readTables(diff, &unknown) :
         codec::readLegacy(diff, format_);
+    if (format_ < kSignInFormat) {
+        change.offers.clear();      // taken only on a link of 5 or later (sync/formats.h)
+    }
     std::vector<SessionRef> sessions;
     sessions.reserve(change.sessions.size());
     for (codec::SessionChange& c : change.sessions) {
@@ -310,6 +328,12 @@ void Sessions::apply_string(const std::string& diff) {
             throw BadDiff("sessions diff names secret request " + std::to_string(q.id) + " out of order or twice");
         }
     }
+    for (std::size_t i = 0; i < change.offers.size(); ++i) {
+        const SignInOffer& o = change.offers[i];
+        if (o.id == 0 || (i > 0 && !(change.offers[i - 1].id < o.id))) {
+            throw BadDiff("sessions diff names sign-in " + std::to_string(o.id) + " out of order or twice");
+        }
+    }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
     setRequests(std::move(change.requests));
     if (change.friendsSent && change.friendsKnown) {
@@ -317,6 +341,7 @@ void Sessions::apply_string(const std::string& diff) {
     } else if (change.friendsSent) {
         clearFriends();
     }
+    setOffers(std::move(change.offers));
     unknown_ = unknown;
 }
 
@@ -325,6 +350,9 @@ bool Sessions::operator==(const Sessions& x) const {
         return false;
     }
     if (friendsKnown_ != x.friendsKnown_ || (friends_ != x.friends_ && *friends_ != *x.friends_)) {
+        return false;
+    }
+    if (offers_ != x.offers_ && *offers_ != *x.offers_) {
         return false;
     }
     if (sessions_ == x.sessions_) {
@@ -348,7 +376,10 @@ constexpr const char* kStateFileTag = "nexus-state ";
 }
 
 std::string stateFile(const Sessions& state) {
-    return kStateFileTag + std::to_string(state.format()) + "\n" + state.init_diff();
+    // No sign-in goes in a file: an offer's URL is for the window holding it alone.
+    Sessions kept = state;
+    kept.setOffers({});
+    return kStateFileTag + std::to_string(state.format()) + "\n" + kept.init_diff();
 }
 
 bool readStateFile(const std::string& bytes, Sessions* out, std::string* why) {

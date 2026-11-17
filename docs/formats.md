@@ -29,6 +29,7 @@ cannot read what the current one writes is refused as current: `docs/builds.md`,
 | 2 | Each session and each entry framed by its length (`Writer::str`); the session's activity after its effort; entry kind Tool 3. Anything after the sessions, and after the known fields of a frame, is skipped. Appended since, at the end of the session's frame: its instance (`str`). |
 | 3 | Format 2, then the open secret requests after the sessions (`docs/secrets.md`): a count, then each request framed by its length (its id, account, what is asked, the asker's session, the asker's friend, the asker's reason). The list is always written (count 0 for none), so a diff cut short before it is refused. Anything after a request's known fields, and after the list, is skipped. The actions up are framed from 3, with the secret dialog's answer (15) and cancel (16). A window of 2 receives no requests, and the server counts it as unable to take one; a secret action, which 2 cannot carry, is written as a stop naming session 0, refused by every server. |
 | 4 | schema's variable tables (`schema/Nexus.schema`): the state is a `SessionsDiff` and the actions an `ActionsDiff`, written and read by the generated code. Every field, enum value and union arm rides under the hash of its name, so rules 1 to 3 hold by construction: a field a reader does not know is skipped, an enum value it does not know reads None, and both are counted (`TableReport.unknown`), which the window logs when the count changes, for the state it receives. The server logs no such count: mosh hands it the actions re-encoded from those it kept, where an unknown field is already gone, and it refuses an unknown action kind with its reason instead. None reads as the plainest thing known: an entry kind as a Notice, an activity as Busy, an action kind as unknown (which the server refuses alone, never the link). It says the same as format 3. |
+| 5 | Format 4's tables with the in-app sign-in added (`docs/secrets.md` "Sign-in"): `SessionsDiff.signins`, the live sign-in flows as each window sees them (`SignInOffer`: its id, account, provider, the claim token of the window holding it or `*` to every other window, the server's host name, and its URL, set only in the holder's state), and the action kinds `SignInClaim`, `SignInOpened` and `SignInCallback`. A format 4 reader reads through all of it (rule 1: the field skipped and counted, the kinds read as unknown and refused alone), but a format 4 window would never act on a flow, so the server must know which windows do: that is why this is a new number rather than an added field. The server reads it from the window's Hello (the link's format, the older of the two protos) and nothing else: it writes `signins` only on a link of 5 or later, takes the three kinds only from one, and while no linked window is of 5 or later it asks for a claude account's login by a paste instead (`docs/secrets.md` "Versions"). The hand-written codecs of 1 to 3 carry no sign-in. |
 
 Fields appended to a format's frames do not change its number: a reader from before them skips them (rule 1), and
 nothing about them makes an older reader wrong. They are listed in the table in the order they were appended, and a
@@ -43,6 +44,8 @@ later field goes after them.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
 - Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
   action; the server, which knows the link's format, never offers that window a request.
+- Absent sign-in flows (a link of format 4 or older): **none**. The window claims, opens and binds nothing; the server,
+  which knows the link's format, asks for a paste while no linked window reads flows.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
@@ -74,7 +77,7 @@ bytes crafted as many tiny elements load into ten times or more, and those are w
 
 ### Agreeing on a format when the window connects: the Hello
 
-A Hello (`schema/Nexus.schema`) is two numbers: `proto`, the protocol an end speaks (its state format, 4 today), and
+A Hello (`schema/Nexus.schema`) is two numbers: `proto`, the protocol an end speaks (its state format, 5 today), and
 `min_peer`, the oldest protocol of the other end it still works with (1 today). It travels as lowercase hex of its
 table bytes, so a later version can add to it like any table.
 
@@ -274,10 +277,15 @@ Each generator says how to build it against a worktree of main at 50565c6. `sync
 `state_format_2_reads_later_formats`, `state_files`, `link_formats_agree`), `store_unit_formats`,
 `durable_unit_kinds` and `link_e2e_older_server` check the rules above; `sync_unit` `sessions_instance_appended` and
 `store_unit_instance` check the appended fields both ways. `wire_unit_nexus_sessions`, `wire_unit_nexus_actions` and
-`wire_unit_nexus_hello` check format 4 and the Hello both ways against a later version; `sync_unit` `hello_min_peer`,
+`wire_unit_nexus_hello` check format 4 and the Hello both ways against a later version; `wire_unit_nexus_signin`
+checks format 5 both ways against format 4 as it shipped (`tests/wire/prev/NexusPrev.schema`, frozen): the link of 4
+from the two Hellos, on which no window acts on a sign-in; the flows' field skipped and counted by a format 4 window;
+the sign-in kinds read as None by a format 4 server, and written on a link of 4 as a stop naming session 0; and
+`signin_unit_hub_older` the paste asked for while only such windows are linked; `sync_unit` `hello_min_peer`,
 `sessions_unknown_kind_is_a_notice`, `sessions_text_not_utf8` and `sessions_growth_across_a_split_character` check
 the refusal, the unknown kind and the text rule; `format4_read_caps` the two caps at their boundaries; and
-`format4_read_fuzz` thousands of damaged diffs (fixed seeds), each read taken or refused as BadDiff alone, a refused
+`format4_read_fuzz` thousands of damaged diffs (fixed seeds; from format 5 the sessions diffs carry sign-in flows, a
+URL among them, and the actions every kind, a sign-in callback's query among them), each read taken or refused as BadDiff alone, a refused
 one leaving the state as it was, a taken one writing back out the same.
 
 ## Moving to schema

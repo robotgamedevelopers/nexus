@@ -20,7 +20,7 @@ add_executable(link_e2e link_e2e.cpp)
 target_link_libraries(link_e2e PRIVATE nexus_link)
 target_include_directories(link_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync ${CMAKE_SOURCE_DIR}/tests)
 target_compile_options(link_e2e PRIVATE ${warnings})
-add_dependencies(link_e2e nexus-server nexus_fake_driver)
+add_dependencies(link_e2e nexus-server nexus_fake_driver nexus_fake_claude nexus-server-leaky)
 
 # Each test's server lives in a directory of its own under /tmp (a Unix socket's path must be short), named by a hash
 # of this build tree, so that two builds on one machine (two CI runners) never share one. The cleanup fixture stops
@@ -38,10 +38,15 @@ add_test(NAME link_e2e_older_server COMMAND link_e2e ${server} ${e2e_dir}-older 
 add_test(NAME link_e2e_flush COMMAND link_e2e ${server} ${e2e_dir}-flush flush $<TARGET_FILE:nexus_fake_driver>)
 add_test(NAME link_e2e_secret COMMAND link_e2e ${server} ${e2e_dir}-secret secret $<TARGET_FILE:nexus_fake_driver>)
 add_test(NAME link_e2e_friends COMMAND link_e2e ${server} ${e2e_dir}-friends friends $<TARGET_FILE:nexus_fake_driver>)
+# In-app sign-in through the real server with the FAKE claude (tests/server/fake_claude.cpp), and its reversed witness:
+# nexus-server-leaky, which writes the forwarded query to server.log, which the run's search must find.
+add_test(NAME link_e2e_signin COMMAND link_e2e ${server} ${e2e_dir}-signin signin $<TARGET_FILE:nexus_fake_claude>)
+add_test(NAME link_e2e_signin_leaky COMMAND link_e2e $<TARGET_FILE:nexus-server-leaky> ${e2e_dir}-leaky signin
+         $<TARGET_FILE:nexus_fake_claude> leaky)
 set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart link_e2e_older_server link_e2e_flush
-    link_e2e_secret link_e2e_friends)
+    link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
-    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends)
+    ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky)
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

@@ -232,12 +232,15 @@ void SecretDesk::write(const SecretRequest& r, const SecretAsker& asker, const S
                        SecretEffects& out) {
     std::string why;
     const Kept kept = keeper.keep(r.account, r.what, value, &why);
+    const bool captured = captured_.count(r.id) != 0;
     if (kept == Kept::Durable) {
         if (!answered) {
             out.replies.push_back(SecretReply{r.id, asker, true, std::string(), r.account, r.what});
         }
         out.notes.push_back(SecretNote{r.id, r.asker, "stored", r.account,
-            note(r, answered ? "was stored after all: its answer crossed the deadline" : "was stored")});
+            note(r, captured ? "from the browser's sign-in was stored" :
+                    answered ? "was stored after all: its answer crossed the deadline" : "was stored"), captured});
+        captured_.erase(r.id);
         out.log.push_back(SecretLog{r.id, r.account, "stored", echoFault_ ? value.bytes() : std::string()});
         out.stored.push_back(r);
         remember(r, SecretState::Stored, asker);
@@ -249,9 +252,27 @@ void SecretDesk::write(const SecretRequest& r, const SecretAsker& asker, const S
         said + "; the value is held in memory and written again in " + std::to_string(backoff / 1000) + " s"});
     if (first) {
         out.notes.push_back(SecretNote{r.id, r.asker, "holding", r.account,
-            note(r, "arrived and is held: its file could not be written yet, so nexus writes it again until it can "
-                    "(server.log says why); nothing needs pasting again")});
+            note(r, captured ?
+                    "from the browser's sign-in is held: its file could not be written yet, so nexus writes it "
+                    "again until it can (server.log says why); nothing needs signing in again" :
+                    "arrived and is held: its file could not be written yet, so nexus writes it again until it can "
+                    "(server.log says why); nothing needs pasting again"), captured});
     }
+}
+
+SecretEffects SecretDesk::capture(std::uint64_t id, const std::string& account, const std::string& what,
+                                  const SecretValue& value, SecretKeeper& keeper, std::uint64_t now) {
+    SecretEffects out;
+    const SecretRequest r{id, account, what, 0, "nexus", "signed in in the browser"};
+    if (const std::string problem = secretShape(what, value); !problem.empty()) {
+        out.log.push_back(SecretLog{id, account, reason::kMalformed, "the sign-in's login: " + problem});
+        remember(r, SecretState::Refused, SecretAsker{});
+        return out;
+    }
+    captured_.insert(id);
+    // Nobody waits for an answer: nexus started the sign-in itself, and the account's drivers start once it is stored.
+    write(r, SecretAsker{}, value, true, true, keeper, now, kSecretRetryFirstMs, out);
+    return out;
 }
 
 SecretEffects SecretDesk::answer(std::uint64_t id, const SecretValue& value, SecretKeeper& keeper,
@@ -347,6 +368,23 @@ SecretEffects SecretDesk::retry(std::uint64_t now, SecretKeeper& keeper) {
     return out;
 }
 
+SecretEffects SecretDesk::satisfied(const std::string& account, const std::string& what) {
+    SecretEffects out;
+    for (std::size_t i = 0; i < open_.size();) {
+        const SecretRequest r = open_[i];
+        if (r.account != account || r.what != what) {
+            ++i;
+            continue;
+        }
+        out.replies.push_back(SecretReply{r.id, askers_[r.id], true, std::string(), r.account, r.what});
+        out.notes.push_back(SecretNote{r.id, r.asker, "stored", r.account,
+            note(r, "is there already: the account was signed in in the browser, so nothing needs pasting")});
+        out.log.push_back(SecretLog{r.id, r.account, "satisfied", "signed in in the browser"});
+        end(i, SecretState::Stored, out);
+    }
+    return out;
+}
+
 SecretEffects SecretDesk::drop() {
     SecretEffects out;
     while (!open_.empty()) {
@@ -356,10 +394,14 @@ SecretEffects SecretDesk::drop() {
     while (!held_.empty()) {
         const Held& h = held_.begin()->second;
         out.log.push_back(SecretLog{h.request.id, h.request.account, "lost",
-            "the server ended before its file could be written, so the value is gone and must be pasted again"});
+            captured_.count(h.request.id) != 0 ?
+                "the server ended before its file could be written, so the login is gone and the account signs in "
+                "again" :
+                "the server ended before its file could be written, so the value is gone and must be pasted again"});
         remember(h.request, SecretState::Dropped, h.asker);
         held_.erase(held_.begin());
     }
+    captured_.clear();
     // A server that starts again knows no request of this one: an answer for one that expired is late there.
     for (auto& [id, e] : ended_) {
         if (e.state == SecretState::Expired) {

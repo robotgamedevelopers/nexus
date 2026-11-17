@@ -1,0 +1,211 @@
+// TEST ONLY: the version of schema/Nexus.schema before the in-app sign-in, state format 4, as nexus shipped it (main at
+// 810991e), so that tests/wire/nexus_versions_test.cpp proves a window and a server of format 4 and of this build's
+// format 5 work together both ways: a format 4 reader skips SessionsDiff.signins and reads the sign-in's action kinds
+// as None. It is frozen: it changes only if what format 4 shipped is found to be wrong. Its package is its own only so
+// that both versions link into one test program; a package name is not on the table wire.
+
+package nexuswireprev
+
+// Sent first on a link, each way, before any state (src/link/bootstrap.h): the protocol this end speaks (its state
+// format, src/sync/formats.h), and the oldest protocol of the other end it still works with. An end refuses the link
+// only when the other's `proto` is below its `min_peer`; otherwise the link speaks the older of the two protos.
+table Hello
+{
+    proto    uint32
+    min_peer uint32
+}
+
+// ---- The sessions state, server to window (src/sync/sessions.h) ----
+
+// What a transcript entry is. An unknown kind (a later server's) reads None, which the window shows as a notice.
+enum EntryKind
+{
+    Person,
+    Friend,
+    Notice,
+    Tool
+}
+
+// What a session's friend is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown
+// value (a later server's) reads None, which the window shows as busy.
+enum Activity
+{
+    Idle,
+    Busy,
+    Down
+}
+
+// What a session is (sync::SessionInfo, store::Info): its friend, harness, account, model and effort, and which of
+// its friend's instances it belongs to. Empty account, model or effort: the harness's default; empty instance: the
+// friend's default.
+table SessionInfo
+{
+    friend_name *string
+    harness     *string
+    account     *string
+    model       *string
+    effort      *string
+    instance    *string
+}
+
+// One entry a sessions diff carries: its kind, whether it is closed, how many bytes of its text the state diffed from
+// already holds (non-zero only for an entry that state holds open and that only grew), and the rest of its text.
+table EntryChange
+{
+    kind   EntryKind
+    closed bool
+    offset uint64
+    tail   *string
+}
+
+// One session of a sessions diff. Unchanged (`changed` false): the state diffed from holds it as it is, and nothing
+// else is set. Changed: what it is, its activity, its first transcript index, the index `keep_from` of the first entry
+// the state diffed from does not hold as it is, the entries from there to the end, and, when `queue_changed`, its
+// queue.
+table SessionChange
+{
+    id            uint64
+    changed       bool
+    info          SessionInfo
+    activity      Activity = Idle
+    first         uint64
+    keep_from     uint64
+    entries       []EntryChange
+    queue_changed bool
+    queue         []string
+}
+
+// An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file
+// asked for, the asker's session (0: nexus itself) and friend, and the asker's one-line reason. Never a value.
+table SecretRequest
+{
+    id         uint64
+    account    *string
+    what       *string
+    asker      uint64
+    asker_name *string
+    why        *string
+}
+
+// A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
+// holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
+// every diff (a few short lines).
+table SessionsDiff
+{
+    sessions []SessionChange
+    requests []SecretRequest
+}
+
+// ---- The actions, window to server (src/sync/actions.h) ----
+
+enum ActionKind
+{
+    Send,
+    Queue,
+    Stop,
+    Create,
+    Ensure,
+    SetAccount,
+    SetModel,
+    SetEffort,
+    AddAccount,
+    RemoveAccount,
+    AddFriend,
+    LinkAccount,
+    UnlinkAccount,
+    SetDefault,
+    SecretAnswer,
+    SecretCancel
+}
+
+// One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
+// its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
+// the person pasted them, never text). Its number is the diff's `start` plus its place in the list.
+table Action
+{
+    kind        ActionKind
+    session     uint64
+    friend_name *string
+    text        *string
+    account     *string
+    request     uint64
+    secret      *bytes
+}
+
+// An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.
+table ActionsDiff
+{
+    start   uint64
+    actions []Action
+}
+
+// ---- The store, nexus-server's durable state (src/store/store.h) ----
+
+// A transcript entry as the store keeps it.
+table StoreEntry
+{
+    kind   EntryKind
+    closed bool
+    text   *string
+}
+
+// A session's driver as the server keeps it across restarts: the next turn number, the turn open (0: none), the last
+// session id the harness reported, the prompts waiting for a driver, whether the next send carries a summary of the
+// conversation (its harness session was dropped for a move), and the directory that harness session was made in
+// (absent: not known, and the next driver resumes it).
+table Driver
+{
+    next_turn   uint64
+    open_turn   uint64
+    session     *string
+    waiting     []string
+    summary     bool
+    session_dir *string
+}
+
+// One change of a step (store::Change): an entry appended to the transcript, a prompt queued, the driver replaced
+// whole, the oldest queued prompt taken, or what the session is replaced whole (first in a step, it makes the next
+// session). A reader that lacks an arm (a later server's change) reads None and skips it.
+union Change
+{
+    append     StoreEntry
+    enqueue    *string
+    set_driver Driver
+    dequeue
+    set_info SessionInfo
+}
+
+// One record of the journal (Store::commit): the changes of one step to one session, and, when `client` is set, that
+// client's applied counter moved to `applied`.
+table Record
+{
+    session uint64
+    changes []Change
+    client  *string
+    applied uint64
+}
+
+// A session as the snapshot keeps it.
+table StoreSession
+{
+    id         uint64
+    info       SessionInfo
+    transcript []StoreEntry
+    queue      []string
+    driver     Driver
+}
+
+// A client's applied counter: the number of the last of its actions the server applied.
+table ClientCounter
+{
+    client  *string
+    applied uint64
+}
+
+// The journal's snapshot: the next session id, every session in id order, and every client's counter.
+table Snapshot
+{
+    next_session uint64
+    sessions     []StoreSession
+    clients      []ClientCounter
+}

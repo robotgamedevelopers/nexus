@@ -201,9 +201,29 @@ bool isSecret(ActionKind kind) {
     return kind == ActionKind::SecretAnswer || kind == ActionKind::SecretCancel;
 }
 
+// The sign-in's kinds (format 5 on, sync/signin.h), which these formats never carry: a window sends one only for a
+// flow it received, which a server sends only on a link of 5 or later.
+bool isSignIn(ActionKind kind) {
+    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
+}
+
 // One action in format 3: its kind, then its fields framed by their length (its session, friend, text, account,
-// request and value), so that a later format appends fields and a reader skips what it does not know.
+// request and value), so that a later format appends fields and a reader skips what it does not know. A sign-in's
+// action goes as a stop naming session 0 and nothing else, which every server refuses and counts, so that the numbers
+// stay unbroken and nothing of the sign-in leaves on a link of 1 to 3.
 void encodeFramed(Writer& w, const Action& a) {
+    if (isSignIn(a.kind)) {
+        Writer stop;
+        stop.u64(0);
+        stop.str(std::string());
+        stop.str(std::string());
+        stop.str(std::string());
+        stop.u64(0);
+        stop.str(std::string());
+        w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
+        w.str(stop.take());
+        return;
+    }
     Writer frame;
     frame.u64(a.session);
     frame.str(a.friendName);
@@ -217,10 +237,11 @@ void encodeFramed(Writer& w, const Action& a) {
     wipeBytes(bytes);   // the frame's copy of a value is wiped as it goes
 }
 
-// One action up to format 2: unframed. A secret's action, which these formats cannot carry, goes as a stop naming
-// session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never leaves.
+// One action up to format 2: unframed. A secret's or a sign-in's action, which these formats cannot carry, goes as a
+// stop naming session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never
+// leaves.
 void encodeUnframed(Writer& w, const Action& a) {
-    if (isSecret(a.kind)) {
+    if (isSecret(a.kind) || isSignIn(a.kind)) {
         w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
         w.u64(0);
         w.str(std::string());

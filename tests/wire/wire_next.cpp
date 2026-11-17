@@ -69,6 +69,24 @@ Bytes nextSessions() {
     waiting->activity = Activity::Waiting;
     addEntry(b.main, *waiting, EntryKind::Person, "yo");
     waiting->queue_changed = true;      // a session new to the state sends its queue, here empty
+    // Two sign-in flows (format 5 on, which the later version keeps): one this window holds, its URL as bytes, and one
+    // another window holds.
+    SignInOffer* held = SessionsDiffSigninsAdd(b.main, b.GetRoot()->signins);
+    held->id = 4;
+    setText(b.main, held->account, "a1");
+    setText(b.main, held->provider, "claude");
+    setText(b.main, held->opener, "w1");
+    setText(b.main, held->host, "studio");
+    const char url[] = "https://claude.com/cai/oauth/authorize?state=test-state";
+    std::uint8_t* at = TableBytesEmplace(b.main, held->url, static_cast<int64_t>(sizeof url - 1));
+    if (at != nullptr) {
+        std::memcpy(at, url, sizeof url - 1);
+    }
+    SignInOffer* other = SessionsDiffSigninsAdd(b.main, b.GetRoot()->signins);
+    other->id = 5;
+    setText(b.main, other->account, "a2");
+    setText(b.main, other->provider, "claude");
+    setText(b.main, other->opener, "*");
     if (!b.Lock()) {
         return Bytes();
     }
@@ -121,7 +139,20 @@ Read nextReadSessions(const Bytes& bytes) {
     const SessionsDiff* d = SessionsDiffLoad(region.data(), need, bytes.data(), static_cast<int64_t>(bytes.size()),
         &report);
     reportInto(out, report, d != nullptr);
-    if (d == nullptr || d->sessions.size() < 1) {
+    if (d == nullptr) {
+        return out;
+    }
+    out.sessions = static_cast<int>(d->sessions.size());
+    for (const SecretRequest& r : d->requests) {
+        out.requests.push_back(r.id);
+    }
+    for (const SignInOffer& o : d->signins) {
+        out.signins.push_back(o.id);
+        const TableBytesView url = TableBytesAt(o.url);
+        out.urls.push_back(url.data == nullptr ? std::string() :
+            std::string(reinterpret_cast<const char*>(url.data), static_cast<std::size_t>(url.length)));
+    }
+    if (d->sessions.size() < 1) {
         return out;
     }
     const SessionChange& s = d->sessions[0];

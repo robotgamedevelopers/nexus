@@ -1242,6 +1242,7 @@ void state_format_2_reads_later_formats() {
     three.apply_string(sessions + requests.take());
     const std::vector<SecretRequest> asked{SecretRequest{4, "work", "oauth-token", 1, "ada", "the login expired"}};
     CHECK(three.requests() == asked);
+    CHECK(three.offers().empty());      // formats 1 to 3 carry no sign-in (sync/formats.h)
     for (const Sessions* read : {&s, &three}) {
         const SessionView* v = read->find(1);
         CHECK(v != nullptr);
@@ -1539,13 +1540,34 @@ void format4_read_caps() {
     for (std::size_t i = 0; i < many.sessions.size(); ++i) {
         many.sessions[i].id = i + 1;
     }
-    const std::string crafted = codec::writeTables(many);
+    const std::string crafted = codec::writeTables(many, kStateFormat);
     CHECK(crafted.size() <= codec::kMaxDiffBytes);
     int unknown = 0;
     CHECK(refusedAsBadDiff([&] { (void)codec::readTables(crafted, &unknown); }, past));
     Sessions small = withText(10);
     const Sessions kept = small;
     CHECK(refusedAsBadDiff([&] { small.apply_string(crafted); }, past));
+    CHECK(small == kept);
+
+    // The sign-in's field (format 5) under the same caps. A flow that is an id alone is 12 bytes and loads into 48, four
+    // times (measured: 300,000 of them, 3,600,036 bytes, load into 14,400,064), so within kMaxDiffBytes the flows
+    // stay within kMaxReadBytes: 300,000 read, as any diff under both caps does. 350,000 (4,200,036 bytes) are longer
+    // than the link carries: refused before they are measured, and the window keeps its state.
+    const auto flowsOf = [](std::size_t count) {
+        codec::SessionsChange flows;
+        flows.offers.resize(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            flows.offers[i].id = i + 1;
+        }
+        return codec::writeTables(flows, kSignInFormat);
+    };
+    const std::string within = flowsOf(300000);
+    CHECK(within.size() <= codec::kMaxDiffBytes);
+    CHECK(codec::readTables(within, &unknown).offers.size() == 300000);
+    const std::string longerFlows = flowsOf(350000);
+    CHECK(longerFlows.size() > codec::kMaxDiffBytes);
+    CHECK(refusedAsBadDiff([&] { (void)codec::readTables(longerFlows, &unknown); }, longer));
+    CHECK(refusedAsBadDiff([&] { small.apply_string(longerFlows); }, longer));
     CHECK(small == kept);
 }
 
@@ -1635,6 +1657,21 @@ void format4_read_fuzz() {
                 to.setFriends({});
                 break;
         }
+        // The sign-in flows (format 5): in half the seeds, one seen by every window and one held by this window, its
+        // URL as bytes; so the fuzz reaches SessionsDiff.signins, its caps and its bytes field.
+        if (seed % 3 != 0) {
+            SignInOffer everyone;
+            everyone.id = seed;
+            everyone.account = "acct";
+            everyone.provider = "claude";
+            everyone.opener = "*";
+            everyone.host = "studio";
+            SignInOffer held = everyone;
+            held.id = seed + 1;
+            held.opener = "claim-test";
+            held.url = SecretValue("https://sign-in.test/authorize?state=test-state");
+            to.setOffers({everyone, held});
+        }
         const std::string diff = to.diff_from(from);
         Sessions check = from;
         check.apply_string(diff);
@@ -1661,17 +1698,21 @@ void format4_read_fuzz() {
             }
         }
     }
-    // Actions: held actions of every kind, a secret's answer among them, as the window sends them.
+    // Actions: held actions of every kind, a secret's answer and a sign-in callback's query among them, as the window
+    // sends them.
     for (std::uint64_t seed = 11; seed <= 14; ++seed) {
         Rng rng{seed};
         Actions held(1);
         for (int i = 0; i < 12; ++i) {
-            Action a = act(static_cast<ActionKind>(1 + rng.below(16)), 1 + rng.below(3), randomText(rng),
-                kTabNames[rng.below(3)]);
+            Action a = act(static_cast<ActionKind>(1 + rng.below(static_cast<std::uint64_t>(kLastActionKind))),
+                1 + rng.below(3), randomText(rng), kTabNames[rng.below(3)]);
             a.account = rng.chance(2) ? "acct" : "";
             a.request = rng.below(4);
             if (a.kind == ActionKind::SecretAnswer) {
                 a.secret = SecretValue("hunter2");
+            }
+            if (a.kind == ActionKind::SignInCallback) {
+                a.secret = SecretValue("code=test-code&state=test-state");
             }
             held.add(std::move(a));
         }
@@ -1685,7 +1726,8 @@ void format4_read_fuzz() {
                 if (!got.empty()) {
                     int unknown = 0;
                     const std::vector<Action> again =
-                        codec::readActionsTables(codec::writeActionsTables(got.front().num, got, 0), &unknown);
+                        codec::readActionsTables(codec::writeActionsTables(got.front().num, got, 0, kStateFormat),
+                            kStateFormat, &unknown);
                     CHECK(again == got);
                 }
                 w.apply_string(m);

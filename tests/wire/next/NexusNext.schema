@@ -101,13 +101,29 @@ table Friend
     name *string
 }
 
+// A live in-app sign-in flow as one window sees it (sync/signin.h SignInOffer), from format 5: its id, its account, its
+// provider, the claim token of the window that holds it (`*` to every other window; absent: no window holds it), the
+// server's host name, and its sign-in URL, set only in the state of the window that holds it (Hub::stateFor), as
+// bytes, never text. A window of format 4 skips the field that holds these, and the server never counts it as able to
+// sign in in the browser (docs/formats.md, format 5).
+table SignInOffer
+{
+    id       uint64
+    account  *string
+    provider *string
+    opener   *string
+    host     *string
+    url      *bytes
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
 // holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
 // every diff (a few short lines). Then the server's friends, only in a diff where they changed from the state diffed
 // from: friends_sent says this diff carries them, and then friends_known whether the server holds a list (false: a
 // server holding no friends file it could read, and the window shows the friends of the sessions it holds) and
 // friends the list, whole, in its friends.json's order. Absent friends_sent (no change, or a server from before the
-// list) reads false: the reader keeps the friends it held.
+// list) reads false: the reader keeps the friends it held. Then, from format 5 and only on a link of 5 or later, the
+// live sign-in flows in id order, whole in every diff.
 table SessionsDiff
 {
     sessions      []SessionChange
@@ -115,6 +131,7 @@ table SessionsDiff
     friends_known bool
     friends       []Friend
     friends_sent  bool
+    signins       []SignInOffer
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -137,12 +154,17 @@ enum ActionKind
     SetDefault,
     SecretAnswer,
     SecretCancel,
+    SignInClaim,
+    SignInOpened,
+    SignInCallback,
     Rename
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
 // its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
-// the person pasted them, never text). Its number is the diff's `start` plus its place in the list.
+// the person pasted them, never text). The sign-in's (format 5 on, sync/signin.h): `request` is the flow's id, `text`
+// the window's claim token, and a callback's query rides in `secret`, as bytes. Its number is the diff's `start` plus
+// its place in the list.
 table Action
 {
     kind        ActionKind

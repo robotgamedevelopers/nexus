@@ -13,11 +13,15 @@ bool isSecret(ActionKind kind) {
     return kind == ActionKind::SecretAnswer || kind == ActionKind::SecretCancel;
 }
 
+bool isSignIn(ActionKind kind) {
+    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
+}
+
 // A diff: the number of its first action and the actions from there, one unbroken run, in the link's format
 // (sync/codec.h).
 std::string encode(std::uint64_t start, const std::vector<Action>& held, std::size_t from, std::uint32_t format) {
     if (format >= kTablesFormat) {
-        return codec::writeActionsTables(start, held, from);
+        return codec::writeActionsTables(start, held, from, format);
     }
     return codec::writeActionsLegacy(start, held, from, format);
 }
@@ -41,6 +45,9 @@ const char* kindName(ActionKind kind) {
         case ActionKind::SetDefault: return "set-default";
         case ActionKind::SecretAnswer: return "secret-answer";
         case ActionKind::SecretCancel: return "secret-cancel";
+        case ActionKind::SignInClaim: return "sign-in-claim";
+        case ActionKind::SignInOpened: return "sign-in-opened";
+        case ActionKind::SignInCallback: return "sign-in-callback";
     }
     return "unknown";
 }
@@ -51,6 +58,8 @@ std::string describe(const Action& action) {
     std::string out = "action " + std::to_string(action.num) + " (" + kindName(action.kind);
     if (isSecret(action.kind)) {
         out += " for secret request " + std::to_string(action.request);
+    } else if (isSignIn(action.kind)) {
+        out += " for sign-in " + std::to_string(action.request);
     }
     return out + ")";
 }
@@ -92,7 +101,7 @@ std::vector<Action> Actions::parse(const std::string& diff, std::uint32_t format
         return std::vector<Action>();
     if (format >= kTablesFormat) {
         int skipped = 0;
-        std::vector<Action> out = codec::readActionsTables(diff, &skipped);
+        std::vector<Action> out = codec::readActionsTables(diff, format, &skipped);
         if (unknown != nullptr) {
             *unknown = skipped;
         }

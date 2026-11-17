@@ -14,7 +14,8 @@ below says what the binding covers, and what it does not yet.
 ## The flow
 
 1. An **asker** asks `nexus-server` for a secret for an account: a friend's AI, through its driver (below), or the
-   server itself (the sign-in flow, roadmap 5c).
+   server itself (a login for an account whose provider has no in-app sign-in; a claude account signs in in the
+   browser instead, "Sign-in" below).
 2. The server refuses the ask outright (below: no request, no id) unless the account and what is asked are each a name
    (letters, digits, `-`, `_` and `.`, at most 64), the account exists, the asker's friend is linked to it in
    `friends.json` (an AI asks only for the accounts its friend may use; nexus itself may ask for any), the account's
@@ -205,6 +206,145 @@ dropped. A secret the person pasted is still stored.
 The deadline is 10 minutes from the ask. That number is a guess, not a measurement: long enough to find a key in a
 provider's console, short enough that a forgotten request does not hold an asker's turn open for long.
 
+## Sign-in: a claude account, in the browser
+
+The owner's rulings: nexus runs on Claude subscriptions; a claude account is signed in from inside
+nexus with one browser sign-in, with no paste, no terminal and no file to save; the sign-in runs in the client and its
+result goes to the server; the login is stored per account under `~/.nexus/server/accounts/<name>/` (0600) behind the
+one-chance store; and it is signed in once, ever: asking again is a bug, but for a login that really ended or was
+refused. No AI ever sees the sign-in URL, the code the browser carries back or the token: none is in a transcript, a
+log line, a driver's input, a state file or a test's output.
+
+The state machine is `models/SignIn.tla`, bound to the code by `tests/sync/signin_walk` and `models/SignInTrace.tla`
+(`models/README.md`). The code: `src/sync/signin.h` (the server's `SignInDesk`, the window's `SignInOpener` and
+`CallbackGate`, the scanners), `src/sync/hub.cpp` (the desk in the hub), `src/server/signin_runner.h` (the processes),
+`src/server/signin_open.cpp` (the URL helper), `src/signin_gate.h` (the window's gate) and `src/frame_host.h`
+(`LinkSignIn`, the window's side).
+
+**The flow.**
+
+1. **Needed.** The server marks a claude account needed when it has no login: at the start (none stored), when its
+   driver reports no credential or its login ends, or when an AI asks with `nexus-server config sign-in <account>`.
+   That mints a flow id, durable and never reused across restarts (the store's applied counter of the client
+   `nexus:sign-ins`), and offers the flow in the state every window receives. One flow per account at most; none while
+   a login for it is held in the one-chance store. Each session on the account gets one notice: "needs signing in:
+   show nexus's window (its hotkey) to sign in in the browser". The AI that asked gets one line back, `signed in` or
+   `refused: <why>`, and nothing of the flow.
+2. **Claimed.** A window claims a flow only once the person has shown it (the hotkey: the person is there), and only
+   the oldest offer no window holds that it has not claimed before. Each window claims by a claim token of its own,
+   32 random letters and digits made at launch; the state names a flow's holder to the holder alone and shows every
+   other window `*`, so no window learns another's token, and a second window or a reconnect never starts a second
+   flow. The first claim the server takes for a needed flow starts its process; a claim of a running flow whose
+   window's link ended takes it over without a second process; any other claim is late and changes nothing.
+3. **The process.** The server starts the unmodified `claude setup-token` (the `claude` program the server's config
+   names, else the first on PATH) under a pseudo-terminal of its own, with an environment made from nothing but HOME,
+   PATH, TERM, LANG, a CLAUDE_CONFIG_DIR of its own under the account's directory (0700, removed when the process
+   ends), and BROWSER. No API key variable, nor anything else of the server's environment, reaches it. First on its
+   PATH is nexus's helper, `nexus-signin-open` (beside `nexus-server`), as `open`, `xdg-open`, `wslview`,
+   `sensible-browser`, `www-browser` and `x-www-browser`, and it is BROWSER too: it hands the URL to the server over a
+   Unix socket in the server's directory (0600), with a nonce that names its flow, and opens nothing. Where the program
+   opens a browser by a path of its own, the URL it prints in its terminal is taken instead (`UrlScanner`, which reads
+   the terminal's text as a terminal shows it: CSI, OSC, DCS and the other strings, the two-byte and the
+   charset-select forms, each split across reads, are never text, and every one of them, a colour change too, ends a
+   URL's run; a URL counts once its line stands, at its line feed, and a carriage return followed by anything else
+   starts the line over). A URL fails the flow unless it is https, to a host on Claude's sign-in list (`claude.com`,
+   `platform.claude.com`, `claude.ai`, compared byte for byte, so a look-alike such as `claude.com.example` is
+   refused), of printable bytes only, with a local redirect (http, localhost or 127.0.0.1, a port) and a state. The
+   window checks the host against the same list before it opens anything.
+
+   *Two things the process holds that are not nexus's choice.* `claude setup-token` itself starts the helper as
+   `open <url>`, so the URL is in the helper's argv, which another process of the same user can read while the helper
+   runs (a few milliseconds); nexus never puts the URL in an argv of its own. And the helper's nonce comes to it in its
+   environment (`NEXUS_SIGNIN_FLOW`, `<flow>-<32 random letters and digits>`), since the helper is the program's child
+   and the program passes its environment down: there is no private channel to it. The nonce is not a secret of the
+   sign-in: it only says which flow a URL is for, the socket is 0600 in a 0700 directory, and the runner compares it in
+   constant time. The residual route is a process of the same user that reads the helper's environment and connects
+   to the socket first: it can hand over a URL of its own, which must still pass the host list, and it already runs
+   as the user.
+
+   *A crash.* The runner locks `.signin/lock` and gives the lock to the process (its fd 3), with the process's group in
+   `.signin/pid`. A server that starts after one that ended without its runner's end (a crash, a SIGKILL) ends every
+   process still holding such a lock (its group: SIGTERM, then SIGKILL after 2 s) and removes every `.signin` left
+   under the accounts, one line each in `server.log`; a process that does not hold the lock is never touched.
+4. **Opened.** The server puts the URL in the holding window's state alone. That window opens it in the system browser
+   once, and says so in one action, which carries no URL. The open runs on a thread of the window's own
+   (`src/url_opener.h`), never the frame's: the frame only queues the URL, and the queue is wiped as it goes.
+5. **The callback.** On the server's machine (the window reaches the server at a loopback address, or the server's host
+   name is the window's own), Claude Code's own listener takes the browser's redirect, and the window binds nothing.
+   On another machine, the window first binds a gate on 127.0.0.1 (and ::1 where it can) at the redirect's port, on a
+   thread of its own. The gate takes exactly one GET on the redirect's path whose `state` matches the URL's and that
+   carries a `code` or an `error`; it answers that one with a plain page ("signed in, you can close this tab"), sends
+   its query up in one action, keeps nothing, and closes. Any other request is answered "not found" and changes
+   nothing. The gate compares the state in constant time, refuses a query with a control byte (CR, LF or any other
+   byte outside 0x21 to 0x7e), holds at most 8 connections at once and drops each one 10 s after it opened (both
+   guesses, not measurements). Where [::1] exists but its port is taken by another program, the gate fails with one
+   plain line rather than listen on 127.0.0.1 alone (a browser that tries ::1 first would hand the callback to that
+   program). The server replays the query once, from the holding window only, while the flow waits, only with the
+   URL's state (compared in constant time) and only of printable bytes, to the listener on the redirect's own host and
+   port, on loopback alone: `localhost` on [::1] first, then 127.0.0.1, as a browser tries it; `127.0.0.1` on IPv4
+   alone; anything else is dropped. The token exchange that follows gets 30 s past the flow's deadline (a guess, not a
+   measurement) before its process is told to end. The gate also closes when its flow leaves the window's state or the link is lost. A window binds
+   one gate at a time: a second page that needs one waits, queued, until the first's callback is taken or its flow
+   leaves.
+6. **Captured.** The process prints the token. The server takes it from the terminal (`TokenScanner`, which holds at
+   most one login's bytes at a time and wipes them, and reads the terminal's text as `UrlScanner` does, but for a
+   colour change, which a run of the token goes on across). A candidate is a run of the subscription login's shape,
+   `sk-ant-oat01-` and its token bytes, exactly 108 bytes in all (the published shape, not a measured login: a run of
+   another length is passed over, and its length, never its bytes, is logged); a longer run is two things joined and
+   no candidate. It counts once its line stands; when the process has ended, by itself with status 0 or by the
+   server's stop, the last candidate printed is the login. The server checks again that it is a subscription's login,
+   not an API key. It then puts the token straight into the one-chance store as a request of nexus's own (above: never
+   dropped, stored when durable, held and written again while the disk refuses it). The account is signed in, and
+   each session held for want of a credential starts its driver. Sessions on the account read "was signed in in the
+   browser". A token printed after its flow ended (the deadline passed while the browser was sent back, or in the
+   grace after the process was told to end) is stored all the same, and a needed flow for the account ends dropped:
+   the person signed in, so nothing asks again (`models/SignIn.tla` `EveryPrintTaken`).
+
+**How a flow ends.** Each end is one state and one plain notice in the account's sessions; each but captured and
+dropped makes a fresh flow at once, so the next show of the window starts the sign-in again.
+
+| end | when | notice |
+|---|---|---|
+| captured | the token was printed and is a subscription's login | "was signed in in the browser" |
+| cancelled | the person declined on the page, and the window's gate forwarded that | "declined on the page" |
+| failed | the process ended without a token (a decline on the server's own machine is this: the server never sees the redirect), its URL was refused, or what it printed was not a subscription's login | "ended without a login" |
+| expired | 10 minutes after its process started (a guess, not a measurement; 30 s more once the callback was forwarded, while the program exchanges the code for its login), its process ended | "was not finished in 10 minutes" |
+| dropped | the server ended; the account was signed in otherwise (a paste, its driver, a late token); or only windows from before sign-ins are linked, and a paste is asked for instead (Versions, below) | none |
+
+A window that closes or loses its link lets go of the flows it holds; the process keeps running, and the next other
+window shown takes the flow over and opens the URL again. The same window, back, does not claim a flow it claimed
+before: that flow ends at its deadline, and the fresh one after it is offered at the next show. When the windows left
+linked are all from before sign-ins, a flow no window holds ends at once, its process ended, and a paste is asked for
+instead (Versions, below). A window's gate that cannot bind its port shows one problem line in that window.
+
+**The window.** Nothing new shows: no settings screen, no hint text. While an account has no login, its sessions'
+state cursor is red (AGENTS.md, "The state cursor"), and the notices above are the only words. All of the window's
+work for a sign-in is a non-blocking step each frame (the gate's sockets and the browser's open are on threads of
+their own); the frame-budget test's `sign_in` case drives a claim, an open through the real opener thread over a stub
+browser that takes 300 ms, a real gate and the flow's end within 8.3 ms a frame.
+
+**Where each value travels, and where it never goes.**
+
+| value | where it is | never in |
+|---|---|---|
+| the URL | the process's terminal, or the helper's argv (put there by `claude setup-token` itself) and the helper's socket (0600); the server's memory (`SignInDesk`); the holding window's state, over the link (mosh, encrypted); the window's memory and its opener thread's queue (wiped as it goes); the browser | the state of any other window, an action, a transcript, a log line, a driver, a state file, an argv of nexus's own, the environment |
+| the code | the browser's redirect; Claude Code's listener (same machine), or the window's gate, its one action up (encrypted), the server's memory and its one replay on loopback | a transcript, a log line, a driver, any window's state |
+| the token | the process's terminal; the scanner; the one-chance store and the account's `oauth-token` (0600); a late one the same way | the state, an action, a transcript, a log line, a driver's input, any window |
+| the helper's nonce | the helper's environment (`NEXUS_SIGNIN_FLOW`) and its one line on the socket; the runner's memory | a log line, a state, an action; it is not a secret of the sign-in (step 3) |
+| the window's claim token | the window's memory; its claim action (encrypted); the server's memory; the holding window's own state | any other window's state (it reads `*`), a log line |
+
+Each is a `SecretValue`, which has no way to print itself and is wiped when it goes. The log names a flow by its id,
+its account and its state only. The flow's AI-facing surface is one line: `signed in`, or `refused: <why>`.
+
+**After the sign-in: the token wall.** The login the sign-in stores is the account's `oauth-token`, the same file a
+paste writes, so the Claude driver starts on it as on any login: it reads the file, hands the token to Claude on a
+descriptor, never in an environment, and keeps every tool its AI has out of the accounts' directory ("The token wall",
+below). The sign-in's own `CLAUDE_CONFIG_DIR`, `.signin`, is inside that directory, so it is behind the wall too while
+it exists, and the driver copies nothing from it into Claude's state (`drivers/claude` unit test, below).
+
+**Not built here.** Accounts of other providers sign in by a paste. Whether `claude setup-token` under WSL2 calls the
+helper or opens a browser by its own path is not measured; the terminal's URL is the fallback either way.
+
 ## Versions
 
 A window, a server and a driver of different versions always work together; the asker learns in one plain answer
@@ -216,6 +356,9 @@ when the secret cannot be asked for.
 | older server, newer window | The server sends no requests, so the window never shows a dialog or sends a secret action. |
 | newer server, older driver | The driver skips the `server` line and never asks. |
 | older server, newer driver | No `server` line arrives before the first `send`, so the driver knows the server takes no secrets, and its tool answers its AI `refused: no-client` without writing `ask-secret`. |
+| sign-in: newer server, older window | Sign-ins are state format 5 (`docs/formats.md`), and the server reads which windows act on them from the link's format, set by each window's Hello and nothing else. A link of format 4 carries none (a window of 4 would read through the flows, the field skipped and counted, but never claim one), nor does one of 1 to 3. While windows that take a paste are linked but none is of format 5, a claude account with no login is asked for by a paste, as before sign-ins: a needed flow ends dropped (one a window holds already goes on) and nexus asks for its `oauth-token` in the dialog, saying the window is too old to sign in in the browser. A newer window that links later shows that paste dialog too. An AI's `config sign-in` answers that the person pastes the login. |
+| sign-in: older server, newer window | The link is of the server's format, 4 or older: the server sends no flows, so the window never claims, opens or binds anything, and never sends the three sign-in actions (`SignInClaim`, `SignInOpened`, `SignInCallback`). Should one be written on such a link it goes as a stop naming session 0 and nothing else, which every server refuses; a format 4 server reading the kinds themselves reads them as unknown and refuses each alone. The server asks for a paste, which the window shows. |
+| sign-in: no helper | A server with no `nexus-signin-open` beside it (or whose helper socket cannot be made) says so once on its standard error, and its claude accounts are asked for by a paste, as before. |
 
 ## Not in the model
 
@@ -268,6 +411,22 @@ the account's name), and each fake value is made up by the test:
   config; and every state the window held.
 - `tests/server/secrets_test files_disk` (functional): a wide or linked account directory refused, a link planted at
   the temporary file's name never written through, and the start's sweep.
+- `tests/server/signin_test leak` (unit): a whole sign-in with stray callbacks, an API key, a held login and a
+  restart; every log line, transcript, store file and state sent (the other window's whole) searched for the URL's
+  state, the code and the token.
+- `tests/server/signin_functional` (functional): the runner with the FAKE `claude` under a pty, the helper, the gate
+  on loopback and the replay; each case's log lines searched. `crashed`: a runner's process outlives its server and
+  the next runner ends it and removes `.signin`.
+- `tests/link/link_e2e signin` (functional): the real `nexus-server` with the FAKE `claude` and two windows over the
+  real link: the URL in the claiming window's state alone, the flow let go of when its link ends and taken over by
+  the other, the forwarded callback replayed, the token in the account's file, `config sign-in`; then every file the
+  run left (`server.log` first) and every state the other window held searched. Its reversed witness,
+  `link_e2e signin ... leaky`, runs `nexus-server-leaky` (a test-only build, `NEXUS_LEAKY_SIGNIN_WITNESS`, which writes
+  each forwarded query to its log) and passes only when the search finds it in `server.log`.
+- `drivers/claude` unit test `a login the in-app sign-in left is read...` (unit, where the sign-in meets the token
+  wall): the login as the sign-in leaves it (the token's bytes alone in `oauth-token`, and a `.signin` holding the
+  token in every file `claude setup-token` might write) is read by the walled driver, and nothing of `.signin` reaches
+  Claude's state directory.
 
 ## The token wall
 

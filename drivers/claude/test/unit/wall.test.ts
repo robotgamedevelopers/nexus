@@ -8,7 +8,9 @@ import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, r
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { configDirOf, kClaudeStateFiles, kMaxStateFileBytes, openConfigDir } from '../../src/account.js';
+import {
+    configDirOf, isAccount, kClaudeStateFiles, kMaxStateFileBytes, openConfigDir, readAccount,
+} from '../../src/account.js';
 import {
     bothForms, configFiles, folded, kClaudeSandboxProtects, kCredentialNames, kDataRoots, kGitNameRules, kLimitedReadsUnderHome, kLoginVariables, kNoSettingsHooks, limitOf, nexusOutsideState, programsOf, projectStateOf, realOf, toolRefusal, wallDenyRules, wallHooks, wallOf, wallSandbox,
     type Wall, type WallFs,
@@ -269,6 +271,31 @@ void test('a new Claude state directory refuses a taken file that holds the toke
     assert.deepEqual(readdirSync(configDirOf(home, 'plain')), ['CLAUDE.md']);
 });
 
+void test('a login the in-app sign-in left is read, and nothing of its sign-in directory reaches Claude\'s state', () => {
+    // What nexus-server's in-app sign-in leaves (docs/secrets.md, "Sign-in"): the one-chance store's oauth-token, the
+    // value's bytes alone with no newline, 0600 in the 0700 login directory; and, while a sign-in runs or after a
+    // crash, `.signin`, the CLAUDE_CONFIG_DIR of the `claude setup-token` it ran, with the lock, the pid and whatever
+    // that program wrote, the token among it. The driver takes the token from the file and copies nothing from there.
+    const home = join(scratch, 'home-signin');
+    const login = join(home, '.nexus/server/accounts/main');
+    const token = 'sk-ant-oat01-nexuswallSIGNINqzxjkvwpTOKENbcdfghmnrst';
+    mkdirSync(join(login, '.signin'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(login, 'oauth-token'), token, { mode: 0o600 });
+    writeFileSync(join(login, '.signin', 'lock'), '', { mode: 0o600 });
+    writeFileSync(join(login, '.signin', 'pid'), '4242\n', { mode: 0o600 });
+    writeFileSync(join(login, '.signin', '.claude.json'), `{"oauthAccount":{"token":"${token}"}}`);
+    writeFileSync(join(login, '.signin', 'settings.json'), `{"env":{"X":"${token}"}}`);
+    writeFileSync(join(login, '.signin', 'CLAUDE.md'), `the token is ${token}\n`);
+    const account = readAccount(home, 'main');
+    assert.ok(isAccount(account), 'the login the sign-in left was refused');
+    assert.equal(account.token, token);
+    const configDir = configDirOf(home, 'main');
+    assert.equal(openConfigDir({ dir: login, configDir, token }), undefined);
+    assert.deepEqual(readdirSync(configDir), []);
+    // The witness: the scan finds the token where the sign-in left it.
+    assert.notEqual(new LeakScan(token, 'main').find(readFileSync(join(login, '.signin', 'settings.json'), 'utf8')), '');
+});
+
 void test('the migration test\'s scan finds a token planted in the new directory (its witness)', () => {
     const token = 'nexuswallWITNESSqzxjkvwpTOKENbcdfghmnrst';
     assert.notEqual(new LeakScan(token, 'main').find(`{"tool_result":"${token}"}`), '');
@@ -283,7 +310,8 @@ void test('nothing under ~/.nexus is writable but the session\'s own Claude stat
     };
     const got = nexusOutsideState('/h', '/h/.nexus/server/harness/claude/main', (d) => dirs[d] ?? []);
     for (const p of ['/h/.nexus/other', '/h/.nexus/server/drivers', '/h/.nexus/server/config', '/h/.nexus/server/nexus-config',
-        '/h/.nexus/server/store', '/h/.nexus/server/accounts', '/h/.nexus/server/harness/claude/work']) {
+        '/h/.nexus/server/store', '/h/.nexus/server/signin.sock', '/h/.nexus/server/signin-bin',
+        '/h/.nexus/server/accounts', '/h/.nexus/server/harness/claude/work']) {
         assert.ok(got.includes(p), p);
     }
     for (const p of ['/h/.nexus', '/h/.nexus/server', '/h/.nexus/server/harness', '/h/.nexus/server/harness/claude',

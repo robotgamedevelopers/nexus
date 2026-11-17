@@ -85,8 +85,17 @@ void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what) {
     }
 }
 
-std::string writeTables(const SessionsChange& change) {
-    wire::SessionsDiffBuilder b;
+std::string writeTables(const SessionsChange& change, std::uint32_t format) {
+    // The flows only on a link of 5 or later (sync/formats.h). A URL is in an offer only in the state of the window
+    // that holds it (Hub::stateFor), and it is the one sign-in secret this writer ever puts in a table: the builder
+    // then wipes its memory as an actions diff with a value does.
+    const bool signIns = format >= kSignInFormat;
+    bool url = false;
+    for (const SignInOffer& o : change.offers) {
+        url = url || (signIns && !o.url.empty());
+    }
+    const wire::TableAllocator wipes = wiping();
+    wire::SessionsDiffBuilder b(url ? wipes : wire::TableDefaultAllocator());
     wire::SessionsDiff* d = b.GetRoot();
     if (d == nullptr) {
         throw std::bad_alloc();
@@ -140,6 +149,17 @@ std::string writeTables(const SessionsChange& change) {
         for (const ServerFriend& f : change.friends) {
             wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
             putText(b.main, w->name, f.name, scratch);
+        }
+    }
+    if (signIns) {
+        for (const SignInOffer& o : change.offers) {
+            wire::SignInOffer* x = added(wire::SessionsDiffSigninsAdd(b.main, d->signins));
+            x->id = o.id;
+            putText(b.main, x->account, o.account, scratch);
+            putText(b.main, x->provider, o.provider, scratch);
+            putText(b.main, x->opener, o.opener, scratch);
+            putText(b.main, x->host, o.host, scratch);
+            putBytes(b.main, x->url, o.url.bytes());
         }
     }
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
@@ -209,6 +229,16 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         for (const wire::Friend& f : d->friends) {
             out.friends.push_back(ServerFriend{textOf(f.name)});
         }
+    }
+    for (const wire::SignInOffer& x : d->signins) {
+        SignInOffer o;
+        o.id = x.id;
+        o.account = textOf(x.account);
+        o.provider = textOf(x.provider);
+        o.opener = textOf(x.opener);
+        o.host = textOf(x.host);
+        o.url = bytesOf(x.url);
+        out.offers.push_back(std::move(o));
     }
     return out;
 }

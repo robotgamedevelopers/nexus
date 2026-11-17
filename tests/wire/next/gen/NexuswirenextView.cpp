@@ -32,7 +32,10 @@ const UnitViewInfo * UnitView()
         { 14, "SetDefault", 0xd9292b9837d05494ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 15, "SecretAnswer", 0xb4e56199e0ae32c3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 16, "SecretCancel", 0x9f781e34e9b7c12full, NULL, NULL, NULL, TableDocNone, 0, NULL },
-        { 17, "Rename", 0x60320a18282b2b33ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 17, "SignInClaim", 0x7439c20e4947e3b5ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 18, "SignInOpened", 0xa65506e3bb15f846ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 19, "SignInCallback", 0x5c16b9e2e6fb5e04ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 20, "Rename", 0x60320a18282b2b33ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -63,7 +66,7 @@ const UnitViewInfo * UnitView()
         { 6, "set_title", 0x2bbef72c13124e22ull, "*string", NULL, &Change_view_arm_fields[1], TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "NexusNext.schema", 17, 8, 18, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "NexusNext.schema", 20, 8, 21, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "NexusNext.schema", 4, 8, 5, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "NexusNext.schema", 5, 8, 6, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
@@ -83,13 +86,14 @@ const UnitViewInfo * UnitView()
         { "SessionChange", "NexusNext.schema", true, SessionChangeTableType(), TableDocNone, 0, NULL },
         { "SessionInfo", "NexusNext.schema", true, SessionInfoTableType(), TableDocNone, 0, NULL },
         { "SessionsDiff", "NexusNext.schema", true, SessionsDiffTableType(), TableDocNone, 0, NULL },
+        { "SignInOffer", "NexusNext.schema", true, SignInOfferTableType(), TableDocNone, 0, NULL },
         { "Snapshot", "NexusNext.schema", true, SnapshotTableType(), TableDocNone, 0, NULL },
         { "StoreEntry", "NexusNext.schema", true, StoreEntryTableType(), TableDocNone, 0, NULL },
         { "StoreSession", "NexusNext.schema", true, StoreSessionTableType(), TableDocNone, 0, NULL },
     };
     static const UnitViewInfo info = { "nexuswirenext", 0x2f2450356481543cull,
         0, NULL,
-        15, tables,
+        16, tables,
         3, enums,
         0, NULL,
         1, unions,

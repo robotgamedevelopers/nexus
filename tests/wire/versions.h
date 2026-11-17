@@ -26,6 +26,10 @@ struct Read {
     std::vector<std::string> kinds;     // each entry's kind, by name ("None": a kind the reader does not know)
     std::vector<std::string> changes;   // each record change's arm, by name ("None": an arm the reader does not know)
     std::vector<std::string> queue;     // the first session's queue
+    int sessions = 0;                   // how many sessions the diff names
+    std::vector<std::uint64_t> requests;    // each open secret request's id
+    std::vector<std::uint64_t> signins;     // each sign-in flow's id (a reader that knows them: this build's, a later's)
+    std::vector<std::string> urls;          // each flow's URL, as it read (empty: none)
 };
 
 // What a reader of the later version made of an actions diff: the read's report, then each action, in order.
@@ -53,8 +57,9 @@ struct ReadHello {
 };
 
 // The later version: a sessions diff, from an empty state, of two sessions: the first with the added field set and
-// entries that include the added kind (Image), the second with the added activity (Waiting); a record whose changes
-// include the added arm (set_title); and its readers of each.
+// entries that include the added kind (Image), the second with the added activity (Waiting), and two sign-in flows
+// (format 5's, which the later version keeps: 4, held by this window, its URL set, and 5, held by another); a record
+// whose changes include the added arm (set_title); and its readers of each.
 Bytes nextSessions();
 Bytes nextRecord();
 Read nextReadSessions(const Bytes& bytes);
@@ -68,5 +73,19 @@ ReadActions nextReadActions(const Bytes& bytes);
 // The later version's Hello, with the added field (build) set; and its reader.
 Bytes nextHello(std::uint32_t proto, std::uint32_t minPeer);
 ReadHello nextReadHello(const Bytes& bytes);
+
+// The earlier version, state format 4 (tests/wire/prev/NexusPrev.schema, wire_prev.cpp): nexus as it was before the
+// in-app sign-in, which knows neither SessionsDiff.signins nor the sign-in's action kinds.
+//   prevSessions   a format 4 server's diff, from an empty state: session 7 (rowan, busy, one entry) and secret request
+//                  3 (account a1, its oauth-token)
+//   prevActions    a format 4 window's actions, from action 5: a send to session 7 ("hi") and a secret answer (request
+//                  3)
+//   prevHello      a format 4 end's Hello
+// and its readers, which say what a format 4 window or server makes of this build's bytes.
+Bytes prevSessions();
+Bytes prevActions();
+Bytes prevHello();
+Read prevReadSessions(const Bytes& bytes);
+ReadActions prevReadActions(const Bytes& bytes);
 
 } // namespace wiretest

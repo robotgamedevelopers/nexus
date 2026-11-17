@@ -48,14 +48,16 @@ struct SessionChange {
 };
 
 // A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends
-// when this diff carries them (friendsSent: they changed from the state diffed from), and then whether it holds a list
-// (friendsKnown) and the list.
+// when this diff carries them (friendsSent: they changed from the state diffed from), whether it holds a list
+// (friendsKnown) and the list, and then the live sign-in flows as this link's window sees them (format 5 on; none in
+// formats 1 to 4).
 struct SessionsChange {
     std::vector<SessionChange> sessions;
     std::vector<SecretRequest> requests;
     bool friendsSent = false;
     bool friendsKnown = false;
     std::vector<ServerFriend> friends;
+    std::vector<SignInOffer> offers;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the
@@ -88,10 +90,17 @@ void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what);
 // when the diff is longer than kMaxDiffBytes, or when loading it would allocate more than kMaxReadBytes;
 // what a later version adds is skipped and counted in `unknown` (fields, enum values: report.unknown), and an entry kind
 // this build does not know reads as a notice, an activity as busy and an action kind as Unknown.
-std::string writeTables(const SessionsChange& change);
+//
+// The sign-in (format 5 on, sync/signin.h) rides on these tables only on a link of 5 or later (`format`): below it,
+// writeTables leaves the flows out and writeActionsTables writes a sign-in's action as a stop naming session 0 and
+// nothing else (which every server refuses), and readActionsTables reads a sign-in's kind as Unknown. A flow's URL is
+// written only from the offer of the window that holds it (Hub::stateFor), the one route a sign-in secret has into a
+// table down; a callback's query, the one route up, rides in an action's `secret` as an answer's value does.
+std::string writeTables(const SessionsChange& change, std::uint32_t format);
 SessionsChange readTables(const std::string& diff, int* unknown);
-std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from);
-std::vector<Action> readActionsTables(const std::string& diff, int* unknown);
+std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from,
+                               std::uint32_t format);
+std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t format, int* unknown);
 
 // True when `text` is text schema's tables carry as it is: well-formed UTF-8 with no zero byte. Other text is written
 // with each byte that breaks the rule as U+FFFD, so a diff never sends an offset into text whose bytes the window
