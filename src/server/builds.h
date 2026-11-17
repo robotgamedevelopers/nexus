@@ -90,8 +90,15 @@ public:
     // they are placed), with the evidence file at `evidence` ("" for none: the build is placed untested). Prints
     // `placed <hash> tested|untested`, or `already placed <hash> ...`.
     int place(const std::string& tree, const std::string& evidence, Result& r);
-    // Makes the build `hash` current, the current build previous, in one rename.
-    int makeCurrent(const std::string& hash, Result& r);
+    // Makes the build `hash` current, the current build previous, in one rename. `allowUntested` is only ever true for
+    // handover_walk's reversed fault.
+    int makeCurrent(const std::string& hash, Result& r, bool allowUntested = false);
+    // Reads the pointer (`builds/active`) under the builds directory's shared lock: empty strings when no build is
+    // current yet.
+    int active(std::string* current, std::string* previous, Result& r);
+    // Checks under the builds directory's shared lock, without changing anything, whether `hash` can be made current
+    // (placed, whole, tested unless `allowUntested`, and compatible with the current build's formats).
+    int checkSwitch(const std::string& hash, Result& r, bool allowUntested = false);
     // Makes previous current, and current previous.
     int back(Result& r);
     // Removes every build but current, previous, those in use and the `keep` most recently placed of the rest.

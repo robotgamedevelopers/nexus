@@ -1054,7 +1054,7 @@ struct Builds::Run {
     }
 
     // current <hash> (back: an empty hash): the pointer moved to the pair (target, current) by one rename.
-    int sw(const std::string& want, bool back) {
+    int sw(const std::string& want, bool back, bool allowUntested = false) {
         Status s = begin();
         if (!s.is_ok()) {
             return finish(s);
@@ -1089,7 +1089,7 @@ struct Builds::Run {
         if (!s.is_ok()) {
             return finish(s);
         }
-        if (!m.tested) {
+        if (!m.tested && !allowUntested) {
             return finish(Status::refused("build " + target + " is untested, and an untested build is never made "
                                           "current: place the tree again with the evidence that its exact content "
                                           "passed its tests (`place <tree> --evidence <file>`)"));
@@ -1444,6 +1444,73 @@ struct Builds::Run {
         }
         return end(Status::ok());
     }
+
+    int active(std::string* current, std::string* previous) {
+        current->clear();
+        previous->clear();
+        bool none = false;
+        Status s = beginRead(&none);
+        if (!s.is_ok() || none) {
+            return end(s);
+        }
+        Pointer p;
+        s = pointer(&p);
+        if (!s.is_ok()) {
+            return end(s);
+        }
+        if (p.exists) {
+            *current = p.current;
+            *previous = p.previous;
+        }
+        return end(Status::ok());
+    }
+
+    int checkSwitch(const std::string& target, bool allowUntested) {
+        bool none = false;
+        Status s = beginRead(&none);
+        if (!s.is_ok()) {
+            return end(s);
+        }
+        if (none || !exists(dir.get(), target)) {
+            return end(Status::refused("build " + target + " is not placed (`nexus-server builds list` lists them)"));
+        }
+        Pointer p;
+        s = pointer(&p);
+        if (!s.is_ok()) {
+            return end(s);
+        }
+        Manifest m;
+        s = checkFolder(dir.get(), target, path + "/" + target, &m, leaveOutDrivers(), syncs());
+        if (!s.is_ok()) {
+            return end(s);
+        }
+        if (!m.tested && !allowUntested) {
+            return end(Status::refused("build " + target + " is untested, and an untested build is never made "
+                                       "current: place the tree again with the evidence that its exact content "
+                                       "passed its tests (`place <tree> --evidence <file>`)"));
+        }
+        if (p.exists && target != p.current) {
+            Manifest cur;
+            std::string text;
+            s = readFileAt(dir.get(), p.current + "/" + kManifest, path + "/" + p.current + "/" + kManifest, &text);
+            std::string why;
+            if (!s.is_ok() || !readManifest(text, &cur, &why, leaveOutDrivers())) {
+                return end(Status::failed("the current build " + p.current + " is damaged: " +
+                                          (s.is_ok() ? why : s.message()) + "; `nexus-server builds verify`"));
+            }
+            const std::string refusal = formatsRefusal(m.formats, target, cur.formats, p.current);
+            if (!refusal.empty()) {
+                return end(Status::refused(refusal));
+            }
+        }
+        const std::string link = b.serverDir_ + "/" + kStable;
+        struct stat st;
+        if (::lstat(link.c_str(), &st) == 0 && !S_ISLNK(st.st_mode)) {
+            return end(Status::refused(link + " is not a link; it is where the stable path to the current build "
+                                       "goes: move it away and run this again"));
+        }
+        return end(Status::ok());
+    }
 };
 
 Builds::Builds(std::string serverDir, Options options) : serverDir_(std::move(serverDir)), options_(std::move(options)) {}
@@ -1454,12 +1521,25 @@ int Builds::place(const std::string& tree, const std::string& evidence, Result& 
     return run.place(tree, evidence);
 }
 
-int Builds::makeCurrent(const std::string& hash, Result& r) {
+int Builds::makeCurrent(const std::string& hash, Result& r, bool allowUntested) {
     Run run(*this, r);
     if (!isHash(hash)) {
         return run.end(Status::refused("`" + hash + "` is not a build's hash (64 hex digits; `builds list`)"));
     }
-    return run.sw(hash, false);
+    return run.sw(hash, false, allowUntested);
+}
+
+int Builds::active(std::string* current, std::string* previous, Result& r) {
+    Run run(*this, r);
+    return run.active(current, previous);
+}
+
+int Builds::checkSwitch(const std::string& hash, Result& r, bool allowUntested) {
+    Run run(*this, r);
+    if (!isHash(hash)) {
+        return run.end(Status::refused("`" + hash + "` is not a build's hash (64 hex digits; `builds list`)"));
+    }
+    return run.checkSwitch(hash, allowUntested);
 }
 
 int Builds::back(Result& r) {

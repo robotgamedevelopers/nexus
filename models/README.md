@@ -3,7 +3,7 @@
 Every state machine in nexus has a TLA+ module here (`Overlay.tla`, when the overlay shows and hides, among them). TLC checks each module on a small instance, with reversed witnesses, and the code is bound to the module: the code's own random walk writes traces, and TLC checks that each trace is a behaviour of the module.
 
 This file covers the window's model. The server's durable state has its own directory: `store/` (its README), the layout of the journal under `src/store/`, and the store's lock with the server's start-up order (`StoreLock.tla`). The server's installed builds have
-`placement/` (its README): placing a build, switching current and previous in one rename, and pruning.
+`placement/` (its README): placing a build, switching current and previous in one rename, and pruning. Replacing the running server with a placed build has `handover/` (its README): draining, starting, rolling back when a build fails to serve, and resuming from durable state on disk after any cut.
 
 ## What is modelled
 

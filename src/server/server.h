@@ -92,8 +92,11 @@ int storeCommand(const Paths& p, const std::vector<std::string>& args);
 int newSession(const Paths& p, const std::string& self, const Client& client = {});
 // Asks the running server to stop.
 int stop(const Paths& p);
+// Asks the running server to finish its open turns and exit with kDrainExit (server/drain.h).
+int drain(const Paths& p);
 // Asks the running server whether it serves, and from which build: prints its answer, `SERVING` and then
-// `build <hash>` (or `build none`, a program outside the placed builds). Exit 0 when it serves, else 1.
+// `build <hash>` (or `build none`, a program outside the placed builds; ` draining` appended while draining). Exit 0
+// when it serves, else 1.
 int status(const Paths& p);
 // `nexus-server config <verb> ...`: the accounts and friends (server/config_repo.h, docs/accounts.md). path, check,
 // history and remote work on the files and the repository directly; reload and restore ask the running server, which
