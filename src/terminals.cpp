@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <iterator>
 #include <utility>
 
 #include "pr/file.h"
@@ -68,6 +67,7 @@ void PraxTerminals::closeAll() {
         }
         shells_.clear();
         watch_.clear();
+        recheck_ = false;
     }
     wake_.notify_one();
     terminals_.clear();
@@ -89,7 +89,7 @@ void PraxTerminals::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     auto watchAt = std::chrono::steady_clock::now();
     for (;;) {
-        wake_.wait_until(lock, watchAt, [this] { return ending_ || !starts_.empty() || !ends_.empty(); });
+        wake_.wait_until(lock, watchAt, [this] { return ending_ || !starts_.empty() || !ends_.empty() || recheck_; });
         std::vector<PrTerminal*> ends;
         ends.swap(ends_);
         std::deque<Start> starts;
@@ -108,41 +108,50 @@ void PraxTerminals::run() {
                 prAppWake(app_);   // a frame takes it up (pr/studio_app.h)
             }
         }
-        if (ending) {
-            lock.lock();
-            if (starts_.empty() && ends_.empty()) {
-                return;
-            }
-            continue;
+        lock.lock();
+        if (ending_ && starts_.empty() && ends_.empty()) {
+            return;
         }
-        if (std::chrono::steady_clock::now() >= watchAt) {
-            lock.lock();
+        if (!ending_ && (recheck_ || std::chrono::steady_clock::now() >= watchAt)) {
+            recheck_ = false;
             const std::map<std::size_t, int> shells = shells_;
             const std::vector<Machine> machines = watched_;
-            std::map<std::size_t, Seen> watch = watch_;
+            const std::map<std::size_t, ForegroundSeen> snapshot = watch_;
             lock.unlock();
-            bool changed = false;
+            struct Polled {
+                std::size_t id;
+                ForegroundSeen snap;
+                int group;
+                std::string remote;
+            };
+            std::vector<Polled> polled;
+            polled.reserve(shells.size());
             for (const auto& [id, pid] : shells) {
+                auto it = snapshot.find(id);
+                const ForegroundSeen snap = it != snapshot.end() ? it->second : ForegroundSeen{};
                 const int group = foregroundGroup(pid);
-                Seen& seen = watch[id];
-                if (group != seen.group || seen.at == std::chrono::steady_clock::time_point{}) {
-                    seen = Seen{group, remoteLabel(sshDestination(processArguments(group)), machines),
-                        std::chrono::steady_clock::now()};
-                    changed = true;
-                }
+                std::string remote = pollNeedsArguments(snap, group)
+                    ? remoteLabel(sshDestination(processArguments(group)), machines)
+                    : snap.remote;
+                polled.push_back(Polled{id, snap, group, std::move(remote)});
             }
             lock.lock();
-            for (auto it = watch.begin(); it != watch.end();) {
-                it = shells_.count(it->first) != 0 ? std::next(it) : watch.erase(it);
+            bool changed = false;
+            for (Polled& p : polled) {
+                if (shells_.count(p.id) == 0) {
+                    continue;
+                }
+                const PollCommit c = commitPollForeground(watch_[p.id], p.snap, p.group, std::move(p.remote));
+                changed = changed || c.changed;
+                recheck_ = recheck_ || c.recheck;
             }
-            watch_ = std::move(watch);
             watchAt = std::chrono::steady_clock::now() + kWatchEvery;
-            if (changed && app_ != nullptr) {
+            if (changed && !ending_ && app_ != nullptr) {
+                lock.unlock();
                 prAppWake(app_);
+                lock.lock();
             }
-            continue;
         }
-        lock.lock();
     }
 }
 
@@ -227,7 +236,11 @@ void PraxTerminals::take() {
                 ends_.push_back(s.terminal);     // its tab closed while it started
             } else if (wanted && s.shell > 0) {
                 shells_[s.id] = s.shell;
+                watch_[s.id] = ForegroundSeen{};
             }
+        }
+        for (const auto& [id, shared] : watch_) {
+            takeForegroundWatch(shared, seen_[id]);
         }
     }
     bool ends = false;
@@ -262,17 +275,14 @@ void PraxTerminals::take() {
 
 void PraxTerminals::observe(double time) {
     take();
-    std::map<std::size_t, Seen> watch;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        watch = watch_;
-    }
+    struct Observed {
+        std::size_t id;
+        int group;
+        std::string remote;
+    };
+    std::vector<Observed> updates;
     for (auto& [id, terminal] : terminals_) {
-        Seen& seen = seen_[id];
-        auto later = watch.find(id);
-        if (later != watch.end() && later->second.at > seen.at) {
-            seen = later->second;
-        }
+        ForegroundSeen& seen = seen_[id];
         // A new title: the label must see the foreground as of it, so the group is read now, and the arguments of a
         // group not seen before.
         const std::string title = programTitle(id);
@@ -280,14 +290,35 @@ void PraxTerminals::observe(double time) {
         if (last == titles_.end() || last->second != title) {
             auto pid = pids_.find(id);
             const int group = pid != pids_.end() ? foregroundGroup(pid->second) : -1;
-            if (group != seen.group || seen.at == std::chrono::steady_clock::time_point{}) {
-                seen.group = group;
-                seen.remote = remoteLabel(sshDestination(processArguments(group)), machines);
-            }
-            seen.at = std::chrono::steady_clock::now();
+            std::string remote = foregroundNeedsArguments(seen, group)
+                ? remoteLabel(sshDestination(processArguments(group)), machines)
+                : seen.remote;
+            updates.push_back(Observed{id, group, std::move(remote)});
             titles_[id] = title;
         }
-        labels_[id].observe(seen.remote, title, time);
+    }
+    if (!updates.empty()) {
+        bool recheck = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (Observed& u : updates) {
+                ForegroundSeen& seen = seen_[u.id];
+                if (shells_.count(u.id) != 0) {
+                    recheck = commitFrameForeground(watch_[u.id], seen, u.group, std::move(u.remote)) || recheck;
+                } else {
+                    seen = ForegroundSeen{seen.seq + 1, u.group, std::move(u.remote)};
+                }
+            }
+            if (recheck) {
+                recheck_ = true;
+            }
+        }
+        if (recheck) {
+            wake_.notify_one();
+        }
+    }
+    for (auto& [id, terminal] : terminals_) {
+        labels_[id].observe(seen_[id].remote, titles_[id], time);
     }
     // One terminal's directory a frame, each terminal once a second.
     if (time - dirsAt_ >= kDirectoriesEvery || dirNext_ != 0) {

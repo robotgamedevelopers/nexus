@@ -193,6 +193,22 @@ Two churn traces run per commit: seed 10 with the sprint tab and three friends, 
 
 `tests/model/label_walk.cpp` (`label_walk <seed> <steps> <remotes> [--faulty-before] <out.tla>`) drives the real `TabLabel` with a seeded walk on a made-up clock (a frame or a pause a step): sessions start, run, switch and end, titles change, and frames fall inside tails and after them. It writes `TabLabelTraceData.tla`: one record per observation with its arguments, the code's state after it and the label the code draws for every title. `TabLabelTrace.tla` takes `Observe` with each record's arguments and `TraceMatches` requires the spec's state and every label to equal the code's; every `TabLabel` property is checked on the trace. Four traces run (seeds 1 to 3 on two remotes, seed 4 on three), and `--faulty-before`, which feeds the code an unrecorded observation before each session's first (the code then takes the label to return to from a title ssh may have set), must be rejected with `TraceMatches` violated.
 
+## TerminalWatch.tla: foreground-group synchronization between the poll and frame threads
+
+`TerminalWatch.tla` models `src/terminal_watch.h` (used by `nexus::PraxTerminals` in `src/terminals.cpp`), which keeps one terminal's observed foreground process group in step between the background poll thread (every 250 ms) and the frame thread (which reads the group itself when the terminal's title changes, so `TabLabel` sees the foreground as of that title without waiting for the poll). Both threads run their system calls outside `mutex_`, and commit into `shared` (`[seq, group, remote]`, with `recheck`) under `mutex_`.
+
+| Property | Kind | What it says |
+|---|---|---|
+| `TypeOK`, `SeqOrdered` | invariant | every variable has its type, and `seen.seq <= shared.seq` |
+| `RemoteMatchesGroup` | invariant | every committed observation carries a real group and that group's remote label |
+| `SeqMonotone` | action | sequence numbers never go backward |
+| `FrameSeesTitleGroup` | action | a title-change commit immediately gives `seen` the foreground group and remote read for that title |
+| `PollNeverClobbersFrame` | action | a background poll whose snapshot was overtaken by a frame commit never overwrites `shared` and asks for a recheck |
+| `OverlapAsksRecheck` | action | a frame commit that overtakes a background commit between `FrameStart` and `FrameCommit` asks for a recheck |
+| `SettlesToForeground` | temporal | once foreground and title changes stop, `seen` settles to the terminal's true foreground group and remote label, even across `G_sh -> G_ssh -> G_sh` ABA transitions within one poll window |
+
+`TerminalWatch.cfg` checks every property across three groups (a shell and two ssh sessions), two foreground changes and two title changes. Witnesses (`witnesses/WWatch*`): `WWatchAba` (a frame commit updates `seen` alone without updating `shared`, wedging `seen` across `G_sh -> G_ssh -> G_sh`: `SettlesToForeground`), `WWatchOneWaySeq` (`SeqOrdered`), `WWatchStaleRemote` (`RemoteMatchesGroup`), `WWatchSeqRewinds` (`SeqMonotone`), `WWatchFrameDropsTitle` (`FrameSeesTitleGroup`), `WWatchStalePoll` (`PollNeverClobbersFrame`), `WWatchFrameNoRecheck` (`OverlapAsksRecheck`). `tests/model/watch_walk.cpp` (`watch_walk <seed> <steps> [--faulty-aba | --faulty-stale] <out.tla>`) drives the real functions across three seeds of 1000 steps per commit, and `--faulty-aba` and `--faulty-stale` must each be rejected with `TraceMatches` violated.
+
 ## Link.tla: what nexus adds on top of mosh
 
 `Link.tla` models the link between the windows and `nexus-server` (`src/sync`, `src/link`, `src/server`): what nexus puts on top of mosh's State Synchronization Protocol, not mosh. mosh is abstracted to the two things nexus relies on. Up, what reaches the server of a window's list is some range of it, which may repeat a range, come after a later one, or start past what the server has: `Deliver(c, first, last)` takes any range. Down, a window's receiver eventually holds the server's newest state, may skip states between, and never goes back to an older one (mosh numbers its states and keeps the newest): `Receive(c, j)` is window c receiving the server's j-th state, the same as before or a later one.
