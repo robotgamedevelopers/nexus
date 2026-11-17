@@ -47,6 +47,11 @@ const Activity* Mirror::activity(std::size_t id) const {
     return it == seen_.end() || !it->second.held ? nullptr : &it->second.activity;
 }
 
+void Mirror::forget(std::size_t id) {
+    session_.erase(id);
+    seen_.erase(id);
+}
+
 bool Mirror::apply(Model& model, const Sessions& state) {
     bool changed = false;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {

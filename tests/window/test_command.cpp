@@ -1,9 +1,9 @@
-// Functional tests of runCommand (src/friends.h): real child processes and a real clock, so not unit tests.
+// Functional tests of runCommand (src/command.h): real child processes and a real clock, so not unit tests.
 
 #include <cstdio>
 #include <string>
 
-#include "friends.h"
+#include "command.h"
 
 namespace {
 

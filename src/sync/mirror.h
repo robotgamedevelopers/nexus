@@ -47,6 +47,11 @@ public:
     // the session says: null until a state has held it, or when the last state applied did not.
     const Activity* activity(std::size_t id) const;
 
+    // Forgets the tab (by Tab::id) whose friend left the server's list (sync/client.h applyFriends): the session it
+    // showed and what it showed of it. Ids are never reused, so a friend that comes back has a new tab, which starts
+    // from the session's first entries as any new tab does.
+    void forget(std::size_t id);
+
 private:
     struct Shown {
         std::uint64_t next = 0;

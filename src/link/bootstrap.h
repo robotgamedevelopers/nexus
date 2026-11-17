@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "friends.h"
+#include "command.h"
 #include "sync/formats.h"
 
 namespace nexus::link {

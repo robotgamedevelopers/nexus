@@ -25,14 +25,15 @@ if(NEXUS_SERVER_PARTS)
 endif()
 
 foreach(group layout refusals versions consistency picks hub_actions hub_reload_rotate hub_store_fails
-              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out)
+              hub_adopt_defaults hub_probe instances hub_instances limits keeps_out hub_friends friends_cap)
     add_test(NAME accounts_unit_${group} COMMAND accounts_test ${group})
     set_tests_properties(accounts_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
 
 # TLC (tlc_test is tests/model's): Accounts.tla, all properties (states and times on two workers on a Linux bench).
-# MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (131,024
-# distinct states, 20 s). Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
+# MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (162,128
+# distinct states since a dropped friend's sessions are kept as they were; 14 s on eight workers on an M-series Mac).
+# Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
 # distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
 # Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores); alone on an idle
 # one (amd-2, 2026-11-15) 16.2 s / 124 CPU s, against 26.3 s / 106 on four. In a CI shard of its own (SHARD: capped at
@@ -95,9 +96,11 @@ tlc_test(tlc_accounts_witness_add_friend_open    WAccAddFriendOpen     WAccAddFr
          PROPERTY NewFriendLimited)
 tlc_test(tlc_accounts_witness_limit_silent       WAccLimitSilent       WAccLimitSilent.cfg       action
          PROPERTY LimitChangeIsTold)
+tlc_test(tlc_accounts_witness_drop_moves_sessions WAccDropMovesSessions WAccDropMovesSessions.cfg action
+         PROPERTY OutLeftAlone)
 
 # Trace binding: the hub's random walks over accounts (accounts_walk), each a behaviour of Accounts.tla. Each walk of 400
-# steps has the server move 6 to 20 sessions (settles and rotations) and takes TLC about two seconds.
+# steps has the server move 5 to 11 sessions (settles and rotations) and takes TLC about two seconds.
 foreach(seed 1 2 3 4)
     tlc_test(tlc_accounts_trace_seed_${seed} AccountsTrace AccountsTrace.cfg pass ACCWALK SEED ${seed} STEPS 400)
 endforeach()
@@ -110,7 +113,7 @@ tlc_test(tlc_accounts_trace_faulty_stay_rejected AccountsTrace AccountsTrace.cfg
 tlc_test(tlc_accounts_trace_faulty_harness_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 6 STEPS 400 FAULTY harness)
 tlc_test(tlc_accounts_trace_faulty_instance_rejected AccountsTrace AccountsTrace.cfg invariant
-         PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY instance)
+         PROPERTY TraceMatches ACCWALK SEED 3 STEPS 400 FAULTY instance)
 tlc_test(tlc_accounts_trace_faulty_limit_rejected AccountsTrace AccountsTrace.cfg invariant
          PROPERTY TraceMatches ACCWALK SEED 1 STEPS 400 FAULTY limit)
 

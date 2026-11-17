@@ -60,7 +60,17 @@ MCIdxS3T1 == 0 .. 5         \* the sprint tab, three friends, up to one terminal
 MCIdxS2 == 0 .. 3           \* the sprint tab, two friends, no terminals
 MCIdxST0 == 0 .. 3          \* the sprint tab, no friends, up to two terminals
 
-\* the state constraint that keeps the instance finite
+\* The friends coming and going (SpecFriendsWith): one friend at the start, and add_friend tried with it (so it comes
+\* back after a remove, and is refused while it stands), a second friend, and an empty name, which is refused.
+MCFriends1 == <<[name |-> "ada", model |-> "m1"]>>
+MCArrivals == {[name |-> "ada", model |-> "m1"], [name |-> "bo", model |-> ""], [name |-> "", model |-> ""]}
+MCNextFriends == NextFriendsWith(MCArrivals)
+MCSpecFriends == Init /\ [][MCNextFriends]_vars
+MCIdxF == 0 .. 4            \* the sprint tab, one friend, and up to two tabs more (friends or terminals)
+MCIdxF0 == 0 .. 2           \* no sprint tab, no friend at the start, up to two tabs (friends or terminals)
+
+\* the state constraint that keeps the instance finite (each friend added takes an id, as a terminal does: MaxTerms
+\* bounds both)
 Bounded == /\ \A f \in Ids : Len(transcript[f]) <= MaxLen /\ Len(queue[f]) <= MaxLen
            /\ nextId <= N + Pinned + MaxTerms
 

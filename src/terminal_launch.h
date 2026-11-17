@@ -28,7 +28,7 @@
 #include <string_view>
 #include <vector>
 
-#include "friends.h"
+#include "command.h"
 
 namespace nexus {
 

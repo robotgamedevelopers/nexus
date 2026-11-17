@@ -8,8 +8,16 @@
 #include <mutex>
 #include <thread>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include "pr/file.h"
 
+#include "accounts/registry.h"
 #include "client_home.h"
 
 namespace nexus {
@@ -181,23 +189,28 @@ TabOrderStore fileTerminalsStore() {
     return fileStoreNamed("terminals.txt");
 }
 
-std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
-        std::string* warning) {
+std::vector<std::string> loadTabOrderNames(const TabOrderStore& store, std::string* warning) {
     warning->clear();
     std::string text;
     std::string error;
     std::vector<std::string> names;
     if (!store.read(&text, &error)) {
-        if (!error.empty())
+        if (!error.empty()) {
             *warning = "the saved tab order " + store.where + " is not used: " + error +
                 "; deleting it resets the order";
-        return loaded;
+        }
+        return {};
     }
     if (!parseTabOrder(text, &names, &error)) {
         *warning = "the saved tab order " + store.where + " is not used: " + error + "; deleting it resets the order";
-        return loaded;
+        return {};
     }
-    return applyTabOrder(loaded, names);
+    return names;
+}
+
+std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
+        std::string* warning) {
+    return applyTabOrder(loaded, loadTabOrderNames(store, warning));
 }
 
 bool saveTabOrder(const TabOrderStore& store, const Model& model, std::string* error) {
@@ -291,23 +304,28 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     return 0;
 }
 
-std::size_t loadSelectedTab(const TabOrderStore& store, const Model& model, std::string* warning) {
+SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning) {
     warning->clear();
     std::string text;
     std::string error;
     SavedTab saved;
     if (!store.read(&text, &error)) {
-        if (!error.empty())
+        if (!error.empty()) {
             *warning = "the saved selected tab " + store.where + " is not used: " + error +
-                "; deleting it resets the selection to the sprint tab";
-        return 0;
+                "; deleting it resets the selection to the first tab";
+        }
+        return SavedTab{};
     }
     if (!parseSelectedTab(text, &saved, &error)) {
         *warning = "the saved selected tab " + store.where + " is not used: " + error +
-            "; deleting it resets the selection to the sprint tab";
-        return 0;
+            "; deleting it resets the selection to the first tab";
+        return SavedTab{};
     }
-    return savedTabPosition(model, saved);
+    return saved;
+}
+
+std::size_t loadSelectedTab(const TabOrderStore& store, const Model& model, std::string* warning) {
+    return savedTabPosition(model, loadSavedTab(store, warning));
 }
 
 bool saveSelectedTab(const TabOrderStore& store, const Model& model, std::string* error) {
@@ -469,6 +487,320 @@ bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& d
     return false;
 }
 
+namespace {
+
+// The first line of the kept drafts' file: what it is, and its format's version; and each draft's line's word.
+constexpr std::string_view kKeptHeader = "nexus kept drafts 2";
+constexpr std::string_view kDraftPrefix = "draft ";
+
+// The most digits a draft's length may have: past any prompt (kPromptBytes), short of overflowing.
+constexpr std::size_t kMaxLengthDigits = 12;
+
+// The longest server a kept draft is keyed by (keptServer).
+constexpr std::size_t kMaxKeptServer = 255;
+
+} // namespace
+
+void applyKeptChange(KeptFile* file, const KeptChange& change) {
+    for (const auto& [name, draft] : change.taken) {
+        const auto at = file->find({change.server, name});
+        if (at != file->end() && at->second == draft) {
+            file->erase(at);
+        }
+    }
+    for (const auto& [name, draft] : change.put) {
+        if (draft.empty()) {
+            continue;
+        }
+        std::string& kept = (*file)[{change.server, name}];
+        if (kept.empty()) {
+            kept = draft;
+        } else if (kept != draft) {
+            kept += kKeptJoin;
+            kept += draft;
+        }
+    }
+}
+
+bool keptServer(std::string_view server) {
+    if (server.empty() || server.size() > kMaxKeptServer) {
+        return false;
+    }
+    for (const char c : server) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u <= ' ' || u == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::map<std::string, std::string> keptFor(const KeptFile& file, const std::string& server) {
+    std::map<std::string, std::string> drafts;
+    for (auto at = file.lower_bound({server, std::string()}); at != file.end() && at->first.first == server; ++at) {
+        drafts.emplace(at->first.second, at->second);
+    }
+    return drafts;
+}
+
+std::string formatKeptDrafts(const KeptFile& file) {
+    std::string text(kKeptHeader);
+    text += '\n';
+    for (const auto& [key, draft] : file) {
+        text += std::string(kDraftPrefix) + key.first + ' ' + key.second + ' ' + std::to_string(draft.size()) + '\n';
+        text += draft;
+        text += '\n';
+    }
+    return text;
+}
+
+bool parseKeptDrafts(std::string_view text, KeptFile* file, std::string* error) {
+    file->clear();
+    auto refuse = [&](const std::string& why) {
+        *error = why;
+        file->clear();
+        return false;
+    };
+    std::size_t end = text.find('\n');
+    if (end == std::string_view::npos || text.substr(0, end) != kKeptHeader) {
+        return refuse("its first line is not \"" + std::string(kKeptHeader) + "\"");
+    }
+    std::size_t at = end + 1;
+    while (at < text.size()) {
+        end = text.find('\n', at);
+        if (end == std::string_view::npos) {
+            return refuse("its last line has no line feed");
+        }
+        const std::string_view line = text.substr(at, end - at);
+        const std::size_t first = line.find(' ', kDraftPrefix.size());
+        const std::size_t last = line.rfind(' ');
+        if (line.substr(0, kDraftPrefix.size()) != kDraftPrefix || first == std::string_view::npos ||
+                last == first) {
+            return refuse("a line is not draft <server> <friend> <bytes>");
+        }
+        const std::string_view server = line.substr(kDraftPrefix.size(), first - kDraftPrefix.size());
+        const std::string_view name = line.substr(first + 1, last - first - 1);
+        const std::string_view digits = line.substr(last + 1);
+        if (!keptServer(server) || !accounts::isName(name)) {
+            return refuse("a line is not draft <server> <friend> <bytes>");
+        }
+        if (digits.empty() || digits.size() > kMaxLengthDigits ||
+                digits.find_first_not_of("0123456789") != std::string_view::npos) {
+            return refuse("a draft's length is not a number");
+        }
+        const std::size_t length = static_cast<std::size_t>(std::stoull(std::string(digits)));
+        const std::size_t from = end + 1;
+        if (length >= text.size() - from || text[from + length] != '\n') {
+            return refuse("a draft is cut short");
+        }
+        if (!file->emplace(std::make_pair(std::string(server), std::string(name)),
+                           std::string(text.substr(from, length))).second) {
+            return refuse("it keeps two drafts for one friend of one server");
+        }
+        at = from + length + 1;
+    }
+    return true;
+}
+
+#if defined(_WIN32)
+
+KeptDraftsStore fileKeptDraftsStore(std::string path) {
+    KeptDraftsStore store;
+    store.where = path;
+    store.read = [](KeptFile*, std::string* error) {
+        *error = "drafts are not kept on Windows, where the window has no server link";
+        return false;
+    };
+    store.update = [](const KeptChange&, std::string* error) {
+        *error = "drafts are not kept on Windows, where the window has no server link";
+        return false;
+    };
+    return store;
+}
+
+#else
+
+namespace {
+
+// The whole of the file at `path`: true with `text` (empty, and `exists` false, when there is none), false with
+// `error`.
+bool readWhole(const std::string& path, std::string* text, bool* exists, std::string* error) {
+    text->clear();
+    *exists = false;
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        *error = std::strerror(errno);
+        return false;
+    }
+    *exists = true;
+    char buffer[65536];
+    for (;;) {
+        const ssize_t n = ::read(fd, buffer, sizeof buffer);
+        if (n == 0) {
+            break;
+        }
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            *error = std::strerror(errno);
+            ::close(fd);
+            return false;
+        }
+        text->append(buffer, static_cast<std::size_t>(n));
+    }
+    ::close(fd);
+    return true;
+}
+
+// `text` into `path` whole: a file beside it, 0600, written and synced, then renamed over it.
+bool writeWhole(const std::string& path, const std::string& text, std::string* error) {
+    const std::string temp = path + "." + std::to_string(static_cast<long>(::getpid())) + ".tmp";
+    const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        *error = std::strerror(errno);
+        return false;
+    }
+    std::size_t done = 0;
+    while (done < text.size()) {
+        const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            *error = std::strerror(errno);
+            ::close(fd);
+            ::unlink(temp.c_str());
+            return false;
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    if (::fchmod(fd, 0600) != 0 || ::fsync(fd) != 0) {
+        *error = std::strerror(errno);
+        ::close(fd);
+        ::unlink(temp.c_str());
+        return false;
+    }
+    ::close(fd);
+    if (::rename(temp.c_str(), path.c_str()) != 0) {
+        *error = std::strerror(errno);
+        ::unlink(temp.c_str());
+        return false;
+    }
+    return true;
+}
+
+// The lock beside `path`: kept-drafts.lock for kept-drafts.txt.
+std::string lockPathOf(const std::string& path) {
+    const std::string_view txt = ".txt";
+    if (path.size() > txt.size() && path.compare(path.size() - txt.size(), txt.size(), txt) == 0) {
+        return path.substr(0, path.size() - txt.size()) + ".lock";
+    }
+    return path + ".lock";
+}
+
+} // namespace
+
+KeptDraftsStore fileKeptDraftsStore(std::string path) {
+    KeptDraftsStore store;
+    store.where = path;
+    store.read = [path](KeptFile* file, std::string* error) {
+        file->clear();
+        std::string text;
+        bool exists = false;
+        if (!readWhole(path, &text, &exists, error)) {
+            return false;
+        }
+        return !exists || parseKeptDrafts(text, file, error);
+    };
+    store.update = [path, lock = lockPathOf(path)](const KeptChange& change, std::string* error) {
+        const int fd = ::open(lock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            *error = "its lock " + lock + " cannot be opened (" + std::strerror(errno) + ")";
+            return false;
+        }
+        int locked = 0;
+        while ((locked = ::flock(fd, LOCK_EX)) != 0 && errno == EINTR) {
+        }
+        if (locked != 0) {
+            *error = "its lock " + lock + " cannot be taken (" + std::strerror(errno) + ")";
+            ::close(fd);
+            return false;
+        }
+        if (::fchmod(fd, 0600) != 0) {
+            *error = "its lock " + lock + " cannot be made private (" + std::strerror(errno) + ")";
+            ::close(fd);
+            return false;
+        }
+        KeptFile file;
+        std::string text;
+        bool exists = false;
+        bool ok = readWhole(path, &text, &exists, error) && (!exists || parseKeptDrafts(text, &file, error));
+        if (ok) {
+            applyKeptChange(&file, change);
+            ok = writeWhole(path, formatKeptDrafts(file), error);
+        }
+        ::close(fd);    // and with it the lock
+        return ok;
+    };
+    return store;
+}
+
+#endif
+
+KeptDraftsStore fileKeptDraftsStore() {
+    std::string dir;
+    std::string why;
+    if (!clientHome(&dir, &why)) {
+        KeptDraftsStore none;
+        none.read = [why](KeptFile*, std::string* error) {
+            *error = why;
+            return false;
+        };
+        none.update = [why](const KeptChange&, std::string* error) {
+            *error = why;
+            return false;
+        };
+        return none;
+    }
+#if defined(_WIN32)
+    KeptDraftsStore store = fileKeptDraftsStore(dir + "\\kept-drafts.txt");
+#else
+    KeptDraftsStore store = fileKeptDraftsStore(dir + "/kept-drafts.txt");
+#endif
+    store.update = [dir, update = store.update](const KeptChange& change, std::string* error) {
+        return makeClientHome(dir, error) && update(change, error);
+    };
+    return store;
+}
+
+std::map<std::string, std::string> loadKeptDrafts(const KeptDraftsStore& store, const std::string& server,
+        bool* readable, std::string* warning) {
+    warning->clear();
+    *readable = true;
+    KeptFile file;
+    std::string error;
+    if (!store.read(&file, &error)) {
+        *readable = false;
+        *warning = "the kept drafts " + store.where + " are not used: " + error +
+            "; the file is left as it is, and this run changes no draft in it";
+        return {};
+    }
+    return keptFor(file, server);
+}
+
+bool saveKeptChange(const KeptDraftsStore& store, const KeptChange& change, std::string* error) {
+    std::string why;
+    if (store.update(change, &why)) {
+        return true;
+    }
+    *error = "the kept drafts could not be saved to " + store.where + ": " + why;
+    return false;
+}
+
 // One store's waiting write: the newest text, while `waiting`.
 struct StoreSlot {
     std::string where;
@@ -477,21 +809,45 @@ struct StoreSlot {
     bool waiting = false;
 };
 
+// A change of the kept drafts handed to the writer: made once, in its turn.
+struct KeptJob {
+    std::string where;
+    std::function<bool(std::string* error)> make;
+};
+
 struct StoreWriter::Impl {
     std::mutex mutex;
     std::condition_variable wake;       // a write waits, or the writer ends
     std::condition_variable done;       // every write handed over is made
     std::deque<std::shared_ptr<StoreSlot>> queue;   // the stores with a write waiting, oldest first
-    std::size_t writing = 0;            // writes taken from the queue and not yet made
+    std::deque<KeptJob> changes;        // the kept drafts' changes, oldest first, each made
+    std::size_t writing = 0;            // writes taken from the queues and not yet made
     bool ending = false;
     std::thread thread;
 
     void run() {
         std::unique_lock<std::mutex> lock(mutex);
         for (;;) {
-            wake.wait(lock, [this] { return ending || !queue.empty(); });
-            if (queue.empty()) {
+            wake.wait(lock, [this] { return ending || !queue.empty() || !changes.empty(); });
+            if (queue.empty() && changes.empty()) {
                 return;     // ending, with nothing left to write
+            }
+            if (!changes.empty()) {
+                KeptJob job = std::move(changes.front());
+                changes.pop_front();
+                ++writing;
+                lock.unlock();
+                std::string error;
+                if (!job.make(&error)) {
+                    std::fprintf(stderr, "nexus: the kept drafts %s were not changed (%s); the drafts of this change "
+                        "are kept in this window until it quits\n", job.where.c_str(), error.c_str());
+                }
+                lock.lock();
+                --writing;
+                if (queue.empty() && changes.empty() && writing == 0) {
+                    done.notify_all();
+                }
+                continue;
             }
             std::shared_ptr<StoreSlot> slot = queue.front();
             queue.pop_front();
@@ -506,7 +862,7 @@ struct StoreWriter::Impl {
             }
             lock.lock();
             --writing;
-            if (queue.empty() && writing == 0) {
+            if (queue.empty() && changes.empty() && writing == 0) {
                 done.notify_all();
             }
         }
@@ -546,9 +902,25 @@ TabOrderStore StoreWriter::wrap(TabOrderStore store) {
     return store;
 }
 
+KeptDraftsStore StoreWriter::wrap(KeptDraftsStore store) {
+    Impl* impl = impl_.get();
+    store.update = [impl, where = store.where, update = std::move(store.update)](const KeptChange& change,
+                                                                               std::string*) {
+        {
+            std::lock_guard<std::mutex> lock(impl->mutex);
+            impl->changes.push_back(KeptJob{where, [update, change](std::string* error) {
+                return update(change, error);
+            }});
+        }
+        impl->wake.notify_one();
+        return true;
+    };
+    return store;
+}
+
 void StoreWriter::flush() {
     std::unique_lock<std::mutex> lock(impl_->mutex);
-    impl_->done.wait(lock, [this] { return impl_->queue.empty() && impl_->writing == 0; });
+    impl_->done.wait(lock, [this] { return impl_->queue.empty() && impl_->changes.empty() && impl_->writing == 0; });
 }
 
 } // namespace nexus

@@ -46,6 +46,17 @@ later field goes after them.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
+- Absent list of friends (a server from before it, or a link of format 3 or older): **not known**. Format 4's
+  `SessionsDiff` carries `friends_sent` (bool, default false), `friends_known` (bool, default false) and `friends` (a
+  list of `Friend`, each its `name`; default empty), the friends the server's `friends.json` holds, in its order. A
+  diff carries the friends, with `friends_sent` true, only when they differ from the state the diff is from (the one
+  the reader holds); without `friends_sent` the reader keeps the friends it holds, so an unchanged list costs no bytes.
+  A first diff, from the empty state, carries them whenever the server has a list. A diff from a server before these
+  fields has no `friends_sent`, and the reader holds no list: not known. The window builds its friend tabs from the
+  list when it is known, adding and removing tabs as it changes; when not known it takes the friends of the sessions it
+  is sent, adds a tab for each new one and removes none, as a window did before the list. Formats 1 to 3 carry none,
+  byte for byte as before (`sync_unit` `friends_cross_the_wire`, `friends_not_in_older_formats`,
+  `friends_sent_only_when_changed`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
 what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so a friend's

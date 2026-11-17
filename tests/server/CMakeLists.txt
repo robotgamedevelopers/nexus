@@ -52,8 +52,8 @@ endif()
 
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test)
 
-foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered queue shutdown
-              restart settings account place limit activity signin)
+foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
+              hub_friend_removed queue shutdown restart settings account place limit activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -87,9 +87,11 @@ endif()
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account instance_dir
-                 instance_elsewhere instance_moved instance_default instance_removed held secret_ask secret_sign_in
-                 secret_leak_witness)
+                 stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account
+                 friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
+                 friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
+                 instance_dir instance_elsewhere instance_moved
+                 instance_default instance_removed held secret_ask secret_sign_in secret_leak_witness)
         add_test(NAME friends_functional_${case} COMMAND drivers_functional $<TARGET_FILE:nexus_fake_driver>
                  ${CMAKE_CURRENT_BINARY_DIR}/friends-${case} ${case})
         set_tests_properties(friends_functional_${case} PROPERTIES LABELS functional TIMEOUT 60)
@@ -124,6 +126,19 @@ tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 
 tlc_test(tlc_supervisor_limit MCSupervisor MCSupervisorLimit.cfg pass)
 tlc_test(tlc_supervisor_limit_two MCSupervisor MCSupervisorLimitTwo.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_limit_wide MCSupervisor MCSupervisorLimitWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# The limit with the friend taken out of friends.json and put back (MCSupervisorLimitFriend.cfg: 15,450 states, 40 s on
+# two workers), nightly; per commit, the walk's limit changes meet its removals in tlc_supervisor_trace_friends_*.
+tlc_test(tlc_supervisor_limit_friend MCSupervisor MCSupervisorLimitFriend.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# The friend taken out of friends.json and put back: per commit with no server restart (MCSupervisorFriend.cfg, split
+# as the instances above, its Settles halves each in a CI shard of their own), and nightly with a restart while it is out as well (MCSupervisorFriendRestart.cfg,
+# 65,189 states, 62 s on eight workers on an M-series Mac, most of it the liveness check). The walk's restarts while
+# the friend is out are checked per commit (tlc_supervisor_trace_friends_*).
+tlc_test(tlc_supervisor_friend MCSupervisor MCSupervisorFriend.cfg pass WORKERS 8 SHARD
+    SPLIT Settles=SettlesOdd+SettlesEven)
+tlc_test(tlc_supervisor_friend_restart MCSupervisor MCSupervisorFriendRestart.cfg pass WORKERS 8 NIGHTLY CAP 900)
+# No friends list held (a start whose committed files do not read), then the first list applied: per commit, in
+# supervisor-rest (5,571 states, 6 s on eight workers).
+tlc_test(tlc_supervisor_friend_unknown MCSupervisor MCSupervisorFriendUnknown.cfg pass WORKERS 8)
 tlc_test(tlc_supervisor_queue MCSupervisor MCSupervisorQueue.cfg pass WORKERS 4 NIGHTLY)
 tlc_test(tlc_supervisor_wide MCSupervisor MCSupervisorWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
 tlc_test(tlc_supervisor_switch_wide MCSupervisor MCSupervisorSwitchWide.cfg pass WORKERS 8 NIGHTLY CAP 900)
@@ -178,10 +193,23 @@ tlc_test(tlc_supervisor_witness_down_forgotten WSupDownForgotten WSupDownForgott
 # A friend with no driver configured shown idle.
 tlc_test(tlc_supervisor_witness_no_driver_idle WSupNoDriverIdle WSupNoDriverIdle.cfg invariant
          PROPERTY BrokenNoDriverShowsDown)
+# The friend taken out of friends.json: a removal that leaves the turn running, and a take while it is out.
+tlc_test(tlc_supervisor_witness_remove_leaves_turn WSupRemoveLeavesTurn WSupRemoveLeavesTurn.cfg invariant
+         PROPERTY AbsentRunsNothing)
+tlc_test(tlc_supervisor_witness_take_while_absent WSupTakeWhileAbsent WSupTakeWhileAbsent.cfg action
+         PROPERTY AbsentKeepsPrompts)
+# A start holding no friends list that reads the friend as in it.
+tlc_test(tlc_supervisor_witness_unknown_listed WSupUnknownListed WSupUnknownListed.cfg action PROPERTY NoSendUnknown)
 
 # Trace binding: the supervisor's random walks, each a behaviour of Supervisor.tla.
 foreach(seed 1 2 3 4 12)
     tlc_test(tlc_supervisor_trace_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK SEED ${seed} STEPS 600)
+endforeach()
+# With the friend taken out of friends.json and put back among the other steps. Seed 13 restarts once holding no
+# friends list, then applies one with the friend in it; seed 15 also applies one without it, and restarts again after.
+foreach(seed 13 14 15)
+    tlc_test(tlc_supervisor_trace_friends_seed_${seed} SupervisorTrace SupervisorTrace.cfg pass SUPWALK CHURN
+             SEED ${seed} STEPS 600)
 endforeach()
 
 # The binding can fail: a restart that loses the next turn number, the session id, the queue, the model and effort, the
@@ -209,6 +237,12 @@ tlc_test(tlc_supervisor_trace_faulty_limit_rejected SupervisorTrace SupervisorTr
 # rejected.
 tlc_test(tlc_supervisor_trace_faulty_activity_rejected SupervisorTrace SupervisorTrace.cfg invariant
          PROPERTY TraceMatches SUPWALK SEED 1 STEPS 600 FAULTY activity)
+# A server whose supervisor is never told the friend was taken out of friends.json is rejected.
+tlc_test(tlc_supervisor_trace_faulty_remove_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK CHURN SEED 13 STEPS 600 FAULTY remove)
+# A restart holding no friends list that starts the supervisor with its friend in it is rejected.
+tlc_test(tlc_supervisor_trace_faulty_unknown_rejected SupervisorTrace SupervisorTrace.cfg invariant
+         PROPERTY TraceMatches SUPWALK CHURN SEED 13 STEPS 600 FAULTY unknown)
 
 # Placement (src/server/builds.h, docs/builds.md, models/placement):
 #   unit        builds_test (builds_unit_*): the manifest, the hash, the evidence, the formats rule, the names in the

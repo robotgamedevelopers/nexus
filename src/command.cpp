@@ -1,24 +1,14 @@
-#include "friends.h"
+#include "command.h"
 
 #include <chrono>
-#include <cstdlib>
 #include <condition_variable>
 #include <mutex>
 
-#include "pr/json.h"
 #include "pr/process.h"
-
-#include "client_home.h"
 
 namespace nexus {
 
 namespace {
-
-constexpr const char* kCommand = "nova-config friend list --json";
-
-std::string_view view(PrStringView s) {
-    return s.data != nullptr ? std::string_view(s.data, s.size) : std::string_view();
-}
 
 PrStringView pr(std::string_view s) {
     return PrStringView{s.data(), s.size()};
@@ -60,53 +50,6 @@ void drain(PrProcess* process, PrProcessStream stream, std::string& into) {
 }
 
 } // namespace
-
-FriendList parseFriendList(std::string_view json) {
-    FriendList list;
-    PrJson* doc = prJsonCreate();
-    size_t at = 0;
-    if (!prJsonParse(doc, pr(json), &at)) {
-        list.error = std::string(kCommand) + " printed something that is not JSON (stopped at byte " +
-            std::to_string(at) + "); run it in a terminal to see what it prints";
-        prJsonDestroy(doc);
-        return list;
-    }
-    PrJsonValueIndex status = prJsonMember(doc, prJsonMember(doc, 0, pr("result")), pr("status"));
-    if (prJsonKind(doc, status) == PrJsonKind_String && view(prJsonString(doc, status)) != "ok") {
-        list.error = std::string(kCommand) + " answered status " + std::string(view(prJsonString(doc, status))) +
-            "; run it in a terminal to see why";
-        prJsonDestroy(doc);
-        return list;
-    }
-    PrJsonValueIndex items = prJsonMember(doc, 0, pr("items"));
-    if (prJsonKind(doc, items) != PrJsonKind_Array) {
-        list.error = std::string(kCommand) + " printed no list of friends (no \"items\" array); run it in a terminal "
-            "to see what it prints";
-        prJsonDestroy(doc);
-        return list;
-    }
-    for (PrJsonValueIndex i = prJsonFirst(doc, items); i != kPrJsonMissing; i = prJsonAfter(doc, items, i)) {
-        PrJsonValueIndex fields = prJsonMember(doc, i, pr("fields"));
-        PrJsonValueIndex name = prJsonMember(doc, fields, pr("name"));
-        PrJsonValueIndex model = prJsonMember(doc, fields, pr("model"));
-        PrJsonValueIndex enabled = prJsonMember(doc, fields, pr("enabled"));
-        if (prJsonKind(doc, name) != PrJsonKind_String || prJsonKind(doc, enabled) != PrJsonKind_True)
-            continue;
-        std::string_view n = view(prJsonString(doc, name));
-        if (n.empty())
-            continue;
-        FriendInfo f{std::string(n), {}};
-        if (prJsonKind(doc, model) == PrJsonKind_String)
-            f.model = std::string(view(prJsonString(doc, model)));
-        list.friends.push_back(std::move(f));
-    }
-    prJsonDestroy(doc);
-    if (list.friends.empty())
-        list.error = std::string(kCommand) + " listed no enabled friends; add one with `nova-config friend add`, or "
-            "enable one with `nova-config friend set <name> --enabled true`";
-    return list;
-}
-
 Command novaConfigCommand(const char* override, const char* shell, const std::vector<std::string>& arguments) {
     std::string joined;
     for (const std::string& a : arguments)
@@ -124,10 +67,6 @@ Command novaConfigCommand(const char* override, const char* shell, const std::ve
     std::string line = "exec nova-config " + joined;
     return Command{program, {"-l", "-c", line}, program + " -l -c '" + line + "'"};
 #endif
-}
-
-Command friendListCommand(const char* override, const char* shell) {
-    return novaConfigCommand(override, shell, {"friend", "list", "--json"});
 }
 
 std::string commandProblem(const Command& command, const CommandResult& r, int timeoutSeconds) {
@@ -156,15 +95,6 @@ std::string commandProblem(const Command& command, const CommandResult& r, int t
     problem += why.empty() ? " and printed nothing on standard error" : ": " + why;
     problem += r.code == 127 ? "; " + fix : "; run it in a terminal to see more";
     return problem;
-}
-
-FriendList loadFriends(const Command& command, const CommandRunner& run) {
-    CommandResult r = run(command, kFriendListTimeoutSeconds);
-    FriendList list;
-    list.error = commandProblem(command, r, kFriendListTimeoutSeconds);
-    if (!list.error.empty())
-        return list;
-    return parseFriendList(r.out);
 }
 
 CommandResult runCommand(const Command& command, int timeoutSeconds) {
@@ -213,10 +143,6 @@ CommandResult runCommand(const Command& command, int timeoutSeconds) {
     result.end = info.signaled ? CommandResult::End::Signaled : CommandResult::End::Exited;
     result.code = info.code;
     return result;
-}
-
-FriendList loadFriends() {
-    return loadFriends(friendListCommand(clientConfig().novaConfig.c_str(), std::getenv("SHELL")), runCommand);
 }
 
 } // namespace nexus

@@ -42,7 +42,12 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(overlay_walk PRIVATE nexus_model)
     target_compile_options(overlay_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk)
+    # The friend strip's walk (src/sync/friend_strip.h), for FriendStripTrace.tla.
+    add_executable(strip_walk strip_walk.cpp)
+    target_link_libraries(strip_walk PRIVATE nexus_sync)
+    target_compile_options(strip_walk PRIVATE ${warnings})
+
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk strip_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -50,7 +55,7 @@ set_tests_properties(model_unit PROPERTIES LABELS unit TIMEOUT 30)
 add_test(NAME overlay_unit COMMAND overlay_test)
 set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 
-# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT]
+# tlc_test(<name> <module> <cfg> <expect> [PROPERTY p] [SEED s STEPS n FRIENDS f] [FAULTY <fault>] [NOSPRINT] [CHURN]
 #          [SEED s STEPS n WINDOWS w LINKWALK] [SEED s STEPS n SUPWALK] [SEED s STEPS n ACCWALK]
 #          [WORKERS w] [NIGHTLY] [SHARD] [CAP s] [SPLIT P=A+B] [LABEL] [OVERLAY])
 # SPLIT P=A+B declares <name>_rest, every property of the cfg but P, and <name>_temporal_1 and _2, A and B in P's place,
@@ -69,6 +74,7 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
+# With STRIPWALK, it is strip_walk (the friend strip, FRIENDS friends), and FAULTY one of its faults (forget, wait).
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
 # (turn, resume, queue).
 # With ACCWALK, it is tests/accounts' accounts_walk (the hub's accounts and friends), and FAULTY one of its faults
@@ -89,8 +95,8 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK DRIVERWALK DRIVERTESTS SHARD
-        TSWALK NODEADLOCK)
+    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY GLIDEWALK SUPWALK ACCWALK SECWALK DRIVERWALK DRIVERTESTS
+        STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -159,6 +165,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DACCWALK=$<TARGET_FILE:accounts_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SUPWALK)
         list(APPEND defs -DSUPWALK=$<TARGET_FILE:supervisor_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_STRIPWALK)
+        list(APPEND defs -DSTRIPWALK=$<TARGET_FILE:strip_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS}
+             -DFRIENDS=${T_FRIENDS})
     elseif(T_GLIDEWALK)
         list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_LINKWALK)
@@ -179,6 +188,9 @@ function(tlc_test name module cfg expect)
     endif()
     if(T_NODEADLOCK)
         list(APPEND defs -DNOCHECK_DEADLOCK=ON)
+    endif()
+    if(T_CHURN)
+        list(APPEND defs -DCHURN=ON)
     endif()
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
@@ -258,6 +270,22 @@ tlc_test(tlc_witness_select_keeps_place   WSelectKeepsPlace   WSelectKeepsPlace.
 tlc_test(tlc_witness_select_appends_again WSelectAppendsAgain WSelectAppendsAgain.cfg invariant PROPERTY HistoryOnce)
 tlc_test(tlc_witness_select_skips_history WSelectSkipsHistory WSelectSkipsHistory.cfg invariant PROPERTY HistoryEndsActive)
 
+# The friends from the server's list (sync/client.h applyFriends): Window.tla with add_friend and remove_friend, behind
+# the sprint tab with one friend (39,465 states, 9 s on four workers in a login session), and from an empty strip,
+# no sprint tab and no friend (1,930 states); and their reversed witnesses.
+tlc_test(tlc_spec_friends       MCWindow MCWindowFriends.cfg      pass WORKERS 8 SHARD)
+tlc_test(tlc_spec_friends_empty MCWindow MCWindowFriendsEmpty.cfg pass)
+tlc_test(tlc_witness_add_friend_twice     WAddFriendTwice     WAddFriendTwice.cfg     invariant PROPERTY NamesOnce)
+tlc_test(tlc_witness_add_friend_among_terminals WAddFriendAmongTerminals WAddFriendAmongTerminals.cfg invariant
+         PROPERTY ZonesOrdered)
+tlc_test(tlc_witness_add_friend_selects   WAddFriendSelects   WAddFriendSelects.cfg   action    PROPERTY AddFriendExact)
+tlc_test(tlc_witness_remove_friend_active_wrong WRemoveFriendActiveWrong WRemoveFriendActiveWrong.cfg action
+         PROPERTY RemoveActiveRule)
+tlc_test(tlc_witness_remove_friend_keeps_history WRemoveFriendKeepsHistory WRemoveFriendKeepsHistory.cfg invariant
+         PROPERTY HistoryOpen)
+tlc_test(tlc_witness_close_leaves_history_empty WCloseLeavesHistoryEmpty WCloseLeavesHistoryEmpty.cfg invariant
+         PROPERTY HistoryEndsActive)
+
 # Trace binding: the real model's random walks, each a behaviour of Window.tla. 1000 steps take every walk's queues past
 # four prompts (trace_walk prints the longest).
 foreach(seed 1 2 3 4 5)
@@ -266,8 +294,13 @@ endforeach()
 tlc_test(tlc_trace_two_tabs WindowTrace WindowTrace.cfg pass SEED 6 STEPS 1000 FRIENDS 2)
 tlc_test(tlc_trace_one_tab  WindowTrace WindowTrace.cfg pass SEED 8 STEPS 1000 FRIENDS 1)
 tlc_test(tlc_trace_no_tabs  WindowTrace WindowTrace.cfg pass SEED 7 STEPS 100 FRIENDS 0)
-# Every walk above starts with the sprint tab, as the window does; this one is the model without it.
+# Every walk above starts with the sprint tab, as the window does; this one is the model
+# without it.
 tlc_test(tlc_trace_no_sprint WindowTrace WindowTrace.cfg pass SEED 9 STEPS 1000 FRIENDS 3 NOSPRINT)
+# The friends coming and going as the server's list does: from the start's three, and from an empty strip, with
+# no sprint tab and no friend.
+tlc_test(tlc_trace_friends_churn WindowTrace WindowTrace.cfg pass SEED 10 STEPS 1000 FRIENDS 3 CHURN)
+tlc_test(tlc_trace_friends_fresh WindowTrace WindowTrace.cfg pass SEED 11 STEPS 1000 FRIENDS 0 NOSPRINT CHURN)
 
 # The binding can fail: a faulty model's trace must be rejected, with the fault in send, in queue and in move.
 tlc_test(tlc_trace_faulty_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
@@ -295,6 +328,35 @@ tlc_test(tlc_trace_faulty_sprint_close_rejected WindowTrace WindowTrace.cfg inva
 # And with closing the active tab ignoring the selection history.
 tlc_test(tlc_trace_faulty_close_fallback_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
          SEED 1 STEPS 300 FRIENDS 3 FAULTY close-fallback)
+# And with remove_friend leaving the removed tab's id in the selection history.
+tlc_test(tlc_trace_faulty_remove_friend_rejected WindowTrace WindowTrace.cfg invariant PROPERTY TraceMatches
+         SEED 1 STEPS 300 FRIENDS 3 CHURN FAULTY remove-friend)
+
+# The friend tabs from the server's state (src/sync/friend_strip.h): FriendStrip.tla on two friends (three nightly), its
+# reversed witnesses (one a window writing its kept drafts over the file other windows share), and the code's random
+# walks checked against it, with two faulty walks that must be rejected.
+tlc_test(tlc_spec_strip MCFriendStrip MCFriendStrip.cfg pass WORKERS 4)
+tlc_test(tlc_spec_strip_three MCFriendStrip MCFriendStrip3.cfg pass WORKERS 8 NIGHTLY)
+# And with another window of the server sharing the kept drafts' file (150,016 states, about 22 s on 4 workers).
+tlc_test(tlc_spec_strip_shared MCFriendStrip MCFriendStripShared.cfg pass WORKERS 8 SHARD)
+tlc_test(tlc_witness_strip_draft_goes   WStripDraftGoes         WStripDraftGoes.cfg         invariant PROPERTY DraftsKept)
+tlc_test(tlc_witness_strip_bad_name     WStripBadName           WStripBadName.cfg           invariant PROPERTY NamesValid)
+tlc_test(tlc_witness_strip_never_removes WStripNeverRemoves     WStripNeverRemoves.cfg      invariant PROPERTY StripExact)
+tlc_test(tlc_witness_strip_kept_stays   WStripKeptStays         WStripKeptStays.cfg         invariant PROPERTY KeptOnlyAbsent)
+tlc_test(tlc_witness_strip_reorders     WStripReorders          WStripReorders.cfg          action PROPERTY SurvivorsKeepOrder)
+tlc_test(tlc_witness_strip_saved_order  WStripIgnoresSavedOrder WStripIgnoresSavedOrder.cfg action PROPERTY NewInSavedOrder)
+tlc_test(tlc_witness_strip_no_restore   WStripNoRestore         WStripNoRestore.cfg         action PROPERTY RestoreSaved)
+tlc_test(tlc_witness_strip_person_loses WStripPersonLoses       WStripPersonLoses.cfg       action PROPERTY PersonWins)
+tlc_test(tlc_witness_strip_blind_rewrite WStripBlindRewrite      WStripBlindRewrite.cfg      invariant PROPERTY FileKeepsOthers)
+foreach(seed 1 2 3)
+    tlc_test(tlc_strip_trace_seed_${seed} FriendStripTrace FriendStripTrace.cfg pass STRIPWALK SEED ${seed} STEPS 400
+             FRIENDS 2)
+endforeach()
+tlc_test(tlc_strip_trace_three FriendStripTrace FriendStripTrace.cfg pass STRIPWALK SEED 4 STEPS 400 FRIENDS 3)
+tlc_test(tlc_strip_trace_faulty_forget_rejected FriendStripTrace FriendStripTrace.cfg invariant PROPERTY TraceMatches
+         STRIPWALK SEED 1 STEPS 400 FRIENDS 2 FAULTY forget)
+tlc_test(tlc_strip_trace_faulty_wait_rejected FriendStripTrace FriendStripTrace.cfg invariant PROPERTY TraceMatches
+         STRIPWALK SEED 1 STEPS 400 FRIENDS 2 FAULTY wait)
 
 # A terminal tab's label across ssh sessions (src/remote.h TabLabel): TabLabel.tla, its reversed witnesses, and the code's
 # random walks checked against it, with a faulty walk that must be rejected.

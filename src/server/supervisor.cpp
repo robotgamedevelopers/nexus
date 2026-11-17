@@ -146,6 +146,24 @@ Output Supervisor::setLimited(bool limited, Millis now) {
     return finish();
 }
 
+// The friend taken out: an open turn gets the person's stop (its done, or the stop's deadline, ends it; Advance then ends
+// the driver, as Retire ends any driver while the friend is out); a driver still starting has no turn open, and is
+// ended at once, never counted as a failed start. Put back: what waits goes on.
+Output Supervisor::setPresent(bool present, Millis now) {
+    if (present == config_.present) {
+        return finish();
+    }
+    config_.present = present;
+    if (!present && phase_ == Phase::Working) {
+        stopOpen(now);
+    } else if (!present && phase_ == Phase::Starting) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    advance(now);
+    return finish();
+}
+
 // More kept out is a tightening, as setLimited(true) is; fewer, a loosening. Each limited start passes them all.
 Output Supervisor::setKeepsOut(std::vector<std::string> keepsOut, Millis now) {
     config_.keepsOut = std::move(keepsOut);
@@ -199,10 +217,11 @@ sync::Activity Supervisor::activity() const {
     if (held_) {
         return sync::Activity::Down;
     }
-    if (state_.openTurn != 0 || (!state_.waiting.empty() && config_.here) || phase_ == Phase::Starting) {
+    if (state_.openTurn != 0 || (!state_.waiting.empty() && config_.here && config_.present) ||
+        phase_ == Phase::Starting) {
         return sync::Activity::Busy;
     }
-    if (config_.command.empty() || !config_.here || (crashed_ && !down_)) {
+    if (config_.command.empty() || !config_.here || !config_.present || (crashed_ && !down_)) {
         return sync::Activity::Down;
     }
     return sync::Activity::Idle;
@@ -263,15 +282,20 @@ Output Supervisor::signedIn(Millis now) {
 // running, it changes nothing: no stop is kept for a later turn.
 Output Supervisor::stop(Millis now) {
     if (phase_ == Phase::Working) {
-        command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
-        phase_ = Phase::Stopping;
-        deadline_ = now + config_.timing.stop;
+        stopOpen(now);
     } else if (phase_ == Phase::Starting && !state_.waiting.empty()) {
         state_.waiting.erase(state_.waiting.begin());
         effect(Effect::What::Stopped, "Stopped.");
         out_.durable = true;
     }
     return finish();
+}
+
+// The stop of the open turn, once: its line to the driver, and the deadline for its done.
+void Supervisor::stopOpen(Millis now) {
+    command(Command::Kind::Write, {}, encode(Stop{state_.openTurn}).line);
+    phase_ = Phase::Stopping;
+    deadline_ = now + config_.timing.stop;
 }
 
 Output Supervisor::message(const DriverMessage& message, Millis now) {
@@ -557,7 +581,7 @@ void Supervisor::close(Millis now) {
 }
 
 void Supervisor::startDriver(Millis now) {
-    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_ || !config_.here) {
+    if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_ || !config_.here || !config_.present) {
         return;
     }
     // The harness keeps its sessions by directory: one made in another directory (the session's instance moved) is
@@ -640,13 +664,13 @@ void Supervisor::writeNext() {
     phase_ = Phase::Working;
 }
 
-// With a driver configured, no turn open, nothing waiting and starting not held back, the oldest queued prompt leaves
-// the queue and waits, shown as the person's entry: one per turn. One that cannot be written as a protocol line (the
-// hub's text limit keeps every prompt far within the line limit, so only text that is not UTF-8) leaves the queue with
-// a notice, and the next is taken in its place.
+// With a driver configured, the friend in friends.json, no turn open, nothing waiting and starting not held back, the
+// oldest queued prompt leaves the queue and waits, shown as the person's entry: one per turn. One that cannot be
+// written as a protocol line (the hub's text limit keeps every prompt far within the line limit, so only text that is
+// not UTF-8) leaves the queue with a notice, and the next is taken in its place.
 void Supervisor::take() {
     while (!config_.command.empty() && state_.openTurn == 0 && state_.waiting.empty() && !held_ && !down_ &&
-           config_.here && !queue_.empty()) {
+           config_.here && config_.present && !queue_.empty()) {
         std::string text = std::move(queue_.front());
         queue_.erase(queue_.begin());
         ++out_.taken;
@@ -665,16 +689,16 @@ void Supervisor::take() {
 // With no turn open, a driver started under an account that is no longer the session's is ended quietly: the next one
 // starts under the session's account. So is one started in a directory that is no longer the session's, or any while
 // the session's instance is on another machine, or one started under another limit than the session's now (limited or
-// not, or limited keeping out other directories). So is one
-// told a model or effort the session has since put back to the
-// harness's default, which a settings line cannot say: the next one starts on the defaults. A turn open runs to its
-// end first.
+// not, or limited keeping out other directories). So is one told a model or effort the session has since put back to
+// the harness's default, which a settings line cannot say: the next one starts on the defaults. So is any while the
+// friend is not in friends.json. A turn open runs to its end first.
 void Supervisor::retire(Millis now) {
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
     if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
                                   driverLimited_ != config_.limited ||
-                                  (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || cleared)) {
+                                  (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || !config_.present ||
+                                  cleared)) {
         retiring_ = true;
         endQuietly(now);
     }

@@ -405,13 +405,22 @@ void hubReloadAndRotate() {
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(has(report, "account cx's provider codex -> claude"));
     CHECK(store.find(1)->info.harness == "claude" && has({lastNotice(store, 1)}, "provider is now claude"));
-    // A reload that drops the friend: its session moves to none, told.
+    // A reload that drops the friend: its session is kept as it is (its account too), told once.
+    const Registry withAda = edit;
+    const std::size_t entries = store.find(1)->transcript.size();
     edit.friends.erase(edit.friends.begin());
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(has(report, "friend ada removed") && has(report, "session 1 (ada): account cx -> none"));
-    CHECK(store.find(1)->info.account.empty());
+    CHECK(has(report, "friend ada removed") && has(report, "session 1 (ada): its friend was removed"));
+    CHECK(store.find(1)->info.account == "cx" && store.find(1)->transcript.size() == entries + 1);
+    CHECK(has({lastNotice(store, 1)}, "ada was taken out of friends.json"));
+    CHECK(has({lastNotice(store, 1)}, "its queued prompts are kept"));
+    // A reload while it is out changes nothing of it; one that puts it back settles it: cx is still linked, so it stays.
+    CHECK(hub.applyAccounts(edit, "reload again", &report));
+    CHECK(store.find(1)->transcript.size() == entries + 1);
+    CHECK(hub.applyAccounts(withAda, "reload", &report));
+    CHECK(store.find(1)->info.account == "cx" && store.find(1)->transcript.size() == entries + 1);
     // The keeper was given each registry applied.
-    CHECK(keeper.kept.size() == 2 && keeper.kept.back() == edit);
+    CHECK(keeper.kept.size() == 4 && keeper.kept.back() == withAda);
 }
 
 // A memory store that fails from a chosen step on, as a disk that stops taking writes: that step and every later one
@@ -598,11 +607,57 @@ void hubInstances() {
         CHECK(has(hub2.useAccounts(edit, &keeper2), "session 1 (bo): instance none -> laptop"));
         CHECK(store2.find(1)->info.instance == "laptop");
     }
-    // The friend dropped: its sessions belong to no instance, told.
+    // The friend dropped: its sessions keep their instance while it is out, told that it was taken out.
+    const Registry withAda = edit;
     edit.friends.erase(edit.friends.begin());
     CHECK(hub.applyAccounts(edit, "reload", &report));
-    CHECK(store.find(1)->info.instance.empty() && store.find(3)->info.instance.empty());
-    CHECK(has(report, "session 3 (ada): instance rocketnet -> none"));
+    CHECK(store.find(1)->info.instance == "rocketnet" && store.find(3)->info.instance == "rocketnet");
+    CHECK(has(report, "session 3 (ada): its friend was removed"));
+    // Put back without rocketnet: settled as any other, moved to its first instance, told.
+    Registry back = withAda;
+    back.friends.front().instances.pop_back();
+    CHECK(hub.applyAccounts(back, "reload", &report));
+    CHECK(store.find(1)->info.instance == "studio" && has(report, "session 1 (ada): instance rocketnet -> studio"));
+}
+
+// The cap on friends: a friends.json of kMaxFriends friends reads; one more is refused whole, in one line with the
+// count, the cap and what to do, in version 1 (before any upgrade) and in version 2 alike; a window's AddFriend at the
+// cap is refused and changes nothing.
+void friendsCap() {
+    for (int version : {1, 2}) {
+        std::string text = "{\"version\": " + std::to_string(version) + ", \"friends\": [";
+        for (std::size_t i = 0; i <= accounts::kMaxFriends; ++i) {
+            text += std::string(i == 0 ? "" : ", ") + "{\"name\": \"f" + std::to_string(i) + "\"}";
+        }
+        Registry r;
+        accounts::Read rd = accounts::readFriends(text + "]}", "friends.json", &r);
+        CHECK(!rd.ok && rd.errors.size() == 1 && r.friends.empty());
+        CHECK(has(rd.errors, "holds 257 friends, and nexus-server takes at most 256"));
+    }
+    auto file = [](std::size_t n) {
+        std::string text = "{\"version\": 1, \"friends\": [";
+        for (std::size_t i = 0; i < n; ++i) {
+            text += std::string(i == 0 ? "" : ", ") + "{\"name\": \"f" + std::to_string(i) + "\"}";
+        }
+        return text + "]}";
+    };
+    Registry r;
+    accounts::Read rd = accounts::readFriends(file(accounts::kMaxFriends), "friends.json", &r);
+    CHECK(rd.ok && r.friends.size() == accounts::kMaxFriends);
+    rd = accounts::readFriends(file(accounts::kMaxFriends + 1), "friends.json", &r);
+    CHECK(!rd.ok && rd.errors.size() == 1 && r.friends.empty());
+    CHECK(has(rd.errors, "friends.json:1: \"friends\" holds 257 friends, and nexus-server takes at most 256; take "
+                         "friends out until it holds 256 or fewer; nothing was changed"));
+
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    std::string why;
+    CHECK(accounts::readFriends(file(accounts::kMaxFriends), "friends.json", &r).ok);
+    CHECK(hub.useAccounts(r, &keeper).empty());
+    CHECK(!hub.apply(act(1, sync::ActionKind::AddFriend, "one-more", ""), &why, "w"));
+    CHECK(has({why}, "friends.json holds 256 friends, the most it may (256); take one out to add one-more"));
+    CHECK(hub.accounts()->friends.size() == accounts::kMaxFriends && keeper.kept.empty());
 }
 
 // A friend's "limit" and an account's "billing" (docs/accounts.md): the defaults by version, the migration of a
@@ -775,6 +830,37 @@ void keepsOut() {
     CHECK(hub.accounts()->keepsOut == std::vector<std::string>{"/data"});
 }
 
+// The state the windows receive carries the registry's friends, in its order (sync/hub.h stateFriends): none known
+// before the hub holds a registry; set when it takes one; changed by a reload that adds or drops a friend and by a
+// window's AddFriend; and kept across the state's rebuilds (a session made).
+void hubFriends() {
+    using Names = std::vector<sync::ServerFriend>;
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    CHECK(!hub.state().friendsKnown() && hub.state().friends().empty());
+    CHECK(hub.useAccounts(sample(), &keeper).empty());
+    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{{"ada"}, {"bo"}}));
+    // A session made rebuilds the state: the friends stay.
+    std::string why;
+    std::uint64_t n = 1;
+    CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+    CHECK(hub.state().sessions().size() == 1 && (hub.state().friends() == Names{{"ada"}, {"bo"}}));
+    // A reload that drops bo and adds cy.
+    Registry edit = sample();
+    edit.friends.erase(edit.friends.begin() + 1);
+    edit.friends.push_back(accounts::Friend{"cy", {}, ""});
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "reload", &report));
+    CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{{"ada"}, {"cy"}}));
+    // A window's AddFriend.
+    CHECK(hub.apply(act(n++, sync::ActionKind::AddFriend, "di", ""), &why, "w"));
+    CHECK((hub.state().friends() == Names{{"ada"}, {"cy"}, {"di"}}));
+    // A registry with no friends: known, and none.
+    CHECK(hub.applyAccounts(Registry{sample().accounts, {}}, "reload", &report));
+    CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -795,6 +881,8 @@ const Group kGroups[] = {
     {"hub_instances", hubInstances},
     {"limits", limits},
     {"keeps_out", keepsOut},
+    {"hub_friends", hubFriends},
+    {"friends_cap", friendsCap},
 };
 
 } // namespace

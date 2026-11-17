@@ -119,7 +119,7 @@ void loadsTheMachineList() {
         r.out = R"({"result":{"status":"ok"},"items":[{"fields":{"name":"space","address":""}}]})";
         return r;
     });
-    CHECK(timeout == kFriendListTimeoutSeconds);
+    CHECK(timeout == kMachineListTimeoutSeconds);
     CHECK(ok.error.empty() && ok.machines.size() == 1);
     MachineList failed = loadMachines(command, [](const Command&, int) {
         CommandResult r;

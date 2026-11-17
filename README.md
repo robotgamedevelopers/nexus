@@ -41,7 +41,9 @@ Spaces, with no Dock icon. Command plus the tilde key (the key left of 1) shows 
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
 `--windowed` it is a normal window instead.
 
-Each friend listed by `nova-config friend list` has a tab. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
+Each friend the server holds (its `friends.json`, `docs/accounts.md`) has a tab, and a friend added or removed there
+gets or loses its tab as soon as the server applies the change (`nexus-server config reload`); the sprint tab comes
+first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. Enter sends the prompt, Command-Enter queues it, and
 Shift-Enter starts a new line. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
 and the size is kept across launches.
@@ -68,8 +70,9 @@ remote side that sets its own title does not change it. When ssh ends, the tab h
 back until its shell sets a new title. A nested ssh on the remote machine is not seen: the tab names the machine the
 local ssh reaches.
 
-nexus finds `nova-config` on the PATH your login shell gives, or at the full path its config names (`nova-config
-<path>` in `~/.nexus/client/config`, below).
+For those machine names and the sprint board's address, nexus finds `nova-config` on the PATH your login shell gives,
+or at the full path its config names (`nova-config <path>` in `~/.nexus/client/config`, below); without it, ssh tabs
+show the host as typed.
 
 The window writes its errors to stderr. On Windows it has no terminal, so unless stderr was redirected they go to
 `%USERPROFILE%\.nexus\client\nexus.log`, appended to on each launch; if the hotkey does not register, a message box says
@@ -87,6 +90,9 @@ the Keychain, the environment or another tool's directory (`~/.claude` included)
     config                      its settings: `nova-config <path>`, `sprint-url <url>`
     tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
                                 its saved order, selection, text size and terminals
+    kept-drafts.txt, kept-drafts.lock
+                                the drafts of friends taken off a server, kept by server and name until they return,
+                                and the lock every window's change of them takes
     nexus.log                   Windows only: its errors
 ~/.nexus/server/                nexus-server (`--dir` gives another directory)
     config                      its settings (it takes none yet)
@@ -120,7 +126,8 @@ What syncs, so far: each prompt sent or queued in the window goes to the server 
 answers each sent prompt with a placeholder reply, "(received)". Every window connected to the server shows every
 tab's transcript and queue. A window that was away for long sees "N earlier entries not shown" in place of what it
 missed (the server sends each transcript's newest 16 entries, so that a diff stays small however far behind a window
-is). The friend list still comes from `nova-config` on the window's machine.
+is). The friend tabs are the server's friends, sent in its state; a server from before that list sends none, and the
+window then shows the friends of the server's sessions.
 
 `nexus-server` keeps every tab's transcript and queue, and how far it has applied each window's actions, in
 `~/.nexus/server/store/`: each action is written and synced there before any window sees it, so a restart, or the server

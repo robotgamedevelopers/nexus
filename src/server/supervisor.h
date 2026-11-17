@@ -90,6 +90,7 @@ struct Config {
     // More directories a limited driver keeps the AI out of (friends.json "limit_keeps_out", accounts::Registry
     // keepsOut), given at each limited start as `--keep-out <dir>`, each once. Only ever more kept out.
     std::vector<std::string> keepsOut{};
+    bool present = true;                // the session's friend is in friends.json (setPresent): else nothing runs
     Timing timing;
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
@@ -202,6 +203,13 @@ public:
     // limited driver not keeping out every one of them is weaker than the session's limit: a turn open on it is stopped
     // now and the driver ended; one keeping out more than them is ended once no turn is open.
     Output setKeepsOut(std::vector<std::string> keepsOut, Millis now);
+    // The session's friend was taken out of friends.json (`present` false) or put back (true), by a reload
+    // (models/Supervisor.tla RemoveFriend, AddBack). Taken out, what runs is stopped and the driver ended: an open turn
+    // gets the person's stop (stop(): the turn ends at its done, or is cut at the stop's deadline), and the driver is
+    // ended once no turn is open; a driver still starting is ended at once. While the friend is out no driver starts and
+    // nothing queued is taken: the waiting prompts and the queue are kept, and go on once it is back. The server refuses
+    // a send first (Drivers::send). Nothing when it is already so.
+    Output setPresent(bool present, Millis now);
 
     std::optional<Millis> deadline() const;     // when tick() next has something to do
     const sync::DriverState& state() const { return state_; }
@@ -227,12 +235,14 @@ public:
     bool limited() const { return config_.limited; }                // the next driver starts limited
     bool driverLimited() const { return driverLimited_; }           // the alive driver was started limited
     bool here() const { return config_.here; }                           // the session's instance is on this machine
+    bool present() const { return config_.present; }                     // the session's friend is in friends.json
     bool retiring() const { return retiring_; }     // the driver is being ended for an account change
     const std::string& openPrompt() const { return openPrompt_; }
     // What the friend is doing, for the window's state cursor (models/Supervisor.tla Activity): Down while starting is
     // held back (failed starts, or no credential); otherwise Busy while a turn is open or about to begin (a prompt
-    // waits with the instance here, or a driver starts); otherwise Down when no driver is configured (nothing queued is
-    // taken, and a prompt reaches no driver), or the instance is on another machine (no driver starts here), or when
+    // waits with the instance here and the friend in friends.json, or a driver starts); otherwise Down when no driver is
+    // configured (nothing queued is taken, and a prompt reaches no driver), or the instance is on another machine (no
+    // driver starts here), or the friend is not in friends.json (nothing runs for it), or when
     // the last driver failed (crashed, broke the protocol, missed a deadline) and none has
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
@@ -248,6 +258,7 @@ private:
     void end(const std::string& why, Millis now);
     void endQuietly(Millis now);
     void close(Millis now);
+    void stopOpen(Millis now);
     void take();
     void startDriver(Millis now);
     void writeNext();

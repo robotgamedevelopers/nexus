@@ -1,7 +1,8 @@
 // Unit tests of the driver supervisor (src/server/supervisor.h), by rule: starting a driver, turn numbers, prompts that
 // wait, every protocol break that ends a driver, every deadline at its edges (one millisecond before, at, after), text
-// gathering and splitting, the failed-start count, the credential, errors, stop, shutdown from every phase, and a
-// restart's state. Logic only: no processes, no clock (the time is an argument, from 1000), no files.
+// gathering and splitting, the failed-start count, the credential, errors, stop, the friend taken out of friends.json
+// and added back (alone and through the hub's reload), shutdown from every phase, and a restart's state. Logic only: no
+// processes, no clock (the time is an argument, from 1000), no files.
 //
 //   supervisor_test           runs every group
 //   supervisor_test <group>   runs one
@@ -12,8 +13,10 @@
 #include <string>
 #include <vector>
 
+#include "accounts/registry.h"
 #include "driver/protocol.h"
 #include "server/supervisor.h"
+#include "sync/hub.h"
 
 namespace {
 
@@ -1069,6 +1072,163 @@ void testStopHammered() {
     CHECK(whats(o).empty() && s.phase() == Phase::Idle && s.state().nextTurn == turn + 2);
 }
 
+// ---- the friend taken out of friends.json, and added back ----
+
+// A removal with a turn open stops it as the person's stop does (a stop line, then the turn ends at its done) and ends
+// the driver once it is idle. While the friend is out nothing is taken from the queue and no driver starts; once it is
+// added back the queue goes on. A removal while the driver starts ends it quietly and keeps what waits.
+void testFriendRemoved() {
+    {
+        Supervisor s = working("go");
+        s.queued("q1", kStart + 2);
+        s.queued("q2", kStart + 2);
+        Output o = s.setPresent(false, kStart + 3);
+        CHECK(written(o) == std::vector<ServerMessage>{Stop{1}} && s.phase() == Phase::Stopping && !s.present());
+        CHECK(s.deadline() && *s.deadline() == kStart + 3 + 200);
+        CHECK(s.activity() == sync::Activity::Busy);     // the turn runs until its done
+        o = s.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 4);
+        CHECK(o.taken == 0 && whats(o) == std::vector<What>{What::Stopped} && ended(s, o));
+        CHECK(s.activity() == sync::Activity::Down);
+        CHECK(s.state().openTurn == 0 && (s.queue() == std::vector<std::string>{"q1", "q2"}));
+        o = s.exited("exited with status 0", kStart + 5);
+        CHECK(o.commands.empty() && o.taken == 0 && s.phase() == Phase::None && s.failedStarts() == 0);
+        o = s.queued("q3", kStart + 6);
+        CHECK(o.taken == 0 && o.commands.empty() && s.queue().size() == 3 && s.state().waiting.empty());
+        CHECK(s.setPresent(false, kStart + 7).commands.empty());     // no change, nothing done
+        o = s.setPresent(true, kStart + 8);
+        CHECK(o.taken == 1 && kinds(o) == std::vector<Kind>{Kind::Start} && s.phase() == Phase::Starting);
+        CHECK(s.state().waiting == std::vector<std::string>{"q1"} && (s.queue() == std::vector<std::string>{"q2", "q3"}));
+        o = s.message(Hello{1, "h"}, kStart + 9);
+        CHECK(sends(o, 2, "q1"));
+    }
+    {
+        // The stop's deadline cuts a turn that does not end, as for the person's stop.
+        Supervisor s = working("go");
+        s.setPresent(false, kStart + 2);
+        Output o = s.tick(kStart + 2 + 199);
+        CHECK(o.commands.empty() && s.phase() == Phase::Stopping);
+        o = s.tick(kStart + 2 + 200);
+        CHECK(s.state().openTurn == 0 && s.phase() == Phase::Ending && !o.commands.empty());
+    }
+    {
+        // Starting: ended quietly, the prompt kept waiting, no failed start counted; it goes once the friend is back.
+        Supervisor s = make();
+        s.prompt("x", kStart);
+        Output o = s.setPresent(false, kStart + 1);
+        CHECK(s.phase() == Phase::Ending && s.state().waiting == std::vector<std::string>{"x"});
+        o = s.exited("exited with status 0", kStart + 2);
+        CHECK(o.commands.empty() && s.phase() == Phase::None && s.failedStarts() == 0);
+        o = s.setPresent(true, kStart + 3);
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+    }
+    {
+        // Idle: the driver is ended; nothing else changes.
+        Supervisor s = working("go");
+        s.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 2);
+        Output o = s.setPresent(false, kStart + 3);
+        CHECK(ended(s, o) && o.effects.empty());
+    }
+}
+
+// The hub's side of a removal, with one session's supervisor as its responder (as server/drivers.cpp runs one per
+// session, without the process): the hub's reload gives the notice and tells the responder, which tells the
+// supervisor. The queue is the store's and the supervisor's, both kept.
+class OneDriver : public sync::Responder {
+public:
+    explicit OneDriver(Millis* now) : now_(now), sup(config(), {}, *now, &last) {}
+    sync::SessionInfo defaults(const std::string& friendName) const override {
+        sync::SessionInfo i;
+        i.friendName = friendName;
+        i.harness = "claude";
+        return i;
+    }
+    std::vector<sync::SessionChange> send(sync::SessionId, const std::string& prompt) override {
+        last = sup.prompt(prompt, *now_);
+        return {};
+    }
+    std::vector<sync::SessionChange> queue(sync::SessionId, const std::string& prompt) override {
+        last = sup.queued(prompt, *now_);
+        sync::SessionChange c;
+        c.prompt = prompt;
+        return {c};
+    }
+    std::vector<sync::SessionChange> stop(sync::SessionId) override {
+        last = sup.stop(*now_);
+        return {};
+    }
+    void sent(sync::SessionId, bool) override {}
+    void configured(sync::SessionId, const sync::SessionInfo&) override {}
+    void present(sync::SessionId, bool present) override {
+        presents.push_back(present);
+        last = sup.setPresent(present, *now_);
+    }
+
+private:
+    Millis* now_;
+
+public:
+    Output last;    // declared before sup, which writes its first output here
+    Supervisor sup;
+    std::vector<bool> presents;
+};
+
+std::string lastNotice(const sync::SessionStore& store, sync::SessionId id) {
+    for (auto it = store.find(id)->transcript.rbegin(); it != store.find(id)->transcript.rend(); ++it) {
+        if ((*it)->kind == EntryKind::Notice) {
+            return (*it)->text;
+        }
+    }
+    return std::string();
+}
+
+// A reload that drops the friend with a turn open: the turn is stopped by the stop line and ends at its done, the
+// driver is ended, the session's transcript has the notice, its queue is kept, and nothing starts while the friend is
+// out (a reload that keeps it out, a prompt queued meanwhile). A reload that adds it back lets the queue go on.
+void testHubFriendRemoved() {
+    Millis now = kStart;
+    sync::MemoryStore store;
+    OneDriver responder(&now);
+    sync::Hub hub(store, {}, &responder);
+    accounts::Registry withAda;
+    withAda.friends = {{"ada", {}, ""}};
+    hub.useAccounts(withAda, nullptr);
+    std::string why;
+    CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
+    CHECK(store.find(1) != nullptr);
+    responder.sup.prompt("go", now);
+    responder.sup.message(Hello{1, "h"}, ++now);
+    CHECK(responder.sup.phase() == Phase::Working);
+    CHECK(hub.apply(sync::Action{2, sync::ActionKind::Queue, 1, "", "q1", ""}, &why, "w"));
+    CHECK(hub.apply(sync::Action{3, sync::ActionKind::Queue, 1, "", "q2", ""}, &why, "w"));
+    CHECK((store.find(1)->queue == std::vector<std::string>{"q1", "q2"}) && responder.sup.queue().size() == 2);
+
+    std::vector<std::string> report;
+    const std::size_t entries = store.find(1)->transcript.size();
+    CHECK(hub.applyAccounts(accounts::Registry{}, "reload", &report));
+    CHECK(responder.presents == std::vector<bool>{false});
+    CHECK(written(responder.last) == std::vector<ServerMessage>{Stop{1}} && responder.sup.phase() == Phase::Stopping);
+    CHECK(store.find(1)->transcript.size() == entries + 1);
+    CHECK(contains(lastNotice(store, 1), "ada was taken out of friends.json (the accounts and friends were changed: "
+                                         "reload), so nexus-server stopped any work running in this session and ended "
+                                         "its driver."));
+    CHECK(contains(lastNotice(store, 1), "its queued prompts are kept"));
+    Output o = responder.sup.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, ++now);
+    CHECK(o.taken == 0 && ended(responder.sup, o));
+    o = responder.sup.exited("exited with status 0", ++now);
+    CHECK(o.commands.empty() && responder.sup.phase() == Phase::None);
+    // While out: a reload that keeps it out tells nobody; a prompt queued is kept, and starts nothing.
+    CHECK(hub.applyAccounts(accounts::Registry{}, "reload again", &report));
+    CHECK(responder.presents.size() == 1 && store.find(1)->transcript.size() == entries + 1);
+    CHECK(hub.apply(sync::Action{4, sync::ActionKind::Queue, 1, "", "q3", ""}, &why, "w"));
+    CHECK(responder.last.commands.empty() && responder.last.taken == 0 && responder.sup.queue().size() == 3);
+    CHECK((store.find(1)->queue == std::vector<std::string>{"q1", "q2", "q3"}));
+    // Added back: the oldest queued prompt is taken and a driver starts for it.
+    CHECK(hub.applyAccounts(withAda, "reload", &report));
+    CHECK((responder.presents == std::vector<bool>{false, true}));
+    CHECK(responder.last.taken == 1 && kinds(responder.last) == std::vector<Kind>{Kind::Start});
+    CHECK(responder.sup.state().waiting == std::vector<std::string>{"q1"});
+}
+
 // ---- the queue: one per turn, at the turn's end, oldest first, each once ----
 
 void testQueue() {
@@ -1277,6 +1437,8 @@ const Group kGroups[] = {
     {"credential", testCredentialAndErrors},
     {"stop", testStop},
     {"stop_hammered", testStopHammered},
+    {"friend_removed", testFriendRemoved},
+    {"hub_friend_removed", testHubFriendRemoved},
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},

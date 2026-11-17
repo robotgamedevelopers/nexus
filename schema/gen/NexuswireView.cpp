@@ -71,6 +71,7 @@ const UnitViewInfo * UnitView()
         { "ClientCounter", "Nexus.schema", true, ClientCounterTableType(), TableDocNone, 0, NULL },
         { "Driver", "Nexus.schema", true, DriverTableType(), TableDocNone, 0, NULL },
         { "EntryChange", "Nexus.schema", true, EntryChangeTableType(), TableDocNone, 0, NULL },
+        { "Friend", "Nexus.schema", true, FriendTableType(), TableDocNone, 0, NULL },
         { "Hello", "Nexus.schema", true, HelloTableType(), TableDocNone, 0, NULL },
         { "Record", "Nexus.schema", true, RecordTableType(), TableDocNone, 0, NULL },
         { "SecretRequest", "Nexus.schema", true, SecretRequestTableType(), TableDocNone, 0, NULL },
@@ -83,7 +84,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswire", 0xcb24df40c7376c7dull,
         0, NULL,
-        14, tables,
+        15, tables,
         3, enums,
         0, NULL,
         1, unions,

@@ -13,7 +13,7 @@
 
 #include "pr/app.h"
 
-#include "friends.h"
+#include "command.h"
 
 namespace nexus {
 

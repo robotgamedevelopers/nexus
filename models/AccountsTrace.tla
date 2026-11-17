@@ -112,5 +112,7 @@ RotateMoves == L!RotateMoves
 SetExact == L!SetExact
 OnlyItsSession == L!OnlyItsSession
 RefusedChangesNothing == L!RefusedChangesNothing
+OutLeftAlone == L!OutLeftAlone
+OutIsTold == L!OutIsTold
 
 =============================================================================

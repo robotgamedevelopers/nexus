@@ -992,7 +992,47 @@ void slowSshLink(Window& w) {
     w.host.link = &w.link;
 }
 
+// The server's list of 2,000 friends while a reply streams into a friend's tab. The window's first frames come before
+// the link does, as in the app; the list arrives with the stream's first state, its first 256 friends' tabs added
+// that frame (sync/client.h kMaxFriendTabs); then each frame's state carries the stream alone, as the link brings it:
+// the server's state each frame holds a list equal to the one before, so its diff carries none
+// (Sessions::diff_from), and the window's state keeps the list it holds (Sessions::friendsList), which the window does
+// not take again (sync/friend_strip.h): no ensure is sent after the first. Every frame keeps the budget.
+void manyFriendsWhileStreaming(Window& w) {
+    history(w.model, 1, 200);
+    w.frames(5);
+    std::vector<sync::ServerFriend> list{{"alex"}, {"emma"}, {"stella"}};
+    for (int i = 0; list.size() < 2000; ++i) {
+        list.push_back(sync::ServerFriend{"friend-" + std::to_string(i)});
+    }
+    sync::Sessions sent;    // the server's last state
+    sync::Sessions held;    // the window's, each state's diff applied to it as the link's thread does
+    std::string open;
+    const std::string chunk = "streamed text arrives in pieces as the friend writes it, and the window shows it as it "
+        "grows; ";
+    while (open.size() < 16 * 1024) {
+        open += chunk;
+        auto v = std::make_shared<sync::SessionView>();
+        v->id = 1;
+        v->info.friendName = "alex";
+        v->activity = sync::Activity::Busy;
+        v->entries.push_back(std::make_shared<sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, open, false}));
+        sync::Sessions next(std::vector<sync::SessionRef>{std::move(v)});
+        next.setFriends(list);
+        held.apply_string(next.diff_from(sent));
+        sent = std::move(next);
+        w.link.set(connected(held));
+        w.frame();
+        CHECK(held.friendsList() == w.link.state.sessions.friendsList());
+    }
+    // The sprint tab and the first 256 friends, alex, emma and stella among them; an ensure for each new one, once.
+    CHECK(w.model.tab_count() == 1 + sync::kMaxFriendTabs);
+    CHECK(w.link.sent.size() == sync::kMaxFriendTabs - 3);
+    w.frames(10);
+}
+
 const Case kCases[] = {
+    {"many_friends_while_streaming", manyFriendsWhileStreaming},
     {"first_frames", firstFrames},
     {"typing_over_a_long_history", typingOverALongHistory},
     {"stalled_link_then_a_long_transcript", stalledLinkThenALongTranscript},

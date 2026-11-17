@@ -134,6 +134,14 @@ std::string writeTables(const SessionsChange& change) {
         putText(b.main, r->asker_name, q.askerName, scratch);
         putText(b.main, r->why, q.why, scratch);
     }
+    if (change.friendsSent) {
+        d->friends_sent = true;
+        d->friends_known = change.friendsKnown;
+        for (const ServerFriend& f : change.friends) {
+            wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
+            putText(b.main, w->name, f.name, scratch);
+        }
+    }
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
         [](const wire::SessionsDiffBuilder& x, std::uint8_t* out, int64_t n) { return wire::SessionsDiffSave(x, out, n); },
         "sessions diff");
@@ -191,6 +199,16 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         q.askerName = textOf(r.asker_name);
         q.why = textOf(r.why);
         out.requests.push_back(std::move(q));
+    }
+    // Only a diff that says it carries the friends sets them: without friends_sent the reader keeps what it held, and any
+    // friends such a diff names are ignored.
+    out.friendsSent = d->friends_sent;
+    if (out.friendsSent) {
+        out.friendsKnown = d->friends_known;
+        out.friends.reserve(static_cast<std::size_t>(d->friends.size()));
+        for (const wire::Friend& f : d->friends) {
+            out.friends.push_back(ServerFriend{textOf(f.name)});
+        }
     }
     return out;
 }

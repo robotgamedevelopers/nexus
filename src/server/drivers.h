@@ -111,6 +111,10 @@ public:
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
+    // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
+    // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
+    // sent is refused with a notice, and what is queued stays queued; put back, what waits goes on.
+    void present(sync::SessionId id, bool present) override;
 
     // The secret dialog (docs/secrets.md): a driver's ask-secret goes to the hub once every slot is served (serve());
     // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its friend, a file its
@@ -164,12 +168,14 @@ private:
     };
 
     std::string friendOf(sync::SessionId id) const;
+    bool listed(sync::SessionId id) const;     // its friend is in friends.json (false while the hub holds no registry)
     ResolvedDriver resolve(sync::SessionId id) const;
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
     bool limitedOf(const sync::SessionInfo& info) const;
     std::vector<std::string> keepsOut() const;
     ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
+    Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);
     std::vector<sync::SessionChange> changes(const Output& out, const Supervisor& sup) const;
@@ -191,6 +197,7 @@ private:
     Output pendingOut_;
     std::set<sync::SessionId> unresolved_;  // the sessions shown down for want of a driver: read again each kResolveMs
     Millis resolveAt_ = 0;
+    bool started_ = false;
     bool holding_ = false;
     // What a step told a driver while holding, in order: a signal (sig) to its process group, or (sig 0) its input
     // carried out as far as it was told.

@@ -1,12 +1,14 @@
-// Unit tests of the window's pure logic: the friend list's parsing and loading (src/friends.h) through a fake command
-// runner. No OS, no clock, no window, no process.
+// Unit tests of the window's pure logic: what it keeps across launches (src/tab_order.h) through in-memory stores, and
+// the nova-config command's form and problems (src/command.h). No OS, no clock, no window, no process. The friend tabs
+// from the server's list are sync/friend_strip.h's, tested in tests/sync, and here across a restart.
 
 #include <cstdio>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "friends.h"
+#include "command.h"
+#include "sync/friend_strip.h"
 #include "tab_order.h"
 
 namespace {
@@ -24,139 +26,71 @@ void check(bool ok, const char* what, int line) {
 
 #define CHECK(x) check((x), #x, __LINE__)
 
-void parsesEnabledFriendsInOrder() {
-    FriendList list = parseFriendList(R"({"result":{"verb":"friend list","status":"ok","exit":0},"items":[
-        {"kind":"friend","fields":{"name":"alex","model":"","enabled":true}},
-        {"kind":"friend","fields":{"name":"off","model":"m","enabled":false}},
-        {"kind":"friend","fields":{"name":"emma","model":"gemini \"2\"","enabled":true}},
-        {"kind":"friend","fields":{"name":"nameless","model":"m"}}]})");
-    CHECK(list.error.empty());
-    CHECK(list.friends.size() == 2);
-    CHECK(list.friends.size() == 2 && list.friends[0].name == "alex" && list.friends[0].model.empty());
-    CHECK(list.friends.size() == 2 && list.friends[1].name == "emma" && list.friends[1].model == "gemini \"2\"");
-}
-
-void reportsWhatIsWrong() {
-    CHECK(!parseFriendList("not json").error.empty());
-    CHECK(parseFriendList("not json").friends.empty());
-    CHECK(!parseFriendList(R"({"result":{"status":"refused"},"items":[]})").error.empty());
-    CHECK(!parseFriendList(R"({"result":{"status":"ok"}})").error.empty());
-    FriendList none = parseFriendList(R"({"result":{"status":"ok"},"items":[]})");
-    CHECK(none.friends.empty());
-    CHECK(none.error.find("no enabled friends") != std::string::npos);
-}
-
 bool has(const std::string& s, const char* part) {
     return s.find(part) != std::string::npos;
 }
 
-// A fake runner: records the command and gives back `result`. No process is spawned.
-struct FakeRun {
-    CommandResult result;
-    Command ran;
-    int timeout = 0;
-    CommandRunner runner() {
-        return [this](const Command& c, int seconds) {
-            ran = c;
-            timeout = seconds;
-            return result;
-        };
-    }
-};
+// The nova-config command and how its failures read (src/command.h). ------------------------------------------------
 
-FriendList loadWith(CommandResult result, FakeRun* seen = nullptr) {
-    FakeRun fake{result, {}, 0};
-    FriendList list = loadFriends(friendListCommand(nullptr, "/bin/zsh"), fake.runner());
-    if (seen != nullptr)
-        *seen = fake;
-    return list;
-}
-
-// What the friend list's command runs (with SHELL /bin/zsh), and how its errors show it.
+// What `nova-config service show sprint-run --json` runs with SHELL /bin/zsh, and how its problems show it.
 #if defined(_WIN32)
-constexpr const char* kShown = "nova-config friend list --json";
+constexpr const char* kShown = "nova-config service show sprint-run --json";
 constexpr const char* kProgram = "nova-config";
 #else
-constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config friend list --json'";
+constexpr const char* kShown = "/bin/zsh -l -c 'exec nova-config service show sprint-run --json'";
 constexpr const char* kProgram = "/bin/zsh";
 #endif
 
-// The command goes through the person's login shell, or /bin/sh without SHELL, or straight to the client config's nova-config.
-void commandIsTheLoginShellOrTheOverride() {
+const std::vector<std::string> kArguments{"service", "show", "sprint-run", "--json"};
+
+// The command goes through the person's login shell, or /bin/sh without SHELL, or straight to the client config's
+// nova-config.
+void novaConfigIsTheLoginShellOrTheOverride() {
 #if defined(_WIN32)
-    // Windows: straight to nova-config on PATH, whatever SHELL says.
-    Command onPath = friendListCommand(nullptr, "/bin/zsh");
-    CHECK(onPath.program == "nova-config");
-    CHECK((onPath.arguments == std::vector<std::string>{"friend", "list", "--json"}));
-    CHECK(onPath.shown == "nova-config friend list --json");
-    CHECK(friendListCommand(nullptr, nullptr).program == "nova-config");
+    Command onPath = novaConfigCommand(nullptr, "/bin/zsh", kArguments);
+    CHECK(onPath.program == "nova-config" && onPath.arguments == kArguments);
+    CHECK(onPath.shown == kShown);
+    CHECK(novaConfigCommand(nullptr, nullptr, kArguments).program == "nova-config");
 #else
-    Command shell = friendListCommand(nullptr, "/bin/zsh");
+    Command shell = novaConfigCommand(nullptr, "/bin/zsh", kArguments);
     CHECK(shell.program == "/bin/zsh");
-    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config friend list --json"}));
+    CHECK((shell.arguments == std::vector<std::string>{"-l", "-c", "exec nova-config service show sprint-run --json"}));
     CHECK(shell.shown == kShown);
-    CHECK(friendListCommand(nullptr, nullptr).program == "/bin/sh");
-    CHECK(friendListCommand("", "").program == "/bin/sh");
+    CHECK(novaConfigCommand(nullptr, nullptr, kArguments).program == "/bin/sh");
+    CHECK(novaConfigCommand("", "", kArguments).program == "/bin/sh");
 #endif
-    Command direct = friendListCommand("/opt/nova/nova-config", "/bin/zsh");
-    CHECK(direct.program == "/opt/nova/nova-config");
-    CHECK((direct.arguments == std::vector<std::string>{"friend", "list", "--json"}));
-    CHECK(direct.shown == "/opt/nova/nova-config friend list --json");
+    Command direct = novaConfigCommand("/opt/nova/nova-config", "/bin/zsh", kArguments);
+    CHECK(direct.program == "/opt/nova/nova-config" && direct.arguments == kArguments);
+    CHECK(direct.shown == "/opt/nova/nova-config service show sprint-run --json");
 }
 
-void validListLoads() {
-    FakeRun seen;
-    FriendList list = loadWith(CommandResult{CommandResult::End::Exited, 0,
-        R"({"result":{"status":"ok"},"items":[{"fields":{"name":"alex","model":"m","enabled":true}}]})", ""}, &seen);
-    CHECK(list.error.empty());
-    CHECK(list.friends.size() == 1 && list.friends[0].name == "alex");
-    CHECK(seen.timeout == 5);
+std::string problemOf(CommandResult result) {
+    return commandProblem(novaConfigCommand(nullptr, "/bin/zsh", kArguments), result, 5);
 }
 
-void emptyListSaysWhatToDo() {
-    FriendList list = loadWith(CommandResult{CommandResult::End::Exited, 0, R"({"result":{"status":"ok"},"items":[]})",
-        ""});
-    CHECK(list.friends.empty());
-    CHECK(has(list.error, "nova-config friend list --json") && has(list.error, "no enabled friends"));
-    CHECK(has(list.error, "nova-config friend add"));
-}
-
-void malformedJsonSaysWhatToDo() {
-    FriendList list = loadWith(CommandResult{CommandResult::End::Exited, 0, "{\"items\": [", ""});
-    CHECK(list.friends.empty());
-    CHECK(has(list.error, "not JSON") && has(list.error, "run it in a terminal"));
-}
-
-// The shell's own "not found" (status 127), and the shell itself missing.
-void commandNotFoundSaysWhatToDo() {
-    FriendList shell = loadWith(CommandResult{CommandResult::End::Exited, 127, "",
+// Each way the command fails names the command and what to do; a success is no problem.
+void commandProblemsSayWhatToDo() {
+    CHECK(problemOf(CommandResult{CommandResult::End::Exited, 0, "{}", ""}).empty());
+    const std::string shell = problemOf(CommandResult{CommandResult::End::Exited, 127, "",
         "zsh:1: command not found: nova-config\n"});
-    CHECK(shell.friends.empty());
-    CHECK(has(shell.error, kShown) && has(shell.error, "status 127") && has(shell.error, "command not found"));
-    CHECK(has(shell.error, "nova-config <path>"));
-    FriendList missing = loadWith(CommandResult{CommandResult::End::NotFound, 0, "", ""});
-    CHECK(has(missing.error, kShown) && has(missing.error, (std::string(kProgram) + " was not found").c_str()));
-    CHECK(has(missing.error, "nova-config <path>"));
+    CHECK(has(shell, kShown) && has(shell, "status 127") && has(shell, "command not found"));
+    CHECK(has(shell, "nova-config <path>"));
+    const std::string missing = problemOf(CommandResult{CommandResult::End::NotFound, 0, "", ""});
+    CHECK(has(missing, kShown) && has(missing, (std::string(kProgram) + " was not found").c_str()));
+    CHECK(has(missing, "nova-config <path>"));
+    const std::string unstarted = problemOf(CommandResult{CommandResult::End::NotStarted, 0, "", ""});
+    CHECK(has(unstarted, kShown) && has(unstarted, "could not start") && has(unstarted, "nova-config <path>"));
+    const std::string silent = problemOf(CommandResult{CommandResult::End::Exited, 3, "", ""});
+    CHECK(has(silent, kShown) && has(silent, "status 3") && has(silent, "nothing on standard error"));
+    CHECK(has(silent, "run it in a terminal"));
+    const std::string said = problemOf(CommandResult{CommandResult::End::Exited, 1, "", "connection refused\n"});
+    CHECK(has(said, kShown) && has(said, "status 1: connection refused;") && has(said, "run it in a terminal"));
+    const std::string late = problemOf(CommandResult{CommandResult::End::TimedOut, 0, "", ""});
+    CHECK(has(late, kShown) && has(late, "within 5 seconds") && has(late, "run it in a terminal"));
+    const std::string killed = problemOf(CommandResult{CommandResult::End::Signaled, 9, "", ""});
+    CHECK(has(killed, kShown) && has(killed, "signal 9"));
 }
 
-void failureWithEmptyStderrNamesTheCommand() {
-    FriendList list = loadWith(CommandResult{CommandResult::End::Exited, 3, "", ""});
-    CHECK(list.friends.empty());
-    CHECK(has(list.error, kShown) && has(list.error, "status 3") && has(list.error, "nothing on standard error"));
-    CHECK(has(list.error, "run it in a terminal"));
-}
-
-void failureWithStderrCarriesIt() {
-    FriendList list = loadWith(CommandResult{CommandResult::End::Exited, 1, "", "connection refused\n"});
-    CHECK(has(list.error, kShown) && has(list.error, "status 1: connection refused;"));
-    CHECK(has(list.error, "run it in a terminal"));
-}
-
-void timeoutSaysSo() {
-    FriendList list = loadWith(CommandResult{CommandResult::End::TimedOut, 0, "", ""});
-    CHECK(list.friends.empty());
-    CHECK(has(list.error, kShown) && has(list.error, "within 5 seconds") && has(list.error, "run it in a terminal"));
-}
 
 // The tab order (src/tab_order.h). ----------------------------------------------------------------------------------
 
@@ -280,6 +214,31 @@ void badStoreUsesTheLoadedOrderAndSaysSo() {
     std::string error;
     CHECK(!saveTabOrder(mem.store(), model, &error));
     CHECK(has(error, "/fake/tab-order.txt") && has(error, "Permission denied"));
+}
+
+// The window reads the saved order's names and the saved tab before any friend has arrived from the server: neither
+// needs a model of friends. Nothing saved is no names and the first tab; a bad file is the same, with a warning.
+void savedNamesAndTabLoadAlone() {
+    MemoryStore order;
+    std::string warning;
+    CHECK(loadTabOrderNames(order.store(), &warning).empty() && warning.empty());
+    Model model(named({"a", "b", "c"}));
+    CHECK(model.move_tab(2, 0) && model.select_tab(1));
+    std::string error;
+    CHECK(saveTabOrder(order.store(), model, &error));
+    CHECK(loadTabOrderNames(order.store(), &warning) == (std::vector<std::string>{"c", "a", "b"}) && warning.empty());
+    order.text = "not a tab order\n";
+    CHECK(loadTabOrderNames(order.store(), &warning).empty() && has(warning, "deleting it resets"));
+
+    MemoryStore selection;
+    SavedTab saved = loadSavedTab(selection.store(), &warning);
+    CHECK(saved.kind == TabKind::Sprint && warning.empty());
+    CHECK(saveSelectedTab(selection.store(), model, &error));
+    saved = loadSavedTab(selection.store(), &warning);
+    CHECK(saved.kind == TabKind::Friend && saved.name == "a" && warning.empty());
+    selection.text = "junk\n";
+    saved = loadSavedTab(selection.store(), &warning);
+    CHECK(saved.kind == TabKind::Sprint && has(warning, "deleting it resets the selection"));
 }
 
 void selectedTabTextRoundTrips() {
@@ -500,9 +459,178 @@ void selectedTerminalComesBackByPlace() {
     CHECK(again.select_tab(5));
 }
 
+// The kept drafts in memory, through the file's own text: what fileKeptDraftsStore does, but the OS (the lock, the
+// file), which tests/window/kept_drafts_functional.cpp covers.
+struct MemoryKept {
+    std::string text;                   // empty: no file yet
+    std::string readError;
+    std::string writeError;
+    KeptDraftsStore store() {
+        KeptDraftsStore s;
+        s.where = "/fake/kept-drafts.txt";
+        s.read = [this](KeptFile* file, std::string* error) {
+            file->clear();
+            if (!readError.empty()) {
+                *error = readError;
+                return false;
+            }
+            return text.empty() || parseKeptDrafts(text, file, error);
+        };
+        s.update = [this](const KeptChange& change, std::string* error) {
+            KeptFile file;
+            if (!readError.empty() || !writeError.empty()) {
+                *error = readError.empty() ? writeError : readError;
+                return false;
+            }
+            if (!text.empty() && !parseKeptDrafts(text, &file, error)) {
+                return false;
+            }
+            applyKeptChange(&file, change);
+            text = formatKeptDrafts(file);
+            return true;
+        };
+        return s;
+    }
+};
+
+// The kept drafts' file: any bytes of a draft come back as typed (newlines, a line that looks like a header, non-ASCII,
+// a draft line inside a draft), each under its server and friend; a file cut short, with a bad length, a bad server or
+// friend, or not of this kind reads as nothing, and says so.
+void keptDraftsTextRoundTrips() {
+    const KeptFile drafts{{{"studio", "ada"}, "two\nlines\n"}, {{"studio", "bo"}, "draft x y 9\nnexus kept drafts 2\n"},
+        {{"me@mini", "cy"}, "zhi yǎ wén"}, {{"studio", "dee"}, std::string("a\0b", 3)}, {{"mini", "ada"}, "other"}};
+    KeptFile read;
+    std::string error;
+    CHECK(parseKeptDrafts(formatKeptDrafts(drafts), &read, &error) && read == drafts);
+    CHECK(parseKeptDrafts(formatKeptDrafts({}), &read, &error) && read.empty());
+    const std::string text = formatKeptDrafts({{{"studio", "ada"}, "hello"}});
+    CHECK(text == "nexus kept drafts 2\ndraft studio ada 5\nhello\n");
+    CHECK(!parseKeptDrafts(text.substr(0, text.size() - 1), &read, &error) && has(error, "cut short") && read.empty());
+    CHECK(!parseKeptDrafts(text.substr(0, text.size() - 3), &read, &error) && has(error, "cut short"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s ada x\nhello\n", &read, &error) && has(error, "not a number"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft ada 5\nhello\n", &read, &error) && has(error, "<server>"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ns ada 5\nhello\n", &read, &error) && has(error, "<server>"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s .ada 1\na\n", &read, &error) && has(error, "<friend>"));
+    CHECK(!parseKeptDrafts("nexus kept drafts 2\ndraft s ada 1\na\ndraft s ada 1\nb\n", &read, &error) &&
+          has(error, "two drafts"));
+    CHECK(parseKeptDrafts("nexus kept drafts 2\ndraft s ada 1\na\ndraft t ada 1\nb\n", &read, &error) &&
+          read.size() == 2);
+    CHECK(!parseKeptDrafts("nexus kept drafts 1\ndraft ada 1\na\n", &read, &error) && has(error, "first line"));
+    CHECK(!parseKeptDrafts("alex\n", &read, &error) && has(error, "first line"));
+    CHECK(!parseKeptDrafts("", &read, &error));
+}
+
+// What can key a draft: a host as ssh takes it, never a space or a control byte.
+void keptServersAreOneWord() {
+    CHECK(keptServer("studio") && keptServer("me@studio.local") && keptServer("10.0.0.2") && keptServer("[::1]"));
+    CHECK(!keptServer("") && !keptServer("two words") && !keptServer("tab\there") && !keptServer("line\n") &&
+          !keptServer(std::string("nul\0", 4)) && !keptServer("del\x7f") && !keptServer(std::string(256, 'h')));
+    CHECK(keptServer(std::string(255, 'h')));
+}
+
+// A change of the file: a put joins another window's draft for the same server and friend rather than replacing it;
+// a take leaves only what was given back, and only while the file still holds exactly that; other servers' drafts are
+// never touched.
+void keptChangesMerge() {
+    KeptFile file{{{"mini", "ada"}, "on mini"}};
+    applyKeptChange(&file, KeptChange{"studio", {{"ada", "from A"}}, {}});
+    applyKeptChange(&file, KeptChange{"studio", {{"ada", "from B"}, {"bo", "to bo"}}, {}});
+    CHECK(file.at({"studio", "ada"}) == "from A\n\nfrom B" && file.at({"studio", "bo"}) == "to bo");
+    CHECK(file.at({"mini", "ada"}) == "on mini");
+    applyKeptChange(&file, KeptChange{"studio", {{"bo", "to bo"}, {"cy", ""}}, {}});
+    CHECK(file.at({"studio", "bo"}) == "to bo" && file.count({"studio", "cy"}) == 0);
+    // A window that gave back only "from A" (it read the file before B's draft was joined) takes nothing.
+    applyKeptChange(&file, KeptChange{"studio", {}, {{"ada", "from A"}}});
+    CHECK(file.at({"studio", "ada"}) == "from A\n\nfrom B");
+    applyKeptChange(&file, KeptChange{"studio", {}, {{"ada", "from A\n\nfrom B"}, {"bo", "to bo"}}});
+    CHECK(file.count({"studio", "ada"}) == 0 && file.count({"studio", "bo"}) == 0);
+    CHECK(file.size() == 1 && file.at({"mini", "ada"}) == "on mini");
+    CHECK((keptFor(file, "mini") == std::map<std::string, std::string>{{"ada", "on mini"}}) &&
+          keptFor(file, "studio").empty() && keptFor(file, "min").empty());
+}
+
+// Saved and loaded through a store, for one server; a file that does not read is left as it is: none kept, not
+// readable, a warning.
+void keptDraftsSaveAndLoad() {
+    MemoryKept mem;
+    bool readable = false;
+    std::string warning;
+    CHECK(loadKeptDrafts(mem.store(), "studio", &readable, &warning).empty() && readable && warning.empty());
+    std::string error;
+    CHECK(saveKeptChange(mem.store(), KeptChange{"studio", {{"ada", "kept"}}, {}}, &error));
+    CHECK(saveKeptChange(mem.store(), KeptChange{"mini", {{"ada", "elsewhere"}}, {}}, &error));
+    const std::map<std::string, std::string> back = loadKeptDrafts(mem.store(), "studio", &readable, &warning);
+    CHECK(back.size() == 1 && back.at("ada") == "kept" && readable && warning.empty());
+    CHECK(loadKeptDrafts(mem.store(), "mini", &readable, &warning).at("ada") == "elsewhere");
+    mem.text = "something else\n";
+    CHECK(loadKeptDrafts(mem.store(), "studio", &readable, &warning).empty() && !readable);
+    CHECK(has(warning, "/fake/kept-drafts.txt") && has(warning, "left as it is"));
+    CHECK(!saveKeptChange(mem.store(), KeptChange{"studio", {{"bo", "x"}}, {}}, &error) && has(error, "first line"));
+    CHECK(mem.text == "something else\n");
+    mem.readError = "permission denied";
+    CHECK(loadKeptDrafts(mem.store(), "studio", &readable, &warning).empty() && !readable &&
+          has(warning, "permission denied"));
+    mem.readError.clear();
+    mem.writeError = "disk full";
+    CHECK(!saveKeptChange(mem.store(), KeptChange{"studio", {}, {}}, &error) && has(error, "disk full") &&
+          has(error, "/fake/kept-drafts.txt"));
+}
+
+// A removed friend's draft across a restart of the window: kept as the tab goes, saved, read back by the next launch
+// (main.cpp loadKeptDrafts into the strip), and given back when the server's list names the friend again.
+void keptDraftsAcrossARestart() {
+    const auto list = [](std::initializer_list<const char*> names) {
+        sync::Sessions s;
+        std::vector<sync::ServerFriend> friends;
+        for (const char* n : names) {
+            friends.push_back(sync::ServerFriend{n});
+        }
+        s.setFriends(std::move(friends));
+        return s;
+    };
+    MemoryKept mem;
+    std::string error;
+    {
+        Model model({});
+        sync::FriendStrip strip;
+        strip.take(model, list({"ada", "bo"}));
+        CHECK(model.set_draft(1, "a prompt\nfor bo"));
+        sync::StripTake t = strip.take(model, list({"ada"}));
+        CHECK(t.keptChanged && t.put.size() == 1 && t.taken.empty());
+        CHECK(saveKeptChange(mem.store(), KeptChange{"studio", std::move(t.put), std::move(t.taken)}, &error));
+    }
+    bool readable = false;
+    std::string warning;
+    // Another server's window finds nothing for its bo.
+    {
+        Model model({});
+        sync::FriendStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "mini", &readable, &warning));
+        strip.take(model, list({"ada", "bo"}));
+        CHECK(readable && model.tab(1).name == "bo" && model.tab(1).draft.empty());
+    }
+    Model model({});
+    sync::FriendStrip strip({}, std::string(), loadKeptDrafts(mem.store(), "studio", &readable, &warning));
+    CHECK(readable && warning.empty() && strip.kept().size() == 1);
+    strip.take(model, list({"ada"}));
+    CHECK(model.tab_count() == 1 && strip.kept().size() == 1);
+    sync::StripTake back = strip.take(model, list({"ada", "bo"}));
+    CHECK(back.keptChanged && model.tab_count() == 2 && model.tab(1).name == "bo");
+    CHECK(model.tab(1).draft == "a prompt\nfor bo" && strip.kept().empty());
+    CHECK(back.put.empty() && back.taken.size() == 1 && back.taken[0].second == "a prompt\nfor bo");
+    CHECK(saveKeptChange(mem.store(), KeptChange{"studio", std::move(back.put), std::move(back.taken)}, &error));
+    CHECK(loadKeptDrafts(mem.store(), "studio", &readable, &warning).empty());
+}
+
 } // namespace
 
 int main() {
+    keptDraftsAcrossARestart();
+    novaConfigIsTheLoginShellOrTheOverride();
+    commandProblemsSayWhatToDo();
+    keptDraftsTextRoundTrips();
+    keptServersAreOneWord();
+    keptChangesMerge();
+    keptDraftsSaveAndLoad();
     terminalDirectoriesFollowTheStrip();
     terminalsTextRoundTrips();
     terminalsLoadAndFallBack();
@@ -518,16 +646,7 @@ int main() {
     terminalTabsAreNeverSaved();
     sprintTabIsNeverSavedAndStaysFirst();
     badStoreUsesTheLoadedOrderAndSaysSo();
-    parsesEnabledFriendsInOrder();
-    reportsWhatIsWrong();
-    commandIsTheLoginShellOrTheOverride();
-    validListLoads();
-    emptyListSaysWhatToDo();
-    malformedJsonSaysWhatToDo();
-    commandNotFoundSaysWhatToDo();
-    failureWithEmptyStderrNamesTheCommand();
-    failureWithStderrCarriesIt();
-    timeoutSaysSo();
+    savedNamesAndTabLoadAlone();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

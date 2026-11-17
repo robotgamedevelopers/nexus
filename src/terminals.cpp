@@ -12,7 +12,7 @@
 #include "pr/vterm.h"
 
 #include "foreground.h"
-#include "friends.h"
+#include "command.h"
 #include "style.h"
 #include "terminal_launch.h"
 
