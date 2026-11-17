@@ -349,14 +349,14 @@ void caseCrashEveryStep(const fs::path& work, const std::string& serverDir, cons
         std::vector<std::string> steps;
         {
             Options opts;
-            opts.start_wait_ms = 1500;
             opts.hook = [&](const std::string& s) {
-                if (s != "idle") {
+                if (s != "idle" && (steps.empty() || steps.back() != s)) {
                     steps.push_back(s);
                 }
             };
             Result r;
-            (void)command(serverDir, {target}, opts, r);
+            const int dryRc = command(serverDir, {target}, opts, r);
+            CHECK(dryRc == (target == b2 ? kExitOk : kExitRolledBack));
         }
         CHECK(!steps.empty());
 
@@ -374,21 +374,24 @@ void caseCrashEveryStep(const fs::path& work, const std::string& serverDir, cons
                 CHECK(command(serverDir, {"resume"}, {}, r) == kExitOk);
             }
 
-            // Fork a child that crashes abruptly (_exit(99)) at step `cut`.
+            // Fork a child that crashes abruptly (_exit(99)) on entering distinct phase transition `cut`.
             const pid_t pid = ::fork();
             CHECK(pid >= 0);
             if (pid == 0) {
                 std::size_t seen = 0;
+                std::string lastStep;
                 Options opts;
-                opts.start_wait_ms = 1500;
                 opts.hook = [&](const std::string& s) {
-                    if (s != "idle" && seen++ == cut) {
-                        // Also plant a leftover `.state-torn` when past lock to test leftover cleanup on real disk.
-                        if (seen > 1) {
-                            std::ofstream torn(serverDir + "/handover/.state-torn", std::ios::binary);
-                            torn << "partial";
+                    if (s != "idle" && s != lastStep) {
+                        lastStep = s;
+                        if (seen++ == cut) {
+                            // Also plant a leftover `.state-torn` when past lock to test leftover cleanup on real disk.
+                            if (seen > 1) {
+                                std::ofstream torn(serverDir + "/handover/.state-torn", std::ios::binary);
+                                torn << "partial";
+                            }
+                            ::_exit(99);
                         }
-                        ::_exit(99);
                     }
                 };
                 Result r;
@@ -401,7 +404,6 @@ void caseCrashEveryStep(const fs::path& work, const std::string& serverDir, cons
 
             // Resume in this process: must recover to a working build (B1 or B2), remove state & leftovers, exit 0!
             Options resOpts;
-            resOpts.start_wait_ms = 2000;
             Result rr;
             CHECK(command(serverDir, {"resume"}, resOpts, rr) == kExitOk);
             CHECK(!fs::exists(fs::path(serverDir) / "handover/state"));
