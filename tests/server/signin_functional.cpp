@@ -560,7 +560,18 @@ void caseCrashed() {
         Run r;
         setUp(r, "silent");
         r.runner->start(7, "claude-main");
-        _exit(r.runner->running("claude-main") && failures == 0 ? 0 : 1);    // no destructor: as a crash leaves it
+        // Wait until the fake program has checked its terminal and written its greeting: on Linux, closing the pty
+        // master in _exit() hangs up the slave (hung_up_tty_ioctl -> EIO), so isatty(0) returns 0 if called after.
+        std::vector<pollfd> fds = r.runner->fds();
+        bool spoke = false;
+        const std::uint64_t readyUntil = nowMs() + 5000;
+        while (fds.size() >= 2 && !spoke && nowMs() < readyUntil) {
+            fds[1].revents = 0;
+            if (poll(&fds[1], 1, 50) > 0 && (fds[1].revents & POLLIN) != 0) {
+                spoke = true;
+            }
+        }
+        _exit(spoke && r.runner->running("claude-main") && failures == 0 ? 0 : 1);    // no destructor: as a crash leaves it
     }
     CHECK(child > 0);
     int status = 0;
