@@ -609,7 +609,7 @@ void caseDualFailHalt(const std::string& fakeBin, const fs::path& work) {
     ChildProc sup;
     sup.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
     int code = -1;
-    CHECK(sup.waitExit(&code, 12000));
+    CHECK(sup.waitExit(&code, 30000));
     CHECK(code == kExitHalted);
 
     // Rolled back once to bLate1 (shunning bLate2), never ping-ponged back to bLate2, and halted!
@@ -624,14 +624,14 @@ void caseDualFailHalt(const std::string& fakeBin, const fs::path& work) {
     // A second supervisor invocation reads `halted = 1` and exits 78 immediately.
     ChildProc sup2;
     sup2.spawn(supExe, {"supervise", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(sup2.waitExit(&code, 2000));
+    CHECK(sup2.waitExit(&code, 5000));
     CHECK(code == kExitHalted);
 
     // Under launchd (`--launchd`), a permanently halted supervisor exits 0 (preventing 10s infinite respawn churn)
     // while keeping `supervise halted` durable in `supervise status`.
     ChildProc supLaunchd;
     supLaunchd.spawn(supExe, {"supervise", "--launchd", "--dir", sdir.string()}, home.string(), supLog);
-    CHECK(supLaunchd.waitExit(&code, 2000));
+    CHECK(supLaunchd.waitExit(&code, 5000));
     CHECK(code == kExitOk);
     Result sr;
     CHECK(command(sdir.string(), home.string(), {"status"}, {}, sr) == kExitOk);

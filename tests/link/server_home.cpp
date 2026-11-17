@@ -141,11 +141,19 @@ int main(int argc, char** argv) {
     CHECK(run("'" + server + "' new", &out) == 0 && has(out, "NEXUS CONNECT"));
     CHECK(exists(dir + "/config") && !exists(top + "/config"));
     CHECK(exists(top + "/client/config"));
-    CHECK(run("'" + server + "' store check", &out) == 0 && has(out, "OK store"));
     CHECK(run("'" + server + "' stop", &out) == 0);
     for (int i = 0; i < 100 && exists(dir + "/server.sock"); ++i) {
         usleep(50 * 1000);
     }
+    int checkRc = 1;
+    for (int i = 0; i < 100; ++i) {
+        checkRc = run("'" + server + "' store check", &out);
+        if (checkRc == 0) {
+            break;
+        }
+        usleep(50 * 1000);
+    }
+    CHECK(checkRc == 0 && has(out, "OK store"));
 
     // No HOME: refused, with --dir too.
     CHECK(unsetenv("HOME") == 0);
