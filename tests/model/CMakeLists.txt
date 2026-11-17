@@ -85,8 +85,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # (stay, harness). Called from tests/accounts.
 # With RECONNECTWALK, it is tests/sync's reconnect_walk (the window's link making its session again), and FAULTY one of
 # its faults (cached, no-reset). Called from tests/sync.
-# With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk and the windows' prompts), and FAULTY
-# one of its faults (store-late, echo). Called from tests/sync.
+# With SECWALK, it is tests/sync's secrets_walk (the secret dialog: the hub's desk, Drivers over a fake harness, and
+# the windows' prompts), and FAULTY one of its faults (store-late, echo, driver, driver-echo). Called from tests/sync.
 # With DRIVERWALK, it is the Claude driver's walk (drivers/claude/test/walk.ts, run under Node from its dist/), and
 # FAULTY one of its faults (settings, refusal, latch, secret); with DRIVERTESTS, the traces are those of the driver's unit
 # tests (test/unit/driver.test.ts). Both need `npm ci && npm run build` in drivers/claude first. Called from
@@ -468,7 +468,7 @@ tlc_test(tlc_watch_trace_faulty_stale_rejected TerminalWatchTrace TerminalWatchT
 # shape and a failing disk), every property, and a witness per
 # property, per commit (each a second or two); its four larger instances nightly (MCSecretsTwo.cfg took 7 s of the
 # model job's 2 minutes; MCSecretsBadTwo.cfg, two requests, 57 s, past the per-commit cap). Bound to the code by trace checks: tests/sync's secrets_walk, tlc_secrets_trace_*.
-tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass)
+tlc_test(tlc_secrets_spec      MCSecrets MCSecrets.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_secrets_spec_one  MCSecrets MCSecretsOne.cfg   pass)
 tlc_test(tlc_secrets_spec_old  MCSecrets MCSecretsOld.cfg   pass)
 tlc_test(tlc_secrets_spec_two  MCSecrets MCSecretsTwo.cfg   pass WORKERS 4 NIGHTLY)

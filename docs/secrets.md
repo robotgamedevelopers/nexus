@@ -374,25 +374,27 @@ model's do).
 ## Binding and leak tests
 
 **The trace binding.** `tests/sync/secrets_walk` drives the hub, the state's codec, the actions, each window's prompt,
-the real `AccountFiles` (over the in-memory filesystem, at every write) and the real `SecretLines` (the server's
-encoder of each driver line and each `server.log` line) at random, and TLC checks each trace against
-`models/SecretsTrace.tla` with every safety property. Each record of the code's state is built from the bytes each
-sink received: the driver line and the answer's reason, the session lines and every entry of the store, the log line,
-and every diff sent to each window. Wherever any run of 8 bytes, hex, base64 or length of a value is found in them
-(`tests/leak_scan.h`), the record holds that value's model value. `SecretsTrace.tla` checks the four no-value
-properties on those code records too (`CodeNoSecretToAsker`, `CodeNoSecretInTranscript`, `CodeNoSecretInLog`,
-`CodeNoSecretToWindows`), so a value that reaches a sink in the code fails TLC whatever the spec allows. The faulty
-walks must be rejected: `--faulty-store-late` (a late answer stored anyway) by `TraceMatches`, and `--faulty-echo` by
-`CodeNoSecretInLog`. The walk also fails and heals the disk under the keeper (a write that fails, or lands
-unconfirmed), pastes a value not of a token's shape one time in five, lets answers cross deadlines and restarts the
-server with values held, so `ReceivedNeverDropped`, `StoredOnlyDurable` and `NoMalformedStored` are checked on the
-code's own traces. The echo is injected into the code (`SecretDesk::injectEchoFault`, a test seam that puts the
-value into the log event of a stored answer), not into the walk's record.
-
-Not in the walk yet: `Drivers`, the process table that writes each `secret` line to its driver's standard input. Driving
-it needs real driver processes, a poll loop and real time per asker, which the walk (logic only, no time) cannot hold;
-a fake harness that stands in for the processes inside the walk is about 400 to 600 lines (roadmap
-`secrets-walk-drivers`). Until then the real-process tests below are its guard.
+the real `AccountFiles` (over the in-memory filesystem, at every write), the real `SecretLines` (the server's encoder
+of each driver line and each `server.log` line) and the real `Drivers` (over an in-memory `Drivers::Host` harness, with
+`Drivers::hold` and `Drivers::release` around each step) at random, and TLC checks each trace against
+`models/SecretsTrace.tla` with every safety property. Each friend session's fake driver checks that `server`
+(`features: ["secrets"]`) arrives on its standard input before `send`, writes `ask-secret` lines on its standard output
+for `Drivers::serve` to read, and decodes every `secret` line arriving on its standard input with `driver::LineReader`
+and `decodeServerMessage`. Each record of the code's state is built from the bytes each sink received: for a session
+asker, solely the `secret` line decoded off its driver's standard input (and for nexus's own sign-in asks, the hub's
+reply), the session lines and every entry of the store, the log line, and every diff sent to each window. Wherever any
+run of 8 bytes, hex, base64 or length of a value is found in them (`tests/leak_scan.h`), the record holds that value's
+model value. `SecretsTrace.tla` checks the four no-value properties on those code records too (`CodeNoSecretToAsker`,
+`CodeNoSecretInTranscript`, `CodeNoSecretInLog`, `CodeNoSecretToWindows`), so a value that reaches a sink in the code
+fails TLC whatever the spec allows. The faulty walks must be rejected: `--faulty-store-late` (a late answer stored
+anyway) and `--faulty-driver` (a session asker's `secret` line dropped before `Drivers::tellSecret`, so its driver's
+standard input never receives it) by `TraceMatches`, `--faulty-echo` by `CodeNoSecretInLog`, and `--faulty-driver-echo`
+(a stored answer's `secret` line carrying the value onto the driver's standard input) by `CodeNoSecretToAsker`. The
+walk also fails and heals the disk under the keeper (a write that fails, or lands unconfirmed), pastes a value not of a
+token's shape one time in five, lets answers cross deadlines and restarts the server with values held, so
+`ReceivedNeverDropped`, `StoredOnlyDurable` and `NoMalformedStored` are checked on the code's own traces. The echo is
+injected into the code (`SecretDesk::injectEchoFault`, a test seam that puts the value into the log event of a stored
+answer), not into the walk's record.
 
 **The leak tests.** Each searches with `tests/leak_scan.h` (any run of 8 or more of the value's bytes, its hex in
 either case, its base64 standard and URL-safe at each alignment, and its length printed as a number within 64 bytes of

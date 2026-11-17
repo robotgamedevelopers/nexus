@@ -36,9 +36,10 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(link_walk PRIVATE nexus_sync)
     target_compile_options(link_walk PRIVATE ${warnings})
 
-    # The secret dialog's walk (src/sync/secrets.h through the hub, and the windows' prompts), for SecretsTrace.tla.
+    # The secret dialog's walk (src/sync/secrets.h through the hub and Drivers over a fake harness, and the windows'
+    # prompts), for SecretsTrace.tla.
     add_executable(secrets_walk secrets_walk.cpp)
-    target_link_libraries(secrets_walk PRIVATE nexus_durable)
+    target_link_libraries(secrets_walk PRIVATE nexus_durable nexus_drivers)
     target_include_directories(secrets_walk PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     target_compile_options(secrets_walk PRIVATE ${warnings})
 
@@ -149,8 +150,16 @@ foreach(seed 1 2 3 4)
     tlc_test(tlc_secrets_trace_tables_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
              FORMAT 4)
 endforeach()
+foreach(seed 1 2 3 4)
+    tlc_test(tlc_secrets_trace_format5_seed_${seed} SecretsTrace SecretsTrace.cfg pass SECWALK SEED ${seed} STEPS 2000
+             FORMAT 5)
+endforeach()
 tlc_test(tlc_secrets_trace_tables_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
          SECWALK SEED 1 STEPS 2000 FAULTY echo FORMAT 4)
+tlc_test(tlc_secrets_trace_tables_faulty_driver_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
+         SECWALK SEED 1 STEPS 2000 FAULTY driver FORMAT 4)
+tlc_test(tlc_secrets_trace_tables_faulty_driver-echo_rejected SecretsTrace SecretsTrace.cfg invariant
+         PROPERTY CodeNoSecretToAsker SECWALK SEED 1 STEPS 2000 FAULTY driver-echo FORMAT 4)
 # Seed 9: a walk with late answers in it (two, both played); with the held values in the walk, seed 1 has none.
 tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
          SECWALK SEED 9 STEPS 2000 FAULTY store-late)
@@ -158,6 +167,12 @@ tlc_test(tlc_secrets_trace_faulty_store-late_rejected SecretsTrace SecretsTrace.
 # code-side invariant names it.
 tlc_test(tlc_secrets_trace_faulty_echo_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY CodeNoSecretInLog
          SECWALK SEED 1 STEPS 2000 FAULTY echo)
+# A session asker's `secret` line dropped before Drivers::tellSecret never reaches the driver's standard input, and one
+# carrying the value on the driver's standard input is caught by CodeNoSecretToAsker.
+tlc_test(tlc_secrets_trace_faulty_driver_rejected SecretsTrace SecretsTrace.cfg invariant PROPERTY TraceMatches
+         SECWALK SEED 1 STEPS 2000 FAULTY driver)
+tlc_test(tlc_secrets_trace_faulty_driver-echo_rejected SecretsTrace SecretsTrace.cfg invariant
+         PROPERTY CodeNoSecretToAsker SECWALK SEED 1 STEPS 2000 FAULTY driver-echo)
 
 # Trace binding of in-app sign-in (models/SignInTrace.tla): the code's random walks (signin_walk), each a behaviour of
 # SignIn.tla with every safety property, the windows' views never holding a login and no log line any value. The
