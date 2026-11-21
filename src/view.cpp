@@ -45,6 +45,7 @@ enum class Part : unsigned char {
     MessageCard,
     FocusedCard,
     ActionRow,
+    ReplyRow,
     Footer,
     Prompt,
     StripRow,
@@ -128,6 +129,7 @@ struct BoxRecipe {
                 box.margin[PrRectSide_Top] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Bottom] = prLayoutLengthAuto();
                 break;
+            case Part::ReplyRow:
             case Part::Entry:
                 box.display = PrLayoutDisplay_Flex;
                 break;
@@ -265,10 +267,20 @@ struct FlexRecipe {
                 flex.shrink = 0;
                 break;
             case Part::ActionRow:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.grow = 1;
+                flex.basis = px(0);
+                flex.alignItems = PrLayoutAlignment_Center;
+                flex.justifyContent = PrLayoutAlignment_Center;
+                break;
             case Part::MessageCard:
             case Part::FocusedCard:
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.shrink = 0;
+                break;
+            case Part::ReplyRow:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.alignItems = PrLayoutAlignment_FlexStart;
                 break;
             case Part::Entry:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -384,18 +396,6 @@ struct Builder {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
 
-    PrLayoutNode cardText(PrLayoutNode parent, std::string_view text) {
-        auto body = textStyle(PrKitTextRole_Display, PrKitTone_Inverse);
-        body.wrap = PrKitWrap_Wrap;
-        return label(parent, text, body);
-    }
-
-    PrLayoutNode message(PrLayoutNode parent, std::string_view text, PrUiKey key = 0) {
-        const auto card = element(parent, Part::MessageCard, 0, key);
-        cardText(card, text);
-        return card;
-    }
-
     void accountPanel(PrLayoutNode parent) {
         const std::string action = view.signInCaption ? view.signInCaption() : std::string();
         if (action.empty()) {
@@ -409,8 +409,8 @@ struct Builder {
         const auto appearance = prUiFocus(ui) == button || prUiIsHovered(ui, button) ?
             Part::FocusedCard : Part::MessageCard;
         prLayoutTreeFrameSetStyle(tree, button, style(ui, look, appearance));
-        cardText(button, action);
-        label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse));
+        label(button, action, textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center));
+        label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center));
         if (prKitActivated(kit, button) && view.activateSignIn)
             view.activateSignIn();
     }
@@ -761,8 +761,7 @@ struct Builder {
     // The heights of the items the last round declared, from the last layout, with the gap after each; and the
     // column's width. After a change of the text scale every height is laid out again.
     void measure(TranscriptItems& items, bool switched) {
-        if (items.steps != look.textSteps || items.cardSize != look.messageCard.textSize) {
-            items.cardSize = look.messageCard.textSize;
+        if (items.steps != look.textSteps) {
             std::fill(items.height.begin(), items.height.end(), 0.0f);
             items.steps = look.textSteps;
         }
@@ -791,11 +790,15 @@ struct Builder {
         if (kind == EntryKind::Tool)
             return float(items.count[i]) * kToolPitch * s + float(items.count[i] - 1) * kToolGap * s + gap;
         // Characters of the body face are about half its size wide.
-        const bool incoming = kind == EntryKind::Friend || kind == EntryKind::Notice;
-        const float font = incoming ? look.messageCard.textSize : kBodySize;
-        const float width = std::max(items.width * (incoming ? 1.0f : kBubbleMaxPercent / 100) - 2 * kBubblePadX * s, 1.0f);
-        const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * 0.5f * font * s / width);
-        return (rows * 1.42f * font + 2 * kBubblePadY) * s + gap;
+        const float perChar = 0.5f * kBodySize * s;
+        float width = std::max(items.width, 1.0f);
+        float pad = 0;
+        if (kind == EntryKind::Person || kind == EntryKind::Friend) {
+            width = std::max(width * kBubbleMaxPercent / 100 - 2 * kBubblePadX * s, 1.0f);
+            pad = 2 * kBubblePadY * s;
+        }
+        const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
+        return rows * kLinePitch * s + pad + gap;
     }
 
     // Declares the items from the scroll's `offset` (or the end) a screen either side of the `viewport`, the spacers
@@ -876,15 +879,16 @@ struct Builder {
         const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 2, i);
         const Entry& e = tab.transcript[items.first[i]];
         switch (e.kind) {
-            case EntryKind::Person: {
-                PrLayoutNode entry = element(column, Part::Entry, 0, key);
+            case EntryKind::Person:
+            case EntryKind::Friend: {
+                PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = element(entry, Part::Bubble);
                 label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
                 return entry;
             }
-            case EntryKind::Friend:
             case EntryKind::Notice:
-                return message(column, e.text, key);
+                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
+                    textStyle(PrKitTextRole_Body, PrKitTone_Muted));
             case EntryKind::Tool:
                 break;
         }
@@ -900,16 +904,17 @@ struct Builder {
     // keeps its text, so only the last is set again as text arrives.
     void paragraphs(PrLayoutNode column, const Tab& tab, const std::string& text) {
         const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, (uint64_t(tab.id) << 8) | 3, 0);
-        PrLayoutNode card = element(column, Part::MessageCard, 0, key);
-        PrLayoutNode box = element(card, Part::Paragraphs);
+        PrLayoutNode row = element(column, Part::ReplyRow, 0, key);
+        PrLayoutNode box = element(element(row, Part::Bubble), Part::Paragraphs);
+        const PrKitTextStyle body = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
         std::size_t at = 0;
         while (at <= text.size()) {
             std::size_t blank = text.find("\n\n", at);
             if (blank == std::string::npos) {
-                cardText(box, std::string_view(text).substr(at));
+                label(box, std::string_view(text).substr(at), body);
                 break;
             }
-            cardText(box, std::string_view(text).substr(at, blank - at));
+            label(box, std::string_view(text).substr(at, blank - at), body);
             at = blank + 2;
         }
     }
@@ -966,12 +971,12 @@ struct Builder {
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
         if (!view.problem.empty()) {
-            message(column, view.problem);
+            label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
         }
         // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
         // to show it, so it stands just above the prompt.
         if (!view.cut.empty() && view.cutTab == tab.id) {
-            message(column, view.cut);
+            label(column, view.cut, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
         }
         // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
         const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
@@ -1143,10 +1148,11 @@ struct Builder {
             }
             return;
         }
-        const auto instructions = element(body, Part::MessageCard);
-        cardText(instructions, asking->asker.empty() ? std::string("asked by nexus") : "asked by " + asking->asker);
-        if (!asking->why.empty())
-            cardText(instructions, "“" + asking->why + "”");
+        label(body, asking->asker.empty() ? std::string("asked by nexus") : "asked by " + asking->asker,
+              textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+        if (!asking->why.empty()) {
+            label(body, "“" + asking->why + "”", textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+        }
         const bool enter = prUiKeyCaptured(ui, body, PrAppKey_Enter, 0);
         PrKitTextField field{};
         field.key = prUiKey(ui, kPrLayoutNodeNone, sv("secret-field"));
@@ -1236,7 +1242,8 @@ struct Builder {
             const char* kind = !active ? "empty" : active->kind == TabKind::Friend ? "friend" :
                 active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
             view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
-                !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string());
+                !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string(),
+                active && active->kind == TabKind::Friend && view.signInCaption && !view.signInCaption().empty());
         };
         describe();
         if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
@@ -1384,7 +1391,8 @@ struct Builder {
                     break;
                 }
                 case Panel::Status:
-                    message(element(window, Part::ActionRow), view.status);
+                    label(element(window, Part::Footer), view.status,
+                        textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
                     break;
             }
         }

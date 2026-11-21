@@ -56,6 +56,8 @@ def _panels(state):
         return ["terminal"]
     if state["tab"] == "sprint":
         return ["board"]
+    if state["tab"] == "friend" and state["prompt_open"] and state.get("needs_sign_in", False):
+        return ["account", "prompt"]
     panels = ["transcript"]
     if state["tab"] == "friend":
         if state["prompt_open"]:

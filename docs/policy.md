@@ -83,7 +83,7 @@ server still owns account eligibility and the durable session move. The client o
 
 ## The window and conversation applications
 
-A client profile can customize incoming messages and sign-in prompts by setting `message_card` in
+Conversation turns use dark bubbles. The person’s messages align right and the friend’s replies align left, including while streaming. Notices use ordinary muted text. When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer. A client profile can customize this card by setting `message_card` in
 `config.json` or returning it from `app.window`. Its defaults are
 `{"fill":"#ffffff","ink":"#000000","text_size":34,"radius":20}`. Colors are opaque `#RRGGBB`.
 The text size (12–72 points) and corner radius (0–64 points) scale with keyboard zoom.

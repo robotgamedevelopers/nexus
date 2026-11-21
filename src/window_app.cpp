@@ -266,7 +266,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 } // namespace
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
-    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group) {
+    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, bool needsSignIn) {
     std::string escapedGroup;
     for (const char c : group) {
         if (c == '\\' || c == '"') escapedGroup += '\\';
@@ -274,7 +274,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     }
     const auto context = std::string("{\"tab\":\"") + tab + "\",\"type\":\"" + type + "\",\"prompt_open\":" + (promptOpen ? "true" : "false") +
         ",\"has_status\":" + (hasStatus ? "true" : "false") + ",\"active_tab\":" + std::to_string(activeTab) +
-        ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
+        ",\"needs_sign_in\":" + (needsSignIn ? "true" : "false") + ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
     const bool sameContext = context == lastContext_;
     const auto generation = host.refresh();
     if (sameContext && generation == generation_) return;

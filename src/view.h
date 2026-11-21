@@ -118,7 +118,6 @@ struct TranscriptItems {
     std::vector<float> height;                  // px with the gap after it, as last laid out; 0 until it is
     std::vector<std::pair<std::uint32_t, PrLayoutNode>> declared;  // the items the last round declared, and nodes
     PrLayoutNode column = kPrLayoutNodeNone;    // the transcript's column, as the last round built it
-    float cardSize = 0;                         // scaled card metrics invalidate the measured transcript heights
     float width = 0;                            // the column's width at the last layout, px
     int steps = 0;                              // the text scale the heights were laid out at
 };

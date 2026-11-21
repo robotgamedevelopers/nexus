@@ -37,7 +37,7 @@ struct MessageCardStyle {
 class WindowApplication {
 public:
     void update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen, bool hasStatus,
-                std::size_t activeTab, std::size_t tabCount, const std::string& group = {});
+                std::size_t activeTab, std::size_t tabCount, const std::string& group = {}, bool needsSignIn = false);
     std::vector<Shortcut> shortcuts;
     std::vector<Panel> panels;
     std::map<std::string, TabType> types;

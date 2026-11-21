@@ -949,40 +949,53 @@ PrColor borderOf(const Harness& h, PrLayoutNode node, PrRectSide side) {
 
 // In the see-through overlay only the window background and the tab strip's fill let what is behind show through:
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
-void readableConversationCards() {
+void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
     h.view.growing = [&](std::size_t) { return &live; };
+    h.model.append(0, Entry{EntryKind::Person, "Hello"});
     h.model.append(0, Entry{EntryKind::Friend, "A reply."});
-    h.model.append(0, Entry{EntryKind::Notice, "The subscription login needs attention."});
-    h.view.signInCaption = [] { return std::string("Sign in to Work"); };
+    h.model.append(0, Entry{EntryKind::Notice, "Usage limit reached."});
+    h.frame();
+    h.frame();
+    const auto entries = h.entries();
+    CHECK(entries.size() == 4);
+    if (entries.size() != 4) return;
+    const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
+    for (auto i : {0, 1, 3}) {
+        const auto fill = fillOf(h, bubble(i));
+        CHECK(fill.a == 1 && fill.r < 0.2f && fill.g < 0.2f && fill.b < 0.2f);
+    }
+    CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
+    CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
+    CHECK(fillOf(h, entries[2]).a == 0);
+
+    h.view.signInCaption = [] { return "Sign in to Work"; };
     int activations = 0;
     h.view.activateSignIn = [&] { ++activations; return true; };
     h.frame();
     h.frame();
-    const auto cards = h.entries();
-    CHECK(cards.size() == 3);
-    for (const auto card : cards) {
-        auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, card));
-        auto d = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
-        const auto fill = prColorFromColor16(d.background);
-        CHECK(fill.a == 1 && fill.r == 1 && fill.g == 1 && fill.b == 1);
-        for (const auto r : d.radii)
-            CHECK(r.bits == prLayoutLengthPx(20).bits);
-        CHECK(h.height(card) > h.kit->theme.types[PrKitTextRole_Display].lineHeight);
-    }
-    const auto color = prKitToneColor(h.kit, PrKitTone_Inverse);
-    CHECK(color.r == 0 && color.g == 0 && color.b == 0 && color.a == 1);
-    CHECK(h.kit->theme.types[PrKitTextRole_Display].size > h.kit->theme.types[PrKitTextRole_Body].size);
-    const auto footer = prLayoutNodeNextSibling(h.tree, h.view.transcript);
-    const auto button = prLayoutNodeFirstChild(h.tree, footer);
-    CHECK(button != kPrLayoutNodeNone && h.hasText(button, "Sign in to Work"));
-    if (button != kPrLayoutNodeNone) {
-        CHECK(h.hasText(button, "Press Enter or click to sign in."));
-        h.pointer(PrAppEventKind_PointerDown, h.centre(button));
-        h.pointer(PrAppEventKind_PointerUp, h.centre(button));
-        CHECK(activations == 1);
-    }
+    CHECK(!h.hasText(h.window(), "A reply."));
+    CHECK(h.view.prompt != kPrLayoutNodeNone);
+    auto area = prLayoutNodeFirstChild(h.tree, h.window());
+    while (area != kPrLayoutNodeNone && !h.hasText(area, "Sign in to Work"))
+        area = prLayoutNodeNextSibling(h.tree, area);
+    CHECK(area != kPrLayoutNodeNone);
+    if (area == kPrLayoutNodeNone) return;
+    const auto button = prLayoutNodeFirstChild(h.tree, area);
+    const auto fill = fillOf(h, button);
+    CHECK(fill.a == 1 && fill.r == 1 && fill.g == 1 && fill.b == 1);
+    CHECK(h.hasText(button, "Press Enter or click to sign in."));
+    CHECK(near(h.centre(button).x, h.centre(area).x));
+    CHECK(near(h.centre(button).y, h.centre(area).y));
+    CHECK(h.height(area) > 2 * h.height(button));
+    h.pointer(PrAppEventKind_PointerDown, h.centre(button));
+    h.pointer(PrAppEventKind_PointerUp, h.centre(button));
+    CHECK(activations == 1);
+    h.view.signInCaption = {};
+    h.frame();
+    CHECK(h.hasText(h.window(), "A reply."));
+    CHECK(!h.hasText(h.window(), "Sign in to Work"));
 }
 
 void overlayKeepsAllButTheBackgroundOpaque() {
@@ -2218,7 +2231,7 @@ int main(int argc, char** argv) {
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     noModelUnderThePrompt();
-    readableConversationCards();
+    conversationBubblesAndSignInCard();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
