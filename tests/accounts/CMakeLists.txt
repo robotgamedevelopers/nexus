@@ -57,6 +57,12 @@ foreach(mode auto pin)
     tlc_test(tlc_accounts_credit_trace_${mode} CreditHandoffTrace CreditHandoffTrace.cfg pass CREDITMODE ${mode})
 endforeach()
 
+tlc_test(tlc_accounts_model_limit_choice LimitChoice LimitChoice.cfg pass)
+tlc_test(tlc_accounts_model_limit_unapproved_rejected LimitChoice WLimitNoApproval.cfg invariant PROPERTY ChosenOnce)
+foreach(mode account model)
+    tlc_test(tlc_accounts_model_limit_trace_${mode} LimitChoiceTrace LimitChoiceTrace.cfg pass CREDITMODE fable-${mode})
+endforeach()
+
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant
          PROPERTY SessionLinked)

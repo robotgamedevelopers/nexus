@@ -9,7 +9,66 @@
 #include <string>
 #include <vector>
 
+namespace {
+
+int modelLimitTrace(bool switchAccount, const std::string& path) {
+    using namespace nexus;
+    sync::MemoryStore store;
+    sync::DriverState pause;
+    pause.modelLimitPending = true;
+    pause.nextTurn = 4;
+    pause.continuationPrompt = "unfinished";
+    pause.exhaustedAccounts = {"first"};
+    if (!store.commit(1, {sync::infoChange({"friend", "claude", "first", "fable", ""}),
+                          sync::SessionChange{nullptr, {}, pause}}, {}, 0, nullptr))
+        return 1;
+    sync::Hub hub(store);
+    accounts::Registry roster;
+    roster.accounts = {{"first", "claude"}, {"second", "claude"}};
+    roster.friends = {{"friend", {"first", "second"}, "first"}};
+    hub.useAccounts(roster, nullptr);
+    hub.reportSignedIn("first", true);
+    hub.reportSignedIn("second", true);
+
+    const auto offer = hub.state().find(1)->info;
+    const std::string choice = switchAccount ? "account" : "model";
+    sync::Action select{1, sync::ActionKind::ResolveLimit, 1,
+                        switchAccount ? offer.limitAccount : offer.limitModel, choice, offer.account};
+    select.request = offer.limitRequest;
+
+    std::ofstream out(path);
+    out << "---- MODULE CreditHandoffData ----\nTrace == <<\n";
+    auto record = [&](const sync::Hub& observer, bool fresh) {
+        const auto& session = *store.find(1);
+        out << "[choice |-> " << std::quoted(choice) << ", fresh |-> " << (fresh ? "TRUE" : "FALSE")
+            << ", account |-> " << std::quoted(session.info.account) << ", model |-> " << std::quoted(session.info.model)
+            << ", work |-> " << std::quoted(session.driver.continuationPrompt)
+            << ", pending |-> " << (session.driver.modelLimitPending ? "TRUE" : "FALSE")
+            << ", notices |-> " << session.transcript.size() << ", request |-> " << observer.state().find(1)->info.limitRequest << "]";
+    };
+    record(hub, false);
+    auto stale = select;
+    --stale.request;
+    hub.apply(stale);
+    out << ",\n";
+    record(hub, false);
+    hub.apply(select);
+    out << ",\n";
+    record(hub, true);
+    // The second window reconnects after the store committed the first window's choice.
+    sync::Hub restarted(store);
+    restarted.apply(select);
+    out << ",\n";
+    record(restarted, true);
+    out << "\n>>\n====\n";
+    return out ? 0 : 1;
+}
+
+} // namespace
+
 int creditHandoffTrace(const std::string& mode, const std::string& path) {
+    if (mode == "fable-account" || mode == "fable-model")
+        return modelLimitTrace(mode == "fable-account", path);
     using namespace nexus;
     sync::MemoryStore store;
     sync::Hub hub(store);
