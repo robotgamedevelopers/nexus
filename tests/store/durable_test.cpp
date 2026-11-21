@@ -482,6 +482,37 @@ void test_kinds() {
     }
 }
 
+// Reconnect uses the saved destination, including the extent of its address, in both log and snapshot recovery.
+void test_switch_notice_reconnect() {
+    const std::string address = "rotation@example.test";
+    const std::string switched = std::string(kAccountSwitchPrefix) + address + " (work)";
+    const auto end = static_cast<std::uint32_t>(kAccountSwitchPrefix.size() + address.size());
+    for (bool compact : {false, true}) {
+        store::MemFs fs;
+        {
+            server::DurableStore ds;
+            store::StoreOptions options;
+            if (compact) options.compact_bytes = 0;
+            CHECK(openOn(fs, ds, options));
+            Hub hub(ds);
+            CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
+            auto notice = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Notice, switched, true, end});
+            CHECK(hub.commit(1, {SessionChange{notice, {}}}, nullptr));
+        }
+        fs.crash(fs.plan_all(false));
+        server::DurableStore ds;
+        CHECK(openOn(fs, ds));
+        Hub hub(ds);
+        Sessions window;
+        window.apply_string(hub.state().init_diff());
+        const auto* session = window.find(1);
+        CHECK(session && session->entries.size() == 1);
+        if (session && session->entries.size() == 1) {
+            CHECK(session->entries[0]->text == switched && session->entries[0]->accountEmailEnd == end);
+        }
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -489,7 +520,7 @@ struct Group {
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
                          {"batch", test_batch}, {"batch_flush", test_batch_flush}, {"take", test_take},
-                         {"migrate", test_migrate}, {"kinds", test_kinds}};
+                         {"migrate", test_migrate}, {"kinds", test_kinds}, {"switch_notice_reconnect", test_switch_notice_reconnect}};
 
 } // namespace
 
