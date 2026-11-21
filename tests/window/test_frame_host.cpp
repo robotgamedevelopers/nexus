@@ -277,6 +277,11 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     };
     snapshot("claude", "home", false, 1);
     w.link.sent.clear();
+    const auto i = w.model.active();
+    w.model.set_draft(i, "/logout");
+    w.view.submit(i, true);
+    w.view.submit(i, false);
+    CHECK(w.link.sent.empty() && w.model.tab(i).draft == "/logout");
     w.view.accountCommand("next");
     CHECK(!w.view.signOut() && w.link.sent.size() == 1);
     snapshot("claude", "work", false, 9);

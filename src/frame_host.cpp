@@ -518,8 +518,8 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             return false;
         }
         const auto session = mirror.session(model->tab(model->active()).id);
-        if (accountSelections_.contains(session)) {
-            view->problem = "Wait for the server to confirm the account change before signing out.";
+        if (view->accountPicker || accountSelections_.contains(session)) {
+            view->problem = "Finish selecting the account before signing out.";
             return false;
         }
         if (accountState_.find(session)->info.harness != "claude") {
@@ -538,6 +538,10 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         return true;
     };
     view->submit = [this](std::size_t i, bool queue) {
+        if (i < model->tab_count() && model->tab(i).draft == "/logout") {
+            view->problem = "Use Enter in the friend composer to sign out.";
+            return;
+        }
         if (i == model->active() && activateSignIn()) return;
         std::string text;
         std::string why;
