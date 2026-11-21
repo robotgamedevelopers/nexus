@@ -6,6 +6,7 @@ import { closeSync, fstatSync, readFileSync, realpathSync, statSync } from 'node
 import { isAccount, openConfigDir, readAccount, type Account, type AccountRefusal } from './account.js';
 import { Driver, newSessionId, parseArguments, type Arguments, type Harness, type HarnessStart, type Host } from './driver.js';
 import { encode, kProtocolVersion, type DriverMessage } from './protocol.js';
+import { verifiedAccess } from './verified.js';
 import { kDataRoots, limitRefusal } from './wall.js';
 
 /** Where the driver runs, for a limited friend's checks: HOME, the platform, and how a path resolves. */
@@ -69,8 +70,8 @@ function isDirectory(path: string): boolean {
  * line ever holds the account's token.
  */
 export function prepare(argv: readonly string[], isDir: (path: string) => boolean,
-    findAccount: (name: string) => Account | AccountRefusal,
-    openConfig: (account: Account) => string | undefined = () => undefined,
+    findAccount: (name: string, verified: boolean) => Account | AccountRefusal,
+    openConfig: (account: Account, migrateSettings: boolean) => string | undefined = () => undefined,
     tools?: { cause: string; fix: string }, place: Place = kHere):
     { args: Arguments; account: Account } | { refusal: DriverMessage[] } {
     const hello: DriverMessage = { kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] };
@@ -116,11 +117,13 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
         return { refusal: [hello, { kind: 'error', cause: `no sandbox for the AI: ${tools.cause}`, fix: tools.fix,
             code: 'other' }] };
     }
-    const found = findAccount(args.account);
+    const found = findAccount(args.account, args.verified !== undefined);
     if (!isAccount(found)) {
         return { refusal: [hello, { kind: 'error', cause: found.cause, fix: found.fix, code: 'no-credential' }] };
     }
-    const config = openConfig(found);
+    // Only legacy accounts migrate old settings from their secret directory. A verified token cannot
+    // be used to detect a legacy credential accidentally embedded in those files.
+    const config = openConfig(found, args.verified === undefined);
     if (config !== undefined) {
         return { refusal: [hello, { kind: 'error', cause: `the account ${found.name}'s Claude state: ${config}`,
             fix: 'fix the directory named, then start the session again', code: 'other' }] };
@@ -135,13 +138,23 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
  * directory with `openConfig`; every harness then starts on that account.
  */
 export function runProcess(startHarness: (start: HarnessStart, account: Account) => Harness, removed: readonly string[],
-    findAccount: (name: string) => Account | AccountRefusal = (name) => readAccount(process.env['HOME'], name),
-    openConfig: (account: Account) => string | undefined = openConfigDir,
+    findAccount: (name: string, verified: boolean) => Account | AccountRefusal = (name, verified) => readAccount(process.env['HOME'], name, verified),
+    openConfig: (account: Account, migrateSettings: boolean) => string | undefined = openConfigDir,
     tools?: { cause: string; fix: string }): void {
     let exiting = false;
     const ready = prepare(process.argv.slice(2), isDirectory, findAccount, openConfig, tools);
     const account = 'refusal' in ready ? undefined : ready.account;
+    const verified = 'refusal' in ready ? undefined : ready.args.verified;
+    let launchedToken: string | undefined;
     const host: Host = {
+        ...(verified && account ? {
+            async refreshCredential() {
+                const access = await verifiedAccess(verified, account.dir);
+                if (typeof access === 'string') return access;
+                account.token = access.token;
+                return access.token === launchedToken ? 'same' as const : 'changed' as const;
+            },
+        } : {}),
         write(line) {
             process.stdout.write(line);
         },
@@ -161,7 +174,8 @@ export function runProcess(startHarness: (start: HarnessStart, account: Account)
             if (account === undefined) {
                 throw new Error('the harness started before the account was read');
             }
-            return startHarness(start, account);
+            launchedToken = account.token;
+            return startHarness(start, { ...account });
         },
         newSessionId,
     };

@@ -4,13 +4,12 @@
 //   node dist/src/main.js --account <name> --cwd <dir> [--resume <session id>] [--limit cwd [--keep-out <dir>]...]
 //                         [--model <model>] [--effort <level>] [--setting-sources <user,project,local>] [--claude <path>]
 //
-// The server passes --cwd, --resume, --limit (a friend limited to its directory) and --keep-out (more directories it
-// is kept out of, friends.json "limit_keeps_out"); the others come from the drivers
-// file. The account is the directory
-// ~/.nexus/server/accounts/<name>/ and its token file (account.ts): Claude gets the directory as CLAUDE_CONFIG_DIR and
-// the token on a descriptor, never in an environment, and never the Keychain's login, the server's environment's or
-// ~/.claude. Every API-key and login variable is removed first (env.ts), and the driver refuses any session not on a
-// subscription: a nexus friend never bills the API. The AI Claude runs never reads the token (wall.ts).
+//                         [--account-email <email> --verified-helper <path> --auth-claude <path>]
+//
+// The server supplies the expected email and credential broker for verified accounts. The broker verifies
+// or refreshes the private grant before a prompt. Unconfigured legacy accounts use their setup token.
+// The SDK receives only the access token via a descriptor and its own isolated state as CLAUDE_CONFIG_DIR.
+// The driver checks the SDK's billing and credential source before handing it a prompt.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 

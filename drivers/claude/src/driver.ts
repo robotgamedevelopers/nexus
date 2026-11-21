@@ -17,6 +17,7 @@
 // refusals) is models/ClaudeDriver.tla. Each step below that the model names is recorded through Host.step, and the
 // model job checks the traces of the unit tests and of test/walk.ts against it (models/ClaudeDriverTrace.tla).
 
+import type { VerifiedLogin } from './verified.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
@@ -114,6 +115,7 @@ export interface Host {
     exit(code: number): void;           // end the process (after what was written reaches the server)
     startHarness(start: HarnessStart): Harness;
     newSessionId(): string;
+    refreshCredential?(): Promise<'same' | 'changed' | 'sign-in' | 'unavailable'>;
     /** A step of the turn's state machine and the state after it (models/ClaudeDriver.tla); only tests listen. */
     step?(op: string, args: StepArgs, state: DriverState): void;
 }
@@ -132,6 +134,7 @@ export interface Arguments {
     resume?: string;
     model?: string;
     effort?: EffortLevel;
+    verified?: VerifiedLogin;
     startupContextFd?: number;
     startupContext?: string;
     settingSources: SettingSource[];
@@ -140,16 +143,17 @@ export interface Arguments {
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
-const kUsage = 'the arguments are --cwd <dir>, --resume <session id>, --limit cwd and --keep-out <dir> (from the server), and from the drivers file '
+const kUsage = 'the arguments are --cwd <dir>, --resume <session id>, --limit cwd and --keep-out <dir>, with --account-email <email>, --verified-helper <path> and --auth-claude <path> for verified accounts (from the server), and from the drivers file '
     + '--account <name> (required), --model <model>, --effort <' + kEffortLevels.join('|') + '>, --setting-sources <user,project,local> and '
     + '--claude <path of a claude executable>';
 
 export function parseArguments(argv: readonly string[]): Arguments | { error: string } {
     const a: Partial<Arguments> & { settingSources: SettingSource[]; keepsOut: string[] } = { settingSources: [], keepsOut: [] };
+    let email, helper, claude;
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -161,6 +165,19 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 a.startupContextFd = fd;
                 break;
             }
+            case '--account-email':
+                if (email !== undefined || !value || Buffer.byteLength(value) > 254 || /[\s\p{Cc}]/u.test(value))
+                    return { error: 'expected one configured email for the selected account' };
+                email = value;
+                break;
+            case '--verified-helper':
+                if (helper !== undefined || !isAbsolute(value)) return { error: 'expected one absolute verified helper path' };
+                helper = value;
+                break;
+            case '--auth-claude':
+                if (claude !== undefined || !isAbsolute(value)) return { error: 'expected one absolute authentication CLI path' };
+                claude = value;
+                break;
             case '--account': a.account = value; break;
             case '--cwd': a.cwd = value; break;
             case '--resume': a.resume = value; break;
@@ -196,6 +213,11 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 a.settingSources = sources as SettingSource[];
             }
         }
+    }
+    if (email !== undefined || helper !== undefined || claude !== undefined) {
+        if (email === undefined || helper === undefined || claude === undefined)
+            return { error: 'verified Claude accounts require --account-email, --verified-helper and --auth-claude together' };
+        a.verified = { email, helper, claude };
     }
     if (a.cwd === undefined || a.cwd === '') {
         return { error: `--cwd <dir> is required; ${kUsage}` };
@@ -395,7 +417,13 @@ export class Driver {
     /** Writes the hello and starts the harness; nothing reaches it before the credential check passes. */
     start(): void {
         this.write({ kind: 'hello', protocol: kProtocolVersion, harness: 'claude', features: ['limit'] });
-        this.launch(this.args.resume);
+        if (this.args.verified) {
+            this.starting = this.refreshCredential().then(() => {
+                if (!this.ended) this.launch(this.args.resume);
+            });
+        } else {
+            this.launch(this.args.resume);
+        }
         this.record('init');
     }
 
@@ -497,6 +525,22 @@ export class Driver {
 
     // ---- The harness ----
 
+    // Keep the durable refresh grant outside the SDK. A changed access token requires a new SDK process,
+    // since the running one already consumed its credential descriptor.
+    private async refreshCredential(): Promise<boolean> {
+        const result = await this.host.refreshCredential?.().catch(() => 'unavailable' as const);
+        if (this.ended) return false;
+        if (result === 'changed' || result === 'same') return result === 'changed';
+        if (result === 'sign-in') {
+            this.refuseCredential('The selected Claude login is missing or its verified email does not match.', tokenFix(this.args));
+        } else {
+            this.error('The verified Claude login could not be checked or refreshed.', 'Check the credential helper and provider connection, then retry.', 'harness', this.open?.turn);
+            if (this.open) this.write({ kind: 'done', turn: this.open.turn, outcome: 'error' });
+            this.quit(1);
+        }
+        return false;
+    }
+
     private launch(resume: string | undefined): void {
         const generation = ++this.generation;
         this.ready = false;
@@ -574,17 +618,21 @@ export class Driver {
         } else {
             billing = 'none';
         }
+        if (this.args.verified && billing === 'subscription' && token !== 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR') {
+            this.refuseCredential('Claude did not use the verified account credential supplied on its descriptor.', tokenFix(this.args));
+            return;
+        }
         this.plan = plan;
         this.write(plan === '' ? { kind: 'credential', billing } : { kind: 'credential', billing, plan: whole(plan) });
         if (billing === 'api-key') {
             this.refuseCredential(`Claude would bill ${provider === 'firstParty' ? `an API key or auth token (apiKeySource ${keySource}${token === '' ? '' : `, tokenSource ${token}`})` : `the ${provider} provider`}, not a subscription login; nexus runs Claude only on a subscription`,
-                `remove the API key or provider setting Claude finds (an apiKeyHelper in the account's settings, or a provider in managed settings), then ${tokenFix(this.args.account)}`);
+                `remove the API key or provider setting Claude finds (an apiKeyHelper in the account's settings, or a provider in managed settings), then ${tokenFix(this.args)}`);
             this.record('refused');
             return;
         }
         if (billing === 'none') {
             this.refuseCredential('Claude has no subscription login: the account reports no subscription',
-                tokenFix(this.args.account));
+                tokenFix(this.args));
             this.record('refused');
             return;
         }
@@ -786,6 +834,19 @@ export class Driver {
      */
     private async begin(t: Turn): Promise<void> {
         const waiting = (): boolean => this.open === t && !t.stopping && !t.pushed && !this.ended;
+        if (this.args.verified) {
+            await this.started();
+            if (!waiting() || !this.ready) return;
+            const changed = await this.refreshCredential();
+            if (!waiting()) return;
+            if (changed) {
+                this.prompts.close();
+                this.harness?.close();
+                this.replace();
+                this.args.resume = this.session;
+                this.launch(this.session);
+            }
+        }
         for (;;) {
             await this.started();
             if (!waiting() || !this.ready) {
@@ -954,7 +1015,7 @@ export class Driver {
                 if (m.subtype === 'init' && m.apiKeySource !== 'none') {
                     this.write({ kind: 'credential', billing: 'api-key', ...(this.plan === '' ? {} : { plan: this.plan }) });
                     this.refuseCredential(`Claude started a turn billing an API key (apiKeySource ${m.apiKeySource}), not the subscription login; nexus runs Claude only on a subscription`,
-                        `remove the API key Claude finds (an apiKeyHelper in the account's settings), then ${tokenFix(this.args.account)}`);
+                        `remove the API key Claude finds (an apiKeyHelper in the account's settings), then ${tokenFix(this.args)}`);
                     this.record('refused');
                 }
                 return;
@@ -1026,7 +1087,7 @@ export class Driver {
         }
         if (m.error !== undefined) {
             const said = m.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
-            t.failure = failure(m.error, said, this.args.account);
+            t.failure = failure(m.error, said, this.args);
             this.record('assistant-error', { code: t.failure.code === 'no-credential' ? 'no-credential' : 'harness' });
             return;
         }
@@ -1210,14 +1271,16 @@ export class Driver {
 }
 
 /** How to give the account a new subscription login (account.ts). */
-function tokenFix(account: string): string {
+function tokenFix(args: Arguments): string {
+    if (args.verified) return `Sign in again to ${args.account} in Nexus with ${args.verified.email}.`;
+    const account = args.account;
     const dir = `~/.nexus/server/accounts/${account}`;
     return `make a new token with \`CLAUDE_CONFIG_DIR=${dir} claude setup-token\` on the subscription account, and save it, `
         + `alone on one line, to ${dir}/${kTokenFile} with mode 0600`;
 }
 
 /** The failure an assistant message's error code names. */
-function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, account: string): Failure {
+function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, args: Arguments): Failure {
     const detail = said === '' ? code : `${code}: ${said}`;
     switch (code) {
         case 'authentication_failed':
@@ -1226,7 +1289,7 @@ function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, 
         case 'verification_required':
         case 'billing_error':
             return { cause: `Claude's login cannot be used (${detail})`, code: 'no-credential',
-                fix: tokenFix(account) };
+                fix: tokenFix(args) };
         case 'rate_limit': {
             // Older SDKs only give the scope in the provider's typed error message.
             const fable = /\bfable(?:['’]s)?(?: usage| weekly| credit)? limits?\b|\bout of fable\b|\blimit (?:reached )?for (?:claude[- ])?fable\b/i.test(said);
