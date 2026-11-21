@@ -140,8 +140,8 @@ Init ==
 \* The parts of a step, each from one supervisor record to the next.
 
 \* These three output sequences are observations for the safety properties and code traces. No Next guard,
-\* operational update or fairness condition reads them. The Settles-only checks can therefore take exactly the
-\* same steps, including every account/owner and directory change, while omitting their output history.
+\* operational update or fairness guard reads them. The fair Timeout, StopWorking and ExitKilled actions also
+\* change phase or escalation stage, so none becomes a stuttering step when Settles omits output history.
 RecordOutput(history, event) == Append(history, event)
 Fx(x, e) == [x EXCEPT !.fx = RecordOutput(@, e)]
 

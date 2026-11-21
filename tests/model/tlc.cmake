@@ -59,6 +59,7 @@
 #   WORKERS     optional: TLC's worker count (-workers), 2 unless given
 #   CAP         optional: the cap on the TLC run in seconds, 60 unless given
 #   SPLIT       optional: rest:<name>, every property of the cfg but one, or as:<name>=<part>, a part of it alone (below)
+#   TEMPORALCFG optional: append this cfg fragment, relative to MODELS, to an as:<name>=<part> check
 #
 # The TLC jar is $ENV{TLA2TOOLS_JAR}; java is $ENV{JAVA}, else `java` on PATH. Each TLC run is capped at CAP seconds.
 
@@ -98,11 +99,12 @@ get_filename_component(cfg_name "${CFG}" NAME)
 # SPLIT rest:<name>: check the instance with every property of its cfg but <name>. SPLIT as:<name>=<part>: check it with
 # <part> in place of <name> and no other property. Every invariant either way. tlc_test's SPLIT declares the rest and
 # one test per part, and the spec defines the parts so that their conjunction is the property (Supervisor.tla,
-# SettlesOdd and SettlesEven), so between them the tests check every property of the cfg on the same states, and the
-# cfg stays the one place the instance is written. A large instance's time is in its temporal property, not its states
-# or action properties (MCSupervisorSwitch.cfg on four cores of a loaded 16-thread host, 2026-11-15: invariants and its
-# 20 action properties 7.8 s, the temporal property Settles alone 67.9 s, all of them 122 s), and in each part less than
-# half of it (one prompt's Settles 38.7 s, both 94.2 s), so the parts run side by side in CI shards of their own.
+# SettlesOdd and SettlesEven), so between them the tests check every property of the cfg. A temporal part may supply
+# a TEMPORALCFG that omits state unobserved by the property and the fair transition relation. A large instance's
+# time is in its temporal property, not its states or action properties (MCSupervisorSwitch.cfg on four cores of a
+# loaded 16-thread host, 2026-11-15: invariants and its 20 action properties 7.8 s, the temporal property Settles alone
+# 67.9 s, all of them 122 s), and in each part less than half of it (one prompt's Settles 38.7 s, both 94.2 s),
+# so the parts run side by side in CI shards of their own.
 if(DEFINED SPLIT AND NOT "${SPLIT}" STREQUAL "")
     set(split_part "")
     if(SPLIT MATCHES "^rest:([A-Za-z_][A-Za-z0-9_]*)$")
