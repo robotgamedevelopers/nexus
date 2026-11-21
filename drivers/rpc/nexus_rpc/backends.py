@@ -3,24 +3,38 @@
 import secrets
 import time
 import uuid
+from pathlib import Path
 
 
 class Failure(Exception):
-    def __init__(self, message, code="harness"):
+    def __init__(self, message, code="harness", *, revoked=False):
         super().__init__(message)
         self.code = code
+        self.revoked = revoked
 
 
-def subscription(plan):
-    if (
-        not isinstance(plan, str)
-        or not plan.strip()
-        or "free" in plan.lower()
-        or plan.lower() in {"unknown", "none", "api", "api-key"}
-        or "usage_based" in plan.lower()
-    ):
-        raise Failure("The harness did not confirm a subscription.", "no-credential")
-    return plan
+# Keep unknown or newly introduced plans out of the prompt path until their billing is known.
+PAID_PLANS = {
+    "codex": {"go", "plus", "pro", "prolite", "team", "selfservebusinessprolite", "business",
+              "enterprise", "edu", "eduplus", "edupro"},
+    "antigravity": {"googleaipro", "googleaiultra"},
+    "grok": {"supergrok", "supergrokheavy", "supergrokpro", "premium", "xpremium+"},
+}
+
+
+def subscription(provider, *candidates):
+    plans = {
+        "".join(c for c in plan.lower() if c not in " _-"): plan
+        for plan in candidates if isinstance(plan, str)
+    }
+    disallowed = {"free", "freetier", "googleaifree", "none", "api", "apikey",
+                  "selfservebusinessusagebased", "enterprisecbpusagebased"}
+    if disallowed.intersection(plans):
+        raise Failure("This account does not report subscription billing for chat.", "no-credential", revoked=True)
+    for name, plan in plans.items():
+        if name in PAID_PLANS[provider]:
+            return plan
+    raise Failure("The provider did not identify a supported paid subscription. Check the account's plan.")
 
 
 def uuid7():
@@ -52,18 +66,24 @@ async def session(call, fresh, resume, session_id, notify):
 
 
 async def codex(rpc, turn):
-    await rpc.call("initialize", {"clientInfo": {"name": "nexus", "version": "1"}})
+    await rpc.call("initialize", {
+        "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
+    })
     await rpc.notify("initialized", {})
-    auth = (await rpc.call("account/read", {"refreshToken": False})).get("account") or {}
+    auth = (await rpc.call("account/read", {"refreshToken": False}))["account"]
+    if auth is None or auth.get("type") == "apiKey":
+        raise Failure("Codex requires a ChatGPT subscription login.", "no-credential", revoked=True)
     if auth.get("type") != "chatgpt":
-        raise Failure("Codex requires a ChatGPT subscription login.", "no-credential")
-    turn.credential(subscription(auth.get("planType")))
+        raise Failure("Codex did not confirm a ChatGPT account.")
+    turn.credential(subscription("codex", auth.get("planType")))
+    cwd = str(Path(turn.cwd).resolve(strict=True))
     options = {
-        "cwd": turn.cwd,
+        "cwd": cwd,
+        "runtimeWorkspaceRoots": [cwd],
         "developerInstructions": turn.instructions,
         "modelProvider": "openai",
-        "approvalPolicy": "on-request",
-        "sandbox": "workspace-write",
+        "approvalPolicy": "never",
+        "permissions": turn.provider.PROFILE,
     }
     if turn.model:
         options["model"] = turn.model
@@ -74,6 +94,13 @@ async def codex(rpc, turn):
         turn.resume,
         turn.missing,
     )
+    if (
+        (result.get("activePermissionProfile") or {}).get("id") != turn.provider.PROFILE
+        or result.get("approvalPolicy") != "never"
+        or result.get("cwd") != options["cwd"]
+        or result.get("runtimeWorkspaceRoots") != options["runtimeWorkspaceRoots"]
+    ):
+        raise Failure("Codex did not confirm the named permission profile and workspace.", "other")
     sid = turn.session(result["thread"]["id"])
     opts = {"threadId": sid, "input": [text(turn.prompt)]}
     if turn.effort:
@@ -108,10 +135,7 @@ async def acp(rpc, turn):
         if "cached_token" in methods:
             await rpc.call("authenticate", {"methodId": "cached_token", "_meta": {"headless": True}})
         elif init.get("_meta", {}).get("defaultAuthMethodId") not in (None, "grok.com"):
-            raise Failure("Grok requires its cached Grok account login.", "no-credential")
-        # This extension only accepts grok.com auth and reads current billing without a turn.
-        billing = await rpc.call("_x.ai/billing", {})
-        turn.credential(subscription(billing.get("subscription_tier")))
+            raise Failure("Grok did not confirm use of its cached Grok account login.")
         if not caps.get("promptCapabilities", {}).get("embeddedContext"):
             raise Failure("This Grok version cannot accept friend context.")
     result = await session(
@@ -123,10 +147,14 @@ async def acp(rpc, turn):
     )
     # ACP load can replay old transcript updates before the response.
     rpc.events.clear()
-    sid = turn.session(result.get("sessionId") or turn.resume)
     if turn.harness == "antigravity":
         tier = result.get("_meta", {}).get("antigravity", {}).get("tier", {})
-        turn.credential(subscription(tier.get("name") or tier.get("id")))
+        turn.credential(subscription("antigravity", tier.get("name"), tier.get("id")))
+    else:
+        # Grok loads this account's subscription during session/new or session/load.
+        billing = await rpc.call("_x.ai/billing", {})
+        turn.credential(subscription("grok", billing.get("subscription_tier")))
+    sid = turn.session(result.get("sessionId") or turn.resume)
     if turn.model:
         choice = next(
             (
@@ -196,8 +224,11 @@ async def acp(rpc, turn):
 
 
 async def muse(rpc, turn):
-    await rpc.call("initialize", {"clientInfo": {"name": "nexus", "version": "1"}})
+    await rpc.call("initialize", {
+        "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
+    })
     await rpc.notify("initialized", {})
+    turn.credential(await turn.provider.subscription_tier(rpc))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
     if turn.model:
         opts["modelId"] = turn.model
@@ -209,8 +240,6 @@ async def muse(rpc, turn):
         turn.missing,
     )
     sid = turn.session(result["session"]["sessionId"])
-    usage = (await rpc.call("usage/read", {})).get("usage") or {}
-    turn.credential(subscription(usage.get("tier")))
     if turn.model and result["session"].get("modelId") != turn.model:
         await rpc.call("session/setModel", {"commandId": uuid7(), "sessionId": sid, "model": turn.model})
     await rpc.call("view/subscribe", {"sessionId": sid, "after": result["viewCursor"]})

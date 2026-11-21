@@ -7,10 +7,22 @@
 // argument.
 
 import {
-    closeSync, constants, existsSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync, readFileSync,
+    closeSync, constants, existsSync, fstatSync, futimesSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
     renameSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
+
+/** A case-insensitive filesystem may have resolved a differently spelled account name. */
+function spellingProblem(dir: string): string | undefined {
+    try {
+        if (readdirSync(dirname(dir)).includes(basename(dir))) {
+            return undefined;
+        }
+    } catch {
+        return `cannot read the parent of ${dir} to verify the account directory's spelling`;
+    }
+    return `${dir} does not match the spelling of the account directory; check the account name's capitalization`;
+}
 
 /** An account the driver can start Claude on. */
 export interface Account {
@@ -84,6 +96,10 @@ export function readAccount(home: string | undefined, name: string): Account | A
     } catch {
         return { cause: `the account ${name} has no directory: ${dir} is missing`,
             fix: `make it (\`mkdir -p -m 700 ${dir}\`), then ${makeToken(dir)}` };
+    }
+    const spelling = spellingProblem(dir);
+    if (spelling !== undefined) {
+        return { cause: spelling, fix: 'use the exact account name recorded on disk' };
     }
     // The directory itself, never a link to one elsewhere, this user's, and no one else's to change.
     if (!dirStat.isDirectory() || (uid() !== undefined && dirStat.uid !== uid())) {
@@ -223,7 +239,7 @@ export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'toke
         if (!st.isDirectory() || (uid() !== undefined && st.uid !== uid())) {
             return `${account.configDir} is not a directory of this user's; move it aside, and the driver makes it again`;
         }
-        return undefined;
+        return spellingProblem(account.configDir);
     }
     const partial = `${account.configDir}.partial-${process.pid}`;
     try {
@@ -252,12 +268,12 @@ export function openConfigDir(account: Pick<Account, 'dir' | 'configDir' | 'toke
     } catch (e) {
         rmSync(partial, { recursive: true, force: true });
         if (existsSync(account.configDir)) {
-            return undefined;   // Another driver of the account made it first.
+            return spellingProblem(account.configDir);   // Another driver may have made it first.
         }
         const code = codeOf(e);
         return `cannot make ${account.configDir}${code === '' ? '' : ` (${code})`}; make it with \`mkdir -p -m 700 ${account.configDir}\``;
     }
-    return undefined;
+    return spellingProblem(account.configDir);
 }
 
 /** Whether `a` is an account rather than a refusal. */

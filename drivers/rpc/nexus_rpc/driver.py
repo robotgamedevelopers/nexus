@@ -2,15 +2,17 @@
 
 import argparse
 import asyncio
+import importlib
 import json
 import os
 import re
 import signal
-import stat
+import subprocess
 import sys
 from collections import deque
 from pathlib import Path
 
+from .account_runtime import enrolled, home_for, process_env, remove_receipt_if_current
 from .backends import BACKENDS, Failure
 
 LIMIT = 1 << 20
@@ -22,10 +24,10 @@ def emit(kind, **fields):
     print(json.dumps({"kind": kind, **fields}, ensure_ascii=False), flush=True)
 
 
-def error(code, cause, **fields):
+def error(code, cause, *, account=None, **fields):
     fix = {
         "protocol": "Check the Nexus driver protocol.",
-        "no-credential": "Connect the named account with its provider's subscription sign-in.",
+        "no-credential": f"Complete the sign-in prompt in Nexus. To open it for this account, run nexus-server config sign-in {account}.",
         "session-not-found": "The next prompt uses a new harness session.",
     }
     emit(
@@ -99,13 +101,20 @@ class Rpc:
                         for s in ("not found", "unknown session", "no rollout found", "does not exist")
                     ):
                         code = "session-not-found"
-                    elif (err.get("code") == -32000 and "auth" in detail) or method == "authenticate":
+                    elif (
+                        method in {"authenticate", "account/read", "_x.ai/billing", "usage/refresh",
+                                   "session/new", "session/load", "session/start", "session/resume"}
+                        and err.get("code") in {-32000, -32001}
+                        and detail.strip(". ") in {"auth required", "authentication required", "unauthorized",
+                                                  "invalid token", "invalid_grant", "not authenticated",
+                                                  "not logged in"}
+                    ):
                         code = "no-credential"
                     elif "usage limit" in detail or "rate limit" in detail:
                         code = "usage-limit"
                     else:
                         code = "harness"
-                    raise Failure(f"The harness refused {method}.", code)
+                    raise Failure(f"The harness refused {method}.", code, revoked=code == "no-credential")
                 return msg["result"]
 
 
@@ -150,44 +159,43 @@ class Turn:
 
     async def run(self):
         home = self.account_home
-        env = {
-            "HOME": str(home),
-            "PATH": os.defpath,
-            "LANG": "en_US.UTF-8",
-            "XDG_CONFIG_HOME": str(home / ".config"),
-            "XDG_DATA_HOME": str(home / ".local/share"),
-            "XDG_CACHE_HOME": str(home / ".cache"),
-            "BROWSER": "/usr/bin/false",
-        }
-        cmds = {
-            "codex": [
-                "app-server",
-                "--stdio",
-                "-c",
-                'forced_login_method="chatgpt"',
-                "-c",
-                'cli_auth_credentials_store="file"',
-            ],
-            "grok": ["agent", "--no-leader", "stdio"],
-            "antigravity": ["acp", "--stdio", "--sandbox"],
-            "muse": ["serve", "--provider", "meta"],
-        }
+        env = process_env(self.harness, home)
         proc = None
         rpc = None
         outcome = "error"
         fatal = False
         try:
+            try:
+                receipt = enrolled(home_for(self.harness, self.account), self.harness)
+            except FileNotFoundError:
+                receipt = None
+            if receipt is None:
+                raise Failure("The named account needs a provider sign-in.", "no-credential")
+            options = {}
             if self.harness == "codex":
-                env["CODEX_HOME"] = str(home / ".codex")
+                options = {"keep_out": self.keep_out, "limited": bool(self.limit)}
+            try:
+                command = await asyncio.to_thread(
+                    self.provider.chat_command, self.binary, home, self.cwd, **options
+                )
+            except (OSError, ValueError, subprocess.SubprocessError) as err:
+                raise Failure(
+                    "The isolated harness could not start. Check its installed version and workspace path.",
+                    "other",
+                ) from err
+            if self.harness in {"antigravity", "grok", "muse"}:
+                self.cwd = str(home / "room")
+            if self.harness == "grok":
+                env["GROK_AGENT"] = "nexus-conversation"
             proc = await asyncio.create_subprocess_exec(
-                self.binary,
-                *cmds[self.harness],
+                *command,
                 env=env,
                 cwd=self.cwd,
                 stdin=-1,
                 stdout=-1,
                 stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=True,
+                umask=0o077,
                 limit=4 * LIMIT,
             )
             rpc = Rpc(proc)
@@ -197,8 +205,18 @@ class Turn:
             outcome = "stopped"
         except Failure as exc:
             self.end()
-            error(exc.code, str(exc), turn=self.number)
-            fatal = exc.code == "no-credential"
+            code = exc.code
+            cause = str(exc)
+            if exc.revoked:
+                try:
+                    if not remove_receipt_if_current(home, self.harness, receipt):
+                        code = "harness"
+                        cause = "The account sign-in changed while this turn was starting. Retry the turn."
+                except (OSError, ValueError):
+                    code = "other"
+                    cause = "The provider refused the login, and Nexus could not update its enrollment receipt."
+            error(code, cause, account=self.account, turn=self.number)
+            fatal = code == "no-credential"
         except (TimeoutError, OSError, ValueError, TypeError, KeyError, AttributeError):
             self.end()
             error(
@@ -311,20 +329,30 @@ async def serve(args):
 
 def main():
     harness = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in BACKENDS else "unknown"
-    emit("hello", protocol=1, harness=harness, features=[])
+    provider = importlib.import_module(f".{harness}_account", __package__) if harness in BACKENDS else None
+    supports_limit = getattr(provider, "SUPPORTS_LIMIT", False)
+    emit("hello", protocol=1, harness=harness, features=["limit"] if supports_limit else [])
     parser = argparse.ArgumentParser(exit_on_error=False, allow_abbrev=False)
     parser.add_argument("harness", choices=BACKENDS)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--account", required=True)
     parser.add_argument("--cwd", required=True)
+    parser.add_argument("--limit", choices=["cwd"])
+    parser.add_argument("--keep-out", action="append", default=[])
     parser.add_argument("--resume")
     parser.add_argument("--model")
     parser.add_argument("--effort")
     parser.add_argument("--startup-context-fd", type=int, required=True)
     try:
         args = parser.parse_args()
-        if not re.fullmatch("[A-Za-z0-9][A-Za-z0-9._-]{0,63}", args.account):
-            raise ValueError("Invalid account.")
+        args.provider = provider
+        if args.limit and not supports_limit:
+            raise Failure("This harness cannot enforce the requested workspace limit.", "other")
+        if args.keep_out and not args.limit:
+            raise ValueError("Additional kept-out directories require a workspace limit.")
+        for excluded in args.keep_out:
+            if not Path(excluded).is_absolute() or Path(excluded).resolve() == Path("/"):
+                raise ValueError("Invalid kept-out directory.")
         if not Path(args.binary).is_absolute() or not Path(args.cwd).is_absolute():
             raise ValueError("Supply absolute harness and workspace paths.")
         if any(v is not None and not IDENTIFIER.fullmatch(v) for v in (args.model, args.effort)):
@@ -336,15 +364,16 @@ def main():
         if not data or len(data) > 262144:
             raise ValueError("Invalid friend context.")
         args.instructions = data.decode()
-        args.account_home = Path.home() / ".nexus" / "server" / "harness" / args.harness / args.account
-        if not args.account_home.is_dir():
-            raise Failure("This Nexus account has no enrolled harness home.", "no-credential")
-        info = args.account_home.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ValueError("The harness home must be a private directory owned by the server user.")
+        try:
+            args.account_home = home_for(args.harness, args.account)
+            ready = enrolled(args.account_home, args.harness)
+        except FileNotFoundError:
+            ready = None
+        if not ready:
+            raise Failure("The named account needs a provider sign-in.", "no-credential")
         return asyncio.run(serve(args))
     except Failure as exc:
-        error(exc.code, str(exc))
+        error(exc.code, str(exc), account=args.account)
     except (ValueError, OSError, argparse.ArgumentError, SystemExit):
         error("other", "Invalid startup arguments, account directory, scope or friend instructions.")
     return 1

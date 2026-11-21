@@ -8,11 +8,22 @@ from pathlib import Path
 
 mode = Path(sys.argv[0]).name
 home = Path(os.environ["HOME"])
-assert home.name == "sample" and home.parent.name == mode
-assert "META_API_KEY" not in os.environ and "OPENAI_API_KEY" not in os.environ
+assert home.name in {"sample", "second"} and home.parent.name == mode
+assert not {"META_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "SSH_AUTH_SOCK",
+            "OPENAI_BASE_URL", "NEXUS_SIGNIN_SOCKET", "NEXUS_TEST_SECRET"}.intersection(os.environ)
+assert os.environ["XDG_CONFIG_HOME"] == str(home / ".config")
+if mode == "codex":
+    assert os.environ["CODEX_HOME"] == str(home / ".codex")
+elif mode == "grok":
+    assert os.environ["GROK_HOME"] == str(home / ".grok") and os.environ["GROK_AGENT"] == "nexus-conversation"
+elif mode == "muse":
+    assert os.environ["TBH_CREDENTIAL_BACKEND"] == "file"
+elif mode == "antigravity":
+    assert os.environ["TMPDIR"] == str(home / "tmp")
 context = "Standing instructions from a synthetic home."
-session = "provider-session"
+session = "provider-session" if home.name == "sample" else "provider-second-session"
 pending = []
+session_open = False
 bad = (home / "signed-out").exists()
 
 
@@ -36,11 +47,16 @@ for line in sys.stdin:
             },
         }
     elif m == "account/read":
+        if (home / "temporary-auth-error").exists():
+            print(json.dumps({"id": msg["id"], "error": {"code": -32000, "message": "auth server timed out"}}), flush=True)
+            continue
         result = {"account": {"type": "apiKey" if bad else "chatgpt", "planType": "plus"}}
+        if mode == "muse":
+            result = {"state": "loggedOut" if bad else "accountLogin", "credentialRequired": True}
     elif m == "_x.ai/billing":
-        result = {"subscription_tier": "free" if bad else "SuperGrok"}
-    elif m == "usage/read":
-        result = {} if bad else {"usage": {"tier": "test-subscription"}}
+        result = {"subscription_tier": "free" if bad else "SuperGrok"} if session_open else {"config": {}}
+    elif m == "usage/refresh":
+        result = {"subscriptionActive": not bad, "tierName": "test-subscription"}
     elif m in {
         "thread/start",
         "thread/resume",
@@ -54,16 +70,29 @@ for line in sys.stdin:
             print(json.dumps({"id": msg["id"], "error": {"message": "session not found"}}), flush=True)
             continue
         assert resume in (None, session)
+        session_open = True
         if mode == "codex":
+            assert p["approvalPolicy"] == "never" and p["permissions"] == "nexus-chat"
+            assert "sandbox" not in p
             assert p["developerInstructions"] == context and p["modelProvider"] == "openai"
+        if mode in {"antigravity", "grok"}:
+            assert Path.cwd() == (home / "room").resolve() and Path(p["cwd"]) == home / "room"
+        if mode == "muse":
+            assert Path.cwd() == (home / "room").resolve()
+            if m == "session/start":
+                assert Path(p["workspaceRoot"]) == home / "room"
         if mode == "antigravity":
             assert p["_meta"]["antigravity"]["systemPrompt"]["append"] == context
         result = {
+            "approvalPolicy": "never",
+            "activePermissionProfile": {"id": "other" if (home / "wrong-profile").exists() else "nexus-chat"},
+            "cwd": p.get("cwd"),
+            "runtimeWorkspaceRoots": p.get("runtimeWorkspaceRoots"),
             "sessionId": session,
             "thread": {"id": session},
             "session": {"sessionId": session},
             "viewCursor": "0",
-            "_meta": {"antigravity": {"tier": {} if bad else {"id": "pro"}}},
+            "_meta": {"antigravity": {"tier": {"name": "free" if bad else "Google AI Pro"}}},
         }
     elif m in {"session/prompt", "turn/start"}:
         parts = p.get("input", p.get("prompt"))

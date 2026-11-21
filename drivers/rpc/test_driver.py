@@ -6,17 +6,44 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from nexus_rpc import account_runtime
 
 HERE = Path(__file__).resolve().parent
 HARNESSES = ("codex", "antigravity", "grok", "muse")
 
 
+def run_fixture():
+    """Exercise the production bridge; substitute only the native executable launch policy."""
+    import importlib
+    from nexus_rpc.driver import main
+
+    provider = importlib.import_module("nexus_rpc." + sys.argv[1] + "_account")
+
+    def fake_command(binary, home, cwd, **kwargs):
+        if sys.argv[1] == "codex":
+            assert kwargs["limited"] == ("--limit" in sys.argv)
+            if "--keep-out" in sys.argv:
+                assert sys.argv[sys.argv.index("--keep-out") + 1] in kwargs["keep_out"]
+        (home / "room").mkdir(mode=0o700, exist_ok=True)
+        return [binary]
+
+    with patch.object(provider, "chat_command", fake_command):
+        sys.exit(main())
+
+
 class Protocol(unittest.TestCase):
     @contextlib.contextmanager
-    def driver(self, harness, *args, rejected=False):
-        with tempfile.TemporaryDirectory() as root:
-            account = Path(root) / ".nexus/server/harness" / harness / "sample"
-            account.mkdir(parents=True, mode=0o700)
+    def driver(self, harness, *args, rejected=False, receipt=True, root=None, name="sample"):
+        directory = contextlib.nullcontext(root) if root else tempfile.TemporaryDirectory()
+        with directory as root:
+            account = Path(root) / ".nexus/server/harness" / harness / name
+            account.mkdir(parents=True, mode=0o700, exist_ok=True)
+            workspace = Path(root) / "workspace"
+            workspace.mkdir(exist_ok=True)
+            if receipt:
+                account_runtime.store_receipt(account, harness)
             if rejected:
                 (account / "signed-out").touch()
             fake = Path(root) / harness
@@ -27,15 +54,15 @@ class Protocol(unittest.TestCase):
                 instructions.seek(0)
                 cmd = [
                     sys.executable,
-                    "-m",
-                    "nexus_rpc.driver",
+                    "-c",
+                    "from test_driver import run_fixture; run_fixture()",
                     harness,
                     "--binary",
                     str(fake),
                     "--cwd",
-                    root,
+                    str(workspace),
                     "--account",
-                    "sample",
+                    name,
                     "--startup-context-fd",
                     str(instructions.fileno()),
                     *args,
@@ -48,10 +75,17 @@ class Protocol(unittest.TestCase):
                     stdout=-1,
                     stderr=-1,
                     text=True,
-                    env={**os.environ, "HOME": root, "META_API_KEY": "fake", "OPENAI_API_KEY": "fake"},
+                    env={
+                        **os.environ, "HOME": root,
+                        **dict.fromkeys(("META_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY",
+                                         "SSH_AUTH_SOCK", "OPENAI_BASE_URL", "NEXUS_TEST_SECRET",
+                                         "NEXUS_SIGNIN_SOCKET"), "synthetic-test-value"),
+                    },
                 )
                 try:
-                    self.assertEqual(self.read(p)["harness"], harness)
+                    hello = self.read(p)
+                    self.assertEqual(hello["harness"], harness)
+                    p.driver_features = hello["features"]
                     yield p, account
                 finally:
                     p.stdin.close()
@@ -96,16 +130,71 @@ class Protocol(unittest.TestCase):
                             ["session-not-found"] if n == 10 and "missing" in args else [],
                         )
 
-    def test_reject_credentials_and_unsupported_scope(self):
+    def test_reject_credentials(self):
         for h in HARNESSES:
             with self.subTest(h=h), self.driver(h, rejected=True) as (p, account):
                 events = self.reply(p, 1)
                 self.assertEqual(events[-2]["code"], "no-credential", events)
                 self.assertEqual(p.wait(timeout=3), 1)
                 self.assertFalse((account / "sent").exists())
-            with self.driver(h, "--limit", "cwd") as (p, account):
-                self.assertEqual(self.read(p)["kind"], "error")
+                self.assertFalse((account / account_runtime.RECEIPT).exists())
+            with self.driver(h, receipt=False) as (p, account):
+                error = self.read(p)
+                self.assertEqual(error["code"], "no-credential")
+                self.assertIn("config sign-in sample", error["fix"])
+                self.assertEqual(p.wait(timeout=3), 1)
                 self.assertFalse((account / "sent").exists())
+
+    def test_keep_out_requires_scope_and_valid_path(self):
+        for extra in (["--keep-out", "/data"], ["--limit", "cwd", "--keep-out", "/"]):
+            with self.driver("codex", *extra) as (p, account):
+                self.assertEqual(self.read(p)["code"], "other")
+                self.assertEqual(p.wait(timeout=3), 1)
+                self.assertFalse((account / "sent").exists())
+
+    def test_advertised_scope(self):
+        for provider in HARNESSES:
+            with self.subTest(provider=provider), self.driver(provider, "--limit", "cwd", "--keep-out", "/extra") as (p, account):
+                if "limit" in p.driver_features:
+                    self.assertEqual(self.reply(p, 1)[-1]["outcome"], "ok")
+                else:
+                    self.assertEqual(self.read(p)["code"], "other")
+                    self.assertFalse((account / "sent").exists())
+
+    def test_codex_rejects_unexpected_profile_before_turn(self):
+        for options in ([], ["--resume", "provider-session"]):
+            with self.subTest(options=options), self.driver("codex", *options) as (p, home):
+                (home / "wrong-profile").touch()
+                events = self.reply(p, 1)
+                self.assertIn("other", [e.get("code") for e in events])
+                self.assertFalse((home / "sent").exists())
+                self.assertTrue((home / account_runtime.RECEIPT).exists())
+
+    def test_temporary_provider_failure_keeps_enrollment(self):
+        with self.driver("codex") as (p, home):
+            (home / "temporary-auth-error").touch()
+            events = self.reply(p, 1)
+            self.assertEqual(events[-2]["code"], "harness")
+            self.assertTrue((home / account_runtime.RECEIPT).exists())
+            self.assertFalse((home / "sent").exists())
+            (home / "temporary-auth-error").unlink()
+            self.assertEqual(self.reply(p, 2)[-1]["outcome"], "ok")
+
+    def test_two_accounts_of_same_provider(self):
+        for provider in HARNESSES:
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as root:
+                with self.driver(provider, root=root) as (first, first_home):
+                    with self.driver(provider, root=root, name="second") as (second, second_home):
+                        first_events = self.reply(first, 1)
+                        self.assertEqual(first_events[-1]["outcome"], "ok", first_events)
+                        self.assertTrue((first_home / "sent").exists())
+                        self.assertFalse((second_home / "sent").exists())
+                        second_events = self.reply(second, 1)
+                        self.assertEqual(second_events[-1]["outcome"], "ok", second_events)
+                        self.assertIn("provider-second-session", [e.get("id") for e in second_events])
+                        (first_home / ".nexus-enrolled").unlink()
+                        self.assertEqual(self.reply(first, 2)[-2]["code"], "no-credential")
+                        self.assertEqual(self.reply(second, 2)[-1]["outcome"], "ok")
 
     def test_protocol_refusals(self):
         for message in (
@@ -125,13 +214,78 @@ class Protocol(unittest.TestCase):
         for h in HARNESSES:
             with self.subTest(h=h), self.driver(h) as (p, _):
                 self.send(p, "send", turn=1, prompt="hold")
-                while self.read(p)["kind"] != "session":
-                    pass
+                while (event := self.read(p))["kind"] != "session":
+                    self.assertNotIn(event["kind"], {"done", "error"}, event)
                 self.send(p, "stop", turn=1)
                 while (event := self.read(p))["kind"] != "done":
                     pass
                 self.assertEqual(event["outcome"], "stopped")
                 self.assertEqual(self.reply(p, 2)[-1]["outcome"], "ok")
+
+
+class AccountFiles(unittest.TestCase):
+    def test_unsafe_path_and_marker(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
+            home = account_runtime.home_for("codex", "first", create=True)
+            parent = home.parent
+            home.rmdir()
+            home.symlink_to(parent, target_is_directory=True)
+            with self.assertRaises(OSError):
+                account_runtime.home_for("codex", "first")
+            home.unlink()
+            home.mkdir(mode=0o700)
+            marker = home / account_runtime.RECEIPT
+            for mode, contents in ((0o644, b"codex\n"), (0o600, b"grok\n"), (0o600, b"codex\njunk")):
+                marker.write_bytes(contents)
+                marker.chmod(mode)
+                with self.assertRaises(ValueError):
+                    account_runtime.enrolled(home, "codex")
+            marker.unlink()
+            marker.symlink_to("/dev/null")
+            with self.assertRaises(OSError):
+                account_runtime.enrolled(home, "codex")
+
+    def test_case_aliases_never_share_a_login(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
+            home = account_runtime.home_for("grok", "_example", create=True)
+            account_runtime.store_receipt(home, "grok")
+            if (home.parent / "_Example").exists():
+                with self.assertRaises(ValueError):
+                    account_runtime.home_for("grok", "_Example", create=True)
+            else:
+                second = account_runtime.home_for("grok", "_Example", create=True)
+                self.assertIsNone(account_runtime.enrolled(second, "grok"))
+            self.assertTrue(account_runtime.enrolled(home, "grok"))
+
+    def test_case_aliases_of_provider_and_receipt_are_refused(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
+            home = account_runtime.home_for("grok", "first", create=True)
+            account_runtime.store_receipt(home, "grok")
+            uppercase = home / ".NEXUS-ENROLLED"
+            if not uppercase.exists():
+                self.skipTest("filesystem distinguishes case")
+            marker = home / account_runtime.RECEIPT
+            marker.rename(uppercase)
+            with self.assertRaises(ValueError):
+                account_runtime.enrolled(home, "grok")
+            home.parent.rename(home.parent.with_name("Grok"))
+            with self.assertRaises(ValueError):
+                account_runtime.home_for("grok", "first")
+
+    def test_concurrent_reenrollment_survives_refusal(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
+            home = account_runtime.home_for("grok", "example", create=True)
+            account_runtime.store_receipt(home, "grok")
+            first = account_runtime.enrolled(home, "grok")
+            account_runtime.store_receipt(home, "grok")
+            second = account_runtime.enrolled(home, "grok")
+            pending = home / account_runtime.PENDING
+            pending.touch(mode=0o600)
+            self.assertFalse(account_runtime.remove_receipt_if_current(home, "grok", first))
+            self.assertTrue(pending.exists())
+            self.assertTrue(account_runtime.remove_receipt_if_current(home, "grok", second))
+            self.assertFalse(pending.exists())
+            self.assertIsNone(account_runtime.enrolled(home, "grok"))
 
 
 if __name__ == "__main__":

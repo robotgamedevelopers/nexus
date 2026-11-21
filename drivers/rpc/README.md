@@ -10,6 +10,7 @@ path to the harness program. For example:
 
 ```text
 driver codex /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/nexus/profile {friend} {harness} /opt/nexus/venv/bin/python -I -m nexus_rpc.driver {harness} --binary /usr/local/bin/codex --account work
+signin codex /opt/nexus/venv/bin/python -I -m nexus_rpc.enroll codex --binary /usr/local/bin/codex
 friend reviewer codex /srv/review
 ```
 
@@ -18,26 +19,35 @@ Configure a linked subscription account and instance in the server's accounts an
 friends files. The program's home is a private server-owned directory at
 `~/.nexus/server/harness/<harness>/<account>`. The driver starts the program with
 a fresh environment. A missing home or a rejected credential produces a Nexus error.
-The new adapters require an unlimited friend. They decline the server's directory
-limit and keep-out flags at startup.
+Each installed adapter declares which limits it enforces. Codex checks the effective
+native permission profile on both start and resume. Antigravity, Grok and Muse
+use dialogue sessions in a private working directory. The deployment must use a
+vendor version and operating system supported by that adapter.
 
 | Harness | Program and transport | Startup instructions | Subscription evidence before sending |
 | --- | --- | --- | --- |
 | Codex | `codex app-server --stdio` | Developer instructions on thread start and resume | ChatGPT account and plan from `account/read` |
 | Antigravity | `agy acp --stdio` | Native system-prompt append on session creation and load | Antigravity tier on the session |
 | Grok | `grok agent --no-leader stdio` | Named ACP context resource alongside the person's message | Grok account billing extension returns a subscription tier |
-| Muse | `muse serve --provider meta` | Opening text part followed by the person's text, with the original prompt as the display text | MSP `usage/read` reports a subscription tier |
+| Muse | `muse serve --provider meta` | Opening text part followed by the person's text, with the original prompt as the display text | MSP `account/read` and `usage/refresh` confirm an active subscription |
 
 Each adapter resumes the specific conversation from the server. A missing conversation
 starts a fresh one with the same identity. A stop ends the provider process for the
 current turn. Nexus controls the next prompt and can restart the driver.
 
-**Deployment status.** The built-in browser sign-in and credential isolation implemented
-for Claude do not yet enroll accounts for these four adapters. In particular, Antigravity
-can restore a login from the OS keyring, and Muse may have no subscription observation
-on a fresh host. A separate HOME by itself does not isolate an OS keyring or deny a
-model's tools access to credential files. Keep these adapters in an isolated deployment
-until account enrollment and those boundaries have been verified for the intended host.
+### Enroll a named account
+
+Add a `signin` line for each provider alongside its `driver` line. Both lines
+must point to the same installed vendor executable. Link accounts to friends in
+the order the fork should offer them. A signed-out account marked
+`"sign_in_on_use": true` starts its browser flow when selected or used.
+
+The local Nexus window opens a private page for that account. Complete the vendor's
+browser authorization there. Antigravity asks you to paste Google's return code
+into that page. A remote window can keep chatting on an enrolled account. Initial
+enrollment for these four providers needs a window connected to the server over
+loopback. The server probes the account-specific enrollment receipt on restart.
+The driver checks the actual subscription before sending the prompt.
 
 Run `python3 -m unittest discover -s drivers/rpc -v` from the repository root. The
 tests run real adapter processes and scripted vendor peers with temporary account homes.
