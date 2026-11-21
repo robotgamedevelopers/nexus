@@ -242,7 +242,7 @@ void encodeFramed(Writer& w, const Action& a) {
 // stop naming session 0, which every server refuses and counts, so that the numbers stay unbroken and the value never
 // leaves.
 void encodeUnframed(Writer& w, const Action& a) {
-    if (isSecret(a.kind) || isSignIn(a.kind)) {
+    if (isSecret(a.kind) || isSignIn(a.kind) || a.kind == ActionKind::ResolveLimit) {
         w.byte(static_cast<std::uint8_t>(ActionKind::Stop));
         w.u64(0);
         w.str(std::string());

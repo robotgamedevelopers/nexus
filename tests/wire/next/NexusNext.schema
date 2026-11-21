@@ -52,6 +52,9 @@ table SessionInfo
     model       *string
     effort      *string
     instance    *string
+    limit_request uint64
+    limit_account *string
+    limit_model   *string
     title       *string
 }
 
@@ -169,6 +172,7 @@ enum ActionKind
     SignInOpened,
     SignInCallback,
     SignOut,
+    ResolveLimit
     Rename
 }
 

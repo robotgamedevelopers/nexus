@@ -98,6 +98,7 @@ source retain the source’s explicit account.
 |---|---|---|
 | Client `text_zoom` | Integer `current` text scale step, signed key `delta`, inclusive `min` and `max` supported by the renderer | An integer in range. On an invalid answer the window keeps the current scale and reports the error. |
 | Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked accounts | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
+| Server `model_after_limit` | `friend`, concrete `account`, current `model` after a Claude Fable limit | The model to offer on the same account, or `None` to omit this choice. Stock policy reads `fable_fallback_model`, defaulting to the Claude `opus` alias. The server resumes only when the person selects an available option. |
 
 The shipped client advances a tab by the key's delta. A server-side relative account command uses the linked accounts in order.
 The server reads a bundle at the decision and reuses the compiled module while its contents are the same. The window reads and compiles updates off its frame thread. The

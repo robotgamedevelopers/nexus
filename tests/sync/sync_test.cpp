@@ -990,6 +990,69 @@ void hub_settings() {
     CHECK(store.applied("w") == 6);
 }
 
+// A pending model-specific limit survives a reconnect. A stale or duplicate choice
+// must never charge another subscription or launch the interrupted work twice.
+void hub_model_limit_choice() {
+    for (const bool changeAccount : {true, false}) {
+        MemoryStore store;
+        DriverState paused;
+        paused.nextTurn = 4;
+        paused.modelLimitPending = true;
+        paused.continuationPrompt = "continue my work";
+        paused.exhaustedAccounts = {"one"};
+        CHECK(store.commit(1, {infoChange({"ada", "claude", "one", "fable", ""}),
+            SessionChange{nullptr, {}, paused}}, {}, 0, nullptr));
+
+        Hub hub(store);
+        accounts::Registry registry;
+        registry.accounts = {{"one", "claude"}, {"two", "claude"}};
+        registry.friends = {{"ada", {"one", "two"}, "one"}};
+        hub.useAccounts(registry, nullptr);
+        hub.reportSignedIn("one", true);
+        hub.reportSignedIn("two", true);
+
+        Sessions mirror;
+        mirror.apply_string(hub.state().init_diff());
+        const auto& offer = mirror.find(1)->info;
+        CHECK(offer.limitRequest == 4 && offer.limitAccount == "two" && offer.limitModel == "opus");
+
+        auto select = act(ActionKind::ResolveLimit, 1, changeAccount ? "account" : "model",
+            changeAccount ? offer.limitAccount : offer.limitModel);
+        select.account = offer.account;
+        select.request = offer.limitRequest;
+        Actions actions(1);
+        actions.add(select);
+        select = Actions::parse(actions.init_diff()).at(0);
+        auto stale = select;
+        stale.request--;
+        CHECK(!hub.apply(stale));
+        stale = select;
+        stale.friendName = "arbitrary";
+        CHECK(!hub.apply(stale));
+        CHECK(store.find(1)->driver == paused);
+
+        if (changeAccount) {
+            hub.reportSignedIn("two", false);
+            CHECK(hub.state().find(1)->info.limitAccount.empty());
+            CHECK(!hub.apply(select));
+            CHECK(store.find(1)->driver == paused);
+            hub.reportSignedIn("two", true);
+        }
+
+        CHECK(hub.apply(select, nullptr, "w"));
+        const auto* result = store.find(1);
+        CHECK(result->info.model == (changeAccount ? "fable" : "opus"));
+        CHECK(result->info.account == (changeAccount ? "two" : "one"));
+        CHECK(result->driver.continuationPrompt == paused.continuationPrompt);
+        CHECK(result->driver.exhaustedAccounts.empty() == !changeAccount);
+        CHECK(!result->driver.modelLimitPending && !hub.state().find(1)->info.limitRequest);
+        CHECK(store.applied("w") == select.num);
+        Hub restarted(store);
+        CHECK(!restarted.apply(select));
+        CHECK(store.find(1)->transcript.size() == 1);
+    }
+}
+
 void hub_stop_reaches_the_responder_once() {
     MemoryStore store;
     RecordingResponder r;
@@ -2576,6 +2639,7 @@ const Case kCases[] = {
     {"hub_ids_never_reused", hub_ids_never_reused},
     {"hub_unknown_session_refused", hub_unknown_session_refused},
     {"hub_settings", hub_settings},
+    {"hub_model_limit_choice", hub_model_limit_choice},
     {"hub_stop_reaches_the_responder_once", hub_stop_reaches_the_responder_once},
     {"hub_stop_without_responder_changes_nothing", hub_stop_without_responder_changes_nothing},
     {"hub_queue_goes_to_the_responder", hub_queue_goes_to_the_responder},

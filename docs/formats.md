@@ -46,6 +46,10 @@ later field goes after them.
   action; the server, which knows the link's format, never offers that window a request.
 - Absent sign-in flows (a link of format 4 or older): **none**. The window claims, opens and binds nothing; the server,
   which knows the link's format, asks for a paste while no linked window reads flows.
+- A pending model-limit choice adds `limit_request`, `limit_account`, and `limit_model` to the session info table.
+  An absent or zero request means no choice. An empty target makes that option unavailable. The `ResolveLimit` action
+  binds the session, interrupted request, current payer, choice kind, and offered target. An earlier table reader
+  skips the fields and refuses the unknown action. The legacy codecs never offer this choice.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.

@@ -210,6 +210,8 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
     }
+    if (action.kind == ActionKind::ResolveLimit)
+        return resolveLimit(action, why, client);
     if (action.kind >= ActionKind::AddAccount) {
         return accountAction(action, why, client);
     }
@@ -1659,12 +1661,66 @@ bool Hub::setActivity(SessionId id, Activity activity) {
     return true;
 }
 
+// Compute the same offer for display and acceptance. An account can sign out or a fork
+// can change its policy between those two calls.
+void Hub::offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info) {
+    info.limitRequest = driver.nextTurn;
+    if (info.harness != "claude")
+        return;
+    std::string reason;
+    info.limitAccount = nextSubscription(id, driver.exhaustedAccounts, reason);
+    if (accounts_ && (!accounts_->linked(info.friendName, info.account) || !signedIn_.count(info.account)))
+        return;
+    auto model = policy::modelAfterLimit(application_, bundlePath_(), info.friendName, info.account, info.model);
+    if (!model.empty() && model != info.model && model.size() <= limits_.setting && printable(model))
+        info.limitModel = std::move(model);
+}
+
+bool Hub::resolveLimit(const Action& action, std::string* why, const std::string& client) {
+    const auto* session = store_.find(action.session);
+    if (!session || !session->driver.modelLimitPending || action.request != session->driver.nextTurn ||
+            action.account != session->info.account)
+        return counted(action, "This model-limit choice is no longer pending.", why, client);
+
+    SessionInfo info = session->info;
+    DriverState driver = session->driver;
+    SessionInfo offer = info;
+    offerLimitChoice(action.session, driver, offer);
+    const bool account = action.text == "account";
+    const std::string& target = account ? offer.limitAccount : offer.limitModel;
+    if ((!account && action.text != "model") || target.empty() || action.friendName != target) {
+        refresh(action.session);
+        return counted(action, "That model-limit option is no longer available.", why, client);
+    }
+
+    std::vector<SessionChange> changes;
+    if (account) {
+        info.account = target;
+        changes.push_back(SessionChange{switchNotice(target), {}});
+    } else {
+        info.model = target;
+        std::erase(driver.exhaustedAccounts, info.account);
+        changes.push_back(SessionChange{entry(EntryKind::Notice, "Switched to model " + target), {}});
+    }
+    driver.modelLimitPending = false;
+    changes.push_back(infoChange(info));
+    changes.push_back(SessionChange{nullptr, {}, std::move(driver)});
+    if (!store_.commit(action.session, changes, client, action.num, why))
+        return false;
+    refresh(action.session);
+    if (responder_)
+        responder_->configured(action.session, info);
+    return true;
+}
+
 // The session's new tail, in place of its old one; every other session is shared with the state before.
 void Hub::refresh(SessionId id) {
     const StoredSession* stored = store_.find(id);
     auto open = open_.find(id);
     SessionView view = tailOf(id, stored->info, stored->transcript, stored->queue, limits_.tail,
         open == open_.end() ? nullptr : open->second);
+    if (stored->driver.modelLimitPending)
+        offerLimitChoice(id, stored->driver, view.info);
     auto activity = activity_.find(id);
     view.activity = activity == activity_.end() ? Activity::Idle : activity->second;
     auto fresh = std::make_shared<const SessionView>(std::move(view));
@@ -1691,6 +1747,10 @@ void Hub::stateFriends() {
                                 signInHooks_.has_value() && secretKeeper_ != nullptr);
     if (!state_.friendsKnown() || state_.friends() != friends) {
         state_.setFriends(std::move(friends));
+    }
+    for (SessionId id : store_.ids()) {
+        if (store_.find(id)->driver.modelLimitPending)
+            refresh(id);
     }
 }
 

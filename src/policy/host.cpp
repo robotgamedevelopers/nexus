@@ -150,6 +150,28 @@ int textZoom(Host& host, const std::string& path, int current, int delta, int lo
     return current;
 }
 
+std::string modelAfterLimit(Host& host, const std::string& path, const std::string& friendName,
+    const std::string& account, const std::string& model) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    auto field = [&](const char* key, const std::string& value) {
+        prJsonWriterKey(w.get(), pr(key));
+        prJsonWriterString(w.get(), pr(value));
+    };
+    field("friend", friendName);
+    field("account", account);
+    field("model", model);
+    prJsonWriterEndObject(w.get());
+    const auto context = prJsonWriterText(w.get());
+    std::string why;
+    const auto answer = host.decide(path, "model_after_limit", std::string(context.data, context.size), why);
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (!why.empty() || !prJsonParse(doc.get(), pr(answer), nullptr) || prJsonKind(doc.get(), 0) != PrJsonKind_String)
+        return {};
+    const auto value = prJsonString(doc.get(), 0);
+    return std::string(value.data, value.size);
+}
+
 std::string accountCommand(Host& host, const std::string& path, const std::string& current,
     const std::vector<std::string>& linked, const std::string& command, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);

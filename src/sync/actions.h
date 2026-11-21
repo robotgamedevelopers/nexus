@@ -60,10 +60,11 @@ enum class ActionKind : std::uint8_t {
     SignInOpened = 18,  // the window holding flow `request` (`text`, its claim token) opened its URL in the browser
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
+    ResolveLimit = 21, // accept a paused turn's offered target (friendName) for account, request and choice kind (text)
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::SignOut;
+constexpr ActionKind kLastActionKind = ActionKind::ResolveLimit;
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused

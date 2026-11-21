@@ -51,6 +51,10 @@ struct SessionInfo {
     std::string effort;
     std::string instance{};     // which of its friend's instances (accounts/registry.h): a machine and a directory; empty
                                 // before the server holds the friend's instances, or when the friend has none
+    // Published by the server while a turn is paused. Empty targets are unavailable options.
+    std::uint64_t limitRequest = 0;
+    std::string limitAccount{};
+    std::string limitModel{};
     bool operator==(const SessionInfo&) const = default;
 };
 

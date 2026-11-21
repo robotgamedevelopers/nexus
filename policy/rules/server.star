@@ -2,6 +2,8 @@ load("server/conversation.star", handle_event = "handle")
 
 # The server supplies linked accounts in configuration order and current eligibility.
 def decide(event, context, config):
+    if event == "model_after_limit":
+        return config.get("fable_fallback_model", "opus")
     if event == "account_command":
         linked = context["linked"]
         current = context["current"]

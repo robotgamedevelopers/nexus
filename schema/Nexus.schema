@@ -52,6 +52,9 @@ table SessionInfo
     model       *string
     effort      *string
     instance    *string
+    limit_request uint64
+    limit_account *string
+    limit_model   *string
 }
 
 // One entry a sessions diff carries: its kind, whether it is closed, how many bytes of its text the state diffed from
@@ -167,7 +170,8 @@ enum ActionKind
     SignInClaim,
     SignInOpened,
     SignInCallback,
-    SignOut
+    SignOut,
+    ResolveLimit
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,

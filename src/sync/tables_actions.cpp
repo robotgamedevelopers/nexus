@@ -32,6 +32,7 @@ wire::ActionKind actionOut(ActionKind k) {
         case ActionKind::SignInOpened: return wire::ActionKind::SignInOpened;
         case ActionKind::SignOut: return wire::ActionKind::SignOut;
         case ActionKind::SignInCallback: return wire::ActionKind::SignInCallback;
+        case ActionKind::ResolveLimit: return wire::ActionKind::ResolveLimit;
     }
     return wire::ActionKind::None;
 }
@@ -64,6 +65,7 @@ ActionKind actionIn(wire::ActionKind k) {
         case wire::ActionKind::SignInOpened: return ActionKind::SignInOpened;
         case wire::ActionKind::SignOut: return ActionKind::SignOut;
         case wire::ActionKind::SignInCallback: return ActionKind::SignInCallback;
+        case wire::ActionKind::ResolveLimit: return ActionKind::ResolveLimit;
         default: return ActionKind::Unknown;
     }
 }

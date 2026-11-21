@@ -439,6 +439,8 @@ private:
     void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
+    void offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info);
+    bool resolveLimit(const Action& action, std::string* why, const std::string& client);
     void refresh(SessionId id);
     SessionStore& store_;
     Limits limits_;
