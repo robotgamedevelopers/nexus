@@ -131,6 +131,7 @@ server's state is.
 | snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) |
 
 - Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
+- An interrupted request may append a continuation to the driver record or session snapshot. Tag `0xA3` introduces the original prompt (`str`), the exhausted account names (`u32` count, then each `str`), and a model-limit decision pending (`u8`). No tag means no outstanding continuation. Its transcript effects and turn boundary commit together. An open turn on recovery may already have executed, so the server cuts it. A checkpoint between turns can safely continue.
 - Absent summary flag: **none owed**. An absent session account means the owner of the harness ID is unknown.
   The server starts a new harness session and provides recent transcript entries on its first send. An explicitly
   empty account identifies the accountless harness. A known account may resume in the same working directory,

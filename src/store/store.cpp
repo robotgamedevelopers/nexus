@@ -131,6 +131,36 @@ void get_session_account(Reader& r, Driver& d) {
     }
 }
 
+// Only interrupted turns have a checkpoint. Tagged tails keep previous snapshots and journal frames readable.
+constexpr std::uint8_t kContinuation = 0xA3;
+
+void put_continuation(Writer& w, const Driver& d) {
+    if (d.continuation_prompt.empty()) {
+        return;
+    }
+    w.u8(kContinuation);
+    w.str(d.continuation_prompt);
+    w.u32(std::uint32_t(d.exhausted_accounts.size()));
+    for (const auto& account : d.exhausted_accounts) {
+        w.str(account);
+    }
+    w.u8(d.model_limit_pending ? 1 : 0);
+}
+
+void get_continuation(Reader& r, Driver& d) {
+    Reader extension = r;
+    if (r.done() || extension.u8() != kContinuation) {
+        return;
+    }
+    d.continuation_prompt = extension.str();
+    const auto count = extension.u32();
+    for (std::uint32_t i = 0; i < count && extension.ok(); ++i) {
+        d.exhausted_accounts.push_back(extension.str());
+    }
+    d.model_limit_pending = extension.u8() != 0;
+    r = extension;
+}
+
 // A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
 void put_change(Writer& w, const Change& c) {
     if (c.kind == Change::Kind::Append) {
@@ -141,6 +171,7 @@ void put_change(Writer& w, const Change& c) {
         put_driver(w, c.driver);
         put_driver_tail(w, c.driver);
         put_session_account(w, c.driver);
+        put_continuation(w, c.driver);
     } else if (c.kind == Change::Kind::SetInfo) {
         put_info(w, c.info);
         put_info_tail(w, c.info);
@@ -579,6 +610,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             }
             if (framed) {
                 get_session_account(in, c.driver);
+                get_continuation(in, c.driver);
             }
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
@@ -661,6 +693,7 @@ Bytes Store::encode_snapshot() const {
         put_driver_tail(frame, t.driver);
         put_info_tail(frame, t.info);
         put_session_account(frame, t.driver);
+        put_continuation(frame, t.driver);
         w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
@@ -743,6 +776,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
             }
             get_info_tail(in, t.info);
             get_session_account(in, t.driver);
+            get_continuation(in, t.driver);
         }
         // A framed session may go on with what a later format adds, which is skipped.
         if (framed && !framedIn.ok()) {

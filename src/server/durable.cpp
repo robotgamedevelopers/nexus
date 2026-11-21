@@ -13,11 +13,13 @@ sync::EntryRef toRef(const store::Entry& e) {
 }
 
 sync::DriverState toState(const store::Driver& d) {
-    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir, d.session_account};
+    return sync::DriverState{d.next_turn, d.open_turn, d.session, d.waiting, d.summary, d.session_dir, d.session_account,
+        d.continuation_prompt, d.exhausted_accounts, d.model_limit_pending};
 }
 
 store::Driver toDriver(const sync::DriverState& d) {
-    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir, d.sessionAccount};
+    return store::Driver{d.nextTurn, d.openTurn, d.session, d.waiting, d.summary, d.sessionDir, d.sessionAccount,
+        d.continuationPrompt, d.exhaustedAccounts, d.modelLimitPending};
 }
 
 sync::SessionInfo toInfo(const store::Info& i) {

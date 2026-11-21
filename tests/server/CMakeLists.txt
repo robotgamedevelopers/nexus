@@ -58,7 +58,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test server_pass_test pass_walk)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered friend_removed
-              hub_friend_removed queue shutdown restart settings account place limit activity signin)
+              hub_friend_removed queue shutdown restart continuation settings account place limit activity signin)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()
@@ -125,7 +125,7 @@ endif()
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window unconfigured sign_in no_credential usage_limit limit_unsupported no_account
+                 stop_hammered account window unconfigured sign_in no_credential usage_limit continuation limit_unsupported no_account
                  friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
                  friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
                  instance_dir instance_elsewhere instance_moved

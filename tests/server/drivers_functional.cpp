@@ -810,6 +810,34 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(readFile(dir + "/starts.log"), "account=a2\n"));
 }
 
+// Observe the real pipe writes across two account-owned processes. A tool already ran and the interrupted reply
+// was still streaming when the first process reported quota. One visible request yields two distinct sends.
+void continuation(Server& s, const std::string& dir, const std::string& fake) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"private-first-id\"}\n"
+        "on-start 1 emit {\"kind\":\"tool\",\"name\":\"Write\",\"summary\":\"created draft.txt\"}\n"
+        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"I finished the first section.\"}\n"
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"subscription limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
+        "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Finished the remainder.\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    s.send("finish my draft");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
+    const std::string sends = readFile(dir + "/sends");
+    CHECK(has(sends, "send 1:\nfinish my draft\n") && has(sends, "send 2:\n[nexus:"));
+    CHECK(has(sends, "Tool activity: Write: created draft.txt") && has(sends, "You: I finished the first section."));
+    CHECK(has(sends, "Do not repeat completed work.]\n\nfinish my draft\n"));
+    const std::string starts = readFile(dir + "/starts.log");
+    CHECK(has(starts, "account=a1\n") && has(starts, "account=a2\n") && !has(starts, "resume=private-first-id"));
+    const auto transcript = s.transcript();
+    CHECK(std::count(transcript.begin(), transcript.end(), "P finish my draft") == 1);
+    CHECK(std::count(transcript.begin(), transcript.end(), "F Finished the remainder.") == 1);
+    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "a2" && s.driver().continuationPrompt.empty());
+}
+
 // A session on no account, whose friend's driver takes one: no driver starts, and the session is told how to link an
 // account.
 void noAccount(Server& s, const std::string& dir, const std::string& fake) {
@@ -1664,7 +1692,7 @@ int main(int argc, char** argv) {
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
                 {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
-                {"usage_limit", usageLimit}, {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
+                {"usage_limit", usageLimit}, {"continuation", continuation}, {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
                 {"friend_removed", friendRemoved}, {"friend_back_limited", friendBackLimited},
                 {"friend_removed_starting", friendRemovedStarting}, {"friend_back_before_stop", friendBackBeforeStop},
                 {"friend_back_limited_queue", friendBackLimitedQueue}, {"friend_back_moved", friendBackMoved},

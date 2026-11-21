@@ -721,7 +721,7 @@ void testAccount() {
     auto changed = c.command;
     changed.insert(changed.end(), {"--account-email", "new@example.test"});
     u.message(Hello{1, "h"}, kStart + 4);
-    o = u.setAccount("other", kStart + 5, &changed);
+    o = u.setAccount("other", kStart + 5, false, &changed);
     CHECK(u.phase() == Phase::Stopping && !written(o).empty());
     u.queued("next", kStart + 6);
     o = u.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 7);
@@ -1477,6 +1477,78 @@ void testRestart() {
     CHECK(sends(o, 3, "w1"));
 }
 
+// A reported quota is a known turn boundary. Only that boundary licenses a fresh continuation.
+void testContinuation() {
+    Config c = config();
+    c.account = "first";
+    c.autoAccount = true;
+    Output o;
+    Supervisor s(c, {}, kStart, &o);
+    s.prompt("original task", kStart);
+    s.message(Hello{1, "h"}, kStart);
+    s.prompt("later task", kStart);
+    s.message(Text{1, "partial"}, kStart);
+    auto limit = Error{"out of credits", "wait", 1, ErrorCode::UsageLimit};
+    auto stale = limit;
+    stale.turn = 42;
+    CHECK(!s.message(stale, kStart).usageLimit);
+    CHECK(s.state().openTurn == 1 && s.state().continuationPrompt.empty());
+    auto other = limit;
+    other.code = ErrorCode::Harness;
+    CHECK(!s.message(other, kStart).usageLimit && s.state().continuationPrompt.empty());
+    o = s.message(limit, kStart);
+    CHECK(o.usageLimit && o.durable && ended(s, o));
+    CHECK((whats(o) == std::vector<What>{What::Reply, What::Error}));
+    CHECK(s.state().openTurn == 0 && s.state().continuationPrompt == "original task" && s.awaitingRotation());
+
+    // The checkpoint before a move survives a restart. No work goes back to an exhausted payer.
+    Supervisor recovered(c, s.state(), kStart, &o);
+    CHECK(o.commands.empty() && recovered.awaitingRotation());
+    o = recovered.setAccount("second", kStart, true);
+    CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+    o = recovered.message(Hello{1, "h"}, kStart);
+    const auto writes = written(o);
+    CHECK(writes.size() == 1 && std::holds_alternative<Send>(writes.front()));
+    if (writes.size() == 1 && std::holds_alternative<Send>(writes.front())) {
+        const auto& send = std::get<Send>(writes.front());
+        CHECK(send.turn == 2 && send.prompt.ends_with("original task") && !contains(send.prompt, "later task"));
+    }
+    CHECK(recovered.state().waiting == std::vector<std::string>{"later task"});
+    // If a sent continuation crashes at an ambiguous point, it is cut, never replayed.
+    c.account = "second";
+    Supervisor ambiguous(c, recovered.state(), kStart, &o);
+    CHECK(whats(o) == std::vector<What>{What::Cut} && ambiguous.state().continuationPrompt.empty());
+    limit.turn = 2;
+    recovered.message(limit, kStart);
+    CHECK(recovered.state().exhaustedAccounts == std::vector<std::string>({"first", "second"}));
+    Supervisor all(c, recovered.state(), kStart, &o);
+    CHECK(all.awaitingRotation() && all.rotationExhausted().durable && all.held());
+    CHECK(!all.awaitingRotation() && all.state().waiting == std::vector<std::string>{"later task"});
+
+    Supervisor stopped(c, recovered.state(), kStart, &o);
+    CHECK(stopped.stop(kStart).durable && stopped.state().continuationPrompt.empty());
+    CHECK(stopped.state().waiting == std::vector<std::string>{"later task"});
+
+    // A model-specific limit waits for a choice even on a pinned subscription. Fallback keeps that payer.
+    c.autoAccount = false;
+    Supervisor choice(c, {}, kStart, &o);
+    choice.prompt("choose the artwork", kStart);
+    choice.message(Hello{1, "h"}, kStart);
+    limit.turn = 1;
+    limit.code = ErrorCode::ModelLimit;
+    CHECK(!choice.message(limit, kStart).usageLimit);
+    CHECK(choice.state().modelLimitPending && !choice.awaitingRotation());
+    auto selected = choice.state();
+    selected.modelLimitPending = false;
+    selected.exhaustedAccounts.clear();
+    Supervisor restored(c, choice.state(), kStart, &o);
+    CHECK(o.commands.empty());
+    restored.acceptModelChoice(selected);
+    restored.setOptions("fallback", "", kStart);
+    CHECK(kinds(restored.setAccount("second", kStart)) == std::vector<Kind>{Kind::Start});
+    CHECK(written(restored.message(Hello{1, "h"}, kStart)).size() == 2);
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -1498,6 +1570,7 @@ const Group kGroups[] = {
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},
+    {"continuation", testContinuation},
     {"settings", testSettings},
     {"account", testAccount},
     {"place", testPlace},

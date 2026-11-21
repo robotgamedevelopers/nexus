@@ -95,6 +95,8 @@ struct Config {
     int maxFailedStarts = kMaxFailedStarts;
     std::size_t maxWaiting = 8;             // prompts waiting, at most (the hub's queue limits)
     std::size_t maxWaitingBytes = 32 * 1024;
+    bool autoAccount = false;
+    std::function<std::string()> continuationContext{};
     std::size_t maxEntryBytes = 32 * 1024;  // the hub's text limit: longer text is split into several entries
 };
 
@@ -186,7 +188,12 @@ public:
     Output setOptions(std::string model, std::string effort, Millis now);
     // The person set the session's account. A driver started under another is ended quietly once no turn is open (an
     // open turn runs to its end first), never counted as a failed start; the next starts under this account.
-    Output setAccount(std::string account, Millis now, const std::vector<std::string>* command = nullptr);
+    Output setAccount(std::string account, Millis now, bool automatic = false,
+                      const std::vector<std::string>* command = nullptr);
+    // A model-limit choice was committed to the store together with its new account or model.
+    void acceptModelChoice(const sync::DriverState& durable);
+    bool awaitingRotation() const;
+    Output rotationExhausted();
     // The session's instance changed (sync::Hub settles it, or a reload moved it): its directory is `cwd`, and `here`
     // says whether it is on this server's machine. A driver started in another directory, or any driver once the
     // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
@@ -253,6 +260,7 @@ private:
     void receive(const driver::DriverMessage& message, Millis now);
     void flush();
     void cutOpen();
+    void clearContinuation();
     void abandon(const std::string& why);
     void end(const std::string& why, Millis now);
     void endQuietly(Millis now);

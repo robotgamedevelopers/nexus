@@ -84,6 +84,9 @@ struct Driver {
     bool summary = false;     // the next send carries a summary of the conversation (its harness session was dropped)
     std::string session_dir{};    // the directory the harness session was made in (empty: not known)
     std::optional<std::string> session_account{};   // the reporting driver's account, absent in older stores
+    std::string continuation_prompt{};
+    std::vector<std::string> exhausted_accounts{};
+    bool model_limit_pending = false;
     bool operator==(const Driver&) const = default;
 };
 

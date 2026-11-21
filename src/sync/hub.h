@@ -54,6 +54,10 @@ struct DriverState {
     bool summary = false;       // the next send carries a summary of the conversation (server/supervisor.h setPlace)
     std::string sessionDir{};   // the directory the harness session was made in: resumed only there (empty: not known)
     std::optional<std::string> sessionAccount{};  // absent in older stores; empty means the accountless harness
+    // The original request for a quota-interrupted turn. A fresh provider session continues it before queued work.
+    std::string continuationPrompt{};
+    std::vector<std::string> exhaustedAccounts{};
+    bool modelLimitPending = false;
     bool operator==(const DriverState&) const = default;
 };
 

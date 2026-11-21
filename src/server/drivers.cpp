@@ -167,21 +167,39 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
 // ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
 // after.
 std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript,
-                      const std::string& prompt) {
+                      const std::string& prompt, const std::vector<std::string>* waiting = nullptr) {
     auto before = transcript.rbegin();
-    while (before != transcript.rend() && !((*before)->kind == EntryKind::Person && (*before)->text == prompt)) {
-        ++before;
+    if (waiting == nullptr) {
+        while (before != transcript.rend() && !((*before)->kind == EntryKind::Person && (*before)->text == prompt)) {
+            ++before;
+        }
+        if (before == transcript.rend()) {
+            before = transcript.rbegin();
+        } else {
+            ++before;
+        }
     }
-    if (before == transcript.rend()) {
-        before = transcript.rbegin();   // not shown (cannot be, but then nothing is left out)
-    } else {
-        ++before;
-    }
+    std::size_t later = waiting == nullptr ? 0 : waiting->size();
+    bool skippedRequest = false;
     std::vector<std::string> parts;
     std::size_t bytes = 0;
     for (auto it = before; it != transcript.rend() && bytes < kSummaryBytes; ++it) {
+        if (waiting != nullptr) {
+            // Later submissions are already visible in the transcript and will get their own turns.
+            if ((*it)->kind == EntryKind::Person && later != 0 && (*it)->text == (*waiting)[later - 1]) {
+                --later;
+                continue;
+            }
+            if ((*it)->kind == EntryKind::Person && !skippedRequest && (*it)->text == prompt) {
+                skippedRequest = true;   // the continuation always includes the original request in full
+                continue;
+            }
+            if ((*it)->kind == EntryKind::Notice) {
+                continue;
+            }
+        }
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
-            (*it)->kind == EntryKind::Friend ? "You" : "nexus";
+            (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" : "nexus";
         std::string part = std::string(who) + ": " + tailOf((*it)->text, kSummaryBytes - bytes) + "\n";
         bytes += part.size();
         parts.push_back(std::move(part));
@@ -191,7 +209,7 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         text += *it;
     }
-    return text + "[nexus: the person's prompt follows.]\n\n";
+    return waiting == nullptr ? text + "[nexus: the person's prompt follows.]\n\n" : text;
 }
 
 class PosixHost : public Drivers::Host {
@@ -401,6 +419,7 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
         c.model = stored->info.model;
         c.effort = stored->info.effort;
         c.account = stored->info.account;
+        c.autoAccount = stored->info.autoAccount;
     }
     c.command = driver.command;
     c.cwd = driver.cwd;
@@ -417,6 +436,11 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
         const sync::StoredSession* s = store_.find(id);
         return s == nullptr ? std::string() : summaryOf(name, s->transcript, prompt);
     };
+    c.continuationContext = [this, id, name = c.name] {
+        const sync::StoredSession* s = store_.find(id);
+        return s == nullptr ? std::string() :
+            summaryOf(name, s->transcript, s->driver.continuationPrompt, &s->driver.waiting);
+    };
     c.configured = options_.table;
     c.timing = options_.timing;
     c.maxWaiting = hub_->limits().queue;
@@ -431,7 +455,7 @@ bool Drivers::start(Millis now) {
         const sync::StoredSession* stored = store_.find(id);
         sync::DriverState state = stored->driver;
         const ResolvedDriver r = resolve(id);
-        if (state.openTurn == 0 && state.waiting.empty() &&
+        if (state.openTurn == 0 && state.waiting.empty() && state.continuationPrompt.empty() &&
             (stored->queue.empty() || !r.problem.empty() || !listed(id))) {
             // Nothing to run, or only queued prompts and no driver to give them (they stay queued, as they are): the
             // session shows idle, or down when its friend has no driver configured or is not in friends.json.
@@ -592,7 +616,8 @@ Output Drivers::syncSlot(sync::SessionId id, Supervisor& sup, Millis now) {
         append(out, sup.configure({}, dir, options_.table, now));
     }
     append(out, sup.setOptions(s->info.model, s->info.effort, now));
-    append(out, sup.setAccount(s->info.account, now, &r.command));
+    sup.acceptModelChoice(s->driver);
+    append(out, sup.setAccount(s->info.account, now, s->info.autoAccount, &r.command));
     append(out, sup.setLimited(limitedOf(s->info), now));
     append(out, sup.setKeepsOut(keepsOut(), now));
     if (!none) {
@@ -1029,6 +1054,9 @@ int Drivers::waitMs(Millis now) const {
         wait = resolveAt_ > now ? resolveAt_ - now : 0;
     }
     for (const auto& [id, t] : slots_) {
+        if (t.sup.awaitingRotation()) {
+            return 0;
+        }
         if (const std::optional<Millis> d = t.sup.deadline()) {
             wait = std::min(wait, *d > now ? *d - now : 0);
         }
@@ -1083,6 +1111,11 @@ bool Drivers::serve(Millis now, bool* changed) {
             append(out, t.sup.closed(t.proc->broken, now));
         }
         append(out, t.sup.tick(now));
+        // A committed checkpoint also requests rotation after a server restart between the quota report and move.
+        if (t.sup.awaitingRotation()) {
+            out.account = t.sup.account();
+            out.usageLimit = true;
+        }
         if ((out.signedIn || out.usageLimit) && !out.account.empty()) {
             reports.push_back(Report{id, out.account, out.signedIn, out.usageLimit});
         }
@@ -1115,11 +1148,20 @@ bool Drivers::serve(Millis now, bool* changed) {
         const sync::StoredSession* s = store_.find(r.id);
         if (r.usageLimit && s != nullptr && s->info.account == r.account) {
             std::string why;
-            if (hub_->rotate(r.id, &why)) {
+            const auto exhausted = s->driver.exhaustedAccounts;
+            bool noEligible = false;
+            if (hub_->rotate(r.id, &why, exhausted, &noEligible)) {
                 log(r.id, "the account " + r.account + " reached its usage limit; the session moved to " +
                     store_.find(r.id)->info.account);
             } else {
                 log(r.id, "the account " + r.account + " reached its usage limit: " + why);
+                if (!noEligible) {
+                    return false;   // the move or notice failed to commit; recover the checkpoint on restart
+                }
+                auto it = slots_.find(r.id);
+                if (it != slots_.end() && !run(r.id, it->second.sup.rotationExhausted(), now, false, changed)) {
+                    return false;
+                }
             }
             if (changed != nullptr) {
                 *changed = true;
