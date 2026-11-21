@@ -695,7 +695,7 @@ std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const
                 // Measure admission with every optional sign-in bit set.
                 const bool needs = !signedIn || (canSignIn && hasSignIn(a->second->provider) &&
                                                   !signedIn->contains(name));
-                row.accounts.push_back({name, a->second->label, needs});
+                row.accounts.push_back({name, a->second->label, needs, a->second->email});
             }
         }
     }
@@ -707,7 +707,7 @@ std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const
 std::string accountRosterProblem(const accounts::Registry& registry) {
     const auto index = indexAccounts(registry);
     const char* problem = "friends.json: the linked account choices exceed the window roster budget "
-                          "(3 MiB on the wire or 12 MiB decoded); shorten repeated account labels in accounts.json "
+                          "(3 MiB on the wire or 12 MiB decoded); shorten repeated account labels or emails in accounts.json "
                           "or remove links from friends.json";
     std::size_t textBytes = 0;
     std::size_t rows = 0;
@@ -716,9 +716,9 @@ std::string accountRosterProblem(const accounts::Registry& registry) {
         rows++;
         for (const auto& name : f.accounts) {
             if (const auto account = index.find(name); account != index.end()) {
-                // Both strings are written inline for every link. Refuse obviously oversized configs
-                // before expanding a shared label into thousands of distinct entries in memory.
-                textBytes += name.size() + account->second->label.size();
+                // Each string is written inline for every link. Check before expanding shared
+                // account metadata into thousands of distinct entries in memory.
+                textBytes += name.size() + account->second->label.size() + account->second->email.size();
                 rows++;
                 if (textBytes > codec::kRosterWireBytes) {
                     return problem;

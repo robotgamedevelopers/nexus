@@ -2072,7 +2072,13 @@ std::vector<FriendInfo> listOf(std::initializer_list<const char*> names) {
 void friends_cross_the_wire() {
     Sessions empty;
     Sessions two({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
-    const std::vector<ServerFriend> choices = {{"ada", {{"work", "dev+work@example.test"}, {"home"}}}, {"bo"}};
+    const std::vector<ServerFriend> choices = {
+        {"ada", {{"work", "Work", true, "dev+work@example.test"}, {"home"}}}, {"bo"}};
+    // The generated format-5 writer at ef5e86c carried the name, label and sign-in state.
+    Sessions previous;
+    previous.apply_string(fixture("account-choice-before-email.init"));
+    const std::vector<ServerFriend> previousChoices = {{"ada", {{"work", "Work", true}}}};
+    CHECK(previous.friends() == previousChoices && previous.unknown() == 0);
     two.setFriends(choices);
     Sessions read;
     read.apply_string(two.diff_from(empty));

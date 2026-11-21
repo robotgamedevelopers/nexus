@@ -11,6 +11,7 @@ table AccountChoice
     field name id=0xc4bcadba8e631b86 kind=17 type=string
     field label id=0x39f7fcec8fcb623d kind=17 type=string
     field needs_sign_in id=0x6ac9ccb3345d3744 kind=1
+    field email id=0x123467b419acbc07 kind=17 type=string
 
 table Action
     field kind id=0xef9c96d721673243 kind=7 enum=ActionKind
@@ -171,4 +172,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-21 (UTC) — Record the action acknowledged by each window state
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Include the configured sign-in email on linked account choices
 - no compatibility-affecting edits; the wire absorbs the rest

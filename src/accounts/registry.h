@@ -33,7 +33,7 @@ constexpr int kAccountOptionsVersion = 3;
 // API-billed account is always limited (Friend::limit), whatever its friend says (docs/accounts.md, "limit").
 enum class Billing { Subscription, Api };
 
-// Count cap for all file versions. The expanded picker labels and links also have a wire and decode
+// Count cap for all file versions. The expanded picker metadata and links also have a wire and decode
 // budget, checked by sync::accountRosterProblem before a registry is published.
 constexpr std::size_t kMaxFriends = 256;
 
@@ -43,7 +43,7 @@ struct Account {
     Billing billing = Billing::Subscription;
     std::string label{};     // optional picker text; the name remains the account id and credential directory
     bool signInOnUse = false;
-    std::string email{};     // configuration metadata; never sent to a client or used to verify login
+    std::string email{};     // configured address shown to linked windows; independent of provider identity verification
     bool operator==(const Account&) const = default;
 };
 

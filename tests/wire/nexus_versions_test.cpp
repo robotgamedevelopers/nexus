@@ -273,9 +273,9 @@ void test_signin() {
     CHECK(skipped.sessions == 1 && skipped.friendName == "rowan" && (skipped.kinds == Names{"Person"}));
     CHECK((skipped.requests == Ids{3}));
     // An older reader which predates the roster still loads the transcript and requests when
-    // the new server includes nested named account choices and labels.
+    // the new server includes nested named account choices, labels and configured email.
     Sessions withRoster = server;
-    withRoster.setFriends({{"rowan", {{"work", "Writing"}, {"home", ""}}}});
+    withRoster.setFriends({{"rowan", {{"work", "Writing", true, "writing@example.test"}, {"home", ""}}}});
     const auto earlier = wiretest::prevReadSessions(bytes(withRoster.init_diff()));
     CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
     CHECK(earlier.sessions == skipped.sessions && earlier.friendName == skipped.friendName);

@@ -67,6 +67,7 @@ struct AccountChoice {
     std::string name;
     std::string label{};
     bool needsSignIn = false;    // the server can sign this linked account in and has no login for it
+    std::string email{};         // configured sign-in address; empty when omitted or sent by an older server
     bool operator==(const AccountChoice&) const = default;
 };
 

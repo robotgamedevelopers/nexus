@@ -53,7 +53,9 @@ later field goes after them.
   `SessionsDiff` carries `friends_sent` (bool, default false), `friends_known` (bool, default false) and `friends` (a
   list of `Friend` records with a `name` and linked `accounts`; default empty), the friends the server's `friends.json` holds, in its order. A
   friend's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
-  display `label`. The optional `needs_sign_in` flag defaults to false. The server sets it for a linked account
+  display `label`. The optional `email` is the address from the account’s server registry entry. It reads as
+  empty for older servers. Older windows skip it and retain the account name, label and sign-in status.
+  The optional `needs_sign_in` flag defaults to false. The server sets it for a linked account
   when its browser sign-in is available and the server has no active login for it. A window can send a
   `SignInClaim` naming the session and account the person selected, its claim token and an existing flow ID,
   or zero to request the first flow. The server verifies the session still uses that linked account before

@@ -706,16 +706,17 @@ void pickerBudget() {
     window.apply_string(hub.state().init_diff());
     CHECK(window.friends() == hub.state().friends());
     CHECK(window.friends().size() == accounts::kMaxFriends && window.friends().back().accounts.size() == 100);
-    for (std::size_t label : {51, 254}) {
-        // At 51 bytes the strings alone fit and generated framing pushes it over. At 254 bytes
-        // even the strings exceed the limit, so the server can refuse before expanding them.
+    for (const auto& [label, email] : {std::pair{51, 0}, std::pair{25, 26}, std::pair{0, 254}}) {
+        // At 51 added bytes the strings fit and framing pushes the roster over. At 254 bytes,
+        // the emails alone exceed the limit before the server expands the repeated choices.
         for (auto& a : roster.accounts) {
-            a.label.assign(label, 'X');
+            a.label.assign(label, 'L');
+            a.email.assign(email, 'E');
         }
         std::vector<std::string> report;
         CHECK(!hub.applyAccounts(roster, "oversized edit", &report));
         CHECK(has(report, "linked account choices exceed the window roster budget"));
-        CHECK(keeper.kept.empty() && hub.accounts()->accounts.front().label.empty());
+        CHECK(keeper.kept.empty() && hub.accounts()->accounts.front().label.empty() && hub.accounts()->accounts.front().email.empty());
         CHECK(window.friends() == hub.state().friends());
     }
 }
@@ -900,13 +901,24 @@ void hubFriends() {
     Keeper keeper;
     CHECK(!hub.state().friendsKnown() && hub.state().friends().empty());
     Registry edit = sample();
-    edit.accounts[0].label = "dev+work@example.test";
-    edit.accounts[0].email = "private-address@example.test";
-    sync::ServerFriend ada{"ada", {{"work", edit.accounts[0].label}, {"home"}, {"cx"}}};
+    edit.accounts[0].label = "Work";
+    edit.accounts[0].email = "dev+work@example.test";
+    edit.accounts.push_back({"unused", "fake", accounts::Billing::Subscription, "", false, "unlinked@example.test"});
+    sync::ServerFriend ada{"ada", {{"work", "Work", false, "dev+work@example.test"}, {"home"}, {"cx"}}};
     const sync::ServerFriend bo{"bo", {{"home"}}};
     CHECK(hub.useAccounts(edit, &keeper).empty());
     CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, bo}));
-    CHECK(hub.state().diff_from(sync::Sessions{}).find(edit.accounts[0].email) == std::string::npos);
+    sync::Sessions window;
+    window.apply_string(hub.state().init_diff());
+    CHECK((window.friends() == Names{ada, bo}));
+    CHECK(hub.state().init_diff().find("unlinked@example.test") == std::string::npos);
+    const auto before = hub.state();
+    edit.accounts[0].email = "replacement@example.test";
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(edit, "email edited", &report));
+    window.apply_string(hub.state().diff_from(before));
+    ada.accounts[0].email = edit.accounts[0].email;
+    CHECK((window.friends() == Names{ada, bo}));
     // A session made rebuilds the state: the friends stay.
     std::string why;
     std::uint64_t n = 1;
@@ -917,7 +929,6 @@ void hubFriends() {
     ada.accounts[0].label = edit.accounts[0].label;
     edit.friends.erase(edit.friends.begin() + 1);
     edit.friends.push_back(accounts::Friend{"cy", {}, ""});
-    std::vector<std::string> report;
     CHECK(hub.applyAccounts(edit, "reload", &report));
     CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, {"cy"}}));
     // A window's AddFriend.

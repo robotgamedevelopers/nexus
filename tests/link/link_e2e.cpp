@@ -1598,6 +1598,8 @@ int privateSignIn(const std::string& binary, const std::string& dir, const std::
     accounts::Registry registry;
     accounts::Account a{account, "codex"};
     a.signInOnUse = true;
+    a.email = "member@example.test";
+    a.label = "work";
     registry.accounts.push_back(a);
     registry.friends.push_back({"fixture-friend", {account}, account});
 
@@ -1634,7 +1636,10 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","acces
         const auto needsSignIn = [&]() -> std::optional<bool> {
             for (const auto& friendRow : w.session->state().friends())
                 for (const auto& choice : friendRow.accounts)
-                    if (friendRow.name == "fixture-friend" && choice.name == account) return choice.needsSignIn;
+                    if (friendRow.name == "fixture-friend" && choice.name == account) {
+                        CHECK(choice.email == a.email && choice.label == a.label);
+                        return choice.needsSignIn;
+                    }
             return std::nullopt;
         };
         CHECK(until([&] { return needsSignIn() == (start == 0); }));

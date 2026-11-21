@@ -154,6 +154,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
                 putText(b.main, choice->name, account.name, scratch);
                 putText(b.main, choice->label, account.label, scratch);
                 choice->needs_sign_in = account.needsSignIn;
+                putText(b.main, choice->email, account.email, scratch);
             }
         }
     }
@@ -251,7 +252,8 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             ServerFriend friendState{textOf(f.name)};
             friendState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
             for (const wire::AccountChoice& choice : f.accounts) {
-                friendState.accounts.push_back({textOf(choice.name), textOf(choice.label), choice.needs_sign_in});
+                friendState.accounts.push_back(
+                    {textOf(choice.name), textOf(choice.label), choice.needs_sign_in, textOf(choice.email)});
             }
             out.friends.push_back(std::move(friendState));
         }
