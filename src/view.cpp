@@ -143,6 +143,7 @@ struct BoxRecipe {
             case Part::FocusedCard:
                 box.display = PrLayoutDisplay_Flex;
                 box.minWidth = px(0);
+                box.maxWidth = prLayoutLengthPercent(100);
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
                 break;
             case Part::Bubble:
@@ -417,19 +418,25 @@ struct Builder {
     }
 
     void accountPanel(PrLayoutNode parent) {
-        const std::string action = view.signInCaption ? view.signInCaption() : std::string();
-        if (action.empty()) {
-            const std::string account = view.accountCaption ? view.accountCaption() : std::string();
-            if (!account.empty())
-                caption(element(parent, Part::ReplyRow), account, textStyle(PrKitTextRole_Meta, kStatusTone));
-            return;
-        }
+        const auto& selected = view.windowApp.signInAccount;
+        if (selected.name.empty()) return;
         const auto footer = element(parent, Part::ActionRow);
         const auto button = prKitButton(kit, footer, {.key = prUiKey(ui, footer, sv("sign-in-action"))}, {});
         const auto appearance = prUiFocus(ui) == button || prUiIsHovered(ui, button) ?
             Part::FocusedCard : Part::MessageCard;
         prLayoutTreeFrameSetStyle(tree, button, style(ui, look, appearance));
-        label(button, action, textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center));
+        auto large = textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center);
+        large.wrap = PrKitWrap_Wrap;
+        label(button, "Sign in to " + (selected.label.empty() ? selected.name : selected.label), large);
+        if (!selected.email.empty()) {
+            const auto email = label(button, selected.email, large);
+            // Keep the Kit label's typography and wrapping. Its color belongs only to this address.
+            auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, email));
+            auto ink = prLayoutColorStyleRecord(tree, record.groups[PrLayoutGroup_Color]);
+            ink.color = prColor16FromColor(rgb(look.messageCard.emailInk));
+            record.groups[PrLayoutGroup_Color] = prLayoutColorStyleIntern(tree, &ink);
+            prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &record));
+        }
         label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center));
         if (prKitActivated(kit, button) && view.activateSignIn)
             view.activateSignIn();
@@ -542,6 +549,61 @@ struct Builder {
     // The secret request the dialog shows this round, or null (read once, before the keys are claimed).
     const SecretAsk* asking = nullptr;
 
+    // The account control fits beneath the friend title. Only the popover floats outside the strip.
+    void accountDropdown(PrLayoutNode title, const std::string& current) {
+        view.accountAnchor = prKitButton(kit, title, {.key = prUiKey(ui, title, sv("account"))},
+                                        {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Sm});
+        PrKitPlace size{};
+        size.height = prKitPx(kit->theme.types[PrKitTextRole_Meta].lineHeight + 4 * k());
+        prKitPlace(kit, view.accountAnchor, &size);
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, view.accountAnchor));
+        auto& group = record.groups[PrLayoutGroup_Decoration];
+        auto decoration = prLayoutDecorationStyleRecord(tree, group);
+        decoration.background = prColor16FromColor(rgb(look.transcriptStyle.fill));
+        group = prLayoutDecorationStyleIntern(tree, &decoration);
+        prLayoutTreeFrameSetStyle(tree, view.accountAnchor, prLayoutStyleIntern(tree, &record));
+        label(view.accountAnchor, current, textStyle(PrKitTextRole_Meta, kStatusTone));
+        prKitIcon(kit, view.accountAnchor, {.icon = PrKitIconKind_ChevronDown},
+                  {.size = kMetaSize * k() * 0.7f, .tone = kStatusTone, ._pad = {}});
+        if (!asking && prKitActivated(kit, view.accountAnchor) && view.pickerCommand)
+            view.pickerCommand(view.accountPicker ? "cancel" : "open");
+
+        const bool open = !asking && view.accountPicker && view.accountPicker->tab == model.tab(model.active()).id;
+        prKitSetOpen(kit, view.accountAnchor, open);
+        const auto popover = prKitPopover(kit, view.accountAnchor, {}, {});
+        if (!open || popover == kPrLayoutNodeNone) {
+            view.lastHighlightedAccount.clear();
+            if (open && view.pickerCommand) view.pickerCommand("cancel");
+            return;
+        }
+        // The fork handles arrow keys and Enter. Native focus follows that preview and remains available to mouse input.
+        view.accountMenu = prKitMenu(kit, popover, {}, {.leavesFocus = true});
+        captureShortcuts(view.accountMenu);
+        if (!view.accountPicker) return;
+        const auto& picker = *view.accountPicker;
+        std::string chosen;
+        for (std::size_t i = 0; i < picker.options.size(); ++i) {
+            const auto& option = picker.options[i];
+            const auto& displayed = option.label.empty() ? option.name : option.label;
+            const bool preview = i == picker.highlighted;
+            const auto row = prKitMenuItem(kit, view.accountMenu,
+                {.key = prUiKey(ui, view.accountMenu, sv(option.name)), .text = sv(displayed),
+                 .icon = PrKitIconKind(preview ? PrKitIconKind_ChevronRight : PrKitIconKind_None),
+                 .checked = option.name == picker.current}, {});
+            PrKitPlace rowSize{};
+            rowSize.height = prKitPx(kit->theme.types[PrKitTextRole_Body].lineHeight + 8 * k());
+            prKitPlace(kit, row, &rowSize);
+            view.accountRows.push_back(row);
+            if (preview && view.lastHighlightedAccount != option.name) {
+                prUiSetFocus(ui, row);
+                prUiReveal(ui, row);
+                view.lastHighlightedAccount = option.name;
+            }
+            if (prKitActivated(kit, row)) chosen = option.name;
+        }
+        if (!chosen.empty() && view.chooseAccount) view.chooseAccount(chosen);
+    }
+
     void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, const std::string& group,
             bool exchanges, PrKitFlex flex) {
         syncTabs(tabs, first, end);
@@ -574,12 +636,22 @@ struct Builder {
                 prLayoutTreeFrameSetStyle(tree, tab, prLayoutStyleIntern(tree, &record));
             }
             PrKitPlace tabPlace{};
-            tabPlace.height = prKitPx(1.75f * kTabSize * k());
+            const bool currentFriend = i == model.active() && model.tab(i).kind == TabKind::Friend;
+            const bool offersAccounts = std::find(view.windowApp.panels.begin(), view.windowApp.panels.end(),
+                                                  Panel::Account) != view.windowApp.panels.end();
+            const auto current = currentFriend && offersAccounts && view.accountCaption ? view.accountCaption() : std::string();
+            tabPlace.height = prKitPx((current.empty() ? 1.75f * kTabSize : kStripHeight) * k());
             tabPlace.align = PrKitAlign_Center;
             if (i == 0)
                 tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
-            prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(label(model.tab(i)))});
+            if (current.empty()) {
+                prKitTabLabel(kit, tab, {.text = sv(label(model.tab(i)))});
+            } else {
+                const auto title = prKitBox(kit, tab, {}, {.direction = PrKitDirection_Column, .align = PrKitAlign_Start});
+                prKitTabLabel(kit, title, {.text = sv(label(model.tab(i)))});
+                accountDropdown(title, current);
+            }
             view.tabNodes[i] = tab;
         }
         // A click on a tab, or Left or Right on a focused one, selects in the kit: made through the model's select_tab.
@@ -593,6 +665,9 @@ struct Builder {
     // that permits transfers uses the kit's cross-strip drop event, naming the source instance and destination slot.
     void strips(PrLayoutNode window) {
         view.tabNodes.assign(model.tab_count(), kPrLayoutNodeNone);
+        view.accountAnchor = kPrLayoutNodeNone;
+        view.accountMenu = kPrLayoutNodeNone;
+        view.accountRows.clear();
         const bool exchanges = std::any_of(view.windowApp.groups.begin(), view.windowApp.groups.end(),
             [](const TabGroup& group) { return !group.acceptsFrom.empty(); });
         if (const PrUiPayload* dragging = prUiDragging(ui)) view.draggingTab = dragging->value;
@@ -1087,11 +1162,11 @@ struct Builder {
         // never sees them; every other Enter (Shift-Enter among them) goes to the area, which breaks the line (pr/ui.h).
         PrLayoutNode box = element(footer, Part::Prompt);
         view.promptBox = box;
-        bool send = prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
-        bool queue = prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
+        bool send = !pickerInput && prUiKeyCaptured(ui, box, PrAppKey_Enter, 0);
+        bool queue = !pickerInput && prUiKeyCaptured(ui, box, PrAppKey_Enter, style::kCommand);
         // Command-V reads the clipboard through the host, which cuts the text to the room left before the area sees it,
         // and hands it on in one event.
-        if (view.paste && prUiKeyCaptured(ui, box, PrAppKey('V'), style::kCommand)) {
+        if (!pickerInput && view.paste && prUiKeyCaptured(ui, box, PrAppKey('V'), style::kCommand)) {
             view.paste();
         }
         view.promptRows = promptRows();
@@ -1102,6 +1177,7 @@ struct Builder {
         area.key = prUiKey(ui, kPrLayoutNodeNone, PrStringView{"prompt", 6});
         area.text = sv(model.tab(active).draft);
         area.rows = view.promptRows;
+        area.disabled = pickerInput;
         PrLayoutNode edit = prKitTextArea(kit, box, area, PrKitFieldStyle{});
         PrKitPlace fill{};
         fill.flex = PrKitFlex_Fill;
@@ -1109,12 +1185,12 @@ struct Builder {
         frameless(edit);
         view.prompt = edit;
         // The focus is the secret dialog's while it shows (secretDialog).
-        if (asking == nullptr && prUiFocus(ui) != edit)
+        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;
         view.cutComing = false;     // the cut text, pushed for this frame, is in the area's events of its first round
-        if (prKitTextChanged(kit, edit, &changed)) {
+        if (!pickerInput && prKitTextChanged(kit, edit, &changed)) {
             // Text that came past the host's cut (pasted with no host, or typed into a selection the host had not yet
             // seen) is cut here.
             const PrStringView kept = cutText(changed, kPromptBytes);
@@ -1132,7 +1208,7 @@ struct Builder {
                 view.cutTab = ~std::size_t(0);
             }
         }
-        if (!composing && asking == nullptr) {
+        if (!pickerInput && !composing && asking == nullptr) {
             if (send)
                 promptKey(active, "Enter");
             if (queue)
@@ -1204,19 +1280,8 @@ struct Builder {
         }
     }
 
-    void build(PrLayoutNode parent) {
-        PrLayoutNode window = element(parent, Part::Window);
-        view.breathing = false;     // until a friend's transcript draws a busy cursor this round
-        // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
-        // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
-        // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
-        // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
-        const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
-        // nexus's Command chords are captured, not claimed: a capture routes ahead of every claim (pr/ui.h
-        // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
-        // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
-        // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
-        updateApplication();
+    // Both the window root and the detached account menu surface use these same policy bindings.
+    void captureShortcuts(PrLayoutNode keys) {
         std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
@@ -1231,6 +1296,26 @@ struct Builder {
             });
             if (active != bindings.end()) shortcut(*active);
         }
+    }
+
+    bool pickerInput = false;
+
+    void build(PrLayoutNode parent) {
+        PrLayoutNode window = element(parent, Part::Window);
+        view.breathing = false;     // until a friend's transcript draws a busy cursor this round
+        // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
+        // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
+        // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
+        // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
+        const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
+        // nexus's Command chords are captured, not claimed: a capture routes ahead of every claim (pr/ui.h
+        // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
+        // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
+        // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
+        updateApplication();
+        pickerInput = view.accountPicker.has_value();
+        captureShortcuts(keys);
+        pickerInput = pickerInput || view.accountPicker.has_value();
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
         // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
@@ -1244,7 +1329,7 @@ struct Builder {
         // routeKey), so during a drag Escape cancels it and hides nothing. While composing it is the input method's.
         // While the secret dialog shows, Escape is the dialog's (it cancels the request) and hides nothing.
         asking = view.secrets != nullptr ? view.secrets->showing() : nullptr;
-        if (hides && asking == nullptr && prUiDragging(ui) == nullptr &&
+        if (hides && !pickerInput && asking == nullptr && prUiDragging(ui) == nullptr &&
                 prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing && view.hide)
             view.hide();
         strips(window);
@@ -1272,9 +1357,13 @@ struct Builder {
             const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
             const char* kind = !active ? "empty" : active->kind == TabKind::Friend ? "friend" :
                 active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
+            if (view.accountPicker && (!active || active->id != view.accountPicker->tab ||
+                    (view.secrets && view.secrets->showing())))
+                view.accountPicker.reset();
             view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
                 !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string(),
-                active && active->kind == TabKind::Friend && view.signInCaption && !view.signInCaption().empty());
+                active && active->kind == TabKind::Friend && view.signInAccount ? view.signInAccount() : SignInAccount{},
+                view.accountPicker.has_value());
         };
         describe();
         if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
@@ -1300,6 +1389,9 @@ struct Builder {
                 if (model.move_tab(from, to) && view.moved) view.moved();
                 break;
             }
+            case WindowCommand::AccountPicker:
+                if (view.pickerCommand) view.pickerCommand(key.type);
+                break;
             case WindowCommand::AccountCommand:
                 if (view.accountCommand) view.accountCommand(key.type);
                 break;

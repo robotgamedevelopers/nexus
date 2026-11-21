@@ -101,7 +101,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -161,7 +161,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
-    if(T_PLUGINTRACE)
+    if(T_PICKERTRACE)
+        list(APPEND defs -DPICKERWALK=$<TARGET_FILE:account_picker_trace>)
+    elseif(T_PLUGINTRACE)
         list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DPLUGINTRACE=ON -DDATA=PluginTabTraceData)
     elseif(T_DRIVERWALK)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
@@ -572,3 +574,8 @@ tlc_test(tlc_signin_witness_no_timeout WSignInNoTimeout WSignInNoTimeout.cfg liv
 tlc_test(tlc_signin_witness_need_twice WSignInNeedTwice WSignInNeedTwice.cfg invariant PROPERTY OneFlowPerAccount)
 tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeeps.cfg invariant
          PROPERTY ProcessHasItsFlow)
+
+# The local account selection preview. FrameHost's real callbacks and emitted link actions are checked on macOS.
+tlc_test(tlc_window_account_picker_spec AccountPicker AccountPicker.cfg pass)
+tlc_test(tlc_window_account_picker_preview_rejected AccountPicker witnesses/WPickerPreviewSends.cfg invariant PROPERTY OnlyConfirmationSends)
+tlc_test(tlc_window_account_picker_stale_rejected AccountPicker witnesses/WPickerStaleSession.cfg invariant PROPERTY LiveBinding)

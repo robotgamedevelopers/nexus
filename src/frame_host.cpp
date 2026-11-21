@@ -261,6 +261,7 @@ void FrameHost::pollLink() {
         }
     }
     phase = s.phase;
+    refreshPicker();
     heardMsAgo = s.heardMsAgo;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
 }
@@ -329,6 +330,7 @@ void FrameHost::selectSignInAccount() {
 }
 
 bool FrameHost::activateSignIn() {
+    if (view->accountPicker) return true;
     if (!link) return false;
     if (model->tab_count() && accountSelections_.contains(mirror.session(model->tab(model->active()).id))) {
         view->problem = "Switching accounts. Your draft is kept. Press Enter when the selected account appears.";
@@ -361,7 +363,73 @@ bool FrameHost::activateSignIn() {
     return true;
 }
 
+void FrameHost::refreshPicker() {
+    auto& picker = view->accountPicker;
+    if (!picker) return;
+    const auto* roster = activeAccountRoster();
+    if (phase != sync::LinkPhase::Connected || !roster || (view->secrets && view->secrets->showing())) {
+        picker.reset();
+        return;
+    }
+    const auto tab = model->tab(model->active()).id;
+    const auto* session = accountState_.find(mirror.session(tab));
+    if (!session || !picker->refresh(tab, session->id, roster->accounts, session->info.account))
+        picker.reset();
+}
+
+void FrameHost::setAccount(sync::SessionId session, const std::string& target) {
+    if (!link) return;
+    sync::Action action;
+    action.kind = sync::ActionKind::SetAccount;
+    action.session = session;
+    action.text = target;
+    const auto number = link->send(std::move(action));
+    if (accountState_.nextAction()) accountSelections_[session] = number;
+}
+
+void FrameHost::chooseAccount(std::string account) {
+    // Revalidate against the latest server snapshot at the time of this click or keypress.
+    refreshPicker();
+    auto& picker = view->accountPicker;
+    if (!picker) return;
+    const auto session = picker->session;
+    const auto selected = picker->choice(account);
+    picker.reset();
+    if (selected && !accountSelections_.contains(session))
+        setAccount(session, *selected);
+}
+
+void FrameHost::pickerCommand(const std::string& command) {
+    auto& picker = view->accountPicker;
+    if (command == "cancel") {
+        picker.reset();
+        return;
+    }
+    const bool wasOpen = picker.has_value();
+    refreshPicker();
+    if (wasOpen && !picker) return;
+    if (command == "confirm") {
+        if (picker) chooseAccount(picker->options[picker->highlighted].name);
+        return;
+    }
+    if (command != "open" && command != "previous" && command != "next") return;
+    const int direction = command == "next" ? 1 : command == "previous" ? -1 : 0;
+    if (picker) {
+        picker->step(direction);
+        return;
+    }
+    if (phase != sync::LinkPhase::Connected || (view->secrets && view->secrets->showing())) return;
+    const auto* roster = activeAccountRoster();
+    if (!roster) return;
+    const auto tab = model->tab(model->active()).id;
+    const auto* session = accountState_.find(mirror.session(tab));
+    if (!session || accountSelections_.contains(session->id)) return;
+    picker = AccountPicker::open(tab, session->id, roster->accounts, session->info.account, direction);
+}
+
 void FrameHost::wire() {
+    view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
+    view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
     view->dismissFriend = [this](const Tab& tab) {
         strip.dismiss(tab);
         mirror.forget(tab.id);
@@ -372,12 +440,13 @@ void FrameHost::wire() {
         }
     };
     view->activateSignIn = [this]() { return activateSignIn(); };
-    view->signInCaption = [this]() -> std::string {
-        if (phase != sync::LinkPhase::Connected || !link || !model->tab_count() ||
+    view->signInAccount = [this]() -> SignInAccount {
+        // A captured state shows the same card as the connected session. Activation requires a live link.
+        if (phase != sync::LinkPhase::Connected || !model->tab_count() ||
             accountSelections_.contains(mirror.session(model->tab(model->active()).id))) return {};
         const auto* choice = activeChoice();
         if (!choice || (!choice->needsSignIn && !offerFor(choice->name))) return {};
-        return "Sign in to " + (choice->label.empty() ? choice->name : choice->label);
+        return {choice->name, choice->label, choice->email};
     };
     view->accountCaption = [this]() -> std::string {
         const auto* roster = activeAccountRoster();
@@ -435,12 +504,8 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         const auto session = mirror.session(model->tab(model->active()).id);
         const auto* current = accountState_.find(session);
         if (!current) return;
-        sync::Action action;
-        action.kind = sync::ActionKind::SetAccount;
-        action.session = session;
-        action.text = "+" + command;
-        const auto number = link->send(std::move(action));
-        if (accountState_.nextAction()) accountSelections_[session] = number;
+        view->accountPicker.reset();
+        setAccount(session, "+" + command);
     };
     view->submit = [this](std::size_t i, bool queue) {
         if (i == model->active() && activateSignIn()) return;
@@ -485,6 +550,7 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
     takeFriends(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
+    refreshPicker();
     heardMsAgo = lost ? sync::kQuietMs : 0;
     wire();
 }

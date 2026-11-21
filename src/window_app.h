@@ -12,7 +12,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand };
+enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -29,6 +29,7 @@ struct TabType {
 struct MessageCardStyle {
     unsigned fill = 0xffffff;
     unsigned ink = 0;
+    unsigned emailInk = 0x477fba;
     float textSize = 34;
     float radius = 20;
     bool operator==(const MessageCardStyle&) const = default;
@@ -46,10 +47,16 @@ struct TranscriptStyle {
     bool operator==(const TranscriptStyle&) const = default;
 };
 
+struct SignInAccount {
+    std::string name, label, email;
+    bool operator==(const SignInAccount&) const = default;
+};
+
 class WindowApplication {
 public:
     void update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen, bool hasStatus,
-                std::size_t activeTab, std::size_t tabCount, const std::string& group = {}, bool needsSignIn = false);
+                std::size_t activeTab, std::size_t tabCount, const std::string& group = {}, SignInAccount account = {},
+                bool pickerOpen = false);
     std::vector<Shortcut> shortcuts;
     std::vector<Panel> panels;
     std::map<std::string, TabType> types;
@@ -57,6 +64,7 @@ public:
     std::optional<bool> closable;
     uint64_t layoutGeneration = 0;
     std::string label;
+    SignInAccount signInAccount;
     MessageCardStyle messageCard;
     TranscriptStyle transcriptStyle;
     float overlayOpacity = style::kOverlayOpacity;

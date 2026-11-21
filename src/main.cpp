@@ -189,6 +189,7 @@ void carryOut(App& a, OverlayAct act) {
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
     if (act == OverlayAct::Hide) {
+        a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
         prAppWindowSetVisible(window, false);
         return;

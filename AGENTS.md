@@ -69,7 +69,7 @@ Launch and the overlay
 - At launch and relaunch nothing shows: no window, no single frame, and no change of focus. nexus connects to `nexus-server` in the background, and only the hotkey shows it. The one exception is a hotkey that fails to register, because then nothing else could show nexus.
 - The hotkey is Command-backtick, the key left of 1, chosen by key position. It hides an overlay that is visible and has the keyboard, and shows it in every other case: after Command-Tab, the next press shows it rather than merely reactivating it.
 - An overlay that had the keyboard and lost it (to Command-Tab or a click on another app) hides. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
-- Escape hides the overlay on the sprint tab and on a friend's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
+- Escape dismisses an open account menu. With no menu or dialog open, Escape hides the overlay on the sprint tab and on a friend's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
 
 Tabs
 - The fork defines tab types, groups, group order, close permissions and key bindings in client Starlark and JSON. The following bindings and groups describe the shipped profile.
@@ -131,8 +131,8 @@ Sign-in (`models/SignIn.tla`, `docs/secrets.md` "Sign-in")
 - With only windows from before sign-ins (state format 4 or older, read from each window's Hello and nothing else) linked, a claude account with no login is asked for by a paste instead, as before sign-ins (`FallBack`).
 - A server that starts after a crash ends every `claude setup-token` still holding a lock its runner gave it, and removes every `.signin` left (`signin_functional_crashed`).
 - No AI ever sees the URL, the code or the token: none in a transcript, a log line, a driver event, a state file or a test's output (`NoTokenToWindows`, `NoTokenInLog`; `signin_unit_leak`, `signin_functional_*`, `link_e2e_signin` with its reversed witness `link_e2e_signin_leaky`). nexus never puts the URL in an argv or an environment of its own. An AI's only surface is `nexus-server config sign-in <account>`: `signed in` or `refused: <why>`.
-- The selected account’s sign-in action appears in a centered opaque rounded white card in the friend tab. Enter in the prompt or clicking the card opens sign-in for that account and keeps the draft. The window opens the browser off its frame thread (`window_frame_budget`).
-- The default overlay darkens the desktop at 60% opacity. The person’s messages and the friend’s replies use dark bubbles with light text. Transcript notices use light red text on a dark bubble. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
+- The selected account’s sign-in action appears in a centered opaque rounded white card in the friend tab. When an email is configured, it appears in light blue between the account title and the activation hint. Enter in the prompt or clicking the card opens sign-in for that account and keeps the draft. The window opens the browser off its frame thread (`window_frame_budget`).
+- The default overlay darkens the desktop at 60% opacity. The person’s messages and the friend’s replies use dark bubbles. The fork can set outgoing text color independently using `transcript_style.person_ink`. Transcript notices use light red text on a dark bubble. Tool output and status labels use light neutral text on a dark bubble. The centered sign-in action alone uses the white card with large black text. The fork can change `transcript_style`, `overlay_opacity` and `message_card` through the client application without rebuilding either binary.
 
 The sprint tab
 - It keeps nova-sprint's original branding and logo. The app itself is called "nexus" (its bundle display name), but the board is not rebranded.
@@ -199,14 +199,14 @@ Keys and contexts
 
 Sessions
 - A friend's tab holds that friend's sessions as subtabs, like a menu bar or a cross menu: friends run across the strip, and the selected friend's sessions drop down in a column under its tab. The column shows only while switching, and hides once a session is chosen.
-- Command-Up/Down select the previous/next linked account in the current friend's tab, wrapping in link order. Shift-Command-Up/Down are reserved for session navigation.
+- Command-Up/Down open the account menu beneath the current friend’s tab and highlight the previous/next linked account, wrapping in link order. Enter switches to the highlighted account. Escape cancels the selection and leaves the overlay open. Shift-Command-Up/Down are reserved for session navigation.
 - Command-N makes a new session with this friend as a subtab in this tab; Command-Shift-N makes it a tab of its own (like a browser's new tab and new window). A new session starts with the current session's account, model and effort.
 - A session can be dragged out of the column into the strip to become its own tab.
 - Switching a session's account happens inside its tab. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far (part 5 of the friends work, `docs/roadmap.sexp`).
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on a friend tab select its account.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on a friend tab navigate its account menu.
 
 ## Tests
 

@@ -55,17 +55,34 @@ gets 0.60. The overlay and terminal use the same dark background. Text and the o
 The client window event supplies `active_tab` (zero-based) and `tab_count` in current strip order. Stock
 `client/window.star` binds Command-Left and Command-Right to the previous and next positions, wrapping at both
 ends. Numbered shortcuts still select positions directly. In client `config.json`, `tab_navigation` maps chords
-to signed offsets and `account_shortcuts` maps chords to named server commands. The stock bindings for friend tabs
-are Command-Up to `previous` and Command-Down to `next`. The `account` panel shows the selected account’s display
-label, falling back to its ID.
+to signed offsets.
 
-The server calls `decide("account_command", context, config)` with `command`, `current` and the friend’s ordered
-`linked` account IDs for the active session. Return one linked ID. The server validates it, saves the selection
-and starts sign-in if that account needs it. The window sends a command only when the server advertises choices.
-Each keypress resolves against the latest server state.
+On a friend tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next
+account. Up and Down continue through the list, wrapping at either end. Enter confirms the highlighted account.
+Clicking a row confirms that account directly. Escape cancels and keeps the overlay and draft open. A change of
+friend, session, current account or connection dismisses the picker. If the server reorders its accounts, the
+highlight follows the same account ID. The server validates an exact account selection before applying it.
 
-For example, a client can bind Command-Down to `advance` with `"account_shortcuts": {"Command+ArrowDown": "advance"}`.
-Server config `"account_navigation": {"steps": {"advance": 1}, "wrap": false}` stops at the final account.
+The stock Starlark window program reads two optional maps from the fork’s client `config.json`:
+
+```json
+{
+  "account_picker_shortcuts": {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"},
+  "account_picker_keys": {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}
+}
+```
+
+A fork can emit `["Command+K", "account_picker", "open"]` to open on the current account. The window context
+field `account_picker_open` lets the program scope other shortcuts to the open menu. Opening, navigating and
+cancelling are local actions. After confirmation the server reports the selected account. For an account that
+needs sign-in, a separate Enter or click on the sign-in card starts the provider flow.
+
+An existing `account_shortcuts` map still sends its configured `account_command` actions immediately. For example,
+`"account_shortcuts": {"Command+ArrowDown": "advance"}` asks the server’s
+`decide("account_command", context, config)` to choose an account. Server config
+`"account_navigation": {"steps": {"advance": 1}, "wrap": false}` stops at the final account. If a profile specifies
+both maps for the same chord, `account_picker_shortcuts` takes precedence.
+
 The applied stock profile sets `"account_default": "first"` for new conversations. Profiles without this option
 retain their friend’s configured `preferred` default, including an empty one. New sessions copied from a linked
 source retain the source’s explicit account.
@@ -77,7 +94,7 @@ source retain the source’s explicit account.
 | Client `text_zoom` | Integer `current` text scale step, signed key `delta`, inclusive `min` and `max` supported by the renderer | An integer in range. On an invalid answer the window keeps the current scale and reports the error. |
 | Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked accounts | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
 
-The shipped client advances by the key's delta. The shipped server cycles through the linked accounts in order.
+The shipped client advances a tab by the key's delta. A server-side relative account command uses the linked accounts in order.
 The server reads a bundle at the decision and reuses the compiled module while its contents are the same. The window reads and compiles updates off its frame thread. The
 server still owns account eligibility and the durable session move. The client owns rendering and saving its scale.
 
@@ -111,9 +128,13 @@ again. Apply the client policy to see the changes in a running window.
 When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer.
 A client profile can customize this card by setting `message_card` in
 `config.json` or returning it from `app.window`. Its defaults are
-`{"fill":"#ffffff","ink":"#000000","text_size":34,"radius":20}`. Colors are opaque `#RRGGBB`.
+`{"fill":"#ffffff","ink":"#000000","email_ink":"#477fba","text_size":34,"radius":20}`. Colors are opaque `#RRGGBB`.
 The text size (12–72 points) and corner radius (0–64 points) scale with keyboard zoom.
-The current account’s sign-in card opens its login when clicked or when Enter is pressed in the prompt.
+The centered card shows the selected account’s label (or account name), its email in `email_ink` on the next
+line when the server supplies one, and the keyboard instruction below. Clicking the card or pressing Enter in
+the prompt opens that account’s login. The client `window` event receives `sign_in_account` as an object with
+string fields `name`, `label`, and `email` while sign-in is available, and `null` otherwise. Unspecified
+labels and emails are empty strings.
 
 Preview application events with an `app.` prefix. The Starlark `handle` function receives the event name without
 the prefix. For example:

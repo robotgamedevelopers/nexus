@@ -129,7 +129,7 @@ if(NEXUS_WINDOW)
     # made up, but text is set in the system's fonts, an outside service: so a functional test, not a unit test.
     add_executable(nexus_input_tests test_input.cpp)
     target_compile_options(nexus_input_tests PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_input_tests PRIVATE nexus_view)
+    target_link_libraries(nexus_input_tests PRIVATE nexus_frame)
     add_test(NAME window_application COMMAND ${CMAKE_COMMAND} "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:nexus_input_tests>"
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/window-application" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
         -P "${PROJECT_SOURCE_DIR}/tests/policy/window.cmake")
@@ -167,6 +167,16 @@ if(NEXUS_WINDOW)
     target_link_libraries(nexus_frame_host_tests PRIVATE nexus_frame)
     add_test(NAME frame_host_unit COMMAND nexus_frame_host_tests)
     set_tests_properties(frame_host_unit PROPERTIES LABELS unit TIMEOUT 30)
+
+    if(NEXUS_SERVER_PARTS)
+        add_executable(account_picker_trace account_picker_trace.cpp)
+        target_compile_options(account_picker_trace PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(account_picker_trace PRIVATE nexus_frame)
+        add_dependencies(model_checks account_picker_trace)
+        tlc_test(tlc_window_account_picker_trace AccountPickerTrace AccountPickerTrace.cfg pass PICKERTRACE)
+        tlc_test(tlc_window_account_picker_trace_cancel_rejected AccountPickerTrace AccountPickerTrace.cfg
+            invariant PROPERTY Matches PICKERTRACE FAULTY cancel)
+    endif()
 
     # The frame budget (test_frames.cpp): the window's real frame code (src/frame_host.h) driven against slow fakes, each
     # frame's main-thread work measured by the hitch detector on the real clock against 8.3 ms (120 Hz). Real shells,

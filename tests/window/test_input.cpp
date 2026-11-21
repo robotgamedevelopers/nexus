@@ -22,6 +22,8 @@
 #include "pr/ui.h"
 #include "pr/ui_text_edit.h"
 
+#include "test_link_port.h"
+
 #include "model.h"
 #include "style.h"
 #include "tab_order.h"
@@ -162,6 +164,7 @@ struct Harness {
     FakeBoard board;
     View view;
     double time = 1000;
+    PrVec2 extent{1000, 780};
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
     int stops = 0;      // stop requests (View::stop)
     int saves = 0;      // tab order saves asked for after a move (View::moved)
@@ -208,7 +211,7 @@ struct Harness {
         PrUiFrameDesc desc{
             .time = time,
             .delta = 1.0 / 60,
-            .extent = PrVec2{1000, 780},
+            .extent = extent,
             .maxRounds = rounds,
             .display = prAppDisplayDefault(),
             .preferences = {},
@@ -306,8 +309,10 @@ struct Harness {
     // The actual text leaf, which inherits the Prax label's foreground.
     PrLayoutNode findText(PrLayoutNode node, const std::string& text) const {
         if (node == kPrLayoutNodeNone) return kPrLayoutNodeNone;
-        const PrStringView t = prLayoutNodeText(tree, node);
-        if (t.data != nullptr && std::string_view(t.data, t.size) == text) return node;
+        if (prLayoutNodeKind(tree, node) == PrLayoutNodeKind_Text) {
+            const PrStringView t = prLayoutNodeText(tree, node);
+            return t.data && std::string_view(t.data, t.size) == text ? node : kPrLayoutNodeNone;
+        }
         for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
              n = prLayoutNodeNextSibling(tree, n)) {
             const auto found = findText(n, text);
@@ -965,10 +970,18 @@ PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned 
     const auto label = prLayoutNodeParent(h.tree, leaf);
     const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, label));
     const auto foreground = prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color;
+    if (!colorMatches(prColorFromColor16(foreground), ink)) {
+        const auto color = prColorFromColor16(foreground);
+        std::fprintf(stderr, "unexpected foreground for %s (%.2f,%.2f,%.2f wanted #%06x)\n",
+                     text.c_str(), color.r, color.g, color.b, ink);
+    }
     CHECK(colorMatches(prColorFromColor16(foreground), ink));
     for (auto n = label; n != kPrLayoutNodeNone; n = prLayoutNodeParent(h.tree, n)) {
         const auto background = fillOf(h, n);
         if (background.a > 0) {
+            if (!colorMatches(background, fill))
+                std::fprintf(stderr, "unexpected background for %s (%.2f,%.2f,%.2f wanted #%06x)\n",
+                             text.c_str(), background.r, background.g, background.b, fill);
             CHECK(colorMatches(background, fill));
             return n;
         }
@@ -1006,7 +1019,8 @@ void conversationBubblesAndSignInCard() {
     checkTextPaint(h, live, stock.ink, stock.fill);
     CHECK(stock.noticeInk == 0xffb4b4 && stock.ink != stock.noticeInk && stock.statusInk != stock.noticeInk);
 
-    h.view.signInCaption = [] { return "Sign in to Work"; };
+    const std::string email = "a.long.selected.account.for.the.narrow.overlay@example.test";
+    h.view.signInAccount = [&] { return SignInAccount{"work", "Work", email}; };
     int activations = 0;
     h.view.activateSignIn = [&] { ++activations; return true; };
     h.frame();
@@ -1021,14 +1035,44 @@ void conversationBubblesAndSignInCard() {
     const auto button = prLayoutNodeFirstChild(h.tree, area);
     const auto fill = fillOf(h, button);
     CHECK(fill.a == 1 && fill.r == 1 && fill.g == 1 && fill.b == 1);
-    CHECK(h.hasText(button, "Press Enter or click to sign in."));
+    const std::string hint = "Press Enter or click to sign in.";
+    CHECK(h.hasText(button, hint));
+    const auto title = prLayoutNodeFirstChild(h.tree, button);
+    const auto address = prLayoutNodeNextSibling(h.tree, title);
+    const auto instruction = prLayoutNodeNextSibling(h.tree, address);
+    CHECK(h.hasText(title, "Sign in to Work") && h.hasText(address, email) && h.hasText(instruction, hint));
+    CHECK(prLayoutNodeNextSibling(h.tree, instruction) == kPrLayoutNodeNone);
+    checkTextPaint(h, "Sign in to Work", 0, 0xffffff);
+    checkTextPaint(h, email, 0x477fba, 0xffffff);
+    checkTextPaint(h, hint, 0, 0xffffff);
     CHECK(near(h.centre(button).x, h.centre(area).x));
     CHECK(near(h.centre(button).y, h.centre(area).y));
     CHECK(h.height(area) > 2 * h.height(button));
     h.pointer(PrAppEventKind_PointerDown, h.centre(button));
     h.pointer(PrAppEventKind_PointerUp, h.centre(button));
     CHECK(activations == 1);
-    h.view.signInCaption = {};
+    h.extent = h.view.extent = {440, 780};
+    h.frame();
+    h.frame();
+    const auto narrowAddress = prLayoutNodeParent(h.tree, h.findText(h.window(), email));
+    const auto narrowButton = prLayoutNodeParent(h.tree, narrowAddress);
+    const auto narrowArea = prLayoutNodeParent(h.tree, narrowButton);
+    if (!(h.height(narrowAddress) > 2 * h.look.messageCard.textSize)) {
+        const auto addr = h.bounds(narrowAddress), box = h.bounds(narrowButton), areaBox = h.bounds(narrowArea);
+        std::fprintf(stderr, "narrow email geometry: address %.0f x %.0f, card %.0f x %.0f, area %.0f x %.0f\n",
+            addr.right - addr.left, addr.bottom - addr.top, box.right - box.left, box.bottom - box.top,
+            areaBox.right - areaBox.left, areaBox.bottom - areaBox.top);
+    }
+    CHECK(h.height(narrowAddress) > 2 * h.look.messageCard.textSize);
+    CHECK(h.bounds(narrowAddress).left >= h.bounds(narrowArea).left &&
+          h.bounds(narrowAddress).right <= h.bounds(narrowArea).right);
+    h.view.signInAccount = [] { return SignInAccount{"legacy", "", ""}; };
+    h.frame();
+    h.frame();
+    const auto legacy = prLayoutNodeParent(h.tree, h.findText(h.window(), "Sign in to legacy"));
+    const auto legacyHint = prLayoutNodeNextSibling(h.tree, legacy);
+    CHECK(h.hasText(legacyHint, hint) && prLayoutNodeNextSibling(h.tree, legacyHint) == kPrLayoutNodeNone);
+    h.view.signInAccount = {};
     h.frame();
     CHECK(h.hasText(h.window(), "A reply."));
     CHECK(!h.hasText(h.window(), "Sign in to Work"));
@@ -1567,30 +1611,117 @@ Harness withSprint(std::size_t friends = 2) {
     return Harness(friendsNamed(friends), false, true);
 }
 
+// Real key events, the production frame host and the actual Prax menu. Only the transport is fake.
+void accountPickerIsAnExplicitChoice() {
+    Harness h(friendsNamed(2), true, true);
+    test::FakeLink link;
+    FrameHost host;
+    host.model = &h.model;
+    host.view = &h.view;
+    host.connect(&link, "test");
+    h.view.selected = [&] { host.personSelected(); };
+    const auto publish = [&](const std::string& account) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 17;
+        session->info = {"f1", "codex", account, "", ""};
+        link.state.phase = sync::LinkPhase::Connected;
+        link.state.loopback = true;
+        link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setFriends({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}},
+                                      {"f2"}});
+        link.changed = true;
+        host.pollLink();
+        h.frame();
+    };
+    publish("b");
+    h.commandDigit(2);
+    h.type("keep my draft");
+    const auto tabId = h.active().id;
+    int signIns = 0;
+    h.view.activateSignIn = [&] { ++signIns; return true; };
+    link.sent.clear();
+    const auto arrow = [&](bool next, PrAppModifierFlags modifiers) {
+        h.key(next ? PrAppKey_Down : PrAppKey_Up, next ? PrAppKeyCode_ArrowDown : PrAppKeyCode_ArrowUp, modifiers);
+        h.frame();
+    };
+    const auto preview = [&](const std::string& wanted, const std::string& current) {
+        if (!h.view.accountPicker) return false;
+        const auto& p = *h.view.accountPicker;
+        return p.tab == tabId && p.session == 17 && p.current == current && p.highlighted < p.options.size() &&
+               p.options[p.highlighted].name == wanted;
+    };
+    arrow(true, style::kCommand);
+    CHECK(preview("c", "b"));
+    CHECK(link.sent.empty() && signIns == 0 && h.active().id == tabId);
+    CHECK(h.view.accountAnchor != kPrLayoutNodeNone && h.view.accountMenu != kPrLayoutNodeNone);
+    if (h.view.accountAnchor == kPrLayoutNodeNone || h.view.accountMenu == kPrLayoutNodeNone) return;
+    const PrRect tab = h.bounds(h.tabs()[h.model.active()]);
+    const PrRect anchor = h.bounds(h.view.accountAnchor);
+    const PrRect menu = h.bounds(h.view.accountMenu);
+    CHECK(anchor.left >= tab.left - 1 && anchor.right <= tab.right + 1);
+    if (menu.top < anchor.bottom - 1 || menu.top > anchor.bottom + 16)
+        std::fprintf(stderr, "picker anchor top/bottom %.1f, %.1f; tab bottom %.1f; menu top/bottom %.1f, %.1f\n",
+                     anchor.top, anchor.bottom, tab.bottom, menu.top, menu.bottom);
+    CHECK(menu.top >= anchor.bottom - 1 && menu.top <= anchor.bottom + 16);
+    CHECK(menu.left < anchor.right && menu.right > anchor.left);
+    for (const char* label : {"Personal", "Work", "Archive"}) CHECK(h.hasText(h.view.accountMenu, label));
+    arrow(false, 0);
+    CHECK(preview("b", "b"));
+    arrow(false, style::kCommand);
+    CHECK(preview("a", "b") && link.sent.empty());
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+    h.frame();
+    CHECK(!h.view.accountPicker && h.hides == 0 && h.active().draft == "keep my draft");
+
+    arrow(true, style::kCommand);
+    CHECK(preview("c", "b") && link.sent.empty());
+    h.enter();
+    h.frame();
+    CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
+    CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount &&
+          link.sent[0].session == 17 && link.sent[0].text == "c");
+    publish("c");
+    arrow(false, style::kCommand);
+    CHECK(preview("b", "c"));
+    h.commandDigit(3);
+    h.frame();
+    CHECK(h.active().name == "f2" && !h.view.accountPicker && link.sent.size() == 1);
+    h.commandDigit(2);
+    arrow(true, style::kCommand);
+    CHECK(preview("a", "c"));
+    CHECK(h.view.accountRows.size() == 3);
+    if (h.view.accountRows.size() != 3) return;
+    const auto point = h.centre(h.view.accountRows[1]);
+    h.pointer(PrAppEventKind_PointerDown, point);
+    h.pointer(PrAppEventKind_PointerUp, point);
+    CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
+    CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SetAccount && link.sent[1].text == "b");
+}
+
 void arrowsFollowTheActiveTab() {
     Harness h = withSprint(2);
-    std::vector<std::string> accountCommands;
-    h.view.accountCommand = [&](const std::string& command) { accountCommands.push_back(command); };
+    std::vector<std::string> pickerCommands;
+    h.view.pickerCommand = [&](const std::string& command) { pickerCommands.push_back(command); };
     auto right = [&] { h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, style::kCommand); };
     auto left = [&] { h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, style::kCommand); };
     auto up = [&] { h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, style::kCommand); };
     auto down = [&] { h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, style::kCommand); };
     h.commandDigit(1);
     up();
-    CHECK(accountCommands.empty());
+    CHECK(pickerCommands.empty());
     right();
     CHECK(h.active().name == "f1");
     h.type("unsent draft");
     down();
     up();
-    CHECK(accountCommands == std::vector<std::string>({"next", "previous"}));
+    CHECK(pickerCommands == std::vector<std::string>({"next", "previous"}));
     CHECK(h.active().draft == "unsent draft");
     right();
     CHECK(h.active().name == "f2");
     h.commandT();
     CHECK(h.active().kind == TabKind::Terminal);
     down();
-    CHECK(accountCommands.size() == 2);
+    CHECK(pickerCommands.size() == 2);
     h.model.open_extension("fixture", "Testing", "Plugin");
     h.frame();
     const auto plugin = h.model.active();
@@ -2083,6 +2214,10 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 // The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
 void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     nexus::WindowApplication window;
+    window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"a", "Work \"team\"", "selected@example.test"});
+    CHECK(window.overlayOpacity == 0.25f && window.messageCard.emailInk == 0x557799);
+    window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"b", "Work \"team\"", "second@example.test"});
+    CHECK(window.overlayOpacity != 0.25f && window.signInAccount.name == "b");
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "friend", "", true, false, i, 14, "validate-style");
         CHECK((window.overlayOpacity == 0.125f) == (i < 4));
@@ -2282,6 +2417,7 @@ int main(int argc, char** argv) {
             checkTextPaint(styled, "Fixture question", 0x9a9a9a, 0x102030);
             checkTextPaint(styled, "Fixture queued", 0x9a9a9a, 0x102030);
             checkTextPaint(styled, "Fixture chat", 0xf0e0d0, 0x102030);
+            CHECK(styled.view.accountAnchor && styled.hasText(styled.view.accountAnchor, "Fixture account"));
             checkTextPaint(styled, "Fixture account", 0xcfdfa0, 0x102030);
             CHECK(!styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
             std::filesystem::copy_file(argv[3], styleFile, std::filesystem::copy_options::overwrite_existing);
@@ -2289,6 +2425,13 @@ int main(int argc, char** argv) {
             CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
             checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
             CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 4);
+            styled.view.promptOpen = false;
+            styled.view.status = "Fixture transport status";
+            styled.frame();
+            styled.frame();
+            CHECK(styled.view.windowApp.transcriptStyle.fill == 0x102030);
+            CHECK(styled.look.transcriptStyle.fill == 0x102030);
+            checkTextPaint(styled, "Fixture transport status", 0xcfdfa0, 0x102030);
         }
         return failures ? 1 : 0;
     }
@@ -2297,6 +2440,7 @@ int main(int argc, char** argv) {
     commandDigitsWorkFromTheSprintTab();
     commandOneWithCapsLockSelectsTheSprintTab();
     arrowsFollowTheActiveTab();
+    accountPickerIsAnExplicitChoice();
     onlyTheActiveTabShowsSelected();
     sprintTabTakesNoText();
     sprintTabNeverMoves();
