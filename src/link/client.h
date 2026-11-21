@@ -56,7 +56,7 @@ public:
     ClientLink& operator=(const ClientLink&) = delete;
 
     // Any thread: an action for the server, sent once the session is up, in the order given.
-    void send(sync::Action action);     // its num ignored: the link numbers it
+    std::uint64_t send(sync::Action action);     // its num ignored: the link numbers it
     // The latest snapshot; true if it changed since the last call that returned true.
     bool poll(Snapshot* out);
 

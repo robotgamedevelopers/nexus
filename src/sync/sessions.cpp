@@ -283,6 +283,7 @@ std::string Sessions::diff_from(const Sessions& existing) const {
     // The sign-in flows ride only on a link of 5 or later (sync/formats.h); a window below it gets none.
     if (format_ >= kSignInFormat) {
         change.offers = *offers_;
+        change.nextAction = nextAction_;
     }
     return tables ? codec::writeTables(change, format_) : codec::writeLegacy(change, format_);
 }
@@ -342,10 +343,12 @@ void Sessions::apply_string(const std::string& diff) {
         clearFriends();
     }
     setOffers(std::move(change.offers));
+    nextAction_ = change.nextAction;
     unknown_ = unknown;
 }
 
 bool Sessions::operator==(const Sessions& x) const {
+    if (nextAction_ != x.nextAction_) return false;
     if (requests_ != x.requests_ && *requests_ != *x.requests_) {
         return false;
     }
@@ -379,6 +382,7 @@ std::string stateFile(const Sessions& state) {
     // No sign-in goes in a file: an offer's URL is for the window holding it alone.
     Sessions kept = state;
     kept.setOffers({});
+    kept.setNextAction(0);
     return kStateFileTag + std::to_string(state.format()) + "\n" + kept.init_diff();
 }
 

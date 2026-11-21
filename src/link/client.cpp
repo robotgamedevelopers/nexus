@@ -67,15 +67,17 @@ void ClientLink::nudge() {
     }
 }
 
-void ClientLink::send(sync::Action action) {
+std::uint64_t ClientLink::send(sync::Action action) {
+    std::uint64_t number;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(std::move(action));
-        ++sent_;
+        number = ++sent_;
         snapshot_.sent = sent_;
         snapshot_.acknowledged = false;
     }
     nudge();
+    return number;
 }
 
 bool ClientLink::poll(Snapshot* out) {

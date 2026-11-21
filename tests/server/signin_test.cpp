@@ -1068,7 +1068,12 @@ void hub_enrolled() {
     claim.account = extra.name;
     CHECK(!s.hub->apply(claim, &why) && !s.hub->signIns().live(extra.name));
     claim.session = 2;
-    CHECK(s.hub->apply(claim, &why));
+    claim.num = 1;
+    CHECK(s.hub->apply(claim, &why, "picker"));
+    sync::Sessions updated;
+    updated.apply_string(s.hub->stateFor("w1", "picker").init_diff());
+    CHECK(updated.nextAction() == 2 && updated.find(2) && updated.find(2)->info.account == extra.name);
+    CHECK(s.hub->stateFor("w2", "another").nextAction() == 1);
     CHECK(s.hub->apply(claim, &why) && s.runner.started.size() == 1);
     const auto flow = s.hub->signIns().flowOf(extra.name);
     CHECK(flow.has_value());

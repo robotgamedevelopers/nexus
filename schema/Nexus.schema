@@ -140,6 +140,7 @@ table SessionsDiff
     friends       []Friend
     friends_sent  bool
     signins       []SignInOffer
+    next_action   uint64
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----

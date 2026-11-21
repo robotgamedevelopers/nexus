@@ -733,7 +733,7 @@ void Server::signInRequest(int fd, const std::string& account) {
     const bool ok = hub_->requestSignIn(account, &said);
     writeAll(fd, (ok ? "OK " : "ERROR ") + said + "\n");
     for (Link& s : links_) {
-        s.link->setState(hub_->stateFor(s.signIn));
+        s.link->setState(hub_->stateFor(s.signIn, s.client));
     }
 }
 
@@ -886,7 +886,7 @@ void Server::control(int fd) {
         // A window from before sign-ins, and none newer: the accounts waiting on a sign-in are asked for by a paste.
         hub_->signInWindowsChanged();
         for (Link& l : links_) {
-            l.link->setState(hub_->stateFor(l.signIn));
+            l.link->setState(hub_->stateFor(l.signIn, l.client));
         }
     } catch (const std::exception& e) {
         writeAll(fd, std::string("ERROR ") + e.what() + "\n");
@@ -921,7 +921,7 @@ void Server::configApply(int fd, const std::string& request) {
             lines.push_back(n);
         }
         for (Link& s : links_) {
-            s.link->setState(hub_->stateFor(s.signIn));
+            s.link->setState(hub_->stateFor(s.signIn, s.client));
         }
     }
     if (ok && lines.empty()) {
@@ -1056,7 +1056,7 @@ void Server::tick() {
     if (linksEnded) {
         hub_->signInWindowsChanged();   // only older windows left: a paste instead of a sign-in
         for (Link& s : links_) {
-            s.link->setState(hub_->stateFor(s.signIn));
+            s.link->setState(hub_->stateFor(s.signIn, s.client));
         }
     }
 }
@@ -1252,7 +1252,7 @@ void Server::release() {
 
 void Server::state() {
     for (Link& s : links_) {
-        s.link->setState(hub_->stateFor(s.signIn));
+        s.link->setState(hub_->stateFor(s.signIn, s.client));
     }
 }
 

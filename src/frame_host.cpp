@@ -224,6 +224,9 @@ void FrameHost::pollLink() {
     // The friends first, so that a friend's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         accountState_ = s.sessions;
+        std::erase_if(accountSelections_, [&](const auto& pending) {
+            return !s.sessions.nextAction() || !s.sessions.find(pending.first) || s.sessions.nextAction() > pending.second;
+        });
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
@@ -327,6 +330,10 @@ void FrameHost::selectSignInAccount() {
 
 bool FrameHost::activateSignIn() {
     if (!link) return false;
+    if (model->tab_count() && accountSelections_.contains(mirror.session(model->tab(model->active()).id))) {
+        view->problem = "Switching accounts. Your draft is kept. Press Enter when the selected account appears.";
+        return true;
+    }
     const auto* choice = activeChoice();
     if (!choice) return false;
     const auto* offer = offerFor(choice->name);
@@ -366,7 +373,8 @@ void FrameHost::wire() {
     };
     view->activateSignIn = [this]() { return activateSignIn(); };
     view->signInCaption = [this]() -> std::string {
-        if (phase != sync::LinkPhase::Connected || !link) return {};
+        if (phase != sync::LinkPhase::Connected || !link || !model->tab_count() ||
+            accountSelections_.contains(mirror.session(model->tab(model->active()).id))) return {};
         const auto* choice = activeChoice();
         if (!choice || (!choice->needsSignIn && !offerFor(choice->name))) return {};
         return "Sign in to " + (choice->label.empty() ? choice->name : choice->label);
@@ -431,10 +439,11 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         action.kind = sync::ActionKind::SetAccount;
         action.session = session;
         action.text = "+" + command;
-        link->send(std::move(action));
+        const auto number = link->send(std::move(action));
+        if (accountState_.nextAction()) accountSelections_[session] = number;
     };
     view->submit = [this](std::size_t i, bool queue) {
-        if (i == model->active() && !queue && activateSignIn()) return;
+        if (i == model->active() && activateSignIn()) return;
         std::string text;
         std::string why;
         // The session the tab shows, the window's own choice; none until the server's state has one of the friend's

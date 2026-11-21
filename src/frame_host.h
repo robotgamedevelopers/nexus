@@ -65,7 +65,7 @@ struct LinkPort {
     // The latest state; true if it changed since the last call that returned true. Never waits.
     virtual bool poll(LinkState* out) = 0;
     // An action for the server, in order. Never waits.
-    virtual void send(sync::Action action) = 0;
+    virtual std::uint64_t send(sync::Action action) = 0;
 };
 
 // The secret dialog over the link (view.h Secrets, docs/secrets.md): the requests come in the server's state, and the
@@ -193,6 +193,7 @@ struct FrameHost {
 
 private:
     sync::Sessions accountState_;
+    std::map<sync::SessionId, std::uint64_t> accountSelections_; // wait for the exact server result
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
     const sync::AccountChoice* activeChoice() const;
     const sync::SignInOffer* offerFor(const std::string& account) const;

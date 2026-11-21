@@ -1068,10 +1068,12 @@ std::vector<SignInOffer> Hub::publicOffers() const {
     return offers;
 }
 
-Sessions Hub::stateFor(const std::string& opener) const {
+Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
+    Sessions s = state_;
+    if (!client.empty()) s.setNextAction(store_.applied(client) + 1);
     std::vector<SignInOffer> offers = signIns_.offers();
     if (opener.empty() || offers.empty()) {
-        return state_;
+        return s;
     }
     for (SignInOffer& o : offers) {
         if (o.opener != opener) {
@@ -1081,7 +1083,6 @@ Sessions Hub::stateFor(const std::string& opener) const {
             }
         }
     }
-    Sessions s = state_;
     s.setOffers(std::move(offers));
     return s;
 }

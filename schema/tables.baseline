@@ -91,6 +91,7 @@ table SessionsDiff
     field friends id=0x82a6b14733b2685a kind=14 elem=13 type=Friend array=unbounded
     field friends_sent id=0x6b65e9dac83a16e9 kind=1
     field signins id=0x5fbecccd50c74838 kind=14 elem=13 type=SignInOffer array=unbounded
+    field next_action id=0xd6bdffc29f42fe4f kind=9
 
 table SignInOffer
     field id id=0x08b72e07b55c3ac0 kind=9
@@ -167,4 +168,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-21 (UTC) — Record server-authoritative sign-in availability with each account choice
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record the action acknowledged by each window state
 - no compatibility-affecting edits; the wire absorbs the rest

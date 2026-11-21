@@ -30,7 +30,7 @@ const std::string kUrl = "https://claude.com/cai/oauth/authorize?code=true&clien
 struct Recorder : LinkPort {
     std::vector<sync::Action> sent;
     bool poll(LinkState*) override { return false; }
-    void send(sync::Action action) override { sent.push_back(std::move(action)); }
+    std::uint64_t send(sync::Action action) override { sent.push_back(std::move(action)); return sent.size(); }
 };
 
 sync::Sessions offering(const std::string& opener, const std::string& url, const std::string& host,

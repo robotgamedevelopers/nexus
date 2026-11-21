@@ -38,7 +38,7 @@ struct FakeLink final : LinkPort {
         changed = false;
         return true;
     }
-    void send(sync::Action action) override { sent.push_back(std::move(action)); }
+    std::uint64_t send(sync::Action action) override { sent.push_back(std::move(action)); return sent.size(); }
 
     void friends(const std::vector<std::string>& names) {
         LinkState s;
@@ -221,6 +221,42 @@ void accountCommandsUseTheActiveConversation() {
     CHECK(w.link.sent.size() == 3 && w.view.accountCaption().empty());
 }
 
+void enterDuringAccountSwitchWaitsForServerState() {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 10;
+    session->info = {"chat", "grok", "first", "", ""};
+    auto snapshot = [&](std::uint64_t next, bool switchAccount) {
+        auto current = std::make_shared<sync::SessionView>(*session);
+        if (switchAccount) current->info.account = "second";
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.loopback = true;
+        w.link.state.sessions = sync::Sessions({current});
+        w.link.state.sessions.setFriends({{"chat", {{"first", "", false}, {"second", "", true}}}});
+        w.link.state.sessions.setNextAction(next);
+        w.link.changed = true;
+        w.host.pollLink();
+    };
+    snapshot(1, false);
+    w.link.sent.clear();
+    const auto tab = w.model.active();
+    w.model.set_draft(tab, "must survive");
+    w.view.accountCommand("next");
+    snapshot(1, false); // transport activity before the server has applied selection
+    w.view.submit(tab, false);
+    CHECK(w.link.sent.size() == 1 && w.model.tab(tab).draft == "must survive");
+    snapshot(2, true);
+    w.view.submit(tab, false);
+    CHECK(w.link.sent.size() == 2 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
+          w.link.sent.back().account == "second" && w.model.tab(tab).draft == "must survive");
+    // A fork's account command may leave the current account unchanged.
+    snapshot(3, false);
+    w.view.accountCommand("stay");
+    snapshot(4, false);
+    w.view.submit(tab, false);
+    CHECK(w.link.sent.size() == 4 && w.link.sent.back().kind == sync::ActionKind::Send);
+}
+
 void explicitSignInKeepsTheDraft() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -273,6 +309,7 @@ int main() {
     dismissedFriendRemainsLocal();
     accountCommandsUseTheActiveConversation();
     explicitSignInKeepsTheDraft();
+    enterDuringAccountSwitchWaitsForServerState();
     extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();

@@ -28,7 +28,7 @@ public:
         return true;
     }
 
-    void send(sync::Action action) override { link_->send(std::move(action)); }
+    std::uint64_t send(sync::Action action) override { return link_->send(std::move(action)); }
 
     // Ends the link: mosh's shutdown, so the server ends this session (up to two seconds, at quit).
     void close() { link_.reset(); }

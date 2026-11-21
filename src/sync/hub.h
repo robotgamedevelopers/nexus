@@ -397,7 +397,7 @@ public:
     void dropSignIns();
     // The state for the link of the window whose claim token is `opener`: state() with the URL of each flow that
     // window holds. state() itself carries no URL.
-    Sessions stateFor(const std::string& opener) const;
+    Sessions stateFor(const std::string& opener, const std::string& client = {}) const;
     const SignInDesk& signIns() const { return signIns_; }
     // The walk's faulty runs alone: SignInDesk's seams.
     void injectSignInClaimFault() { signIns_.injectClaimFault(); }

@@ -142,6 +142,9 @@ public:
     // state of the link of the window that holds it (Hub::stateFor); never in a state file.
     const std::vector<SignInOffer>& offers() const { return *offers_; }
     void setOffers(std::vector<SignInOffer> offers);
+    // First action from this client still unapplied when the server built this exact state. Zero on older links.
+    std::uint64_t nextAction() const { return nextAction_; }
+    void setNextAction(std::uint64_t next) { nextAction_ = next; }
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -158,7 +161,10 @@ public:
     // The format (sync/formats.h) diff_from writes and apply_string reads: a link's, agreed when it is made. A copy
     // keeps it; equality ignores it.
     std::uint32_t format() const { return format_; }
-    void setFormat(std::uint32_t format) { format_ = format; }
+    void setFormat(std::uint32_t format) {
+        format_ = format;
+        if (format < kSignInFormat) nextAction_ = 0;
+    }
     // How many fields and enum values the last diff applied held that this build does not know and skipped (a later
     // server's: schema's report.unknown, from format 4), so that the window can log them. A copy keeps it; equality
     // ignores it.
@@ -176,6 +182,7 @@ private:
     std::shared_ptr<const std::vector<SignInOffer>> offers_;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
+    std::uint64_t nextAction_ = 0;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the

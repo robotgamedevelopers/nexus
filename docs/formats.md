@@ -57,7 +57,10 @@ later field goes after them.
   when its browser sign-in is available and the server has no active login for it. A window can send a
   `SignInClaim` naming the session and account the person selected, its claim token and an existing flow ID,
   or zero to request the first flow. The server verifies the session still uses that linked account before
-  claiming its flow. A window with advertised choices can send SetAccount text prefixed with `+` to invoke a named
+  claiming its flow. With a named client, `SessionsDiff.next_action` is the first number from that client
+  the server had yet to apply when it built this snapshot. Zero means unavailable. The window waits for a
+  snapshot past its account-selection action before it can submit the draft or start a sign-in for that session.
+  A window with advertised choices can send SetAccount text prefixed with `+` to invoke a named
   account command in the server profile. Every account ID excludes `+`. The server resolves the command against
   the current session and validates its resulting ID before applying the ordinary SetAccount operation. Older
   servers omit the choices, which read as an empty list, and the window sends them no account commands. A

@@ -158,6 +158,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         }
     }
     if (signIns) {
+        d->next_action = change.nextAction;
         for (const SignInOffer& o : change.offers) {
             wire::SignInOffer* x = added(wire::SessionsDiffSigninsAdd(b.main, d->signins));
             x->id = o.id;
@@ -203,6 +204,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     }
     *unknown = report.unknown;
     SessionsChange out;
+    out.nextAction = d->next_action;
     out.sessions.reserve(static_cast<std::size_t>(d->sessions.size()));
     for (const wire::SessionChange& x : d->sessions) {
         SessionChange s;

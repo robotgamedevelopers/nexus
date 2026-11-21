@@ -67,7 +67,7 @@ struct Harness {
         ui = prUiCreate(tree);
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
-        terminals = new PraxTerminals(kit, fonts, nullptr, nullptr, false);
+        terminals = new PraxTerminals(kit, fonts, nullptr, nullptr);
         view.model = &model;
         view.look = &look;
         view.terminals = terminals;

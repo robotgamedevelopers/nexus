@@ -1010,7 +1010,7 @@ struct Builder {
     }
 
     void promptKey(std::size_t active, const char* key) {
-        if (std::string_view(key) == "Enter" && view.activateSignIn && view.activateSignIn())
+        if (view.activateSignIn && view.activateSignIn())
             return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         const Tab& tab = model.tab(active);
         policy::MessagePlan plan;

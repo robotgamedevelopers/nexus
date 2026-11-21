@@ -58,6 +58,7 @@ struct SessionsChange {
     bool friendsKnown = false;
     std::vector<ServerFriend> friends;
     std::vector<SignInOffer> offers;
+    std::uint64_t nextAction = 0;
 };
 
 // Formats 1 to 3. A format that lacks a field does not write it (activity before 2, the instance before 2, the

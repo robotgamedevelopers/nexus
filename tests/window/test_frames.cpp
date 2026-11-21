@@ -144,7 +144,7 @@ struct FakeLink final : LinkPort {
         changed = false;
         return true;
     }
-    void send(sync::Action action) override { sent.push_back(std::move(action)); }
+    std::uint64_t send(sync::Action action) override { sent.push_back(std::move(action)); return sent.size(); }
 
     void set(LinkState s) {
         state = std::move(s);
