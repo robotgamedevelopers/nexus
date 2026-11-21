@@ -134,9 +134,7 @@ if(NEXUS_SANDBOX_TOOLS)
     include(cmake/sandbox.cmake)
 endif()
 
-if(NEXUS_LINK OR NEXUS_WINDOW)
-    include(cmake/policy.cmake)
-endif()
+include(cmake/policy.cmake)
 
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
@@ -149,7 +147,7 @@ target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 add_library(nexus_accounts STATIC src/accounts/registry.cpp)
 target_include_directories(nexus_accounts PUBLIC src)
 target_compile_options(nexus_accounts PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_accounts PUBLIC prax::json prax::core)
+target_link_libraries(nexus_accounts PUBLIC prax::json prax::core nexus_policy)
 
 # The two states mosh's transport keeps in step between the window and nexus-server (the person's actions up, the tabs
 # down), what the server does with an action, and what the window shows of the tabs. No OS, no time.
@@ -160,7 +158,7 @@ add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/ac
     src/sync/signin.cpp src/sync/redial.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
-target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire)
+target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire nexus_policy)
 
 if(NEXUS_SERVER_PARTS)
     # nexus-server's durable state: the tabs and each client's applied counter over a crash-safe journal, behind a
@@ -298,10 +296,10 @@ endif()
 
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
-    add_library(nexus_view STATIC src/view.cpp src/font_prefetch.cpp)
+    add_library(nexus_view STATIC src/view.cpp src/window_app.cpp src/native_tabs.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_view PUBLIC src)
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_view PUBLIC nexus_window_logic nexus_hitch
+    target_link_libraries(nexus_view PUBLIC nexus_policy nexus_window_logic nexus_hitch
         prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
     # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.

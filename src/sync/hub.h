@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "accounts/registry.h"
+#include "policy/host.h"
 #include "sync/actions.h"
 #include "sync/secrets.h"
 #include "sync/sessions.h"
@@ -214,7 +215,8 @@ public:
 class Hub {
 public:
     // The state starts as every session the store already holds. Actions go to `responder` when one is given.
-    explicit Hub(SessionStore& store, Limits limits = {}, Responder* responder = nullptr);
+    explicit Hub(SessionStore& store, Limits limits = {}, Responder* responder = nullptr,
+        std::function<std::string()> bundlePath = [] { return std::string(); });
 
     // Applies one action (each once: the link's Applier sees to that), deciding against the sessions the store holds.
     // A send gives the responder's changes, or without one the prompt and then the placeholder reply; a queue puts the
@@ -322,9 +324,9 @@ public:
     // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
     // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
     // why, when the session is not held, the hub holds no accounts, or there was none to move to.
-    using AccountPolicy = std::function<std::string(const std::string&, const std::vector<std::string>&,
-        const std::vector<std::string>&, std::string&)>;
-    void rotateWith(AccountPolicy choose) { accountPolicy_ = std::move(choose); }
+    // Pure request handlers. The server commits the returned text with the request's acknowledgement.
+    using NativeService = std::function<std::string(const std::string&)>;
+    void registerService(std::string name, NativeService handler) { services_[std::move(name)] = std::move(handler); }
     bool rotate(SessionId id, std::string* why = nullptr);
 
     // The secret dialog (sync/secrets.h, docs/secrets.md, models/Secrets.tla). Until secretsWith() the hub takes no
@@ -409,6 +411,7 @@ private:
     void secretEffects(const SecretEffects& effects);
     bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
+    bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
     bool set(const Action& action, std::string* why, const std::string& client);
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
@@ -434,7 +437,9 @@ private:
     Sessions state_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
-    AccountPolicy accountPolicy_;
+    std::map<std::string, NativeService> services_;
+    policy::Host application_{"server"};
+    std::function<std::string()> bundlePath_;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
     SecretDesk desk_;

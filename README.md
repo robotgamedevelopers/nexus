@@ -169,7 +169,7 @@ See [accounts and friends](docs/accounts.md) for configuration.
 
 Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
 rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
-without rebuilding or restarting. The first hooks cover text zoom and account selection after a usage limit.
+without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](docs/plugins.md) for a native Prax editor and a Starlark-only tab.
 The Claude driver also supports model and effort defaults at startup. See [customizing Nexus in your fork](docs/policy.md).
 
 Model and effort can be set in the drivers file and

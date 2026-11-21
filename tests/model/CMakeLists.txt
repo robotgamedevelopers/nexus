@@ -101,7 +101,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
         "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
@@ -158,7 +158,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
-    if(T_DRIVERWALK)
+    if(T_PLUGINTRACE)
+        list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DPLUGINTRACE=ON -DDATA=PluginTabTraceData)
+    elseif(T_DRIVERWALK)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERWALK=${driver_dist}/walk.js -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_DRIVERTESTS)
         list(APPEND defs -DNODE=${NEXUS_NODE} -DDRIVERTESTS=${driver_dist}/unit/driver.test.js)
@@ -406,6 +408,9 @@ tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadloc
          FAULTY keyup)
 
 # The overlay (Overlay.tla): the whole state space, a witness per property, code traces, and faulty traces rejected.
+tlc_test(tlc_window_plugin_groups_trace PluginTabTrace PluginTabTrace.cfg pass PLUGINTRACE)
+tlc_test(tlc_window_plugin_groups PluginTabs PluginTabs.cfg pass)
+tlc_test(tlc_window_plugin_groups_cross_rejected PluginTabs PluginTabsCrossGroup.cfg invariant PROPERTY Grouped)
 tlc_test(tlc_overlay_spec Overlay Overlay.cfg pass)
 tlc_test(tlc_overlay_witness_act_name          WOverlayActName          WOverlayActName.cfg          invariant
          PROPERTY TypeOK)

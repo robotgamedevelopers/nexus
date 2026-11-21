@@ -1,6 +1,9 @@
 // The accounts and friends (registry.h): their rules, their files' text, and the accounts the server picks.
 
 #include "accounts/registry.h"
+#include "policy/host.h"
+
+#include <cstdio>
 
 #include <algorithm>
 #include <cmath>
@@ -650,18 +653,17 @@ std::string nextUp(const Registry& registry, const std::set<std::string>& up, st
     if (f == nullptr || f->accounts.empty()) {
         return std::string();
     }
-    const auto at = std::find(f->accounts.begin(), f->accounts.end(), current);
-    const std::size_t n = f->accounts.size();
-    // From the one after `current` round to the one before it; with `current` not linked, from the first.
-    const std::size_t from = at == f->accounts.end() ? 0 : static_cast<std::size_t>(at - f->accounts.begin()) + 1;
-    const std::size_t count = at == f->accounts.end() ? n : n - 1;
-    for (std::size_t k = 0; k < count; ++k) {
-        const std::string& a = f->accounts[(from + k) % n];
-        if (up.count(a) != 0) {
-            return a;
-        }
+    std::vector<std::string> eligible;
+    for (const auto& account : f->accounts) {
+        if (account != current && up.count(account))
+            eligible.push_back(account);
     }
-    return std::string();
+    policy::Host stock("server");
+    std::string why;
+    auto selected = policy::accountAfterLimit(stock, {}, std::string(current), f->accounts, eligible, why);
+    if (!why.empty())
+        std::fprintf(stderr, "nexus: shipped account policy: %s\n", why.c_str());
+    return selected;
 }
 
 std::string landing(const Registry& registry, const std::set<std::string>& up, std::string_view friendName) {

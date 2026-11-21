@@ -1,5 +1,5 @@
 #include "server/server.h"
-#include "policy/host.h"
+#include "server/sha256.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -418,7 +418,6 @@ private:
                              [](const std::string& line) { std::fprintf(stderr, "%s\n", line.c_str()); }};
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
-    policy::Host policy_{"server"};
     std::unique_ptr<sync::Hub> hub_;
     std::unique_ptr<ConfigRepo> config_;
     // In-app sign-in's processes (server/signin_runner.h): `claude setup-token` per flow a window claims.
@@ -486,10 +485,9 @@ bool Server::restoreAll(std::string* why) {
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
                                                                   machine, host, true,
                                                                   [this] { return dirNow("drivers"); }});
-    hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get());
-    hub_->rotateWith([this](const auto& current, const auto& linked, const auto& eligible, std::string& why) {
-        return policy::accountAfterLimit(policy_, dirNow("policy.bundle.json"), current, linked, eligible, why);
-    });
+    hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
+        [this] { return dirNow("policy.bundle.json"); });
+    hub_->registerService("text.sha256", sha256Hex);
     drivers_->attach(*hub_);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.

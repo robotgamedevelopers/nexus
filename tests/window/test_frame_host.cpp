@@ -153,9 +153,27 @@ void loggableEscapesAndCuts() {
     CHECK(loggable("").empty());
 }
 
+void extensionTargetsItsConfiguredConversation() {
+    Window w("");
+    CHECK(!w.view.requestService("tools", "one two").empty());
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 42;
+    session->info.friendName = "tools";
+    w.link.friends({"tools"});
+    w.link.state.sessions = sync::Sessions({session});
+    w.link.state.sessions.setFriends({sync::ServerFriend{"tools"}});
+    w.host.pollLink();
+    const auto count = w.link.sent.size();
+    CHECK(!w.view.requestService("absent", "one two").empty() && w.link.sent.size() == count);
+    CHECK(w.view.requestService("tools", "one two").empty() && w.link.sent.size() == count + 1);
+    CHECK(w.link.sent.back().kind == sync::ActionKind::Send && w.link.sent.back().session == 42 &&
+        w.link.sent.back().text == "one two");
+}
+
 } // namespace
 
 int main() {
+    extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();
     waitOutlastsOtherFriends();

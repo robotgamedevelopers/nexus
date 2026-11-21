@@ -1,4 +1,5 @@
 #include "sync/hub.h"
+#include "policy/session.h"
 
 #include <algorithm>
 #include <deque>
@@ -127,8 +128,8 @@ std::uint64_t MemoryStore::applied(const std::string& client) const {
     return it == applied_.end() ? 0 : it->second;
 }
 
-Hub::Hub(SessionStore& store, Limits limits, Responder* responder)
-    : store_(store), limits_(limits), responder_(responder) {
+Hub::Hub(SessionStore& store, Limits limits, Responder* responder, std::function<std::string()> bundlePath)
+    : store_(store), limits_(limits), responder_(responder), bundlePath_(std::move(bundlePath)) {
     for (SessionId id : store_.ids()) {
         refresh(id);
     }
@@ -227,32 +228,25 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
                                                  : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
         info.friendName = action.friendName;
-        if (action.kind == ActionKind::Create && action.session != 0) {
-            const StoredSession* from = store_.find(action.session);
-            if (from == nullptr) {
-                return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
-            }
-            info.account = from->info.account;
-            info.model = from->info.model;
-            info.effort = from->info.effort;
-            if (from->info.friendName == action.friendName) {
-                info.instance = from->info.instance;
-            }
-        }
-        if (accounts_) {
-            // The account copied only when linked to this friend (or none), else the friend's default.
-            const accounts::Friend* f = accounts_->friendNamed(action.friendName);
-            const bool copied = action.kind == ActionKind::Create && action.session != 0;
-            if (!copied || !(info.account.empty() || accounts_->linked(action.friendName, info.account))) {
-                info.account = f == nullptr ? std::string() : f->preferred;
-            }
+        const auto* f = accounts_ ? accounts_->friendNamed(action.friendName) : nullptr;
+        const auto* from = action.kind == ActionKind::Create && action.session ? store_.find(action.session) : nullptr;
+        if (action.kind == ActionKind::Create && action.session && !from)
+            return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
+        const SessionInfo defaults = info;
+        std::string error;
+        if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f, bool(accounts_), info, error))
+            return counted(action, "New session application: " + error, why, client);
+        if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
+                !printable(info.model) || !printable(info.effort) ||
+                (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
+                (accounts_ && !info.instance.empty() && (!f || !f->instance(info.instance))) ||
+                (!accounts_ && info.account != defaults.account && (!from || info.account != from->info.account)) ||
+                (!accounts_ && info.instance != defaults.instance &&
+                    (!from || from->info.friendName != info.friendName || info.instance != from->info.instance)))
+            return counted(action, "New session application: choose an available account and instance and "
+                "printable model and effort within the setting limit", why, client);
+        if (accounts_)
             info.harness = harnessOf(info.account, info.harness);
-            // The instance copied from a session of the same friend while the friend still has it, else the friend's
-            // default instance (its first), or none.
-            if (f == nullptr || f->instance(info.instance) == nullptr) {
-                info.instance = f == nullptr || f->instances.empty() ? std::string() : f->instances.front().name;
-            }
-        }
         return make(action, info, why, client);
     }
     const StoredSession* session = store_.find(action.session);
@@ -263,6 +257,10 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (isSet(action.kind)) {
         return set(action, why, client);
     }
+    return applyMessage(action, *session, why, client);
+}
+
+bool Hub::applyMessage(const Action& action, const StoredSession& session, std::string* why, const std::string& client) {
     std::string failed;
     auto commit = [&](const std::vector<SessionChange>& changes) {
         if (changes.empty() && client.empty()) {
@@ -276,24 +274,67 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         }
         return false;
     };
+    std::vector<SessionChange> notices;
+    policy::MessagePlan plan;
     std::string refused;
-    if (action.kind == ActionKind::Stop) {
-        if (!action.text.empty()) {
-            return counted(action, "a stop that carried text was not applied: a stop carries none", why, client);
+    ActionKind kind = action.kind;
+    const std::string* text = &action.text;
+    if (kind != ActionKind::Stop && text->size() <= limits_.text) {
+        const policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
+            session.driver.openTurn != 0};
+        if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
+            refused = "Message application: " + refused;
+        } else {
+            for (const auto& notice : plan.notices)
+                notices.emplace_back(entry(EntryKind::Notice, notice), std::string());
+            if (plan.text)
+                text = &*plan.text;
+            if (plan.delivery == policy::Delivery::Native) {
+                auto service = services_.find(plan.service);
+                if (service == services_.end())
+                    refused = "No native service registered as " + plan.service + ".";
+                else if (text->size() > limits_.text)
+                    refused = "Native service input exceeds the message limit.";
+                else {
+                    try {
+                        const auto result = service->second(*text);
+                        if (result.size() > limits_.text)
+                            refused = "Native service output exceeds the message limit.";
+                        else
+                            notices.emplace_back(entry(EntryKind::Notice, result), std::string());
+                    } catch (const std::exception&) {
+                        refused = "Native service " + plan.service + " failed to handle the request.";
+                    }
+                }
+            }
+            if (refused.empty() && (plan.delivery == policy::Delivery::None || plan.delivery == policy::Delivery::Native)) {
+                if (!commit(notices))
+                    return false;
+                refresh(action.session);
+                return true;
+            }
+            kind = plan.delivery == policy::Delivery::Send ? ActionKind::Send : ActionKind::Queue;
         }
-    } else if (blankText(action.text)) {
-        refused = std::string("An empty prompt was not ") + verb(action.kind) + ".";
-    } else if (action.text.size() > limits_.text) {
-        refused = "A prompt of " + std::to_string(action.text.size()) + " bytes was not " + verb(action.kind) +
-            ": the limit is " + kib(limits_.text) + ".";
-    } else if (action.kind == ActionKind::Queue) {
-        const std::size_t bytes = std::accumulate(session->queue.begin(), session->queue.end(), std::size_t(0),
-            [](std::size_t n, const std::string& q) { return n + q.size(); });
-        if (session->queue.size() >= limits_.queue) {
-            refused = "A prompt was not queued: the queue holds " + std::to_string(limits_.queue) +
-                " prompts, its limit.";
-        } else if (bytes + action.text.size() > limits_.queueBytes) {
-            refused = "A prompt was not queued: the queue would hold more than " + kib(limits_.queueBytes) + ".";
+    }
+    if (refused.empty()) {
+        if (kind == ActionKind::Stop) {
+            if (!text->empty()) {
+                return counted(action, "a stop that carried text was not applied: a stop carries none", why, client);
+            }
+        } else if (blankText(*text)) {
+            refused = std::string("An empty prompt was not ") + verb(kind) + ".";
+        } else if (text->size() > limits_.text) {
+            refused = "A prompt of " + std::to_string(text->size()) + " bytes was not " + verb(kind) +
+                ": the limit is " + kib(limits_.text) + ".";
+        } else if (kind == ActionKind::Queue) {
+            const std::size_t bytes = std::accumulate(session.queue.begin(), session.queue.end(), std::size_t(0),
+                [](std::size_t n, const std::string& q) { return n + q.size(); });
+            if (session.queue.size() >= limits_.queue) {
+                refused = "A prompt was not queued: the queue holds " + std::to_string(limits_.queue) +
+                    " prompts, its limit.";
+            } else if (bytes + text->size() > limits_.queueBytes) {
+                refused = "A prompt was not queued: the queue would hold more than " + kib(limits_.queueBytes) + ".";
+            }
         }
     }
     if (!refused.empty()) {
@@ -307,18 +348,19 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return false;
     }
     std::vector<SessionChange> changes;
-    if (action.kind == ActionKind::Send && responder_ != nullptr) {
-        changes = responder_->send(action.session, action.text);
-    } else if (action.kind == ActionKind::Send) {
-        changes.push_back(SessionChange{entry(EntryKind::Person, action.text), {}});
+    if (kind == ActionKind::Send && responder_ != nullptr) {
+        changes = responder_->send(action.session, *text);
+    } else if (kind == ActionKind::Send) {
+        changes.push_back(SessionChange{entry(EntryKind::Person, *text), {}});
         changes.push_back(SessionChange{entry(EntryKind::Friend, kReceived), {}});
-    } else if (action.kind == ActionKind::Queue && responder_ != nullptr) {
-        changes = responder_->queue(action.session, action.text);
-    } else if (action.kind == ActionKind::Queue) {
-        changes.push_back(SessionChange{nullptr, action.text});
+    } else if (kind == ActionKind::Queue && responder_ != nullptr) {
+        changes = responder_->queue(action.session, *text);
+    } else if (kind == ActionKind::Queue) {
+        changes.push_back(SessionChange{nullptr, *text});
     } else if (responder_ != nullptr) {
         changes = responder_->stop(action.session);
     }
+    changes.insert(changes.begin(), notices.begin(), notices.end());
     const bool committed = commit(changes);
     if (responder_ != nullptr) {
         responder_->sent(action.session, committed);
@@ -1229,17 +1271,15 @@ bool Hub::rotate(SessionId id, std::string* why) {
     std::string next;
     std::string policyReason;
     const auto* who = accounts_->friendNamed(info.friendName);
-    if (accountPolicy_ && who) {
+    if (who) {
         std::vector<std::string> eligible;
         for (const auto& name : who->accounts) {
             if (name != info.account && signedIn_.count(name))
                 eligible.push_back(name);
         }
-        next = accountPolicy_(info.account, who->accounts, eligible, policyReason);
+        next = policy::accountAfterLimit(application_, bundlePath_(), info.account, who->accounts, eligible, policyReason);
         if (policyReason.empty() && next.empty() && !eligible.empty())
             policyReason = "account_after_limit chose to keep the current account";
-    } else {
-        next = accounts::nextUp(*accounts_, signedIn_, info.friendName, info.account);
     }
     if (next.empty()) {
         const std::string notice = !policyReason.empty() ? "Account policy: " + policyReason + ". See docs/policy.md." :

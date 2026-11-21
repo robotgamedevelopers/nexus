@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "policy/application.h"
+
 struct NexusPolicyHost;
 
 namespace nexus::policy {
@@ -22,6 +24,10 @@ private:
     NexusPolicyHost* host_;
     std::string initError_;
 };
+
+// A plan is validated in full before the caller executes its first command.
+bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
+    const MessageState& state, MessagePlan& out, std::string& why);
 
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high);
 std::string accountAfterLimit(Host& host, const std::string& path, const std::string& current,

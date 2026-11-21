@@ -22,11 +22,12 @@ The rules for an AI working in this repository. Each one holds on every change.
    cannot is noticed well ahead. The one second paste is for a login the provider revoked, or one that ended with no
    way to renew it, and the dialog says which (`docs/accounts.md`, "How long a login lasts").
 
-A person's setup is configuration data and client- and server-side Starlark checked into their Nexus fork. When designing behavior, identify
-the question the engine asks, the data it supplies, and the answers it can safely apply. Put choices about how a
-person works in the fork’s Starlark and JSON. Run visual decisions locally on the client. The engine validates answers and owns persistence, action ordering,
-credentials, billing constraints and permission enforcement. Changing a policy answer takes effect without
-rebuilding Nexus. Document each shipped hook and when its changes take effect in `docs/policy.md`.
+Implement the Nexus application in fork-owned Starlark and JSON. Keep the client and server processes, connection,
+mosh, durable operations, credential handling, driver I/O, rendering and validated host primitives native. A plugin
+may implement its Prax UI or server capability in native code, or compose available primitives entirely in Starlark.
+Expose installed capabilities by name. Choose tab types, groups, shortcuts and handlers in the fork. Exercise the
+same application modules through the real client and server entry points and document their contracts in
+`docs/policy.md` and `docs/plugins.md`.
 
 The sprint tab, the friends and the terminals are one person's configuration, not hardwired; the locked rules below
 that fix them (such as the sprint tab pinned at Command-1) move into configuration with the client-config work.

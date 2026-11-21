@@ -50,6 +50,77 @@ std::string Host::decide(const std::string& path, const char* event, const std::
     return answer;
 }
 
+bool messagePlan(Host& host, const std::string& path, bool client, const char* intent,
+    const MessageState& state, MessagePlan& out, std::string& why) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    auto field = [&](const char* name, std::string_view value) {
+        prJsonWriterKey(w.get(), pr(name));
+        prJsonWriterString(w.get(), pr(value));
+    };
+    field(client ? "key" : "intent", intent);
+    field("text", state.text);
+    field("friend", state.friendName);
+    field("model", state.model);
+    prJsonWriterKey(w.get(), pr("queued"));
+    prJsonWriterNumber(w.get(), static_cast<double>(state.queued));
+    prJsonWriterKey(w.get(), pr("busy"));
+    prJsonWriterBool(w.get(), state.busy);
+    prJsonWriterEndObject(w.get());
+    const auto ctx = prJsonWriterText(w.get());
+    const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", std::string(ctx.data, ctx.size), why);
+    if (!why.empty())
+        return false;
+
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    auto* d = doc.get();
+    if (!prJsonParse(d, pr(answer), nullptr) || prJsonKind(d, 0) != PrJsonKind_Array || prJsonCount(d, 0) > 16) {
+        why = "return a list of up to 16 commands";
+        return false;
+    }
+    MessagePlan plan;
+    for (uint32_t i = 0; i < prJsonCount(d, 0); ++i) {
+        const auto item = prJsonElement(d, 0, i);
+        const auto op = prJsonString(d, prJsonMember(d, item, pr("op")));
+        const auto text = prJsonString(d, prJsonMember(d, item, pr("text")));
+        const std::string_view name = op.data ? std::string_view(op.data, op.size) : std::string_view();
+        if (plan.delivery != Delivery::None) {
+            why = "a delivery or native service call must be the last command for a message";
+            return false;
+        }
+        if (!client && name == "native") {
+            const auto service = prJsonString(d, prJsonMember(d, item, pr("name")));
+            if (!service.data || service.size == 0 || service.size > 128 ||
+                    prJsonCount(d, item) != (text.data ? 3u : 2u)) {
+                why = "a native call takes a service name and optional text";
+                return false;
+            }
+            plan.delivery = Delivery::Native;
+            plan.service.assign(service.data, service.size);
+            if (text.data) plan.text.emplace(text.data, text.size);
+            continue;
+        }
+        if (prJsonKind(d, item) != PrJsonKind_Object || prJsonCount(d, item) != (text.data ? 2u : 1u)) {
+            why = "a command takes an op string and an optional text string";
+            return false;
+        }
+        if (name == "notice" && text.data && text.size > 0 && text.size <= 1024) {
+            plan.notices.emplace_back(text.data, text.size);
+        } else if (name == "draft" && client && text.data && text.size <= 32768) {
+            plan.text.emplace(text.data, text.size);
+        } else if (name == "send" || name == "queue") {
+            plan.delivery = name == "send" ? Delivery::Send : Delivery::Queue;
+            if (text.data)
+                plan.text.emplace(text.data, text.size);
+        } else {
+            why = "unsupported command or text length; see docs/policy.md";
+            return false;
+        }
+    }
+    out = std::move(plan);
+    return true;
+}
+
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high) {
     const auto context = "{\"current\":" + std::to_string(current) + ",\"delta\":" + std::to_string(delta) +
         ",\"min\":" + std::to_string(low) + ",\"max\":" + std::to_string(high) + "}";

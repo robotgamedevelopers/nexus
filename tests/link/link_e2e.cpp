@@ -1309,6 +1309,33 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     CHECK((friendTabs(w.model) == std::vector<std::string>{"ada", "bo"}));
     CHECK(w.model.tab(tabOf(w.model, "bo")).draft == "half a prompt for bo" && w.strip.kept().empty());
 
+    // The same open window and server handle an application edit on the next message.
+    const std::string rules = dir + "/rules";
+    CHECK(::mkdir(rules.c_str(), 0700) == 0);
+    CHECK(writeFile(rules + "/config.json", "{}"));
+    CHECK(writeFile(rules + "/server.star", "def handle(event, state, config):\n"
+        "    return [{\"op\": \"notice\", \"text\": \"handled: \" + state[\"text\"]}]\n"));
+    const auto cli = (std::filesystem::path(binary).parent_path() / "nexus-policy").string();
+    const auto applied = runCommand(Command{cli, {"apply", "server", rules, dir}, "apply message application"}, 20);
+    CHECK(applied.end == CommandResult::End::Exited && applied.code == 0);
+    w.session->add(act(sync::ActionKind::Send, adaSession, "after edit"));
+    CHECK(settle([&] {
+        const auto& transcript = w.model.tab(tabOf(w.model, "ada")).transcript;
+        return w.session->allAcknowledged() && !transcript.empty() && transcript.back().text == "handled: after edit";
+    }));
+
+    // Change only the server application again. Its native plugin receives the buffer over the same link.
+    CHECK(writeFile(rules + "/server.star", "def handle(event, state, config):\n"
+        "    return [{\"op\": \"native\", \"name\": \"text.sha256\"}]\n"));
+    const auto rebound = runCommand(Command{cli, {"apply", "server", rules, dir}, "bind native service"}, 20);
+    CHECK(rebound.end == CommandResult::End::Exited && rebound.code == 0);
+    w.session->add(act(sync::ActionKind::Send, adaSession, "abc"));
+    CHECK(settle([&] {
+        const auto& transcript = w.model.tab(tabOf(w.model, "ada")).transcript;
+        return w.session->allAcknowledged() && !transcript.empty() &&
+            transcript.back().text == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    }));
+
     w.session->shutdown();
     const auto end = Clock::now() + std::chrono::seconds(3);
     while (Clock::now() < end && !w.session->shutdownDone()) {

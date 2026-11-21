@@ -1,3 +1,5 @@
+load("server/conversation.star", handle_event = "handle")
+
 # The server supplies linked accounts in configuration order and current eligibility.
 def decide(event, context, config):
     if event == "account_after_limit":
@@ -9,3 +11,6 @@ def decide(event, context, config):
                 return account
         return None
     return None
+
+def handle(event, state, config):
+    return handle_event(event, state, config)

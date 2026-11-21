@@ -3,6 +3,9 @@
 // made-up clock (from 1000 s), never the real one. Text is set in the system's fonts, so these are functional tests.
 
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include <initializer_list>
 #include <map>
 #include <set>
@@ -1943,7 +1946,50 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3) {
+        Harness h;
+        h.view.policyBundle = argv[1];
+        h.type("before");
+        h.enter();
+        CHECK(h.active().transcript.size() == 1);
+        std::filesystem::copy_file(argv[2], argv[1]);
+        h.type("after");
+        h.enter();
+        CHECK(h.active().transcript.size() == 1);
+        CHECK((h.active().queue == std::vector<std::string>{"edited after"}));
+        // Wait for the running window to observe the atomic activation.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!h.view.windowApp.types.count("editor") && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            h.frame();
+        }
+        h.frame();
+        h.key('K', PrAppKeyCode_KeyK, style::kCommand);
+        CHECK(h.view.askedTextSteps == 2);
+        h.key('E', PrAppKeyCode_KeyE, style::kCommand);
+        CHECK(h.active().kind == TabKind::Extension && h.active().type == "editor" && h.active().group == "Writing");
+        h.type("native buffer");
+        CHECK(h.active().draft == "native buffer");
+        std::string service, payload;
+        h.view.requestService = [&](const std::string& target, const std::string& text) {
+            service = target;
+            payload = text;
+            return std::string();
+        };
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, style::kCommand);
+        CHECK(service == "text-tools" && payload == "native buffer" && h.active().draft == payload);
+        h.key('W', PrAppKeyCode_KeyW, PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift));
+        CHECK(h.active().type == "word-counter" && h.active().group == "Tools");
+        h.type("script buffer");
+        CHECK(h.active().draft == "script buffer");
+        CHECK(!h.model.move_tab(h.model.active(), h.model.active() - 1));
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, style::kCommand);
+        CHECK(service == "word-count" && payload == "script buffer");
+        h.key('W', PrAppKeyCode_KeyW, style::kCommand);
+        CHECK(h.active().type == "editor" && h.active().draft == "native buffer");
+        return failures ? 1 : 0;
+    }
     sprintTabIsFirstAndCommandOne();
     choosingTheSprintTabGoesHome();
     commandDigitsWorkFromTheSprintTab();

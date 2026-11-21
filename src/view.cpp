@@ -326,22 +326,6 @@ PrStringView sv(std::string_view s) {
 // The kit's id of the tab each strip holds but no round declares (syncTabs).
 constexpr uint64_t kNoTab = ~uint64_t(0);
 
-// The digits that select tabs with Command, in tab order: the keyboard's number row.
-constexpr std::string_view kTabKeys = "1234567890";
-
-// The text scale's keys, in this one place: a logical key with exactly these modifiers, and the steps it moves the
-// scale: the standard macOS keys. Command-= is larger without Shift, as Command-+ (Shift-=) is; Command-minus is smaller.
-struct TextKey {
-    PrAppKey key;
-    PrAppModifierFlags modifiers;
-    int steps;
-};
-constexpr TextKey kTextKeys[] = {
-    {'=', style::kCommand, 1},
-    {'+', PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift), 1},
-    {'-', style::kCommand, -1},
-};
-
 PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign align = PrKitTextAlign_Start) {
     return PrKitTextStyle{.role = role, .tone = tone, .wrap = PrKitWrap_Auto, .align = align, .preserve = true};
 }
@@ -511,12 +495,27 @@ struct Builder {
     void strips(PrLayoutNode window) {
         const std::size_t pinned = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint ? 1 : 0;
         tabNodes.assign(model.tab_count(), kPrLayoutNodeNone);
-        if (pinned == 0) {
-            strip(window, view.movableTabs.get(), 0, model.tab_count(), true, PrKitFlex_Fixed);
+        std::size_t base = model.tab_count();
+        while (base > 0 && model.tab(base - 1).kind == TabKind::Extension)
+            --base;
+        if (pinned == 0 && base == model.tab_count()) {
+            strip(window, view.movableTabs.get(), 0, base, true, PrKitFlex_Fixed);
         } else {
             PrLayoutNode row = element(window, Part::StripRow);
-            strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
-            strip(row, view.movableTabs.get(), pinned, model.tab_count(), true, PrKitFlex_Fill);
+            if (pinned)
+                strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
+            strip(row, view.movableTabs.get(), pinned, base, true,
+                base == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
+            for (std::size_t i = base; i < model.tab_count();) {
+                const auto& group = model.tab(i).group;
+                auto& tabs = view.extensionStrips[group];
+                if (!tabs) tabs.reset(prKitTabsCreate());
+                auto end = i + 1;
+                while (end < model.tab_count() && model.tab(end).group == group) ++end;
+                label(row, group, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+                strip(row, tabs.get(), i, end, true, PrKitFlex_Fixed);
+                i = end;
+            }
         }
         keepFocusOnTheActiveTab();
     }
@@ -538,7 +537,7 @@ struct Builder {
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
     // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
-        if (tab.kind == TabKind::Friend)
+        if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
             return tab.name;
         if (tab.kind == TabKind::Sprint)
             return "sprint";
@@ -945,6 +944,38 @@ struct Builder {
         return uint32_t(std::clamp(lines, 1.0f, kPromptMaxLines));
     }
 
+    void promptKey(std::size_t active, const char* key) {
+        const Tab& tab = model.tab(active);
+        policy::MessagePlan plan;
+        std::string why;
+        const policy::MessageState state{tab.draft, tab.name, tab.model, tab.queue.size(),
+            view.cursor && view.cursor(tab.id) == CursorState::Busy};
+        if (!policy::messagePlan(*view.application, view.policyBundle, true, key, state, plan, why) ||
+                (plan.text && plan.text->size() > kPromptBytes)) {
+            view.problem = "Prompt application: " + (why.empty() ? "draft exceeds the prompt limit" : why);
+            return;
+        }
+        if (plan.text)
+            model.set_draft(active, std::move(*plan.text));
+        if (plan.delivery != policy::Delivery::None) {
+            const bool queue = plan.delivery == policy::Delivery::Queue;
+            if (view.submit)
+                view.submit(active, queue);
+            else if (queue)
+                model.queue(active);
+            else
+                model.send(active);
+        }
+        if (!plan.notices.empty()) {
+            view.problem.clear();
+            for (const auto& notice : plan.notices) {
+                if (!view.problem.empty())
+                    view.problem += "\n";
+                view.problem += notice;
+            }
+        }
+    }
+
     // `composing`: an input method was composing in the prompt before this round's events (read in build).
     void prompt(PrLayoutNode footer, bool composing) {
         std::size_t active = model.active();
@@ -998,17 +1029,11 @@ struct Builder {
                 view.cutTab = ~std::size_t(0);
             }
         }
-        if (!composing && send) {
-            if (view.submit)
-                view.submit(active, false);
-            else
-                model.send(active);
-        }
-        if (!composing && queue) {
-            if (view.submit)
-                view.submit(active, true);
-            else
-                model.queue(active);
+        if (!composing && asking == nullptr) {
+            if (send)
+                promptKey(active, "Enter");
+            if (queue)
+                promptKey(active, "Command+Enter");
         }
         // A friend's draft comes back with the caret at its end.
         if (view.prompted != model.tab(active).id) {
@@ -1088,43 +1113,15 @@ struct Builder {
         // prUiKeyCaptured), so they win in every tab, a terminal's included. That matters off macOS, where Command is
         // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
         // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
-        // Command-1 to Command-0 select the tabs at positions 1 to 10 in the strip's current order, in the keyboard
-        // row's order. A key whose tab does not exist is refused by the model and changes nothing. macOS types no text
-        // for a Command chord. The sprint tab's key takes its page back to the board (Board::home).
-        for (std::size_t n = 0; n < kTabKeys.size(); ++n) {
-            if (prUiKeyCaptured(ui, keys, PrAppKey(kTabKeys[n]), style::kCommand) && model.select_tab(n) &&
-                    model.tab(n).kind == TabKind::Sprint && view.board != nullptr)
-                view.board->home();
-        }
-        // The text scale's keys, captured the same way, ask for a new scale; the next frame applies it
-        // (beginWindowFrame).
-        for (const TextKey& t : kTextKeys) {
-            if (prUiKeyCaptured(ui, keys, t.key, t.modifiers))
-                view.askedTextSteps = view.textZoom ? view.textZoom(view.askedTextSteps, t.steps) :
-                    std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
-        }
-        // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
-        // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the
-        // sprint tab. A terminal that cannot start leaves the tab that showed before. Captured like the keys above, so
-        // neither a terminal nor the prompt sees them.
-        if (prUiKeyCaptured(ui, keys, PrAppKey('T'), style::kCommand) && view.terminals != nullptr) {
-            const std::size_t id = model.add_terminal();
-            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
-            if (!view.terminals->open(id))
-                model.close_tab(model.active());
-        }
-        if (prUiKeyCaptured(ui, keys, PrAppKey('W'), style::kCommand) && model.tab_count() != 0 &&
-                model.tab(model.active()).kind == TabKind::Terminal) {
-            const std::size_t id = model.tab(model.active()).id;
-            HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
-            model.close_tab(model.active());
-            view.terminals->close(id);
+        updateApplication();
+        for (const auto& binding : view.windowApp.shortcuts) {
+            if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
+                shortcut(binding);
         }
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
         // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
         const TabKind activeKind = model.tab_count() == 0 ? TabKind::Friend : model.tab(model.active()).kind;
-        const bool onFriend = activeKind == TabKind::Friend;
         const bool hides = activeKind != TabKind::Terminal;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
         // first, then CompositionEnd): read before the area takes this round's events.
@@ -1137,11 +1134,6 @@ struct Builder {
         if (hides && asking == nullptr && prUiDragging(ui) == nullptr &&
                 prUiKeyPressed(ui, keys, PrAppKey_Escape, 0) && !composing && view.hide)
             view.hide();
-        // Command-Escape is stop (view.stop) on a friend's tab, and does nothing on the others. It hides nothing. It is
-        // captured on every tab, like nexus's other Command chords, so a terminal never takes it as Meta-Escape.
-        const bool stopKey = prUiKeyCaptured(ui, keys, PrAppKey_Escape, style::kCommand);
-        if (onFriend && stopKey && view.stop)
-            view.stop();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
         if (view.board != nullptr && !tabNodes.empty() && model.tab(0).kind == TabKind::Sprint &&
@@ -1162,35 +1154,148 @@ struct Builder {
         secretDialog(window);
     }
 
-    // What the selected tab shows: the sprint tab's page, a terminal, or a friend's transcript and prompt.
+    void updateApplication() {
+        const char* tab = "empty";
+        if (model.tab_count()) {
+            switch (model.tab(model.active()).kind) {
+                case TabKind::Friend: tab = "friend"; break;
+                case TabKind::Terminal: tab = "terminal"; break;
+                case TabKind::Sprint: tab = "sprint"; break;
+                case TabKind::Extension: tab = "extension"; break;
+            }
+        }
+        view.windowApp.update(*view.application, view.policyBundle, tab, model.tab_count() ? model.tab(model.active()).type : std::string(), view.promptOpen, !view.status.empty());
+    }
+
+    void shortcut(const Shortcut& key) {
+        switch (key.command) {
+            case WindowCommand::SelectTab: {
+                const auto index = static_cast<std::size_t>(key.argument);
+                if (model.select_tab(index) && model.tab(index).kind == TabKind::Sprint && view.board)
+                    view.board->home();
+                break;
+            }
+            case WindowCommand::Zoom:
+                view.askedTextSteps = policy::textZoom(*view.application, view.policyBundle, view.askedTextSteps,
+                    key.argument, -kTextStepsDown, kTextStepsUp);
+                break;
+            case WindowCommand::OpenTerminal:
+                if (view.terminals) {
+                    const auto id = model.add_terminal();
+                    HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
+                    if (!view.terminals->open(id))
+                        model.close_tab(model.active());
+                }
+                break;
+            case WindowCommand::CloseTerminal:
+                if (view.terminals && model.tab_count() && model.tab(model.active()).kind == TabKind::Terminal) {
+                    const auto id = model.tab(model.active()).id;
+                    HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
+                    model.close_tab(model.active());
+                    view.terminals->close(id);
+                }
+                break;
+            case WindowCommand::OpenTab: {
+                auto found = view.windowApp.types.find(key.type);
+                if (found != view.windowApp.types.end()) {
+                    model.open_extension(key.type, found->second.group, found->second.title);
+                    view.extensionProblem.clear();
+                }
+                break;
+            }
+            case WindowCommand::CloseTab:
+                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Extension) {
+                    model.close_tab(model.active());
+                    view.extensionProblem.clear();
+                }
+                break;
+            case WindowCommand::InvokeService:
+                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Extension) {
+                    const auto& tab = model.tab(model.active());
+                    auto type = view.windowApp.types.find(tab.type);
+                    if (!view.requestService || type == view.windowApp.types.end() || type->second.service.empty())
+                        view.extensionProblem = "Connect to a server and configure a service for this tab type.";
+                    else
+                        view.extensionProblem = view.requestService(type->second.service, tab.draft);
+                }
+                break;
+            case WindowCommand::Stop:
+                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Friend && view.stop)
+                    view.stop();
+                break;
+        }
+    }
+
     void page(PrLayoutNode window, bool composing) {
-        const bool onSprint = model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Sprint;
-        if (!onSprint && view.board != nullptr)
-            view.board->hidden();
-        if (onSprint) {
-            sprint(window);
-            return;
+        updateApplication(); // A shortcut or the strip may have selected another tab this round.
+        const auto& panels = view.windowApp.panels;
+        if (std::find(panels.begin(), panels.end(), Panel::Board) == panels.end()) {
+            view.boardBox = kPrLayoutNodeNone;
+            if (view.board)
+                view.board->hidden();
         }
-        view.boardBox = kPrLayoutNodeNone;
-        if (model.tab_count() != 0 && model.tab(model.active()).kind == TabKind::Terminal) {
-            terminal(window, model.tab(model.active()));
-            return;
+        if (std::find(panels.begin(), panels.end(), Panel::Transcript) == panels.end() && view.shown != ~std::size_t(0)) {
+            leaveTranscript();
+            view.shown = ~std::size_t(0);
+            view.transcript = kPrLayoutNodeNone;
         }
-        transcript(window);
-        PrLayoutNode footer = element(window, Part::Footer);
-        // The link's state, plainly, in the prompt's place until the server is reached: there is no prompt to type in.
-        // Once it is open, nothing stands under or around the prompt but its box (the state cursor shows a link lost).
-        if (!view.status.empty() && model.tab_count() != 0 && !view.promptOpen) {
-            label(footer, view.status, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
-        }
-        if (model.tab_count() != 0 && view.promptOpen) {
-            prompt(footer, composing);
-        } else {
+        if (std::find(panels.begin(), panels.end(), Panel::Prompt) == panels.end()) {
             view.prompted = ~std::size_t(0);
             view.prompt = kPrLayoutNodeNone;
             view.promptBox = kPrLayoutNodeNone;
         }
+        for (const auto panel : panels) {
+            switch (panel) {
+                case Panel::Board: sprint(window); break;
+                case Panel::Terminal: terminal(window, model.tab(model.active())); break;
+                case Panel::Transcript: transcript(window); break;
+                case Panel::Prompt: prompt(element(window, Part::Footer), composing); break;
+                case Panel::Native: {
+                    const auto& tab = model.tab(model.active());
+                    auto type = view.windowApp.types.find(tab.type);
+                    if (type != view.windowApp.types.end()) {
+                        auto draw = view.nativeTabs.find(type->second.native);
+                        if (draw != view.nativeTabs.end()) {
+                            draw->second(kit, window, model, asking == nullptr);
+                            break;
+                        }
+                    }
+                    label(window, "The native renderer for this tab is unavailable. Check its registration.",
+                        textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                    break;
+                }
+                case Panel::TextArea:
+                    drawTextEditor(kit, window, model, asking == nullptr);
+                    break;
+                case Panel::Label:
+                    label(window, view.windowApp.label, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    break;
+                case Panel::ServiceReply: {
+                    const auto& tab = model.tab(model.active());
+                    const auto type = view.windowApp.types.find(tab.type);
+                    if (type == view.windowApp.types.end()) break;
+                    for (std::size_t i = 0; i < model.tab_count(); ++i) {
+                        const auto& service = model.tab(i);
+                        if (service.kind == TabKind::Friend && service.name == type->second.service &&
+                                !service.transcript.empty()) {
+                            const auto& result = service.transcript.back();
+                            if (result.kind == EntryKind::Friend || result.kind == EntryKind::Notice)
+                                label(window, result.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                            break;
+                        }
+                    }
+                    break;
+                }
+                case Panel::Status:
+                    label(element(window, Part::Footer), view.status,
+                        textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+                    break;
+            }
+        }
+        if (!view.extensionProblem.empty() && model.tab_count() && model.tab(model.active()).kind == TabKind::Extension)
+            label(window, view.extensionProblem, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
     }
+
 };
 
 } // namespace

@@ -93,7 +93,6 @@
 #include "terminals.h"
 #include "url_opener.h"
 #include "view.h"
-#include "policy/host.h"
 
 #if NEXUS_LINK
 #include "link/client_port.h"
@@ -859,7 +858,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    static App a;
+    App a;  // Destroy the embedded VM before process-level thread-local teardown.
     a.model = &model;
     a.view.model = &model;
     a.view.look = &a.look;
@@ -877,11 +876,11 @@ int main(int argc, char** argv) {
     a.look.overlay = a.overlay;
     // Escape hides the overlay, as the hotkey does; a normal window has nothing to hide.
     if (a.overlay)
-        a.view.hide = [] { carryOut(a, a.rules.escape(overlayVisible(a))); };
+        a.view.hide = [&a] { carryOut(a, a.rules.escape(overlayVisible(a))); };
     // The friends' order is saved as the person moves a tab, once the server's friends are in the strip: a move before
     // them (a terminal's) leaves the saved order as it was.
     if (!fromState) {
-        a.view.moved = [] {
+        a.view.moved = [&a] {
             if (!a.host.strip.taken()) {
                 return;
             }
@@ -903,20 +902,18 @@ int main(int argc, char** argv) {
         a.host.selectionStore = &selection;
         a.host.keptStore = keptReadable ? &keptDrafts : nullptr;
         a.reopen = std::move(reopen);
-        a.view.selected = [] { a.host.personSelected(); };
+        a.view.selected = [&a] { a.host.personSelected(); };
     }
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
     if (live) {
-        static policy::Host clientPolicy("client");
-        a.view.textZoom = [path = home.empty() ? std::string() : home + "/policy.bundle.json"](int current, int delta) {
-            return policy::textZoom(clientPolicy, path, current, delta, -style::kTextStepsDown, style::kTextStepsUp);
-        };
+        if (!home.empty())
+            a.view.policyBundle = home + "/policy.bundle.json";
         std::string scaleWarning;
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
         if (!scaleWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", scaleWarning.c_str());
-        a.view.scaled = [] {
+        a.view.scaled = [&a] {
             std::string error;
             if (!saveTextScale(scale, a.look.textSteps, &error))
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
@@ -929,7 +926,7 @@ int main(int argc, char** argv) {
     if (server != nullptr) {
         link::ClientLink::Options options;
         options.bootstrap.host = server;
-        options.wake = [] {
+        options.wake = [&a] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
         };

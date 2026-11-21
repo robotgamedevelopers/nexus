@@ -245,6 +245,7 @@ constexpr const char* kFault = std::is_same_v<M, FaultyModel> ? ", faulty model"
 
 const char* tab_kind_name(nexus::TabKind k) {
     switch (k) {
+    case nexus::TabKind::Extension: return "\"Extension\"";
     case nexus::TabKind::Sprint: return "\"Sprint\"";
     case nexus::TabKind::Friend: return "\"Friend\"";
     case nexus::TabKind::Terminal: return "\"Terminal\"";
@@ -548,9 +549,42 @@ bool parse(const char* s, std::uint64_t& v) {
     return end != s && *end == '\0';
 }
 
+int pluginTabs(const char* path) {
+    nexus::Model model({});
+    std::ofstream out(path);
+    out << "---- MODULE PluginTabTraceData ----\nTrace == <<";
+    auto record = [&](const char* op, std::size_t a, std::size_t b) {
+        out << "[op |-> \"" << op << "\", a |-> " << a << ", b |-> " << b << ", tabs |-> <<";
+        for (std::size_t i = 0; i < model.tab_count(); ++i) {
+            if (i) out << ",";
+            out << model.tab(i).id + 1;
+        }
+        out << ">>]";
+    };
+    record("init", 0, 0);
+    for (const auto group : {"writing", "tools", "writing"}) {
+        auto id = model.open_extension("test", group, "title");
+        out << ",\n";
+        record("open", id + 1, 0);
+    }
+    for (auto to : {1u, 2u}) {
+        model.move_tab(0, to);
+        out << ",\n";
+        record("move", 1, to + 1);
+    }
+    model.close_tab(0);
+    out << ",\n";
+    record("close", 1, 0);
+    out << ">>\n====\n";
+    out.close();
+    return out ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--plugin-tabs")
+        return pluginTabs(argv[2]);
     std::vector<std::string> args(argv + 1, argv + argc);
     const std::vector<std::string> faults = {"--faulty", "--faulty-queue", "--faulty-move", "--faulty-queue-cap",
         "--faulty-send-trim", "--faulty-send-dedup", "--faulty-close", "--faulty-sprint-move", "--faulty-sprint-close",

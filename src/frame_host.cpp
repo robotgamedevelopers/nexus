@@ -260,6 +260,24 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
     }
     view->promptOpen = false;
     view->status = sync::linkStatus(sync::LinkPhase::Connecting, host, 0, "");
+    view->requestService = [this](const std::string& service, const std::string& text) -> std::string {
+        if (!link || phase != sync::LinkPhase::Connected)
+            return "The server is disconnected. The buffer is kept.";
+        if (text.empty() || text.size() > sync::Limits{}.text)
+            return "The service takes nonempty text of up to 32 KiB. The buffer is kept.";
+        for (std::size_t i = 0; i < model->tab_count(); ++i) {
+            if (model->tab(i).kind != TabKind::Friend || model->tab(i).name != service) continue;
+            const auto id = sync::sessionOf(*model, i, mirror);
+            if (!id) break;
+            sync::Action request;
+            request.kind = sync::ActionKind::Send;
+            request.session = id;
+            request.text = text;
+            link->send(std::move(request));
+            return {};
+        }
+        return "No conversation with " + service + " is available on the server. The buffer is kept.";
+    };
     view->submit = [this](std::size_t i, bool queue) {
         std::string text;
         std::string why;
@@ -345,6 +363,12 @@ bool FrameHost::event(const PrAppEvent& e) {
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
+    }
+    if (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp) {
+        for (const auto& binding : view->windowApp.shortcuts) {
+            if (binding.key == e.keyboard.key && binding.modifiers == (e.modifiers & ~PrAppModifierFlag_CapsLock))
+                return false; // Route an application shortcut to the window's capture ahead of the embedded page.
+        }
     }
     if (board != nullptr && board->event(e)) {
         return true;

@@ -17,7 +17,7 @@ struct Entry { EntryKind kind; std::string text; };
 // What a tab is. The sprint tab, when the model has one, is first and never moves or closes; friend tabs come and go
 // with the server's friend list (add_friend, remove_friend) and are never closed by the person; terminal tabs come and
 // go.
-enum class TabKind { Sprint, Friend, Terminal };
+enum class TabKind { Sprint, Friend, Terminal, Extension };
 
 // The zone a tab of `kind` stands in: the strip holds the zones in ascending order, and a tab moves only inside its own.
 // The sprint tab is zone 0, alone; friends are zone 1 and terminals zone 2.
@@ -33,6 +33,8 @@ struct Tab {
     std::string draft;
     std::vector<std::string> queue;  // prompts queued for later, oldest first; apart from the transcript
     TabKind kind = TabKind::Friend;
+    std::string type{};
+    std::string group{};
 };
 
 class Model {
@@ -60,6 +62,8 @@ public:
                                                      // `from` and `to` are in the same zone; else the tab at `from`
                                                      // ends at `to`, the tabs between shift by one, everything the tab
                                                      // holds goes with it, and active() follows its friend
+    std::size_t open_extension(std::string type, std::string group, std::string title);
+    bool edit_extension(std::size_t i, std::string text);
     std::size_t add_terminal();  // appends a terminal tab at the end, makes it active (its id at the end of
                                  // selection_history()), returns its new id
     bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, its id leaves

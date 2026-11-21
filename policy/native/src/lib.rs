@@ -12,7 +12,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::io::{Read, Write};
 use std::path::Path;
 
-pub const LIMIT: usize = 256 * 1024;
+pub const LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +68,16 @@ fn compile(
     done: &mut HashMap<String, FrozenModule>,
     visiting: &mut HashSet<String>,
 ) -> Result<FrozenModule> {
+    let opposite = if bundle.side == "server" {
+        "client"
+    } else {
+        "server"
+    };
+    ensure!(
+        name != format!("{opposite}.star") && !name.starts_with(&format!("{opposite}/")),
+        "{} cannot import {name}",
+        bundle.side
+    );
     if let Some(module) = done.get(name) {
         return Ok(module.clone());
     }
@@ -108,6 +118,7 @@ fn compile(
 pub struct Program {
     module: FrozenModule,
     config: Value,
+    application: FrozenModule,
 }
 
 impl Program {
@@ -117,8 +128,8 @@ impl Program {
             "expected a version 1 {side} policy"
         );
         ensure!(
-            bundle.config.is_object() && bundle.sources.len() <= 32,
-            "expected a config object and at most 32 source files"
+            bundle.config.is_object() && bundle.sources.len() <= 128,
+            "expected a config object and at most 128 source files"
         );
         let module = compile(
             &format!("{side}.star"),
@@ -126,23 +137,56 @@ impl Program {
             &mut HashMap::new(),
             &mut HashSet::new(),
         )?;
-        let function = module.get("decide")?;
+        let decider = module.get_option("decide")?;
+        let handler = module.get_option("handle")?;
         ensure!(
-            function.value().get_type() == "function",
-            "define decide(event, context, config)"
+            decider.is_some() || handler.is_some(),
+            "export handle(event, state, config) or decide(event, context, config)"
         );
+        for function in [&decider, &handler].into_iter().flatten() {
+            ensure!(
+                function.value().get_type() == "function",
+                "application entry points must be functions"
+            );
+        }
+        let fallback = if decider.is_none() || handler.is_none() {
+            compile(
+                &format!("{side}.star"),
+                &defaults(side)?,
+                &mut HashMap::new(),
+                &mut HashSet::new(),
+            )?
+        } else {
+            module.clone()
+        };
         Ok(Self {
-            module,
+            application: if handler.is_some() {
+                module.clone()
+            } else {
+                fallback.clone()
+            },
+            module: if decider.is_some() { module } else { fallback },
             config: bundle.config,
         })
     }
 
     pub fn decide(&self, event: &str, context: Value) -> Result<String> {
+        let (entry, event) = match event.strip_prefix("app.") {
+            Some(name) => ("handle", name),
+            None => ("decide", event),
+        };
+        self.call(entry, event, context)
+    }
+
+    fn call(&self, entry: &str, event: &str, context: Value) -> Result<String> {
         ensure!(context.is_object(), "context must be a JSON object");
         Module::with_temp_heap(|module| {
-            let function = module
-                .heap()
-                .access_owned_frozen_value(&self.module.get("decide")?);
+            let source = if entry == "handle" {
+                &self.application
+            } else {
+                &self.module
+            };
+            let function = module.heap().access_owned_frozen_value(&source.get(entry)?);
             let heap = module.heap();
             let args = [
                 heap.alloc(event),
@@ -164,8 +208,8 @@ impl Program {
 struct Limited<'a>(&'a mut Vec<u8>);
 impl Write for Limited<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.0.len() + buf.len() > 65536 {
-            return Err(std::io::Error::other("answer exceeds 64 KiB"));
+        if self.0.len() + buf.len() > 256 * 1024 {
+            return Err(std::io::Error::other("answer exceeds 256 KiB"));
         }
         self.0.extend_from_slice(buf);
         Ok(buf.len())

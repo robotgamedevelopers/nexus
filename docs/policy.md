@@ -9,9 +9,9 @@ the new revision the next time that event occurs. Client decisions work when the
 | `client.star` | Local UI decisions |
 | `server.star` | Decisions about server state |
 | `config.json` | JSON object passed to both scripts |
-| Other `*.star` files in the same directory | Shared functions, imported with `load("helpers.star", "my_function")` |
+| `client/`, `server/` and shared modules | Application code. Imports such as `load("client/window.star", "handle")` resolve from the rules directory. Apply includes the transitive imports for that side. |
 
-Each entry point defines `decide(event, context, config)`. The host supplies the event name and a JSON object
+Each entry point can export `handle(event, state, config)` for application events and `decide(event, context, config)` for scalar decisions. An entry point from an earlier fork that exports only one function inherits the other from the bundled defaults. The host supplies the event name and a JSON object
 describing its current state. Starlark returns a JSON-compatible value. Each hook documents which values the
 engine can apply. Modules can load other files from the same bundle. Scripts receive their inputs through the
 function arguments and have no host filesystem, environment, network or process API. Keep credentials out of the fork.
@@ -56,8 +56,34 @@ The shipped client advances by the key's delta. The shipped server cycles throug
 The host reads a bundle at the decision and reuses the compiled module while its contents are the same. The
 server still owns account eligibility and the durable session move. The client owns rendering and saving its scale.
 
-A new event needs a native call site that supplies the state and validates the result. A fork can then change
-what that event does in Starlark, including calling shared modules and using its own config keys.
+## The window and conversation applications
+
+Preview application events with an `app.` prefix. The Starlark `handle` function receives the event name without
+the prefix. For example:
+
+```sh
+echo '{"tab":"friend","type":"","prompt_open":true,"has_status":false}' |
+  build/nexus-policy preview client policy/rules app.window
+echo '{"friend":"reviewer","intent":"send","text":"hello","model":"","queued":0,"busy":false}' |
+  build/nexus-policy preview server policy/rules app.message
+```
+
+| Event | State and return value |
+|---|---|
+| Client `window` | Receives the active tab kind, registered type ID, prompt availability and presence of link status. Returns the ordered panel list, keyboard shortcuts, and optional tab registrations and label. The window caches this description until its state changes or it observes an applied revision during a frame. |
+| Client `prompt_key` | Receives `key` (`Enter` or `Command+Enter`), `text`, `friend`, `model`, queue length `queued`, and displayed `busy` state. Returns a command list. |
+| Server `message` | Receives the same text and session fields with `intent` (`send` or `queue`) and server-side `busy` (an open turn). Returns a command list. |
+| Server `new_session` | Receives `friend`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred` and `instances`. Returns string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
+
+Message command lists accept up to 16 operations. Each operation is a dictionary with an `op` field. A `notice`
+carries `text`. A client `draft` replaces the current draft. A final `send` or `queue` can supply replacement
+`text` or use the input. A final server `native` names a registered service in `name` and can supply input
+`text`. An empty list consumes the input. The server validates the entire plan before acting and commits its
+changes together with the request acknowledgement. Stop, credential input and sign-in take dedicated engine paths.
+
+The shipped modules are `client/window.star`, `server/conversation.star` and `server/sessions.star`. Add modules in
+your fork, import them from an entry point, and check the imports in with the config. For a complete registration
+and both native and script handlers, see [tab and service plugins](plugins.md).
 
 ## Claude driver startup
 

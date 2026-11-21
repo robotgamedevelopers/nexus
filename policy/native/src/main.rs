@@ -9,33 +9,55 @@ use std::{
 
 fn bundle(dir: &Path, side: &str) -> Result<Bundle> {
     let mut sources = BTreeMap::new();
-    let mut bytes = 0;
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("star") {
+    let root = dir
+        .canonicalize()
+        .with_context(|| format!("opening {}", dir.display()))?;
+    let mut pending = vec![format!("{side}.star")];
+    let mut total = 0;
+    while let Some(name) = pending.pop() {
+        if sources.contains_key(&name) {
             continue;
         }
-        let name = path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .context("non-UTF-8 module name")?;
-        // Each host receives only its own entry point and the shared modules.
-        if name
-            == format!(
-                "{}.star",
-                if side == "server" { "client" } else { "server" }
-            )
-        {
-            continue;
-        }
-        let source = read(&path)?;
-        bytes += source.len();
         ensure!(
-            bytes <= LIMIT && sources.len() < 32,
-            "source bundle too large"
+            name.ends_with(".star")
+                && name.split('/').all(|part| !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))),
+            "invalid module name {name}"
         );
-        sources.insert(name.to_owned(), String::from_utf8(source)?);
+        let opposite = if side == "server" { "client" } else { "server" };
+        ensure!(
+            name != format!("{opposite}.star") && !name.starts_with(&format!("{opposite}/")),
+            "{side} cannot import {name}"
+        );
+        let path = root.join(&name);
+        ensure!(
+            path.canonicalize()
+                .with_context(|| format!("loading {name}"))?
+                .starts_with(&root),
+            "module {name} lies outside the rules directory"
+        );
+        let source = String::from_utf8(read(&path).with_context(|| format!("reading {name}"))?)?;
+        total += source.len();
+        ensure!(
+            total <= LIMIT && sources.len() < 128,
+            "application exceeds bundle limits"
+        );
+        let ast = starlark::syntax::AstModule::parse(
+            &name,
+            source.clone(),
+            &starlark::syntax::Dialect::Standard,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        pending.extend(
+            ast.loads()
+                .into_iter()
+                .map(|load| load.module_id.to_owned()),
+        );
+        sources.insert(name, source);
     }
     Ok(Bundle {
         version: 1,

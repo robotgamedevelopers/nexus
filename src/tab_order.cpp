@@ -225,7 +225,7 @@ std::string formatSelectedTab(const Model& model) {
     std::string text(kSelectedHeader);
     text += '\n';
     const Tab* tab = model.tab_count() != 0 ? &model.tab(model.active()) : nullptr;
-    if (tab == nullptr || tab->kind == TabKind::Sprint) {
+    if (tab == nullptr || tab->kind == TabKind::Sprint || tab->kind == TabKind::Extension) {
         text += "sprint";
     } else if (tab->kind == TabKind::Terminal) {
         std::size_t place = 0;

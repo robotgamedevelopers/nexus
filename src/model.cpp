@@ -33,6 +33,7 @@ int zone(TabKind kind) {
         case TabKind::Sprint: return 0;
         case TabKind::Friend: return 1;
         case TabKind::Terminal: return 2;
+        case TabKind::Extension: return 3;
     }
     return 2;
 }
@@ -130,7 +131,7 @@ bool Model::append(std::size_t i, Entry e) {
 // Window.tla's MoveTab: the order is Moved (a rotation of the tabs from `from` to `to`), and active_ is MovedIndex. A
 // zone's tabs stand together, so a move whose two ends are in one zone shifts only tabs of that zone.
 bool Model::move_tab(std::size_t from, std::size_t to) {
-    if (from >= tabs_.size() || to >= tabs_.size() || zone(tabs_[from].kind) != zone(tabs_[to].kind))
+    if (from >= tabs_.size() || to >= tabs_.size() || (zone(tabs_[from].kind) != zone(tabs_[to].kind) || tabs_[from].group != tabs_[to].group))
         return false;
     auto at = [this](std::size_t i) { return tabs_.begin() + static_cast<std::ptrdiff_t>(i); };
     if (from < to)
@@ -149,16 +150,34 @@ bool Model::move_tab(std::size_t from, std::size_t to) {
 // Window.tla's AddTerminal: the terminal zone is last, so the end of the strip is in it.
 std::size_t Model::add_terminal() {
     const std::size_t id = next_id_++;
-    tabs_.push_back(Tab{id, {}, {}, {}, {}, {}, TabKind::Terminal});
-    active_ = tabs_.size() - 1;
+    auto pos = std::find_if(tabs_.begin(), tabs_.end(), [](const Tab& t) { return t.kind == TabKind::Extension; });
+    active_ = static_cast<std::size_t>(pos - tabs_.begin());
+    tabs_.insert(pos, Tab{id, {}, {}, {}, {}, {}, TabKind::Terminal});
     touch(id);
     return id;
+}
+
+std::size_t Model::open_extension(std::string type, std::string group, std::string title) {
+    auto pos = std::find_if(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return t.group == group; });
+    while (pos != tabs_.end() && pos->group == group) ++pos;
+    const auto id = next_id_++;
+    active_ = static_cast<std::size_t>(pos - tabs_.begin());
+    tabs_.insert(pos, Tab{id, std::move(title), {}, {}, {}, {}, TabKind::Extension, std::move(type), std::move(group)});
+    touch(id);
+    return id;
+}
+
+bool Model::edit_extension(std::size_t i, std::string text) {
+    if (i >= tabs_.size() || tabs_[i].kind != TabKind::Extension)
+        return false;
+    tabs_[i].draft = std::move(text);
+    return true;
 }
 
 // Window.tla's CloseTab: the order is Removed, the history Forget, and active_ ClosedActive: the tab of the last id left
 // in the history if the closed tab was active, else (and with no id left) ClosedIndex.
 bool Model::close_tab(std::size_t i) {
-    if (i >= tabs_.size() || tabs_[i].kind != TabKind::Terminal)
+    if (i >= tabs_.size() || (tabs_[i].kind != TabKind::Terminal && tabs_[i].kind != TabKind::Extension))
         return false;
     remove_at(i);
     return true;
