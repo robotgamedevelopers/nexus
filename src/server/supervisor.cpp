@@ -13,6 +13,11 @@ namespace {
 
 using namespace nexus::driver;
 
+std::string_view expectedEmail(const std::vector<std::string>& command) {
+    const auto flag = std::find(command.begin(), command.end(), "--account-email");
+    return flag != command.end() && std::next(flag) != command.end() ? std::string_view(*std::next(flag)) : std::string_view();
+}
+
 // The kind a message has on the line.
 std::string kindOf(const DriverMessage& message) {
     return std::visit([](const auto& m) -> std::string {
@@ -207,7 +212,9 @@ Output Supervisor::setOptions(std::string model, std::string effort, Millis now)
     return finish();
 }
 
-Output Supervisor::setAccount(std::string account, Millis now) {
+Output Supervisor::setAccount(std::string account, Millis now, const std::vector<std::string>* command) {
+    // Changing an account can start queued work immediately. Bind its complete launch command in the same step.
+    if (command) config_.command = *command;
     config_.account = std::move(account);
     advance(now);
     return finish();
@@ -640,6 +647,7 @@ void Supervisor::startDriver(Millis now) {
     lastCause_.clear();
     lastFix_.clear();
     driverAccount_ = config_.account;
+    driverEmail_ = expectedEmail(config_.command);
     driverCwd_ = config_.cwd;
     driverLimited_ = config_.limited;
     driverKeepsOut_ = config_.limited ? config_.keepsOut : std::vector<std::string>{};
@@ -710,9 +718,13 @@ void Supervisor::take() {
 // the harness's default, which a settings line cannot say: the next one starts on the defaults. So is any while the
 // friend is not in friends.json. A turn open runs to its end first.
 void Supervisor::retire(Millis now) {
+    const bool changedIdentity = driverEmail_ != expectedEmail(config_.command);
+    if (changedIdentity && driverAccount_ == config_.account && phase_ == Phase::Working) {
+        stopOpen(now);
+    }
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
-    if (phase_ == Phase::Idle && (driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
+    if (phase_ == Phase::Idle && (changedIdentity || driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
                                   driverLimited_ != config_.limited ||
                                   (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || !config_.present ||
                                   cleared)) {

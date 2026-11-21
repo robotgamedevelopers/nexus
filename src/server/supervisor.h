@@ -186,7 +186,7 @@ public:
     Output setOptions(std::string model, std::string effort, Millis now);
     // The person set the session's account. A driver started under another is ended quietly once no turn is open (an
     // open turn runs to its end first), never counted as a failed start; the next starts under this account.
-    Output setAccount(std::string account, Millis now);
+    Output setAccount(std::string account, Millis now, const std::vector<std::string>* command = nullptr);
     // The session's instance changed (sync::Hub settles it, or a reload moved it): its directory is `cwd`, and `here`
     // says whether it is on this server's machine. A driver started in another directory, or any driver once the
     // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
@@ -286,6 +286,7 @@ private:
     std::string lastFailure_;           // why the last driver ended, for the notice that holds starts back
     std::string lastCause_;             // the cause the driver gave with its last error, if any
     std::string lastFix_;               // and its fix
+    std::string driverEmail_;           // registry email verified by the alive driver
     std::string driverAccount_;         // the account the driver alive was started under
     std::string driverCwd_;             // the directory it was started in
     bool driverLimited_ = false;        // whether it was started limited

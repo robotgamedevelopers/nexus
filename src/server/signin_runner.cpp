@@ -66,8 +66,10 @@ int aboveNine(int fd) {
     return fd;
 }
 
-// The first `claude` on `path`, or empty.
-std::string onPath(const std::string& path) {
+} // namespace
+
+// The first absolute `claude` on `path`, or empty.
+std::string claudeOnPath(const std::string& path) {
     std::size_t at = 0;
     while (at <= path.size()) {
         std::size_t end = path.find(':', at);
@@ -75,7 +77,7 @@ std::string onPath(const std::string& path) {
             end = path.size();
         }
         const std::string dir = path.substr(at, end - at);
-        if (!dir.empty()) {
+        if (!dir.empty() && dir.front() == '/') {
             const std::string candidate = dir + "/claude";
             if (::access(candidate.c_str(), X_OK) == 0) {
                 return candidate;
@@ -85,8 +87,6 @@ std::string onPath(const std::string& path) {
     }
     return std::string();
 }
-
-} // namespace
 
 SignInRunner::SignInRunner(Options options, Events events) : options_(std::move(options)) {
     socket_ = options_.dir + "/signin.sock";
@@ -256,8 +256,9 @@ void SignInRunner::start(std::uint64_t id, const std::string& account, const std
             events_.exited(account, id, "its process did not start: " + what);
         }
     };
-    if (provider == "claude") {
-        const std::string claude = !options_.claude.empty() ? options_.claude : onPath(options_.path);
+    const bool setupToken = provider == "claude" && command.empty();
+    if (setupToken) {
+        const std::string claude = !options_.claude.empty() ? options_.claude : claudeOnPath(options_.path);
         if (claude.empty()) {
             fail("no claude program on the server's PATH (set `claude <path>` in the server's config)");
             return;
@@ -415,13 +416,14 @@ void SignInRunner::start(std::uint64_t id, const std::string& account, const std
     Proc& p = it->second;
     p.id = id;
     p.provider = provider;
+    p.setupToken = setupToken;
     p.pid = pid;
     p.master = master;
     p.nonce = nonce;
     p.configDir = configDir;
     p.lock = lock;
     if (events_.log) {
-        const std::string operation = provider == "claude" ? "claude setup-token" : provider + " sign-in";
+        const std::string operation = setupToken ? "claude setup-token" : provider + " sign-in";
         events_.log("sign-in " + std::to_string(id) + ": " + account + ": " + operation + " started, process " +
                     std::to_string(pid));
     }
@@ -539,7 +541,7 @@ void SignInRunner::readTerminal(const std::string& account, Proc& p) {
                     events_.url(account, p.id, url);
                 }
             }
-            if (p.provider == "claude") {
+            if (p.setupToken) {
                 p.token.feed(bytes);
             }
             std::memset(buf, 0, sizeof buf);
@@ -594,14 +596,22 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
     const bool endedByUs = p.killAt != 0;
     const std::string why = !status ? "it was ended" : WIFEXITED(st) ? "it exited " + std::to_string(WEXITSTATUS(st)) :
         WIFSIGNALED(st) ? "it ended on a signal" : "it ended";
-    if (p.provider != "claude") {
+    if (!p.setupToken) {
         const std::string provider = p.provider;
         procs_.erase(account);
         if (exitedZero && !endedByUs && !reported && events_.enrolled) {
             acted_ = true;
             events_.enrolled(account, provider, id);
         } else if (!reported && events_.exited) {
-            events_.exited(account, id, why);
+            std::string reason = why;
+            if (provider == "claude" && status && WIFEXITED(st)) {
+                switch (WEXITSTATUS(st)) {
+                    case 11: reason = "the signed-in email differs from this account; choose the displayed email in the browser and try again"; break;
+                    case 12: reason = "Claude did not confirm the email for this login; sign in again"; break;
+                    case 13: reason = "Claude sign-in or private credential storage failed; sign in again"; break;
+                }
+            }
+            events_.exited(account, id, reason);
         }
         return;
     }

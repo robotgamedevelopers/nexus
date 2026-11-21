@@ -716,6 +716,18 @@ void testAccount() {
     o = u.exited("exited with status 0", kStart + 3);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
     CHECK(hasArgs(o, {"--account", "other"}));
+
+    // A reload of the same named account starts queued work only with its new identity check.
+    auto changed = c.command;
+    changed.insert(changed.end(), {"--account-email", "new@example.test"});
+    u.message(Hello{1, "h"}, kStart + 4);
+    o = u.setAccount("other", kStart + 5, &changed);
+    CHECK(u.phase() == Phase::Stopping && !written(o).empty());
+    u.queued("next", kStart + 6);
+    o = u.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 7);
+    CHECK(ended(u, o) && written(o).empty());
+    o = u.exited("exited with status 0", kStart + 8);
+    CHECK(hasArgs(o, {"--account-email", "new@example.test"}) && hasArgs(o, {"--account", "other"}));
 }
 
 bool resumes(const Output& o) {

@@ -42,6 +42,8 @@
 
 namespace nexus::server {
 
+std::string claudeOnPath(const std::string& path);
+
 class SignInRunner {
 public:
     struct Options {
@@ -105,6 +107,7 @@ private:
         sync::TokenScanner token;
         sync::UrlScanner url{"claude"};     // the runner runs `claude setup-token`: its hosts
         std::string provider;
+        bool setupToken = false;
         bool urlSent = false;
         std::uint64_t killAt = 0;   // when SIGKILL follows the SIGTERM; 0: not ending
     };

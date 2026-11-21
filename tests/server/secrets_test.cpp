@@ -1135,6 +1135,27 @@ void login_files() {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     enrollment_files(dir);
+    const auto claude = dir / "Personal";
+    std::filesystem::create_directory(claude);
+    CHECK(::chmod(claude.c_str(), 0700) == 0);
+    const auto receipt = claude / "verified-claude.json";
+    const auto verified = [&](const std::string& email) { return server::hasVerifiedClaude(claude.string(), email); };
+    CHECK(!verified("user@example.test"));
+    auto writeReceipt = [&](std::string_view body) {
+        int fd = ::open(receipt.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        CHECK(fd >= 0 && ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size()));
+        CHECK(::close(fd) == 0);
+    };
+    writeReceipt(R"({"version":1,"email":"user@example.test"})");
+    CHECK(!verified("user@example.test"));
+    writeReceipt(R"({"version":1,"email":"User@example.test","credential":{"accessToken":"fixture","refreshToken":"fixture","expiresAt":1}})");
+    CHECK(verified("user@EXAMPLE.test"));
+    CHECK(!verified("user+tag@example.test") && !verified("older@example.test"));
+    CHECK(!server::hasVerifiedClaude((dir / "personal").string(), "user@example.test"));
+    CHECK(::chmod(receipt.c_str(), 0644) == 0 && !verified("user@example.test"));
+    CHECK(::chmod(receipt.c_str(), 0600) == 0);
+    std::filesystem::create_hard_link(receipt, claude / "alias");
+    CHECK(!verified("user@example.test"));
     const std::string path = (dir / "oauth-token").string();
     CHECK(server::inspectLogin(path).file == LoginSeen::File::Missing);
     auto write = [&](const std::string& text, mode_t mode) {

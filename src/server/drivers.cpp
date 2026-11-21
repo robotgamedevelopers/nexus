@@ -321,6 +321,14 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
             "nexus-server has no " + held->provider + " driver for it yet, so the prompt was not sent. Set the "
             "session to one of " + friendName + "'s " + harness + " accounts.");
     }
+    if (held != nullptr && held->requiresVerifiedEmail()) {
+        if (!takesAccount || options_.verifiedHelper.empty() || options_.authClaude.empty()) {
+            return refuse("Configure the Claude sign-in helper, Claude executable and driver --account for " +
+                          held->name + " to verify its email.");
+        }
+        r.command.insert(r.command.end(), {"--account-email", held->email, "--verified-helper", options_.verifiedHelper,
+                                           "--auth-claude", options_.authClaude});
+    }
     return r;
 }
 
@@ -584,7 +592,7 @@ Output Drivers::syncSlot(sync::SessionId id, Supervisor& sup, Millis now) {
         append(out, sup.configure({}, dir, options_.table, now));
     }
     append(out, sup.setOptions(s->info.model, s->info.effort, now));
-    append(out, sup.setAccount(s->info.account, now));
+    append(out, sup.setAccount(s->info.account, now, &r.command));
     append(out, sup.setLimited(limitedOf(s->info), now));
     append(out, sup.setKeepsOut(keepsOut(), now));
     if (!none) {

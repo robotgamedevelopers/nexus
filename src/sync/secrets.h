@@ -253,6 +253,8 @@ public:
     // The server is ending: every open request is dropped, unanswered (its asker ends with the server), and every held
     // value is lost, logged "lost" (the one way a value that arrived is not stored). Expired requests are forgotten.
     SecretEffects drop();
+    // A registry change retired this account's paste-based login, including late answers and held retries.
+    SecretEffects retireLogin(const std::string& account, const std::string& what);
     // When expire() next has something to do.
     std::optional<std::uint64_t> deadline() const;
     // When retry() next has something to do.

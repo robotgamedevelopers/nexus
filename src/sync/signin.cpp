@@ -548,12 +548,12 @@ SignInEffects SignInDesk::signedIn(const std::string& account) {
     return out;
 }
 
-std::vector<std::string> SignInDesk::fallBack(SignInEffects* out) {
+std::vector<std::string> SignInDesk::fallBack(SignInEffects* out, const std::set<std::string>& browserOnly) {
     std::vector<std::string> accounts;
     for (const auto& [key, f] : flows_) {
         // A needed flow, and a running one that no window holds (its window went away): no window left could take it
         // over, so its process is ended rather than left to its deadline.
-        if (f.state == SignInState::Needed || (signInRunning(f.state) && f.opener.empty())) {
+        if (!browserOnly.contains(key) && (f.state == SignInState::Needed || (signInRunning(f.state) && f.opener.empty()))) {
             accounts.push_back(key);
         }
     }

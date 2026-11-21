@@ -1,5 +1,6 @@
 #include "server/login_life.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <ctime>
@@ -12,6 +13,7 @@
 #endif
 
 #include "accounts/registry.h"
+#include "pr/json.h"
 #include "store/fs.h"
 #include "sync/secrets.h"
 #include "sync/signin.h"
@@ -103,6 +105,56 @@ int openAccountDirectory(const std::string& dir, std::string& problem) {
         errno = error;
     }
     return fd;
+}
+
+bool hasVerifiedClaude(const std::string& accountDir, const std::string& expectedEmail) {
+    if (expectedEmail.empty()) return false;
+    std::string problem;
+    const int dir = openAccountDirectory(accountDir, problem);
+    if (dir < 0) return false;
+    struct stat st{};
+    const bool privateDir = ::fstat(dir, &st) == 0 && st.st_uid == ::getuid() && (st.st_mode & 0777) == 0700;
+    const int fd = privateDir ? openExactAt(dir, "verified-claude.json", O_NONBLOCK) : -1;
+    ::close(dir);
+    if (fd < 0) return false;
+    std::string bytes;
+    if (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == ::getuid() && st.st_nlink == 1 &&
+        (st.st_mode & 0777) == 0600 && st.st_size > 0 && st.st_size <= 65536) {
+        bytes.resize(static_cast<std::size_t>(st.st_size));
+        std::size_t at = 0;
+        while (at < bytes.size()) {
+            const ssize_t n = ::read(fd, bytes.data() + at, bytes.size() - at);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            at += static_cast<std::size_t>(n);
+        }
+        char extra;
+        if (at != bytes.size() || ::read(fd, &extra, 1) != 0) sync::wipeBytes(bytes);
+    }
+    ::close(fd);
+    if (bytes.empty()) return false;
+    PrJson* doc = prJsonCreate();
+    const bool parsed = doc && prJsonParse(doc, {bytes.data(), bytes.size()}, nullptr);
+    bool valid = false;
+    if (parsed) {
+        auto member = [&](PrJsonValueIndex object, std::string_view key) {
+            return prJsonMember(doc, object, {key.data(), key.size()});
+        };
+        const PrStringView email = prJsonString(doc, member(0, "email"));
+        const auto grant = member(0, "credential");
+        auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : int(c); };
+        const auto version = member(0, "version");
+        const auto expiry = member(grant, "expiresAt");
+        valid = prJsonKind(doc, version) == PrJsonKind_Number && prJsonNumber(doc, version, 0) == 1 && email.data &&
+            email.size == expectedEmail.size() && std::equal(expectedEmail.begin(), expectedEmail.end(), email.data,
+                [&](char a, char b) { return lower(a) == lower(b); }) &&
+            prJsonString(doc, member(grant, "accessToken")).size > 0 &&
+            prJsonString(doc, member(grant, "refreshToken")).size > 0 &&
+            prJsonKind(doc, expiry) == PrJsonKind_Number && prJsonNumber(doc, expiry, 0) > 0;
+    }
+    prJsonDestroy(doc);
+    sync::wipeBytes(bytes);
+    return valid;
 }
 
 bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account) {

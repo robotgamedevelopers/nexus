@@ -99,6 +99,8 @@ public:
         Host* host = nullptr;           // null: PosixHost
         std::function<bool(std::string* text, std::string* problem)> readTable{};
         bool quiet = false;
+        std::string verifiedHelper{};
+        std::string authClaude{};
     };
 
     // Over the sessions in `store`; attach() the hub that commits to it before anything else.

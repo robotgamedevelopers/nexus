@@ -743,6 +743,18 @@ void caseAccountSpelling() {
 }
 
 void caseEnrollmentFailure() {
+    // A verified Claude helper can print a setup-token-shaped line but only its verified completion counts.
+    for (int code : {0, 11, 12, 13}) {
+        Run r;
+        setUp(r, "silent");
+        r.runner->start(7, "personal", "claude", {"/bin/sh", "-c", "echo " + std::string(fake_claude::kToken) +
+                        "; exit " + std::to_string(code)});
+        CHECK(pump(r, [&] { return !r.runner->running("personal"); }));
+        CHECK(!r.gotToken && r.enrollmentCount == (code == 0 ? 1 : 0) && r.exited == (code != 0));
+        if (code == 11) CHECK(r.why.find("email differs") != std::string::npos);
+        if (code == 12) CHECK(r.why.find("confirm the email") != std::string::npos);
+        checkClean(r);
+    }
     enrollment("grok", "failure");
     enrollment("muse", "cancel");
 }

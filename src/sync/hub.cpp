@@ -654,6 +654,9 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
         info.harness = harnessOf(was, info.harness);
         notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
             "now runs " + info.harness + ".";
+    } else if (const auto* row = accounts_->account(was); before && row && row->provider == "claude" &&
+               before->account(was) && before->account(was)->email != row->email) {
+        notice = "The configured Claude email for " + was + " changed. This session will use the updated login.";
     } else if (instanceNotice.empty()) {
         return true;
     }
@@ -786,26 +789,32 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
 
 // The registry becomes `next`; an account it no longer holds loses its sign-in, and one it did not hold before is
 // probed (probeSignInWith).
+static bool sameLogin(const accounts::Account* previous, const accounts::Account& current) {
+    return previous && previous->provider == current.provider &&
+        (current.provider != "claude" || previous->email == current.email);
+}
+
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
         const auto* current = accounts_->account(*it);
         const auto* previous = was ? was->account(*it) : nullptr;
-        it = !current || (previous && previous->provider != current->provider)
+        it = !current || (previous && !sameLogin(previous, *current))
             ? signedIn_.erase(it) : std::next(it);
     }
     for (const accounts::Account& a : accounts_->accounts) {
         const accounts::Account* before = was ? was->account(a.name) : nullptr;
-        if (probe_ && (before == nullptr || before->provider != a.provider) && probe_(a)) {
-            signedIn_.insert(a.name);
+        if (!sameLogin(before, a)) {
+            if (before && a.requiresVerifiedEmail()) secretEffects(desk_.retireLogin(a.name, loginFile(a.provider)));
+            if (probe_ && probe_(a)) signedIn_.insert(a.name);
         }
     }
     stateFriends();
     // A flow for an account removed, or now of another provider, ends with it.
     for (const SignInOffer& o : signIns_.offers()) {
         const accounts::Account* a = accounts_->account(o.account);
-        if (a == nullptr || a->provider != o.provider) {
+        if (!a || (was && !sameLogin(was->account(o.account), *a))) {
             signInEffects(signIns_.signedIn(o.account));
         }
     }
@@ -815,6 +824,10 @@ void Hub::take(accounts::Registry next) {
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
+    }
+    const auto* accountRow = accounts_ ? accounts_->account(account) : nullptr;
+    if (signedIn && accountRow && accountRow->requiresVerifiedEmail()) {
+        signedIn = probe_ && probe_(*accountRow);
     }
     if (signedIn) {
         if (signedIn_.insert(account).second && accounts_) stateFriends();
@@ -908,7 +921,7 @@ void Hub::needSignIn(const std::string& account) {
     if (a == nullptr || signedIn_.count(account) != 0 || signIns_.live(account) || desk_.busy(account)) {
         return;
     }
-    if (pasteInstead()) {
+    if (pasteInstead() && !a->requiresVerifiedEmail()) {
         askPasteLogin(account);
         return;
     }
@@ -946,6 +959,10 @@ bool Hub::requestSignIn(const std::string& account, std::string* said) {
         *said = "signed in";
         return true;
     }
+    if (a->requiresVerifiedEmail() && pasteInstead()) {
+        *said = "Open an updated Nexus window to verify " + a->email + " in the browser.";
+        return false;
+    }
     const bool before = desk_.busy(account);
     needSignIn(account);
     *said = before ? "needs sign-in: its login is being stored, or asked for by a paste" :
@@ -962,7 +979,7 @@ void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretVa
 
 void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
-    if (!a || a->provider != "claude" || !secretKeeper_) {
+    if (!a || a->provider != "claude" || a->requiresVerifiedEmail() || !secretKeeper_) {
         return;
     }
     const auto flow = signIns_.flowOf(account);
@@ -1028,7 +1045,12 @@ void Hub::signInEnrolled(const std::string& account, const std::string& provider
 }
 
 void Hub::signInExited(const std::string& account, std::uint64_t id, const std::string& why) {
-    signInEffects(signIns_.exited(account, id, why));
+    auto effects = signIns_.exited(account, id, why);
+    const auto* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (a && a->requiresVerifiedEmail() && !effects.notes.empty() && !why.empty()) {
+        effects.notes.front().text = "Could not sign in to " + a->email + ". " + why;
+    }
+    signInEffects(effects);
 }
 
 void Hub::signInWindowsChanged() {
@@ -1036,7 +1058,13 @@ void Hub::signInWindowsChanged() {
         return;
     }
     SignInEffects out;
-    const std::vector<std::string> accounts = signIns_.fallBack(&out);
+    std::set<std::string> browserOnly;
+    if (accounts_) {
+        for (const auto& a : accounts_->accounts) {
+            if (a.requiresVerifiedEmail()) browserOnly.insert(a.name);
+        }
+    }
+    const std::vector<std::string> accounts = signIns_.fallBack(&out, browserOnly);
     signInEffects(out);
     for (const std::string& account : accounts) {
         askPasteLogin(account);
@@ -1232,6 +1260,9 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
         return refuse("the account " + account + " is not linked to the friend of session " +
                       std::to_string(asker.session) + " in friends.json, so its AI may not ask for its secrets");
     }
+    if (a->requiresVerifiedEmail() && what == loginFile(a->provider)) {
+        return refuse("Sign in to " + a->email + " in the browser so Nexus can verify the email.");
+    }
     const std::vector<std::string> files = secretFiles(a->provider);
     if (std::find(files.begin(), files.end(), what) == files.end()) {
         std::string named;
@@ -1371,7 +1402,7 @@ void Hub::secretEffects(const SecretEffects& effects) {
     // asked to paste a login that is there (models/SignIn.tla NoAskWhenSignedIn).
     for (const SecretRequest& r : effects.stored) {
         const accounts::Account* a = accounts_ ? accounts_->account(r.account) : nullptr;
-        if (a != nullptr && r.what == loginFile(a->provider)) {
+        if (a != nullptr && !a->requiresVerifiedEmail() && r.what == loginFile(a->provider)) {
             secretEffects(desk_.satisfied(r.account, r.what));
             reportSignedIn(r.account, true);
             if (responder_ != nullptr) {

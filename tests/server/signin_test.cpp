@@ -1094,6 +1094,33 @@ void hub_enrolled() {
     CHECK(s.hub->signedIn().count(extra.name) == 1 && !s.hub->signIns().live(extra.name));
     CHECK(s.responder.logins == std::vector<std::string>{extra.name});
     CHECK(!s.hub->state().friends().back().accounts.front().needsSignIn);
+    // A configured Claude email requires a fresh provider grant on reload, even when the account already worked.
+    auto& named = registry.accounts[1];
+    named.email = "personal@example.test";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(!s.hub->signedIn().contains(named.name));
+    const auto waiting = s.hub->signIns().flowOf(named.name);
+    CHECK(waiting);
+    if (!waiting) return;
+    s.hub->reportSignedIn(named.name, true);
+    s.hub->signInPrinted(named.name, secret(kToken));
+    CHECK(!s.hub->askSecret({}, named.name, "oauth-token", "Paste login", &why));
+    CHECK(keeper.files.empty() && !s.hub->signedIn().contains(named.name));
+    CHECK(s.act(sync::ActionKind::SignInClaim, waiting->first, "w1"));
+    named.email = "new@example.test";
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(s.hub->signIns().stateOf(waiting->first) == sync::SignInState::Dropped);
+    const auto replacement = s.hub->signIns().flowOf(named.name);
+    CHECK(replacement && replacement->first != waiting->first);
+    if (!replacement) return;
+    s.hub->probeSignInWith([](const accounts::Account& a) { return a.email == "new@example.test"; });
+    s.hub->signInEnrolled(named.name, "claude", waiting->first);
+    CHECK(!s.hub->signedIn().contains(named.name));
+    CHECK(s.act(sync::ActionKind::SignInClaim, replacement->first, "w1"));
+    s.hub->signInEnrolled(named.name, "claude", replacement->first);
+    CHECK(s.hub->signedIn().contains(named.name) && s.responder.logins.back() == named.name);
+
     registry.accounts.back().provider = "grok";
     s.hub->probeSignInWith([](const accounts::Account&) { return false; });
     s.hub->useAccounts(registry, nullptr);

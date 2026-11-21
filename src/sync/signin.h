@@ -188,7 +188,7 @@ public:
     // for a paste instead: every needed flow (no process, no window holding it), and every running flow no window
     // holds (its window went away), ends, dropped, its process ended, and its account is returned. models/SignIn.tla
     // FallBack.
-    std::vector<std::string> fallBack(SignInEffects* out);
+    std::vector<std::string> fallBack(SignInEffects* out, const std::set<std::string>& browserOnly = {});
     // The server is ending: every live flow is dropped and every process ended.
     SignInEffects drop();
 

@@ -401,6 +401,8 @@ private:
     std::size_t shutDownLinks();
     void configApply(int fd, const std::string& request);
     Paths paths_;
+    std::string verifiedHelper_;
+    std::string authClaude_;
     std::unique_ptr<store::Fs> fs_;
     std::unique_ptr<store::Fs> secretFs_;
     std::unique_ptr<AccountFiles> secretFiles_;
@@ -481,9 +483,13 @@ bool Server::restoreAll(std::string* why) {
         std::fprintf(stderr, "nexus-server: this machine has no name (gethostname failed, and the config sets no "
             "machine), so no friend's instance runs here; set `machine <name>` in %s\n", paths_.config.c_str());
     }
+    if (!paths_.self.empty()) verifiedHelper_ = store::dir_of(paths_.self) + "/nexus-claude-auth";
+    const char* path = std::getenv("PATH");
+    authClaude_ = settings_.claude.empty() ? claudeOnPath(path ? path : "/usr/bin:/bin") : settings_.claude;
     drivers_ = std::make_unique<Drivers>(store_, Drivers::Options{paths_.drivers, paths_.home, Timing{}, nowMs,
                                                                   machine, host, true,
-                                                                  [this] { return dirNow("drivers"); }});
+                                                                  [this] { return dirNow("drivers"); }, nullptr, {}, false,
+                                                                  verifiedHelper_, authClaude_});
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
@@ -506,6 +512,7 @@ bool Server::restoreAll(std::string* why) {
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
     hub_->probeSignInWith([logins = paths_.accounts, home = paths_.home](const accounts::Account& a) {
+        if (a.requiresVerifiedEmail()) return hasVerifiedClaude(logins + "/" + a.name, a.email);
         if (sync::usesLocalSignInPage(a.provider)) {
             return hasEnrollment(home, a.provider, a.name);
         }
@@ -516,6 +523,7 @@ bool Server::restoreAll(std::string* why) {
     });
     // A login lost: ask in the window only when a paste can fix it, saying why (server/login_life.h loginAsk).
     hub_->loginsWith([logins = paths_.accounts](const accounts::Account& a) {
+        if (a.requiresVerifiedEmail()) return sync::Hub::LoginAsk{false, "Sign in to " + a.email + " in Nexus to verify this account."};
         return loginAsk(a.name, a.provider, inspectLogin(logins + "/" + a.name + "/" + sync::loginFile(a.provider)),
                         static_cast<std::uint64_t>(wallMs()));
     });
@@ -695,6 +703,15 @@ void Server::openSignIn(const std::string& host) {
         const auto* a = registry ? registry->account(account) : nullptr;
         if (!a) {
             hub_->signInExited(account, id, "this account was removed");
+            return;
+        }
+        if (a->requiresVerifiedEmail()) {
+            if (authClaude_.empty() || verifiedHelper_.empty() || access(verifiedHelper_.c_str(), X_OK) != 0) {
+                hub_->signInExited(account, id, "install nexus-claude-auth beside nexus-server and configure the Claude executable");
+                return;
+            }
+            signIns_->start(id, account, a->provider, {verifiedHelper_, "enroll", "--account-dir",
+                paths_.accounts + "/" + account, "--email", a->email, "--claude", authClaude_});
             return;
         }
         if (a->provider == "claude") {
@@ -1013,6 +1030,7 @@ void Server::checkLogins() {
     }
     std::vector<LoginWatch::Login> logins;
     for (const accounts::Account& a : registry->accounts) {
+        if (a.requiresVerifiedEmail()) continue;
         const std::string file = sync::loginFile(a.provider);
         if (file.empty()) {
             continue;

@@ -43,7 +43,8 @@ struct Account {
     Billing billing = Billing::Subscription;
     std::string label{};     // optional picker text; the name remains the account id and credential directory
     bool signInOnUse = false;
-    std::string email{};     // configured address shown to linked windows; independent of provider identity verification
+    std::string email{};     // configured address shown to linked windows; Claude verifies it during enrollment
+    bool requiresVerifiedEmail() const { return provider == "claude" && !email.empty(); }
     bool operator==(const Account&) const = default;
 };
 
