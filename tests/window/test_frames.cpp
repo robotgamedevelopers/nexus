@@ -50,6 +50,7 @@
 #include "pr/kit_surface.h"
 #include "pr/layout_scene.h"
 #include "pr/layout_tree.h"
+#include "pr/layout_style.h"
 #include "pr/text.h"
 #include "pr/time.h"
 #include "pr/ui.h"
@@ -276,7 +277,7 @@ struct Window {
         view.model = &model;
         view.look = &look;
         view.extent = extent;
-        terminals = std::make_unique<PraxTerminals>(kit, fonts, nullptr, nullptr, true);
+        terminals = std::make_unique<PraxTerminals>(kit, fonts, nullptr, nullptr);
         terminals->program = "/bin/sh";
         char cwd[4096];
         terminals->directory = getcwd(cwd, sizeof cwd) != nullptr ? cwd : "";
@@ -355,7 +356,7 @@ struct Window {
                 PrKitSurfaceStyle style{
                     .box = {.overflow = PrKitOverflow_Clip,
                         .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
-                    .background = PrKitBackground_App,
+                    .background = PrKitBackground(w.look.overlay ? PrKitBackground_None : PrKitBackground_App),
                 };
                 w.host.build(w.kit, prKitSurface(w.kit, kPrLayoutNodeNone, {}, style));
             }, this);
@@ -816,6 +817,16 @@ void terminals(Window& w) {
     }
     CHECK(arrived);
     CHECK(w.terminals->held(first) == 0);
+    // The real terminal paints its default background on the window itself. A second layer here would
+    // make the terminal darker than the conversation under the same policy.
+    const auto root = prLayoutTreeRoot(w.tree);
+    const auto pane = prLayoutNodeFirstChild(w.tree, root);
+    auto background = [&](PrLayoutNode node) {
+        const auto style = prLayoutStyleRecord(w.tree, prLayoutNodeStyle(w.tree, node));
+        return prLayoutDecorationStyleRecord(w.tree, style.groups[PrLayoutGroup_Decoration]).background;
+    };
+    CHECK(background(root).a == 0);
+    CHECK(background(pane).a > 0.595f && background(pane).a < 0.605f);
     w.frames(30, true);
     for (int i = 0; i < 2; ++i) {
         w.command('T', PrAppKeyCode_KeyT);

@@ -13,7 +13,7 @@
 // is counted from when its file was written (the file's modification time): a token made before it was pasted ends
 // that much sooner, which the 30 days' notice covers.
 //
-// Everything here but inspectLogin (which reads the file) is pure: the time is an argument.
+// inspectLogin and hasEnrollment inspect local files. Time is an argument to the lifetime checks.
 
 #pragma once
 
@@ -47,10 +47,14 @@ struct LoginSeen {
     std::uint64_t storedAtMs = 0;   // the file's modification time, when usable
     std::string problem;            // for Malformed and Unusable, with the fix
 };
-// Reads `path` without following a link, through one descriptor. The value is wiped after its shape is checked.
 // POSIX: nexus-server runs on macOS and Linux, and inside WSL2 on Windows, whose native build is only the window.
 #ifndef _WIN32
+// Open the requested account directory only with its exact entry spelling. Caller closes the descriptor.
+int openAccountDirectory(const std::string& dir, std::string& problem);
+// Read the token from its exact account directory. Wipe the value after its shape is checked.
 LoginSeen inspectLogin(const std::string& path);
+// Checks the named harness account's enrollment receipt under HOME. The receipt holds only the provider name.
+bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account);
 #endif
 
 // The day `ms` falls on, UTC, as YYYY-MM-DD.

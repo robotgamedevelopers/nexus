@@ -134,6 +134,14 @@ if(NEXUS_WINDOW)
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/window-application" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
         -P "${PROJECT_SOURCE_DIR}/tests/policy/window.cmake")
     set_tests_properties(window_application PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME window_group_drag COMMAND ${CMAKE_COMMAND} "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:nexus_input_tests>"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/window-group-drag" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        -P "${PROJECT_SOURCE_DIR}/tests/policy/group_drag.cmake")
+    set_tests_properties(window_group_drag PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME window_group_close COMMAND ${CMAKE_COMMAND} "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:nexus_input_tests>"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/window-group-close" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        -P "${PROJECT_SOURCE_DIR}/tests/policy/group_close.cmake")
+    set_tests_properties(window_group_close PROPERTIES LABELS functional TIMEOUT 30)
     add_test(NAME window_input COMMAND nexus_input_tests)
     set_tests_properties(window_input PROPERTIES LABELS functional TIMEOUT 60)
 

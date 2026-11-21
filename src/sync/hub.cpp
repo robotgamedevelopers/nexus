@@ -7,6 +7,7 @@
 #include <numeric>
 
 #include "sync/client.h"
+#include "sync/codec.h"
 
 namespace nexus::sync {
 
@@ -402,16 +403,26 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             std::to_string(limits_.setting) + " printable characters.";
     }
     SessionInfo info = session->info;
-    if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !action.text.empty() &&
-            !accounts_->linked(info.friendName, action.text)) {
-        refused = "The account was not changed: " + action.text + " is not one of " + info.friendName +
-            "'s accounts" + (accounts_->account(action.text) == nullptr ? " (no account " + action.text +
+    std::string account = action.text;
+    if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
+        const auto* who = accounts_ ? accounts_->friendNamed(info.friendName) : nullptr;
+        if (!who || who->accounts.empty()) {
+            refused = "Link an account to " + info.friendName + " in friends.json to switch accounts.";
+        } else {
+            account = policy::accountCommand(application_, bundlePath_(), info.account, who->accounts,
+                                             account.substr(1), refused);
+        }
+    }
+    if (refused.empty() && action.kind == ActionKind::SetAccount && accounts_ && !account.empty() &&
+            !accounts_->linked(info.friendName, account)) {
+        refused = "The account was not changed: " + account + " is not one of " + info.friendName +
+            "'s accounts" + (accounts_->account(account) == nullptr ? " (no account " + account +
             " is set up in accounts.json)" : "") + ". Link it to " + info.friendName + " first: add it to " +
             info.friendName + "'s \"accounts\" in friends.json and run `nexus-server config reload` "
             "(docs/accounts.md).";
     }
     if (action.kind == ActionKind::SetAccount) {
-        info.account = action.text;
+        info.account = account;
         if (accounts_) {
             info.harness = harnessOf(info.account, info.harness);
         }
@@ -440,6 +451,9 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             *why = "session " + std::to_string(action.session) + ": " + refused;
         }
         return false;
+    }
+    if (action.kind == ActionKind::SetAccount && signsIn(info.account)) {
+        needSignIn(info.account);
     }
     if (changes.empty()) {
         return true;    // already so
@@ -657,7 +671,73 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
     return true;
 }
 
+namespace {
+
+using AccountIndex = std::map<std::string_view, const accounts::Account*>;
+
+AccountIndex indexAccounts(const accounts::Registry& registry) {
+    AccountIndex index;
+    for (const auto& account : registry.accounts) {
+        index.emplace(account.name, &account);
+    }
+    return index;
+}
+
+std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const AccountIndex& index,
+                                      const std::set<std::string>* signedIn = nullptr, bool canSignIn = false) {
+    std::vector<ServerFriend> friends;
+    friends.reserve(registry.friends.size());
+    for (const auto& f : registry.friends) {
+        ServerFriend& row = friends.emplace_back(ServerFriend{f.name});
+        row.accounts.reserve(f.accounts.size());
+        for (const auto& name : f.accounts) {
+            if (const auto a = index.find(name); a != index.end()) {
+                // Measure admission with every optional sign-in bit set.
+                const bool needs = !signedIn || (canSignIn && hasSignIn(a->second->provider) &&
+                                                  !signedIn->contains(name));
+                row.accounts.push_back({name, a->second->label, needs});
+            }
+        }
+    }
+    return friends;
+}
+
+} // namespace
+
+std::string accountRosterProblem(const accounts::Registry& registry) {
+    const auto index = indexAccounts(registry);
+    const char* problem = "friends.json: the linked account choices exceed the window roster budget "
+                          "(3 MiB on the wire or 12 MiB decoded); shorten repeated account labels in accounts.json "
+                          "or remove links from friends.json";
+    std::size_t textBytes = 0;
+    std::size_t rows = 0;
+    for (const auto& f : registry.friends) {
+        textBytes += f.name.size();
+        rows++;
+        for (const auto& name : f.accounts) {
+            if (const auto account = index.find(name); account != index.end()) {
+                // Both strings are written inline for every link. Refuse obviously oversized configs
+                // before expanding a shared label into thousands of distinct entries in memory.
+                textBytes += name.size() + account->second->label.size();
+                rows++;
+                if (textBytes > codec::kRosterWireBytes) {
+                    return problem;
+                }
+            }
+        }
+    }
+    // Small rosters are far below both generated sizes even with per-field framing, aligned
+    // string storage, and replacement of invalid UTF-8. Measure all larger ones with the real codec.
+    if (rows <= 1024 && textBytes <= 64 * 1024) {
+        return {};
+    }
+    return codec::rosterFits(windowRoster(registry, index)) ? "" : problem;
+}
+
 std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsKeeper* keeper) {
+    if (auto problem = accountRosterProblem(registry); !problem.empty()) {
+        return {std::move(problem)};
+    }
     take(std::move(registry));
     keeper_ = keeper;
     std::vector<std::string> report;
@@ -667,6 +747,11 @@ std::vector<std::string> Hub::useAccounts(accounts::Registry registry, AccountsK
 
 bool Hub::applyAccounts(const accounts::Registry& next, const std::string& message, std::vector<std::string>* report) {
     std::vector<std::string> lines = accounts::problems(next);
+    if (lines.empty()) {
+        if (auto problem = accountRosterProblem(next); !problem.empty()) {
+            lines.push_back(std::move(problem));
+        }
+    }
     std::string failed;
     if (lines.empty() && keeper_ != nullptr && !keeper_->keep(next, message, &failed)) {
         lines.push_back(failed);
@@ -704,9 +789,11 @@ bool Hub::applyAccounts(const accounts::Registry& next, const std::string& messa
 void Hub::take(accounts::Registry next) {
     std::optional<accounts::Registry> was = std::move(accounts_);
     accounts_ = std::move(next);
-    stateFriends();
     for (auto it = signedIn_.begin(); it != signedIn_.end();) {
-        it = accounts_->account(*it) == nullptr ? signedIn_.erase(it) : std::next(it);
+        const auto* current = accounts_->account(*it);
+        const auto* previous = was ? was->account(*it) : nullptr;
+        it = !current || (previous && previous->provider != current->provider)
+            ? signedIn_.erase(it) : std::next(it);
     }
     for (const accounts::Account& a : accounts_->accounts) {
         const accounts::Account* before = was ? was->account(a.name) : nullptr;
@@ -714,6 +801,7 @@ void Hub::take(accounts::Registry next) {
             signedIn_.insert(a.name);
         }
     }
+    stateFriends();
     // A flow for an account removed, or now of another provider, ends with it.
     for (const SignInOffer& o : signIns_.offers()) {
         const accounts::Account* a = accounts_->account(o.account);
@@ -729,14 +817,14 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
         return;
     }
     if (signedIn) {
-        signedIn_.insert(account);
+        if (signedIn_.insert(account).second && accounts_) stateFriends();
         // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
         if (signIns_.live(account)) {
             signInEffects(signIns_.signedIn(account));
         }
         return;
     }
-    signedIn_.erase(account);
+    if (signedIn_.erase(account) && accounts_) stateFriends();
     // An account whose provider signs in in the app: a flow, one browser sign-in, unless one is live or a login for it
     // is held already.
     if (signsIn(account)) {
@@ -763,7 +851,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
     if (accounts_ && accounts_->account(account) == nullptr) {
         return;
     }
-    signedIn_.erase(account);
+    if (signedIn_.erase(account) && accounts_) stateFriends();
     if (signsIn(account)) {
         needSignIn(account);
         return;
@@ -780,6 +868,7 @@ void Hub::needsSignIn(const std::string& account, const std::string& why) {
 void Hub::signInWith(SignInHooks hooks, std::string host) {
     signInHooks_ = std::move(hooks);
     signIns_.setHost(std::move(host));
+    if (accounts_) stateFriends();
     needAll();
 }
 
@@ -794,7 +883,7 @@ void Hub::needAll() {
         return;
     }
     for (const accounts::Account& a : accounts_->accounts) {
-        if (signedIn_.count(a.name) == 0 && signsIn(a.name)) {
+        if (!a.signInOnUse && signedIn_.count(a.name) == 0 && signsIn(a.name)) {
             needSignIn(a.name);
         }
     }
@@ -872,6 +961,10 @@ void Hub::signInUrl(const std::string& account, std::uint64_t id, const SecretVa
 }
 
 void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (!a || a->provider != "claude" || !secretKeeper_) {
+        return;
+    }
     const auto flow = signIns_.flowOf(account);
     const bool running = flow && signInRunning(flow->second);
     // The re-check: a subscription's login, not an API key (nor anything else the process printed).
@@ -896,10 +989,6 @@ void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     SignInEffects e;
     signIns_.printed(account, &e);
     signInEffects(e);
-    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
-    if (a == nullptr || secretKeeper_ == nullptr) {
-        return;
-    }
     // Straight into the one-chance store, as a request of nexus's own (never in any window's state): stored when
     // durable, else held and written again; never dropped.
     const std::uint64_t id = store_.applied(kSecretIdsClient) + 1;
@@ -916,6 +1005,25 @@ void Hub::signInPrinted(const std::string& account, const SecretValue& token) {
     // Refused as not of the login's shape: the account needs a fresh sign-in.
     if (signedIn_.count(account) == 0 && !desk_.busy(account)) {
         needSignIn(account);
+    }
+}
+
+void Hub::signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id) {
+    const auto flow = signIns_.flowOf(account);
+    const accounts::Account* a = accounts_ ? accounts_->account(account) : nullptr;
+    if (!flow || flow->first != id || !signInRunning(flow->second) || a == nullptr || a->provider != provider) {
+        return;
+    }
+    if (!probe_ || !probe_(*a)) {
+        signInExited(account, id, "the provider did not confirm this account's enrollment");
+        return;
+    }
+    SignInEffects effects;
+    signIns_.printed(account, &effects);
+    signInEffects(effects);
+    reportSignedIn(account, true);
+    if (responder_ != nullptr) {
+        responder_->signedIn(account);
     }
 }
 
@@ -989,9 +1097,29 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
         return false;
     }
     switch (action.kind) {
-        case ActionKind::SignInClaim:
-            signInEffects(signIns_.claim(action.request, action.text, clock_ ? clock_() : 0));
+        case ActionKind::SignInClaim: {
+            auto id = action.request;
+            if (!action.account.empty() || action.session != 0) {
+                // A card or Enter names the exact session/account the person chose. Recheck it
+                // after any pending account changes and before allocating or claiming a flow.
+                const auto* session = store_.find(action.session);
+                if (!isClaimToken(action.text) || !session || action.account.empty() ||
+                    session->info.account != action.account || !signsIn(action.account) ||
+                    !accounts_->linked(session->info.friendName, action.account) || signedIn_.contains(action.account)) {
+                    if (why) *why = "The selected session or its sign-in changed. Use the current account's sign-in.";
+                    return false;
+                }
+                if (!id) needSignIn(action.account);
+                const auto flow = signIns_.flowOf(action.account);
+                if (!flow || (id && flow->first != id)) {
+                    if (why) *why = "The sign-in offer changed or could not be created. Retry the current account.";
+                    return false;
+                }
+                id = flow->first;
+            }
+            signInEffects(signIns_.claim(id, action.text, clock_ ? clock_() : 0));
             break;
+        }
         case ActionKind::SignInOpened:
             signInEffects(signIns_.opened(action.request, action.text));
             break;
@@ -1418,6 +1546,9 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     if (!refused.empty()) {
         return counted(action, "the accounts were not changed: " + refused, why, client);
     }
+    if (auto problem = accountRosterProblem(next); !problem.empty()) {
+        return counted(action, problem, why, client);
+    }
     const std::vector<std::string> lines = accounts::changes(*accounts_, next);
     std::string message;
     for (const std::string& l : lines) {
@@ -1487,11 +1618,8 @@ void Hub::refresh(SessionId id) {
 // The friends of the registry the hub holds, in its order, into the state the windows receive: who the friends are is
 // the server's, and a window shows a tab for each (sync/client.h applyFriends).
 void Hub::stateFriends() {
-    std::vector<ServerFriend> friends;
-    friends.reserve(accounts_->friends.size());
-    for (const accounts::Friend& f : accounts_->friends) {
-        friends.push_back(ServerFriend{f.name});
-    }
+    auto friends = windowRoster(*accounts_, indexAccounts(*accounts_), &signedIn_,
+                                signInHooks_.has_value() && secretKeeper_ != nullptr);
     if (!state_.friendsKnown() || state_.friends() != friends) {
         state_.setFriends(std::move(friends));
     }

@@ -120,7 +120,82 @@ void clientHomeFiles() {
 
 } // namespace
 
+// Two instances of one extension, terminals in the same directory, and late roster delivery all retain their
+// identity. The same snapshot respects a fork which disallows the prior cross-group move.
+static void mixedLayout() {
+    const SavedLayout wanted{"extension:8", {
+        {"sprint", "dashboards", ""}, {"extension:4", "friends", "notes"}, {"friend:ada", "friends", ""},
+        {"terminal:2", "friends", "/same"}, {"terminal:3", "terminals", "/same"}, {"extension:8", "writing", "notes"}}};
+    SavedLayout read;
+    CHECK(parseLayout(formatLayout(wanted), &read) && read == wanted);
+    const auto path = fileTabOrderStore("mixed-layout-test/tab-layout.json");
+    std::string error, text;
+    CHECK(path.write(formatLayout(wanted), &error) && path.read(&text, &error) && parseLayout(text, &read));
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["sprint","dashboards",""],["sprint","friends",""]]})", &read));
+    CHECK(!parseLayout(R"({"version":1,"selected":"extension:7","tabs":[]})", &read));
+    const auto extension = [](const std::string& type, std::string* group, std::string* title) {
+        if (type != "notes") return false;
+        *group = "writing";
+        *title = "Notes";
+        return true;
+    };
+    for (bool crossing : {true, false}) {
+        Model model({}, true);
+        model.set_tab_groups({{"dashboards", {"sprint"}}, {"friends", {"friend"}, false,
+            crossing ? std::vector<std::string>{"terminals", "writing"} : std::vector<std::string>{}},
+            {"terminals", {"terminal"}, true}, {"writing", {"notes"}, true}});
+        TabLayout layout(read);
+        const auto shells = layout.reopenTerminals(model);
+        CHECK(shells.size() == 2 && shells[0].second == "/same" && shells[1].second == "/same");
+        layout.restore(model, extension, false);
+        const auto focused = model.tab(model.active()).id;
+        CHECK(model.tab(model.active()).kind == TabKind::Extension);
+        layout.capture(model, {"/same", "/same"}, false);
+        CHECK(layout.saved().selected == "extension:8");
+        model.add_friend({"ada", {}});
+        layout.restore(model, extension, true);
+        CHECK(model.tab(model.active()).id == focused);
+        layout.capture(model, {"/same", "/same"}, true);
+        if (crossing) {
+            CHECK(layout.saved() == wanted);
+        } else {
+            CHECK(model.tab(1).name == "ada" && model.tab(2).kind == TabKind::Terminal);
+            CHECK(model.tab(2).group == "terminals" && model.tab(4).group == "writing");
+        }
+        CHECK(model.close_tab(model.active()));
+        layout.restore(model, extension, true);
+        CHECK(model.tab_count() == 5);
+        layout.capture(model, {"/same", "/same"}, true);
+        CHECK(layout.saved().tabs.size() == 5);
+    }
+    // A plugin may become available after launch. Respect a focus choice made while waiting for it.
+    TabLayout delayed(wanted);
+    Model partial({}, true);
+    delayed.reopenTerminals(partial);
+    delayed.restore(partial, [](const auto&, auto*, auto*) { return false; }, false);
+    delayed.capture(partial, {"/same", "/same"}, false);
+    CHECK(delayed.saved().selected == "extension:8");
+    CHECK(partial.select_tab(0));
+    delayed.personSelected();
+    delayed.restore(partial, extension, true);
+    CHECK(partial.tab(partial.active()).kind == TabKind::Sprint);
+    delayed.capture(partial, {"/same", "/same"}, true);
+    CHECK(delayed.saved().selected == "sprint" && delayed.saved().tabs.size() == 5);
+    SavedLayout friendFocus = wanted;
+    friendFocus.selected = "friend:ada";
+    TabLayout pending(friendFocus);
+    Model waiting({}, true);
+    pending.reopenTerminals(waiting);
+    pending.restore(waiting, extension, false);
+    pending.capture(waiting, {"/same", "/same"}, false);
+    CHECK(pending.saved().selected == "friend:ada");
+    waiting.add_friend({"ada", {}});
+    pending.restore(waiting, extension, true);
+    CHECK(waiting.tab(waiting.active()).name == "ada");
+}
+
 int main() {
+    mixedLayout();
     const std::string path = "tab-order-test/nexus/tab-order.txt";
     prFileRemove(PrStringView{path.data(), path.size()});
     TabOrderStore store = fileTabOrderStore(path);

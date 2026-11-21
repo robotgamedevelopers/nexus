@@ -168,6 +168,7 @@ void ClientLink::run() {
             std::fprintf(stderr, "nexus: link to %s: a new session, from action %llu\n", host.c_str(),
                 static_cast<unsigned long long>(b.next));
         }
+        s.loopback = ip == "127.0.0.1" || ip == "::1";
         session = std::move(made);   // the old one goes: its server ended it, or ends it for this one
         return true;
     };

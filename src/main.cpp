@@ -241,7 +241,7 @@ bool open(void* context, PrStudioWindow* window) {
     // made on the first frame, they were most of its work.
     warmShaper(prStudioWindowShaper(window), a.fonts, a.overlay);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
-        prStudioWindowAppWindow(window), a.overlay);
+        prStudioWindowAppWindow(window));
     a.terminals->machines = a.machines;
     a.view.terminals = a.terminals.get();
     // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
@@ -460,7 +460,7 @@ void buildOffscreen(void* context, PrUi*, const PrUiRound*) {
 }
 
 bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
-    // The render is premultiplied; the encoder takes straight alpha. Everything is opaque, so only alpha 0 needs care.
+    // The render is premultiplied; the encoder takes straight alpha.
     for (size_t i = 0; i < bytes.size(); i += 4) {
         uint8_t alpha = bytes[i + 3];
         if (alpha != 0 && alpha != 255) {
@@ -503,14 +503,14 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     // With --backdrop the window is drawn as the overlay draws it, see-through; otherwise opaque, since an offscreen
     // frame has nothing behind it to show through.
     PrKitTheme theme = windowTheme(a.fonts, a.backdrop);
-    prLayoutTreeSetCanvasColor(tree, prColor16FromColor(theme.palette.bg0));
+    // The window paints its fill once over the transparent canvas, as in the live overlay.
     PrUi* ui = prUiCreate(tree);
     PrKit* kit = prKitCreate(ui, &theme);
     Offscreen off{&a, kit};
     PrAppDisplay display = prAppDisplayDefault();
     display.pixelRatio = ratio;
     a.view.extent = extent;
-    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr, a.backdrop);
+    auto terminals = std::make_unique<PraxTerminals>(kit, a.fonts, nullptr, nullptr);
     a.view.terminals = terminals.get();
     PraxBoard::Desc boardDesc;
     boardDesc.kit = kit;
@@ -750,7 +750,7 @@ int main(int argc, char** argv) {
             "hotkey: %s-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
             "frame: the whole screen with the pointer, menu bar or taskbar included, set through the native window at "
             "each show\n"
-            "background alpha: %.2f; tab strip fill alpha: %.2f\n",
+            "default background alpha: %.2f; tab strip fill alpha: %.2f\n",
             style::kOverlayBlur ? "Blur" : "Transparent", style::kOverlayAccessory ? "Accessory" : "Regular",
             style::kCommandName, unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
             double(style::kOverlayOpacity), double(style::kOverlayStripFill));
@@ -826,16 +826,60 @@ int main(int argc, char** argv) {
         sync::applyFriends(model, sync::friendsOf(held), held.friendsKnown(), {});
     }
 #endif
-    // The terminal tabs open when nexus last quit, after the friends in the order they stood, each to start a new shell
-    // in its directory when the window opens (tab_order.h). A screenshot reopens none.
     const bool live = shot == nullptr;
-    std::vector<std::pair<std::size_t, std::string>> reopen;
+    TabOrderStore layoutStore;
+    SavedLayout savedLayout;
+    bool haveLayout = false;
+    bool layoutReadable = true;
     if (live) {
+        layoutStore = writer.wrap(fileLayoutStore());
+        std::string text, error;
+        if (layoutStore.read(&text, &error)) {
+            haveLayout = parseLayout(text, &savedLayout);
+            if (!haveLayout) error = "unrecognized or malformed layout";
+        }
+        if (!error.empty()) {
+            layoutReadable = false;
+            std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
+                         layoutStore.where.c_str(), error.c_str());
+        }
+    }
+    TabLayout layout(std::move(savedLayout));
+    if (tabGiven) layout.personSelected();
+    std::vector<std::pair<std::size_t, std::string>> reopen;
+    if (haveLayout) {
+        reopen = layout.reopenTerminals(model);
+        const auto savedTerminals = std::count_if(layout.saved().tabs.begin(), layout.saved().tabs.end(),
+            [](const auto& row) { return row.key.starts_with("terminal:"); });
+        if (static_cast<std::size_t>(savedTerminals) > reopen.size())
+            std::fprintf(stderr, "nexus: the saved layout contains %zu terminals; reopening the first %zu\n",
+                         static_cast<std::size_t>(savedTerminals), reopen.size());
+    } else if (live) {
         std::string terminalsWarning;
         for (const std::string& dir : loadTerminals(terminalStore, &terminalsWarning))
             reopen.emplace_back(model.add_terminal(), dir);
-        if (!terminalsWarning.empty())
-            std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+        if (!terminalsWarning.empty()) std::fprintf(stderr, "nexus: %s\n", terminalsWarning.c_str());
+    }
+    App a;  // Destroy the embedded VM before process-level thread-local teardown.
+    a.model = &model;
+    a.view.model = &model;
+    a.view.look = &a.look;
+    a.host.model = &model;
+    a.host.view = &a.view;
+    if (live) {
+        if (!home.empty()) a.view.application->watch(home + "/policy.bundle.json");
+        a.host.layout = std::move(layout);
+        a.host.layoutStore = layoutReadable ? &layoutStore : nullptr;
+        a.view.restoreTabLayout = [&a] {
+            if (!a.view.windowApp.layoutGeneration) return;
+            a.host.groupPolicyReady = true;
+            a.host.restoreLayout();
+        };
+        a.view.windowApp.update(*a.view.application, "sprint", {}, false, false, 0, model.tab_count(), {});
+        model.set_tab_groups(a.view.windowApp.groups);
+        model.select_tab(savedTabPosition(model, SavedTab{}));
+        a.view.restoreTabLayout();
+        if (haveLayout && !tabGiven) tab = model.active() + 1;
     }
     // The window opens on the tab --tab names; without it, on the tab selected when nexus last quit, found by who it is
     // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved friend's tab is
@@ -843,7 +887,7 @@ int main(int argc, char** argv) {
     // server, is judged once the server's friends have arrived (below, after the link starts). A screenshot without
     // --tab shows the sprint tab, whatever was saved.
     SavedTab savedTab;
-    if (!tabGiven && live) {
+    if (!tabGiven && live && !haveLayout) {
         std::string selectionWarning;
         savedTab = loadSavedTab(selection, &selectionWarning);
         if (!selectionWarning.empty())
@@ -858,10 +902,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    App a;  // Destroy the embedded VM before process-level thread-local teardown.
-    a.model = &model;
-    a.view.model = &model;
-    a.view.look = &a.look;
     // The tab selected at launch is no choice of the person's (FrameHost::personSelected): only a later one is.
     if (model.tab_count() != 0) {
         a.view.selectedId = model.tab(model.active()).id;
@@ -881,6 +921,7 @@ int main(int argc, char** argv) {
     // them (a terminal's) leaves the saved order as it was.
     if (!fromState) {
         a.view.moved = [&a] {
+            a.host.keepTerminals();
             if (!a.host.strip.taken()) {
                 return;
             }
@@ -907,8 +948,6 @@ int main(int argc, char** argv) {
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
     if (live) {
-        if (!home.empty())
-            a.view.application->watch(home + "/policy.bundle.json");
         std::string scaleWarning;
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
         if (!scaleWarning.empty())
@@ -919,8 +958,6 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "nexus: %s\n", error.c_str());
         };
     }
-    a.host.model = &model;
-    a.host.view = &a.view;
     a.host.hitch = &a.hitch;
 #if NEXUS_LINK
     if (server != nullptr) {

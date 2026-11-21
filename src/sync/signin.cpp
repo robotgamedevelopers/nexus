@@ -79,8 +79,12 @@ std::string answer(std::string_view body) {
 
 } // namespace
 
+bool usesLocalSignInPage(std::string_view provider) {
+    return provider == "codex" || provider == "antigravity" || provider == "grok" || provider == "muse";
+}
+
 bool hasSignIn(const std::string& provider) {
-    return provider == "claude";
+    return provider == "claude" || usesLocalSignInPage(provider);
 }
 
 std::string queryValue(std::string_view query, std::string_view name) {
@@ -112,6 +116,34 @@ const std::vector<std::string_view>& signInHosts(std::string_view provider) {
     static const std::vector<std::string_view> kClaude{"claude.com", "platform.claude.com", "claude.ai"};
     static const std::vector<std::string_view> kNone;
     return provider == "claude" ? kClaude : kNone;
+}
+
+bool isLocalSignInUrl(std::string_view url) {
+    constexpr std::string_view origin = "http://127.0.0.1:";
+    constexpr std::string_view route = "/nexus-signin/";
+    if (!url.starts_with(origin)) {
+        return false;
+    }
+    url.remove_prefix(origin.size());
+    const std::size_t slash = url.find('/');
+    if (slash == std::string_view::npos || slash == 0 || slash > 5 || url.front() == '0') {
+        return false;
+    }
+    unsigned port = 0;
+    for (char c : url.substr(0, slash)) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        port = port * 10 + static_cast<unsigned>(c - '0');
+    }
+    url.remove_prefix(slash);
+    if (port < 1024 || port > 65535 || !url.starts_with(route)) {
+        return false;
+    }
+    url.remove_prefix(route.size());
+    return url.size() == 64 && std::all_of(url.begin(), url.end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
 }
 
 } // namespace
@@ -150,6 +182,13 @@ bool isQueryBytes(std::string_view query) {
 }
 
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out) {
+    if (usesLocalSignInPage(provider)) {
+        if (url.size() > kSignInUrlBytes || !isLocalSignInUrl(url)) {
+            return false;
+        }
+        *out = {};
+        return true;
+    }
     if (url.size() > kSignInUrlBytes || url.substr(0, 8) != "https://" || !isQueryBytes(url)) {
         return false;
     }
@@ -388,8 +427,7 @@ SignInEffects SignInDesk::url(const std::string& account, std::uint64_t id, cons
     Flow& f = it->second;
     SignInTarget target;
     if (!parseSignInUrl(f.provider, url.bytes(), &target)) {
-        out.log.push_back(line(id, account, "the process's URL was not a sign-in page of " + f.provider +
-                                                "'s with a local redirect: refused"));
+        out.log.push_back(line(id, account, "the process's URL did not match the sign-in page for " + f.provider + ": refused"));
         end(account, SignInState::Failed, out);
         return out;
     }
@@ -417,7 +455,7 @@ SignInEffects SignInDesk::opened(std::uint64_t id, const std::string& opener) {
 SignInEffects SignInDesk::callback(std::uint64_t id, const std::string& opener, const SecretValue& query) {
     SignInEffects out;
     Flow* f = byId(id);
-    if (f == nullptr || f->opener != opener || opener.empty() ||
+    if (f == nullptr || usesLocalSignInPage(f->provider) || f->opener != opener || opener.empty() ||
             (f->state != SignInState::Waiting && !callbackFault_) || query.size() > kSignInQueryBytes) {
         out.log.push_back("sign-in " + std::to_string(id) + ": a callback, late");
         return out;
@@ -588,16 +626,20 @@ void SignInOpener::lost() {
     armed_ = false;
 }
 
-SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const void*), const void* context) {
+SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const void*), const void* context,
+                                         const std::string* activeAccount) {
     Step step;
     if (token_.empty()) {
         return step;
     }
     for (const SignInOffer& o : view_) {
-        if (o.opener != token_ || o.url.empty() || opened_.count(o.id) != 0) {
+        if ((activeAccount && o.account != *activeAccount) || o.opener != token_ || o.url.empty() || opened_.count(o.id) != 0) {
             continue;
         }
         const bool gate = same == nullptr || !same(o, context);
+        if (gate && usesLocalSignInPage(o.provider)) {
+            continue;
+        }
         // One gate per window: a page that needs one waits, unopened, while another flow's gate waits for its
         // callback (models/SignIn.tla Open, GateForEveryPage).
         if (gate && gate_ != 0) {
@@ -622,11 +664,13 @@ SignInOpener::Step SignInOpener::next(bool (*same)(const SignInOffer&, const voi
         }
         return step;
     }
-    if (!armed_) {
+    if (!armed_ || activeAccount) {
         return step;
     }
     for (const SignInOffer& o : view_) {
-        if (o.opener.empty() && claimed_.count(o.id) == 0) {
+        if (o.opener.empty() && claimed_.count(o.id) == 0 &&
+            (wantedAccount_.empty() ? !usesLocalSignInPage(o.provider) : wantedAccount_ == o.account) &&
+            (!usesLocalSignInPage(o.provider) || (same != nullptr && same(o, context)))) {
             claimed_.insert(o.id);
             armed_ = false;
             step.kind = Step::Kind::Claim;

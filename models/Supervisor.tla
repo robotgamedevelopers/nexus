@@ -63,8 +63,8 @@
 (* driver started in another directory (the ghost ddir), or any driver     *)
 (* while the instance is elsewhere, is ended like one under an old account; *)
 (* while elsewhere no driver starts and nothing queued is taken. The        *)
-(* harness keeps its sessions by directory: the session id is durable with *)
-(* the directory it was made in (sdir), and a start in another one drops   *)
+(* harness session id is durable with its directory (sdir) and account    *)
+(* (owner). A start in another directory or under another account drops   *)
 (* it and starts afresh, owing (summary, durable) the conversation's       *)
 (* summary to the first send, which carries it (each send's sum).          *)
 (*                                                                         *)
@@ -133,7 +133,7 @@ Init ==
             nocred |-> FALSE, down |-> FALSE, crashed |-> FALSE, procs |-> 0, written |-> <<>>, stops |-> <<>>,
             fate |-> [p \in 1 .. Prompts |-> "unsent"], fx |-> <<>>, resumed |-> "", asked |-> FALSE, signin |-> FALSE,
             setting |-> Default, told |-> Default, account |-> "", drv |-> "", retiring |-> FALSE,
-            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", summary |-> FALSE,
+            unconf |-> FALSE, dir |-> "", here |-> TRUE, ddir |-> "", sdir |-> "", owner |-> "", summary |-> FALSE,
             lim |-> FALSE, dlim |-> FALSE, absent |-> FALSE, rm |-> 0, removing |-> FALSE, known |-> TRUE]
 
 ----------------------------------------------------------------------------
@@ -179,12 +179,12 @@ Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
 WriteNext(x) == WriteNextWith(Told, x)
 
 \* Start a driver when a prompt waits and none is alive and the instance is here, in the session's directory, under
-\* the session's account, with --resume the last session id when it was made in that directory; one made in another
+\* the session's account, with --resume the last ID reported by that account in that directory. An incompatible ID
 \* is dropped (D), and when the conversation has turns the first send owes a summary, said in a notice. With no driver
 \* configured the start names no program, and so nothing to resume: it fails, as the exit that follows says.
 Drop(x) ==
-    IF x.session # "" /\ x.sdir # x.dir
-    THEN [(IF x.next > 1 THEN Fx(x, E("N", 0, 0)) ELSE x) EXCEPT !.session = "", !.sdir = "",
+    IF x.session # "" /\ (x.sdir # x.dir \/ x.owner # x.account)
+    THEN [(IF x.next > 1 THEN Fx(x, E("N", 0, 0)) ELSE x) EXCEPT !.session = "", !.sdir = "", !.owner = "",
                                                                  !.summary = @ \/ x.next > 1]
     ELSE x
 StartDriverWith(D(_), x) ==
@@ -252,7 +252,7 @@ ReceiveWith(x, m, Txt(_, _)) ==
                                  ELSE End(x)
       [] m.kind = "hello"      -> End(x)
       [] m.kind = "credential" -> IF m.v = "subscription" THEN x ELSE [End(x) EXCEPT !.blocked = TRUE]
-      [] m.kind = "session"    -> [x EXCEPT !.session = m.v, !.sdir = x.ddir]
+      [] m.kind = "session"    -> [x EXCEPT !.session = m.v, !.sdir = x.ddir, !.owner = x.drv]
       [] m.kind = "error"      -> NoCredential(m, IF m.t = 0 THEN Fx(x, E("N", 0, 0))
                                                  ELSE IF m.t = x.open THEN Fx(x, E("E", m.t, 0)) ELSE x)
       [] m.kind = "text"       -> Txt(x, m)
@@ -594,6 +594,7 @@ TypeOK ==
     /\ s.told \in Settings
     /\ (s.procs = 0) => s.told = Default
     /\ s.account \in Accounts \cup {""}
+    /\ s.owner \in Accounts \cup {""}
     /\ (s.procs = 0) => s.drv = "" /\ ~s.retiring
     /\ s.crashed \in BOOLEAN
     /\ s.unconf \in BOOLEAN
@@ -749,6 +750,9 @@ LooseningKeepsTurn == [][s.lim /\ ~s'.lim => s'.open = s.open /\ s'.written = s.
 
 \* A driver resumes a harness session only in the directory it was made in.
 ResumesItsDir == [][s'.procs > s.procs /\ s'.resumed # "" => s.sdir = s'.ddir]_vars
+
+\* A resume ID is sent only to a driver running under the account that reported it.
+ResumesItsAccount == [][s'.procs > s.procs /\ s'.resumed # "" => s.owner = s'.drv]_vars
 
 \* A harness session dropped from a conversation with turns owes a summary, and the next send carries what is owed,
 \* once.

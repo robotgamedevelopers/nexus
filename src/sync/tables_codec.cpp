@@ -149,6 +149,12 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         for (const ServerFriend& f : change.friends) {
             wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
             putText(b.main, w->name, f.name, scratch);
+            for (const AccountChoice& account : f.accounts) {
+                auto* choice = added(wire::FriendAccountsAdd(b.main, w->accounts));
+                putText(b.main, choice->name, account.name, scratch);
+                putText(b.main, choice->label, account.label, scratch);
+                choice->needs_sign_in = account.needsSignIn;
+            }
         }
     }
     if (signIns) {
@@ -165,6 +171,19 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
         [](const wire::SessionsDiffBuilder& x, std::uint8_t* out, int64_t n) { return wire::SessionsDiffSave(x, out, n); },
         "sessions diff");
+}
+
+bool rosterFits(std::vector<ServerFriend> friends) {
+    SessionsChange state;
+    state.friendsSent = true;
+    state.friendsKnown = true;
+    state.friends = std::move(friends);
+    const std::string bytes = writeTables(state, kStateFormat);
+    if (bytes.size() > kRosterWireBytes) {
+        return false;
+    }
+    const auto need = wire::SessionsDiffLoadMeasure(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    return need > 0 && static_cast<std::size_t>(need) <= kRosterReadBytes;
 }
 
 SessionsChange readTables(const std::string& diff, int* unknown) {
@@ -227,7 +246,12 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         out.friendsKnown = d->friends_known;
         out.friends.reserve(static_cast<std::size_t>(d->friends.size()));
         for (const wire::Friend& f : d->friends) {
-            out.friends.push_back(ServerFriend{textOf(f.name)});
+            ServerFriend friendState{textOf(f.name)};
+            friendState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
+            for (const wire::AccountChoice& choice : f.accounts) {
+                friendState.accounts.push_back({textOf(choice.name), textOf(choice.label), choice.needs_sign_in});
+            }
+            out.friends.push_back(std::move(friendState));
         }
     }
     for (const wire::SignInOffer& x : d->signins) {

@@ -53,6 +53,7 @@ struct DriverState {
     std::vector<std::string> waiting;
     bool summary = false;       // the next send carries a summary of the conversation (server/supervisor.h setPlace)
     std::string sessionDir{};   // the directory the harness session was made in: resumed only there (empty: not known)
+    std::optional<std::string> sessionAccount{};  // absent in older stores; empty means the accountless harness
     bool operator==(const DriverState&) const = default;
 };
 
@@ -211,6 +212,9 @@ public:
     virtual ~AccountsKeeper() = default;
     virtual bool keep(const accounts::Registry& registry, const std::string& message, std::string* why) = 0;
 };
+
+// Empty when all account choices fit a window snapshot. Also checked when reading committed or edited config.
+std::string accountRosterProblem(const accounts::Registry& registry);
 
 class Hub {
 public:
@@ -378,6 +382,7 @@ public:
     // The account's process handed over its URL; printed its token; ended with no token (`why`, one line).
     void signInUrl(const std::string& account, std::uint64_t id, const SecretValue& url);
     void signInPrinted(const std::string& account, const SecretValue& token);
+    void signInEnrolled(const std::string& account, const std::string& provider, std::uint64_t id);
     void signInExited(const std::string& account, std::uint64_t id, const std::string& why);
     // A window's link ended: the flows it held (by its claim token) are let go of.
     void signInWindowGone(const std::string& opener);

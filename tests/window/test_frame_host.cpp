@@ -170,9 +170,109 @@ void extensionTargetsItsConfiguredConversation() {
         w.link.sent.back().text == "one two");
 }
 
+void accountCommandsUseTheActiveConversation() {
+    Window w("Ada");
+    auto convo = std::make_shared<sync::SessionView>();
+    convo->id = 19;
+    convo->info.friendName = "Ada";
+    convo->info.account = "work";
+    w.link.state.phase = sync::LinkPhase::Connected;
+    w.link.state.sessions = sync::Sessions({convo});
+    w.link.state.sessions.setFriends({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.view.accountCaption() == "Account · Work");
+    w.link.sent.clear();
+    w.view.accountCommand("next");
+    w.view.accountCommand("previous");
+    CHECK(w.link.sent.size() == 2 && w.link.sent[0].session == 19 && w.link.sent[0].text == "+next" &&
+          w.link.sent[0].kind == sync::ActionKind::SetAccount && w.link.sent[1].text == "+previous");
+    // A switch waits for the updated session, without arming any sign-in.
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(!w.host.signIn.opener.armed());
+    auto switched = std::make_shared<sync::SessionView>(*convo);
+    switched->info.account = "home";
+    w.link.state.sessions = sync::Sessions({switched});
+    w.link.state.sessions.setFriends({{"Ada", {{"work", "Work"}, {"home", ""}}}, {"Bo"}});
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.view.accountCaption() == "Account · home");
+    sync::SignInOffer other;
+    other.id = 10; other.account = "work"; other.provider = "claude";
+    auto wanted = other;
+    wanted.id = 11; wanted.account = "home";
+    w.link.state.sessions.setOffers({other, wanted});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.host.signIn.shown();
+    w.host.signIn.step();
+    CHECK(w.link.sent.size() == 2);
+    CHECK(w.view.signInCaption() == "Sign in to home");
+    CHECK(w.view.activateSignIn());
+    CHECK(w.view.activateSignIn());
+    CHECK(w.link.sent.size() == 3 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
+          w.link.sent.back().request == 11 && w.link.sent.back().session == 19 && w.link.sent.back().account == "home");
+    // An older server advertises friends without choices; no relative command is sent.
+    w.link.state.sessions.setFriends({{"Ada"}, {"Bo"}});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.view.accountCommand("next");
+    CHECK(w.link.sent.size() == 3 && w.view.accountCaption().empty());
+}
+
+void explicitSignInKeepsTheDraft() {
+    Window w("chat");
+    auto session = std::make_shared<sync::SessionView>();
+    session->id = 37;
+    session->info = {"chat", "grok", "work", "", ""};
+    w.link.state.phase = sync::LinkPhase::Connected;
+    w.link.state.loopback = true;
+    w.link.state.sessions = sync::Sessions({session});
+    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", true}, {"other", "Other", true}}}});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.link.sent.clear();
+    const auto i = w.model.active();
+    CHECK(w.view.signInCaption() == "Sign in to Work");
+    w.view.submit(i, false);
+    CHECK(w.model.tab(i).draft.empty());
+    w.model.set_draft(i, "  keep this draft  ");
+    w.view.submit(i, false);
+    CHECK(w.model.tab(i).draft == "  keep this draft  ");
+    CHECK(w.link.sent.size() == 1 && w.link.sent.front().kind == sync::ActionKind::SignInClaim &&
+          w.link.sent.front().session == 37 && w.link.sent.front().account == "work" && !w.link.sent.front().request);
+    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", false}, {"other", "Other", true}}}});
+    w.link.changed = true;
+    w.host.pollLink();
+    CHECK(w.view.signInCaption().empty() && !w.view.activateSignIn());
+    w.view.submit(i, false);
+    CHECK(w.link.sent.size() == 2 && w.link.sent.back().kind == sync::ActionKind::Send &&
+          w.link.sent.back().text == "  keep this draft  " && w.model.tab(i).draft.empty());
+}
+
+void dismissedFriendRemainsLocal() {
+    Window w("");
+    w.link.friends({"ada"});
+    w.host.pollLink();
+    const auto i = w.tabOf("ada");
+    CHECK(w.model.set_draft(i, "keep my draft"));
+    w.view.dismissFriend(w.model.tab(i));
+    CHECK(w.model.dismiss_tab(i));
+    CHECK(!w.host.strip.hasFriends());
+    CHECK(w.host.strip.kept().at("ada") == "keep my draft");
+    w.link.friends({"bo", "ada"});
+    w.host.pollLink();
+    CHECK(w.tabOf("ada") == w.model.tab_count());
+    CHECK(w.tabOf("bo") < w.model.tab_count());
+}
+
 } // namespace
 
 int main() {
+    dismissedFriendRemainsLocal();
+    accountCommandsUseTheActiveConversation();
+    explicitSignInKeepsTheDraft();
     extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();

@@ -205,7 +205,7 @@ if(NEXUS_SERVER_PARTS)
     add_library(nexus_signin_runner STATIC src/server/signin_runner.cpp)
     target_include_directories(nexus_signin_runner PUBLIC src)
     target_compile_options(nexus_signin_runner PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_signin_runner PUBLIC nexus_sync)
+    target_link_libraries(nexus_signin_runner PUBLIC nexus_sync PRIVATE nexus_durable)
     add_executable(nexus-signin-open src/server/signin_open.cpp)
     target_compile_options(nexus-signin-open PRIVATE ${NEXUS_WARNINGS})
 

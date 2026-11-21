@@ -699,9 +699,9 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     s.send("second");
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(s.drivers->pid(kAda) != before && s.drivers->pid(kAda) > 0);
-    CHECK((s.transcript() == std::vector<std::string>{"P first", "F one", "N Stopped.", "P second"}));
+    CHECK(s.transcript().size() == 5 && has(s.transcript().back(), "belongs to a different account"));
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "work");
-    CHECK(has(readFile(dir + "/starts.log"), "resume=s-1"));
+    CHECK(!has(readFile(dir + "/starts.log"), "resume=s-1"));
 }
 
 // ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and
@@ -723,16 +723,32 @@ bool signedIn(Server& s, const std::string& account) {
 // A driver's credential event reports its account signed in, and the driver runs on the session's account: the
 // drivers file's --account value is replaced by it.
 void signIn(Server& s, const std::string& dir, const std::string& fake) {
-    setUpAccounts(s, dir, fake, "record " + dir + "/starts.log\n" + kHello + "send\n"
-        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"first-id\"}\n"
+        "on-start 2 emit {\"kind\":\"session\",\"id\":\"second-id\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
     CHECK(s.hub->signedIn().empty());
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
-    s.send("q");
-    CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 2; }, 10));
+    s.send("first turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().session == "first-id"; }, 10));
     CHECK(signedIn(s, "a1") && !signedIn(s, "a2"));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a2")));
+    s.send("second turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().session == "second-id"; }, 10));
+    CHECK(signedIn(s, "a1") && signedIn(s, "a2"));
+    s.send("third turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 4; }, 10));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    s.send("last turn");
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 5; }, 10));
     const std::string log = readFile(dir + "/starts.log");
-    CHECK(has(log, "account=a1\n"));
-    CHECK(!has(log, "from-the-file"));
+    CHECK(!has(log, "from-the-file") && !has(log, "resume=first-id"));
+    CHECK(has(log, "resume=\naccount=a1\n") && has(log, "resume=\naccount=a2\n"));
+    CHECK(has(log, "resume=second-id\naccount=a2\n") && !has(log, "resume=second-id\naccount=a1\n"));
+    const std::string sends = readFile(dir + "/sends");
+    CHECK(has(sends, "The person: first turn\n") && has(sends, "send 3:\nthird turn\n"));
+    CHECK(has(sends, "The person: third turn\n") && has(sends, "prompt follows.]\n\nlast turn\n"));
 }
 
 // A driver that has no credential for its account reports it as needing sign-in: the account is signed in no more.
@@ -1156,7 +1172,7 @@ void instanceMoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(readFile(dir + "/starts") == "2\n");
     // The first send there carries the summary of the turns before its prompt, then the prompt, once.
     const std::string sends = readFile(dir + "/sends");
-    CHECK(has(sends, "send 1:\nq\nsend 2:\n[nexus: this conversation with ada was held in another working directory"));
+    CHECK(has(sends, "send 1:\nq\nsend 2:\n[nexus: this conversation with ada continues in a fresh harness session"));
     CHECK(has(sends, "The person: q\n") && !has(sends, "The person: r\n"));
     CHECK(has(sends, "[nexus: the person's prompt follows.]\n\nr\n"));
     // Its machine edited to another: the driver is ended, and the next prompt is not sent.

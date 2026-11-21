@@ -143,6 +143,7 @@ void testStart() {
     // A known session id is the start's --resume.
     sync::DriverState known;
     known.session = "s-1";
+    known.sessionAccount = "";
     Supervisor r = make(known);
     o = r.prompt("x", kStart);
     CHECK((o.commands[0].argv == std::vector<std::string>{"drv", "--x", "--cwd", "/w", "--resume", "s-1"}));
@@ -689,23 +690,32 @@ void testAccount() {
     Supervisor t = working("first");
     o = t.setAccount("home", kStart + 2);
     CHECK(o.commands.empty() && o.effects.empty() && t.phase() == Phase::Working);
+    // A late ID while that turn finishes still belongs to the running process, even though the user switched.
+    t.message(Session{"from-previous"}, kStart + 2);
+    CHECK(t.state().sessionAccount == "");
     t.queued("later", kStart + 3);
     o = t.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 4);
     CHECK(o.taken == 1 && ended(t, o) && t.state().waiting == std::vector<std::string>{"later"});
     CHECK(written(o).empty());     // never written to the driver under the old account
     o = t.exited("exited with status 0", kStart + 5);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && t.driverAccount() == "home" && t.failedStarts() == 0);
+    CHECK(!hasArgs(o, {"--resume"}) && t.state().summary);
     o = t.message(Hello{1, "h"}, kStart + 6);
     CHECK((written(o) == std::vector<ServerMessage>{Send{2, "later"}}));
 
     // Starting: the driver says hello under the old account, so it is ended before it is given the prompt.
-    Supervisor u = make();
-    u.prompt("p", kStart);
+    Config c = config();
+    c.command = {"driver", "--account", "placeholder"};
+    c.account = "initial";
+    Supervisor u(c, {}, kStart, &o);
+    o = u.prompt("p", kStart);
+    CHECK(hasArgs(o, {"--account", "initial"}));
     u.setAccount("other", kStart + 1);
     o = u.message(Hello{1, "h"}, kStart + 2);
     CHECK(ended(u, o) && written(o).empty() && u.state().waiting.size() == 1);
     o = u.exited("exited with status 0", kStart + 3);
     CHECK(kinds(o) == std::vector<Kind>{Kind::Start} && u.driverAccount() == "other" && u.failedStarts() == 0);
+    CHECK(hasArgs(o, {"--account", "other"}));
 }
 
 bool resumes(const Output& o) {
@@ -753,14 +763,14 @@ void testPlace() {
     CHECK(s.state().sessionDir == "/v");
     s.message(Done{2, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 10);
 
-    // A restart in the same directory (here, for an account) resumes, with no summary.
+    // A switch of account in the same directory also starts fresh and carries the transcript once.
     o = s.setAccount("work", kStart + 11);
     CHECK(ended(s, o));
     s.exited("exited with status 0", kStart + 12);
     o = s.prompt("three", kStart + 13);
-    CHECK(hasArgs(o, {"--cwd", "/v", "--resume", "s-2"}) && o.effects.size() == 1);
+    CHECK(!resumes(o) && o.effects.size() == 2 && s.state().summary);
     o = s.message(Hello{1, "h"}, kStart + 14);
-    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "three"}}) && summaries == 1);
+    CHECK((written(o) == std::vector<ServerMessage>{Send{3, "SUM three"}}) && summaries == 2);
 
     // Working: a move waits for the turn's end; the driver is then ended, never given another prompt in /v.
     o = s.setPlace("/u", true, kStart + 15);
@@ -783,14 +793,13 @@ void testPlace() {
     o = u.setPlace("/w", true, kStart + 6);
     CHECK(o.taken == 1 && kinds(o) == std::vector<Kind>{Kind::Start});
 
-    // A harness session from before its directory was kept (none recorded) is resumed; with no turns yet, a move
-    // gives no summary and no notice.
+    // An older harness ID with no recorded owner starts fresh. No summary or notice is needed without prior turns.
     sync::DriverState old;
     old.nextTurn = 3;
     old.session = "old";
     Supervisor v = make(old);
     o = v.prompt("p", kStart);
-    CHECK(hasArgs(o, {"--resume", "old"}));
+    CHECK(!resumes(o) && v.state().summary);
     Supervisor w = make();
     w.setPlace("/v", true, kStart);
     o = w.prompt("p", kStart + 1);

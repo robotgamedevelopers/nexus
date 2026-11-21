@@ -94,11 +94,20 @@ table SecretRequest
     why        *string
 }
 
+// The account id used by SetAccount and its optional display label.
+table AccountChoice
+{
+    name  *string
+    label *string
+    needs_sign_in bool
+}
+
 // A friend the server holds (its friends.json, docs/accounts.md): what a window needs to show the friend's tab and to
 // start a session with it, which it does with an ensure naming the friend.
 table Friend
 {
     name *string
+    accounts []AccountChoice
 }
 
 // A live in-app sign-in flow as one window sees it (sync/signin.h SignInOffer), from format 5: its id, its account, its

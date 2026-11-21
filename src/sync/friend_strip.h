@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,7 @@ public:
     bool taken() const { return taken_; }
     // The strip holds a friend's tab.
     bool hasFriends() const { return friendTabs_ != 0; }
+    void dismiss(const Tab& tab);
     const KeptDrafts& kept() const { return kept_; }
 
 private:
@@ -72,6 +74,7 @@ private:
     bool pending_ = false;
     bool taken_ = false;
     KeptDrafts kept_;
+    std::set<std::string> dismissed_;
     std::size_t friendTabs_ = 0;
     // What was last taken: nothing yet, a list (held, so that its pointer is never another list's), or the sessions'.
     bool any_ = false;

@@ -391,6 +391,11 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
     if (ra.ok && rf.ok) {
         const std::vector<std::string> p = accounts::problems(*out);
         errors->insert(errors->end(), p.begin(), p.end());
+        if (p.empty()) {
+            if (auto problem = sync::accountRosterProblem(*out); !problem.empty()) {
+                errors->push_back(std::move(problem));
+            }
+        }
     }
     if (upgraded != nullptr) {
         *upgraded = ra.upgraded || rf.upgraded;
@@ -462,6 +467,12 @@ bool ConfigRepo::pending(std::string* why) {
 
 bool ConfigRepo::keep(const accounts::Registry& registry, const std::string& message, std::string* why) {
     notes_.clear();
+    if (auto problem = sync::accountRosterProblem(registry); !problem.empty()) {
+        if (why != nullptr) {
+            *why = std::move(problem);
+        }
+        return false;
+    }
     if (!applying_ && pending(why)) {
         return false;
     }

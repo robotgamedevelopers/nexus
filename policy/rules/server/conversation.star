@@ -4,7 +4,7 @@ load("server/sessions.star", "new_session")
 
 def handle(event, state, config):
     if event == "new_session":
-        return new_session(state)
+        return new_session(state, config)
     if event == "message":
         service = config.get("services", {}).get(state["friend"])
         if service:

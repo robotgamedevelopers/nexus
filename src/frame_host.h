@@ -15,7 +15,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +57,7 @@ struct LinkState {
     std::string problem;                // with Failed: why
     std::uint64_t heardMsAgo = 0;       // with Connected: since the server was last heard
     sync::Sessions sessions;            // the server's latest state
+    bool loopback = false;              // link connected to a numeric loopback address
 };
 
 struct LinkPort {
@@ -97,6 +100,8 @@ public:
     sync::SignInOpener opener;          // its claim token, random per launch (connect)
     std::string serverArg;              // where the window reaches the server (--server)
     std::string local;                  // this machine's host name, for sync::sameMachine
+    bool loopback = false;              // established by the transport, independent of names in server offers
+    std::optional<std::string> activeAccount; // roster-aware windows claim only on explicit input
     std::function<void(const std::string& url)> openUrl;    // empty: nothing is opened (the frame test)
     // Where the gate comes from: a test seam; empty: a SignInGate.
     std::function<std::unique_ptr<SignInGate>(const sync::SignInTarget&)> openGate;
@@ -130,6 +135,13 @@ struct FrameHost {
     const TabOrderStore* selectionStore = nullptr;
     std::string savedTerminals;         // the text last handed to each store, so that only a change is written
     std::string savedSelection;
+    const TabOrderStore* layoutStore = nullptr;
+    TabLayout layout;
+    bool groupPolicyReady = false;
+    bool rosterKnown = false;
+    void restoreLayout();
+    std::uint64_t savedLayoutRevision = ~std::uint64_t{};
+    std::size_t savedLayoutFocus = ~std::size_t{};
 
     // The friend tabs are the server's (AGENTS.md "Friend tabs"): each state the link brings while connected whose
     // friends changed sets them (sync/friend_strip.h), new ones in the saved order, and a session is ensured with each
@@ -180,6 +192,13 @@ struct FrameHost {
     void pollLink();
 
 private:
+    sync::Sessions accountState_;
+    std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
+    const sync::AccountChoice* activeChoice() const;
+    const sync::SignInOffer* offerFor(const std::string& account) const;
+    void selectSignInAccount();
+    bool activateSignIn();
+    const sync::ServerFriend* activeAccountRoster() const;
     void wire();
     // The friend tabs from `state` (FriendStrip::take): when its friends changed, the mirror's record of each removed
     // tab forgotten, a session ensured for each added one when there is a link, each name the server sent that is not

@@ -40,7 +40,8 @@ current turn. Nexus controls the next prompt and can restart the driver.
 Add a `signin` line for each provider alongside its `driver` line. Both lines
 must point to the same installed vendor executable. Link accounts to friends in
 the order the fork should offer them. A signed-out account marked
-`"sign_in_on_use": true` starts its browser flow when selected or used.
+`"sign_in_on_use": true` defers its sign-in offer until use. In the selected friend's tab,
+press **Enter** or click **Sign in to** to open that account’s browser flow. Its draft stays in the prompt.
 
 The local Nexus window opens a private page for that account. Complete the vendor's
 browser authorization there. Antigravity asks you to paste Google's return code

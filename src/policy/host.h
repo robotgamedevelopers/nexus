@@ -35,6 +35,8 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     const MessageState& state, MessagePlan& out, std::string& why);
 
 int textZoom(Host& host, const std::string& path, int current, int delta, int low, int high);
+std::string accountCommand(Host& host, const std::string& path, const std::string& current,
+    const std::vector<std::string>& linked, const std::string& command, std::string& why);
 std::string accountAfterLimit(Host& host, const std::string& path, const std::string& current,
     const std::vector<std::string>& linked, const std::vector<std::string>& eligible, std::string& why);
 

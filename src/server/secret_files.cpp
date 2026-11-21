@@ -44,6 +44,15 @@ sync::Kept AccountFiles::keep(const std::string& account, const std::string& wha
     if (!s.is_ok()) {
         return fail(s.message());
     }
+    // A case-insensitive filesystem can open another account when the requested spelling is absent.
+    std::vector<std::string> names;
+    s = fs_.list(accounts_, names);
+    if (!s.is_ok()) {
+        return fail(s.message());
+    }
+    if (std::find(names.begin(), names.end(), account) == names.end()) {
+        return fail(dir + " does not match the spelling of the account directory; check the account name's capitalization");
+    }
     // A temporary file left by a write a crash cut short holds nothing anyone reads: it goes first.
     s = fs_.remove(temp);
     if (!s.is_ok() && s.code() != store::Status::Code::NotFound) {

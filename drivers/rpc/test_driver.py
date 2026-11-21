@@ -272,6 +272,24 @@ class AccountFiles(unittest.TestCase):
             with self.assertRaises(ValueError):
                 account_runtime.home_for("grok", "first")
 
+    def test_receipt_commit_cannot_revive_revoked_pending_enrollment(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
+            home = account_runtime.home_for("muse", "work", create=True)
+            ticket = home / account_runtime.PENDING
+            ticket.write_bytes(b"one")
+            ticket.chmod(0o600)
+            with self.assertRaises(ValueError):
+                account_runtime.store_receipt(home, "muse", pending=b"other")
+            self.assertIsNone(account_runtime.enrolled(home, "muse"))
+            account_runtime.store_receipt(home, "muse", pending=b"one")
+            self.assertFalse(ticket.exists())
+            account_runtime.store_receipt(home, "muse", pending=b"one")
+            observed = account_runtime.enrolled(home, "muse")
+            self.assertTrue(account_runtime.remove_receipt_if_current(home, "muse", observed))
+            with self.assertRaises(ValueError):
+                account_runtime.store_receipt(home, "muse", pending=b"one")
+            self.assertIsNone(account_runtime.enrolled(home, "muse"))
+
     def test_concurrent_reenrollment_survives_refusal(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, HOME=root):
             home = account_runtime.home_for("grok", "example", create=True)

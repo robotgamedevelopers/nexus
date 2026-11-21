@@ -146,7 +146,7 @@ bool onlyKeys(Reader& r, PrJsonValueIndex object, const std::vector<std::string>
 // The top: an object of "version", the one list `list`, and the optional fields `more`. Returns the list's index, or
 // kPrJsonMissing.
 PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& example,
-                     const std::vector<std::string>& more = {}) {
+                     const std::vector<std::string>& more = {}, int maxVersion = kVersion) {
     if (prJsonKind(r.doc(), 0) != PrJsonKind_Object) {
         r.errorAt(0, "the file is " + std::string(kindName(prJsonKind(r.doc(), 0))) + ", not an object",
                   "make it an object of \"version\" and \"" + list + "\", as " + example);
@@ -164,12 +164,12 @@ PrJsonValueIndex top(Reader& r, const std::string& list, const std::string& exam
         if (prJsonKind(r.doc(), v) != PrJsonKind_Number || n < 1 || n != std::floor(n)) {
             r.errorAt(v, "\"version\" is not a whole number from 1", "set it to " + std::to_string(kVersion));
             ok = false;
-        } else if (n > kVersion) {
+        } else if (n > maxVersion) {
             // n is range-checked before the cast: 1e300 is a number JSON allows, and no long long holds it
             const std::string said = n < 1e9 ? std::to_string(static_cast<long long>(n))
                                              : std::string("a number past any version");
             r.errorAt(v, "\"version\" is " + said + ", newer than this " +
-                      "nexus-server reads (" + std::to_string(kVersion) + ")",
+                      "nexus-server reads (" + std::to_string(maxVersion) + ")",
                       "run the nexus-server that wrote it, or update this one; the file was left as it is");
             ok = false;
         } else {
@@ -240,6 +240,12 @@ const char* const kAccountsExample =
 const char* const kFriendsExample =
     "{ \"version\": 2, \"friends\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
     "\"work\" } ] }";
+
+bool isAccountText(std::string_view value) {
+    return value.size() <= 254 && std::none_of(value.begin(), value.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+    });
+}
 
 bool contains(const std::vector<std::string>& v, std::string_view x) {
     return std::find(v.begin(), v.end(), x) != v.end();
@@ -340,6 +346,14 @@ std::vector<std::string> problems(const Registry& r) {
             out.push_back("accounts.json: the account \"" + a.name + "\" has the provider \"" + a.provider +
                           "\", which is not one (" + kProviderRule + "); correct it");
         }
+        if (!isAccountText(a.label)) {
+            out.push_back("accounts.json: the label for account " + a.name +
+                          " must be one line of at most 254 bytes; shorten it or remove control characters");
+        }
+        if (!isAccountText(a.email)) {
+            out.push_back("accounts.json: the email for account " + a.name +
+                          " must be one line of at most 254 bytes; shorten it or remove control characters");
+        }
         if (!names.insert(a.name).second) {
             out.push_back("accounts.json: the account \"" + a.name + "\" is there twice; keep one");
         }
@@ -412,11 +426,25 @@ std::vector<std::string> problems(const Registry& r) {
 }
 
 std::string accountsText(const Registry& r) {
-    std::string s = "{\n  \"version\": " + std::to_string(kVersion) + ",\n  \"accounts\": [";
+    const bool usesOptions = std::any_of(r.accounts.begin(), r.accounts.end(), [](const Account& a) {
+        return !a.label.empty() || !a.email.empty() || a.signInOnUse;
+    });
+    const int version = usesOptions ? kAccountOptionsVersion : kVersion;
+    std::string s = "{\n  \"version\": " + std::to_string(version) + ",\n  \"accounts\": [";
     for (std::size_t i = 0; i < r.accounts.size(); ++i) {
         s += std::string(i == 0 ? "\n" : ",\n") + "    {\n      \"name\": " + quoted(r.accounts[i].name) +
              ",\n      \"provider\": " + quoted(r.accounts[i].provider) + ",\n      \"billing\": " +
-             quoted(billingName(r.accounts[i].billing)) + "\n    }";
+             quoted(billingName(r.accounts[i].billing));
+        if (!r.accounts[i].label.empty()) {
+            s += ",\n      \"label\": " + quoted(r.accounts[i].label);
+        }
+        if (!r.accounts[i].email.empty()) {
+            s += ",\n      \"email\": " + quoted(r.accounts[i].email);
+        }
+        if (r.accounts[i].signInOnUse) {
+            s += ",\n      \"sign_in_on_use\": true";
+        }
+        s += "\n    }";
     }
     s += r.accounts.empty() ? "]\n}\n" : "\n  ]\n}\n";
     return s;
@@ -466,7 +494,7 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
     if (!r.parse()) {
         return r.read;
     }
-    const PrJsonValueIndex list = top(r, "accounts", kAccountsExample);
+    const PrJsonValueIndex list = top(r, "accounts", kAccountsExample, {}, kAccountOptionsVersion);
     if (list == kPrJsonMissing) {
         return r.read;
     }
@@ -478,10 +506,23 @@ Read readAccounts(std::string_view text, const std::string& path, Registry* regi
         }
         Account a;
         const std::string what = "an account";
-        bool ok = onlyKeys(r, e, {"name", "provider", "billing"}, what);
+        bool ok = onlyKeys(r, e, {"name", "provider", "billing", "label", "sign_in_on_use", "email"}, what);
         ok = stringField(r, e, "name", what, true, false, &a.name) && ok;
         const std::string named = a.name.empty() ? what : "the account \"" + a.name + "\"";
         ok = stringField(r, e, "provider", named, true, false, &a.provider) && ok;
+        ok = stringField(r, e, "label", named, false, false, &a.label) && ok;
+        ok = stringField(r, e, "email", named, false, false, &a.email) && ok;
+        if (!isAccountText(a.email)) {
+            r.errorAt(prJsonMember(r.doc(), e, pr("email")), named + "'s email must be one line of at most 254 bytes",
+                      "shorten it or remove control characters");
+            ok = false;
+        }
+        ok = boolField(r, e, "sign_in_on_use", named, false, &a.signInOnUse) && ok;
+        if (!isAccountText(a.label)) {
+            r.errorAt(prJsonMember(r.doc(), e, pr("label")), named + "'s label must be one line of at most 254 bytes",
+                      "shorten it or remove control characters");
+            ok = false;
+        }
         // Absent: a subscription's, in every version (version 1 had no API-billed accounts).
         std::string billing;
         ok = stringField(r, e, "billing", named, false, false, &billing) && ok;
@@ -710,6 +751,15 @@ std::vector<std::string> changes(const Registry& before, const Registry& after) 
             out.push_back("account " + a.name + " set up (" + a.provider +
                           (a.billing == Billing::Api ? ", billed at API rate)" : ")"));
             continue;
+        }
+        if (was->label != a.label) {
+            out.push_back("account " + a.name + "'s display label changed");
+        }
+        if (was->email != a.email) {
+            out.push_back("account " + a.name + "'s email changed");
+        }
+        if (was->signInOnUse != a.signInOnUse) {
+            out.push_back("account " + a.name + "'s sign_in_on_use is now " + (a.signInOnUse ? "true" : "false"));
         }
         if (was->provider != a.provider) {
             out.push_back("account " + a.name + "'s provider " + was->provider + " -> " + a.provider);

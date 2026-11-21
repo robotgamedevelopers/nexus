@@ -46,6 +46,7 @@ public:
         sync::Sessions sessions;            // the server's latest state
         std::uint64_t sent = 0;             // actions handed to the link
         bool acknowledged = true;           // the server has acknowledged every one
+        bool loopback = false;              // the numeric address this session dials is on loopback
         std::uint64_t reconnects = 0;       // sessions made after the first (the bootstrap run again)
     };
 

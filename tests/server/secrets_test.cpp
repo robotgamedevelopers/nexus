@@ -915,6 +915,12 @@ void files_disk() {
     std::string why;
     CHECK(f.keep("a1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Durable);
     CHECK(f.keep("a1", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    if (std::filesystem::exists(dir / "accounts" / "A1")) {
+        CHECK(f.keep("A1", kToken, sync::SecretValue(kValue), &why) == sync::Kept::Failed);
+        CHECK(holds(why, "spelling") && readFile(*fs, f.path("a1", kToken)) == kOther);
+        const auto seen = server::inspectLogin(f.path("A1", kToken));
+        CHECK(seen.file == server::LoginSeen::File::Unusable && holds(seen.problem, "spelling"));
+    }
     struct stat file{};
     struct stat parent{};
     CHECK(::stat(f.path("a1", kToken).c_str(), &file) == 0 && (file.st_mode & 0777) == 0600);
@@ -1066,12 +1072,69 @@ void logins() {
 }
 
 #ifndef _WIN32
+// Synthetic enrollment receipts under a private HOME. Exercise name, account, ancestor and marker boundaries
+// through the same lookup the server uses on startup.
+void enrollment_files(const std::filesystem::path& home) {
+    namespace fs = std::filesystem;
+    const std::string account = "A.test_1-2";
+    const auto harness = home / ".nexus/server/harness";
+    fs::create_directories(harness);
+    for (const char* provider : {"codex", "antigravity", "grok", "muse"}) {
+        const auto dir = harness / provider / account;
+        fs::create_directories(dir);
+        CHECK(::chmod(dir.c_str(), 0700) == 0);
+        const auto receipt = dir / ".nexus-enrolled";
+        const auto enrolled = [&] { return server::hasEnrollment(home.string(), provider, account); };
+        const auto write = [&](const std::string& value) {
+            const int fd = ::open(receipt.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+            CHECK(fd >= 0 && ::write(fd, value.data(), value.size()) == static_cast<ssize_t>(value.size()));
+            CHECK(::close(fd) == 0);
+        };
+        CHECK(!enrolled());
+        write(std::string(provider) + "\n");
+        CHECK(enrolled());
+        CHECK(!server::hasEnrollment(home.string(), provider, "a.test_1-2"));
+        CHECK(!server::hasEnrollment(home.string(), provider, "../" + account));
+        CHECK(!server::hasEnrollment(home.string(), std::string(provider) + "/.", account));
+        CHECK(::chmod(receipt.c_str(), 0640) == 0 && !enrolled());
+        CHECK(::chmod(receipt.c_str(), 0600) == 0);
+        CHECK(::chmod(dir.c_str(), 0750) == 0 && !enrolled());
+        CHECK(::chmod(dir.c_str(), 0700) == 0);
+        CHECK(::chmod(harness.c_str(), 0775) == 0 && !enrolled());
+        CHECK(::chmod(harness.c_str(), 0755) == 0);
+        CHECK(enrolled());
+        fs::create_hard_link(receipt, dir / "other-name");
+        CHECK(!enrolled());
+        fs::remove(dir / "other-name");
+        fs::rename(receipt, dir / ".NEXUS-ENROLLED");
+        CHECK(!enrolled());
+        fs::rename(dir / ".NEXUS-ENROLLED", receipt);
+        fs::create_directory_symlink(dir, dir.parent_path() / "alias");
+        CHECK(!server::hasEnrollment(home.string(), provider, "alias"));
+        fs::rename(dir, dir.parent_path() / "_account");
+        CHECK(server::hasEnrollment(home.string(), provider, "_account"));
+        fs::rename(dir.parent_path() / "_account", dir);
+        fs::rename(receipt, dir / "elsewhere");
+        fs::create_symlink(dir / "elsewhere", receipt);
+        CHECK(!enrolled());
+        fs::remove(receipt);
+        CHECK(::mkfifo(receipt.c_str(), 0600) == 0 && !enrolled());
+        fs::remove(receipt);
+        for (const std::string& bad : {std::string(), std::string(provider), std::string("another\n"),
+                                       std::string(provider) + "\nextra", std::string(provider) + "\n\n"}) {
+            write(bad);
+            CHECK(!enrolled());
+        }
+    }
+}
+
 // Functional: real files. A login file as it lies, without its value ever in what is said of it.
 void login_files() {
     using server::LoginSeen;
     const std::filesystem::path dir = std::filesystem::current_path() / "logins_disk";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
+    enrollment_files(dir);
     const std::string path = (dir / "oauth-token").string();
     CHECK(server::inspectLogin(path).file == LoginSeen::File::Missing);
     auto write = [&](const std::string& text, mode_t mode) {

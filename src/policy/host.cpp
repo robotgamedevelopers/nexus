@@ -147,6 +147,32 @@ int textZoom(Host& host, const std::string& path, int current, int delta, int lo
     return current;
 }
 
+std::string accountCommand(Host& host, const std::string& path, const std::string& current,
+    const std::vector<std::string>& linked, const std::string& command, std::string& why) {
+    std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
+    prJsonWriterBeginObject(w.get());
+    prJsonWriterKey(w.get(), pr("current"));
+    prJsonWriterString(w.get(), pr(current));
+    strings(w.get(), "linked", linked);
+    prJsonWriterKey(w.get(), pr("command"));
+    prJsonWriterString(w.get(), pr(command));
+    prJsonWriterEndObject(w.get());
+    const auto ctx = prJsonWriterText(w.get());
+    const auto answer = host.decide(path, "account_command", std::string(ctx.data, ctx.size), why);
+    if (!why.empty()) return {};
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (prJsonParse(doc.get(), pr(answer), nullptr)) {
+        const auto value = prJsonString(doc.get(), 0);
+        if (value.data) {
+            const std::string selected(value.data, value.size);
+            if (std::find(linked.begin(), linked.end(), selected) != linked.end())
+                return selected;
+        }
+    }
+    why = "account_command must return one of the friend's linked accounts";
+    return {};
+}
+
 std::string accountAfterLimit(Host& host, const std::string& path, const std::string& current,
     const std::vector<std::string>& linked, const std::vector<std::string>& eligible, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);

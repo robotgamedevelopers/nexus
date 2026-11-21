@@ -505,7 +505,10 @@ bool Server::restoreAll(std::string* why) {
     // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
-    hub_->probeSignInWith([logins = paths_.accounts](const accounts::Account& a) {
+    hub_->probeSignInWith([logins = paths_.accounts, home = paths_.home](const accounts::Account& a) {
+        if (sync::usesLocalSignInPage(a.provider)) {
+            return hasEnrollment(home, a.provider, a.name);
+        }
         const std::string file = sync::loginFile(a.provider);
         return !file.empty() &&
             loginLive(a.provider, inspectLogin(logins + "/" + a.name + "/" + file),
@@ -671,6 +674,9 @@ void Server::openSignIn(const std::string& host) {
     e.printed = [this](const std::string& account, const sync::SecretValue& token) {
         hub_->signInPrinted(account, token);
     };
+    e.enrolled = [this](const std::string& account, const std::string& provider, std::uint64_t id) {
+        hub_->signInEnrolled(account, provider, id);
+    };
     e.exited = [this](const std::string& account, std::uint64_t id, const std::string& why) {
         hub_->signInExited(account, id, why);
     };
@@ -684,7 +690,30 @@ void Server::openSignIn(const std::string& host) {
         return;
     }
     sync::SignInHooks hooks;
-    hooks.start = [this](std::uint64_t id, const std::string& account) { signIns_->start(id, account); };
+    hooks.start = [this](std::uint64_t id, const std::string& account) {
+        const auto* registry = hub_->accounts();
+        const auto* a = registry ? registry->account(account) : nullptr;
+        if (!a) {
+            hub_->signInExited(account, id, "this account was removed");
+            return;
+        }
+        if (a->provider == "claude") {
+            signIns_->start(id, account);
+            return;
+        }
+        std::ifstream in(dirNow("drivers"));
+        std::ostringstream text;
+        text << in.rdbuf();
+        auto table = parseDriverTable(text.str(), paths_.home);
+        auto cmd = table.signins.find(a->provider);
+        if (cmd == table.signins.end()) {
+            hub_->signInExited(account, id, "configure a signin command for " + a->provider +
+                                            " in the server's drivers file");
+            return;
+        }
+        cmd->second.insert(cmd->second.end(), {"--account", account});
+        signIns_->start(id, account, a->provider, std::move(cmd->second));
+    };
     hooks.stop = [this](const std::string& account) { signIns_->stop(account); };
     hooks.replay = [this](std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                           const sync::SecretValue& query) { signIns_->replay(id, account, target, query); };

@@ -1,5 +1,6 @@
 #include "frame_host.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -54,18 +55,45 @@ void FrameHost::keepTerminals() {
     std::vector<std::string> directories = terminalDirectories(*model,
         [t](std::size_t id) { return t->workingDirectory(id); });
     std::string text = formatTerminals(directories);
-    if (text != savedTerminals) {
+    const bool directoriesChanged = text != savedTerminals;
+    if (directoriesChanged) {
         savedTerminals = text;
         std::string error;
         if (!saveTerminals(*terminalStore, directories, &error))
             std::fprintf(stderr, "nexus: %s\n", error.c_str());
+    }
+    const std::size_t focus = model->tab_count() ? model->tab(model->active()).id : ~std::size_t{};
+    if (layoutStore && groupPolicyReady && !strip.pending() &&
+        (directoriesChanged || savedLayoutRevision != model->layout_revision() || savedLayoutFocus != focus)) {
+        layout.capture(*model, directories, rosterKnown);
+        std::string error;
+        if (layoutStore->write(formatLayout(layout.saved()), &error)) {
+            savedLayoutRevision = model->layout_revision();
+            savedLayoutFocus = focus;
+        } else {
+            std::fprintf(stderr, "nexus: could not save the tab layout: %s\n", error.c_str());
+        }
     }
     keepSelection();
 }
 
 void FrameHost::personSelected() {
     strip.personSelected();
-    keepSelection();
+    layout.personSelected();
+    if (terminals && terminalStore) keepTerminals();
+    else keepSelection();
+}
+
+void FrameHost::restoreLayout() {
+    if (!layoutStore || !groupPolicyReady) return;
+    layout.restore(*model, [this](const std::string& type, std::string* group, std::string* title) {
+        const auto it = view->windowApp.types.find(type);
+        if (it == view->windowApp.types.end()) return false;
+        *group = it->second.group;
+        *title = it->second.title;
+        return true;
+    }, rosterKnown);
+    if (model->tab_count()) view->selectedId = model->tab(model->active()).id;
 }
 
 void FrameHost::takeFriends(const sync::Sessions& state) {
@@ -77,6 +105,9 @@ void FrameHost::takeFriends(const sync::Sessions& state) {
     if (!changes.ran) {
         return;
     }
+    if (rosterKnown != state.friendsKnown()) savedLayoutRevision = ~std::uint64_t{};
+    rosterKnown = state.friendsKnown();
+    restoreLayout();
     // A tab the friends selected (the saved one arriving, or another after the one that showed went) is no choice of
     // the person's: the view's next round must not take it for one (view.h selected), so it is neither saved nor ends
     // the saved tab's wait.
@@ -110,6 +141,8 @@ void FrameHost::takeFriends(const sync::Sessions& state) {
 }
 
 void LinkSignIn::lost() {
+    activeAccount.reset();
+    loopback = false;
     opener.lost();
     gate_.reset();
     gateFlow_ = 0;
@@ -119,6 +152,9 @@ namespace {
 
 bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
     const LinkSignIn* s = static_cast<const LinkSignIn*>(context);
+    if (sync::usesLocalSignInPage(offer.provider)) {
+        return s->loopback;
+    }
     return sync::sameMachine(s->serverArg, offer.host, s->local);
 }
 
@@ -152,7 +188,7 @@ void LinkSignIn::step() {
             opener.gateClosed();
         }
     }
-    sync::SignInOpener::Step next = opener.next(onThisMachine, this);
+    sync::SignInOpener::Step next = opener.next(onThisMachine, this, activeAccount ? &*activeAccount : nullptr);
     if (next.kind == sync::SignInOpener::Step::Kind::Claim) {
         sync::Action action;
         action.kind = sync::ActionKind::SignInClaim;
@@ -162,7 +198,7 @@ void LinkSignIn::step() {
     } else if (next.kind == sync::SignInOpener::Step::Kind::Refused) {
         // The window's own check of the page's host (sync::parseSignInUrl): nothing is opened, and the flow ends at its
         // deadline. The URL is never shown.
-        problem = next.account + "'s sign-in page is not one of Claude's: it was not opened";
+        problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
         if (next.gate) {
             gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target);
@@ -187,13 +223,27 @@ void FrameHost::pollLink() {
         return;
     // The friends first, so that a friend's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
+        accountState_ = s.sessions;
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
     if (signIn.port != nullptr) {
         if (s.phase == sync::LinkPhase::Connected) {
+            signIn.loopback = s.loopback;
             signIn.received(s.sessions);
+            selectSignInAccount();
+            for (auto it = pendingClaims_.begin(); it != pendingClaims_.end();) {
+                const auto* offer = offerFor(it->first);
+                if (offer && !it->second) it->second = offer->id;
+                const auto* choice = activeChoice();
+                if ((offer && offer->id != it->second) ||
+                    (!offer && (it->second || !choice || choice->name != it->first || !choice->needsSignIn)))
+                    it = pendingClaims_.erase(it);
+                else
+                    ++it;
+            }
         } else {
+            pendingClaims_.clear();
             signIn.lost();
         }
     }
@@ -239,7 +289,100 @@ void LinkSecrets::cancel() {
     }
 }
 
+const sync::ServerFriend* FrameHost::activeAccountRoster() const {
+    if (!model->tab_count() || model->tab(model->active()).kind != TabKind::Friend)
+        return nullptr;
+    const auto& name = model->tab(model->active()).name;
+    const auto& friends = accountState_.friends();
+    const auto it = std::find_if(friends.begin(), friends.end(), [&](const auto& f) { return f.name == name; });
+    return it == friends.end() || it->accounts.empty() ? nullptr : &*it;
+}
+
+const sync::AccountChoice* FrameHost::activeChoice() const {
+    const auto* roster = activeAccountRoster();
+    if (!roster) return nullptr;
+    const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+    if (!session) return nullptr;
+    const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                 [&](const auto& a) { return a.name == session->info.account; });
+    return it == roster->accounts.end() ? nullptr : &*it;
+}
+
+const sync::SignInOffer* FrameHost::offerFor(const std::string& account) const {
+    const auto& offers = accountState_.offers();
+    const auto it = std::find_if(offers.begin(), offers.end(), [&](const auto& o) { return o.account == account; });
+    return it == offers.end() ? nullptr : &*it;
+}
+
+void FrameHost::selectSignInAccount() {
+    // Servers from before the account roster used a show of the overlay to claim a flow.
+    const auto& friends = accountState_.friends();
+    if (!std::any_of(friends.begin(), friends.end(), [](const auto& f) { return !f.accounts.empty(); })) {
+        signIn.activeAccount.reset();
+        return;
+    }
+    const auto* choice = activeChoice();
+    signIn.activeAccount = choice ? choice->name : std::string{};
+}
+
+bool FrameHost::activateSignIn() {
+    if (!link) return false;
+    const auto* choice = activeChoice();
+    if (!choice) return false;
+    const auto* offer = offerFor(choice->name);
+    if (!choice->needsSignIn && !offer) return false;
+    if (phase != sync::LinkPhase::Connected) {
+        view->problem = "Reconnect to the Nexus server to sign in. Your draft is kept.";
+        return true;
+    }
+    const auto session = mirror.session(model->tab(model->active()).id);
+    const auto* current = accountState_.find(session);
+    if (!current) return false;
+    if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
+        view->problem = "Open Nexus on the server machine to sign in to " + choice->name + ". Your draft is kept.";
+        return true;
+    }
+    if ((offer && !offer->opener.empty()) || pendingClaims_.contains(choice->name)) return true;
+    sync::Action action;
+    action.kind = sync::ActionKind::SignInClaim;
+    action.account = choice->name;
+    action.session = session;
+    action.request = offer ? offer->id : 0;
+    action.text = signIn.opener.token();
+    pendingClaims_.emplace(choice->name, action.request);
+    link->send(std::move(action));
+    return true;
+}
+
 void FrameHost::wire() {
+    view->dismissFriend = [this](const Tab& tab) {
+        strip.dismiss(tab);
+        mirror.forget(tab.id);
+        if (!tab.draft.empty() && keep && keptStore && keptServer(host)) {
+            std::string error;
+            if (!saveKeptChange(*keptStore, KeptChange{host, {{tab.name, tab.draft}}, {}}, &error))
+                std::fprintf(stderr, "nexus: %s\n", error.c_str());
+        }
+    };
+    view->activateSignIn = [this]() { return activateSignIn(); };
+    view->signInCaption = [this]() -> std::string {
+        if (phase != sync::LinkPhase::Connected || !link) return {};
+        const auto* choice = activeChoice();
+        if (!choice || (!choice->needsSignIn && !offerFor(choice->name))) return {};
+        return "Sign in to " + (choice->label.empty() ? choice->name : choice->label);
+    };
+    view->accountCaption = [this]() -> std::string {
+        const auto* roster = activeAccountRoster();
+        if (!roster) return {};
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        if (!session) return {};
+        const auto& name = session->info.account;
+        for (const auto& choice : roster->accounts) {
+            if (choice.name == name)
+                return "Account · " + (choice.label.empty() ? name : choice.label);
+        }
+        return name.empty() ? "Account · None" : "Account · " + name;
+    };
     view->growing = [this](std::size_t id) -> const std::string* {
         const sync::SessionEntry* open = mirror.open(id);
         return open != nullptr ? &open->text : nullptr;
@@ -278,7 +421,20 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         }
         return "No conversation with " + service + " is available on the server. The buffer is kept.";
     };
+    view->accountCommand = [this](const std::string& command) {
+        if (phase != sync::LinkPhase::Connected || !activeAccountRoster())
+            return;
+        const auto session = mirror.session(model->tab(model->active()).id);
+        const auto* current = accountState_.find(session);
+        if (!current) return;
+        sync::Action action;
+        action.kind = sync::ActionKind::SetAccount;
+        action.session = session;
+        action.text = "+" + command;
+        link->send(std::move(action));
+    };
     view->submit = [this](std::size_t i, bool queue) {
+        if (i == model->active() && !queue && activateSignIn()) return;
         std::string text;
         std::string why;
         // The session the tab shows, the window's own choice; none until the server's state has one of the friend's
@@ -316,6 +472,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
 }
 
 void FrameHost::showState(const sync::Sessions& state, bool lost) {
+    accountState_ = state;
     takeFriends(state);
     mirror.apply(*model, state);
     phase = sync::LinkPhase::Connected;
@@ -341,6 +498,11 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     {
         HitchScope scope(hitch, Phase::SyncApply);
         pollLink();
+        if (signIn.activeAccount) {
+            const auto* choice = activeChoice();
+            if (!choice) signIn.activeAccount->clear();
+            else if (*signIn.activeAccount != choice->name) *signIn.activeAccount = choice->name;
+        }
         signIn.step();
         if (!signIn.problem.empty()) {
             view->problem = std::move(signIn.problem);

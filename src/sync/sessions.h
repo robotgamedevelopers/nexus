@@ -63,11 +63,19 @@ struct SessionEntry {
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
 
+struct AccountChoice {
+    std::string name;
+    std::string label{};
+    bool needsSignIn = false;    // the server can sign this linked account in and has no login for it
+    bool operator==(const AccountChoice&) const = default;
+};
+
 // A friend the server holds (accounts/registry.h, its friends.json): what a window needs to show the friend's tab and
 // to start a session with it (an ensure naming it). The server is the authority on who the friends are; the window
 // shows them. A later version adds fields here and in schema/Nexus.schema's Friend.
 struct ServerFriend {
     std::string name;
+    std::vector<AccountChoice> accounts{};   // in link order, empty with an older server
     bool operator==(const ServerFriend&) const = default;
 };
 

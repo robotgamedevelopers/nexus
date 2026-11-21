@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -43,9 +44,9 @@ int zone(TabKind kind) {
 Model::Model(const std::vector<FriendInfo>& friends, bool sprint) {
     tabs_.reserve(friends.size() + (sprint ? 1 : 0));
     if (sprint)
-        tabs_.push_back(Tab{friends.size(), {}, {}, {}, {}, {}, TabKind::Sprint});
+        tabs_.push_back(Tab{friends.size(), {}, {}, {}, {}, {}, TabKind::Sprint, {}, home_group(TabKind::Sprint)});
     for (std::size_t f = 0; f < friends.size(); ++f)
-        tabs_.push_back(Tab{f, friends[f].name, friends[f].model, {}, {}, {}, TabKind::Friend});
+        tabs_.push_back(Tab{f, friends[f].name, friends[f].model, {}, {}, {}, TabKind::Friend, {}, home_group(TabKind::Friend)});
     next_id_ = friends.size() + (sprint ? 1 : 0);
     if (!tabs_.empty())
         history_.push_back(tabs_[0].id);
@@ -128,11 +129,132 @@ bool Model::append(std::size_t i, Entry e) {
     return true;
 }
 
-// Window.tla's MoveTab: the order is Moved (a rotation of the tabs from `from` to `to`), and active_ is MovedIndex. A
-// zone's tabs stand together, so a move whose two ends are in one zone shifts only tabs of that zone.
+// The fork assigns logical tab types to groups. Older descriptions retain the three built-in zones and
+// extension groups in the order they are first opened.
+std::string Model::home_group(TabKind kind, const std::string& type, const std::string& declared) const {
+    const std::string_view key = kind == TabKind::Extension ? std::string_view(type) :
+        kind == TabKind::Friend ? "friend" : kind == TabKind::Sprint ? "sprint" : "terminal";
+    for (const TabGroup& g : groups_) {
+        if (std::find(g.types.begin(), g.types.end(), key) != g.types.end())
+            return g.id;
+    }
+    return kind == TabKind::Extension ? declared : legacyGroups_[static_cast<std::size_t>(zone(kind))];
+}
+
+std::size_t Model::group_rank(const std::string& group) const {
+    for (std::size_t i = 0; i < groups_.size(); ++i)
+        if (groups_[i].id == group) return i;
+    const auto it = std::find(legacyGroups_.begin(), legacyGroups_.end(), group);
+    return groups_.size() + static_cast<std::size_t>(it - legacyGroups_.begin());
+}
+
+std::size_t Model::group_end(const std::string& group) const {
+    const auto rank = group_rank(group);
+    auto end = std::find_if(tabs_.rbegin(), tabs_.rend(), [&](const Tab& t) { return group_rank(t.group) <= rank; });
+    return static_cast<std::size_t>(end.base() - tabs_.begin());
+}
+
+bool Model::accepts(const std::string& from, const std::string& to) const {
+    if (from == to) return true;
+    for (const TabGroup& g : groups_) {
+        if (g.id == to)
+            return std::find(g.acceptsFrom.begin(), g.acceptsFrom.end(), from) != g.acceptsFrom.end();
+    }
+    return false;
+}
+
+// A saved instance may have reached its destination in several authorized moves. Validate that the current fork
+// still admits a path from its type's home; a single interactive move always checks the actual edge.
+bool Model::reachable(const std::string& from, const std::string& to) const {
+    if (accepts(from, to)) return true;
+    std::unordered_set<std::string> seen{from};
+    std::vector<std::string> pending{from};
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+        for (const TabGroup& g : groups_) {
+            if (seen.count(g.id) ||
+                std::find(g.acceptsFrom.begin(), g.acceptsFrom.end(), pending[i]) == g.acceptsFrom.end()) continue;
+            if (g.id == to) return true;
+            seen.insert(g.id);
+            pending.push_back(g.id);
+        }
+    }
+    return false;
+}
+
+bool Model::set_tab_groups(const std::vector<TabGroup>& groups) {
+    if (groups_ == groups) return false;
+    // Keep authorized instance overrides, and recalculate every other tab from its type.
+    std::vector<bool> overrides;
+    overrides.reserve(tabs_.size());
+    for (const Tab& t : tabs_)
+        overrides.push_back(t.group != home_group(t.kind, t.type, t.declaredGroup));
+    ++layoutRevision_;
+    groups_ = groups;
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        Tab& t = tabs_[i];
+        auto home = home_group(t.kind, t.type, t.declaredGroup);
+        if (!overrides[i] || !reachable(home, t.group)) t.group = std::move(home);
+    }
+    sort_layout({});
+    return true;
+}
+
+void Model::restore_tab_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered) {
+    std::vector<std::pair<std::size_t, std::string>> before;
+    for (const Tab& t : tabs_) before.emplace_back(t.id, t.group);
+    std::unordered_map<std::size_t, std::string> requested;
+    for (const auto& item : ordered) requested.insert(item);
+    for (Tab& t : tabs_) {
+        const auto it = requested.find(t.id);
+        if (it == requested.end()) continue;
+        const auto home = home_group(t.kind, t.type, t.declaredGroup);
+        t.group = reachable(home, it->second) ? it->second : home;
+    }
+    sort_layout(ordered);
+    for (std::size_t i = 0; i < tabs_.size(); ++i) {
+        if (before[i].first != tabs_[i].id || before[i].second != tabs_[i].group) {
+            ++layoutRevision_;
+            break;
+        }
+    }
+}
+
+void Model::sort_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered) {
+    if (tabs_.empty()) return;
+    const auto activeId = tabs_[active_].id;
+    std::unordered_map<std::size_t, std::size_t> saved;
+    for (std::size_t i = 0; i < ordered.size(); ++i) saved.try_emplace(ordered[i].first, i);
+    const auto position = [&](const Tab& t) {
+        const auto it = saved.find(t.id);
+        return std::pair{group_rank(t.group), it == saved.end() ? ordered.size() : it->second};
+    };
+    std::stable_sort(tabs_.begin(), tabs_.end(), [&](const Tab& a, const Tab& b) { return position(a) < position(b); });
+    const auto active = std::find_if(tabs_.begin(), tabs_.end(), [activeId](const Tab& t) { return t.id == activeId; });
+    active_ = static_cast<std::size_t>(active - tabs_.begin());
+}
+
 bool Model::move_tab(std::size_t from, std::size_t to) {
-    if (from >= tabs_.size() || to >= tabs_.size() || (zone(tabs_[from].kind) != zone(tabs_[to].kind) || tabs_[from].group != tabs_[to].group))
+    if (from >= tabs_.size() || to >= tabs_.size() || !accepts(tabs_[from].group, tabs_[to].group))
         return false;
+    if (from != to) ++layoutRevision_;
+    tabs_[from].group = tabs_[to].group;
+    return reorder(from, to);
+}
+
+// A Prax drop names an insertion slot in the destination strip, including the slot past its last tab.
+bool Model::move_to_group(std::size_t from, const std::string& group, std::size_t slot) {
+    if (from >= tabs_.size() || tabs_[from].group == group || !accepts(tabs_[from].group, group))
+        return false;
+    const auto first = std::find_if(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return t.group == group; });
+    if (first == tabs_.end()) return false;
+    const auto start = static_cast<std::size_t>(first - tabs_.begin());
+    const auto dest = start + std::min(slot, group_end(group) - start);
+    ++layoutRevision_;
+    tabs_[from].group = group;
+    return reorder(from, from < dest ? dest - 1 : dest);
+}
+
+bool Model::reorder(std::size_t from, std::size_t to) {
     auto at = [this](std::size_t i) { return tabs_.begin() + static_cast<std::ptrdiff_t>(i); };
     if (from < to)
         std::rotate(at(from), at(from + 1), at(to + 1));
@@ -149,20 +271,26 @@ bool Model::move_tab(std::size_t from, std::size_t to) {
 
 // Window.tla's AddTerminal: the terminal zone is last, so the end of the strip is in it.
 std::size_t Model::add_terminal() {
+    ++layoutRevision_;
     const std::size_t id = next_id_++;
-    auto pos = std::find_if(tabs_.begin(), tabs_.end(), [](const Tab& t) { return t.kind == TabKind::Extension; });
+    const auto group = home_group(TabKind::Terminal);
+    auto pos = tabs_.begin() + static_cast<std::ptrdiff_t>(group_end(group));
     active_ = static_cast<std::size_t>(pos - tabs_.begin());
-    tabs_.insert(pos, Tab{id, {}, {}, {}, {}, {}, TabKind::Terminal});
+    tabs_.insert(pos, Tab{id, {}, {}, {}, {}, {}, TabKind::Terminal, {}, group});
     touch(id);
     return id;
 }
 
 std::size_t Model::open_extension(std::string type, std::string group, std::string title) {
-    auto pos = std::find_if(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return t.group == group; });
-    while (pos != tabs_.end() && pos->group == group) ++pos;
+    if (std::find(legacyGroups_.begin(), legacyGroups_.end(), group) == legacyGroups_.end())
+        legacyGroups_.push_back(group);
+    auto actualGroup = home_group(TabKind::Extension, type, group);
+    active_ = group_end(actualGroup);
+    ++layoutRevision_;
     const auto id = next_id_++;
-    active_ = static_cast<std::size_t>(pos - tabs_.begin());
-    tabs_.insert(pos, Tab{id, std::move(title), {}, {}, {}, {}, TabKind::Extension, std::move(type), std::move(group)});
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(active_),
+                 Tab{id, std::move(title), {}, {}, {}, {}, TabKind::Extension, std::move(type),
+                     std::move(actualGroup), std::move(group)});
     touch(id);
     return id;
 }
@@ -179,6 +307,12 @@ bool Model::edit_extension(std::size_t i, std::string text) {
 bool Model::close_tab(std::size_t i) {
     if (i >= tabs_.size() || (tabs_[i].kind != TabKind::Terminal && tabs_[i].kind != TabKind::Extension))
         return false;
+    return dismiss_tab(i);
+}
+
+bool Model::dismiss_tab(std::size_t i) {
+    if (i >= tabs_.size())
+        return false;
     remove_at(i);
     return true;
 }
@@ -194,14 +328,13 @@ bool Model::add_friend(FriendInfo f) {
             return false;
         }
     }
-    std::size_t at = 0;
-    while (at < tabs_.size() && zone(tabs_[at].kind) <= zone(TabKind::Friend)) {
-        ++at;
-    }
+    const auto group = home_group(TabKind::Friend);
+    const std::size_t at = group_end(group);
+    ++layoutRevision_;
     const std::size_t id = next_id_++;
     const bool empty = tabs_.empty();
     tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at),
-                 Tab{id, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend});
+                 Tab{id, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend, {}, group});
     if (empty) {
         history_.push_back(id);
     } else if (active_ >= at) {
@@ -228,10 +361,8 @@ std::vector<std::string> Model::add_friends(std::vector<FriendInfo> friends, std
             named.insert(t.name);
         }
     }
-    std::size_t at = tabs_.size();
-    while (at > 0 && zone(tabs_[at - 1].kind) > zone(TabKind::Friend)) {
-        --at;
-    }
+    const auto group = home_group(TabKind::Friend);
+    const auto at = group_end(group);
     if (atOut != nullptr) {
         *atOut = at;
     }
@@ -242,12 +373,13 @@ std::vector<std::string> Model::add_friends(std::vector<FriendInfo> friends, std
             continue;
         }
         added.push_back(f.name);
-        fresh.push_back(Tab{next_id_++, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend});
+        fresh.push_back(Tab{next_id_++, std::move(f.name), std::move(f.model), {}, {}, {}, TabKind::Friend, {}, group});
     }
     if (fresh.empty()) {
         return added;
     }
     const bool empty = tabs_.empty();
+    ++layoutRevision_;
     const std::size_t count = fresh.size();
     tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at), std::make_move_iterator(fresh.begin()),
                  std::make_move_iterator(fresh.end()));
@@ -278,6 +410,7 @@ std::vector<std::size_t> Model::remove_friends(const std::function<bool(const Ta
     if (removed.empty()) {
         return removed;
     }
+    ++layoutRevision_;
     const bool historyStays = std::any_of(history_.begin(), history_.end(),
         [&ids](std::size_t id) { return ids.count(id) == 0; });
     if (!historyStays) {
@@ -312,6 +445,7 @@ std::vector<std::size_t> Model::remove_friends(const std::function<bool(const Ta
 }
 
 void Model::remove_at(std::size_t i) {
+    ++layoutRevision_;
     const std::size_t id = tabs_[i].id;
     tabs_.erase(tabs_.begin() + static_cast<std::ptrdiff_t>(i));
     history_.erase(std::remove(history_.begin(), history_.end(), id), history_.end());

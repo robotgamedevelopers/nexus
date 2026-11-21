@@ -96,6 +96,12 @@ void checkReadSize(std::size_t diffBytes, std::int64_t need, const char* what);
 // nothing else (which every server refuses), and readActionsTables reads a sign-in's kind as Unknown. A flow's URL is
 // written only from the offer of the window that holds it (Hub::stateFor), the one route a sign-in secret has into a
 // table down; a callback's query, the one route up, rides in an action's `secret` as an answer's value does.
+// A complete picker roster can share a snapshot with transcripts, requests and offers. Reserve one
+// quarter of both link limits for those other fields. Check the generated representation near the limits.
+constexpr std::size_t kRosterWireBytes = kMaxDiffBytes * 3 / 4;
+constexpr std::size_t kRosterReadBytes = kMaxReadBytes * 3 / 4;
+bool rosterFits(std::vector<ServerFriend> friends);
+
 std::string writeTables(const SessionsChange& change, std::uint32_t format);
 SessionsChange readTables(const std::string& diff, int* unknown);
 std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& held, std::size_t from,

@@ -44,6 +44,32 @@ directory and the WSL user's server directory. On separate machines, check out t
 apply locally. To roll back, revert the policy commit and apply again. Without an applied bundle, each host
 uses the rules packaged with its binary.
 
+## Overlay opacity
+
+Set `"overlay_opacity": 0.60` in the client’s `config.json` and apply the client profile. The shipped
+`client/window.star` returns it as a number from 0 (clear) through 1 (opaque). A profile that omits the field
+gets 0.60. The overlay and terminal use the same dark background. Text and the ordinary window stay opaque.
+
+## Tab and account navigation
+
+The client window event supplies `active_tab` (zero-based) and `tab_count` in current strip order. Stock
+`client/window.star` binds Command-Left and Command-Right to the previous and next positions, wrapping at both
+ends. Numbered shortcuts still select positions directly. In client `config.json`, `tab_navigation` maps chords
+to signed offsets and `account_shortcuts` maps chords to named server commands. The stock bindings for friend tabs
+are Command-Up to `previous` and Command-Down to `next`. The `account` panel shows the selected account’s display
+label, falling back to its ID.
+
+The server calls `decide("account_command", context, config)` with `command`, `current` and the friend’s ordered
+`linked` account IDs for the active session. Return one linked ID. The server validates it, saves the selection
+and starts sign-in if that account needs it. The window sends a command only when the server advertises choices.
+Each keypress resolves against the latest server state.
+
+For example, a client can bind Command-Down to `advance` with `"account_shortcuts": {"Command+ArrowDown": "advance"}`.
+Server config `"account_navigation": {"steps": {"advance": 1}, "wrap": false}` stops at the final account.
+The applied stock profile sets `"account_default": "first"` for new conversations. Profiles without this option
+retain their friend’s configured `preferred` default, including an empty one. New sessions copied from a linked
+source retain the source’s explicit account.
+
 ## Events available in the native hosts
 
 | Host and event | Context | Result |
@@ -56,6 +82,12 @@ The server reads a bundle at the decision and reuses the compiled module while i
 server still owns account eligibility and the durable session move. The client owns rendering and saving its scale.
 
 ## The window and conversation applications
+
+A client profile can customize incoming messages and sign-in prompts by setting `message_card` in
+`config.json` or returning it from `app.window`. Its defaults are
+`{"fill":"#ffffff","ink":"#000000","text_size":34,"radius":20}`. Colors are opaque `#RRGGBB`.
+The text size (12–72 points) and corner radius (0–64 points) scale with keyboard zoom.
+The current account’s sign-in card opens its login when clicked or when Enter is pressed in the prompt.
 
 Preview application events with an `app.` prefix. The Starlark `handle` function receives the event name without
 the prefix. For example:

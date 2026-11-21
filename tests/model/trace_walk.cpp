@@ -551,6 +551,8 @@ bool parse(const char* s, std::uint64_t& v) {
 
 int pluginTabs(const char* path) {
     nexus::Model model({});
+    std::vector<nexus::TabGroup> groups{{"writing", {"editor"}}, {"tools", {"counter"}}};
+    model.set_tab_groups(groups);
     std::ofstream out(path);
     out << "---- MODULE PluginTabTraceData ----\nTrace == <<";
     auto record = [&](const char* op, std::size_t a, std::size_t b) {
@@ -559,11 +561,16 @@ int pluginTabs(const char* path) {
             if (i) out << ",";
             out << model.tab(i).id + 1;
         }
+        out << ">>, groups |-> <<";
+        for (std::size_t i = 0; i < model.tab_count(); ++i) {
+            if (i) out << ",";
+            out << "\"" << model.tab(i).group << "\"";
+        }
         out << ">>]";
     };
     record("init", 0, 0);
     for (const auto group : {"writing", "tools", "writing"}) {
-        auto id = model.open_extension("test", group, "title");
+        auto id = model.open_extension(std::string(group) == "writing" ? "editor" : "counter", group, "title");
         out << ",\n";
         record("open", id + 1, 0);
     }
@@ -572,6 +579,17 @@ int pluginTabs(const char* path) {
         out << ",\n";
         record("move", 1, to + 1);
     }
+    groups[0].acceptsFrom = {"tools"};
+    model.set_tab_groups(groups);
+    out << ",\n";
+    record("reload", 1, 0);
+    model.move_tab(2, 0);
+    out << ",\n";
+    record("move", 3, 1);
+    groups[0].acceptsFrom.clear();
+    model.set_tab_groups(groups);
+    out << ",\n";
+    record("reload", 0, 0);
     model.close_tab(0);
     out << ",\n";
     record("close", 1, 0);

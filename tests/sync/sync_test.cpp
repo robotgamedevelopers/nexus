@@ -2072,11 +2072,12 @@ std::vector<FriendInfo> listOf(std::initializer_list<const char*> names) {
 void friends_cross_the_wire() {
     Sessions empty;
     Sessions two({std::make_shared<const SessionView>(tailOf(1, infoOf("ada"), {}, {}, Tail{}))});
-    two.setFriends({ServerFriend{"ada"}, ServerFriend{"bo"}});
+    const std::vector<ServerFriend> choices = {{"ada", {{"work", "dev+work@example.test"}, {"home"}}}, {"bo"}};
+    two.setFriends(choices);
     Sessions read;
     read.apply_string(two.diff_from(empty));
     CHECK(read == two && read.friendsKnown() && read.unknown() == 0);
-    CHECK((read.friends() == std::vector<ServerFriend>{{"ada"}, {"bo"}}));
+    CHECK(read.friends() == choices);
     Sessions one = two;
     one.setFriends({ServerFriend{"bo"}});
     CHECK(!one.diff_from(two).empty());

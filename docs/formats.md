@@ -51,7 +51,16 @@ later field goes after them.
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
 - Absent list of friends (a server from before it, or a link of format 3 or older): **not known**. Format 4's
   `SessionsDiff` carries `friends_sent` (bool, default false), `friends_known` (bool, default false) and `friends` (a
-  list of `Friend`, each its `name`; default empty), the friends the server's `friends.json` holds, in its order. A
+  list of `Friend` records with a `name` and linked `accounts`; default empty), the friends the server's `friends.json` holds, in its order. A
+  friend's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
+  display `label`. The optional `needs_sign_in` flag defaults to false. The server sets it for a linked account
+  when its browser sign-in is available and the server has no active login for it. A window can send a
+  `SignInClaim` naming the session and account the person selected, its claim token and an existing flow ID,
+  or zero to request the first flow. The server verifies the session still uses that linked account before
+  claiming its flow. A window with advertised choices can send SetAccount text prefixed with `+` to invoke a named
+  account command in the server profile. Every account ID excludes `+`. The server resolves the command against
+  the current session and validates its resulting ID before applying the ordinary SetAccount operation. Older
+  servers omit the choices, which read as an empty list, and the window sends them no account commands. A
   diff carries the friends, with `friends_sent` true, only when they differ from the state the diff is from (the one
   the reader holds); without `friends_sent` the reader keeps the friends it holds, so an unchanged list costs no bytes.
   A first diff, from the empty state, carries them whenever the server has a list. A diff from a server before these
@@ -111,15 +120,16 @@ server's state is.
 | --- | --- | --- | --- |
 | record | 1 | | a friend tab's, by name: migrated at open |
 | record | 2 | | by session, unframed, entry kinds 0 to 2 |
-| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame ends with the instance (`str`), a driver's with the summary flag (`u8`) and its session's directory (`str`) |
+| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame ends with the instance (`str`), a driver's with the summary flag (`u8`) and its session's directory (`str`), followed by the optional session account (`0xA1`, `str`) |
 | snapshot | 1, 2 | | friend tabs (1 before drivers): migrated at open |
 | snapshot | 3 | | by session, unframed, entry kinds 0 to 2 |
-| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance |
+| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) |
 
 - Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
-- Absent summary flag: **none owed**. Absent session directory: **not known**, and the next driver resumes the
-  harness session as before the field existed. Resuming claims least: it is what a server from before did, and a
-  harness that has no such session in the directory starts a new one.
+- Absent summary flag: **none owed**. An absent session account means the owner of the harness ID is unknown.
+  The server starts a new harness session and provides recent transcript entries on its first send. An explicitly
+  empty account identifies the accountless harness. A known account may resume in the same working directory,
+  or when an earlier format left the directory unknown.
 - An older server that rewrites the store (a compaction) drops the appended fields; a newer one then reads their
   defaults.
 

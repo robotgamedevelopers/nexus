@@ -1,5 +1,6 @@
 #include "sync/friend_strip.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace nexus::sync {
@@ -7,6 +8,12 @@ namespace nexus::sync {
 FriendStrip::FriendStrip(std::vector<std::string> savedOrder, std::string savedFriend, KeptDrafts kept)
     : savedOrder_(std::move(savedOrder)), savedFriend_(std::move(savedFriend)), pending_(!savedFriend_.empty()),
       kept_(std::move(kept)) {}
+
+void FriendStrip::dismiss(const Tab& tab) {
+    dismissed_.insert(tab.name);
+    if (friendTabs_) --friendTabs_;
+    if (!tab.draft.empty()) kept_[tab.name] = tab.draft;
+}
 
 StripTake FriendStrip::take(Model& model, const Sessions& state) {
     StripTake out;
@@ -28,7 +35,10 @@ StripTake FriendStrip::take(Model& model, const Sessions& state) {
     newest_ = newest;
     out.ran = true;
 
-    FriendChanges changes = applyFriends(model, friendsOf(state, &out.dropped, &out.past), known, savedOrder_, &kept_);
+    auto visible = friendsOf(state, &out.dropped, &out.past);
+    visible.erase(std::remove_if(visible.begin(), visible.end(),
+        [&](const FriendInfo& f) { return dismissed_.count(f.name) != 0; }), visible.end());
+    FriendChanges changes = applyFriends(model, visible, known, savedOrder_, &kept_);
     out.added = std::move(changes.added);
     out.removed = std::move(changes.removed);
     out.keptChanged = changes.keptChanged;

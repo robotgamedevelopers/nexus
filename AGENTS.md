@@ -64,7 +64,7 @@ Prax goes to Prax's author as a request, never a fork.
 Each rule here has a test or a model behind it. A change that breaks one is a regression, not a redesign. Only the owner changes a rule, and the change is recorded here in the same pull request.
 
 Launch and the overlay
-- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. It has a see-through backdrop, covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
+- nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 60% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
 - The macOS client starts at GUI login in overlay mode. Keep example plugins, their services, groups and bindings in isolated test fixtures.
 - At launch and relaunch nothing shows: no window, no single frame, and no change of focus. nexus connects to `nexus-server` in the background, and only the hotkey shows it. The one exception is a hotkey that fails to register, because then nothing else could show nexus.
 - The hotkey is Command-backtick, the key left of 1, chosen by key position. It hides an overlay that is visible and has the keyboard, and shows it in every other case: after Command-Tab, the next press shows it rather than merely reactivating it.
@@ -197,14 +197,14 @@ Keys and contexts
 
 Sessions
 - A friend's tab holds that friend's sessions as subtabs, like a menu bar or a cross menu: friends run across the strip, and the selected friend's sessions drop down in a column under its tab. The column shows only while switching, and hides once a session is chosen.
-- Command-Up/Down move between the sessions in the current friend's tab. (In a friend's tab this replaces Command-Up/Down gliding to the ends; Home and End still glide.)
+- Command-Up/Down select the previous/next linked account in the current friend's tab, wrapping in link order. Shift-Command-Up/Down are reserved for session navigation.
 - Command-N makes a new session with this friend as a subtab in this tab; Command-Shift-N makes it a tab of its own (like a browser's new tab and new window). A new session starts with the current session's account, model and effort.
 - A session can be dragged out of the column into the strip to become its own tab.
 - Switching a session's account happens inside its tab. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far (part 5 of the friends work, `docs/roadmap.sexp`).
 - Command-M opens a pop-up selector of the harness's models and Command-E one of its effort levels. Up/Down move, Enter picks, Escape closes it. Nothing shows the model or effort otherwise.
 
 Tabs
-- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. With Command-Up/Down for sessions, the arrows make one grid: friends across, sessions down.
+- Command-Left/Right select the tab to the left or right: navigation, on every tab. They no longer move to the start or end of a line in the prompt, which is a single line. Command-Up/Down on a friend tab select its account.
 
 ## Tests
 

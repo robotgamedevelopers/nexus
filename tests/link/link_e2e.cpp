@@ -76,6 +76,7 @@
 #include <vector>
 
 #include "fake_mosh.h"
+#include "accounts/registry.h"
 #include "command.h"
 #include "leak_scan.h"
 #include "link/bootstrap.h"
@@ -1584,6 +1585,113 @@ std::string control(const std::string& dir, const std::string& request) {
     return line;
 }
 
+// A private account enrolled on demand through the real server, link and local sign-in page. Only the provider
+// executable is synthetic. A fresh server on the same HOME recognizes the receipt without starting a second flow.
+int privateSignIn(const std::string& binary, const std::string& dir, const std::string& python,
+                  const std::string& fixture) {
+    Server server(binary, dir);
+    const std::string home = dir + "/home";
+    const std::string config = dir + "/nexus-config";
+    std::filesystem::create_directories(home);
+    std::filesystem::create_directories(config);
+    const std::string account = "fixture-account";
+    accounts::Registry registry;
+    accounts::Account a{account, "codex"};
+    a.signInOnUse = true;
+    registry.accounts.push_back(a);
+    registry.friends.push_back({"fixture-friend", {account}, account});
+
+    CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    // Keep the drivers command's words free of spaces even if the source tree or interpreter path contains them.
+    std::filesystem::create_symlink(python, dir + "/python");
+    std::filesystem::create_symlink(fixture, dir + "/enroll.py");
+    const std::string provider = dir + "/fake-codex";
+    CHECK(writeFile(provider, R"(#!/bin/sh
+set -eu
+test "$1" = login
+test "$2" = --device-auth
+umask 077
+printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","access_token":"synthetic-access","refresh_token":"synthetic-refresh"}}' > "$CODEX_HOME/auth.json"
+)"));
+    CHECK(::chmod(provider.c_str(), 0700) == 0);
+    CHECK(writeFile(dir + "/drivers", "friend fixture-friend codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
+                    provider + "\n"));
+    for (int start = 0; start < 2; ++start) {
+        const pid_t pid = startServe(binary, dir);
+        CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));
+        Window w;
+        link::Connect connect;
+        if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &w, &connect)) {
+            return 1;
+        }
+        std::vector<Window*> windows{&w};
+        const auto until = [&](const std::function<bool()>& done) {
+            return waitFor([&] { step(windows, nullptr, 20); return done(); }, kStallSeconds);
+        };
+        CHECK(until([&] { return w.session->stateNum() != 0; }));
+        CHECK(w.session->state().offers().empty());
+        const auto needsSignIn = [&]() -> std::optional<bool> {
+            for (const auto& friendRow : w.session->state().friends())
+                for (const auto& choice : friendRow.accounts)
+                    if (friendRow.name == "fixture-friend" && choice.name == account) return choice.needsSignIn;
+            return std::nullopt;
+        };
+        CHECK(until([&] { return needsSignIn() == (start == 0); }));
+        const auto request = [&] { return control(dir, "config sign-in " + account); };
+        if (start == 0) {
+            sync::Action ensure;
+            ensure.kind = sync::ActionKind::Ensure;
+            ensure.friendName = "fixture-friend";
+            w.session->add(ensure);
+            if (!until([&] {
+                const auto& sessions = w.session->state().sessions();
+                return sessions.size() == 1 && sessions.front()->info.account == account;
+            })) {
+                CHECK(false);
+                return 1;
+            }
+            CHECK(w.session->state().offers().empty());
+            // Exactly the action sent when the person activates the selected friend's Sign in card or presses Enter.
+            const std::string claim = "fixtureWindowOpener1";
+            auto gesture = signInAction(sync::ActionKind::SignInClaim, 0, claim);
+            gesture.session = w.session->state().sessions().front()->id;
+            gesture.account = account;
+            w.session->add(gesture);
+            if (!until([&] {
+                const auto& offers = w.session->state().offers();
+                return offers.size() == 1 && offers.front().opener == claim && !offers.front().url.empty();
+            })) {
+                CHECK(false);
+                return 1;
+            }
+            const auto* claimed = &w.session->state().offers().front();
+            const auto flowId = claimed->id;
+            CHECK(claimed->account == account && claimed->provider == "codex");
+            const std::string url = claimed->url.bytes();
+            sync::SignInTarget target;
+            if (!sync::parseSignInUrl("codex", url, &target)) {
+                CHECK(false);
+                return 1;
+            }
+            w.session->add(signInAction(sync::ActionKind::SignInOpened, flowId, claim));
+            const auto page = runCommand(Command{python, {"-IB", fixture, "visit", url}, "visit test sign-in page"}, 20);
+            CHECK(page.end == CommandResult::End::Exited && page.code == 0);
+            CHECK(until([&] { return w.session->state().offers().empty(); }));
+            CHECK(readFile(home + "/.nexus/server/harness/codex/" + account + "/.nexus-enrolled") == "codex\n");
+        }
+        CHECK(until([&] { return needsSignIn() == false && w.session->state().offers().empty(); }));
+        CHECK(request() == "OK signed in");
+        w.session->shutdown();
+        CHECK(until([&] { return w.session->shutdownDone(); }));
+        const auto stopped = runCommand(Command{binary, {"stop", "--dir", dir}, "stop test server"}, 10);
+        CHECK(stopped.end == CommandResult::End::Exited && stopped.code == 0);
+        int status = 0;
+        CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+    return failures == 0 ? 0 : 1;
+}
+
 // How many sessions the server log says were made (`new` answered): one line per CONNECT.
 std::size_t sessionsLogged(const std::string& dir) {
     return static_cast<std::size_t>(count(readFile(dir + "/server.log"), " on UDP port "));
@@ -1801,13 +1909,16 @@ int main(int argc, char** argv) {
     if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
         return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
     }
+    if (argc == 6 && std::strcmp(argv[3], "private-signin") == 0) {
+        return privateSignIn(argv[1], argv[2], argv[4], argv[5]);
+    }
     if (argc == 4 && std::strcmp(argv[3], "takeover") == 0) {
         return takeover(argv[1], argv[2]);
     }
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
                          "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | "
-                         "signin <fake claude> [leaky] | takeover\n"
+                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

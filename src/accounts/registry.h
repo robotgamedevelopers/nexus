@@ -3,7 +3,7 @@
 // the person or the AI who edits them; models/Accounts.tla is the model the hub's decisions are checked against.
 //
 // An account is a login with one provider (the harness its sessions run: "claude", later others). It is set up on its
-// own, and its credentials live under ~/.nexus/server/accounts/<name>/, never here: these files hold names only. A
+// own, and its credentials live under ~/.nexus/server/accounts/<name>/, never in the registry. A
 // friend links to any number of accounts, of any providers, and an account serves any number of friends.
 //
 // Two files, each pretty-printed JSON a person can edit by hand (accounts.json and friends.json), with a "version"
@@ -22,24 +22,28 @@
 
 namespace nexus::accounts {
 
-// The version of the files this code writes, and the newest it reads. An older version is upgraded as it is read.
+// The version written for friends and for accounts using the original fields. Version 1 upgrades to this.
 // Version 2 added an account's "billing" and a friend's "limit" (docs/accounts.md, Versions): a version 1 file reads
 // every account as billed by subscription and every friend as not limited, which is how nexus ran them then.
 constexpr int kVersion = 2;
+// accounts.json needs version 3 only when storing picker metadata or an on-use login.
+constexpr int kAccountOptionsVersion = 3;
 
 // How an account's sessions are paid for: a subscription's included usage, or the provider's API rate. A session on an
 // API-billed account is always limited (Friend::limit), whatever its friend says (docs/accounts.md, "limit").
 enum class Billing { Subscription, Api };
 
-// The most friends friends.json may hold: a file with more is refused whole. Derived, not measured: the friends go to
-// every window in the state, each a name of at most 64 bytes, so 256 of them are at most about 20 KiB of it with their
-// framing, under 1% of the 4 MiB a diff may be (sync/codec.h kMaxDiffBytes), leaving the rest for the sessions.
+// Count cap for all file versions. The expanded picker labels and links also have a wire and decode
+// budget, checked by sync::accountRosterProblem before a registry is published.
 constexpr std::size_t kMaxFriends = 256;
 
 struct Account {
     std::string name;
     std::string provider;
     Billing billing = Billing::Subscription;
+    std::string label{};     // optional picker text; the name remains the account id and credential directory
+    bool signInOnUse = false;
+    std::string email{};     // configuration metadata; never sent to a client or used to verify login
     bool operator==(const Account&) const = default;
 };
 
@@ -114,7 +118,7 @@ struct Read {
 // Reads the accounts file's `text` (`path` for the errors) into registry->accounts, or the friends file's into
 // registry->friends (and its "limit_keeps_out" into registry->keepsOut). An empty or missing file (text empty) reads
 // as none. Refused, with every error found: text that
-// is not JSON (with the line where reading stopped), a version newer than kVersion or not a whole number, a field
+// is not JSON (with the line where reading stopped), an unsupported version or one that is not a whole number, a field
 // unknown or of the wrong kind, a name or provider malformed, more than kMaxFriends friends (in any version).
 // Consistency across the two files is problems()'s.
 // In a version 1 friends file, a friend without "limit" reads unlimited (it ran so) only when `committed` is null (the

@@ -8,6 +8,7 @@
 
 #include "pr/color_space.h"
 #include "pr/kit_choice.h"
+#include "pr/kit_button.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
 #include "pr/kit_menu.h"
@@ -41,6 +42,9 @@ enum class Part : unsigned char {
     Entry,
     Bubble,
     BubbleQueued,
+    MessageCard,
+    FocusedCard,
+    ActionRow,
     Footer,
     Prompt,
     StripRow,
@@ -127,6 +131,18 @@ struct BoxRecipe {
             case Part::Entry:
                 box.display = PrLayoutDisplay_Flex;
                 break;
+            case Part::ActionRow:
+                box.display = PrLayoutDisplay_Flex;
+                box.width = prLayoutLengthPercent(kColumnPercent);
+                box.margin[PrRectSide_Left] = prLayoutLengthAuto();
+                box.margin[PrRectSide_Right] = prLayoutLengthAuto();
+                break;
+            case Part::MessageCard:
+            case Part::FocusedCard:
+                box.display = PrLayoutDisplay_Flex;
+                box.minWidth = px(0);
+                padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
+                break;
             case Part::Bubble:
             case Part::BubbleQueued:
                 box.display = PrLayoutDisplay_Block;
@@ -188,7 +204,18 @@ struct DecorationRecipe {
         const float k = textScale(steps);
         switch (part) {
             case Part::Window:
-                d.background = prColor16FromColor(look.overlay ? faded(kBackground, kOverlayOpacity) : kBackground);
+                d.background = prColor16FromColor(look.overlay ? faded(kBackground, look.overlayOpacity) : kBackground);
+                break;
+            case Part::MessageCard:
+            case Part::FocusedCard:
+                d.background = prColor16FromColor(rgb(look.messageCard.fill));
+                radius(d, look.messageCard.radius * k);
+                if (part == Part::FocusedCard) {
+                    d.outlineStyle = PrDrawBorderStyle_Solid;
+                    d.outlineColor = prColor16FromColor(rgb(look.messageCard.ink));
+                    d.outlineWidth = prLayoutUnitFromPx(2 * k);
+                    d.outlineOffset = prLayoutUnitFromPx(-4 * k);
+                }
                 break;
             case Part::Bubble:
                 d.background = prColor16FromColor(kBubble);
@@ -235,6 +262,12 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.rowGap = px(kGap * k);
+                flex.shrink = 0;
+                break;
+            case Part::ActionRow:
+            case Part::MessageCard:
+            case Part::FocusedCard:
+                flex.direction = PrLayoutFlexDirection_Column;
                 flex.shrink = 0;
                 break;
             case Part::Entry:
@@ -351,6 +384,37 @@ struct Builder {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
 
+    PrLayoutNode cardText(PrLayoutNode parent, std::string_view text) {
+        auto body = textStyle(PrKitTextRole_Display, PrKitTone_Inverse);
+        body.wrap = PrKitWrap_Wrap;
+        return label(parent, text, body);
+    }
+
+    PrLayoutNode message(PrLayoutNode parent, std::string_view text, PrUiKey key = 0) {
+        const auto card = element(parent, Part::MessageCard, 0, key);
+        cardText(card, text);
+        return card;
+    }
+
+    void accountPanel(PrLayoutNode parent) {
+        const std::string action = view.signInCaption ? view.signInCaption() : std::string();
+        if (action.empty()) {
+            const std::string caption = view.accountCaption ? view.accountCaption() : std::string();
+            if (!caption.empty())
+                label(parent, caption, textStyle(PrKitTextRole_Meta, PrKitTone_Muted));
+            return;
+        }
+        const auto footer = element(parent, Part::ActionRow);
+        const auto button = prKitButton(kit, footer, {.key = prUiKey(ui, footer, sv("sign-in-action"))}, {});
+        const auto appearance = prUiFocus(ui) == button || prUiIsHovered(ui, button) ?
+            Part::FocusedCard : Part::MessageCard;
+        prLayoutTreeFrameSetStyle(tree, button, style(ui, look, appearance));
+        cardText(button, action);
+        label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse));
+        if (prKitActivated(kit, button) && view.activateSignIn)
+            view.activateSignIn();
+    }
+
     // The kit's plus, centred on the prompt's last line, where the box aligns its items at the bottom.
     void plus(PrLayoutNode box) {
         const float side = kPlusSide * k();
@@ -453,22 +517,25 @@ struct Builder {
     // threshold is a click that selects the tab. Each tab is keyed by its Tab::id, so its node (focus, pointer state)
     // goes with it when it moves.
     // The tabs' nodes by position, as the strips declared them this round.
-    std::vector<PrLayoutNode> tabNodes;
+    struct Drop { uint64_t id = 0; std::string group{}; std::size_t slot = 0; };
+    Drop drop{};
     // The secret request the dialog shows this round, or null (read once, before the keys are claimed).
     const SecretAsk* asking = nullptr;
 
-    void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, bool reorderable,
-            PrKitFlex flex) {
+    void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, const std::string& group,
+            bool exchanges, PrKitFlex flex) {
         syncTabs(tabs, first, end);
-        PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = 0, .tabs = tabs, .group = 0,
-            .reorderable = reorderable, .collapsesSingle = false, .disabled = false},
+        PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = prUiKey(ui, parent, sv(group)), .tabs = tabs,
+            .group = exchanges ? 0x4e78546162477270ull : 0, .reorderable = true, .collapsesSingle = false, .disabled = false},
             PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
         rowPlace.height = prKitPx(kStripHeight * k() + 1);
         rowPlace.flex = flex;
         prKitPlace(kit, row, &rowPlace);
-        if (reorderable)
-            mirrorMove(tabs, first, end);
+        PrKitTabMove moved{};
+        if (prKitTabMoved(kit, row, &moved) && moved.kind == PrKitTabMoveKind_Received && moved.id == view.draggingTab)
+            drop = Drop{moved.id, group, moved.index};
+        mirrorMove(tabs, first, end);
         const uint64_t selected = prKitTabsSelected(tabs);
         for (std::size_t i = first; i < end; ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.id = kitId(model.tab(i)), .disabled = false});
@@ -479,7 +546,7 @@ struct Builder {
                 tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
             prKitTabLabel(kit, tab, PrKitLabel{.key = 0, .text = sv(label(model.tab(i)))});
-            tabNodes[i] = tab;
+            view.tabNodes[i] = tab;
         }
         // A click on a tab, or Left or Right on a focused one, selects in the kit: made through the model's select_tab.
         // Right on the last tab selects kNoTab, which selects nothing: the next round puts the selection back.
@@ -488,35 +555,39 @@ struct Builder {
             model.select_tab(first + prKitTabsIndex(tabs, now));
     }
 
-    // The tab strip. The sprint tab, if there is one, is first, in a strip of its own that is not reorderable: it is
-    // never carried, and the other strip's caret never stands before it. The kit has no per-tab way to pin a tab
-    // (PrKitTab is only an id and disabled, kit_choice.h 132-135; kit_choice.cpp prKitTab 817-820 starts a drag for every
-    // tab of a reorderable strip): a request for Prax. The two strips stand side by side, so their rules meet as one.
+    // Prax keeps click selection independent of drag admission. Every contiguous group has its own strip. A fork
+    // that permits transfers uses the kit's cross-strip drop event, naming the source instance and destination slot.
     void strips(PrLayoutNode window) {
-        const std::size_t pinned = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint ? 1 : 0;
-        tabNodes.assign(model.tab_count(), kPrLayoutNodeNone);
-        std::size_t base = model.tab_count();
-        while (base > 0 && model.tab(base - 1).kind == TabKind::Extension)
-            --base;
-        if (pinned == 0 && base == model.tab_count()) {
-            strip(window, view.movableTabs.get(), 0, base, true, PrKitFlex_Fixed);
-        } else {
-            PrLayoutNode row = element(window, Part::StripRow);
-            if (pinned)
-                strip(row, view.pinnedTabs.get(), 0, pinned, false, PrKitFlex_Fixed);
-            strip(row, view.movableTabs.get(), pinned, base, true,
-                base == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
-            for (std::size_t i = base; i < model.tab_count();) {
-                const auto& group = model.tab(i).group;
-                auto& tabs = view.extensionStrips[group];
-                if (!tabs) tabs.reset(prKitTabsCreate());
-                auto end = i + 1;
-                while (end < model.tab_count() && model.tab(end).group == group) ++end;
-                label(row, group, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
-                strip(row, tabs.get(), i, end, true, PrKitFlex_Fixed);
-                i = end;
+        view.tabNodes.assign(model.tab_count(), kPrLayoutNodeNone);
+        const bool exchanges = std::any_of(view.windowApp.groups.begin(), view.windowApp.groups.end(),
+            [](const TabGroup& group) { return !group.acceptsFrom.empty(); });
+        if (const PrUiPayload* dragging = prUiDragging(ui)) view.draggingTab = dragging->value;
+        const bool many = model.tab_count() && model.tab(0).group != model.tab(model.tab_count() - 1).group;
+        const PrLayoutNode row = many ? element(window, Part::StripRow) : window;
+        for (std::size_t first = 0; first < model.tab_count();) {
+            const auto& group = model.tab(first).group;
+            auto end = first + 1;
+            bool extensions = model.tab(first).kind == TabKind::Extension;
+            while (end < model.tab_count() && model.tab(end).group == group) {
+                extensions = extensions && model.tab(end).kind == TabKind::Extension;
+                ++end;
+            }
+            auto& tabs = view.groupStrips[group];
+            if (!tabs) tabs.reset(prKitTabsCreate());
+            if (many && extensions) label(row, group, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            strip(row, tabs.get(), first, end, group, exchanges,
+                  many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
+            first = end;
+        }
+        if (drop.id) {
+            for (std::size_t i = 0; i < model.tab_count(); ++i) {
+                if (kitId(model.tab(i)) == drop.id && model.move_to_group(i, drop.group, drop.slot)) {
+                    if (view.moved) view.moved();
+                    break;
+                }
             }
         }
+        if (!prUiDragging(ui)) view.draggingTab = 0;
         keepFocusOnTheActiveTab();
     }
 
@@ -527,10 +598,10 @@ struct Builder {
     // later in the round, as each does every round.
     void keepFocusOnTheActiveTab() {
         const std::size_t active = model.active();
-        for (std::size_t i = 0; i < tabNodes.size(); ++i) {
-            if (i != active && tabNodes[i] != kPrLayoutNodeNone && prUiFocus(ui) == tabNodes[i] &&
-                    active < tabNodes.size() && tabNodes[active] != kPrLayoutNodeNone)
-                prUiSetFocus(ui, tabNodes[active]);
+        for (std::size_t i = 0; i < view.tabNodes.size(); ++i) {
+            if (i != active && view.tabNodes[i] != kPrLayoutNodeNone && prUiFocus(ui) == view.tabNodes[i] &&
+                    active < view.tabNodes.size() && view.tabNodes[active] != kPrLayoutNodeNone)
+                prUiSetFocus(ui, view.tabNodes[active]);
         }
     }
 
@@ -690,7 +761,8 @@ struct Builder {
     // The heights of the items the last round declared, from the last layout, with the gap after each; and the
     // column's width. After a change of the text scale every height is laid out again.
     void measure(TranscriptItems& items, bool switched) {
-        if (items.steps != look.textSteps) {
+        if (items.steps != look.textSteps || items.cardSize != look.messageCard.textSize) {
+            items.cardSize = look.messageCard.textSize;
             std::fill(items.height.begin(), items.height.end(), 0.0f);
             items.steps = look.textSteps;
         }
@@ -719,15 +791,11 @@ struct Builder {
         if (kind == EntryKind::Tool)
             return float(items.count[i]) * kToolPitch * s + float(items.count[i] - 1) * kToolGap * s + gap;
         // Characters of the body face are about half its size wide.
-        const float perChar = 0.5f * kBodySize * s;
-        float width = std::max(items.width, 1.0f);
-        float pad = 0;
-        if (kind == EntryKind::Person) {
-            width = std::max(width * kBubbleMaxPercent / 100 - 2 * kBubblePadX * s, 1.0f);
-            pad = 2 * kBubblePadY * s;
-        }
-        const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
-        return rows * kLinePitch * s + pad + gap;
+        const bool incoming = kind == EntryKind::Friend || kind == EntryKind::Notice;
+        const float font = incoming ? look.messageCard.textSize : kBodySize;
+        const float width = std::max(items.width * (incoming ? 1.0f : kBubbleMaxPercent / 100) - 2 * kBubblePadX * s, 1.0f);
+        const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * 0.5f * font * s / width);
+        return (rows * 1.42f * font + 2 * kBubblePadY) * s + gap;
     }
 
     // Declares the items from the scroll's `offset` (or the end) a screen either side of the `viewport`, the spacers
@@ -815,11 +883,8 @@ struct Builder {
                 return entry;
             }
             case EntryKind::Friend:
-                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
-                    textStyle(PrKitTextRole_Body, PrKitTone_Primary));
             case EntryKind::Notice:
-                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
-                    textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                return message(column, e.text, key);
             case EntryKind::Tool:
                 break;
         }
@@ -835,16 +900,16 @@ struct Builder {
     // keeps its text, so only the last is set again as text arrives.
     void paragraphs(PrLayoutNode column, const Tab& tab, const std::string& text) {
         const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, (uint64_t(tab.id) << 8) | 3, 0);
-        PrLayoutNode box = element(column, Part::Paragraphs, 0, key);
-        const PrKitTextStyle body = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        PrLayoutNode card = element(column, Part::MessageCard, 0, key);
+        PrLayoutNode box = element(card, Part::Paragraphs);
         std::size_t at = 0;
         while (at <= text.size()) {
             std::size_t blank = text.find("\n\n", at);
             if (blank == std::string::npos) {
-                label(box, std::string_view(text).substr(at), body);
+                cardText(box, std::string_view(text).substr(at));
                 break;
             }
-            label(box, std::string_view(text).substr(at, blank - at), body);
+            cardText(box, std::string_view(text).substr(at, blank - at));
             at = blank + 2;
         }
     }
@@ -899,14 +964,14 @@ struct Builder {
         if (growing != nullptr && !growing->empty()) {
             paragraphs(column, tab, *growing);
         }
-        // Why the last prompt was not sent: dim, at the end of the transcript, so that nothing stands by the prompt.
+        // Keep the reason alongside the conversation if a prompt could not be sent.
         if (!view.problem.empty()) {
-            label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            message(column, view.problem);
         }
         // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
         // to show it, so it stands just above the prompt.
         if (!view.cut.empty() && view.cutTab == tab.id) {
-            label(column, view.cut, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            message(column, view.cut);
         }
         // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
         const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
@@ -945,6 +1010,8 @@ struct Builder {
     }
 
     void promptKey(std::size_t active, const char* key) {
+        if (std::string_view(key) == "Enter" && view.activateSignIn && view.activateSignIn())
+            return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         const Tab& tab = model.tab(active);
         policy::MessagePlan plan;
         std::string why;
@@ -1076,11 +1143,10 @@ struct Builder {
             }
             return;
         }
-        label(body, asking->asker.empty() ? std::string("asked by nexus") : "asked by " + asking->asker,
-              textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
-        if (!asking->why.empty()) {
-            label(body, "“" + asking->why + "”", textStyle(PrKitTextRole_Body, PrKitTone_Primary));
-        }
+        const auto instructions = element(body, Part::MessageCard);
+        cardText(instructions, asking->asker.empty() ? std::string("asked by nexus") : "asked by " + asking->asker);
+        if (!asking->why.empty())
+            cardText(instructions, "“" + asking->why + "”");
         const bool enter = prUiKeyCaptured(ui, body, PrAppKey_Enter, 0);
         PrKitTextField field{};
         field.key = prUiKey(ui, kPrLayoutNodeNone, sv("secret-field"));
@@ -1114,9 +1180,19 @@ struct Builder {
         // Alt and Prax's terminal claims every Alt chord for its shell (terminal.cpp claimKeys), which keeps Alt as
         // Meta for every other key. Inside the overlay nexus takes its keys (AGENTS.md).
         updateApplication();
+        std::vector<Shortcut> pressed;
         for (const auto& binding : view.windowApp.shortcuts) {
             if ((!view.secrets || !view.secrets->showing()) && prUiKeyCaptured(ui, keys, binding.key, binding.modifiers))
-                shortcut(binding);
+                pressed.push_back(binding);
+        }
+        for (std::size_t i = 0; i < pressed.size(); ++i) {
+            // A preceding key can select a different group in the same frame.
+            if (i) updateApplication();
+            const auto& bindings = view.windowApp.shortcuts;
+            const auto active = std::find_if(bindings.begin(), bindings.end(), [&](const Shortcut& key) {
+                return key.key == pressed[i].key && key.modifiers == pressed[i].modifiers;
+            });
+            if (active != bindings.end()) shortcut(*active);
         }
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
@@ -1136,8 +1212,8 @@ struct Builder {
             view.hide();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
-        if (view.board != nullptr && !tabNodes.empty() && model.tab(0).kind == TabKind::Sprint &&
-                prUiClicked(ui, tabNodes[0], 0))
+        if (view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
+                prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
         if (model.tab_count() != 0 && model.tab(model.active()).id != view.selectedId) {
@@ -1155,16 +1231,20 @@ struct Builder {
     }
 
     void updateApplication() {
-        const char* tab = "empty";
-        if (model.tab_count()) {
-            switch (model.tab(model.active()).kind) {
-                case TabKind::Friend: tab = "friend"; break;
-                case TabKind::Terminal: tab = "terminal"; break;
-                case TabKind::Sprint: tab = "sprint"; break;
-                case TabKind::Extension: tab = "extension"; break;
-            }
+        const auto describe = [&] {
+            const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
+            const char* kind = !active ? "empty" : active->kind == TabKind::Friend ? "friend" :
+                active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
+            view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
+                !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string());
+        };
+        describe();
+        if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
+            model.set_tab_groups(view.windowApp.groups);
+            view.tabGroupGeneration = view.windowApp.layoutGeneration;
+            if (view.restoreTabLayout) view.restoreTabLayout();
+            describe();
         }
-        view.windowApp.update(*view.application, tab, model.tab_count() ? model.tab(model.active()).type : std::string(), view.promptOpen, !view.status.empty());
     }
 
     void shortcut(const Shortcut& key) {
@@ -1175,6 +1255,16 @@ struct Builder {
                     view.board->home();
                 break;
             }
+            case WindowCommand::MoveTab: {
+                const auto from = model.active();
+                if (model.tab_count() == 0 || (key.argument < 0 && from == 0)) break;
+                const auto to = key.argument < 0 ? from - 1 : from + 1;
+                if (model.move_tab(from, to) && view.moved) view.moved();
+                break;
+            }
+            case WindowCommand::AccountCommand:
+                if (view.accountCommand) view.accountCommand(key.type);
+                break;
             case WindowCommand::Zoom:
                 view.askedTextSteps = policy::textZoom(*view.application, {}, view.askedTextSteps,
                     key.argument, -kTextStepsDown, kTextStepsUp);
@@ -1187,14 +1277,6 @@ struct Builder {
                         model.close_tab(model.active());
                 }
                 break;
-            case WindowCommand::CloseTerminal:
-                if (view.terminals && model.tab_count() && model.tab(model.active()).kind == TabKind::Terminal) {
-                    const auto id = model.tab(model.active()).id;
-                    HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
-                    model.close_tab(model.active());
-                    view.terminals->close(id);
-                }
-                break;
             case WindowCommand::OpenTab: {
                 auto found = view.windowApp.types.find(key.type);
                 if (found != view.windowApp.types.end()) {
@@ -1203,12 +1285,26 @@ struct Builder {
                 }
                 break;
             }
-            case WindowCommand::CloseTab:
-                if (model.tab_count() && model.tab(model.active()).kind == TabKind::Extension) {
-                    model.close_tab(model.active());
-                    view.extensionProblem.clear();
+            case WindowCommand::CloseTerminal:
+            case WindowCommand::CloseTab: {
+                if (!model.tab_count()) break;
+                const auto& tab = model.tab(model.active());
+                const bool terminal = tab.kind == TabKind::Terminal;
+                // Older window descriptions used separate primitives for terminals and extensions.
+                const bool legacy = key.command == WindowCommand::CloseTerminal;
+                if ((legacy && !terminal) || !view.windowApp.closable.value_or(legacy || tab.kind == TabKind::Extension))
+                    break;
+                const auto id = tab.id;
+                if (tab.kind == TabKind::Friend && view.dismissFriend)
+                    view.dismissFriend(tab);
+                model.dismiss_tab(model.active());
+                if (terminal && view.terminals) {
+                    HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
+                    view.terminals->close(id);
                 }
+                view.extensionProblem.clear();
                 break;
+            }
             case WindowCommand::InvokeService:
                 if (model.tab_count() && model.tab(model.active()).kind == TabKind::Extension) {
                     const auto& tab = model.tab(model.active());
@@ -1250,6 +1346,7 @@ struct Builder {
                 case Panel::Terminal: terminal(window, model.tab(model.active())); break;
                 case Panel::Transcript: transcript(window); break;
                 case Panel::Prompt: prompt(element(window, Part::Footer), composing); break;
+                case Panel::Account: accountPanel(window); break;
                 case Panel::Native: {
                     const auto& tab = model.tab(model.active());
                     auto type = view.windowApp.types.find(tab.type);
@@ -1287,8 +1384,7 @@ struct Builder {
                     break;
                 }
                 case Panel::Status:
-                    label(element(window, Part::Footer), view.status,
-                        textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+                    message(element(window, Part::ActionRow), view.status);
                     break;
             }
         }
@@ -1300,16 +1396,17 @@ struct Builder {
 
 } // namespace
 
-PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity, const MessageCardStyle& card) {
     const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
     // The palette is public, but which slot each widget draws with (the tab strip bg1, a hovered tab bg2, the strip's
     // rule line2) is read from the kit's source, not documented: Prax has no public per-widget colours (a request).
     PrKitPalette& p = theme.palette;
-    p.bg0 = overlay ? faded(kBackground, kOverlayOpacity) : kBackground;   // the canvas
+    p.bg0 = overlay ? faded(kBackground, opacity) : kBackground;   // the canvas
     p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip
     p.bg2 = kPromptFill;                                                    // a tab under the pointer
     p.line2 = kStripLine;                                                   // the strip's rule
+    p.textInverse = rgb(card.ink);
     p.text1 = kInk;
     p.text3 = kNotice;
     p.text4 = kFaint;
@@ -1323,6 +1420,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
         t.lineHeight = lineHeight * k;
         t.letterSpacing = 0;
     };
+    type(PrKitTextRole_Display, card.textSize, 1.42f * card.textSize);
     type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
     type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no friends
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
@@ -1332,11 +1430,19 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps) {
 
 bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     Look& look = *view.look;
-    if (look.textSteps == view.askedTextSteps)
-        return false;
+    const bool scaleChanged = look.textSteps != view.askedTextSteps;
+    const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
+    const bool cardChanged = look.messageCard != view.windowApp.messageCard;
+    if (!scaleChanged && !opacityChanged && !cardChanged) return false;
+    if (opacityChanged || cardChanged) {
+        look.messageCard = view.windowApp.messageCard;
+        if (opacityChanged) look.overlayOpacity = view.windowApp.overlayOpacity;
+        prUiForget(kit->ui, &look);
+    }
     look.textSteps = view.askedTextSteps;
-    PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps);
+    PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps, look.overlayOpacity, look.messageCard);
     prKitSetTheme(kit, &theme);
+    if (!scaleChanged) return true;
     if (view.terminals != nullptr)
         view.terminals->setTextScale(textScale(look.textSteps));
     if (view.board != nullptr)
@@ -1410,7 +1516,8 @@ PrStringView cutText(PrStringView text, std::size_t room) {
 }
 
 bool windowWantsFrame(const View& view) {
-    return view.look->textSteps != view.askedTextSteps || view.breathing || view.cutComing;
+    return view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
+           (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.cutComing;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {

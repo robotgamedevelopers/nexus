@@ -112,7 +112,7 @@ if(NOT WIN32)
     target_include_directories(signin_functional PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     add_dependencies(signin_functional nexus_fake_claude nexus-signin-open)
     foreach(case same_machine printed_url forwarded declined api_key stopped unguarded gate_in_use gate_v6_in_use late crashed
-                 forwarded_v6 quick_exit group)
+                 forwarded_v6 quick_exit group enrollment enrollment_failure account_spelling)
         file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/signin-${case})
         add_test(NAME signin_functional_${case}
                  COMMAND signin_functional $<TARGET_FILE:nexus_fake_claude> $<TARGET_FILE:nexus-signin-open> ${case}
@@ -216,6 +216,8 @@ tlc_test(tlc_supervisor_witness_account_cuts WSupAccountCuts WSupAccountCuts.cfg
 tlc_test(tlc_supervisor_witness_place_ignored WSupPlaceIgnored WSupPlaceIgnored.cfg action PROPERTY NoSendInOldPlace)
 tlc_test(tlc_supervisor_witness_resume_elsewhere WSupResumeElsewhere WSupResumeElsewhere.cfg action
          PROPERTY ResumesItsDir)
+tlc_test(tlc_supervisor_witness_resume_other_account WSupResumeElsewhere WSupResumeOtherAccount.cfg action
+         PROPERTY ResumesItsAccount)
 tlc_test(tlc_supervisor_witness_summary_lost WSupSummaryLost WSupSummaryLost.cfg action PROPERTY SummaryOwed)
 # The limit: a driver started without it is never kept for a limited session, and tightening stops an open turn.
 tlc_test(tlc_supervisor_witness_limit_not_retired WSupLimitNotRetired WSupLimitNotRetired.cfg invariant

@@ -1,7 +1,11 @@
 file(REMOVE_RECURSE "${ROOT}")
 file(MAKE_DIRECTORY "${ROOT}/rules" "${ROOT}/activated")
 file(COPY "${RULES}/client" DESTINATION "${ROOT}/rules")
-file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/config.json" "${ROOT}/rules/config.json")
+file(READ "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/config.json" config)
+string(JSON config SET "${config}" overlay_opacity 0.35)
+string(JSON config SET "${config}" message_card [[{"fill":"#edf2ea","ink":"#192218","text_size":38,"radius":24}]])
+string(JSON config SET "${config}" account_shortcuts [[{"Command+ArrowUp":"custom"}]])
+file(WRITE "${ROOT}/rules/config.json" "${config}")
 file(WRITE "${ROOT}/rules/client.star" [=[
 load("client/window.star", stock = "handle")
 def handle(event, state, config):
@@ -24,3 +28,35 @@ string(JSON words GET "${reply}" 0 text)
 if(NOT words STREQUAL "3 words")
     message(FATAL_ERROR "word-count fixture returned ${reply}")
 endif()
+
+# The same server executable resolves a fork-defined command and changes wrap behavior from JSON.
+file(COPY_FILE "${RULES}/server.star" "${ROOT}/rules/server.star")
+string(JSON config SET "${config}" account_navigation [[{"steps":{"custom":-1},"wrap":false}]])
+file(WRITE "${ROOT}/rules/config.json" "${config}")
+file(WRITE "${ROOT}/choice.json" [[{"current":"a","linked":["a","b"],"command":"custom"}]])
+execute_process(COMMAND "${TOOL}" preview server "${ROOT}/rules" account_command INPUT_FILE "${ROOT}/choice.json"
+    OUTPUT_VARIABLE choice OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+if(NOT choice STREQUAL "\"a\"")
+    message(FATAL_ERROR "bounded account command returned ${choice}")
+endif()
+string(JSON config SET "${config}" account_navigation wrap true)
+file(WRITE "${ROOT}/rules/config.json" "${config}")
+execute_process(COMMAND "${TOOL}" preview server "${ROOT}/rules" account_command INPUT_FILE "${ROOT}/choice.json"
+    OUTPUT_VARIABLE choice OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+if(NOT choice STREQUAL "\"b\"")
+    message(FATAL_ERROR "wrapped account command returned ${choice}")
+endif()
+
+file(WRITE "${ROOT}/new-session.json" [[{"friend":"friend","source":null,"defaults":{"account":"","instance":"","model":"","effort":""},"roster":{"linked":["a","b"],"preferred":"b","instances":[]}}]])
+foreach(mode preferred first)
+    if(mode STREQUAL "first")
+        string(JSON config SET "${config}" account_default [["first"]])
+        file(WRITE "${ROOT}/rules/config.json" "${config}")
+    endif()
+    execute_process(COMMAND "${TOOL}" preview server "${ROOT}/rules" app.new_session INPUT_FILE "${ROOT}/new-session.json"
+        OUTPUT_VARIABLE reply OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    string(JSON chosen GET "${reply}" account)
+    if((mode STREQUAL "preferred" AND NOT chosen STREQUAL "b") OR (mode STREQUAL "first" AND NOT chosen STREQUAL "a"))
+        message(FATAL_ERROR "expected ${mode} default, got ${chosen}")
+    endif()
+endforeach()

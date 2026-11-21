@@ -33,11 +33,14 @@ namespace nexus {
 struct Look {
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
+    MessageCardStyle messageCard{};
+    float overlayOpacity = style::kOverlayOpacity;
 };
 
 // The kit theme the window is drawn in: Studio's dark theme with the window's colours and type sizes (style.h) at the
 // text scale `steps` steps from 1.
-PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0);
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
+                       const MessageCardStyle& card = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
@@ -115,6 +118,7 @@ struct TranscriptItems {
     std::vector<float> height;                  // px with the gap after it, as last laid out; 0 until it is
     std::vector<std::pair<std::uint32_t, PrLayoutNode>> declared;  // the items the last round declared, and nodes
     PrLayoutNode column = kPrLayoutNodeNone;    // the transcript's column, as the last round built it
+    float cardSize = 0;                         // scaled card metrics invalidate the measured transcript heights
     float width = 0;                            // the column's width at the last layout, px
     int steps = 0;                              // the text scale the heights were laid out at
 };
@@ -128,7 +132,10 @@ struct View {
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
     WindowApplication windowApp;
     NativeTabs nativeTabs;
-    std::map<std::string, KitTabs> extensionStrips;
+    std::map<std::string, KitTabs> groupStrips;
+    std::vector<PrLayoutNode> tabNodes;
+    uint64_t tabGroupGeneration = 0;
+    uint64_t draggingTab = 0;
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
     std::string extensionProblem;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
@@ -149,6 +156,10 @@ struct View {
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    std::function<void(const std::string&)> accountCommand;
+    std::function<std::string()> accountCaption;
+    std::function<std::string()> signInCaption;  // empty when this session can receive a prompt
+    std::function<bool()> activateSignIn;        // true when sign-in consumed Enter or a card click
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
     // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.
     std::function<void()> paste;
@@ -165,6 +176,8 @@ struct View {
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
+    std::function<void(const Tab&)> dismissFriend; // local close; the server still owns the friend and session
+    std::function<void()> restoreTabLayout;      // after the effective group policy is installed
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)
@@ -174,10 +187,6 @@ struct View {
     Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
     std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
     PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
-    // The kit's tabs of the two strips: the sprint tab's, and the others'. The model owns the order and the selection;
-    // each round copies them into these, and a move the kit applies is mirrored into the model (buildWindow).
-    KitTabs pinnedTabs{prKitTabsCreate()};
-    KitTabs movableTabs{prKitTabsCreate()};
     // Each friend's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed
     // its newest entry, where it follows what arrives.
     static constexpr float kAtEnd = -1;

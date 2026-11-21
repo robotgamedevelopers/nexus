@@ -110,6 +110,27 @@ void get_info_tail(Reader& r, Info& i) {
     i.instance = r.done() ? std::string() : r.str();
 }
 
+// An optional tagged extension at the end of the driver record or session snapshot frame. A legacy ID has no
+// recorded owner. Only an explicit empty owner identifies a session created by the accountless harness.
+constexpr std::uint8_t kSessionAccount = 0xA1;
+
+void put_session_account(Writer& w, const Driver& d) {
+    if (d.session_account) {
+        w.u8(kSessionAccount);
+        w.str(*d.session_account);
+    }
+}
+
+void get_session_account(Reader& r, Driver& d) {
+    if (!r.done()) {
+        Reader extension = r;
+        if (extension.u8() == kSessionAccount) {
+            d.session_account = extension.str();
+            r = extension;
+        }
+    }
+}
+
 // A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
 void put_change(Writer& w, const Change& c) {
     if (c.kind == Change::Kind::Append) {
@@ -119,6 +140,7 @@ void put_change(Writer& w, const Change& c) {
     } else if (c.kind == Change::Kind::SetDriver) {
         put_driver(w, c.driver);
         put_driver_tail(w, c.driver);
+        put_session_account(w, c.driver);
     } else if (c.kind == Change::Kind::SetInfo) {
         put_info(w, c.info);
         put_info_tail(w, c.info);
@@ -555,6 +577,9 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             if (framed && !get_driver_tail(in, c.driver)) {
                 return unreadable(dir_, what, "a driver's summary flag is neither 0 nor 1");
             }
+            if (framed) {
+                get_session_account(in, c.driver);
+            }
         } else if (kind == std::uint8_t(Change::Kind::Dequeue)) {
             c.kind = Change::Kind::Dequeue;
         } else if (kind == std::uint8_t(Change::Kind::SetInfo) && format >= 2) {
@@ -635,6 +660,7 @@ Bytes Store::encode_snapshot() const {
         put_driver(frame, t.driver);
         put_driver_tail(frame, t.driver);
         put_info_tail(frame, t.info);
+        put_session_account(frame, t.driver);
         w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
@@ -716,6 +742,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
                 return unreadable(dir_, what, "session " + std::to_string(id) + " has a summary flag neither 0 nor 1");
             }
             get_info_tail(in, t.info);
+            get_session_account(in, t.driver);
         }
         // A framed session may go on with what a later format adds, which is skipped.
         if (framed && !framedIn.ok()) {

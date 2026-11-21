@@ -1,10 +1,11 @@
 // Which program is each friend's driver: the file `drivers` in nexus-server's directory, read at each prompt, so that
 // an edit takes effect without a restart (a driver running keeps the program it was started with; a friend the file no
-// longer names has its prompts refused with the fix). Two kinds of line, words split on spaces and tabs (no quoting),
+// longer names has its prompts refused with the fix). Three kinds of line, words split on spaces and tabs (no quoting),
 // `#` starting a comment line:
 //
 //   driver <harness> <program> [<argument>...]    the harness's driver, started with these arguments, then --cwd
 //                                                  and --resume (docs/driver-protocol.md)
+//   signin <provider> <absolute program> [<argument>...]  enrollment helper, started with --account <name>
 //   friend <name> <harness> [<directory>]         the friend's harness, and the directory it works in (--cwd): the
 //                                                  home directory unless given; a leading ~/ is the home directory
 //
@@ -28,6 +29,7 @@ struct DriverTable {
         std::string cwd;
     };
     std::map<std::string, std::vector<std::string>> drivers;  // harness: program and arguments
+    std::map<std::string, std::vector<std::string>> signins;  // provider: trusted account enrollment program
     std::map<std::string, Friend> friends;
     std::vector<std::string> errors;                           // "line <n>: <why>", one per line not understood
 };

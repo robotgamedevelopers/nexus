@@ -162,7 +162,7 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
     return text.substr(from);
 }
 
-// What goes before the prompt of a driver started afresh in another directory: the conversation's newest entries,
+// What goes before the prompt of a driver started afresh on another account or in another directory: the conversation's newest entries,
 // oldest first, within kSummaryBytes, each said whose it is. Only the turns before `prompt`: the transcript already
 // ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
 // after.
@@ -186,8 +186,8 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
         bytes += part.size();
         parts.push_back(std::move(part));
     }
-    std::string text = "[nexus: this conversation with " + friendName + " was held in another working directory, "
-        "where its harness session stays, so it starts afresh here. Its newest entries so far, oldest first:]\n";
+    std::string text = "[nexus: this conversation with " + friendName + " continues in a fresh harness session. "
+        "Its newest entries so far, oldest first:]\n";
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         text += *it;
     }
@@ -267,11 +267,10 @@ bool Drivers::listed(sync::SessionId id) const {
     return registry != nullptr && registry->friendNamed(friendOf(id)) != nullptr;
 }
 
-// The session's driver: its friend's line of the drivers file, with the session's account in place of the value its
-// command passes after `--account` (the Claude driver's: part 4 of the sign-in work gives every driver its account,
-// docs/roadmap.sexp). A command that takes an account starts for a session with one only: a session on no account (one
+// The session's driver: its friend's line of the drivers file. The supervisor binds any `--account` argument at
+// process start. A command that takes an account starts for a session with one only: a session on no account (one
 // whose friend had no signed-in account left when its own was unlinked) gets the reason and how to link one. A session
-// on an account of another provider than its friend's harness has no driver here until that provider's driver exists.
+// using a provider other than its friend's configured harness needs an account on that harness.
 ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     const std::string friendName = friendOf(id);
     DriverTable table;
@@ -321,11 +320,6 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
             held->provider + ", but " + friendName + "'s driver in " + options_.table + " is " + harness + "'s, and "
             "nexus-server has no " + held->provider + " driver for it yet, so the prompt was not sent. Set the "
             "session to one of " + friendName + "'s " + harness + " accounts.");
-    }
-    for (std::size_t i = 1; i + 1 < r.command.size(); ++i) {
-        if (r.command[i] == "--account") {
-            r.command[i + 1] = info.account;
-        }
     }
     return r;
 }
@@ -387,7 +381,7 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
 }
 
 sync::SessionInfo Drivers::defaults(const std::string& friendName) const {
-    // The drivers file names a program per friend, not a harness: every driver nexus has is Claude's, for now.
+    // A server without a roster uses the legacy harness default. A named account supplies its own provider.
     return sync::SessionInfo{friendName, sync::kDefaultHarness, {}, {}, {}};
 }
 

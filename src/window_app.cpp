@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <charconv>
 #include <cstdio>
 #include <memory>
+#include <set>
 #include <string_view>
 
 #include "pr/json.h"
@@ -49,20 +51,24 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
             !chord(stringAt(d, prJsonElement(d, row, 0)), out.key, out.modifiers))
         return false;
     const auto op = stringAt(d, prJsonElement(d, row, 1));
-    if (op == "select_tab" || op == "zoom") {
+    if (op == "select_tab" || op == "move_tab" || op == "zoom") {
         const auto arg = prJsonElement(d, row, 2);
         const double value = prJsonNumber(d, arg, 0);
         if (prJsonCount(d, row) != 3 || prJsonKind(d, arg) != PrJsonKind_Number || value != std::trunc(value) ||
-                value < (op == "zoom" ? -1024 : 0) || value > 1024)
+                value < (op == "select_tab" ? 0 : -1024) || value > 1024 ||
+                (op == "move_tab" && value != -1 && value != 1))
             return false;
-        out.command = op == "zoom" ? WindowCommand::Zoom : WindowCommand::SelectTab;
+        out.command = op == "zoom" ? WindowCommand::Zoom :
+            op == "move_tab" ? WindowCommand::MoveTab : WindowCommand::SelectTab;
         out.argument = static_cast<int>(value);
         return true;
     }
-    if (op == "open_tab") {
-        out.command = WindowCommand::OpenTab;
+    if (op == "open_tab" || op == "account_command") {
+        out.command = op == "open_tab" ? WindowCommand::OpenTab : WindowCommand::AccountCommand;
         out.type = stringAt(d, prJsonElement(d, row, 2));
-        return prJsonCount(d, row) == 3 && !out.type.empty();
+        return prJsonCount(d, row) == 3 && !out.type.empty() &&
+            (op != "account_command" || (out.type.size() <= 63 && out.type.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == std::string::npos));
     }
     if (prJsonCount(d, row) != 2) return false;
     if (op == "open_terminal") out.command = WindowCommand::OpenTerminal;
@@ -74,12 +80,118 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
     return true;
 }
 
-bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, std::vector<Shortcut>& keys,
-    std::vector<Panel>& panels, std::map<std::string, TabType>& types, std::string& label, std::string& why) {
+bool groupName(std::string_view name) {
+    return !name.empty() && name.size() <= 64 && std::none_of(name.begin(), name.end(),
+        [](unsigned char c) { return c < 32 || c == 127; });
+}
+
+bool readGroups(const PrJson* d, const std::map<std::string, TabType>& types, std::vector<TabGroup>& groups,
+        std::optional<bool>& closable, std::string& why) {
+    const auto rows = prJsonMember(d, 0, {"tab_groups", 10});
+    if (rows == kPrJsonMissing) return true; // original window applications used close_terminal and close_tab
+    const auto mayClose = prJsonKind(d, prJsonMember(d, 0, {"closable", 8}));
+    if (prJsonKind(d, rows) != PrJsonKind_Array || prJsonCount(d, rows) > 256 ||
+            (mayClose != PrJsonKind_False && mayClose != PrJsonKind_True)) {
+        why = "return up to 256 tab_groups and a boolean closable for the active tab";
+        return false;
+    }
+    closable = mayClose == PrJsonKind_True;
+    std::set<std::string> members{"friend", "terminal", "sprint"}, ids;
+    for (const auto& type : types) {
+        if (!members.insert(type.first).second) {
+            why = "tab type conflicts with a native type: " + type.first;
+            return false;
+        }
+    }
+    for (uint32_t i = 0; i < prJsonCount(d, rows); ++i) {
+        const auto row = prJsonElement(d, rows, i);
+        TabGroup group;
+        group.id = stringAt(d, prJsonMember(d, row, {"id", 2}));
+        const auto flag = prJsonKind(d, prJsonMember(d, row, {"closable", 8}));
+        if (!groupName(group.id) || !ids.insert(group.id).second ||
+                (flag != PrJsonKind_True && flag != PrJsonKind_False)) {
+            why = "tab groups need a unique id and a boolean closable";
+            return false;
+        }
+        group.closable = flag == PrJsonKind_True;
+        const auto list = prJsonMember(d, row, {"types", 5});
+        const auto from = prJsonMember(d, row, {"accepts_from", 12});
+        if (prJsonKind(d, list) != PrJsonKind_Array || (from != kPrJsonMissing &&
+                (prJsonKind(d, from) != PrJsonKind_Array || prJsonCount(d, from) > 256))) {
+            why = "group types and accepts_from must be lists";
+            return false;
+        }
+        for (uint32_t j = 0; j < prJsonCount(d, list); ++j) {
+            std::string type(stringAt(d, prJsonElement(d, list, j)));
+            if (!members.erase(type)) {
+                why = "unknown or repeated tab group member: " + type;
+                return false;
+            }
+            group.types.push_back(std::move(type));
+        }
+        for (uint32_t j = 0; j < prJsonCount(d, from); ++j)
+            group.acceptsFrom.emplace_back(stringAt(d, prJsonElement(d, from, j)));
+        groups.push_back(std::move(group));
+    }
+    if (!members.empty()) {
+        why = "tab_groups must assign every type, including " + *members.begin();
+        return false;
+    }
+    for (const auto& group : groups)
+        for (const auto& source : group.acceptsFrom)
+            if (!ids.count(source)) {
+                why = "accepts_from names an unknown group: " + source;
+                return false;
+            }
+    return true;
+}
+
+bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
+    card = {};
+    if (obj == kPrJsonMissing) return true;
+    if (prJsonKind(d, obj) != PrJsonKind_Object) return false;
+    auto color = [&](PrStringView name, unsigned& value) {
+        const auto field = prJsonMember(d, obj, name);
+        if (field == kPrJsonMissing) return true;
+        auto text = stringAt(d, field);
+        if (text.size() != 7 || text.front() != '#') return false;
+        const auto end = text.data() + text.size();
+        const auto parsed = std::from_chars(text.data() + 1, end, value, 16);
+        return parsed.ec == std::errc{} && parsed.ptr == end;
+    };
+    auto points = [&](PrStringView name, float& value, double min, double max) {
+        const auto field = prJsonMember(d, obj, name);
+        if (field == kPrJsonMissing) return true;
+        const double n = prJsonNumber(d, field, -1);
+        if (prJsonKind(d, field) != PrJsonKind_Number || !(min <= n && n <= max)) return false;
+        value = static_cast<float>(n);
+        return true;
+    };
+    return color({"fill", 4}, card.fill) && color({"ink", 3}, card.ink) &&
+        points({"text_size", 9}, card.textSize, 12, 72) && points({"radius", 6}, card.radius, 0, 64);
+}
+
+bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card, std::vector<Shortcut>& keys,
+    std::vector<Panel>& panels, std::map<std::string, TabType>& types, std::vector<TabGroup>& groups,
+    std::optional<bool>& closable, std::string& label, float& overlayOpacity, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
         return false;
+    const auto opacity = prJsonMember(d, 0, {"overlay_opacity", 15});
+    if (!readMessageCard(d, prJsonMember(d, 0, {"message_card", 12}), card)) {
+        why = "message_card needs #RRGGBB fill and ink, text_size from 12 to 72, and radius from 0 to 64";
+        return false;
+    }
+    overlayOpacity = style::kOverlayOpacity;
+    if (opacity != kPrJsonMissing) {
+        const double alpha = prJsonNumber(d, opacity, -1);
+        if (!std::isfinite(alpha) || alpha < 0 || alpha > 1) {
+            why = "overlay_opacity must be a number from 0 to 1";
+            return false;
+        }
+        overlayOpacity = static_cast<float>(alpha);
+    }
     const auto rows = prJsonMember(d, 0, {"shortcuts", 9});
     const auto list = prJsonMember(d, 0, {"panels", 6});
     if (prJsonKind(d, rows) != PrJsonKind_Array || prJsonKind(d, list) != PrJsonKind_Array ||
@@ -99,6 +211,12 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         };
         const auto id = field("id");
         TabType spec{field("title"), field("group"), field("native"), field("service")};
+        const auto mayClose = prJsonMember(d, row, {"closable", 8});
+        if (mayClose != kPrJsonMissing && prJsonKind(d, mayClose) != PrJsonKind_True &&
+                prJsonKind(d, mayClose) != PrJsonKind_False) {
+            why = "tab type closable must be a boolean";
+            return false;
+        }
         if (id.empty() || id.size() > 64 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") != id.npos ||
                 spec.group.empty() || spec.group.size() > 64 || spec.title.empty() || spec.title.size() > 128 ||
                 !types.emplace(id, std::move(spec)).second) {
@@ -106,6 +224,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
             return false;
         }
     }
+    if (!readGroups(d, types, groups, closable, why)) return false;
     for (uint32_t i = 0; i < prJsonCount(d, rows); ++i) {
         Shortcut binding{};
         if (!shortcut(d, prJsonElement(d, rows, i), binding) || std::any_of(keys.begin(), keys.end(),
@@ -126,6 +245,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         else if (name == "terminal" && tab == "terminal") panel = Panel::Terminal;
         else if (name == "transcript" && (tab == "friend" || tab == "empty")) panel = Panel::Transcript;
         else if (name == "prompt" && tab == "friend" && promptOpen) panel = Panel::Prompt;
+        else if (name == "account" && tab == "friend") panel = Panel::Account;
         else if (name == "status") panel = Panel::Status;
         else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
         else if (name == "native" && tab == "extension") panel = Panel::Native;
@@ -146,25 +266,42 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 } // namespace
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
-    bool hasStatus) {
+    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group) {
+    std::string escapedGroup;
+    for (const char c : group) {
+        if (c == '\\' || c == '"') escapedGroup += '\\';
+        escapedGroup += c;
+    }
     const auto context = std::string("{\"tab\":\"") + tab + "\",\"type\":\"" + type + "\",\"prompt_open\":" + (promptOpen ? "true" : "false") +
-        ",\"has_status\":" + (hasStatus ? "true}" : "false}");
+        ",\"has_status\":" + (hasStatus ? "true" : "false") + ",\"active_tab\":" + std::to_string(activeTab) +
+        ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
     const bool sameContext = context == lastContext_;
     const auto generation = host.refresh();
     if (sameContext && generation == generation_) return;
     lastContext_ = context;
     generation_ = generation;
     std::string why;
+    MessageCardStyle card;
     std::vector<Shortcut> keys;
     std::vector<Panel> parts;
     std::map<std::string, TabType> registrations;
+    std::vector<TabGroup> layout;
+    std::optional<bool> mayClose;
     std::string caption;
+    float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, keys, parts, registrations, caption, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
+        if (generation != appliedGeneration_ || groups != layout || types != registrations)
+            ++layoutGeneration;
+        appliedGeneration_ = generation;
         shortcuts = std::move(keys);
         panels = std::move(parts);
         types = std::move(registrations);
+        groups = std::move(layout);
+        closable = mayClose;
         label = std::move(caption);
+        overlayOpacity = opacity;
+        messageCard = card;
     } else {
         std::fprintf(stderr, "nexus: window application: %s. Check client/window.star and apply again.\n", why.c_str());
         if (sameContext)
@@ -172,17 +309,32 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         keys.clear();
         parts.clear();
         registrations.clear();
+        layout.clear();
+        mayClose.reset();
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, keys, parts, registrations, caption, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
             keys.clear();
             parts.clear();
+            registrations.clear();
+            layout.clear();
+            mayClose.reset();
         }
         shortcuts = std::move(keys);
         panels = std::move(parts);
-        types = std::move(registrations);
+        if (appliedGeneration_) {
+            // Keep the last accepted layout across a rejected edit. Its previous
+            // active-tab permission cannot authorize closing a different tab.
+            closable = false;
+        } else {
+            types = std::move(registrations);
+            groups = std::move(layout);
+            closable = mayClose;
+        }
         label = std::move(caption);
+        overlayOpacity = opacity;
+        messageCard = card;
     }
 }
 } // namespace nexus

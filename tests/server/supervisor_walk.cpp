@@ -632,7 +632,8 @@ private:
           << ", activity |-> " << str(activityName(activity())) << ", dir |-> " << str(dirName(s.cwd()))
           << ", absent |-> " << ((fault_ == Fault::Remove ? absent_ : !s.present()) ? "TRUE" : "FALSE")
           << ", here |-> " << (s.here() ? "TRUE" : "FALSE") << ", ddir |-> " << str(dirName(s.driverCwd())) << ", sdir |-> "
-          << str(dirName(s.state().sessionDir)) << ", summary |-> " << (s.state().summary ? "TRUE" : "FALSE")
+          << str(dirName(s.state().sessionDir)) << ", owner |-> " << str(s.state().sessionAccount.value_or(""))
+          << ", summary |-> " << (s.state().summary ? "TRUE" : "FALSE")
           << ", lim |-> " << (s.limited() ? "TRUE" : "FALSE") << ", dlim |-> " << (s.driverLimited() ? "TRUE" : "FALSE")
           << ", switches |-> " << switches_ << "]";
         return o.str();

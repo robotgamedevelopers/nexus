@@ -41,7 +41,9 @@ fn defaults(side: &str) -> Result<Bundle> {
             .filter(|(name, _)| *name != other)
             .map(|(name, text)| (name.to_string(), text.to_string()))
             .collect(),
-        config: serde_json::from_str(include_str!("../../rules/config.json"))?,
+        // A server without an applied fork profile keeps the behavior of an absent setting.
+        // The shipped profile's config.json is applied explicitly alongside its modules.
+        config: serde_json::json!({}),
     })
 }
 

@@ -37,10 +37,8 @@ PrStringView view(const std::string& s) {
 
 } // namespace
 
-PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window, bool overlay)
+PraxTerminals::PraxTerminals(PrKit* kit, PrFontSet* fonts, PrApp* app, PrAppWindow* window)
     : kit_(kit), fonts_(fonts), app_(app), window_(window),
-      background_{channel(style::kBackground.r), channel(style::kBackground.g), channel(style::kBackground.b),
-          channel(overlay ? style::kOverlayOpacity : 1.0f)},
       launcher_(prProcessLauncherCreate(PrProcessBackend_Default)), thread_([this] { run(); }) {}
 
 PraxTerminals::~PraxTerminals() {
@@ -462,12 +460,14 @@ void PraxTerminals::close(std::size_t id) {
 // Sets the screen's background colour to the window's if it is not, under the screen's lock. Returns true if it was
 // not: Prax set it from the kit's theme (the terminal's first frame, or a palette change).
 bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
+    const auto canvas = kit_->theme.palette.bg0;
+    const PrColor8 background{channel(canvas.r), channel(canvas.g), channel(canvas.b), channel(canvas.a)};
     PrVterm* vterm = prTerminalVtermLock(terminal);
     PrColor8 now = prVtermRoleColor(vterm, PrVtermColorRole_Background);
-    bool changed = now.r != background_.r || now.g != background_.g || now.b != background_.b ||
-        now.a != background_.a;
+    bool changed = now.r != background.r || now.g != background.g || now.b != background.b ||
+        now.a != background.a;
     if (changed) {
-        prVtermRoleSetColor(vterm, PrVtermColorRole_Background, background_);
+        prVtermRoleSetColor(vterm, PrVtermColorRole_Background, background);
     }
     prTerminalVtermUnlock(terminal);
     return changed;

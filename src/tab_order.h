@@ -51,6 +51,41 @@ TabOrderStore fileTabOrderStore();
 // The store in a file at `path`, written atomically (Prax's prFileWrite: a file beside it, then a rename).
 TabOrderStore fileTabOrderStore(std::string path);
 
+// One atomic layout across tab kinds. Friends and the sprint board have intrinsic keys. Local instances receive
+// persistent keys on creation so two terminals in the same directory and two tabs of the same type stay distinct.
+struct LayoutTab {
+    std::string key, group, detail;  // detail is a terminal's directory or an extension's registered type
+    bool operator==(const LayoutTab&) const = default;
+};
+struct SavedLayout {
+    std::string selected;
+    std::vector<LayoutTab> tabs;
+    bool operator==(const SavedLayout&) const = default;
+};
+TabOrderStore fileLayoutStore();
+std::string formatLayout(const SavedLayout& layout);
+bool parseLayout(std::string_view text, SavedLayout* layout);
+
+class TabLayout {
+public:
+    explicit TabLayout(SavedLayout saved = {});
+    const SavedLayout& saved() const { return saved_; }
+    std::vector<std::pair<std::size_t, std::string>> reopenTerminals(Model& model);
+    // Registers extensions only after their type becomes available. Restores order under the active fork's movement
+    // rules and preserves focus by logical key, including a friend that arrives after startup.
+    void restore(Model& model, const std::function<bool(const std::string&, std::string*, std::string*)>& type,
+                 bool friendsKnown);
+    void personSelected() { pending_.clear(); }
+    void capture(const Model& model, const std::vector<std::string>& directories, bool friendsKnown);
+
+private:
+    std::string keyOf(const Tab& tab);
+    SavedLayout saved_;
+    std::string pending_;
+    std::map<std::size_t, std::string> localKeys_;
+    std::size_t serial_ = 0;
+};
+
 // The names the store saved, in order: none if nothing is saved, and on an unreadable or malformed file, with `warning`
 // one line naming the file, what was wrong and that deleting it resets the order. The window reads them before it
 // shows and orders the server's friends by them as they arrive (sync/client.h applyFriends).

@@ -50,6 +50,13 @@ set(e2e_tests link_e2e_loopback link_e2e_outage link_e2e_soak link_e2e_restart l
     link_e2e_secret link_e2e_friends link_e2e_signin link_e2e_signin_leaky link_e2e_takeover)
 set(e2e_dirs ${e2e_dir}-loopback ${e2e_dir}-outage ${e2e_dir}-soak ${e2e_dir}-restart ${e2e_dir}-older
     ${e2e_dir}-flush ${e2e_dir}-secret ${e2e_dir}-friends ${e2e_dir}-signin ${e2e_dir}-leaky ${e2e_dir}-takeover)
+find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME link_e2e_private_signin COMMAND link_e2e ${server} ${e2e_dir}-private-signin private-signin
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/private_signin.py)
+    list(APPEND e2e_tests link_e2e_private_signin)
+    list(APPEND e2e_dirs ${e2e_dir}-private-signin)
+endif()
 if(NEXUS_E2E_TAILNET)
     add_test(NAME link_e2e_tailnet COMMAND link_e2e ${server} ${e2e_dir}-tailnet roundtrip ${NEXUS_E2E_TAILNET}
         $<TARGET_FILE:nexus_fake_driver>)

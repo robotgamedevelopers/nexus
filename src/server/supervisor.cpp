@@ -350,8 +350,9 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
             held_ = true;
         }
     } else if (const Session* s = std::get_if<Session>(&message)) {
-        if (state_.session != s->id || state_.sessionDir != driverCwd_) {
+        if (state_.session != s->id || state_.sessionDir != driverCwd_ || state_.sessionAccount != driverAccount_) {
             state_.session = s->id;
+            state_.sessionAccount = driverAccount_;
             state_.sessionDir = driverCwd_;     // the harness keeps it by directory: resumed only there
             out_.durable = true;
         }
@@ -584,23 +585,39 @@ void Supervisor::startDriver(Millis now) {
     if (phase_ != Phase::None || state_.waiting.empty() || held_ || down_ || !config_.here || !config_.present) {
         return;
     }
-    // The harness keeps its sessions by directory: one made in another directory (the session's instance moved) is
-    // dropped, and the driver starts afresh; when the conversation has turns, its first send carries a summary of them.
-    // A session from before its directory was kept (none recorded) is resumed.
-    if (!state_.session.empty() && !state_.sessionDir.empty() && state_.sessionDir != config_.cwd) {
+    // A harness resume ID belongs to the account that reported it. A legacy ID with no recorded owner
+    // cannot be attributed after an earlier account switch. Seed a fresh session from the Nexus transcript.
+    const bool accountChanged = state_.sessionAccount != config_.account;
+    const bool dirChanged = !state_.sessionDir.empty() && state_.sessionDir != config_.cwd;
+    if (!state_.session.empty() && (accountChanged || dirChanged)) {
         const bool turns = state_.nextTurn > 1;
         if (turns) {
-            effect(Effect::What::Notice, config_.name + " now works in " + config_.cwd + ", and the conversation "
-                "so far was held in " + state_.sessionDir + ", where it cannot be resumed from here: " + config_.name +
+            std::string reason;
+            if (accountChanged) {
+                reason = state_.sessionAccount ? "The previous harness session belongs to a different account. " :
+                    "The previous harness session has no recorded account. ";
+            } else {
+                reason = config_.name + " now works in " + config_.cwd + ", and the conversation so far was held in " +
+                    state_.sessionDir + ", where it cannot be resumed from here: ";
+            }
+            effect(Effect::What::Notice, reason + config_.name +
                 " starts afresh, given a summary of it with the next prompt.");
         }
         state_.session.clear();
         state_.sessionDir.clear();
+        state_.sessionAccount.reset();
         state_.summary = state_.summary || turns;
         out_.durable = true;
     }
     std::vector<std::string> argv = config_.command;
     if (!argv.empty()) {        // none configured: the start fails, as no program is configured
+        // A queued prompt can start as settings are applied. Bind the argument from the same account we record
+        // as the owner of this process, even if the previous resolved command named a different account.
+        for (std::size_t i = 1; i + 1 < argv.size(); ++i) {
+            if (argv[i] == "--account") {
+                argv[++i] = config_.account;
+            }
+        }
         argv.insert(argv.end(), {"--cwd", config_.cwd});
         if (!state_.session.empty()) {
             argv.insert(argv.end(), {"--resume", state_.session});
@@ -649,7 +666,7 @@ void Supervisor::writeNext() {
     }
     // prompt() refused any prompt that does not encode, and a turn number's digits cannot push a prompt within the
     // hub's text limit past the line limit, so this line is always whole.
-    // After a move to another directory, the first send carries the summary before the prompt.
+    // After dropping a harness session, the first send carries the summary before the prompt.
     const std::string summary = state_.summary && config_.summarize ? config_.summarize(state_.waiting.front()) :
         std::string();
     if (state_.summary) {

@@ -7,8 +7,8 @@ with the commands below.
 
 ## What they are
 
-- An **account** is one login with one **provider**: the harness its sessions run (`claude` today; others as their
-  drivers come). It is set up on its own, by name.
+- An **account** is one login with one **provider**: the harness its sessions run. Set up each login under its own stable
+  name. Several accounts can have the same provider.
 - A **friend** is who you talk to in a tab. A friend links to any number of accounts, of any providers, in an order,
   and one of them may be its **default**. An account may serve any number of friends.
 - An **instance** of a friend is that friend on one machine, working from one directory: `rowan` on `studio` in
@@ -24,7 +24,7 @@ with the commands below.
   reach the windows, so a window can show a tab per friend or per instance, as its own config says.
 - A **session** (a conversation with a friend) runs on one of its friend's linked accounts, or on none (the harness's
   own login). A new session takes the account of the session it copies when that account is linked to its friend,
-  else the friend's default. A session's harness is its account's provider, so switching a session's account can
+  else the account selected by the server profile as described below. A session's harness is its account's provider, so switching a session's account can
   switch harness.
 - When a session's account reaches its usage limit, the shipped server policy picks the friend's next signed-in linked account,
   in link order, and tells the session. If there is none, the session is told that too, and stays.
@@ -57,7 +57,7 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 
 `nexus-server config path` prints the directory and both files. (With `--dir DIR`, they are under `DIR/nexus-config/`.)
 
-**No secret ever goes in these files.** They hold names only. Each account's login lives in
+**No secret ever goes in these files.** They hold account and friend configuration. Each account's login lives in
 `~/.nexus/server/accounts/<name>/` (a 0700 directory of 0600 files), outside this directory, and is set up by the
 in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
 the server's sign-in check and the drivers read the one path (`src/server/home.h`, `accountsDir`).
@@ -79,22 +79,30 @@ the AI: they hold no secret.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "accounts": [
     {
       "name": "work",
+      "label": "Work",
+      "email": "work@example.org",
+      "sign_in_on_use": true,
       "provider": "claude",
       "billing": "subscription"
     },
     {
       "name": "home",
+      "label": "Personal",
+      "sign_in_on_use": true,
       "provider": "claude",
       "billing": "subscription"
     },
     {
       "name": "codex-main",
       "provider": "codex",
-      "billing": "api"
+      "billing": "subscription",
+      "label": "work",
+      "email": "dev@example.com",
+      "sign_in_on_use": true
     }
   ]
 }
@@ -102,13 +110,45 @@ the AI: they hold no secret.
 
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
-| `version` | top | yes | the whole number `2` (see Versions) |
+| `version` | top | yes | the whole number `2` or `3` (see Versions) |
 | `accounts` | top | yes | a list of accounts, in any order you like; `[]` for none |
 | `name` | each account | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the accounts |
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
 | `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); a friend on an `api` account is always limited (friends.json's `limit`) |
+| `label` | each account | no | Short display text for the account picker. Up to 254 UTF-8 bytes without ASCII control characters. An omitted or empty label displays the stable account name. |
+| `email` | each account | no | Descriptive email for the login, kept in server config. It is independent of sign-in and stays out of the picker. Up to 254 UTF-8 bytes without ASCII control characters. |
+| `sign_in_on_use` | each account | no (`false`) | `true` defers sign-in until the account is selected or needs its driver. Opening the overlay leaves unused accounts alone. |
 
 The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
+
+### Using two logins with one provider
+
+The example above declares two Claude logins, `work` and `home`. Add each name once to
+`accounts.json`. In `friends.json`, add both to the friend's `accounts` list in the order
+you want to cycle them. Run `nexus-server config check` and
+`nexus-server config reload`. The same provider driver handles both logins. Each has its own
+sign-in and private account directory. Keep an enrolled account's name when adding another login.
+
+In the stock client, open the friend's tab. Press **⌘↓** for the next linked account or **⌘↑** for
+the previous one. Both wrap in the order listed for that friend. The server remembers the selected
+account on that session, including after a reconnect. Other sessions of the same friend keep their
+own accounts, and a new session copied from this one inherits its account if it is still linked.
+
+When the selected account needs a login, press **Enter** in the prompt or click **Sign in to**
+above it. This opens the selected account’s browser flow. An empty prompt works. Any draft
+stays in the composer through sign-in. Press **Enter** again after sign-in to send it.
+
+For a fresh session, the shipped server profile sets `"account_default": "first"` in its `config.json`
+and starts on the first linked account for that friend. Set `account_default` to `"preferred"` to
+use that friend's explicit `default` in `friends.json`. Existing profiles that omit the option
+also use the explicit default.
+
+Switching the active Nexus session keeps its transcript. A turn already running finishes on its
+original account. The first prompt on the new account starts a fresh harness session with recent
+entries from the transcript. Later starts on that same account and working directory can resume
+its harness session. A return to the first account after a turn on the second starts fresh with the
+updated transcript. The same rules apply when usage-limit policy switches accounts automatically.
+On the first start after upgrading, an older harness ID with no recorded owner also starts fresh.
 
 ## friends.json
 
@@ -189,8 +229,11 @@ session that names no instance while its friend has some belongs to the friend's
 session whose friend has no instances (every one removed, say) works here, in the directory of its friend's line in the
 drivers file. A file that is empty or missing means none.
 
-The limit of 256 friends is worked out from the largest change the server sends a window (4 MiB): 256 names of at most
-64 bytes are about 20 KiB with their framing, well inside it. It is not a measured number.
+A registry can list up to 256 friends. The complete friend and account picker list must fit in 3 MiB
+on the wire and 12 MiB when decoded. This leaves one quarter of each snapshot limit for conversations,
+requests and sign-in offers. An account name and label are included once for each friend who links
+that account. Shortening a shared label or removing unused links can bring an oversized roster back
+under the limit. A rejected reload keeps the running configuration.
 
 Taking a friend out of the file (and running `nexus-server config reload`) stops its work in every one of its sessions,
 as a stop in the window would: a turn running is stopped, and then its driver is ended. Each such session gets one
@@ -388,7 +431,8 @@ that account's directory on the server it was pasted into, and used only for tha
 | provider | what is stored | how long it lasts | renewed by | what nexus does | sources |
 |---|---|---|---|---|---|
 | `claude` | `oauth-token`: the token `claude setup-token` prints, for the account's Claude subscription | one year from when it was made | nothing: it has no refresh token; a person runs `claude setup-token` again | built: counts the year from the file's time, tells the account's sessions 30, 7 and 1 days ahead, and on the day asks for a new one in the window, saying why | code.claude.com/docs/en/authentication ("Generate a long-lived token": one year, no refresh); code.claude.com/docs/en/errors ("OAuth token has expired", "OAuth token revoked") |
-| codex (ChatGPT sign-in) | `~/.codex/auth.json`: access, ID and refresh tokens | access tokens are short; the CLI refreshes about every 8 days and on a 401, and the refresh token rotates | the Codex CLI itself; `codex login --device-auth` signs in without a browser on the machine | [Codex adapter](../drivers/rpc/README.md) available; in-app enrollment and login-life integration pending | the Codex authentication docs; openai/codex `codex-rs/core/src/auth.rs` |
+| `codex` | ChatGPT browser grant in the account’s private Codex home | managed by the Codex CLI | Codex | Nexus enrolls the named account with device authorization and verifies its subscription on every turn | [Codex adapter](../drivers/rpc/README.md) |
+| `antigravity`, `grok`, `muse` | browser grant in the named account’s private harness home | managed by the vendor CLI | the corresponding CLI | Nexus opens a private enrollment page, verifies the account’s receipt on restart and checks subscription access before sending a prompt | [Harness drivers](../drivers/rpc/README.md) |
 | gemini (Google sign-in) | `oauth_creds.json`: access and refresh tokens | access tokens about an hour | google-auth-library refreshes them from the refresh token, unattended | roadmap (`login-life-gemini`): no gemini driver yet | geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli `packages/core/src/code_assist/oauth2.ts` |
 | an API key (Anthropic Console, OpenAI, Gemini, xAI) | the key | until it is revoked; an xAI key may carry an optional expiry chosen when it is made | nothing needed | roadmap (`login-life-api-keys`): no provider of nexus stores a key yet | each provider's key docs (docs.x.ai for the optional expiry) |
 
@@ -431,6 +475,9 @@ Version 2 added `billing` (accounts.json) and `limit` (friends.json). A version 
 by subscription and every friend it held when committed **not** limited, as it ran before (a friend added by hand to a
 version 1 file while the edit is pending reads limited: it never ran), and the upgrade writes each friend's `"limit"`
 and each account's `"billing": "subscription"` into the files, so that the choice is plain to see and to change.
+
+Nexus writes accounts.json as version 3 when an account has a display label or email, or enables `sign_in_on_use`.
+A registry that uses none of these options is written as version 2. The friends file continues to use version 2.
 
 **A downgrade drops the limit for everyone.** An older nexus-server refuses the version 2 files, so it holds no
 accounts and no friends, and its Claude driver has no limit: every session it runs is unlimited. Do not run an older

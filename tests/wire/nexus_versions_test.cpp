@@ -272,6 +272,14 @@ void test_signin() {
     CHECK(skipped.unknown == 2);    // the skipped field counts once for each flow it holds (measured: 1 for one flow)
     CHECK(skipped.sessions == 1 && skipped.friendName == "rowan" && (skipped.kinds == Names{"Person"}));
     CHECK((skipped.requests == Ids{3}));
+    // An older reader which predates the roster still loads the transcript and requests when
+    // the new server includes nested named account choices and labels.
+    Sessions withRoster = server;
+    withRoster.setFriends({{"rowan", {{"work", "Writing"}, {"home", ""}}}});
+    const auto earlier = wiretest::prevReadSessions(bytes(withRoster.init_diff()));
+    CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
+    CHECK(earlier.sessions == skipped.sessions && earlier.friendName == skipped.friendName);
+    CHECK(earlier.requests == skipped.requests && earlier.kinds == skipped.kinds);
     // What this server sends on the link of 4: no flows at all, so nothing unknown; the requests as before.
     Sessions onLink = server;
     onLink.setFormat(link);

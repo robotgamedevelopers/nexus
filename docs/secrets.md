@@ -207,6 +207,22 @@ dropped. A secret the person pasted is still stored.
 The deadline is 10 minutes from the ask. That number is a guess, not a measurement: long enough to find a key in a
 provider's console, short enough that a forgotten request does not hold an asker's turn open for long.
 
+## Browser sign-in for Codex, Antigravity, Grok and Muse
+
+Each account has a separate directory under `~/.nexus/server/harness/<provider>/<account>/`.
+The server reads the provider's `signin` command from its drivers file and supplies
+the selected account name. The window connected to that server over loopback opens
+the helper's one-time local page in the user's browser. The provider's device link,
+code or pasted response stays in that browser flow. The window claims a flow and
+opens its page through the existing sign-in protocol.
+
+The server accepts a successful helper exit for the current flow only after it
+verifies the account's owner-only enrollment receipt. That receipt contains the
+provider name. Each adapter separately checks subscription access before sending
+a prompt. The account ID selects the credential directory. Its short label and
+email are descriptive configuration that can change independently of that ID.
+See [the driver configuration](../drivers/rpc/README.md) for the launch contract.
+
 ## Sign-in: a claude account, in the browser
 
 The owner's rulings: nexus runs on Claude subscriptions; a claude account is signed in from inside

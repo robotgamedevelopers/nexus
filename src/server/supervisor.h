@@ -77,7 +77,7 @@ struct Config {
     std::string model;                  // the session's model and effort, written with each send (empty: the
     std::string effort;                 // harness's default)
     std::string account;                // the session's account: a driver runs under the one it was started with
-    // What goes before the prompt of the first send after the session moved to another directory, where its harness
+    // What goes before the prompt of the first send after the session changed account or directory, where its harness
     // session cannot be resumed: a summary of the conversation so far (Drivers gives it from the transcript). Called
     // only then, with the prompt it goes before (already the transcript's, which the summary leaves out); unset,
     // nothing goes before it.
@@ -190,10 +190,9 @@ public:
     // The session's instance changed (sync::Hub settles it, or a reload moved it): its directory is `cwd`, and `here`
     // says whether it is on this server's machine. A driver started in another directory, or any driver once the
     // instance is elsewhere, is ended quietly once no turn is open, like an account change; the next starts in `cwd`.
-    // The harness keeps its sessions by directory (the state's sessionDir): in the same directory the next driver
-    // resumes the harness session; in another it is dropped, and the next driver starts afresh, its first send
-    // carrying a summary of the conversation so far (Config::summarize), with a notice. While not here, no queued
-    // prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
+    // The harness keeps its sessions by directory and account. When either changes, the next driver starts afresh,
+    // its first send carrying a summary of the conversation so far (Config::summarize), with a notice. While not here,
+    // no queued prompt is taken, no driver is started, and the friend shows down unless a turn runs on.
     Output setPlace(std::string cwd, bool here, Millis now);
     // The session's limit changed (its friend's "limit", accounts::limitedFor): a driver started under the other one is
     // ended quietly once no turn is open, like a change of place (an open turn runs to its end first); the next starts

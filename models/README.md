@@ -309,6 +309,7 @@ Reversed witnesses (`witnesses/WSup*.tla`), each rejected by TLC:
 | `WSupNoDriverIdle` | the cursor's activity forgets that the friend has no driver configured, so a friend whose driver the drivers file lost shows idle | `NoDriverShowsDown` |
 | `WSupPlaceIgnored` | a driver started in the instance's old directory is kept after the instance moves, and given the next prompt | `NoSendInOldPlace` |
 | `WSupResumeElsewhere` | a driver started in another directory than its harness session's resumes that session | `ResumesItsDir` |
+| `WSupResumeElsewhere` (other-account case) | a driver receives a resume ID issued to another account | `ResumesItsAccount` |
 | `WSupSummaryLost` | a harness session dropped for a move is dropped without owing a summary | `SummaryOwed` |
 | `WSupLimitNotRetired` | a driver started without the limit is kept after the session is limited (the retire drops its limit check), and given the next prompt | `NeverWeaker` |
 | `WSupLimitNoStop` | tightening the limit under an open turn on a driver started without it does not stop the turn | `NeverWeaker` |

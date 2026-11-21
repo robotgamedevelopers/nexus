@@ -1,7 +1,9 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nexus {
@@ -14,14 +16,19 @@ enum class EntryKind { Person, Friend, Notice, Tool };
 
 struct Entry { EntryKind kind; std::string text; };
 
-// What a tab is. The sprint tab, when the model has one, is first and never moves or closes; friend tabs come and go
-// with the server's friend list (add_friend, remove_friend) and are never closed by the person; terminal tabs come and
-// go.
+// Native presentation and lifecycle. The active fork separately assigns each tab type to a group.
 enum class TabKind { Sprint, Friend, Terminal, Extension };
 
-// The zone a tab of `kind` stands in: the strip holds the zones in ascending order, and a tab moves only inside its own.
-// The sprint tab is zone 0, alone; friends are zone 1 and terminals zone 2.
+// The built-in order used by older window descriptions without tab groups.
 int zone(TabKind kind);
+
+struct TabGroup {
+    std::string id;
+    std::vector<std::string> types{};
+    bool closable = false;
+    std::vector<std::string> acceptsFrom{};
+    bool operator==(const TabGroup&) const = default;
+};
 
 struct Tab {
     std::size_t id;     // who the tab is, wherever it stands, never reused: a friend's place in the constructor's list;
@@ -35,6 +42,7 @@ struct Tab {
     TabKind kind = TabKind::Friend;
     std::string type{};
     std::string group{};
+    std::string declaredGroup{};  // the plugin default when an older fork provides no tab_groups
 };
 
 class Model {
@@ -59,13 +67,20 @@ public:
                                       // transcript or a draft.
     bool append(std::size_t i, Entry e);         // false and no change unless i is a friend's tab
     bool move_tab(std::size_t from, std::size_t to); // false and no change unless both < tab_count() and the tabs at
-                                                     // `from` and `to` are in the same zone; else the tab at `from`
+                                                     // the destination group accepts the move; else the tab at `from`
                                                      // ends at `to`, the tabs between shift by one, everything the tab
                                                      // holds goes with it, and active() follows its friend
+    std::uint64_t layout_revision() const { return layoutRevision_; }
+    // Reconcile a newly loaded group description, preserving active identity and permitted instance moves.
+    bool set_tab_groups(const std::vector<TabGroup>& groups);
+    bool move_to_group(std::size_t from, const std::string& group, std::size_t slot);
+    // Saved ids with their destination group, in saved order. Only groups reachable under the active fork are restored.
+    void restore_tab_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered);
     std::size_t open_extension(std::string type, std::string group, std::string title);
     bool edit_extension(std::size_t i, std::string text);
     std::size_t add_terminal();  // appends a terminal tab at the end, makes it active (its id at the end of
                                  // selection_history()), returns its new id
+    bool dismiss_tab(std::size_t i); // window policy authorized closing this tab; preserves selection history
     bool close_tab(std::size_t i); // a terminal's tab: removes it, the tabs after shift left, its id leaves
                                    // selection_history(), true; the sprint tab, a friend's tab or i >= tab_count(): false,
                                    // no change. If it was active, the tab selected before it is active: the last id left
@@ -100,6 +115,16 @@ protected:
     bool sendable(std::size_t i) const;
     void touch(std::size_t id);     // Window.tla's Touch: id at the end of history_, and nowhere else
     void remove_at(std::size_t i);  // the tab at i out, by Window.tla's Removed, Forget and ClosedActive
+    std::string home_group(TabKind kind, const std::string& type = {}, const std::string& declared = {}) const;
+    std::size_t group_rank(const std::string& group) const;
+    std::size_t group_end(const std::string& group) const;
+    bool accepts(const std::string& from, const std::string& to) const;
+    bool reachable(const std::string& from, const std::string& to) const;
+    bool reorder(std::size_t from, std::size_t to);
+    void sort_layout(const std::vector<std::pair<std::size_t, std::string>>& ordered);
+    std::uint64_t layoutRevision_ = 0;
+    std::vector<TabGroup> groups_;
+    std::vector<std::string> legacyGroups_{"dashboards", "friends", "terminals"};
     std::vector<Tab> tabs_;
     std::vector<std::size_t> history_;
     std::size_t active_ = 0;

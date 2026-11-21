@@ -74,6 +74,7 @@ const UnitViewInfo * UnitView()
         { "Change", "NexusNext.schema", 6, 8, 7, Change_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewType tables[] = {
+        { "AccountChoice", "NexusNext.schema", true, AccountChoiceTableType(), TableDocNone, 0, NULL },
         { "Action", "NexusNext.schema", true, ActionTableType(), TableDocNone, 0, NULL },
         { "ActionsDiff", "NexusNext.schema", true, ActionsDiffTableType(), TableDocNone, 0, NULL },
         { "ClientCounter", "NexusNext.schema", true, ClientCounterTableType(), TableDocNone, 0, NULL },
@@ -93,7 +94,7 @@ const UnitViewInfo * UnitView()
     };
     static const UnitViewInfo info = { "nexuswirenext", 0x2f2450356481543cull,
         0, NULL,
-        16, tables,
+        17, tables,
         3, enums,
         0, NULL,
         1, unions,

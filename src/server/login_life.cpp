@@ -3,14 +3,18 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 #ifndef _WIN32
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 
+#include "accounts/registry.h"
 #include "store/fs.h"
 #include "sync/secrets.h"
+#include "sync/signin.h"
 
 namespace nexus::server {
 
@@ -24,6 +28,40 @@ std::string fit(const std::string& longer, const std::string& shorter) {
 std::string days(std::uint64_t n) {
     return std::to_string(n) + (n == 1 ? " day" : " days");
 }
+
+#ifndef _WIN32
+// Use the directory entry's exact spelling even on case-insensitive filesystems. Match the opened inode to that
+// entry so a replacement during the lookup cannot associate another file with this name.
+int openExactAt(int parent, const char* name, int flags) {
+    const int fd = ::openat(parent, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | flags);
+    if (fd < 0) {
+        return -1;
+    }
+    const int listing = ::openat(parent, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    DIR* entries = listing < 0 ? nullptr : ::fdopendir(listing);
+    bool matches = false;
+    if (entries != nullptr) {
+        struct stat opened {};
+        if (::fstat(fd, &opened) == 0) {
+            while (dirent* entry = ::readdir(entries)) {
+                if (std::strcmp(name, entry->d_name) == 0) {
+                    matches = opened.st_ino == entry->d_ino;
+                    break;
+                }
+            }
+        }
+        ::closedir(entries);
+    } else if (listing >= 0) {
+        ::close(listing);
+    }
+    if (matches) {
+        return fd;
+    }
+    ::close(fd);
+    errno = EINVAL;   // the opened entry does not bear the requested spelling
+    return -1;
+}
+#endif
 
 } // namespace
 
@@ -48,6 +86,75 @@ std::string dateOf(std::uint64_t ms) {
 }
 
 #ifndef _WIN32
+int openAccountDirectory(const std::string& dir, std::string& problem) {
+    const std::string parent = store::dir_of(dir);
+    const int base = ::open(parent.empty() ? "." : parent.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int fd = -1;
+    if (base >= 0) {
+        fd = openExactAt(base, store::name_of(dir).c_str(), O_DIRECTORY);
+        const int error = errno;
+        ::close(base);
+        errno = error;
+    }
+    if (fd < 0) {
+        const int error = errno;
+        problem = error == EINVAL ? dir + " does not match the spelling of the account directory; check the account name's capitalization"
+                                  : dir + " cannot be opened as an account directory (" + std::strerror(error) + ")";
+        errno = error;
+    }
+    return fd;
+}
+
+bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account) {
+    if (!sync::usesLocalSignInPage(provider) || !accounts::isName(account) || home.empty() ||
+        home.find('\0') != std::string::npos) {
+        return false;
+    }
+    const std::string expected = provider + "\n";
+    std::string bytes(expected.size() + 1, '\0');   // one extra byte detects trailing data
+    int dir = ::open(home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dir < 0) {
+        return false;
+    }
+    const char* parts[] = {".nexus", "server", "harness", provider.c_str(), account.c_str()};
+    for (size_t i = 0; i < std::size(parts); ++i) {
+        const int child = openExactAt(dir, parts[i], O_DIRECTORY);
+        ::close(dir);
+        if (child < 0) {
+            return false;
+        }
+        dir = child;
+        struct stat info {};
+        const mode_t mask = i + 1 == std::size(parts) ? 0077 : 0022;
+        if (::fstat(dir, &info) != 0 || info.st_uid != ::getuid() || (info.st_mode & mask) != 0) {
+            ::close(dir);
+            return false;
+        }
+    }
+    const int marker = openExactAt(dir, ".nexus-enrolled", O_NONBLOCK);
+    ::close(dir);
+    if (marker < 0) {
+        return false;
+    }
+    struct stat info {};
+    const bool valid = ::fstat(marker, &info) == 0 && S_ISREG(info.st_mode) && (info.st_mode & 07777) == 0600 &&
+                       info.st_uid == ::getuid() && info.st_nlink == 1;
+    size_t used = 0;
+    bool eof = false;
+    while (valid && used < bytes.size()) {
+        const ssize_t count = ::read(marker, bytes.data() + used, bytes.size() - used);
+        if (count > 0) {
+            used += static_cast<size_t>(count);
+        } else if (count == 0 || errno != EINTR) {
+            eof = count == 0;
+            break;
+        }
+    }
+    ::close(marker);
+    bytes.resize(used);
+    return eof && bytes == expected;
+}
+
 LoginSeen inspectLogin(const std::string& path) {
     LoginSeen seen;
     auto unusable = [&](const std::string& problem) {
@@ -55,8 +162,16 @@ LoginSeen inspectLogin(const std::string& path) {
         seen.problem = problem;
         return seen;
     };
-    const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    std::string problem;
+    const int account = openAccountDirectory(store::dir_of(path), problem);
+    if (account < 0) {
+        return errno == ENOENT ? seen : unusable(problem);
+    }
+    const int fd = ::openat(account, store::name_of(path).c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    const int error = errno;
+    ::close(account);
     if (fd < 0) {
+        errno = error;
         if (errno == ENOENT) {
             return seen;
         }

@@ -1375,7 +1375,8 @@ void put_main_driver(Writer& w, std::uint64_t next, const std::string& session) 
 // as it skips what any later frame adds. Both kept across a crash and a compaction.
 void test_instance() {
     auto defaults = [](const Session* t) {
-        return t != nullptr && t->info.instance.empty() && !t->driver.summary && t->driver.session_dir.empty();
+        return t != nullptr && t->info.instance.empty() && !t->driver.summary && t->driver.session_dir.empty() &&
+               !t->driver.session_account;
     };
     {
         MemFs fs = journaled({fixture(kMainRecord2First), fixture(kMainRecord2Second)});
@@ -1431,6 +1432,7 @@ void test_instance() {
         Change d = setDriver(3, 0, "", {});
         d.driver.summary = true;
         d.driver.session_dir = "/work/rocketnet";
+        d.driver.session_account = "work";
         CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}, "w1", 5));
     }
     {
@@ -1449,6 +1451,8 @@ void test_instance() {
         put_main_driver(driverFrame, 3, "");
         driverFrame.u8(1);
         driverFrame.str("/work/rocketnet");
+        driverFrame.u8(0xA1);
+        driverFrame.str("work");
         want.bytes(driverFrame.out());
         want.str("w1");
         want.u64(5);
@@ -1463,7 +1467,7 @@ void test_instance() {
         CHECK_OK(o.st);
         CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
         CHECK(o.s != nullptr && o.s->session(1)->driver.summary &&
-              o.s->session(1)->driver.session_dir == "/work/rocketnet");
+              o.s->session(1)->driver.session_account == "work" && o.s->session(1)->driver.session_dir == "/work/rocketnet");
     }
     // Through a snapshot of this build's: a store that compacts at every step.
     StoreOptions small;
@@ -1478,6 +1482,7 @@ void test_instance() {
         Change d = setDriver(3, 0, "s-2", {});
         d.driver.summary = true;
         d.driver.session_dir = "/work/rocketnet";
+        d.driver.session_account = "work";
         CHECK_OK(o.s->commit(1, std::vector<Change>{c, d}));
     }
     fs2.crash(fs2.plan_all(false));
@@ -1485,7 +1490,8 @@ void test_instance() {
         Opened o = open_store(fs2, small);
         CHECK_OK(o.st);
         CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->driver.summary &&
-              o.s->session(1)->driver.session_dir == "/work/rocketnet" && o.s->session(1)->driver.session == "s-2");
+              o.s->session(1)->driver.session_account == "work" && o.s->session(1)->driver.session_dir == "/work/rocketnet" &&
+              o.s->session(1)->driver.session == "s-2");
     }
 }
 

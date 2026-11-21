@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -37,7 +38,8 @@
 //
 // The tails were added to formats 3 and 4 at the end of their frames, so a reader from before them skips them, and
 // neither format's number nor its reader byte changed. A frame without them reads as their defaults: the friend's
-// default instance, no summary owed, and the directory not known (the driver resumes its session).
+// default instance, no summary owed, and the directory not known. A driver record or session snapshot frame may
+// end with 0xA1 and str session account. An absent owner makes a harness ID ineligible for resume.
 //
 // Across versions (docs/formats.md): a reader skips, in a framed format, what a later one adds at the end of a frame
 // or of the record (a change of a kind it does not know is skipped whole), keeps an entry kind it does not know as it
@@ -81,6 +83,7 @@ struct Driver {
     std::vector<std::string> waiting;
     bool summary = false;     // the next send carries a summary of the conversation (its harness session was dropped)
     std::string session_dir{};    // the directory the harness session was made in (empty: not known)
+    std::optional<std::string> session_account{};   // the reporting driver's account, absent in older stores
     bool operator==(const Driver&) const = default;
 };
 

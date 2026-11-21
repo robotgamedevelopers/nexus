@@ -23,6 +23,7 @@ public:
         out->phase = s.phase;
         out->problem = std::move(s.problem);
         out->heardMsAgo = s.heardMsAgo;
+        out->loopback = s.loopback;
         out->sessions = std::move(s.sessions);
         return true;
     }

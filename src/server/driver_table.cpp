@@ -43,6 +43,12 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
         const std::string where = "line " + std::to_string(number) + ": ";
         if (w[0] == "driver" && w.size() >= 3) {
             table.drivers[w[1]] = std::vector<std::string>(w.begin() + 2, w.end());
+        } else if (w[0] == "signin") {
+            if (w.size() < 3 || !accounts::isProvider(w[1]) || w[2].front() != '/') {
+                table.errors.push_back(where + "a signin line is `signin <provider> <absolute program> [<argument>...]`");
+            } else {
+                table.signins[w[1]] = std::vector<std::string>(w.begin() + 2, w.end());
+            }
         } else if (w[0] == "friend" && (w.size() == 3 || w.size() == 4)) {
             std::string cwd = w.size() == 4 ? w[3] : home;
             if (cwd == "~" || cwd.rfind("~/", 0) == 0) {
@@ -54,7 +60,7 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
         } else if (w[0] == "friend") {
             table.errors.push_back(where + "a friend line is `friend <name> <harness> [<directory>]`");
         } else {
-            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver` or `friend`");
+            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `friend`");
         }
     }
     return table;

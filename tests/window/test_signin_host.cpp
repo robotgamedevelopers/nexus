@@ -33,11 +33,12 @@ struct Recorder : LinkPort {
     void send(sync::Action action) override { sent.push_back(std::move(action)); }
 };
 
-sync::Sessions offering(const std::string& opener, const std::string& url, const std::string& host) {
+sync::Sessions offering(const std::string& opener, const std::string& url, const std::string& host,
+                        const std::string& provider = "claude") {
     sync::SignInOffer o;
     o.id = 3;
-    o.account = "claude-main";
-    o.provider = "claude";
+    o.account = provider + "-main";
+    o.provider = provider;
     o.opener = opener;
     o.host = host;
     o.url = sync::SecretValue(url);
@@ -130,11 +131,65 @@ void refusesALookalike() {
     f.signIn.received(offering("tokWindowA1", lookalike, "studio"));
     f.signIn.step();
     CHECK(f.opened.empty() && f.gates.empty() && f.port.sent.empty());
-    CHECK(f.signIn.problem.find("not one of Claude's") != std::string::npos);
+    CHECK(f.signIn.problem.find("sign-in address failed validation") != std::string::npos);
     CHECK(f.signIn.problem.find("evil") == std::string::npos && f.signIn.problem.find("fakeSt") == std::string::npos);
     f.signIn.problem.clear();
     f.signIn.step();
     CHECK(f.signIn.problem.empty() && f.opened.empty());    // once
+}
+
+void privateSignInPages() {
+    const std::string nonce(64, 'a');
+    const std::string path = "/nexus-signin/" + nonce;
+    const std::string url = "http://127.0.0.1:54321" + path;
+    for (const char* provider : {"codex", "antigravity", "grok", "muse"}) {
+        CHECK(sync::hasSignIn(provider));
+        Fixture f("tester@studio-alias", "studio");
+        f.signIn.loopback = true;
+        f.signIn.shown();
+        f.signIn.received(offering("", "", "studio", provider));
+        f.signIn.step();
+        CHECK(f.port.sent.empty()); // Showing the overlay never opens an unrelated private provider page.
+        f.signIn.opener.showAccount(std::string(provider) + "-main");
+        f.signIn.step();
+        CHECK(f.port.sent.size() == 1 && f.port.sent.back().kind == sync::ActionKind::SignInClaim);
+        f.signIn.received(offering("tokWindowA1", url, "studio", provider));
+        f.signIn.step();
+        f.signIn.step();
+        CHECK(f.opened.size() == 1 && f.opened.front() == url && f.gates.empty());
+        CHECK(f.port.sent.size() == 2 && f.port.sent.back().kind == sync::ActionKind::SignInOpened);
+        CHECK(f.port.sent.back().text == "tokWindowA1" && f.port.sent.back().secret.empty());
+
+        // Even an already-claimed offer bearing the window's own hostname cannot open a page on another machine.
+        Fixture remote("localhost", "studio");   // an SSH alias whose actual endpoint is remote
+        remote.signIn.opener.showAccount(std::string(provider) + "-main");
+        remote.signIn.received(offering("", "", "studio", provider));
+        remote.signIn.step();
+        CHECK(remote.signIn.opener.armed());
+        remote.signIn.received(offering("tokWindowA1", url, "studio", provider));
+        remote.signIn.step();
+        CHECK(remote.port.sent.empty() && remote.opened.empty() && remote.gates.empty());
+
+        sync::SignInDesk desk;
+        desk.need(1, "test-account", provider);
+        desk.claim(1, "w1", 1000);
+        CHECK(desk.url("test-account", 1, sync::SecretValue(url)).changed);
+        CHECK(desk.opened(1, "w1").changed);
+        CHECK(desk.callback(1, "w1", sync::SecretValue("code=dummy")).replays.empty());
+        CHECK(desk.stateOf(1) == sync::SignInState::Waiting);
+    }
+    sync::SignInTarget target;
+    CHECK(sync::parseSignInUrl("claude", kUrl, &target));
+    CHECK(sync::parseSignInUrl("codex", url, &target) && target == sync::SignInTarget{});
+    CHECK(!sync::parseSignInUrl("claude", url, &target));
+    CHECK(!sync::hasSignIn("unknown") && !sync::parseSignInUrl("unknown", url, &target));
+    for (const std::string& bad : {
+            kUrl, "http://localhost:54321" + path, "http://127.0.0.1.example:54321" + path,
+            "http://127.0.0.1:05432" + path, "http://127.0.0.1:22" + path, "http://127.0.0.1:65536" + path,
+            "http://127.0.0.1:54321/" + nonce, url + "#", url + "?code=0", url + "/", url.substr(0, url.size() - 1),
+            url.substr(0, url.size() - 1) + "A"}) {
+        CHECK(!sync::parseSignInUrl("muse", bad, &target));
+    }
 }
 
 } // namespace
@@ -146,6 +201,7 @@ int main() {
     leavesAnotherWindowsFlow();
     lostForgetsTheView();
     refusesALookalike();
+    privateSignInPages();
     if (failures != 0) {
         std::fprintf(stderr, "signin host: %d check(s) failed\n", failures);
         return 1;

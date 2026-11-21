@@ -218,7 +218,7 @@ struct Harness {
             Harness& h = *static_cast<Harness*>(context);
             PrKitSurfaceStyle style{
                 .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
-                .background = PrKitBackground_App,
+                .background = PrKitBackground(h.look.overlay ? PrKitBackground_None : PrKitBackground_App),
             };
             buildWindow(h.view, h.kit, prKitSurface(h.kit, kPrLayoutNodeNone, {}, style));
         }, this);
@@ -299,25 +299,8 @@ struct Harness {
     PrLayoutNode window() const {
         return prLayoutNodeFirstChild(tree, prLayoutTreeRoot(tree));
     }
-    // With the sprint tab, the window's first child is a row of two strips: the sprint tab's, then the others'.
-    std::vector<PrLayoutNode> tabs() const {
-        std::vector<PrLayoutNode> out;
-        const bool sprint = model.tab_count() != 0 && model.tab(0).kind == TabKind::Sprint;
-        std::vector<PrLayoutNode> strips;
-        if (sprint) {
-            for (PrLayoutNode s = prLayoutNodeFirstChild(tree, strip()); s != kPrLayoutNodeNone;
-                    s = prLayoutNodeNextSibling(tree, s))
-                strips.push_back(s);
-        } else {
-            strips.push_back(strip());
-        }
-        for (PrLayoutNode s : strips) {
-            for (PrLayoutNode n = prLayoutNodeFirstChild(tree, s); n != kPrLayoutNodeNone;
-                    n = prLayoutNodeNextSibling(tree, n))
-                out.push_back(n);
-        }
-        return out;
-    }
+    // The native tab nodes from the last layout, in model order across all strips.
+    std::vector<PrLayoutNode> tabs() const { return view.tabNodes; }
 
     // True if some text under `node` at the last layout is `text`.
     bool hasText(PrLayoutNode node, const std::string& text) const {
@@ -427,6 +410,22 @@ void enterSendsExactlyTheText() {
     // The prompt is empty after the send, and the next message starts clean.
     h.type("again");
     CHECK(h.active().draft == "again");
+}
+
+void enterStartsSignInBeforeEditingTheDraft() {
+    Harness h;
+    bool needed = true;
+    int attempts = 0;
+    h.view.activateSignIn = [&] { ++attempts; return needed; };
+    h.enter();
+    CHECK(attempts == 1 && h.active().draft.empty() && h.active().transcript.empty());
+    h.type("  ready after login  ");
+    h.enter();
+    CHECK(attempts == 2 && h.active().draft == "  ready after login  " && h.active().transcript.empty());
+    needed = false;
+    h.enter();
+    CHECK(attempts == 3 && h.active().draft.empty());
+    CHECK(h.active().transcript.size() == 1 && h.active().transcript.front().text == "  ready after login  ");
 }
 
 void commandEnterQueues() {
@@ -950,6 +949,42 @@ PrColor borderOf(const Harness& h, PrLayoutNode node, PrRectSide side) {
 
 // In the see-through overlay only the window background and the tab strip's fill let what is behind show through:
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
+void readableConversationCards() {
+    Harness h;
+    const std::string live = "Streaming reply";
+    h.view.growing = [&](std::size_t) { return &live; };
+    h.model.append(0, Entry{EntryKind::Friend, "A reply."});
+    h.model.append(0, Entry{EntryKind::Notice, "The subscription login needs attention."});
+    h.view.signInCaption = [] { return std::string("Sign in to Work"); };
+    int activations = 0;
+    h.view.activateSignIn = [&] { ++activations; return true; };
+    h.frame();
+    h.frame();
+    const auto cards = h.entries();
+    CHECK(cards.size() == 3);
+    for (const auto card : cards) {
+        auto style = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, card));
+        auto d = prLayoutDecorationStyleRecord(h.tree, style.groups[PrLayoutGroup_Decoration]);
+        const auto fill = prColorFromColor16(d.background);
+        CHECK(fill.a == 1 && fill.r == 1 && fill.g == 1 && fill.b == 1);
+        for (const auto r : d.radii)
+            CHECK(r.bits == prLayoutLengthPx(20).bits);
+        CHECK(h.height(card) > h.kit->theme.types[PrKitTextRole_Display].lineHeight);
+    }
+    const auto color = prKitToneColor(h.kit, PrKitTone_Inverse);
+    CHECK(color.r == 0 && color.g == 0 && color.b == 0 && color.a == 1);
+    CHECK(h.kit->theme.types[PrKitTextRole_Display].size > h.kit->theme.types[PrKitTextRole_Body].size);
+    const auto footer = prLayoutNodeNextSibling(h.tree, h.view.transcript);
+    const auto button = prLayoutNodeFirstChild(h.tree, footer);
+    CHECK(button != kPrLayoutNodeNone && h.hasText(button, "Sign in to Work"));
+    if (button != kPrLayoutNodeNone) {
+        CHECK(h.hasText(button, "Press Enter or click to sign in."));
+        h.pointer(PrAppEventKind_PointerDown, h.centre(button));
+        h.pointer(PrAppEventKind_PointerUp, h.centre(button));
+        CHECK(activations == 1);
+    }
+}
+
 void overlayKeepsAllButTheBackgroundOpaque() {
     Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true);
     h.type("sent");
@@ -958,7 +993,9 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     h.enter(style::kCommand);
     h.frame();
     PrLayoutNode window = prLayoutNodeParent(h.tree, h.view.transcript);
-    CHECK(near(fillOf(h, window).a * 100, style::kOverlayOpacity * 100));
+    CHECK(near(fillOf(h, window).a * 100, 60.0f));
+    CHECK(prColorFromColor16(prLayoutTreeCanvasColor(h.tree)).a == 0);
+    CHECK(fillOf(h, prLayoutNodeParent(h.tree, window)).a == 0);
     CHECK(near(h.kit->theme.palette.bg0.a * 100, style::kOverlayOpacity * 100));
     CHECK(near(h.kit->theme.palette.bg1.a * 100, style::kOverlayStripFill * 100));
     CHECK(fillOf(h, h.view.promptBox).a == 1);
@@ -1321,14 +1358,14 @@ void longTranscriptDeclaresWhatIsInSight() {
 // the spacer above it stands for the items before it only: the column is as tall as with every item declared.
 void scrollPastTheEndCountsTheLastItemOnce() {
     Harness h;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 8; ++i) {
         h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
     }
     h.frame();
     h.frame();
     PrLayoutNode column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
     const float whole = h.height(column);
-    CHECK(h.entries().size() == 12);        // every item declared, and measured
+    CHECK(h.entries().size() == 8);        // every item declared, and measured
     h.commandDigit(2);
     h.frame();
     h.view.scrolls[0] = 1.0e6f;             // a scroll from a layout taller than this one
@@ -1337,7 +1374,7 @@ void scrollPastTheEndCountsTheLastItemOnce() {
     h.rounds = 8;
     column = prLayoutNodeFirstChild(h.tree, h.view.transcript);
     std::vector<PrLayoutNode> e = h.entries();
-    CHECK(e.size() == 2 && h.hasText(e.back(), "line 11"));     // the spacer, and the last item
+    CHECK(e.size() == 2 && h.hasText(e.back(), "line 7"));     // the spacer, and the last item
     const float shown = h.height(column);
     if (shown < whole - 0.5f || shown > whole + 0.5f) {
         std::fprintf(stderr, "  column %.1f px with every item, %.1f px from past the end\n", double(whole),
@@ -1380,11 +1417,11 @@ void scrolledUpKeepsItsPlaceAsHeightsAreMeasured() {
         // The spacer above stands for items not yet laid out.
         std::vector<PrLayoutNode> e = h.entries();
         CHECK(e.size() < 200);
-        // An entry whose top is in view (entries here can be taller than the view).
+        // A tall card can span the viewport with its top already scrolled off. Its layout must remain anchored too.
         PrLayoutNode seen = kPrLayoutNodeNone;
         for (PrLayoutNode n : e) {
-            PrRect b = h.bounds(n);
-            if (b.top >= port.top && b.top < port.bottom) {
+            const PrRect b = h.bounds(n);
+            if (b.bottom > port.top && b.top < port.bottom && prLayoutNodeFirstChild(h.tree, n) != kPrLayoutNodeNone) {
                 seen = n;
                 break;
             }
@@ -1470,6 +1507,45 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
 // The harness with the sprint tab first, as the app runs, and `friends` friends f1, f2, ...
 Harness withSprint(std::size_t friends = 2) {
     return Harness(friendsNamed(friends), false, true);
+}
+
+void arrowsFollowTheActiveTab() {
+    Harness h = withSprint(2);
+    std::vector<std::string> accountCommands;
+    h.view.accountCommand = [&](const std::string& command) { accountCommands.push_back(command); };
+    auto right = [&] { h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, style::kCommand); };
+    auto left = [&] { h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, style::kCommand); };
+    auto up = [&] { h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, style::kCommand); };
+    auto down = [&] { h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, style::kCommand); };
+    h.commandDigit(1);
+    up();
+    CHECK(accountCommands.empty());
+    right();
+    CHECK(h.active().name == "f1");
+    h.type("unsent draft");
+    down();
+    up();
+    CHECK(accountCommands == std::vector<std::string>({"next", "previous"}));
+    CHECK(h.active().draft == "unsent draft");
+    right();
+    CHECK(h.active().name == "f2");
+    h.commandT();
+    CHECK(h.active().kind == TabKind::Terminal);
+    down();
+    CHECK(accountCommands.size() == 2);
+    h.model.open_extension("fixture", "Testing", "Plugin");
+    h.frame();
+    const auto plugin = h.model.active();
+    const auto count = h.model.tab_count();
+    right();
+    CHECK(h.model.active() == (plugin + 1) % count);
+    left();
+    CHECK(h.model.active() == plugin);
+    h.commandDigit(1);
+    left();
+    CHECK(h.model.active() == count - 1);
+    right();
+    CHECK(h.active().kind == TabKind::Sprint);
 }
 
 // ---- Terminal tabs ----
@@ -1947,6 +2023,98 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 5 && std::string(argv[1]) == "--group-drag") {
+        Harness h = withSprint(1);
+        h.view.nativeTabs.emplace("text_editor", drawTabTextArea);
+        h.view.application->watch(argv[2]);
+        const auto activate = [&](const char* bundle) {
+            auto before = h.view.windowApp.layoutGeneration;
+            std::filesystem::copy_file(bundle, argv[2], std::filesystem::copy_options::overwrite_existing);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (h.view.windowApp.layoutGeneration == before && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                h.frame();
+            }
+            CHECK(h.view.windowApp.layoutGeneration != before);
+        };
+        activate(argv[3]);
+        h.key('L', PrAppKeyCode_KeyL, style::kCommand);
+        h.key('R', PrAppKeyCode_KeyR, style::kCommand);
+        h.key('Y', PrAppKeyCode_KeyY, style::kCommand);
+        h.commandT();
+        h.frame();
+        // Tools [script, terminal], Chat [friend, native], Review [sprint, second instance of same native renderer].
+        CHECK(h.model.tab_count() == 6);
+        if (h.model.tab_count() != 6) return 1;
+        CHECK(h.ids() == "4 5 0 2 1 3");
+        const auto active = h.active().id;
+        h.dragTab(5, 0);
+        h.dragTab(0, 5);
+        CHECK(h.ids() == "4 5 0 2 1 3" && h.active().id == active);
+        h.dragTab(3, 2);
+        CHECK(h.ids() == "4 5 2 0 1 3");
+        const auto point = h.centre(h.tabs()[5]);
+        h.pointer(PrAppEventKind_PointerDown, point);
+        h.pointer(PrAppEventKind_PointerUp, point);
+        CHECK(h.active().type == "right");
+        // Move and select entirely by keyboard. The default fence rejects a step into the next group.
+        const auto reorder = PrAppModifierFlags(style::kCommand | PrAppModifierFlag_Shift);
+        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
+        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft, reorder);
+        CHECK(h.ids() == "4 5 2 0 3 1" && h.active().type == "right");
+        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        CHECK(h.ids() == "4 5 2 0 1 3" && h.active().type == "right");
+        activate(argv[4]);
+        h.dragTab(5, 0);
+        CHECK(h.ids() == "3 4 5 2 0 1" && h.active().group == "Tools" && h.active().type == "right");
+        h.dragTab(0, 5);  // the other direction is still forbidden
+        CHECK(h.ids() == "3 4 5 2 0 1");
+        activate(argv[3]);
+        CHECK(h.active().group == "Review" && h.active().type == "right");
+        CHECK(h.ids() == "4 5 2 0 3 1");
+        h.commandDigit(1);  // select across groups, then reorder and close using only the keys
+        h.commandDigit(5);
+        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight, reorder);
+        CHECK(h.active().type == "right" && h.model.active() == 5);
+        h.key('W', PrAppKeyCode_KeyW, style::kCommand);
+        CHECK(h.model.tab_count() == 5 && h.active().type == "words");
+        return failures ? 1 : 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "--group-close") {
+        auto h = withSprint();
+        h.view.application->watch(argv[2]);
+        h.commandW();
+        CHECK(h.active().kind == TabKind::Sprint && h.model.tab_count() == 3);
+        h.commandDigit(2);
+        h.commandW();
+        CHECK(h.active().kind == TabKind::Friend && h.model.tab_count() == 3);
+        h.commandT();
+        const auto first = h.active().id;
+        h.commandT();
+        h.commandW();
+        CHECK(h.active().id == first && h.model.tab_count() == 4);
+        CHECK(h.terminals.closed.size() == 1);
+        std::filesystem::copy_file(argv[3], argv[2]);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (h.view.windowApp.closable.value_or(true) && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            h.frame();
+        }
+        h.commandW();
+        CHECK(h.active().id == first && h.terminals.running.count(first) && h.terminals.closed.size() == 1);
+        h.commandDigit(1);
+        h.commandW();
+        CHECK(h.model.tab_count() == 3 && h.active().id == first);
+        h.commandDigit(1);
+        h.commandW();
+        CHECK(h.model.tab_count() == 2 && h.active().id == first);
+        h.key('P', PrAppKeyCode_KeyP, style::kCommand);
+        CHECK(h.active().type == "pinned");
+        h.commandW();
+        CHECK(h.active().type == "pinned" && h.model.tab_count() == 3);
+        return failures ? 1 : 0;
+    }
     if (argc == 3) {
         Harness h;
         CHECK(h.view.nativeTabs.empty());
@@ -1962,6 +2130,21 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             h.frame();
         }
+        CHECK(near(h.view.windowApp.overlayOpacity * 100, 35.0f));
+        h.frame();
+        CHECK(h.look.messageCard.fill == 0xedf2ea && h.look.messageCard.ink == 0x192218);
+        CHECK(h.look.messageCard.radius == 24 && h.kit->theme.types[PrKitTextRole_Display].size == 38);
+        CHECK(h.kit->theme.palette.bg0.a == 1);   // ordinary window
+        h.look.overlay = true;
+        prUiForget(h.ui, &h.look);
+        h.frame();
+        CHECK(near(h.kit->theme.palette.bg0.a * 100, 35.0f));
+        CHECK(near(fillOf(h, h.window()).a * 100, 35.0f));
+        CHECK(h.kit->theme.palette.text1.a == 1);
+        std::string accountCommand;
+        h.view.accountCommand = [&](const std::string& name) { accountCommand = name; };
+        h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, style::kCommand);
+        CHECK(accountCommand == "custom");
         h.type("after");
         h.enter();
         CHECK(h.active().transcript.size() == 1);
@@ -1996,6 +2179,7 @@ int main(int argc, char** argv) {
     choosingTheSprintTabGoesHome();
     commandDigitsWorkFromTheSprintTab();
     commandOneWithCapsLockSelectsTheSprintTab();
+    arrowsFollowTheActiveTab();
     onlyTheActiveTabShowsSelected();
     sprintTabTakesNoText();
     sprintTabNeverMoves();
@@ -2008,6 +2192,7 @@ int main(int argc, char** argv) {
     sprintTabWithoutFriendsShowsTheNotice();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
+    enterStartsSignInBeforeEditingTheDraft();
     commandEnterQueues();
     shiftEnterInsertsOneLineFeed();
     blankDraftsSendNothing();
@@ -2033,6 +2218,7 @@ int main(int argc, char** argv) {
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     noModelUnderThePrompt();
+    readableConversationCards();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();

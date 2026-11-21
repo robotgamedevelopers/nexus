@@ -1,5 +1,7 @@
 #include "server/signin_runner.h"
 
+#include "server/login_life.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -103,6 +105,7 @@ SignInRunner::SignInRunner(Options options, Events events) : options_(std::move(
         events_.exited = [this, f = std::move(events.exited)](const std::string& a, std::uint64_t id,
                                                               const std::string& why) { acted_ = true; f(a, id, why); };
     }
+    events_.enrolled = std::move(events.enrolled);
     events_.log = std::move(events.log);
 }
 
@@ -242,7 +245,8 @@ bool SignInRunner::open(std::string* why) {
     return true;
 }
 
-void SignInRunner::start(std::uint64_t id, const std::string& account) {
+void SignInRunner::start(std::uint64_t id, const std::string& account, const std::string& provider,
+                         std::vector<std::string> command) {
     if (procs_.count(account) != 0) {
         stop(account);      // the desk starts one per account; one left over is ended first
         reap(account, procs_[account], true, std::nullopt);
@@ -252,17 +256,35 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
             events_.exited(account, id, "its process did not start: " + what);
         }
     };
-    const std::string claude = !options_.claude.empty() ? options_.claude : onPath(options_.path);
-    if (claude.empty()) {
-        fail("no claude program on the server's PATH (set `claude <path>` in the server's config)");
+    if (provider == "claude") {
+        const std::string claude = !options_.claude.empty() ? options_.claude : onPath(options_.path);
+        if (claude.empty()) {
+            fail("no claude program on the server's PATH (set `claude <path>` in the server's config)");
+            return;
+        }
+        command = {claude, "setup-token"};
+    } else if (command.empty() || command.front().empty() || command.front().front() != '/') {
+        fail("set a signin command with an absolute program path for " + provider + " in the server's drivers file");
         return;
     }
+    const std::string& program = command.front();
     // Its own config directory, under the account's, so nothing of another login is read or written.
     const std::string accountDir = options_.accounts + "/" + account;
     const std::string configDir = accountDir + "/.signin";
     std::error_code ec;
     std::filesystem::create_directories(accountDir, ec);
-    ::chmod(accountDir.c_str(), 0700);
+    std::string problem;
+    const int accountFd = openAccountDirectory(accountDir, problem);
+    if (accountFd < 0) {
+        fail(problem);
+        return;
+    }
+    const bool privateAccount = ::fchmod(accountFd, 0700) == 0;
+    ::close(accountFd);
+    if (!privateAccount) {
+        fail("cannot make its account directory private");
+        return;
+    }
     std::filesystem::remove_all(configDir, ec);
     if (::mkdir(configDir.c_str(), 0700) != 0) {
         fail("cannot make its config directory: " + std::string(std::strerror(errno)));
@@ -314,7 +336,7 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
     // The environment, from nothing.
     std::vector<std::string> env{
         "HOME=" + options_.home,
-        "PATH=" + bin_ + ":" + std::filesystem::path(claude).parent_path().string() + ":" + options_.path,
+        "PATH=" + bin_ + ":" + std::filesystem::path(program).parent_path().string() + ":" + options_.path,
         "TERM=xterm-256color",
         "LANG=en_US.UTF-8",
         "CLAUDE_CONFIG_DIR=" + configDir,
@@ -327,9 +349,11 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
         envp.push_back(e.data());
     }
     envp.push_back(nullptr);
-    std::string program = claude;
-    std::string verb = "setup-token";
-    char* argv[] = {program.data(), verb.data(), nullptr};
+    std::vector<char*> argv;
+    for (std::string& arg : command) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
     posix_spawn_file_actions_t files;
     posix_spawn_file_actions_init(&files);
     posix_spawn_file_actions_adddup2(&files, slave, 0);
@@ -361,7 +385,7 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
     sigdelset(&all, SIGSTOP);
     posix_spawnattr_setsigdefault(&attr, &all);
     pid_t pid = -1;
-    const int rc = ::posix_spawn(&pid, program.c_str(), &files, &attr, argv, envp.data());
+    const int rc = ::posix_spawn(&pid, program.c_str(), &files, &attr, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&files);
     posix_spawnattr_destroy(&attr);
     ::close(slave);
@@ -390,13 +414,15 @@ void SignInRunner::start(std::uint64_t id, const std::string& account) {
     (void)made;
     Proc& p = it->second;
     p.id = id;
+    p.provider = provider;
     p.pid = pid;
     p.master = master;
     p.nonce = nonce;
     p.configDir = configDir;
     p.lock = lock;
     if (events_.log) {
-        events_.log("sign-in " + std::to_string(id) + ": " + account + ": claude setup-token started, process " +
+        const std::string operation = provider == "claude" ? "claude setup-token" : provider + " sign-in";
+        events_.log("sign-in " + std::to_string(id) + ": " + account + ": " + operation + " started, process " +
                     std::to_string(pid));
     }
 }
@@ -506,14 +532,16 @@ void SignInRunner::readTerminal(const std::string& account, Proc& p) {
         const ssize_t n = ::read(p.master, buf, sizeof buf);
         if (n > 0) {
             const std::string_view bytes(buf, static_cast<std::size_t>(n));
-            if (!p.urlSent && p.url.feed(bytes)) {
+            if (p.provider == "claude" && !p.urlSent && p.url.feed(bytes)) {
                 p.urlSent = true;
                 const sync::SecretValue url = p.url.take();
                 if (events_.url) {
                     events_.url(account, p.id, url);
                 }
             }
-            p.token.feed(bytes);
+            if (p.provider == "claude") {
+                p.token.feed(bytes);
+            }
             std::memset(buf, 0, sizeof buf);
             continue;
         }
@@ -566,6 +594,17 @@ void SignInRunner::reap(const std::string& account, Proc& p, bool reported, std:
     const bool endedByUs = p.killAt != 0;
     const std::string why = !status ? "it was ended" : WIFEXITED(st) ? "it exited " + std::to_string(WEXITSTATUS(st)) :
         WIFSIGNALED(st) ? "it ended on a signal" : "it ended";
+    if (p.provider != "claude") {
+        const std::string provider = p.provider;
+        procs_.erase(account);
+        if (exitedZero && !endedByUs && !reported && events_.enrolled) {
+            acted_ = true;
+            events_.enrolled(account, provider, id);
+        } else if (!reported && events_.exited) {
+            events_.exited(account, id, why);
+        }
+        return;
+    }
     const bool found = p.token.finish();
     if (p.token.passedOver() != 0 && events_.log) {
         events_.log("sign-in " + std::to_string(id) + ": " + account + ": a login-shaped run of " +

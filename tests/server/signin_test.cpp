@@ -1041,6 +1041,60 @@ void hub() {
     }
 }
 
+// A provider confirms an account through its own durable receipt. A returned process or another account's
+// completed enrollment cannot sign it in. Choosing an on-use account starts the first flow.
+void hub_enrolled() {
+    store::MemFs fs;
+    Keeper keeper;
+    Server s(fs, keeper);
+    auto registry = *s.hub->accounts();
+    accounts::Account extra{"alternate", "codex"};
+    extra.signInOnUse = true;
+    registry.accounts.push_back(extra);
+    registry.friends.push_back(accounts::Friend{"reviewer", {extra.name}, extra.name});
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(!s.hub->signIns().live(extra.name));
+    CHECK(s.hub->state().friends().back().accounts.front().needsSignIn);
+    sync::Action ensure;
+    ensure.kind = sync::ActionKind::Ensure;
+    ensure.friendName = "reviewer";
+    std::string why;
+    CHECK(s.hub->apply(ensure, &why));
+    CHECK(!s.hub->signIns().live(extra.name));
+    sync::Action claim;
+    claim.kind = sync::ActionKind::SignInClaim;
+    claim.text = "w1";
+    claim.session = 1; // another open session, still on its own account
+    claim.account = extra.name;
+    CHECK(!s.hub->apply(claim, &why) && !s.hub->signIns().live(extra.name));
+    claim.session = 2;
+    CHECK(s.hub->apply(claim, &why));
+    CHECK(s.hub->apply(claim, &why) && s.runner.started.size() == 1);
+    const auto flow = s.hub->signIns().flowOf(extra.name);
+    CHECK(flow.has_value());
+    if (!flow) return;
+    s.hub->signInEnrolled(extra.name, "grok", flow->first);
+    s.hub->signInEnrolled(extra.name, extra.provider, flow->first + 1);
+    s.hub->signInPrinted(extra.name, secret(kToken));
+    CHECK(s.hub->signIns().stateOf(flow->first) == sync::SignInState::Started);
+    CHECK(s.hub->signedIn().count(extra.name) == 0 && keeper.files.empty());
+    s.hub->signInEnrolled(extra.name, extra.provider, flow->first);
+    CHECK(s.hub->signIns().stateOf(flow->first) == sync::SignInState::Failed);
+    const auto again = s.hub->signIns().flowOf(extra.name);
+    CHECK(again.has_value());
+    if (!again) return;
+    CHECK(s.act(sync::ActionKind::SignInClaim, again->first, "w1"));
+    s.hub->probeSignInWith([&](const accounts::Account& a) { return a.name == extra.name; });
+    s.hub->signInEnrolled(extra.name, extra.provider, again->first);
+    CHECK(s.hub->signedIn().count(extra.name) == 1 && !s.hub->signIns().live(extra.name));
+    CHECK(s.responder.logins == std::vector<std::string>{extra.name});
+    CHECK(!s.hub->state().friends().back().accounts.front().needsSignIn);
+    registry.accounts.back().provider = "grok";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    s.hub->useAccounts(registry, nullptr);
+    CHECK(s.hub->signedIn().count(extra.name) == 0);
+}
+
 // A login printed late: the deadline passes while the browser is sent back (the callback forwarded, the process told
 // to end), and the process prints its login in the grace before it ends. Stored, the account signed in, the flow made
 // for the next show dropped: never a second sign-in (models/SignIn.tla Print's late branch, EveryPrintTaken). An API
@@ -1268,7 +1322,7 @@ struct Group {
 
 const Group kGroups[] = {
     {"urls", urls}, {"desk", desk}, {"opener", opener}, {"gate", gate}, {"scanner", scanner},
-    {"codecs", codecs}, {"hub", hub}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
+    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); }}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
 };
 
 } // namespace
