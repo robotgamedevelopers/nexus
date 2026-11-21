@@ -176,7 +176,7 @@ See [accounts and friends](docs/accounts.md) for configuration.
 Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
 rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
 without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](docs/plugins.md) for the native and Starlark registration APIs.
-The Claude driver also supports model and effort defaults at startup. See [customizing Nexus in your fork](docs/policy.md).
+The driver launcher can load each friend's live nova-config definition, opening prompt and home documents. The Claude driver applies them on fresh and resumed sessions. See [customizing Nexus in your fork](docs/policy.md).
 
 Model and effort can be set in the drivers file and
 changed between turns. Build and test it:

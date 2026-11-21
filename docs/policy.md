@@ -117,6 +117,54 @@ deadline. The hook has no host I/O functions or module loader. A policy error pr
 and leaves the prompt unsent to the provider. Correct the profile, preview it, and retry. A change takes effect on
 the next start. A driver already answering a turn continues with its current settings.
 
+## Friend identity at startup
+
+A server profile can keep `identities.json` next to `policy.star`. The launcher queries
+`nova-config friend show NAME --json` at each driver start. The registry supplies the friend's name,
+harness, model, pronouns, note and enabled state. The profile supplies the local home checkout, opening
+prompt and ordered home files. For example, a profile for a single reviewer could contain:
+
+```json
+{
+  "nova_config": ["/usr/local/bin/nova-config"],
+  "friends": {
+    "reviewer": {
+      "home": "/srv/friends/reviewer",
+      "prefix": "Follow the initialization procedure in your home README.",
+      "files": ["AGENTS.md", "README.md"]
+    }
+  }
+}
+```
+
+The home documents must be regular files tracked at HEAD. The launcher reads their working-copy text,
+including local edits. It records the base commit and a digest of the exact startup context. Use a
+read-only registry connection. The optional arguments following the `nova_config` program can select
+its store. Keep credentials out of the profile.
+
+The server substitutes `{friend}` and `{harness}` when either occupies an entire driver argument.
+For example, one command can serve all friends using an installed Claude adapter:
+
+```text
+driver claude /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/nexus/profile {friend} {harness} /usr/bin/node /opt/nexus/drivers/claude/dist/src/main.js --account work
+```
+
+The launcher verifies the selected harness against the registry before running the driver. The configured
+model is a default. A registry model equal to the harness name uses the harness default.
+An explicit session setting takes precedence. The `driver_start` hook also receives `context["identity"]`
+with the friend, harness, registry model, home path, files, revision and digest.
+The CLI can verify a definition and report this metadata without starting a model:
+
+```sh
+/opt/nexus/venv/bin/python -I -m nexus_policy identity /srv/nexus/profile reviewer --harness claude
+```
+
+The adapter receives the startup context in an inherited temporary file descriptor
+named by `--startup-context-fd`. It consumes and closes the descriptor before launching the model.
+The shipped Claude adapter appends the text to the Claude Code system prompt on new and resumed queries.
+Other harnesses need a Nexus driver that consumes the same input and applies it as standing instructions.
+An identity profile alone does not install a driver or add a friend to the roster.
+
 ## Install and use
 
 On the server, install the policy host once with Python 3.11 or newer. From the Nexus checkout:

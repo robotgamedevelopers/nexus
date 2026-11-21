@@ -81,6 +81,10 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
         return r;
     }
     r.command = d->second;
+    for (std::size_t i = 1; i < r.command.size(); ++i) {
+        if (r.command[i] == "{friend}") r.command[i] = name;
+        else if (r.command[i] == "{harness}") r.command[i] = f->second.harness;
+    }
     r.cwd = f->second.cwd;
     return r;
 }

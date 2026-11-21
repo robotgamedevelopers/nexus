@@ -7,6 +7,9 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
+
+from friend_identity import resolve
 
 import starlark
 
@@ -85,8 +88,47 @@ def cli():
     driver.add_argument("node")
     driver.add_argument("entry")
     driver.add_argument("arguments", nargs=argparse.REMAINDER)
+    inspect = commands.add_parser("identity", help="verify the friend definition and home without starting a model")
+    inspect.add_argument("profile", type=Path)
+    inspect.add_argument("friend")
+    inspect.add_argument("--harness")
+    launch = commands.add_parser("friend-driver", help="start a Nexus driver with its friend's standing instructions")
+    launch.add_argument("profile", type=Path)
+    launch.add_argument("friend")
+    launch.add_argument("harness")
+    launch.add_argument("program")
+    launch.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
+        if args.command in ("identity", "friend-driver"):
+            directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                config = json.loads(read_profile_file(directory, "identities.json"))
+            finally:
+                os.close(directory)
+            instructions, identity = resolve(config, args.friend, args.harness)
+            if args.command == "identity":
+                print(json.dumps(identity))
+                return 0
+            # Driver programs may have leading arguments (e.g. a Node entry point).
+            def option(key):
+                for pos in range(len(args.arguments) - 2, -1, -1):
+                    if args.arguments[pos] == key:
+                        return args.arguments[pos + 1]
+                return ""
+            context = {"friend": args.friend, "provider": args.harness, "account": option("--account"),
+                       "resuming": bool(option("--resume")), "identity": identity}
+            defaults = decision(args.profile.absolute(), context)
+            if identity["model"] and identity["model"] != identity["harness"]:
+                defaults.setdefault("model", identity["model"])
+            extra = [item for key, value in defaults.items() if not option("--" + key)
+                     for item in ("--" + key, value)]
+            with tempfile.TemporaryFile() as descriptor:
+                descriptor.write(instructions.encode())
+                descriptor.seek(0)
+                os.set_inheritable(descriptor.fileno(), True)
+                os.execv(args.program, [args.program, *args.arguments, *extra,
+                                        "--startup-context-fd", str(descriptor.fileno())])
         if args.command == "check":
             context = {"friend": args.friend, "provider": "claude", "account": args.account, "resuming": args.resuming}
             print(json.dumps(decision(args.profile.absolute(), context), sort_keys=True))
@@ -99,10 +141,10 @@ def cli():
         defaults = [item for key, value in answer.items() if "--" + key not in flags
                     for item in ("--" + key, value)]
         os.execv(args.node, [args.node, args.entry, *defaults, *args.arguments])
-    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
         cause = "Nexus driver policy: " + " ".join(str(error).splitlines())[:500]
-        if args.command == "driver":
-            print(json.dumps({"kind": "hello", "protocol": 1, "harness": "claude", "features": ["limit"]}))
+        if args.command in ("driver", "friend-driver"):
+            print(json.dumps({"kind": "hello", "protocol": 1, "harness": getattr(args, "harness", "claude"), "features": ["limit"]}))
             print(json.dumps({"kind": "error", "code": "other", "cause": cause,
                               "fix": "Check the server profile with nexus_policy check and retry."}))
         else:

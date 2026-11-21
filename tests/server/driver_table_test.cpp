@@ -76,6 +76,9 @@ void resolve() {
     CHECK(bo.command.empty());
     CHECK(has(bo.problem, "bo's harness, codex, has no driver, so the prompt was not sent"));
     CHECK(has(bo.problem, "`driver codex <program> [<argument>...]` to /d/drivers"));
+    const auto templated = parseDriverTable("driver engine /program {friend} {harness}\nfriend cy engine /work\n", "/h");
+    CHECK((resolveDriver(templated, "cy", "/d/drivers").command ==
+        std::vector<std::string>{"/program", "cy", "engine"}));
     // No file at all is an empty table.
     CHECK(has(resolveDriver(parseDriverTable("", "/h"), "ada", "/d/drivers").problem, "ada has no driver"));
 }

@@ -40,6 +40,44 @@ class PersonalPolicy(unittest.TestCase):
         self.assertEqual(start(), ["--effort", "low", *original])
         self.assertEqual(json.loads(self.check().stdout), {"effort": "medium"})
 
+    def test_friend_identity_reaches_the_selected_driver(self):
+        root = self.profile.parent
+        checkout = root / "home"
+        checkout.mkdir()
+        def git(*args):
+            subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
+        git("init")
+        (checkout / "standing.md").write_text("read my original instructions")
+        git("add", "standing.md")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "home")
+        registry = root / "registry"
+        fixture = {"result": {"status": "ok"}, "items": [{"kind": "friend", "fields": {
+            "name": "review", "harness": "codex", "model": "selected", "enabled": True}}]}
+        registry.write_text("#!" + sys.executable + "\nprint(" + repr(json.dumps(fixture)) + ")\n")
+        registry.chmod(0o700)
+        config = {"nova_config": [str(registry)], "friends": {"review": {"home": str(checkout),
+                  "prefix": "open the home", "files": ["standing.md"]}}}
+        (self.profile / "identities.json").write_text(json.dumps(config))
+        capture = root / "driver.py"
+        capture.write_text("import json,sys,os\nargs=sys.argv[1:]\n"
+                           "print(json.dumps([args,os.fdopen(int(args[-1])).read()]))\n")
+        command = [*self.command, "friend-driver", str(self.profile), "review", "codex", sys.executable,
+                   str(capture), "--cwd", str(root)]
+        for args in ([], ["--resume", "existing"]):
+            flags, prompt = json.loads(subprocess.check_output([*command, *args], text=True))
+            self.assertIn("read my original instructions", prompt)
+            self.assertIn("open the home", prompt)
+            self.assertIn('"harness": "codex"', prompt)
+            self.assertEqual(flags[flags.index("--model") + 1], "selected")
+        different = subprocess.run([*self.command, "identity", str(self.profile), "review", "--harness", "claude"],
+                                   capture_output=True, text=True)
+        self.assertNotEqual(different.returncode, 0)
+        config["friends"]["review"]["files"] = ["../elsewhere"]
+        (self.profile / "identities.json").write_text(json.dumps(config))
+        refused = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(json.loads(refused.stdout.splitlines()[1])["kind"], "error")
+
     def test_refusals(self):
         sources = ['load("other.star", "x")', 'print("unframed output")',
                    'def driver_start(x, y): return {"command": "other"}',

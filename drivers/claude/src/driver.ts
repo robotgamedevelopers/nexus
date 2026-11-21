@@ -65,6 +65,7 @@ export interface HarnessStart {
     resume?: string;
     model?: string;
     effort?: EffortLevel;
+    startupContext?: string;
     settingSources: SettingSource[];
     claudePath?: string;
     limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
@@ -131,6 +132,8 @@ export interface Arguments {
     resume?: string;
     model?: string;
     effort?: EffortLevel;
+    startupContextFd?: number;
+    startupContext?: string;
     settingSources: SettingSource[];
     claudePath?: string;
     limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
@@ -146,11 +149,18 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
         switch (name) {
+            case '--startup-context-fd': {
+                const fd = Number(value);
+                if (!/^\d+$/.test(value) || !Number.isSafeInteger(fd) || fd < 3 || a.startupContextFd !== undefined)
+                    return { error: 'expected one inherited startup context descriptor (3 or greater)' };
+                a.startupContextFd = fd;
+                break;
+            }
             case '--account': a.account = value; break;
             case '--cwd': a.cwd = value; break;
             case '--resume': a.resume = value; break;
@@ -493,6 +503,7 @@ export class Driver {
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
             limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        if (this.args.startupContext !== undefined) start.startupContext = this.args.startupContext;
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {

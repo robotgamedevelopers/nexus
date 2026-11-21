@@ -1,7 +1,7 @@
 // The driver as a process: its arguments, standard input and output, and its exit, around a way to start the harness.
 // main.ts gives it the Claude Agent SDK; the conformance test's fake-main.ts a scripted query.
 
-import { realpathSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 
 import { isAccount, openConfigDir, readAccount, type Account, type AccountRefusal } from './account.js';
 import { Driver, newSessionId, parseArguments, type Arguments, type Harness, type HarnessStart, type Host } from './driver.js';
@@ -77,6 +77,22 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
     const args = parseArguments(argv);
     if ('error' in args) {
         return { refusal: [hello, { kind: 'error', cause: args.error, fix: 'fix the driver\'s line in nexus-server\'s drivers file', code: 'other' }] };
+    }
+    if (args.startupContextFd !== undefined) {
+        const fd = args.startupContextFd;
+        try {
+            try {
+                const file = fstatSync(fd);
+                if (!file.isFile() || file.size < 1 || file.size > 256 * 1024) throw new Error();
+                args.startupContext = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(fd));
+                if (!args.startupContext.trim()) throw new Error();
+            } finally {
+                closeSync(fd);
+            }
+        } catch {
+            return { refusal: [hello, { kind: 'error', code: 'other', cause: 'Could not read the friend startup context',
+                fix: 'Check the friend definition and its configured home files on the Nexus server.' }] };
+        }
     }
     if (!isDir(args.cwd)) {
         return { refusal: [hello, { kind: 'error', cause: `cannot work in ${args.cwd}: it is not a directory`,

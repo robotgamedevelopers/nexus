@@ -66,6 +66,9 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         prompt: start.prompts,
         options: {
             cwd: start.cwd,
+            ...(start.startupContext === undefined ? {} : {
+                systemPrompt: { type: 'preset', preset: 'claude_code', append: start.startupContext },
+            }),
             // The whole environment the harness gets (it replaces, not merges): the scrubbed one, with the account's
             // directory. The token is not in it: the wall's spawn hands it over on a descriptor.
             env: harnessEnv(env, account),

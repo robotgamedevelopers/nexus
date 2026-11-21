@@ -237,6 +237,17 @@ void test('--resume resumes that session and reports it', async () => {
     ]);
 });
 
+void test('fresh and resumed harnesses each receive their standing instructions', async () => {
+    for (const resume of [undefined, 'existing']) {
+        const host = new TestHost();
+        const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [],
+            startupContext: 'standing instructions', ...(resume === undefined ? {} : { resume }) });
+        driver.start();
+        await settle();
+        assert.equal(host.harness.start.startupContext, 'standing instructions');
+    }
+});
+
 void test('a --resume id Claude does not know: a notice, a new session, and the turn goes on', async () => {
     const host = new TestHost();
     host.prepare = (h) => {
