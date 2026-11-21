@@ -163,6 +163,9 @@ struct View {
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
     std::function<bool()> signOut; // true when the selected account accepted the explicit composer command
+    std::function<LimitOffer()> limitOffer;
+    std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
+    LimitOffer displayedLimit;
     std::optional<AccountPicker> accountPicker;
     std::function<void(const std::string&)> pickerCommand;
     std::function<void(const std::string&)> chooseAccount;

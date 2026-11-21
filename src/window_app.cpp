@@ -63,6 +63,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         out.argument = static_cast<int>(value);
         return true;
     }
+    if (op == "resolve_limit") {
+        out.command = WindowCommand::ResolveLimit;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "account" || out.type == "model");
+    }
     if (op == "account_picker") {
         out.command = WindowCommand::AccountPicker;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -222,7 +227,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
     TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
-    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, float& overlayOpacity, std::string& why) {
+    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, std::string& accountLabel, std::string& modelLabel, float& overlayOpacity, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
@@ -303,6 +308,16 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         else if (name == "transcript" && (tab == "friend" || tab == "empty")) panel = Panel::Transcript;
         else if (name == "prompt" && tab == "friend" && promptOpen) panel = Panel::Prompt;
         else if (name == "account" && tab == "friend") panel = Panel::Account;
+        else if (name == "limit_choice" && tab == "friend") {
+            label = stringAt(d, prJsonMember(d, 0, {"label", 5}));
+            accountLabel = stringAt(d, prJsonMember(d, 0, {"limit_account_label", 19}));
+            modelLabel = stringAt(d, prJsonMember(d, 0, {"limit_model_label", 17}));
+            if (label.empty() || label.size() > 512 || accountLabel.size() > 256 || modelLabel.size() > 256) {
+                why = "limit_choice needs a question of up to 512 bytes and button labels of up to 256 bytes";
+                return false;
+            }
+            panel = Panel::LimitChoice;
+        }
         else if (name == "status") panel = Panel::Status;
         else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
         else if (name == "native" && tab == "extension") panel = Panel::Native;
@@ -323,7 +338,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 } // namespace
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
-    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen) {
+    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen, LimitOffer offer) {
     std::string escapedGroup;
     for (const char c : group) {
         if (c == '\\' || c == '"') escapedGroup += '\\';
@@ -333,13 +348,30 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         ",\"has_status\":" + (hasStatus ? "true" : "false") + ",\"active_tab\":" + std::to_string(activeTab) +
         ",\"account_picker_open\":" + (pickerOpen ? "true" : "false") +
         ",\"needs_sign_in\":" + (account.name.empty() ? "false" : "true") + ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
-    const bool sameContext = context == lastContext_ && account == signInAccount;
+    const bool sameContext = context == lastContext_ && account == signInAccount && offer == limitOffer;
     const auto generation = host.refresh();
     if (sameContext && generation == generation_) return;
     lastContext_ = context;
     generation_ = generation;
     signInAccount = std::move(account);
+    limitOffer = std::move(offer);
     context.pop_back();
+    if (limitOffer.request) {
+        std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> json(prJsonWriterCreate(), prJsonWriterDestroy);
+        prJsonWriterBeginObject(json.get());
+        prJsonWriterKey(json.get(), {"account", 7});
+        prJsonWriterString(json.get(), {limitOffer.account.data(), limitOffer.account.size()});
+        prJsonWriterKey(json.get(), {"model", 5});
+        prJsonWriterString(json.get(), {limitOffer.model.data(), limitOffer.model.size()});
+        prJsonWriterKey(json.get(), {"waiting", 7});
+        prJsonWriterBool(json.get(), limitOffer.waiting);
+        prJsonWriterKey(json.get(), {"connected", 9});
+        prJsonWriterBool(json.get(), limitOffer.connected);
+        prJsonWriterEndObject(json.get());
+        const auto text = prJsonWriterText(json.get());
+        context += ",\"limit_offer\":";
+        context.append(text.data, text.size);
+    }
     context += ",\"sign_in_account\":";
     if (signInAccount.name.empty()) {
         context += "null}";
@@ -366,10 +398,10 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     std::map<std::string, TabType> registrations;
     std::vector<TabGroup> layout;
     std::optional<bool> mayClose;
-    std::string caption, autoLabel;
+    std::string caption, autoLabel, accountLabel, modelLabel;
     float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, opacity, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, why)) {
         if (generation != appliedGeneration_ || groups != layout || types != registrations)
             ++layoutGeneration;
         appliedGeneration_ = generation;
@@ -380,6 +412,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         closable = mayClose;
         label = std::move(caption);
         autoAccountLabel = std::move(autoLabel);
+        limitAccountLabel = std::move(accountLabel);
+        limitModelLabel = std::move(modelLabel);
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;
@@ -395,7 +429,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, opacity, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, why)) {
             keys.clear();
             parts.clear();
             registrations.clear();
@@ -415,6 +449,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         }
         label = std::move(caption);
         autoAccountLabel = std::move(autoLabel);
+        limitAccountLabel = std::move(accountLabel);
+        limitModelLabel = std::move(modelLabel);
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;

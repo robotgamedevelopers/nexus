@@ -1765,6 +1765,77 @@ void accountPickerIsAnExplicitChoice() {
 
 }
 
+void fableLimitOffersKeyboardAndMouseChoices() {
+    Harness h(friendsNamed(2), true, true);
+    test::FakeLink link;
+    FrameHost host;
+    host.model = &h.model;
+    host.view = &h.view;
+    host.connect(&link, "test");
+    h.view.selected = [&] { host.personSelected(); };
+    const auto publish = [&](std::uint64_t request, std::string next, std::string model) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 19;
+        session->info = {"f1", "claude", "first", "fable", ""};
+        session->info.limitRequest = request;
+        session->info.limitAccount = std::move(next);
+        session->info.limitModel = std::move(model);
+        link.state.phase = sync::LinkPhase::Connected;
+        link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setFriends({{"f1", {{"first"}, {"second"}}}, {"f2"}});
+        link.changed = true;
+        host.pollLink();
+        h.frame();
+    };
+    publish(0, "", "");
+    h.commandDigit(2);
+    h.type("unsent draft");
+    link.sent.clear();
+    publish(87, "second", "opus");
+    CHECK(h.hasText(h.window(), "Out of Fable. Switch to another account or drop to Opus?"));
+    CHECK(h.view.promptBox == kPrLayoutNodeNone && h.active().draft == "unsent draft");
+    h.enter();
+    CHECK(link.sent.empty());
+    const auto old = h.view.displayedLimit;
+    const auto mods = style::kCommand | PrAppModifierFlag_Shift;
+    h.key(PrAppKey('O'), PrAppKeyCode_KeyO, mods);
+    h.frame();
+    CHECK(link.sent.size() == 1);
+    if (link.sent.size() != 1) return;
+    const auto& first = link.sent.front();
+    CHECK(first.kind == sync::ActionKind::ResolveLimit && first.session == 19 && first.request == 87);
+    CHECK(first.account == "first" && first.text == "model" && first.friendName == "opus");
+    CHECK(h.hasText(h.window(), "Waiting for the server to resume the conversation…"));
+    h.key(PrAppKey('A'), PrAppKeyCode_KeyA, mods);
+    CHECK(link.sent.size() == 1);
+
+    publish(88, "second", "");
+    CHECK(h.hasText(h.window(), "Out of Fable. Switch to another account?"));
+    h.view.resolveLimit(old, "account");
+    h.key(PrAppKey('O'), PrAppKeyCode_KeyO, mods);
+    CHECK(link.sent.size() == 1);
+    const auto button = h.findText(h.window(), h.view.windowApp.limitAccountLabel);
+    CHECK(button != kPrLayoutNodeNone);
+    if (button == kPrLayoutNodeNone) return;
+    const auto point = h.centre(button);
+    h.pointer(PrAppEventKind_PointerDown, point);
+    h.pointer(PrAppEventKind_PointerUp, point);
+    CHECK(link.sent.size() == 2);
+    if (link.sent.size() != 2) return;
+    const auto& second = link.sent.back();
+    CHECK(second.kind == sync::ActionKind::ResolveLimit && second.request == 88 &&
+          second.text == "account" && second.friendName == "second" && second.account == "first");
+
+    publish(89, "", "opus");
+    CHECK(h.hasText(h.window(), "Out of Fable. Drop to Opus?"));
+    h.commandDigit(3);
+    h.key(PrAppKey('O'), PrAppKeyCode_KeyO, mods);
+    CHECK(h.active().name == "f2" && link.sent.size() == 2);
+    h.commandDigit(2);
+    publish(0, "", "");
+    CHECK(h.active().draft == "unsent draft" && h.view.promptBox != kPrLayoutNodeNone);
+}
+
 void arrowsFollowTheActiveTab() {
     Harness h = withSprint(2);
     std::vector<std::string> pickerCommands;
@@ -2509,6 +2580,7 @@ int main(int argc, char** argv) {
     commandOneWithCapsLockSelectsTheSprintTab();
     arrowsFollowTheActiveTab();
     accountPickerIsAnExplicitChoice();
+    fableLimitOffersKeyboardAndMouseChoices();
     onlyTheActiveTabShowsSelected();
     sprintTabTakesNoText();
     sprintTabNeverMoves();

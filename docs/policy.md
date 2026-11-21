@@ -94,6 +94,16 @@ the sign-in card. A same-friend copy inherits the source selection mode. Named d
 `account_default`, either `"first"` (stock) or `"preferred"`. Forks can set `auto_accounts` to false to use
 named defaults for every new session.
 
+## Fable limit choices
+
+When the provider reports a Fable-specific limit, the friend tab keeps the transcript visible and holds its draft while you choose how to continue. Press Command-Shift-A to switch to the offered account or Command-Shift-O to use the offered model on the current account. Each button also responds to a click. The server supplies the available choices and validates the choice against the interrupted turn.
+
+In the client's `window` event, `limit_offer` is present for an interrupted turn. It contains the proposed `account` and `model` (empty when unavailable), plus `connected` and `waiting`. The stock policy renders the `limit_choice` panel using `label` for the question and `limit_account_label` and `limit_model_label` for the buttons. Change the wording in the fork's `client/window.star`. Set `limit_choice_keys` in the client configuration to customize the bindings, for example:
+
+```json
+{"limit_choice_keys": {"account": "Command+Shift+A", "model": "Command+Shift+O"}}
+```
+
 ## Events available in the native hosts
 
 | Host and event | Context | Result |

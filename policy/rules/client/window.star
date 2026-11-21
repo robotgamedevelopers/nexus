@@ -117,6 +117,38 @@ def handle(event, state, config):
             caption = "This tab type is no longer registered."
             if group == None:
                 closable = True
+        account_button = ""
+        model_button = ""
+        offer = state.get("limit_offer")
+        if state["tab"] == "friend" and offer:
+            panels = ["transcript", "limit_choice"]
+            account = offer["account"]
+            model = offer["model"]
+            model_name = "Opus" if model == "opus" else model
+            if not offer["connected"]:
+                caption = "Reconnecting to resume the Fable choice…"
+            elif offer["waiting"]:
+                caption = "Waiting for the server to resume the conversation…"
+            else:
+                if account and model:
+                    caption = "Out of Fable. Switch to another account or drop to " + model_name + "?"
+                elif account:
+                    caption = "Out of Fable. Switch to another account?"
+                elif model:
+                    caption = "Out of Fable. Drop to " + model_name + "?"
+                else:
+                    caption = "Out of Fable. No other account or model is available."
+                keys = config.get("limit_choice_keys", {})
+                if account:
+                    chord = keys.get("account", "Command+Shift+A")
+                    account_button = "Switch to " + account + "  (" + chord + ")"
+                    if not state.get("account_picker_open"):
+                        shortcuts = _bind(shortcuts, chord, ["resolve_limit", "account"])
+                if model:
+                    chord = keys.get("model", "Command+Shift+O")
+                    model_button = "Use " + model_name + "  (" + chord + ")"
+                    if not state.get("account_picker_open"):
+                        shortcuts = _bind(shortcuts, chord, ["resolve_limit", "model"])
         if state.get("account_picker_open", False):
             for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
@@ -131,6 +163,8 @@ def handle(event, state, config):
             "panels": panels,
             "tab_types": types,
             "label": caption,
+            "limit_account_label": account_button,
+            "limit_model_label": model_button,
         }
     if event == "prompt_key":
         if state["text"] == "/logout":

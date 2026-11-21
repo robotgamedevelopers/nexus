@@ -227,6 +227,11 @@ void FrameHost::pollLink() {
         std::erase_if(accountSelections_, [&](const auto& pending) {
             return !s.sessions.nextAction() || !s.sessions.find(pending.first) || s.sessions.nextAction() > pending.second;
         });
+        std::erase_if(limitSelections_, [&](const auto& pending) {
+            const auto* session = s.sessions.find(pending.first);
+            return !session || session->info.limitRequest != pending.second.request ||
+                s.sessions.nextAction() > pending.second.action;
+        });
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
@@ -427,7 +432,33 @@ void FrameHost::pickerCommand(const std::string& command) {
     picker = AccountPicker::open(tab, *session, *roster, direction);
 }
 
+LimitOffer FrameHost::currentLimit() const {
+    if (!model->tab_count()) return {};
+    const auto& tab = model->tab(model->active());
+    if (tab.kind != TabKind::Friend) return {};
+    const auto* session = accountState_.find(mirror.session(tab.id));
+    if (!session || !session->info.limitRequest) return {};
+    const auto& info = session->info;
+    return {session->id, info.limitRequest, info.account, info.limitAccount, info.limitModel,
+        limitSelections_.contains(session->id) || accountSelections_.contains(session->id),
+        phase == sync::LinkPhase::Connected};
+}
+
 void FrameHost::wire() {
+    view->limitOffer = [this] { return currentLimit(); };
+    view->resolveLimit = [this](const LimitOffer& shown, const std::string& choice) {
+        if (!link || !shown.connected || !shown.request || shown.waiting || shown != currentLimit()) return;
+        sync::Action action;
+        if (choice == "account") action.friendName = shown.account;
+        else if (choice == "model") action.friendName = shown.model;
+        if (action.friendName.empty()) return;
+        action.kind = sync::ActionKind::ResolveLimit;
+        action.session = shown.session;
+        action.request = shown.request;
+        action.account = shown.owner;
+        action.text = choice;
+        limitSelections_[shown.session] = {shown.request, link->send(std::move(action))};
+    };
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
     view->dismissFriend = [this](const Tab& tab) {
@@ -547,6 +578,8 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             view->problem = "Use Enter in the friend composer to sign out.";
             return;
         }
+        const auto* current = accountState_.find(sync::sessionOf(*model, i, mirror));
+        if (current && current->info.limitRequest) return;
         if (i == model->active() && activateSignIn()) return;
         std::string text;
         std::string why;

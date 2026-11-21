@@ -194,6 +194,9 @@ struct FrameHost {
 private:
     sync::Sessions accountState_;
     std::map<sync::SessionId, std::uint64_t> accountSelections_; // wait for the exact server result
+    struct LimitSelection { uint64_t request, action; };
+    std::map<sync::SessionId, LimitSelection> limitSelections_;
+    LimitOffer currentLimit() const;
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
     const sync::AccountChoice* activeChoice() const;
     const sync::SignInOffer* offerFor(const std::string& account) const;

@@ -417,6 +417,26 @@ struct Builder {
             label(element(parent, Part::CaptionBubble), text, appearance);
     }
 
+    void limitPanel(PrLayoutNode parent) {
+        const auto& app = view.windowApp;
+        if (!app.limitOffer.request) return;
+        const auto card = element(element(parent, Part::Footer), Part::CaptionBubble);
+        auto body = textStyle(PrKitTextRole_Body, kChatTone);
+        body.wrap = PrKitWrap_Wrap;
+        label(card, app.label, body);
+        auto option = [&](const char* choice, const std::string& target, const std::string& title) {
+            if (target.empty() || title.empty() || app.limitOffer.waiting || !app.limitOffer.connected) return;
+            const auto id = std::to_string(app.limitOffer.session) + "/" + std::to_string(app.limitOffer.request) +
+                "/" + choice + "/" + target;
+            const auto button = prKitButton(kit, card, {.key = prUiKey(ui, card, sv(id)), .text = sv(title)}, {});
+            if (!asking && !view.accountPicker && view.displayedLimit == app.limitOffer &&
+                    prKitActivated(kit, button) && view.resolveLimit)
+                view.resolveLimit(app.limitOffer, choice);
+        };
+        option("account", app.limitOffer.account, app.limitAccountLabel);
+        option("model", app.limitOffer.model, app.limitModelLabel);
+    }
+
     void accountPanel(PrLayoutNode parent) {
         const auto& selected = view.windowApp.signInAccount;
         if (selected.name.empty()) return;
@@ -1389,6 +1409,7 @@ struct Builder {
             view.cutComing = false;
         }
         page(window, composing);
+        view.displayedLimit = view.windowApp.limitOffer;
         secretDialog(window);
     }
 
@@ -1403,7 +1424,8 @@ struct Builder {
             view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
                 !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string(),
                 active && active->kind == TabKind::Friend && view.signInAccount ? view.signInAccount() : SignInAccount{},
-                view.accountPicker.has_value());
+                view.accountPicker.has_value(),
+                active && active->kind == TabKind::Friend && view.limitOffer ? view.limitOffer() : LimitOffer{});
         };
         describe();
         if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
@@ -1429,6 +1451,10 @@ struct Builder {
                 if (model.move_tab(from, to) && view.moved) view.moved();
                 break;
             }
+            case WindowCommand::ResolveLimit:
+                if (!view.accountPicker && view.displayedLimit == view.windowApp.limitOffer && view.resolveLimit)
+                    view.resolveLimit(view.displayedLimit, key.type);
+                break;
             case WindowCommand::AccountPicker:
                 if (view.pickerCommand) view.pickerCommand(key.type);
                 break;
@@ -1516,6 +1542,7 @@ struct Builder {
                 case Panel::Terminal: terminal(window, model.tab(model.active())); break;
                 case Panel::Transcript: transcript(window); break;
                 case Panel::Prompt: prompt(element(window, Part::Footer), composing); break;
+                case Panel::LimitChoice: limitPanel(window); break;
                 case Panel::Account: accountPanel(window); break;
                 case Panel::Native: {
                     const auto& tab = model.tab(model.active());

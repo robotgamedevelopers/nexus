@@ -12,7 +12,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker };
+enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, ResolveLimit };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -20,7 +20,7 @@ struct Shortcut {
     int argument;
     std::string type{};
 };
-enum class Panel { Board, Terminal, Transcript, Prompt, Status, Account, Native, TextArea, Label, ServiceReply };
+enum class Panel { Board, Terminal, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply };
 struct TabType {
     std::string title, group, native, service;
     bool operator==(const TabType&) const = default;
@@ -53,11 +53,18 @@ struct SignInAccount {
     bool operator==(const SignInAccount&) const = default;
 };
 
+struct LimitOffer {
+    uint64_t session = 0, request = 0;
+    std::string owner{}, account{}, model{};
+    bool waiting = false, connected = false;
+    bool operator==(const LimitOffer&) const = default;
+};
+
 class WindowApplication {
 public:
     void update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen, bool hasStatus,
                 std::size_t activeTab, std::size_t tabCount, const std::string& group = {}, SignInAccount account = {},
-                bool pickerOpen = false);
+                bool pickerOpen = false, LimitOffer offer = {});
     std::vector<Shortcut> shortcuts;
     std::vector<Panel> panels;
     std::map<std::string, TabType> types;
@@ -67,6 +74,8 @@ public:
     std::string label;
     std::string autoAccountLabel = "auto";
     SignInAccount signInAccount;
+    LimitOffer limitOffer;
+    std::string limitAccountLabel, limitModelLabel;
     MessageCardStyle messageCard;
     TranscriptStyle transcriptStyle;
     float overlayOpacity = style::kOverlayOpacity;
