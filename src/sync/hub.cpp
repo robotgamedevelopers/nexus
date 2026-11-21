@@ -1226,9 +1226,24 @@ bool Hub::rotate(SessionId id, std::string* why) {
     }
     SessionInfo info = s->info;
     const std::string was = info.account.empty() ? std::string("in use") : info.account;
-    const std::string next = accounts::nextUp(*accounts_, signedIn_, info.friendName, info.account);
+    std::string next;
+    std::string policyReason;
+    const auto* who = accounts_->friendNamed(info.friendName);
+    if (accountPolicy_ && who) {
+        std::vector<std::string> eligible;
+        for (const auto& name : who->accounts) {
+            if (name != info.account && signedIn_.count(name))
+                eligible.push_back(name);
+        }
+        next = accountPolicy_(info.account, who->accounts, eligible, policyReason);
+        if (policyReason.empty() && next.empty() && !eligible.empty())
+            policyReason = "account_after_limit chose to keep the current account";
+    } else {
+        next = accounts::nextUp(*accounts_, signedIn_, info.friendName, info.account);
+    }
     if (next.empty()) {
-        const std::string notice = "The account " + was + " reached its usage limit, and " + info.friendName +
+        const std::string notice = !policyReason.empty() ? "Account policy: " + policyReason + ". See docs/policy.md." :
+            "The account " + was + " reached its usage limit, and " + info.friendName +
             " has no other signed-in account to move to. Link another account to " + info.friendName + " in "
             "friends.json, or sign in one it has (docs/accounts.md).";
         std::string failed;
@@ -1236,7 +1251,8 @@ bool Hub::rotate(SessionId id, std::string* why) {
             return refuse(failed);
         }
         refresh(id);
-        return refuse("session " + std::to_string(id) + ": " + info.friendName + " has no other signed-in account");
+        return refuse("session " + std::to_string(id) + ": " +
+            (policyReason.empty() ? info.friendName + " has no other signed-in account" : policyReason));
     }
     info.account = next;
     info.harness = harnessOf(next, info.harness);

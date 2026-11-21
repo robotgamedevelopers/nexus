@@ -1100,7 +1100,8 @@ struct Builder {
         // (beginWindowFrame).
         for (const TextKey& t : kTextKeys) {
             if (prUiKeyCaptured(ui, keys, t.key, t.modifiers))
-                view.askedTextSteps = std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
+                view.askedTextSteps = view.textZoom ? view.textZoom(view.askedTextSteps, t.steps) :
+                    std::clamp(view.askedTextSteps + t.steps, -kTextStepsDown, kTextStepsUp);
         }
         // Command-T adds a terminal tab at the end and shows it; Command-W closes the tab that shows if it is a
         // terminal's, and the tab selected before it shows (Model::close_tab), and does nothing on a friend's or the

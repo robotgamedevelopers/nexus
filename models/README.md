@@ -426,7 +426,7 @@ The binding: `tests/model/overlay_walk.cpp` (`overlay_walk <seed> <steps> [--fau
 | `IdsDense` | invariant | the sessions made are exactly the ids below the next |
 | `MovedIsTold` | action | a session's account, harness or instance changes without a notice only when the person set its account |
 | `ServerPicksSignedIn` | action | an account the server picks (a rotation, a move off an unlinked account) is signed in |
-| `RotateMoves` | action | a rotation moves the session whenever its friend has another signed-in linked account |
+| `RotateMoves` | action | the shipped policy moves whenever the friend has another signed-in linked account. MCAccountsPolicy explores every eligible choice and declining the move |
 | `SetExact` | action | a set is taken exactly when the account is linked to the session's friend (or none), and gives it that one |
 | `OnlyItsSession` | action | a set or a rotation changes no other session |
 | `ApiAlwaysLimited` | invariant | no driver of a session on an account billed at API rate starts unlimited |

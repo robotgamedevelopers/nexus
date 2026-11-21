@@ -123,6 +123,7 @@ struct View {
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
+    std::function<int(int current, int delta)> textZoom;
     int askedTextSteps = 0;                     // the text scale the keys asked for, applied at the next frame's start
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when

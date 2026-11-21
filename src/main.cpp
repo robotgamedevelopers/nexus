@@ -93,6 +93,7 @@
 #include "terminals.h"
 #include "url_opener.h"
 #include "view.h"
+#include "policy/host.h"
 
 #if NEXUS_LINK
 #include "link/client_port.h"
@@ -701,8 +702,8 @@ int main(int argc, char** argv) {
     // The window's home, ~/.nexus/client (client_home.h), made mode 0700 if missing. On Windows the window has no
     // terminal: its error lines go to nexus.log there (src/platform.h). Then its config, whose problems are logged
     // (clientConfig also says when there is no home to read it from). A screenshot of a state file reads neither.
+    std::string home;
     if (state == nullptr) {
-        std::string home;
         std::string homeWhy;
         const bool haveHome = clientHome(&home, &homeWhy);
         const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
@@ -907,6 +908,10 @@ int main(int argc, char** argv) {
     // The text scale the person last chose, applied at the first frame, and each change saved as it is applied. A
     // screenshot draws at the default scale and saves nothing.
     if (live) {
+        static policy::Host clientPolicy("client");
+        a.view.textZoom = [path = home.empty() ? std::string() : home + "/policy.bundle.json"](int current, int delta) {
+            return policy::textZoom(clientPolicy, path, current, delta, -style::kTextStepsDown, style::kTextStepsUp);
+        };
         std::string scaleWarning;
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
         if (!scaleWarning.empty())

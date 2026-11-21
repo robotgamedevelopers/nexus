@@ -39,6 +39,7 @@ endforeach()
 # one (amd-2, 2026-11-15) 16.2 s / 124 CPU s, against 26.3 s / 106 on four. In a CI shard of its own (SHARD: capped at
 # the shard's budget, 80 s).
 tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8 SHARD)
+tlc_test(tlc_accounts_policy MCAccounts MCAccountsPolicy.cfg pass WORKERS 2)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # MCAccountsInstances.cfg: one account, two friends, two instance names, two sessions: the instances' rules.
 tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 4)

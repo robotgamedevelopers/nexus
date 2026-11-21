@@ -26,7 +26,7 @@ with the commands below.
   own login). A new session takes the account of the session it copies when that account is linked to its friend,
   else the friend's default. A session's harness is its account's provider, so switching a session's account can
   switch harness.
-- When a session's account reaches its usage limit, the server moves it to the friend's next signed-in linked account,
+- When a session's account reaches its usage limit, the shipped server policy picks the friend's next signed-in linked account,
   in link order, and tells the session. If there is none, the session is told that too, and stays.
 - When a change takes a friend out of friends.json, the server stops the work running in each of its sessions (the
   turn open gets the person's stop; its driver is ended) and tells each session once. The sessions are kept as they
@@ -166,7 +166,7 @@ The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
 | `friends` | top | yes | a list of friends, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
 | `name` | each friend | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the friends |
 | `limit` | each friend | no (`true`) | `true` or `false`, without quotes: whether the friend's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for a friend that links an account with `"billing": "api"` |
-| `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the order is the order a rotation at a usage limit goes through them |
+| `accounts` | each friend | no (none) | a list of account names from accounts.json, each once; the shipped account rotation policy uses this order (see [customizing policy](policy.md)) |
 | `default` | each friend | no (none) | one of the friend's `accounts`, or `null` for none |
 | `instances` | each friend | no (none) | a list of instances, in order; the first is the friend's default instance |
 | `name` | each instance | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among its friend's instances (two friends may use the same name) |

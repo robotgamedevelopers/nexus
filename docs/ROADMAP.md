@@ -72,7 +72,7 @@
 
 | feature | done |
 |---|:---:|
-| Portable personal configuration and server-side Starlark policy: the engine asks typed questions and validates the answers. Driver-start model and effort defaults are implemented (docs/policy.md); extend coverage across the non-core choices so a person and their AIs can change how they work without rebuilding Nexus | ❌ |
+| Fork-owned configuration and Starlark in the client and server. Both native hosts run editable rules with shared modules and preview/apply. Text zoom, account rotation and driver-start defaults are implemented (docs/policy.md). Extend coverage across non-core choices without rebuilding Nexus | ❌ |
 | Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per friend or a tab per instance of a friend (the server sends every session's friend and instance names, and keeps no tabs of its own) | ❌ |
 | A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched) | ❌ |
 | Promote one machine's client config to the template, with a pending update for every other machine (later) | ❌ |

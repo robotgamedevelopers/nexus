@@ -322,6 +322,9 @@ public:
     // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
     // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
     // why, when the session is not held, the hub holds no accounts, or there was none to move to.
+    using AccountPolicy = std::function<std::string(const std::string&, const std::vector<std::string>&,
+        const std::vector<std::string>&, std::string&)>;
+    void rotateWith(AccountPolicy choose) { accountPolicy_ = std::move(choose); }
     bool rotate(SessionId id, std::string* why = nullptr);
 
     // The secret dialog (sync/secrets.h, docs/secrets.md, models/Secrets.tla). Until secretsWith() the hub takes no
@@ -431,6 +434,7 @@ private:
     Sessions state_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
+    AccountPolicy accountPolicy_;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
     SecretDesk desk_;

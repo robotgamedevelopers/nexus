@@ -314,15 +314,22 @@ SetSession(s, a) ==
 
 \* The server's, where a usage limit is reported: the friend's next signed-in linked account after the session's, in
 \* link order. The session is told either way: of the switch, or that there is none to switch to.
-Rotate(s) ==
+RotateTo(s, n) ==
     IF ses[s].made
-    THEN LET n == NextUp(ses[s].friend, ses[s].acct) IN
-         IF n = None
+    THEN IF n = None
          THEN Refused("rotate", None, None, s, {s})
          ELSE /\ ses' = [ses EXCEPT ![s].acct = n, ![s].harness = prov[n]]
               /\ Done("rotate", None, n, s, TRUE) /\ told' = {s}
               /\ UNCHANGED <<acct, prov, known, links, dflt, insts, nextSes, lim, bill, run>>
     ELSE Refused("rotate", None, None, s, {})
+
+Rotate(s) == RotateTo(s, IF ses[s].made THEN NextUp(ses[s].friend, ses[s].acct) ELSE None)
+
+\* A fork may decline the move or pick any other signed-in linked account.
+PolicyRotate(s) ==
+    IF ses[s].made
+    THEN \E n \in {None} \cup {a \in Range(links[ses[s].friend]) : a /= ses[s].acct /\ Up(a)} : RotateTo(s, n)
+    ELSE RotateTo(s, None)
 
 \* A session made with friend f, copying session `from` (0: none): its account when linked to f (or none), else
 \* f's default; its instance when `from` is f's and f still has it, else f's default instance. Past the limit, or
@@ -399,6 +406,10 @@ Next == NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, Rota
                     ReloadProvider)
 
 Spec == Init /\ [][Next]_vars
+
+PolicyNext == NextWith(AddAccount, RemoveAccount, Unlink, SetDefault, SetSession, PolicyRotate, Create, ReloadDropLink,
+                       ReloadProvider)
+PolicySpec == Init /\ [][PolicyNext]_vars
 
 -----------------------------------------------------------------------------
 \* Invariants.

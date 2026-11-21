@@ -167,8 +167,10 @@ Replace `main` with the account linked to the friend. Follow the sign-in in Nexu
 a message and press Enter. The server reports the result of sign-in to the command.
 See [accounts and friends](docs/accounts.md) for configuration.
 
-A [personal Starlark policy](docs/policy.md) can choose model and effort defaults on the server. Edit the profile
-to change the next driver start without rebuilding Nexus.
+Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
+rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
+without rebuilding or restarting. The first hooks cover text zoom and account selection after a usage limit.
+The Claude driver also supports model and effort defaults at startup. See [customizing Nexus in your fork](docs/policy.md).
 
 Model and effort can be set in the drivers file and
 changed between turns. Build and test it:
@@ -220,6 +222,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 open build/nexus.app
 ```
+
+The window and server builds use Rust and Cargo (with the dependency versions locked in `policy/native/Cargo.lock`)
+to embed Starlark and build the policy CLI.
 
 The window and `nexus-server` need protobuf for mosh's transport (on macOS, `brew install protobuf`; zlib and the
 crypto come with macOS). Without it, configure with `-DNEXUS_LINK=OFF` for the window alone, without `--server`. A

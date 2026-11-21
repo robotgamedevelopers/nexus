@@ -134,6 +134,10 @@ if(NEXUS_SANDBOX_TOOLS)
     include(cmake/sandbox.cmake)
 endif()
 
+if(NEXUS_LINK OR NEXUS_WINDOW)
+    include(cmake/policy.cmake)
+endif()
+
 # The non-drawing logic: tabs, transcripts, drafts, send and queue, and when the overlay shows and hides (overlay.h).
 # No OS, no time.
 add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
@@ -338,7 +342,7 @@ if(NEXUS_LINK)
     # The server the window talks to with --server: headless, on the machine that keeps going.
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
+    target_link_libraries(nexus_server PUBLIC nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
         nexus_signin_runner nexus_handover nexus_supervision)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
@@ -354,7 +358,7 @@ if(NEXUS_LINK)
     add_library(nexus_server_leaky STATIC EXCLUDE_FROM_ALL src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
     target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
-    target_link_libraries(nexus_server_leaky PUBLIC nexus_link nexus_durable nexus_drivers nexus_config_repo
+    target_link_libraries(nexus_server_leaky PUBLIC nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo
         nexus_builds nexus_signin_runner nexus_handover nexus_supervision)
     add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
     target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})
@@ -385,7 +389,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
         endif()
     endif()
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus PRIVATE nexus_frame nexus_view nexus_terminals nexus_board
+    target_link_libraries(nexus PRIVATE nexus_policy nexus_frame nexus_view nexus_terminals nexus_board
         prax::studio_app prax::gpu prax::image prax::compress)
     if(NEXUS_LINK)
         target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
@@ -405,6 +409,15 @@ if(WIN32 AND NOT NEXUS_WINDOW)
 endif()
 
 enable_testing()
+if(TARGET nexus_policy)
+    add_executable(policy_reload_test tests/policy/reload.cpp)
+    target_link_libraries(policy_reload_test PRIVATE nexus_policy)
+    target_compile_options(policy_reload_test PRIVATE ${NEXUS_WARNINGS})
+    add_test(NAME policy_functional_reload COMMAND ${CMAKE_COMMAND}
+        "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_reload_test>"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-reload-test" -P "${PROJECT_SOURCE_DIR}/tests/policy/reload.cmake")
+    set_tests_properties(policy_functional_reload PROPERTIES LABELS functional TIMEOUT 30)
+endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)
 add_subdirectory(tests/accounts)

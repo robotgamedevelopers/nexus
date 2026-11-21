@@ -77,6 +77,7 @@ jobs:
             echo "CCACHE_MAXSIZE=4G"
             echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
             echo "JOBS=$(sh .github/job-cores.sh)"
+            echo "CARGO_BUILD_JOBS=$(sh .github/job-cores.sh)"
             echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
           } >> "$GITHUB_ENV"
       - name: Configure (Release)
