@@ -1522,6 +1522,25 @@ void testContinuation() {
               std::get<Send>(lines.front()).prompt.ends_with("original task"));
         CHECK(switched.state().waiting == std::vector<std::string>{"later task"});
     }
+    // The same selection may arrive just before the old payer reports its cap. Its report
+    // is valid for the open turn even though the session already records the new payer.
+    for (const auto cap : {ErrorCode::UsageLimit, ErrorCode::ModelLimit}) {
+        Supervisor finishing(c, {}, kStart, &o);
+        finishing.prompt("finish this", kStart);
+        finishing.message(Hello{1, "h"}, kStart);
+        finishing.setAccount("second", kStart, false);
+        CHECK(finishing.state().openTurn == 1);
+        const auto oldPayerLimit = Error{"out of credits", "wait", 1, cap};
+        o = finishing.message(oldPayerLimit, kStart);
+        CHECK(o.durable && ended(finishing, o));
+        CHECK(!finishing.state().modelLimitPending && !finishing.awaitingRotation());
+        CHECK(finishing.state().continuationPrompt == "finish this");
+        CHECK(kinds(finishing.exited("finished", kStart)) == std::vector<Kind>{Kind::Start});
+        const auto lines = written(finishing.message(Hello{1, "h"}, kStart));
+        CHECK(lines.size() == 1 && std::holds_alternative<Send>(lines.front()) &&
+              std::get<Send>(lines.front()).turn == 2 &&
+              std::get<Send>(lines.front()).prompt.ends_with("finish this"));
+    }
     Supervisor unchanged(c, s.state(), kStart, &o);
     CHECK(unchanged.setAccount("first", kStart, false).commands.empty() && unchanged.awaitingRotation());
     o = unchanged.rotationExhausted();

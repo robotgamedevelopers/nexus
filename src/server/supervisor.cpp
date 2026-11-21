@@ -423,8 +423,11 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
         const bool current = !e->turn || (*e->turn == open && open != 0);
         const bool accountLimit = e->code == ErrorCode::UsageLimit;
         const bool modelLimit = e->code == ErrorCode::ModelLimit;
-        const bool checkpoint = (modelLimit || (config_.autoAccount && accountLimit)) && current &&
-            phase_ == Phase::Working && driverAccount_ == config_.account && !driverAccount_.empty();
+        // An in-flight turn finishes on its original payer after a selection changes. A cap
+        // reported by that turn hands the unfinished work to the payer already selected.
+        const bool replacementSelected = !config_.account.empty() && config_.account != driverAccount_;
+        const bool checkpoint = current && phase_ == Phase::Working && !driverAccount_.empty() &&
+            !config_.account.empty() && (modelLimit || (accountLimit && (config_.autoAccount || replacementSelected)));
         if (checkpoint) {
             flush();
         }
@@ -440,7 +443,7 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
                 state_.exhaustedAccounts.end()) {
                 state_.exhaustedAccounts.push_back(driverAccount_);
             }
-            state_.modelLimitPending = modelLimit;
+            state_.modelLimitPending = modelLimit && !replacementSelected;
             state_.openTurn = 0;
             openPrompt_.clear();
             out_.durable = true;
