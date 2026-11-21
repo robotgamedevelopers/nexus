@@ -126,7 +126,6 @@ struct View {
     Board* board = nullptr;                     // the sprint tab's page; unset, the tab says it has none
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
-    std::string policyBundle;
     WindowApplication windowApp;
     NativeTabs nativeTabs = nativeTabTypes();
     std::map<std::string, KitTabs> extensionStrips;

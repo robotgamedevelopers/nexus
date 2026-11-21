@@ -145,29 +145,21 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 }
 } // namespace
 
-void WindowApplication::update(policy::Host& host, const std::string& path, const char* tab, const std::string& type, bool promptOpen,
+void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
     bool hasStatus) {
     const auto context = std::string("{\"tab\":\"") + tab + "\",\"type\":\"" + type + "\",\"prompt_open\":" + (promptOpen ? "true" : "false") +
         ",\"has_status\":" + (hasStatus ? "true}" : "false}");
-    const bool sameContext = context == lastContext_ && path == lastPath_;
-    bool changed = !sameContext;
-    const auto now = std::chrono::steady_clock::now();
-    if (!path.empty() && (changed || now >= nextCheck_)) {
-        std::error_code ec;
-        const auto stamp = std::filesystem::last_write_time(path, ec);
-        changed = changed || stamp != stamp_;
-        stamp_ = stamp;
-        nextCheck_ = now + std::chrono::milliseconds(250);
-    }
-    if (!changed) return;
+    const bool sameContext = context == lastContext_;
+    const auto generation = host.refresh();
+    if (sameContext && generation == generation_) return;
     lastContext_ = context;
-    lastPath_ = path;
+    generation_ = generation;
     std::string why;
     std::vector<Shortcut> keys;
     std::vector<Panel> parts;
     std::map<std::string, TabType> registrations;
     std::string caption;
-    const auto answer = host.decide(path, "app.window", context, why);
+    const auto answer = host.decide({}, "app.window", context, why);
     if (why.empty() && readWindow(answer, tab, promptOpen, keys, parts, registrations, caption, why)) {
         shortcuts = std::move(keys);
         panels = std::move(parts);

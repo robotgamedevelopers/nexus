@@ -1,8 +1,7 @@
 # Customizing Nexus in your fork
 
 The window and server each run Starlark locally. Edit the files under `policy/rules/` in your fork, preview
-an event, apply the revision on the machine running that side, and commit the files. The running process uses
-the new revision the next time that event occurs. Client decisions work when the server is offline.
+an event, apply the revision on the machine running that side, and commit the files. The server uses the new revision on its next event. The window picks it up at a frame boundary after its background reader compiles it. Client decisions work when the server is offline.
 
 | File | Used for |
 |---|---|
@@ -53,7 +52,7 @@ uses the rules packaged with its binary.
 | Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked accounts | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
 
 The shipped client advances by the key's delta. The shipped server cycles through the linked accounts in order.
-The host reads a bundle at the decision and reuses the compiled module while its contents are the same. The
+The server reads a bundle at the decision and reuses the compiled module while its contents are the same. The window reads and compiles updates off its frame thread. The
 server still owns account eligibility and the durable session move. The client owns rendering and saving its scale.
 
 ## The window and conversation applications

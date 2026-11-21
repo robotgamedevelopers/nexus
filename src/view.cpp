@@ -950,7 +950,7 @@ struct Builder {
         std::string why;
         const policy::MessageState state{tab.draft, tab.name, tab.model, tab.queue.size(),
             view.cursor && view.cursor(tab.id) == CursorState::Busy};
-        if (!policy::messagePlan(*view.application, view.policyBundle, true, key, state, plan, why) ||
+        if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
             view.problem = "Prompt application: " + (why.empty() ? "draft exceeds the prompt limit" : why);
             return;
@@ -1164,7 +1164,7 @@ struct Builder {
                 case TabKind::Extension: tab = "extension"; break;
             }
         }
-        view.windowApp.update(*view.application, view.policyBundle, tab, model.tab_count() ? model.tab(model.active()).type : std::string(), view.promptOpen, !view.status.empty());
+        view.windowApp.update(*view.application, tab, model.tab_count() ? model.tab(model.active()).type : std::string(), view.promptOpen, !view.status.empty());
     }
 
     void shortcut(const Shortcut& key) {
@@ -1176,7 +1176,7 @@ struct Builder {
                 break;
             }
             case WindowCommand::Zoom:
-                view.askedTextSteps = policy::textZoom(*view.application, view.policyBundle, view.askedTextSteps,
+                view.askedTextSteps = policy::textZoom(*view.application, {}, view.askedTextSteps,
                     key.argument, -kTextStepsDown, kTextStepsUp);
                 break;
             case WindowCommand::OpenTerminal:

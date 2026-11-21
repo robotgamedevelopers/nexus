@@ -1,6 +1,7 @@
 // One interpreter per host. All calls are made on its owning thread.
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,10 @@ public:
     ~Host();
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
+
+    // The window starts its bundle reader before opening and adopts a ready program at frame boundaries.
+    void watch(const std::string& path);
+    uint64_t refresh();
 
     // Returns a JSON value, or an empty string and an actionable error on failure.
     std::string decide(const std::string& bundlePath, const char* event, const std::string& context, std::string& why);

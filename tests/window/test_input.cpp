@@ -1949,21 +1949,21 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 int main(int argc, char** argv) {
     if (argc == 3) {
         Harness h;
-        h.view.policyBundle = argv[1];
+        h.view.application->watch(argv[1]);
         h.type("before");
         h.enter();
         CHECK(h.active().transcript.size() == 1);
         std::filesystem::copy_file(argv[2], argv[1]);
-        h.type("after");
-        h.enter();
-        CHECK(h.active().transcript.size() == 1);
-        CHECK((h.active().queue == std::vector<std::string>{"edited after"}));
         // Wait for the running window to observe the atomic activation.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (!h.view.windowApp.types.count("editor") && std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             h.frame();
         }
+        h.type("after");
+        h.enter();
+        CHECK(h.active().transcript.size() == 1);
+        CHECK((h.active().queue == std::vector<std::string>{"edited after"}));
         h.frame();
         h.key('K', PrAppKeyCode_KeyK, style::kCommand);
         CHECK(h.view.askedTextSteps == 2);

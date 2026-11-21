@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, CString, c_char};
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 pub const LIMIT: usize = 2 * 1024 * 1024;
 
@@ -233,34 +236,125 @@ unsafe fn arg<'a>(s: *const c_char) -> Result<&'a str> {
 pub struct Host {
     side: String,
     active: Option<(Option<Vec<u8>>, Program)>,
+    watch: Option<Watch>,
+    generation: u64,
+}
+
+struct Watch {
+    stop: mpsc::Sender<()>,
+    thread: Option<JoinHandle<()>>,
+    pending: Arc<Mutex<Option<Program>>>,
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn read_revision(path: &str) -> Result<Option<Vec<u8>>> {
+    Ok(if path.is_empty() {
+        None
+    } else {
+        match read(Path::new(path)) {
+            Ok(bytes) => Some(bytes),
+            Err(e)
+                if e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                None
+            }
+            Err(e) => return Err(e.context(format!("reading {path}"))),
+        }
+    })
+}
+
+fn compile_revision(bytes: &Option<Vec<u8>>, side: &str) -> Result<Program> {
+    let bundle = match bytes {
+        Some(bytes) => serde_json::from_slice(bytes).context("reading policy bundle")?,
+        None => defaults(side)?,
+    };
+    Program::new(bundle, side)
 }
 
 impl Host {
-    fn decide(&mut self, path: &str, event: &str, context: Value) -> Result<String> {
-        let revision = if path.is_empty() {
-            None
-        } else {
-            match read(Path::new(path)) {
-                Ok(bytes) => Some(bytes),
-                Err(e)
-                    if e.downcast_ref::<std::io::Error>()
-                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    None
-                }
-                Err(e) => return Err(e.context(format!("reading {path}"))),
-            }
-        };
+    fn load(&mut self, path: &str) -> Result<()> {
+        let revision = read_revision(path)?;
         if self
             .active
             .as_ref()
             .is_none_or(|(bytes, _)| *bytes != revision)
         {
-            let bundle = match &revision {
-                Some(bytes) => serde_json::from_slice(bytes).context("reading policy bundle")?,
-                None => defaults(&self.side)?,
-            };
-            self.active = Some((revision, Program::new(bundle, &self.side)?));
+            let program = compile_revision(&revision, &self.side)?;
+            self.active = Some((revision, program));
+        }
+        Ok(())
+    }
+
+    // Load the initial window application before its first frame. A worker owns all
+    // subsequent filesystem access and compilation. Only frozen modules cross threads.
+    fn watch(&mut self, path: String) -> Result<()> {
+        let (stop, stopping) = mpsc::channel();
+        let pending = Arc::new(Mutex::new(None));
+        let publish = Arc::clone(&pending);
+        self.load("")?;
+        if let Err(e) = self.load(&path) {
+            eprintln!("nexus: client policy: {e:#}");
+        }
+        let side = self.side.clone();
+        let initial = self.active.as_ref().unwrap().0.clone();
+        let worker = thread::Builder::new()
+            .name("nexus-policy".into())
+            .spawn(move || {
+                let mut previous = initial;
+                let mut last_error = None;
+                while matches!(
+                    stopping.recv_timeout(Duration::from_millis(250)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let result = (|| -> Result<()> {
+                        let bytes = read_revision(&path)?;
+                        if previous != bytes {
+                            let program = compile_revision(&bytes, &side)?;
+                            previous = bytes;
+                            *publish.lock().unwrap() = Some(program);
+                        }
+                        Ok(())
+                    })();
+                    let error = result.err().map(|e| format!("{e:#}"));
+                    if error != last_error
+                        && let Some(e) = &error
+                    {
+                        eprintln!("nexus: client policy: {e}");
+                    }
+                    last_error = error;
+                }
+            })?;
+        self.watch = Some(Watch {
+            stop,
+            thread: Some(worker),
+            pending,
+        });
+        Ok(())
+    }
+
+    fn refresh(&mut self) -> u64 {
+        if let Some(watch) = &self.watch
+            && let Ok(mut pending) = watch.pending.try_lock()
+            && let Some(program) = pending.take()
+        {
+            self.active = Some((None, program));
+            self.generation += 1;
+        }
+        self.generation
+    }
+
+    fn decide(&mut self, path: &str, event: &str, context: Value) -> Result<String> {
+        if self.watch.is_none() {
+            self.load(path)?;
         }
         self.active.as_ref().unwrap().1.decide(event, context)
     }
@@ -279,6 +373,8 @@ pub unsafe extern "C" fn nexus_star_open_v1(
         Ok(Host {
             side: side.to_string(),
             active: None,
+            watch: None,
+            generation: 0,
         })
     })
     .unwrap_or_else(|_| Err(anyhow!("policy compiler panicked")));
@@ -289,6 +385,23 @@ pub unsafe extern "C" fn nexus_star_open_v1(
             std::ptr::null_mut()
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nexus_star_watch_v1(p: *mut Host, path: *const c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        (*p).watch(arg(path)?.to_owned())
+    }))
+    .unwrap_or_else(|_| Err(anyhow!("policy watcher panicked")));
+    result
+        .err()
+        .map(|e| message(format!("{e:#}")))
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nexus_star_refresh_v1(p: *mut Host) -> u64 {
+    unsafe { (*p).refresh() }
 }
 
 #[unsafe(no_mangle)]

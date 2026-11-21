@@ -11,6 +11,8 @@
 extern "C" {
 NexusPolicyHost* nexus_star_open_v1(const char* side, char** error);
 char* nexus_star_call_v1(NexusPolicyHost*, const char* path, const char* event, const char* context, char** error);
+char* nexus_star_watch_v1(NexusPolicyHost*, const char* path);
+uint64_t nexus_star_refresh_v1(NexusPolicyHost*);
 void nexus_star_close_v1(NexusPolicyHost*);
 void nexus_star_free_v1(char*);
 }
@@ -38,6 +40,15 @@ Host::Host(const char* side) {
 }
 
 Host::~Host() { nexus_star_close_v1(host_); }
+
+void Host::watch(const std::string& path) {
+    if (!host_) return;
+    const auto error = take(nexus_star_watch_v1(host_, path.c_str()));
+    if (!error.empty())
+        std::fprintf(stderr, "nexus: client policy watcher: %s\n", error.c_str());
+}
+
+uint64_t Host::refresh() { return host_ ? nexus_star_refresh_v1(host_) : 0; }
 
 std::string Host::decide(const std::string& path, const char* event, const std::string& context, std::string& why) {
     if (!host_) {

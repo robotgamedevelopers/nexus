@@ -908,7 +908,7 @@ int main(int argc, char** argv) {
     // screenshot draws at the default scale and saves nothing.
     if (live) {
         if (!home.empty())
-            a.view.policyBundle = home + "/policy.bundle.json";
+            a.view.application->watch(home + "/policy.bundle.json");
         std::string scaleWarning;
         a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
         if (!scaleWarning.empty())
