@@ -817,7 +817,7 @@ void continuation(Server& s, const std::string& dir, const std::string& fake) {
         "send\nrecord-send " + dir + "/sends\n"
         "on-start 1 emit {\"kind\":\"session\",\"id\":\"private-first-id\"}\n"
         "on-start 1 emit {\"kind\":\"tool\",\"name\":\"Write\",\"summary\":\"created draft.txt\"}\n"
-        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"I finished the first section.\"}\n"
+        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"" + std::string(20000, 'x') + " I finished the first section.\"}\n"
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"subscription limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
         "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Finished the remainder.\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
@@ -828,7 +828,7 @@ void continuation(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
     const std::string sends = readFile(dir + "/sends");
     CHECK(has(sends, "send 1:\nfinish my draft\n") && has(sends, "send 2:\n[nexus:"));
-    CHECK(has(sends, "Tool activity: Write: created draft.txt") && has(sends, "You: I finished the first section."));
+    CHECK(has(sends, "Tool activity: Write: created draft.txt") && has(sends, " I finished the first section."));
     CHECK(has(sends, "Do not repeat completed work.]\n\nfinish my draft\n"));
     const std::string starts = readFile(dir + "/starts.log");
     CHECK(has(starts, "account=a1\n") && has(starts, "account=a2\n") && !has(starts, "resume=private-first-id"));

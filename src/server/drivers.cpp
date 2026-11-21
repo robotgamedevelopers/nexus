@@ -182,8 +182,10 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
     std::size_t later = waiting == nullptr ? 0 : waiting->size();
     bool skippedRequest = false;
     std::vector<std::string> parts;
-    std::size_t bytes = 0;
-    for (auto it = before; it != transcript.rend() && bytes < kSummaryBytes; ++it) {
+    // Preserve recent tool outcomes even after a large streamed reply consumed the text budget.
+    std::size_t toolsLeft = waiting == nullptr ? 0 : kSummaryBytes / 4;
+    std::size_t textLeft = kSummaryBytes - toolsLeft;
+    for (auto it = before; it != transcript.rend() && (textLeft || toolsLeft); ++it) {
         if (waiting != nullptr) {
             // Later submissions are already visible in the transcript and will get their own turns.
             if ((*it)->kind == EntryKind::Person && later != 0 && (*it)->text == (*waiting)[later - 1]) {
@@ -200,8 +202,14 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
         }
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
             (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" : "nexus";
-        std::string part = std::string(who) + ": " + tailOf((*it)->text, kSummaryBytes - bytes) + "\n";
-        bytes += part.size();
+        std::size_t& left = waiting != nullptr && (*it)->kind == EntryKind::Tool ? toolsLeft : textLeft;
+        std::string part = std::string(who) + ": ";
+        if (left <= part.size() + 1) {
+            left = 0;
+            continue;
+        }
+        part += tailOf((*it)->text, left - part.size() - 1) + "\n";
+        left -= part.size();
         parts.push_back(std::move(part));
     }
     std::string text = "[nexus: this conversation with " + friendName + " continues in a fresh harness session. "

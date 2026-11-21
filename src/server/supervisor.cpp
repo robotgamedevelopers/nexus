@@ -816,7 +816,8 @@ driver::Send Supervisor::sendOf(std::uint64_t turn, const std::string& prompt) c
 // What follows every event: the oldest queued prompt taken at a turn's end, a driver under an old account ended, a
 // driver started for a waiting prompt, or the prompt written to an idle one.
 void Supervisor::advance(Millis now) {
-    if (state_.modelLimitPending || awaitingRotation()) {
+    if (state_.modelLimitPending || awaitingRotation() ||
+        (!state_.continuationPrompt.empty() && config_.command.empty())) {
         return;
     }
     if (state_.continuationPrompt.empty()) {
