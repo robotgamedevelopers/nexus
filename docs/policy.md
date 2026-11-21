@@ -159,7 +159,7 @@ carries `text`. A client `draft` replaces the current draft. A final `send` or `
 `text`. An empty list consumes the input. The server validates the entire plan before acting and commits its
 changes together with the request acknowledgement. The client accepts a single `sign_out` operation for Enter on
 the exact draft `/logout`. It targets the account the server confirmed for this conversation. The command stays in the
-window when queued or unsupported. Stop, credential input and sign-in take dedicated engine paths.
+window when queued or unsupported. Claude sign-out removes the selected Nexus login and returns the friend tab to its sign-in card. An active turn or browser sign-in must finish first. Stop, credential input and sign-in take dedicated engine paths.
 
 The shipped modules are `client/window.star`, `server/conversation.star` and `server/sessions.star`. Add modules in
 your fork, import them from an entry point, and check the imports in with the config. For a complete registration

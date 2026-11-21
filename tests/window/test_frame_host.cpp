@@ -291,11 +291,11 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     CHECK(!w.view.signOut() && w.link.sent.size() == 2);
     snapshot("claude", "work", true, 10);
     CHECK(w.view.signInAccount().name == "work");
-    CHECK(w.view.signOut() && w.link.sent.size() == 2);
+    CHECK(w.view.signOut() && w.link.sent.size() == 3);
     snapshot("muse", "work", false, 11);
-    CHECK(!w.view.signOut() && w.link.sent.size() == 2);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
     snapshot("claude", "unlinked", false, 12);
-    CHECK(!w.view.signOut() && w.link.sent.size() == 2);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
 }
 
 void enterDuringAccountSwitchWaitsForServerState() {

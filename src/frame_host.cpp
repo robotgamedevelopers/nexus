@@ -526,14 +526,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             view->problem = "Sign-out is currently available for Claude accounts.";
             return false;
         }
-        if (!choice->needsSignIn) {
-            sync::Action action;
-            action.kind = sync::ActionKind::SignOut;
-            action.session = session;
-            action.account = choice->name;
-            const auto number = link->send(std::move(action));
-            if (accountState_.nextAction()) accountSelections_[session] = number;
-        }
+        sync::Action action;
+        action.kind = sync::ActionKind::SignOut;
+        action.session = session;
+        action.account = choice->name;
+        const auto number = link->send(std::move(action));
+        if (accountState_.nextAction()) accountSelections_[session] = number;
         view->problem.clear();
         return true;
     };

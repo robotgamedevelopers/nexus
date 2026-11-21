@@ -166,7 +166,8 @@ enum ActionKind
     SecretCancel,
     SignInClaim,
     SignInOpened,
-    SignInCallback
+    SignInCallback,
+    SignOut
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,

@@ -207,6 +207,14 @@ Output Supervisor::setOptions(std::string model, std::string effort, Millis now)
     return finish();
 }
 
+Output Supervisor::retireIdleLogin(Millis now) {
+    if (phase_ == Phase::Idle) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    return finish();
+}
+
 Output Supervisor::setAccount(std::string account, Millis now) {
     config_.account = std::move(account);
     advance(now);

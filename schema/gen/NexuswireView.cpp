@@ -35,6 +35,7 @@ const UnitViewInfo * UnitView()
         { 17, "SignInClaim", 0x7439c20e4947e3b5ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 18, "SignInOpened", 0xa65506e3bb15f846ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 19, "SignInCallback", 0x5c16b9e2e6fb5e04ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 20, "SignOut", 0x5cdb26887b48e1e8ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant Activity_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -61,7 +62,7 @@ const UnitViewInfo * UnitView()
         { 5, "set_info", 0x5d21aec9380ade68ull, "SessionInfo", SessionInfoTableType(), NULL, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary enums[] = {
-        { "ActionKind", "Nexus.schema", 19, 8, 20, ActionKind_view_variants, TableDocNone, 0, NULL },
+        { "ActionKind", "Nexus.schema", 20, 8, 21, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "Nexus.schema", 3, 8, 4, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "Nexus.schema", 4, 8, 5, EntryKind_view_variants, TableDocNone, 0, NULL },
     };

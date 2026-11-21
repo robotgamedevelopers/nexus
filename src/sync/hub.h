@@ -323,6 +323,8 @@ public:
     // What says, before any driver reports, whether an account is signed in (the server: its credential file is
     // there). Asked of each account when it first appears in the registry (at useAccounts() for every one), before the
     // sessions are settled; a driver's report afterwards overrides it. Set before useAccounts().
+    // The server retires any idle driver holding this exact login and forgets its grants under the account lock.
+    void signOutWith(std::function<std::string(const accounts::Account&)> hook) { signOut_ = std::move(hook); }
     void probeSignInWith(std::function<bool(const accounts::Account&)> probe) { probe_ = std::move(probe); }
 
     // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
@@ -447,6 +449,8 @@ private:
     std::function<std::string()> bundlePath_;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
+    std::function<std::string(const accounts::Account&)> signOut_;
+    bool signOutAction(const Action& action, std::string* why, const std::string& client);
     SecretDesk desk_;
     SecretKeeper* secretKeeper_ = nullptr;
     SecretEvents* secretEvents_ = nullptr;
