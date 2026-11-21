@@ -139,7 +139,11 @@ Init ==
 ----------------------------------------------------------------------------
 \* The parts of a step, each from one supervisor record to the next.
 
-Fx(x, e) == [x EXCEPT !.fx = Append(@, e)]
+\* These three output sequences are observations for the safety properties and code traces. No Next guard,
+\* operational update or fairness condition reads them. The Settles-only checks can therefore take exactly the
+\* same steps, including every account/owner and directory change, while omitting their output history.
+RecordOutput(history, event) == Append(history, event)
+Fx(x, e) == [x EXCEPT !.fx = RecordOutput(@, e)]
 
 \* The text gathered for the open turn goes into the tab as the friend's entry.
 Flush(x) == IF x.gathered THEN [Fx(x, E("F", x.open, 0)) EXCEPT !.gathered = FALSE] ELSE x
@@ -171,7 +175,7 @@ WriteNextWith(V(_), x) ==
     IF x.phase = "idle" /\ x.waiting # <<>>
     THEN LET p == Head(x.waiting) IN
          [x EXCEPT !.open = x.next, !.prompt = p, !.next = x.next + 1, !.waiting = Tail(x.waiting),
-                   !.written = Append(@, [p |-> p, t |-> x.next, v |-> V(x), sum |-> x.summary]), !.fate[p] = "open",
+                   !.written = RecordOutput(@, [p |-> p, t |-> x.next, v |-> V(x), sum |-> x.summary]), !.fate[p] = "open",
                    !.phase = "working", !.told = V(x), !.summary = FALSE]
     ELSE x
 Told(x) == [m |-> IF x.setting.m # "" THEN x.setting.m ELSE x.told.m,
@@ -321,7 +325,7 @@ QueuePrompt == QueuePromptWith(Advance)
 \* The person stops the friend's work: a stop for the open turn, if one is open and no stop is out; while the driver
 \* starts, the turn about to begin is cancelled (C). It never waits: it acts in the step it is given, or not at all.
 \* The stop of the open turn, written once (Supervisor::stopOpen).
-StopOpen(x) == [x EXCEPT !.phase = "stopping", !.stops = Append(@, x.open)]
+StopOpen(x) == [x EXCEPT !.phase = "stopping", !.stops = RecordOutput(@, x.open)]
 StopWith(Ok(_), C(_)) ==
     /\ Keep
     /\ s' = LET x == [Fresh EXCEPT !.asked = TRUE] IN
@@ -484,7 +488,7 @@ SetLimitWith(Sl(_, _), v) ==
 LimitSet(x, v) ==
     LET y == [x EXCEPT !.lim = v] IN
     Advance(IF v /\ ~y.dlim /\ y.phase = "working"
-            THEN [Fx(y, E("N", 0, 0)) EXCEPT !.phase = "stopping", !.stops = Append(@, y.open)]
+            THEN [Fx(y, E("N", 0, 0)) EXCEPT !.phase = "stopping", !.stops = RecordOutput(@, y.open)]
             ELSE y)
 SetLimit(v) == SetLimitWith(LimitSet, v)
 

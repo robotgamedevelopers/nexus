@@ -104,10 +104,10 @@ function(tlc_test name module cfg expect)
     set(options PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE" "" ${ARGN})
+        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
-    # of the cfg is checked.
+    # of the cfg is checked. TEMPORALCFG optionally appends model configuration to just the temporal parts.
     if(T_SPLIT)
         if(NOT T_SPLIT MATCHES "^([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_+]*)$")
             message(FATAL_ERROR "tlc_test(${name}): SPLIT is ${T_SPLIT}, not <property>=<part>+<part>")
@@ -153,6 +153,9 @@ function(tlc_test name module cfg expect)
              -DMODULE=${module} -DCFG=${cfg} -DEXPECT=${expect} -DWORKERS=${T_WORKERS} -DCAP=${cap})
     if(T_PROPERTY)
         list(APPEND defs -DPROPERTY=${T_PROPERTY})
+    endif()
+    if(T_TEMPORALCFG AND T_SPLITMODE MATCHES "^as:")
+        list(APPEND defs -DTEMPORALCFG=${T_TEMPORALCFG})
     endif()
     if(T_SPLITMODE)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})

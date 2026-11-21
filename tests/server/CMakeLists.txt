@@ -150,14 +150,16 @@ endif()
 # halves it costs less than half (Settles of one prompt 38.7 s, of both 94.2 s). So <name>_temporal_1 and _2 check
 # SettlesOdd and SettlesEven (Supervisor.tla: together, Settles) in shards of their own, and <name>_rest every
 # invariant and the other properties, a few seconds each, in the supervisor-rest shard. Between them every property is
-# checked on the same instance.
-tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD SPLIT Settles=SettlesOdd+SettlesEven)
+# checked for the same inputs and bounds. Temporal-only shards omit the write-only effects, sends and stops logs.
+# Every guard, successor on the remaining fields, fair action and Settles observation is independent of those logs.
+# The _rest shard checks safety with the full histories, including NoSendOnOldAccount and ResumesItsAccount.
+tlc_test(tlc_supervisor MCSupervisor MCSupervisor.cfg pass WORKERS 8 SHARD SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_switch MCSupervisor MCSupervisorSwitch.cfg pass WORKERS 4 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_place MCSupervisor MCSupervisorPlace.cfg pass WORKERS 8 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_signin MCSupervisor MCSupervisorSignIn.cfg pass WORKERS 8 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 # The limit's per-commit instance runs in the supervisor-rest shard on two workers, like the witnesses beside it:
 # 4,497 states, 4 s on an idle machine, so the 60 s cap leaves fifteen times that for a loaded runner. Its two-prompt
 # instance (69 s on two workers) and the wide one run nightly.
@@ -172,7 +174,7 @@ tlc_test(tlc_supervisor_limit_friend MCSupervisor MCSupervisorLimitFriend.cfg pa
 # 65,189 states, 62 s on eight workers on an M-series Mac, most of it the liveness check). The walk's restarts while
 # the friend is out are checked per commit (tlc_supervisor_trace_friends_*).
 tlc_test(tlc_supervisor_friend MCSupervisor MCSupervisorFriend.cfg pass WORKERS 8 SHARD
-    SPLIT Settles=SettlesOdd+SettlesEven)
+    SPLIT Settles=SettlesOdd+SettlesEven TEMPORALCFG SupervisorSettles.cfg)
 tlc_test(tlc_supervisor_friend_restart MCSupervisor MCSupervisorFriendRestart.cfg pass WORKERS 8 NIGHTLY CAP 900)
 # No friends list held (a start whose committed files do not read), then the first list applied: per commit, in
 # supervisor-rest (5,571 states, 6 s on eight workers).
