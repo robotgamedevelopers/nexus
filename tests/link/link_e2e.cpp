@@ -1749,7 +1749,7 @@ int verifiedClaude(const std::string& binary, const std::string& dir, const std:
     };
     const auto notice = [&](const std::string& fragment) {
         for (const auto& entry : w.session->state().sessions().front()->entries)
-            if (entry->kind == sync::EntryKind::Notice && entry->text.find(fragment) != std::string::npos) return true;
+            if (entry->kind == EntryKind::Notice && entry->text.find(fragment) != std::string::npos) return true;
         return false;
     };
     const std::string verified = accounts + "/" + account + "/verified-claude.json";
