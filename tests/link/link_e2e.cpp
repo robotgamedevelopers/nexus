@@ -1697,6 +1697,117 @@ printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","acces
     return failures == 0 ? 0 : 1;
 }
 
+// Two browser callbacks for the same requested email. The fake provider independently chooses a different
+// identity for the first and the requested one for the second. The window only knows the configured email.
+int verifiedClaude(const std::string& binary, const std::string& dir, const std::string& fakeClaude) {
+    Server server(binary, dir);
+    const std::string config = dir + "/nexus-config";
+    const std::string accounts = dir + "/home/.nexus/server/accounts";
+    const std::string account = "work";
+    const std::string other = "other";
+    std::filesystem::create_directories(config);
+    for (const auto& name : {account, other}) {
+        std::filesystem::create_directories(accounts + "/" + name);
+        CHECK(::chmod((accounts + "/" + name).c_str(), 0700) == 0);
+        const auto file = accounts + "/" + name + "/oauth-token";
+        CHECK(writeFile(file, kFakeToken));
+        CHECK(::chmod(file.c_str(), 0600) == 0);
+    }
+    accounts::Registry registry;
+    accounts::Account row{account, "claude"};
+    row.email = "work@example.test";
+    row.signInOnUse = true;
+    registry.accounts = {row, accounts::Account{other, "claude"}};
+    registry.friends = {{"fixture-friend", {account}, account}, {"fixture-other", {other}, other}};
+    CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+    CHECK(writeFile(config + "/friends.json", accounts::friendsText(registry)));
+    CHECK(writeFile(dir + "/config", "claude " + fakeClaude + "\n"));
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nfriend fixture-friend claude " +
+                    dir + "\nfriend fixture-other claude " + dir + "\n"));
+    const pid_t pid = startServe(binary, dir);
+    CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));
+    Window w;
+    link::Connect connect;
+    if (!openWindow(server, "localhost", "127.0.0.1", nullptr, &w, &connect)) return 1;
+    std::vector<Window*> windows{&w};
+    const auto until = [&](const std::function<bool()>& done) {
+        return waitFor([&] { step(windows, nullptr, 20); return done(); }, kStallSeconds);
+    };
+    sync::Action ensure;
+    ensure.kind = sync::ActionKind::Ensure;
+    ensure.friendName = "fixture-friend";
+    w.session->add(ensure);
+    if (!until([&] { return w.session->state().sessions().size() == 1; })) { CHECK(false); return 1; }
+    const auto id = w.session->state().sessions().front()->id;
+    const auto selectedNeedsLogin = [&](bool expected) {
+        for (const auto& f : w.session->state().friends()) {
+            for (const auto& a : f.accounts) {
+                if (a.name == account) return a.email == registry.accounts.front().email && a.needsSignIn == expected;
+            }
+        }
+        return false;
+    };
+    const auto notice = [&](const std::string& fragment) {
+        for (const auto& entry : w.session->state().sessions().front()->entries)
+            if (entry->kind == sync::EntryKind::Notice && entry->text.find(fragment) != std::string::npos) return true;
+        return false;
+    };
+    const std::string verified = accounts + "/" + account + "/verified-claude.json";
+    CHECK(selectedNeedsLogin(true));
+    for (bool wrong : {true, false}) {
+        const std::string opener = "fixtureWindowOpener1";
+        auto claim = signInAction(sync::ActionKind::SignInClaim, 0, opener);
+        claim.session = id;
+        claim.account = account;
+        w.session->add(claim);
+        if (!until([&] {
+                const auto& offers = w.session->state().offers();
+                return offers.size() == 1 && offers.front().opener == opener && !offers.front().url.empty();
+            })) { CHECK(false); return 1; }
+        const auto& offer = w.session->state().offers().front();
+        CHECK(offer.account == account && offer.provider == "claude");
+        const auto flow = offer.id;
+        w.session->add(signInAction(sync::ActionKind::SignInOpened, flow, opener));
+        const std::string code = std::string(kFakeCode) + (wrong ? "Other" : "");
+        w.session->add(signInAction(sync::ActionKind::SignInCallback, flow, opener,
+                                    "code=" + code + "&state=" + kFakeState));
+        if (wrong) {
+            if (!until([&] { return notice("signed-in email differs"); })) { CHECK(false); return 1; }
+            CHECK(selectedNeedsLogin(true) && !std::filesystem::exists(verified));
+            CHECK(readFile(accounts + "/" + account + "/oauth-token") == kFakeToken);
+        } else {
+            if (!until([&] { return selectedNeedsLogin(false); })) { CHECK(false); return 1; }
+            CHECK(std::filesystem::exists(verified) && control(dir, "config sign-in " + account) == "OK signed in");
+        }
+    }
+    // Changing a configured email invalidates the cached login immediately. Switching back recognizes the
+    // existing matching grant, without a second browser approval.
+    for (const bool change : {true, false}) {
+        registry.accounts.front().email = change ? "new@example.test" : row.email;
+        CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
+        const auto reload = runCommand(Command{"/usr/bin/env", {"HOME=" + dir + "/home", binary, "config", "reload",
+                                               "--dir", dir}, "reload test accounts"}, 20);
+        CHECK(reload.end == CommandResult::End::Exited && reload.code == 0);
+        CHECK(until([&] { return selectedNeedsLogin(change); }));
+        CHECK(std::filesystem::exists(verified));
+    }
+    sync::Action logout;
+    logout.kind = sync::ActionKind::SignOut;
+    logout.session = id;
+    logout.account = account;
+    w.session->add(logout);
+    CHECK(until([&] { return selectedNeedsLogin(true) && notice("Signed out of work"); }));
+    CHECK(!std::filesystem::exists(verified) && !std::filesystem::exists(accounts + "/" + account + "/oauth-token"));
+    CHECK(readFile(accounts + "/" + other + "/oauth-token") == kFakeToken);
+    CHECK(control(dir, "config sign-in " + other) == "OK signed in");
+    w.session->shutdown();
+    CHECK(until([&] { return w.session->shutdownDone(); }));
+    CHECK(control(dir, "stop") == "OK");
+    int status;
+    CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    return failures == 0 ? 0 : 1;
+}
+
 // How many sessions the server log says were made (`new` answered): one line per CONNECT.
 std::size_t sessionsLogged(const std::string& dir) {
     return static_cast<std::size_t>(count(readFile(dir + "/server.log"), " on UDP port "));
@@ -1914,6 +2025,9 @@ int main(int argc, char** argv) {
     if ((argc == 5 || argc == 6) && std::strcmp(argv[3], "signin") == 0) {
         return signin(argv[1], argv[2], argv[4], argc == 6 && std::strcmp(argv[5], "leaky") == 0);
     }
+    if (argc == 5 && std::strcmp(argv[3], "verified-claude") == 0) {
+        return verifiedClaude(argv[1], argv[2], argv[4]);
+    }
     if (argc == 6 && std::strcmp(argv[3], "private-signin") == 0) {
         return privateSignIn(argv[1], argv[2], argv[4], argv[5]);
     }
@@ -1923,7 +2037,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "usage: link_e2e <nexus-server> <dir> roundtrip <host> <nexus-fake-driver> | outage | "
                          "soak <clients> <prompts> | restart | older_server | flush <nexus-fake-driver> |\n"
                          "       secret <nexus-fake-driver> | friends <nexus-fake-driver> | "
-                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | takeover\n"
+                         "signin <fake claude> [leaky] | private-signin <python> <fixture> | verified-claude <fake claude> | takeover\n"
                          "       link_e2e <nexus-server> stop <dir>...\n");
     return 2;
 }

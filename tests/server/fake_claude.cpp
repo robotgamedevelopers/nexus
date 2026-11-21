@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 #include "fake_claude.h"
@@ -153,10 +154,22 @@ void openInBrowser(const std::string& url) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2 || std::strcmp(argv[1], "setup-token") != 0) {
+    const char* config = std::getenv("CLAUDE_CONFIG_DIR");
+    const bool authLogin = argc == 6 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "login") == 0 &&
+        std::strcmp(argv[3], "--claudeai") == 0 && std::strcmp(argv[4], "--email") == 0 && config;
+    if (argc == 4 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "status") == 0 &&
+            std::strcmp(argv[3], "--json") == 0 && config) {
+        std::ifstream identity(std::string(config) + "/test-browser-email");
+        std::string email;
+        if (!(identity >> email)) return 3;
+        std::printf(R"({"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"%s"})" "\n",
+                    email.c_str());
+        return 0;
+    }
+    if (!authLogin && (argc != 2 || std::strcmp(argv[1], "setup-token") != 0)) {
         return 2;
     }
-    if (!environmentAsPromised()) {
+    if (!authLogin && !environmentAsPromised()) {
         std::printf("fake claude: the environment is not as the runner promises\r\n");
         return 3;
     }
@@ -175,6 +188,7 @@ int main(int argc, char** argv) {
     if (listener < 0) {
         return 6;
     }
+    if (authLogin) mode = "helper";
     if (mode == "group") {
         spawnGrandchild(argv[0]);
     }
@@ -235,6 +249,17 @@ int main(int argc, char** argv) {
     if (error) {
         std::printf("\x1b[31mOAuth error: access_denied\x1b[0m\r\n");
         return 1;
+    }
+    if (authLogin) {
+        // Simulate the identity chosen in the browser, independently of the --email hint used to open it.
+        const char* email = first.find(std::string(kCode) + "Other") != std::string::npos
+                          ? "other@example.test" : "work@example.test";
+        std::ofstream identity(std::string(config) + "/test-browser-email");
+        identity << email;
+        std::ofstream grant(std::string(config) + "/.credentials.json");
+        grant << R"({"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh",)"
+                 R"("expiresAt":4102444800000,"scopes":["user:profile","user:inference"]}})";
+        return identity.good() && grant.good() ? 0 : 3;
     }
     if (mode == "late") {
         // Slow to print: the token comes only once the runner has told it to end (SIGTERM), in the grace before the
