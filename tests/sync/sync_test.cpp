@@ -1005,10 +1005,11 @@ void hub_model_limit_choice() {
 
         Hub hub(store);
         accounts::Registry registry;
-        registry.accounts = {{"one", "claude"}, {"two", "claude"}};
-        registry.friends = {{"ada", {"one", "two"}, "one"}};
+        registry.accounts = {{"one", "claude"}, {"other", "codex"}, {"two", "claude"}};
+        registry.friends = {{"ada", {"one", "other", "two"}, "one"}};
         hub.useAccounts(registry, nullptr);
         hub.reportSignedIn("one", true);
+        hub.reportSignedIn("other", true);
         hub.reportSignedIn("two", true);
 
         Sessions mirror;
@@ -1032,15 +1033,22 @@ void hub_model_limit_choice() {
         CHECK(store.find(1)->driver == paused);
 
         if (changeAccount) {
+            stale = select;
+            stale.friendName = "other";  // a different provider cannot serve this model
+            CHECK(!hub.apply(stale));
+            hub.reportSignedIn("one", false);
             hub.reportSignedIn("two", false);
-            CHECK(hub.state().find(1)->info.limitAccount.empty());
+            CHECK(hub.state().find(1)->info.limitRequest == 4);
+            CHECK(hub.state().find(1)->info.limitAccount.empty() && hub.state().find(1)->info.limitModel.empty());
             CHECK(!hub.apply(select));
             CHECK(store.find(1)->driver == paused);
+            hub.reportSignedIn("one", true);
             hub.reportSignedIn("two", true);
         }
 
         CHECK(hub.apply(select, nullptr, "w"));
         const auto* result = store.find(1);
+        CHECK(result->info.harness == "claude");
         CHECK(result->info.model == (changeAccount ? "fable" : "opus"));
         CHECK(result->info.account == (changeAccount ? "two" : "one"));
         CHECK(result->driver.continuationPrompt == paused.continuationPrompt);

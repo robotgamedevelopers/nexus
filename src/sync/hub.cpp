@@ -1541,7 +1541,8 @@ void Hub::secretEffects(const SecretEffects& effects) {
     }
 }
 
-std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason) const {
+std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason,
+                                  const std::string& provider) const {
     reason.clear();
     const auto* session = store_.find(id);
     const auto* who = session && accounts_ ? accounts_->friendNamed(session->info.friendName) : nullptr;
@@ -1551,8 +1552,10 @@ std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& 
     }
     const auto& current = session->info.account;
     std::vector<std::string> eligible;
-    for (const auto& name : subscriptionsFor(who->name)) {
-        if (name != current && signedIn_.contains(name) &&
+    for (const auto& name : who->accounts) {
+        const auto* account = accounts_->account(name);
+        if (account && account->billing == accounts::Billing::Subscription &&
+                (provider.empty() || account->provider == provider) && name != current && signedIn_.contains(name) &&
                 std::find(exhausted.begin(), exhausted.end(), name) == exhausted.end())
             eligible.push_back(name);
     }
@@ -1763,11 +1766,11 @@ bool Hub::setActivity(SessionId id, Activity activity) {
 // can change its policy between those two calls.
 void Hub::offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info) {
     info.limitRequest = driver.nextTurn;
-    if (info.harness != "claude")
+    if (info.harness != "claude" || !accounts_)
         return;
     std::string reason;
-    info.limitAccount = nextSubscription(id, driver.exhaustedAccounts, reason);
-    if (accounts_ && (!accounts_->linked(info.friendName, info.account) || !signedIn_.count(info.account)))
+    info.limitAccount = nextSubscription(id, driver.exhaustedAccounts, reason, info.harness);
+    if (!accounts_->linked(info.friendName, info.account) || !signedIn_.count(info.account))
         return;
     auto model = policy::modelAfterLimit(application_, bundlePath_(), info.friendName, info.account, info.model);
     if (!model.empty() && model != info.model && model.size() <= limits_.setting && printable(model))

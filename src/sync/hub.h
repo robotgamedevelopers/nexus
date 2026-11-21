@@ -335,7 +335,8 @@ public:
     using NativeService = std::function<std::string(const std::string&)>;
     void registerService(std::string name, NativeService handler) { services_[std::move(name)] = std::move(handler); }
     // Preview the policy's next signed-in subscription, skipping payers already tried on this turn.
-    std::string nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason) const;
+    std::string nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason,
+                                 const std::string& provider = {}) const;
     // Commit an automatic move. noEligible distinguishes a settled refusal from a failed store write.
     bool rotate(SessionId id, std::string* why = nullptr, const std::vector<std::string>& exhausted = {},
                 bool* noEligible = nullptr);
