@@ -146,34 +146,72 @@ bool readGroups(const PrJson* d, const std::map<std::string, TabType>& types, st
     return true;
 }
 
+bool readColor(const PrJson* d, Index obj, PrStringView name, unsigned& value) {
+    const auto field = prJsonMember(d, obj, name);
+    if (field == kPrJsonMissing) return true;
+    const auto text = stringAt(d, field);
+    if (text.size() != 7 || text.front() != '#') return false;
+    const auto end = text.data() + text.size();
+    const auto parsed = std::from_chars(text.data() + 1, end, value, 16);
+    return parsed.ec == std::errc{} && parsed.ptr == end;
+}
+
+bool readPoints(const PrJson* d, Index obj, PrStringView name, float& value, double min, double max) {
+    const auto field = prJsonMember(d, obj, name);
+    if (field == kPrJsonMissing) return true;
+    const double n = prJsonNumber(d, field, -1);
+    if (prJsonKind(d, field) != PrJsonKind_Number || !(min <= n && n <= max)) return false;
+    value = static_cast<float>(n);
+    return true;
+}
+
+bool readFlag(const PrJson* d, Index obj, PrStringView name, bool& value) {
+    const auto field = prJsonMember(d, obj, name);
+    if (field == kPrJsonMissing) return true;
+    const auto kind = prJsonKind(d, field);
+    if (kind != PrJsonKind_True && kind != PrJsonKind_False) return false;
+    value = kind == PrJsonKind_True;
+    return true;
+}
+
 bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
     card = {};
     if (obj == kPrJsonMissing) return true;
-    if (prJsonKind(d, obj) != PrJsonKind_Object) return false;
-    auto color = [&](PrStringView name, unsigned& value) {
-        const auto field = prJsonMember(d, obj, name);
-        if (field == kPrJsonMissing) return true;
-        auto text = stringAt(d, field);
-        if (text.size() != 7 || text.front() != '#') return false;
-        const auto end = text.data() + text.size();
-        const auto parsed = std::from_chars(text.data() + 1, end, value, 16);
-        return parsed.ec == std::errc{} && parsed.ptr == end;
-    };
-    auto points = [&](PrStringView name, float& value, double min, double max) {
-        const auto field = prJsonMember(d, obj, name);
-        if (field == kPrJsonMissing) return true;
-        const double n = prJsonNumber(d, field, -1);
-        if (prJsonKind(d, field) != PrJsonKind_Number || !(min <= n && n <= max)) return false;
-        value = static_cast<float>(n);
-        return true;
-    };
-    return color({"fill", 4}, card.fill) && color({"ink", 3}, card.ink) &&
-        points({"text_size", 9}, card.textSize, 12, 72) && points({"radius", 6}, card.radius, 0, 64);
+    return prJsonKind(d, obj) == PrJsonKind_Object &&
+        readColor(d, obj, {"fill", 4}, card.fill) && readColor(d, obj, {"ink", 3}, card.ink) &&
+        readPoints(d, obj, {"text_size", 9}, card.textSize, 12, 72) &&
+        readPoints(d, obj, {"radius", 6}, card.radius, 0, 64);
 }
 
-bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card, std::vector<Shortcut>& keys,
-    std::vector<Panel>& panels, std::map<std::string, TabType>& types, std::vector<TabGroup>& groups,
-    std::optional<bool>& closable, std::string& label, float& overlayOpacity, std::string& why) {
+bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std::string& why) {
+    style = {};
+    if (obj == kPrJsonMissing) return true;
+    if (prJsonKind(d, obj) != PrJsonKind_Object) {
+        why = "transcript_style must be an object";
+        return false;
+    }
+    for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
+        const auto key = stringAt(d, i);
+        if (key != "fill" && key != "ink" && key != "notice_ink" && key != "status_ink" &&
+                key != "radius" && key != "show_notices" && key != "show_tools") {
+            why = "unknown transcript_style field: " + std::string(key);
+            return false;
+        }
+    }
+    const bool valid =
+        readColor(d, obj, {"fill", 4}, style.fill) && readColor(d, obj, {"ink", 3}, style.ink) &&
+        readColor(d, obj, {"notice_ink", 10}, style.noticeInk) && readColor(d, obj, {"status_ink", 10}, style.statusInk) &&
+        readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
+        readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools);
+    if (!valid)
+        why = "transcript_style needs #RRGGBB colors (fill, ink, notice_ink, status_ink), "
+              "radius from 0 to 64 and boolean show_notices and show_tools";
+    return valid;
+}
+
+bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
+    TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
+    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, float& overlayOpacity, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
@@ -183,6 +221,8 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         why = "message_card needs #RRGGBB fill and ink, text_size from 12 to 72, and radius from 0 to 64";
         return false;
     }
+    if (!readTranscriptStyle(d, prJsonMember(d, 0, {"transcript_style", 16}), transcript, why))
+        return false;
     overlayOpacity = style::kOverlayOpacity;
     if (opacity != kPrJsonMissing) {
         const double alpha = prJsonNumber(d, opacity, -1);
@@ -282,6 +322,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     generation_ = generation;
     std::string why;
     MessageCardStyle card;
+    TranscriptStyle transcript;
     std::vector<Shortcut> keys;
     std::vector<Panel> parts;
     std::map<std::string, TabType> registrations;
@@ -290,7 +331,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     std::string caption;
     float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, card, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
         if (generation != appliedGeneration_ || groups != layout || types != registrations)
             ++layoutGeneration;
         appliedGeneration_ = generation;
@@ -302,6 +343,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         label = std::move(caption);
         overlayOpacity = opacity;
         messageCard = card;
+        transcriptStyle = transcript;
     } else {
         std::fprintf(stderr, "nexus: window application: %s. Check client/window.star and apply again.\n", why.c_str());
         if (sameContext)
@@ -314,7 +356,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, card, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
             keys.clear();
             parts.clear();
             registrations.clear();
@@ -335,6 +377,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         label = std::move(caption);
         overlayOpacity = opacity;
         messageCard = card;
+        transcriptStyle = transcript;
     }
 }
 } // namespace nexus

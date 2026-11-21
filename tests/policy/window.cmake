@@ -1,9 +1,10 @@
 file(REMOVE_RECURSE "${ROOT}")
-file(MAKE_DIRECTORY "${ROOT}/rules" "${ROOT}/activated")
+file(MAKE_DIRECTORY "${ROOT}/rules" "${ROOT}/activated" "${ROOT}/notices")
 file(COPY "${RULES}/client" DESTINATION "${ROOT}/rules")
 file(READ "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/config.json" config)
 string(JSON config SET "${config}" overlay_opacity 0.35)
 string(JSON config SET "${config}" message_card [[{"fill":"#edf2ea","ink":"#192218","text_size":38,"radius":24}]])
+string(JSON config SET "${config}" transcript_style [[{"fill":"#102030","ink":"#f0e0d0","notice_ink":"#ffa0a0","status_ink":"#cfdfa0","radius":12,"show_notices":false,"show_tools":false}]])
 string(JSON config SET "${config}" account_shortcuts [[{"Command+ArrowUp":"custom"}]])
 file(WRITE "${ROOT}/rules/config.json" "${config}")
 file(WRITE "${ROOT}/rules/client.star" [=[
@@ -12,11 +13,28 @@ def handle(event, state, config):
     if event == "prompt_key":
         return [{"op": "queue", "text": "edited " + state["text"]}]
     window = stock(event, state, config)
+    if state["group"] == "validate-style":
+        cases = [
+            None, {}, {"ink": "#aAbBcC", "radius": 0}, {"radius": 64},
+            "bad", {"fill": False}, {"notice_ink": "#234"}, {"status_ink": "#zzzzzz"},
+            {"radius": 65}, {"radius": -1}, {"radius": True}, {"show_notices": 0},
+            {"show_tools": "false"}, {"show_tool": False},
+        ]
+        style = cases[state["active_tab"]]
+        if style == None:
+            window.pop("transcript_style")
+        else:
+            window["transcript_style"] = style
+        window["overlay_opacity"] = 0.125
     window["shortcuts"].append(["Command+K", "zoom", 2])
     return window
 ]=])
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/activated" COMMAND_ERROR_IS_FATAL ANY)
-execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
+string(JSON config SET "${config}" transcript_style show_notices true)
+file(WRITE "${ROOT}/rules/config.json" "${config}")
+execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/notices" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy.bundle.json"
+    "${ROOT}/notices/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
 
 # Exercise the fixture's server application with its own config under the test root.
 file(COPY "${RULES}/server" DESTINATION "${ROOT}/rules")

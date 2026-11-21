@@ -1,4 +1,13 @@
 {
   "account_default": "first",
-  "overlay_opacity": 0.6
+  "overlay_opacity": 0.6,
+  "transcript_style": {
+    "fill": "#252525",
+    "ink": "#f3f3f3",
+    "notice_ink": "#ffb4b4",
+    "status_ink": "#d8d8d8",
+    "radius": 25.2,
+    "show_notices": true,
+    "show_tools": true
+  }
 }

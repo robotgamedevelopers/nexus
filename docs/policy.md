@@ -83,7 +83,32 @@ server still owns account eligibility and the durable session move. The client o
 
 ## The window and conversation applications
 
-Conversation turns use dark bubbles. The person’s messages align right and the friend’s replies align left, including while streaming. Notices use ordinary muted text. When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer. A client profile can customize this card by setting `message_card` in
+The person’s messages align right and the friend’s replies align left, including while streaming. Set
+`transcript_style` in the client’s `config.json`, or return it from the Starlark `window` event to vary the
+appearance by tab. The shipped profile uses these defaults:
+
+```json
+{
+  "transcript_style": {
+    "fill": "#252525",
+    "ink": "#f3f3f3",
+    "notice_ink": "#ffb4b4",
+    "status_ink": "#d8d8d8",
+    "radius": 25.2,
+    "show_notices": true,
+    "show_tools": true
+  }
+}
+```
+
+`fill` and `ink` set the conversation bubble background and text. `notice_ink` sets the notice color and
+`status_ink` sets the status text color. Colors accept six hexadecimal digits after `#`. The corner radius
+accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
+to `false` to hide those transcript entries in the client. Their history stays available when you enable them
+again. Apply the client policy to see the changes in a running window.
+
+When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer.
+A client profile can customize this card by setting `message_card` in
 `config.json` or returning it from `app.window`. Its defaults are
 `{"fill":"#ffffff","ink":"#000000","text_size":34,"radius":20}`. Colors are opaque `#RRGGBB`.
 The text size (12–72 points) and corner radius (0–64 points) scale with keyboard zoom.

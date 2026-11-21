@@ -41,7 +41,7 @@ enum class Part : unsigned char {
     Centered,
     Entry,
     Bubble,
-    BubbleQueued,
+    CaptionBubble,
     MessageCard,
     FocusedCard,
     ActionRow,
@@ -125,7 +125,7 @@ struct BoxRecipe {
                 padding(box, kColumnInset * k, 0, 0, 0);
                 break;
             case Part::Centered:
-                box.display = PrLayoutDisplay_Block;
+                box.display = PrLayoutDisplay_Flex;
                 box.margin[PrRectSide_Top] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Bottom] = prLayoutLengthAuto();
                 break;
@@ -146,10 +146,14 @@ struct BoxRecipe {
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
                 break;
             case Part::Bubble:
-            case Part::BubbleQueued:
                 box.display = PrLayoutDisplay_Block;
                 box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
+                break;
+            case Part::CaptionBubble:
+                box.display = PrLayoutDisplay_Block;
+                box.maxWidth = prLayoutLengthPercent(100);
+                padding(box, kToolGap * k, kBubblePadX * k / 2, kToolGap * k, kBubblePadX * k / 2);
                 break;
             case Part::Footer:
                 box.display = PrLayoutDisplay_Flex;
@@ -174,6 +178,8 @@ struct BoxRecipe {
                 break;
             case Part::Tools:
                 box.display = PrLayoutDisplay_Flex;
+                box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
+                padding(box, kToolGap * k, kBubblePadX * k / 2, kToolGap * k, kBubblePadX * k / 2);
                 box.minWidth = px(0);
                 box.overflowX = PrLayoutOverflow_Hidden;
                 break;
@@ -220,12 +226,10 @@ struct DecorationRecipe {
                 }
                 break;
             case Part::Bubble:
-                d.background = prColor16FromColor(kBubble);
-                radius(d, kBubbleRadius * k);
-                break;
-            case Part::BubbleQueued:
-                d.background = prColor16FromColor(kQueuedBubble);
-                radius(d, kBubbleRadius * k);
+            case Part::CaptionBubble:
+            case Part::Tools:
+                d.background = prColor16FromColor(rgb(look.transcriptStyle.fill));
+                radius(d, look.transcriptStyle.radius * k);
                 break;
             case Part::Prompt:
                 d.background = prColor16FromColor(kPromptFill);
@@ -265,6 +269,10 @@ struct FlexRecipe {
                 flex.justifyContent = PrLayoutAlignment_FlexEnd;
                 flex.rowGap = px(kGap * k);
                 flex.shrink = 0;
+                break;
+            case Part::Centered:
+                flex.direction = PrLayoutFlexDirection_Column;
+                flex.alignItems = PrLayoutAlignment_Center;
                 break;
             case Part::ActionRow:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -307,6 +315,7 @@ struct FlexRecipe {
                 flex.basis = px(0);
                 break;
             case Part::Tools:
+                flex.alignSelf = PrLayoutAlignment_FlexStart;
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.rowGap = px(kToolGap * k);
                 flex.shrink = 0;
@@ -375,6 +384,11 @@ PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign alig
     return PrKitTextStyle{.role = role, .tone = tone, .wrap = PrKitWrap_Auto, .align = align, .preserve = true};
 }
 
+// Dedicated theme slots keep transcript colors independent of controls and the sign-in card.
+constexpr auto kChatTone = PrKitTone_AxisX;
+constexpr auto kNoticeTone = PrKitTone_AxisY;
+constexpr auto kStatusTone = PrKitTone_AxisZ;
+
 struct Builder {
     View& view;
     PrKit* kit;
@@ -396,12 +410,17 @@ struct Builder {
         return prKitLabel(kit, parent, PrKitLabel{.key = 0, .text = sv(text)}, s);
     }
 
+    void caption(PrLayoutNode parent, std::string_view text, PrKitTextStyle appearance) {
+        if (!text.empty())
+            label(element(parent, Part::CaptionBubble), text, appearance);
+    }
+
     void accountPanel(PrLayoutNode parent) {
         const std::string action = view.signInCaption ? view.signInCaption() : std::string();
         if (action.empty()) {
-            const std::string caption = view.accountCaption ? view.accountCaption() : std::string();
-            if (!caption.empty())
-                label(parent, caption, textStyle(PrKitTextRole_Meta, PrKitTone_Muted));
+            const std::string account = view.accountCaption ? view.accountCaption() : std::string();
+            if (!account.empty())
+                caption(element(parent, Part::ReplyRow), account, textStyle(PrKitTextRole_Meta, kStatusTone));
             return;
         }
         const auto footer = element(parent, Part::ActionRow);
@@ -539,6 +558,20 @@ struct Builder {
         const uint64_t selected = prKitTabsSelected(tabs);
         for (std::size_t i = first; i < end; ++i) {
             PrLayoutNode tab = prKitTab(kit, row, PrKitTab{.id = kitId(model.tab(i)), .disabled = false});
+            // The strip leaves empty space translucent. The title sits on an opaque tab; Prax's hover
+            // fill, chosen underline and selected text retain their normal appearance.
+            const auto base = prLayoutTreeFrameStyle(tree, tab);
+            auto record = prLayoutStyleRecord(tree, base);
+            auto& group = record.groups[PrLayoutGroup_Decoration];
+            auto decoration = prLayoutDecorationStyleRecord(tree, group);
+            const PrColor fill = prColorFromColor16(decoration.background);
+            if (fill.a < 1) {
+                const float uncovered = 1 - fill.a;
+                decoration.background = prColor16FromColor({fill.r * fill.a + kStrip.r * uncovered,
+                    fill.g * fill.a + kStrip.g * uncovered, fill.b * fill.a + kStrip.b * uncovered, 1});
+                group = prLayoutDecorationStyleIntern(tree, &decoration);
+                prLayoutTreeFrameSetStyle(tree, tab, prLayoutStyleIntern(tree, &record));
+            }
             PrKitPlace tabPlace{};
             tabPlace.height = prKitPx(1.75f * kTabSize * k());
             tabPlace.align = PrKitAlign_Center;
@@ -574,7 +607,7 @@ struct Builder {
             }
             auto& tabs = view.groupStrips[group];
             if (!tabs) tabs.reset(prKitTabsCreate());
-            if (many && extensions) label(row, group, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            if (many && extensions) caption(row, group, textStyle(PrKitTextRole_BodySmall, kStatusTone));
             strip(row, tabs.get(), first, end, group, exchanges,
                   many && end == model.tab_count() ? PrKitFlex_Fill : PrKitFlex_Fixed);
             first = end;
@@ -665,14 +698,14 @@ struct Builder {
             PrLayoutNode box = element(window, Part::BoardBox);
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
-            label(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
+            caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
             return;
         }
         view.terminals->show(tab.id, window);
     }
 
     // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
-    // is no page to show, the line that says why. With no friends, the reason there are none is a faint line beneath.
+    // is no page to show, the line that says why. With no friends, a caption beneath the board gives the reason.
     // Like a terminal tab, it leaves the friend shown before with its scroll and its draft.
     void sprint(PrLayoutNode window) {
         if (view.shown != ~std::size_t(0))
@@ -696,14 +729,14 @@ struct Builder {
         if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
-            label(centered, problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted, PrKitTextAlign_Center));
+            caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
         }
         bool friends = false;
         for (std::size_t i = 0; i < model.tab_count() && !friends; ++i)
             friends = model.tab(i).kind == TabKind::Friend;
         if (!friends && !view.notice.empty()) {
             PrLayoutNode footer = element(window, Part::Footer);
-            label(footer, view.notice, textStyle(PrKitTextRole_BodySmall, PrKitTone_Faint, PrKitTextAlign_Center));
+            caption(footer, view.notice, textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
         }
     }
 
@@ -736,6 +769,9 @@ struct Builder {
         const std::vector<Entry>& entries = tab.transcript;
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
+            if ((e.kind == EntryKind::Tool && !look.transcriptStyle.showTools) ||
+                    (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
+                continue;
             uint32_t lines = 1;
             for (char c : e.text)
                 lines += c == '\n' ? 1 : 0;
@@ -788,15 +824,11 @@ struct Builder {
         const float gap = kGap * s;
         const EntryKind kind = tab.transcript[items.first[i]].kind;
         if (kind == EntryKind::Tool)
-            return float(items.count[i]) * kToolPitch * s + float(items.count[i] - 1) * kToolGap * s + gap;
+            return float(items.count[i]) * kToolPitch * s + float(items.count[i] + 1) * kToolGap * s + gap;
         // Characters of the body face are about half its size wide.
         const float perChar = 0.5f * kBodySize * s;
-        float width = std::max(items.width, 1.0f);
-        float pad = 0;
-        if (kind == EntryKind::Person || kind == EntryKind::Friend) {
-            width = std::max(width * kBubbleMaxPercent / 100 - 2 * kBubblePadX * s, 1.0f);
-            pad = 2 * kBubblePadY * s;
-        }
+        const float width = std::max(items.width * kBubbleMaxPercent / 100 - 2 * kBubblePadX * s, 1.0f);
+        const float pad = 2 * kBubblePadY * s;
         const float rows = float(items.lines[i]) + std::floor(float(items.chars[i]) * perChar / width);
         return rows * kLinePitch * s + pad + gap;
     }
@@ -876,24 +908,22 @@ struct Builder {
     // One item, keyed by its tab and place, so that it keeps its node and its set text as the items in sight change.
     PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, const TranscriptItems& items, std::size_t i,
             uint64_t base) {
-        const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 2, i);
+        const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, base | 2, items.first[i]);
         const Entry& e = tab.transcript[items.first[i]];
         switch (e.kind) {
             case EntryKind::Person:
-            case EntryKind::Friend: {
+            case EntryKind::Friend:
+            case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = element(entry, Part::Bubble);
-                label(bubble, e.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                label(bubble, e.text, textStyle(PrKitTextRole_Body, e.kind == EntryKind::Notice ? kNoticeTone : kChatTone));
                 return entry;
             }
-            case EntryKind::Notice:
-                return prKitLabel(kit, column, PrKitLabel{.key = key, .text = sv(e.text)},
-                    textStyle(PrKitTextRole_Body, PrKitTone_Muted));
             case EntryKind::Tool:
                 break;
         }
         PrLayoutNode tools = element(column, Part::Tools, 0, key);
-        PrKitTextStyle line = textStyle(PrKitTextRole_Mono, PrKitTone_Muted);
+        PrKitTextStyle line = textStyle(PrKitTextRole_Mono, kStatusTone);
         line.wrap = PrKitWrap_Clip;
         for (std::uint32_t t = 0; t < items.count[i]; ++t)
             label(tools, tab.transcript[items.first[i] + t].text, line);
@@ -906,7 +936,7 @@ struct Builder {
         const PrUiKey key = prUiKeyIndex2(ui, kPrLayoutNodeNone, (uint64_t(tab.id) << 8) | 3, 0);
         PrLayoutNode row = element(column, Part::ReplyRow, 0, key);
         PrLayoutNode box = element(element(row, Part::Bubble), Part::Paragraphs);
-        const PrKitTextStyle body = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        const PrKitTextStyle body = textStyle(PrKitTextRole_Body, kChatTone);
         std::size_t at = 0;
         while (at <= text.size()) {
             std::size_t blank = text.find("\n\n", at);
@@ -924,7 +954,7 @@ struct Builder {
         PrLayoutNode column = element(scroller, Part::Column);
         if (model.tab_count() == 0) {
             PrLayoutNode centered = element(column, Part::Centered);
-            label(centered, view.notice, textStyle(PrKitTextRole_Body, PrKitTone_Faint, PrKitTextAlign_Center));
+            caption(centered, view.notice, textStyle(PrKitTextRole_Body, kStatusTone, PrKitTextAlign_Center));
             view.transcript = scroller;
             return;
         }
@@ -971,12 +1001,12 @@ struct Builder {
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
         if (!view.problem.empty()) {
-            label(column, view.problem, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            caption(element(column, Part::ReplyRow), view.problem, textStyle(PrKitTextRole_Body, kNoticeTone));
         }
         // How much text was cut to fit the prompt, on the tab it was cut on, there too: the transcript went to its end
         // to show it, so it stands just above the prompt.
         if (!view.cut.empty() && view.cutTab == tab.id) {
-            label(column, view.cut, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+            caption(element(column, Part::ReplyRow), view.cut, textStyle(PrKitTextRole_Body, kNoticeTone));
         }
         // The state cursor, on its own line under the last text: the busy one breathes, so frames go on while it shows.
         const CursorState state = view.cursor ? view.cursor(tab.id) : CursorState::None;
@@ -986,15 +1016,14 @@ struct Builder {
             prUiElement(ui, column, 0, cursorStyle(ui, look, state, level), 0);
         }
         // The tab's queue, after its transcript and apart from it: each prompt held for later, oldest first, in a
-        // dimmer bubble marked "queued".
+        // bubble marked "queued".
         for (const std::string& text : tab.queue) {
             PrLayoutNode entry = element(column, Part::Entry);
-            PrLayoutNode bubble = element(entry, Part::BubbleQueued);
-            label(bubble, text, textStyle(PrKitTextRole_Body, PrKitTone_Muted));
-            PrLayoutNode tag = label(entry, "queued", textStyle(PrKitTextRole_Meta, PrKitTone_Faint));
+            PrLayoutNode bubble = element(entry, Part::Bubble);
+            label(bubble, text, textStyle(PrKitTextRole_Body, kChatTone));
+            PrLayoutNode tag = label(bubble, "queued", textStyle(PrKitTextRole_Meta, kStatusTone, PrKitTextAlign_End));
             PrKitPlace place{};
             place.margin.top = 0.3f * kMetaSize * k();
-            place.margin.right = 6 * k();
             prKitPlace(kit, tag, &place);
         }
     }
@@ -1364,15 +1393,15 @@ struct Builder {
                             break;
                         }
                     }
-                    label(window, "The native renderer for this tab is unavailable. Check its registration.",
-                        textStyle(PrKitTextRole_Body, PrKitTone_Muted));
+                    caption(element(window, Part::ReplyRow), "The native renderer for this tab is unavailable. Check its registration.",
+                        textStyle(PrKitTextRole_Body, kNoticeTone));
                     break;
                 }
                 case Panel::TextArea:
                     drawTabTextArea(kit, window, model, asking == nullptr);
                     break;
                 case Panel::Label:
-                    label(window, view.windowApp.label, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                    caption(element(window, Part::ReplyRow), view.windowApp.label, textStyle(PrKitTextRole_Body, kChatTone));
                     break;
                 case Panel::ServiceReply: {
                     const auto& tab = model.tab(model.active());
@@ -1383,28 +1412,30 @@ struct Builder {
                         if (service.kind == TabKind::Friend && service.name == type->second.service &&
                                 !service.transcript.empty()) {
                             const auto& result = service.transcript.back();
-                            if (result.kind == EntryKind::Friend || result.kind == EntryKind::Notice)
-                                label(window, result.text, textStyle(PrKitTextRole_Body, PrKitTone_Primary));
+                            if (result.kind == EntryKind::Friend || (result.kind == EntryKind::Notice && look.transcriptStyle.showNotices))
+                                caption(element(window, Part::ReplyRow), result.text, textStyle(PrKitTextRole_Body,
+                                    result.kind == EntryKind::Notice ? kNoticeTone : kChatTone));
                             break;
                         }
                     }
                     break;
                 }
                 case Panel::Status:
-                    label(element(window, Part::Footer), view.status,
-                        textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted, PrKitTextAlign_Center));
+                    caption(element(window, Part::Footer), view.status,
+                        textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
                     break;
             }
         }
         if (!view.extensionProblem.empty() && model.tab_count() && model.tab(model.active()).kind == TabKind::Extension)
-            label(window, view.extensionProblem, textStyle(PrKitTextRole_BodySmall, PrKitTone_Muted));
+            caption(element(window, Part::ReplyRow), view.extensionProblem, textStyle(PrKitTextRole_BodySmall, kNoticeTone));
     }
 
 };
 
 } // namespace
 
-PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity, const MessageCardStyle& card) {
+PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity, const MessageCardStyle& card,
+                       const TranscriptStyle& transcript) {
     const float k = textScale(steps);
     PrKitTheme theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts);
     // The palette is public, but which slot each widget draws with (the tab strip bg1, a hovered tab bg2, the strip's
@@ -1414,6 +1445,11 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
     p.bg1 = overlay ? faded(kStrip, kOverlayStripFill) : kStrip;            // the tab strip
     p.bg2 = kPromptFill;                                                    // a tab under the pointer
     p.line2 = kStripLine;                                                   // the strip's rule
+    // These tones are used by the fork's transcript and status labels. Keep the palette for controls
+    // and the inverse ink of the sign-in card independent of the conversation.
+    p.axisX = rgb(transcript.ink);
+    p.axisY = rgb(transcript.noticeInk);
+    p.axisZ = rgb(transcript.statusInk);
     p.textInverse = rgb(card.ink);
     p.text1 = kInk;
     p.text3 = kNotice;
@@ -1441,14 +1477,19 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     const bool scaleChanged = look.textSteps != view.askedTextSteps;
     const bool opacityChanged = look.overlay && look.overlayOpacity != view.windowApp.overlayOpacity;
     const bool cardChanged = look.messageCard != view.windowApp.messageCard;
-    if (!scaleChanged && !opacityChanged && !cardChanged) return false;
-    if (opacityChanged || cardChanged) {
+    const bool transcriptChanged = look.transcriptStyle != view.windowApp.transcriptStyle;
+    if (!scaleChanged && !opacityChanged && !cardChanged && !transcriptChanged) return false;
+    if (opacityChanged || cardChanged || transcriptChanged) {
+        if (look.transcriptStyle.showNotices != view.windowApp.transcriptStyle.showNotices ||
+            look.transcriptStyle.showTools != view.windowApp.transcriptStyle.showTools)
+            view.items.clear();
+        look.transcriptStyle = view.windowApp.transcriptStyle;
         look.messageCard = view.windowApp.messageCard;
         if (opacityChanged) look.overlayOpacity = view.windowApp.overlayOpacity;
         prUiForget(kit->ui, &look);
     }
     look.textSteps = view.askedTextSteps;
-    PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps, look.overlayOpacity, look.messageCard);
+    PrKitTheme theme = windowTheme(fonts, look.overlay, look.textSteps, look.overlayOpacity, look.messageCard, look.transcriptStyle);
     prKitSetTheme(kit, &theme);
     if (!scaleChanged) return true;
     if (view.terminals != nullptr)
@@ -1524,7 +1565,8 @@ PrStringView cutText(PrStringView text, std::size_t room) {
 }
 
 bool windowWantsFrame(const View& view) {
-    return view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
+    return view.look->transcriptStyle != view.windowApp.transcriptStyle ||
+           view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
            (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.cutComing;
 }
 

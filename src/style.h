@@ -75,24 +75,13 @@ constexpr PrColor rgb(unsigned hex) {
 constexpr PrColor kBackground = rgb(0x181818);
 constexpr PrColor kStrip = rgb(0x1b1b1b);
 constexpr PrColor kStripLine = rgb(0x373737);
-constexpr PrColor kBubble = rgb(0x252525);
 constexpr PrColor kInk = rgb(0xf3f3f3);
-constexpr PrColor kNotice = rgb(0x9e9e9e);     // dim notices
-constexpr PrColor kFaint = rgb(0x8c8c8c);      // faint text: "queued", and the notice when there are no friends
+constexpr PrColor kNotice = rgb(0x9e9e9e);
+constexpr PrColor kFaint = rgb(0x8c8c8c);
 constexpr PrColor kMeta = rgb(0x707070);
 constexpr PrColor kPromptFill = rgb(0x303030);
 constexpr PrColor kPromptBorder = rgb(0x3a3a3a);
 constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in the reference)
-
-// The queued bubble's fill and text, as alphas of kBubble and kInk.
-constexpr float kQueuedFill = 0.5f;
-constexpr float kQueuedInk = 0.55f;
-
-// The queued bubble's fill: kBubble at kQueuedFill over kBackground, mixed here so that the bubble stays opaque in the
-// see-through overlay (only the window background and the tab strip let what is behind show through).
-constexpr PrColor kQueuedBubble = PrColor{kBackground.r + (kBubble.r - kBackground.r) * kQueuedFill,
-    kBackground.g + (kBubble.g - kBackground.g) * kQueuedFill, kBackground.b + (kBubble.b - kBackground.b) * kQueuedFill,
-    1};
 
 // The overlay window (macOS, the default; --windowed gives a normal opaque window instead): borderless, over the whole
 // screen that has the pointer (menu bar included), above other apps and their fullscreen Spaces, shown and hidden by a

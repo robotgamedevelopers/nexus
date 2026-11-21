@@ -114,7 +114,17 @@ def handle(event, state, config):
             caption = "This tab type is no longer registered."
             if group == None:
                 closable = True
-        return {"message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "text_size":34, "radius":20}), "overlay_opacity": config.get("overlay_opacity", 0.60), "tab_groups": groups, "closable": closable, "shortcuts": shortcuts, "panels": panels, "tab_types": types, "label": caption}
+        return {
+            "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "text_size":34, "radius":20}),
+            "transcript_style": config.get("transcript_style", {}),
+            "overlay_opacity": config.get("overlay_opacity", 0.60),
+            "tab_groups": groups,
+            "closable": closable,
+            "shortcuts": shortcuts,
+            "panels": panels,
+            "tab_types": types,
+            "label": caption,
+        }
     if event == "prompt_key":
         if state["key"] == "Enter":
             return [{"op": "send"}]

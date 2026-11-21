@@ -34,6 +34,17 @@ struct MessageCardStyle {
     bool operator==(const MessageCardStyle&) const = default;
 };
 
+struct TranscriptStyle {
+    unsigned fill = 0x252525;
+    unsigned ink = 0xf3f3f3;
+    unsigned noticeInk = 0xffb4b4;
+    unsigned statusInk = 0xd8d8d8;
+    float radius = style::kBubbleRadius;
+    bool showNotices = true;
+    bool showTools = true;
+    bool operator==(const TranscriptStyle&) const = default;
+};
+
 class WindowApplication {
 public:
     void update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen, bool hasStatus,
@@ -46,6 +57,7 @@ public:
     uint64_t layoutGeneration = 0;
     std::string label;
     MessageCardStyle messageCard;
+    TranscriptStyle transcriptStyle;
     float overlayOpacity = style::kOverlayOpacity;
 
 private:

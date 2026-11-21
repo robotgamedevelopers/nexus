@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <thread>
 #include <initializer_list>
@@ -302,18 +303,19 @@ struct Harness {
     // The native tab nodes from the last layout, in model order across all strips.
     std::vector<PrLayoutNode> tabs() const { return view.tabNodes; }
 
-    // True if some text under `node` at the last layout is `text`.
-    bool hasText(PrLayoutNode node, const std::string& text) const {
-        PrStringView t = prLayoutNodeText(tree, node);
-        if (t.data != nullptr && std::string(t.data, t.size) == text)
-            return true;
+    // The actual text leaf, which inherits the Prax label's foreground.
+    PrLayoutNode findText(PrLayoutNode node, const std::string& text) const {
+        if (node == kPrLayoutNodeNone) return kPrLayoutNodeNone;
+        const PrStringView t = prLayoutNodeText(tree, node);
+        if (t.data != nullptr && std::string_view(t.data, t.size) == text) return node;
         for (PrLayoutNode n = prLayoutNodeFirstChild(tree, node); n != kPrLayoutNodeNone;
-                n = prLayoutNodeNextSibling(tree, n)) {
-            if (hasText(n, text))
-                return true;
+             n = prLayoutNodeNextSibling(tree, n)) {
+            const auto found = findText(n, text);
+            if (found != kPrLayoutNodeNone) return found;
         }
-        return false;
+        return kPrLayoutNodeNone;
     }
+    bool hasText(PrLayoutNode node, const std::string& text) const { return findText(node, text) != kPrLayoutNodeNone; }
     PrVec2 centre(PrLayoutNode node) const {
         PrRect b = bounds(node);
         return PrVec2{(b.left + b.right) / 2, (b.top + b.bottom) / 2};
@@ -947,6 +949,34 @@ PrColor borderOf(const Harness& h, PrLayoutNode node, PrRectSide side) {
     return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).borderColor[side];
 }
 
+bool colorMatches(PrColor color, unsigned rgb) {
+    const auto expected = style::rgb(rgb);
+    // Layout stores 16-bit floats. The tolerance is narrower than one 8-bit channel step.
+    return std::abs(color.r - expected.r) < 0.001f && std::abs(color.g - expected.g) < 0.001f &&
+           std::abs(color.b - expected.b) < 0.001f && color.a == 1.0f;
+}
+
+// Check the rendered text foreground and its nearest painted surface. Return the latter so a test can distinguish
+// a tag inside a bubble from a tag somewhere else on the same-colored background.
+PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned ink, unsigned fill) {
+    const auto leaf = h.findText(h.window(), text);
+    CHECK(leaf != kPrLayoutNodeNone);
+    if (leaf == kPrLayoutNodeNone) return leaf;
+    const auto label = prLayoutNodeParent(h.tree, leaf);
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, label));
+    const auto foreground = prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color;
+    CHECK(colorMatches(prColorFromColor16(foreground), ink));
+    for (auto n = label; n != kPrLayoutNodeNone; n = prLayoutNodeParent(h.tree, n)) {
+        const auto background = fillOf(h, n);
+        if (background.a > 0) {
+            CHECK(colorMatches(background, fill));
+            return n;
+        }
+    }
+    CHECK(false);
+    return kPrLayoutNodeNone;
+}
+
 // In the see-through overlay only the window background and the tab strip's fill let what is behind show through:
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
 void conversationBubblesAndSignInCard() {
@@ -962,13 +992,19 @@ void conversationBubblesAndSignInCard() {
     CHECK(entries.size() == 4);
     if (entries.size() != 4) return;
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
-    for (auto i : {0, 1, 3}) {
+    for (auto i : {0, 1, 2, 3}) {
         const auto fill = fillOf(h, bubble(i));
         CHECK(fill.a == 1 && fill.r < 0.2f && fill.g < 0.2f && fill.b < 0.2f);
     }
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
-    CHECK(fillOf(h, entries[2]).a == 0);
+    // A stored, closed Notice uses the same model entry after hydration. Live status and chat keep distinct colors.
+    const TranscriptStyle stock;
+    checkTextPaint(h, "Hello", stock.ink, stock.fill);
+    checkTextPaint(h, "A reply.", stock.ink, stock.fill);
+    checkTextPaint(h, "Usage limit reached.", stock.noticeInk, stock.fill);
+    checkTextPaint(h, live, stock.ink, stock.fill);
+    CHECK(stock.noticeInk == 0xffb4b4 && stock.ink != stock.noticeInk && stock.statusInk != stock.noticeInk);
 
     h.view.signInCaption = [] { return "Sign in to Work"; };
     int activations = 0;
@@ -1020,6 +1056,11 @@ void overlayKeepsAllButTheBackgroundOpaque() {
         PrLayoutNode bubble = prLayoutNodeFirstChild(h.tree, entry);
         CHECK(fillOf(h, bubble).a == 1);
     }
+    const TranscriptStyle stock;
+    const auto queued = checkTextPaint(h, "held", stock.ink, stock.fill);
+    CHECK(checkTextPaint(h, "queued", stock.statusInk, stock.fill) == queued);
+    for (auto tab : h.tabs())
+        CHECK(fillOf(h, tab).a == 1);   // title backplates stay opaque while the strip is translucent
     const PrKitPalette& p = h.kit->theme.palette;
     for (PrColor c : {p.text1, p.text2, p.text3, p.text4, p.textSelection})
         CHECK(c.a == 1);
@@ -1107,7 +1148,9 @@ void toolLinesAreOneCompactLine() {
     if (e.size() != 3) {
         return;
     }
-    CHECK(h.hasText(e[1], "Bash: ls src"));
+    const TranscriptStyle stock;
+    checkTextPaint(h, "Bash: ls src", stock.statusInk, stock.fill);
+    checkTextPaint(h, "Let me look.", stock.ink, stock.fill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
             n = prLayoutNodeNextSibling(h.tree, n)) {
@@ -1238,6 +1281,8 @@ void nothingAroundTheOpenPrompt() {
     h.view.status = "Connecting to studio";
     h.frame();
     CHECK(h.view.promptBox == kPrLayoutNodeNone && h.hasText(prLayoutTreeRoot(h.tree), "Connecting to studio"));
+    const TranscriptStyle stock;
+    checkTextPaint(h, "Connecting to studio", stock.statusInk, stock.fill);
     CHECK(h.entries().empty());
 }
 
@@ -2035,6 +2080,23 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 
 } // namespace
 
+// The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
+void checkTranscriptStyleValidation(nexus::policy::Host& host) {
+    nexus::WindowApplication window;
+    for (std::size_t i = 0; i < 14; ++i) {
+        window.update(host, "friend", "", true, false, i, 14, "validate-style");
+        CHECK((window.overlayOpacity == 0.125f) == (i < 4));
+        nexus::TranscriptStyle expected;
+        if (i == 2) {
+            expected.ink = 0xaabbcc;
+            expected.radius = 0;
+        } else if (i == 3) {
+            expected.radius = 64;
+        }
+        CHECK(window.transcriptStyle == expected);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--group-drag") {
         Harness h = withSprint(1);
@@ -2128,7 +2190,7 @@ int main(int argc, char** argv) {
         CHECK(h.active().type == "pinned" && h.model.tab_count() == 3);
         return failures ? 1 : 0;
     }
-    if (argc == 3) {
+    if (argc == 3 || argc == 4) {
         Harness h;
         CHECK(h.view.nativeTabs.empty());
         h.view.nativeTabs.emplace("text_editor", drawTabTextArea);
@@ -2186,6 +2248,43 @@ int main(int argc, char** argv) {
         CHECK(service == "word-count" && payload == "script buffer");
         h.key('W', PrAppKeyCode_KeyW, style::kCommand);
         CHECK(h.active().type == "editor" && h.active().draft == "native buffer");
+        checkTranscriptStyleValidation(*h.view.application);
+        if (argc == 4) {
+            // The new harness starts on stock, then reads the live fork. Entries remain in the model across each reload.
+            Harness styled;
+            styled.view.accountCaption = [] { return "Fixture account"; };
+            styled.model.append(0, {EntryKind::Friend, "Fixture chat"});
+            styled.model.append(0, {EntryKind::Notice, "Fixture notice"});
+            styled.model.append(0, {EntryKind::Tool, "Fixture tool"});
+            styled.frame();
+            styled.frame();
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "Fixture tool"));
+            const std::string styleFile = std::string(argv[1]) + ".styles";
+            styled.view.application->watch(styleFile);
+            std::filesystem::copy_file(argv[2], styleFile);
+            const auto waitForStyle = [&](bool notices) {
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                do {
+                    styled.frame();
+                    const auto& colors = styled.view.windowApp.transcriptStyle;
+                    if (colors.fill == 0x102030 && colors.showNotices == notices && !colors.showTools) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                } while (std::chrono::steady_clock::now() < until);
+                styled.frame();
+                styled.frame();
+                const auto& colors = styled.view.windowApp.transcriptStyle;
+                CHECK(colors.fill == 0x102030 && colors.showNotices == notices && !colors.showTools);
+            };
+            waitForStyle(false);
+            checkTextPaint(styled, "Fixture chat", 0xf0e0d0, 0x102030);
+            checkTextPaint(styled, "Fixture account", 0xcfdfa0, 0x102030);
+            CHECK(!styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
+            std::filesystem::copy_file(argv[3], styleFile, std::filesystem::copy_options::overwrite_existing);
+            waitForStyle(true);
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
+            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
+            CHECK(styled.active().transcript.size() == 3 && styled.entries().size() == 2);
+        }
         return failures ? 1 : 0;
     }
     sprintTabIsFirstAndCommandOne();

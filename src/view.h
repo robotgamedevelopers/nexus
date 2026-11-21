@@ -34,13 +34,14 @@ struct Look {
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
     MessageCardStyle messageCard{};
+    TranscriptStyle transcriptStyle{};
     float overlayOpacity = style::kOverlayOpacity;
 };
 
 // The kit theme the window is drawn in: Studio's dark theme with the window's colours and type sizes (style.h) at the
 // text scale `steps` steps from 1.
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
-                       const MessageCardStyle& card = {});
+                       const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
