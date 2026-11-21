@@ -116,7 +116,7 @@ the AI: they hold no secret.
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
 | `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); a friend on an `api` account is always limited (friends.json's `limit`) |
 | `label` | each account | no | Short display text for the account picker. Up to 254 UTF-8 bytes without ASCII control characters. An omitted or empty label displays the stable account name. |
-| `email` | each account | no | Descriptive email for the login, kept in server config. It is independent of sign-in and stays out of the picker. Up to 254 UTF-8 bytes without ASCII control characters. |
+| `email` | each account | no | Address shown to connected windows for this linked account. Changing it updates the sign-in caption. The provider verifies the login separately. Up to 254 UTF-8 bytes without ASCII control characters. |
 | `sign_in_on_use` | each account | no (`false`) | `true` defers sign-in until the account is selected or needs its driver. Opening the overlay leaves unused accounts alone. |
 
 The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
@@ -135,7 +135,7 @@ account on that session, including after a reconnect. Other sessions of the same
 own accounts, and a new session copied from this one inherits its account if it is still linked.
 
 When the selected account needs a login, press **Enter** in the prompt or click **Sign in to**
-above it. This opens the selected account’s browser flow. An empty prompt works. Any draft
+above it. The card shows the selected account’s label (or name) and its configured email on a separate line when available. This opens the selected account’s browser flow. An empty prompt works. Any draft
 stays in the composer through sign-in. Press **Enter** again after sign-in to send it.
 
 For a fresh session, the shipped server profile sets `"account_default": "first"` in its `config.json`
@@ -231,8 +231,8 @@ drivers file. A file that is empty or missing means none.
 
 A registry can list up to 256 friends. The complete friend and account picker list must fit in 3 MiB
 on the wire and 12 MiB when decoded. This leaves one quarter of each snapshot limit for conversations,
-requests and sign-in offers. An account name and label are included once for each friend who links
-that account. Shortening a shared label or removing unused links can bring an oversized roster back
+requests and sign-in offers. The account name, label and configured email are included once for each friend who links
+that account. Shortening shared metadata or removing unused links can bring an oversized roster back
 under the limit. A rejected reload keeps the running configuration.
 
 Taking a friend out of the file (and running `nexus-server config reload`) stops its work in every one of its sessions,

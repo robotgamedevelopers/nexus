@@ -3,7 +3,7 @@ file(MAKE_DIRECTORY "${ROOT}/rules" "${ROOT}/activated" "${ROOT}/notices")
 file(COPY "${RULES}/client" DESTINATION "${ROOT}/rules")
 file(READ "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/config.json" config)
 string(JSON config SET "${config}" overlay_opacity 0.35)
-string(JSON config SET "${config}" message_card [[{"fill":"#edf2ea","ink":"#192218","text_size":38,"radius":24}]])
+string(JSON config SET "${config}" message_card [[{"fill":"#edf2ea","ink":"#192218","email_ink":"#557799","text_size":38,"radius":24}]])
 string(JSON config SET "${config}" transcript_style [[{"fill":"#102030","ink":"#f0e0d0","person_ink":"#9a9a9a","notice_ink":"#ffa0a0","status_ink":"#cfdfa0","radius":12,"show_notices":false,"show_tools":false}]])
 string(JSON config SET "${config}" account_shortcuts [[{"Command+ArrowUp":"custom"}]])
 file(WRITE "${ROOT}/rules/config.json" "${config}")
@@ -13,6 +13,10 @@ def handle(event, state, config):
     if event == "prompt_key":
         return [{"op": "queue", "text": "edited " + state["text"]}]
     window = stock(event, state, config)
+    if state["group"] == "verify-sign-in":
+        account = state.get("sign_in_account")
+        if account and account["email"] == 'selected@example.test' and account["label"] == 'Work "team"':
+            window["overlay_opacity"] = 0.25
     if state["group"] == "validate-style":
         cases = [
             None, {}, {"ink": "#aAbBcC", "radius": 0}, {"radius": 64},

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "pr/layout_tree.h"
 #include "pr/ui.h"
 
+#include "account_picker.h"
 #include "cursor.h"
 #include "hitch.h"
 #include "model.h"
@@ -134,6 +136,10 @@ struct View {
     NativeTabs nativeTabs;
     std::map<std::string, KitTabs> groupStrips;
     std::vector<PrLayoutNode> tabNodes;
+    PrLayoutNode accountAnchor = kPrLayoutNodeNone;
+    PrLayoutNode accountMenu = kPrLayoutNodeNone;
+    std::vector<PrLayoutNode> accountRows;
+    std::string lastHighlightedAccount;
     uint64_t tabGroupGeneration = 0;
     uint64_t draggingTab = 0;
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
@@ -157,9 +163,12 @@ struct View {
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
     std::function<bool()> signOut; // true when the selected account accepted the explicit composer command
+    std::optional<AccountPicker> accountPicker;
+    std::function<void(const std::string&)> pickerCommand;
+    std::function<void(const std::string&)> chooseAccount;
     std::function<void(const std::string&)> accountCommand;
     std::function<std::string()> accountCaption;
-    std::function<std::string()> signInCaption;  // empty when this session can receive a prompt
+    std::function<SignInAccount()> signInAccount; // selected account while its sign-in is available
     std::function<bool()> activateSignIn;        // true when sign-in consumed Enter or a card click
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
     // it to the room the prompt has left (frame_host.h); unset, the text area pastes on its own, uncut.

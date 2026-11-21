@@ -63,6 +63,12 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         out.argument = static_cast<int>(value);
         return true;
     }
+    if (op == "account_picker") {
+        out.command = WindowCommand::AccountPicker;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "open" || out.type == "previous" ||
+            out.type == "next" || out.type == "confirm" || out.type == "cancel");
+    }
     if (op == "open_tab" || op == "account_command") {
         out.command = op == "open_tab" ? WindowCommand::OpenTab : WindowCommand::AccountCommand;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -179,6 +185,7 @@ bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
     if (obj == kPrJsonMissing) return true;
     return prJsonKind(d, obj) == PrJsonKind_Object &&
         readColor(d, obj, {"fill", 4}, card.fill) && readColor(d, obj, {"ink", 3}, card.ink) &&
+        readColor(d, obj, {"email_ink", 9}, card.emailInk) &&
         readPoints(d, obj, {"text_size", 9}, card.textSize, 12, 72) &&
         readPoints(d, obj, {"radius", 6}, card.radius, 0, 64);
 }
@@ -221,7 +228,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         return false;
     const auto opacity = prJsonMember(d, 0, {"overlay_opacity", 15});
     if (!readMessageCard(d, prJsonMember(d, 0, {"message_card", 12}), card)) {
-        why = "message_card needs #RRGGBB fill and ink, text_size from 12 to 72, and radius from 0 to 64";
+        why = "message_card needs #RRGGBB fill, ink and email_ink, text_size from 12 to 72, and radius from 0 to 64";
         return false;
     }
     if (!readTranscriptStyle(d, prJsonMember(d, 0, {"transcript_style", 16}), transcript, why))
@@ -309,20 +316,41 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 } // namespace
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
-    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, bool needsSignIn) {
+    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen) {
     std::string escapedGroup;
     for (const char c : group) {
         if (c == '\\' || c == '"') escapedGroup += '\\';
         escapedGroup += c;
     }
-    const auto context = std::string("{\"tab\":\"") + tab + "\",\"type\":\"" + type + "\",\"prompt_open\":" + (promptOpen ? "true" : "false") +
+    auto context = std::string("{\"tab\":\"") + tab + "\",\"type\":\"" + type + "\",\"prompt_open\":" + (promptOpen ? "true" : "false") +
         ",\"has_status\":" + (hasStatus ? "true" : "false") + ",\"active_tab\":" + std::to_string(activeTab) +
-        ",\"needs_sign_in\":" + (needsSignIn ? "true" : "false") + ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
-    const bool sameContext = context == lastContext_;
+        ",\"account_picker_open\":" + (pickerOpen ? "true" : "false") +
+        ",\"needs_sign_in\":" + (account.name.empty() ? "false" : "true") + ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
+    const bool sameContext = context == lastContext_ && account == signInAccount;
     const auto generation = host.refresh();
     if (sameContext && generation == generation_) return;
     lastContext_ = context;
     generation_ = generation;
+    signInAccount = std::move(account);
+    context.pop_back();
+    context += ",\"sign_in_account\":";
+    if (signInAccount.name.empty()) {
+        context += "null}";
+    } else {
+        std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> json(prJsonWriterCreate(), prJsonWriterDestroy);
+        auto field = [&](PrStringView key, const std::string& value) {
+            prJsonWriterKey(json.get(), key);
+            prJsonWriterString(json.get(), {value.data(), value.size()});
+        };
+        prJsonWriterBeginObject(json.get());
+        field({"name", 4}, signInAccount.name);
+        field({"label", 5}, signInAccount.label);
+        field({"email", 5}, signInAccount.email);
+        prJsonWriterEndObject(json.get());
+        const auto text = prJsonWriterText(json.get());
+        context.append(text.data, text.size);
+        context += '}';
+    }
     std::string why;
     MessageCardStyle card;
     TranscriptStyle transcript;

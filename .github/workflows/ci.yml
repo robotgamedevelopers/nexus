@@ -104,6 +104,16 @@ jobs:
         run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+      # Record real FrameHost callbacks and outbound SetAccount actions with the frame target already built here.
+      - name: Account picker model traces
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TLA2TOOLS_JAR="$HOME/sdk/tla/tla2tools.jar"
+          test "$(shasum -a 256 "$TLA2TOOLS_JAR" | cut -d' ' -f1)" = "$(cut -d' ' -f1 .github/tla2tools.sha256)"
+          export JAVA="$HOME/sdk/bin/java"
+          if ! "$JAVA" -version >/dev/null 2>&1; then export JAVA=/opt/homebrew/opt/openjdk/bin/java; fi
+          ctest --test-dir build -L '^model$' -R '^tlc_window_account_picker_trace' -j "$TEST_JOBS" --output-on-failure --no-tests=error
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget (docs/frame-budget.md) times the frame thread on the real clock, so it runs after the others,

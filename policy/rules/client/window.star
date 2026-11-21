@@ -76,8 +76,11 @@ def handle(event, state, config):
             for chord, direction in config.get("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}).items():
                 shortcuts = _bind(shortcuts, chord, ["move_tab", direction])
         if state["tab"] == "friend":
-            for chord, command in config.get("account_shortcuts", {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}).items():
+            for chord, command in config.get("account_shortcuts", {}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
+            default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
+            for chord, command in config.get("account_picker_shortcuts", default_picker).items():
+                shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         types = config.get("tab_types", [])
         groups = _tab_groups(config, types)
         tab_type = state.get("type", "") if state["tab"] == "extension" else state["tab"]
@@ -114,8 +117,11 @@ def handle(event, state, config):
             caption = "This tab type is no longer registered."
             if group == None:
                 closable = True
+        if state.get("account_picker_open", False):
+            for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
+                shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         return {
-            "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "text_size":34, "radius":20}),
+            "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": config.get("transcript_style", {}),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,

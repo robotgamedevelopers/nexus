@@ -198,6 +198,10 @@ private:
     const sync::AccountChoice* activeChoice() const;
     const sync::SignInOffer* offerFor(const std::string& account) const;
     void selectSignInAccount();
+    void refreshPicker();
+    void pickerCommand(const std::string& command);
+    void chooseAccount(std::string account);
+    void setAccount(sync::SessionId session, const std::string& target);
     bool activateSignIn();
     const sync::ServerFriend* activeAccountRoster() const;
     void wire();

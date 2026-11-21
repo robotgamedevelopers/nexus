@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "frame_host.h"
+#include "test_link_port.h"
 
 namespace {
 
@@ -25,33 +25,7 @@ int failures = 0;
         }                                                                                 \
     } while (0)
 
-struct FakeLink final : LinkPort {
-    LinkState state;
-    bool changed = false;
-    std::vector<sync::Action> sent;
-
-    bool poll(LinkState* out) override {
-        if (!changed) {
-            return false;
-        }
-        *out = state;
-        changed = false;
-        return true;
-    }
-    std::uint64_t send(sync::Action action) override { sent.push_back(std::move(action)); return sent.size(); }
-
-    void friends(const std::vector<std::string>& names) {
-        LinkState s;
-        s.phase = sync::LinkPhase::Connected;
-        std::vector<sync::ServerFriend> list;
-        for (const std::string& n : names) {
-            list.push_back(sync::ServerFriend{n});
-        }
-        s.sessions.setFriends(std::move(list));
-        state = std::move(s);
-        changed = true;
-    }
-};
+using test::FakeLink;
 
 struct Window {
     Model model{{}, true};
@@ -208,7 +182,7 @@ void accountCommandsUseTheActiveConversation() {
     w.host.signIn.shown();
     w.host.signIn.step();
     CHECK(w.link.sent.size() == 2);
-    CHECK(w.view.signInCaption() == "Sign in to home");
+    CHECK((w.view.signInAccount() == SignInAccount{"home", "", ""}));
     CHECK(w.view.activateSignIn());
     CHECK(w.view.activateSignIn());
     CHECK(w.link.sent.size() == 3 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
@@ -219,6 +193,73 @@ void accountCommandsUseTheActiveConversation() {
     w.host.pollLink();
     w.view.accountCommand("next");
     CHECK(w.link.sent.size() == 3 && w.view.accountCaption().empty());
+}
+
+void accountPickerRechecksTheServerRoster() {
+    Window w("chat");
+    std::vector<sync::AccountChoice> choices{{"first", "Personal"}, {"second", "Work", true}, {"third", ""}};
+    const auto publish = [&](sync::SessionId id, const std::string& account) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = id;
+        session->info = {"chat", "codex", account, "", ""};
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({session});
+        w.link.state.sessions.setFriends({{"chat", choices}});
+        w.link.changed = true;
+        w.host.pollLink();
+    };
+    publish(8, "");
+    w.link.sent.clear();
+    const auto highlighted = [&]() -> std::string {
+        if (!w.view.accountPicker) return {};
+        const auto& p = *w.view.accountPicker;
+        return p.highlighted < p.options.size() ? p.options[p.highlighted].name : std::string();
+    };
+    w.view.pickerCommand("next");
+    CHECK(highlighted() == "first");
+    w.view.pickerCommand("cancel");
+    w.view.pickerCommand("previous");
+    CHECK(highlighted() == "third" && w.link.sent.empty());
+    w.view.chooseAccount("unlinked");
+    CHECK(w.link.sent.empty());
+    w.view.pickerCommand("cancel");
+
+    publish(8, "first");
+    w.view.pickerCommand("open");
+    CHECK(highlighted() == "first");
+    w.view.pickerCommand("confirm");       // already the confirmed account
+    CHECK(w.link.sent.empty() && !w.view.accountPicker);
+    w.view.pickerCommand("next");
+    CHECK(highlighted() == "second");
+    choices.erase(choices.begin() + 1);
+    publish(8, "first");
+    w.view.chooseAccount("second");        // click from an older rendered roster
+    CHECK(w.link.sent.empty());
+    w.view.pickerCommand("cancel");
+
+    w.view.pickerCommand("next");
+    CHECK(highlighted() == "third");
+    publish(9, "first");
+    w.view.pickerCommand("confirm");       // cannot confirm the choice for the old session
+    CHECK(w.link.sent.empty());
+}
+
+void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
+    Model model({}, true);
+    View view;
+    view.model = &model;
+    FrameHost host;
+    host.model = &model;
+    host.view = &view;
+    host.strip = sync::FriendStrip({}, "Ada", {});
+    auto conversation = std::make_shared<sync::SessionView>();
+    conversation->id = 42;
+    conversation->info = {"Ada", "codex", "second", "", ""};
+    sync::Sessions saved({conversation});
+    saved.setFriends({{"Ada", {{"first", "Home", true, "home@example.test"}, {"second", "Work", true, "work@example.test"}}}});
+    host.showState(saved, false);
+    CHECK((view.signInAccount() == SignInAccount{"second", "Work", "work@example.test"}));
+    CHECK(!view.activateSignIn() && !host.signIn.opener.armed());
 }
 
 void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
@@ -296,12 +337,12 @@ void explicitSignInKeepsTheDraft() {
     w.link.state.phase = sync::LinkPhase::Connected;
     w.link.state.loopback = true;
     w.link.state.sessions = sync::Sessions({session});
-    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", true}, {"other", "Other", true}}}});
+    w.link.state.sessions.setFriends({{"chat", {{"work", "Work", true, "work@example.test"}, {"other", "Other", true, "other@example.test"}}}});
     w.link.changed = true;
     w.host.pollLink();
     w.link.sent.clear();
     const auto i = w.model.active();
-    CHECK(w.view.signInCaption() == "Sign in to Work");
+    CHECK((w.view.signInAccount() == SignInAccount{"work", "Work", "work@example.test"}));
     w.view.submit(i, false);
     CHECK(w.model.tab(i).draft.empty());
     w.model.set_draft(i, "  keep this draft  ");
@@ -312,7 +353,7 @@ void explicitSignInKeepsTheDraft() {
     w.link.state.sessions.setFriends({{"chat", {{"work", "Work", false}, {"other", "Other", true}}}});
     w.link.changed = true;
     w.host.pollLink();
-    CHECK(w.view.signInCaption().empty() && !w.view.activateSignIn());
+    CHECK(w.view.signInAccount().name.empty() && !w.view.activateSignIn());
     w.view.submit(i, false);
     CHECK(w.link.sent.size() == 2 && w.link.sent.back().kind == sync::ActionKind::Send &&
           w.link.sent.back().text == "  keep this draft  " && w.model.tab(i).draft.empty());
@@ -339,9 +380,11 @@ void dismissedFriendRemainsLocal() {
 int main() {
     dismissedFriendRemainsLocal();
     accountCommandsUseTheActiveConversation();
+    accountPickerRechecksTheServerRoster();
     explicitSignInKeepsTheDraft();
     enterDuringAccountSwitchWaitsForServerState();
     logoutUsesTheConfirmedAccountAndReturnsToSignIn();
+    savedStateShowsTheSelectedEmailWithoutStartingSignIn();
     extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();
