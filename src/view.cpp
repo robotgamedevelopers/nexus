@@ -1046,9 +1046,10 @@ struct Builder {
     }
 
     void promptKey(std::size_t active, const char* key) {
-        if (view.activateSignIn && view.activateSignIn())
-            return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         const Tab& tab = model.tab(active);
+        const bool logout = tab.draft == "/logout";
+        if (!logout && view.activateSignIn && view.activateSignIn())
+            return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         policy::MessagePlan plan;
         std::string why;
         const policy::MessageState state{tab.draft, tab.name, tab.model, tab.queue.size(),
@@ -1056,6 +1057,18 @@ struct Builder {
         if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
             view.problem = "Prompt application: " + (why.empty() ? "draft exceeds the prompt limit" : why);
+            return;
+        }
+        if (plan.delivery == policy::Delivery::SignOut) {
+            if (!view.signOut)
+                view.problem = "Connect to the Nexus server to sign out.";
+            else if (view.signOut())
+                model.set_draft(active, {});
+            return;
+        }
+        if (logout && (plan.delivery != policy::Delivery::None || plan.text)) {
+            // A fork using the older send/queue policy must never turn the command into a message.
+            view.problem = "Enable the sign_out operation in the client prompt policy to use /logout.";
             return;
         }
         if (plan.text)

@@ -442,6 +442,36 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         const auto number = link->send(std::move(action));
         if (accountState_.nextAction()) accountSelections_[session] = number;
     };
+    view->signOut = [this] {
+        if (!link || phase != sync::LinkPhase::Connected) {
+            view->problem = "Reconnect to the Nexus server before signing out.";
+            return false;
+        }
+        const auto* choice = activeChoice();
+        if (!choice) {
+            view->problem = "The server has not confirmed a selected account for this conversation.";
+            return false;
+        }
+        const auto session = mirror.session(model->tab(model->active()).id);
+        if (accountSelections_.contains(session)) {
+            view->problem = "Wait for the server to confirm the account change before signing out.";
+            return false;
+        }
+        if (accountState_.find(session)->info.harness != "claude") {
+            view->problem = "Sign-out is currently available for Claude accounts.";
+            return false;
+        }
+        if (!choice->needsSignIn) {
+            sync::Action action;
+            action.kind = sync::ActionKind::SignOut;
+            action.session = session;
+            action.account = choice->name;
+            const auto number = link->send(std::move(action));
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
+        view->problem.clear();
+        return true;
+    };
     view->submit = [this](std::size_t i, bool queue) {
         if (i == model->active() && activateSignIn()) return;
         std::string text;

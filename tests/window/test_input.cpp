@@ -414,6 +414,29 @@ void enterSendsExactlyTheText() {
     CHECK(h.active().draft == "again");
 }
 
+void logoutRequiresAnExplicitEnterAndNeverBecomesChat() {
+    Harness h;
+    int commands = 0;
+    h.view.signOut = [&] { ++commands; return true; };
+    h.type("/logout");
+    h.enter(style::kCommand);
+    CHECK(commands == 0 && h.active().queue.empty() && h.active().transcript.empty());
+    CHECK(h.active().draft == "/logout");
+    h.view.activateSignIn = [] { return true; };
+    h.enter();
+    CHECK(commands == 1 && h.active().draft.empty() && h.active().transcript.empty());
+    h.view.activateSignIn = {};
+    h.type("Explain /logout");
+    h.enter();
+    CHECK(commands == 1 && h.active().transcript.size() == 1);
+    CHECK(h.active().transcript.front().text == "Explain /logout");
+
+    Harness offline;
+    offline.type("/logout");
+    offline.enter();
+    CHECK(offline.active().transcript.empty() && offline.active().queue.empty() && !offline.view.problem.empty());
+}
+
 void enterStartsSignInBeforeEditingTheDraft() {
     Harness h;
     bool needed = true;
@@ -2309,6 +2332,7 @@ int main(int argc, char** argv) {
     sprintTabWithoutFriendsShowsTheNotice();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
+    logoutRequiresAnExplicitEnterAndNeverBecomesChat();
     enterStartsSignInBeforeEditingTheDraft();
     commandEnterQueues();
     shiftEnterInsertsOneLineFeed();

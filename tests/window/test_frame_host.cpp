@@ -221,6 +221,37 @@ void accountCommandsUseTheActiveConversation() {
     CHECK(w.link.sent.size() == 3 && w.view.accountCaption().empty());
 }
 
+void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
+    Window w("chat");
+    auto snapshot = [&](const std::string& harness, const std::string& account, bool needsSignIn, std::uint64_t next) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 31;
+        session->info = {"chat", harness, account, "", ""};
+        w.link.state.phase = sync::LinkPhase::Connected;
+        w.link.state.sessions = sync::Sessions({session});
+        w.link.state.sessions.setFriends({{"chat", {{"home", "Home", false}, {"work", "Work", needsSignIn}}}});
+        w.link.state.sessions.setNextAction(next);
+        w.link.changed = true;
+        w.host.pollLink();
+    };
+    snapshot("claude", "home", false, 1);
+    w.link.sent.clear();
+    w.view.accountCommand("next");
+    CHECK(!w.view.signOut() && w.link.sent.size() == 1);
+    snapshot("claude", "work", false, 9);
+    CHECK(w.view.signOut() && w.link.sent.size() == 2);
+    CHECK(w.link.sent.back().kind == sync::ActionKind::SignOut && w.link.sent.back().session == 31 &&
+          w.link.sent.back().account == "work" && w.link.sent.back().text.empty());
+    CHECK(!w.view.signOut() && w.link.sent.size() == 2);
+    snapshot("claude", "work", true, 10);
+    CHECK(w.view.signInAccount().name == "work");
+    CHECK(w.view.signOut() && w.link.sent.size() == 2);
+    snapshot("muse", "work", false, 11);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 2);
+    snapshot("claude", "unlinked", false, 12);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 2);
+}
+
 void enterDuringAccountSwitchWaitsForServerState() {
     Window w("chat");
     auto session = std::make_shared<sync::SessionView>();
@@ -310,6 +341,7 @@ int main() {
     accountCommandsUseTheActiveConversation();
     explicitSignInKeepsTheDraft();
     enterDuringAccountSwitchWaitsForServerState();
+    logoutUsesTheConfirmedAccountAndReturnsToSignIn();
     extensionTargetsItsConfiguredConversation();
     removedTabIsNoChoice();
     savedTabArrivingIsNoChoice();

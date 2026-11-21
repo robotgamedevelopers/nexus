@@ -126,6 +126,10 @@ def handle(event, state, config):
             "label": caption,
         }
     if event == "prompt_key":
+        if state["text"] == "/logout":
+            if state["key"] == "Enter":
+                return [{"op": "sign_out"}]
+            return [{"op": "notice", "text": "Press Enter to sign out of the selected account."}]
         if state["key"] == "Enter":
             return [{"op": "send"}]
         if state["key"] == "Command+Enter":
