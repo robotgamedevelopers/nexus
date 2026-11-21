@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import stat
 import subprocess
 import sys
@@ -14,7 +15,7 @@ HELPER = Path(sys.argv.pop(1)).resolve()
 EMAIL = "work@example.test"
 
 CLI = '''#!/usr/bin/python3 -I
-import json, os, sys, time
+import json, os, subprocess, sys, time
 from pathlib import Path
 cfg = Path(os.environ["CLAUDE_CONFIG_DIR"])
 assert Path.home() == cfg.parent and cfg.parent.resolve() == Path.cwd()
@@ -24,6 +25,16 @@ credentials = cfg / ".credentials.json"
 if sys.argv[1:3] == ["auth", "login"]:
     assert sys.argv[3:5] == ["--claudeai", "--email"] and "NEXUS_SIGNIN_FLOW" in os.environ
     assert not credentials.exists()
+    if mode == "isolation":
+        result = subprocess.run([os.environ["BROWSER"], "https://example.test/synthetic-login"], check=False)
+        assert result.returncode == 0
+        if sys.platform == "darwin":
+            try:
+                (cfg.parents[3] / "other" / "sentinel").read_bytes()
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("The login read another account")
     with credentials.open("w") as f:
         json.dump({"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh","expiresAt":int(time.time()*1000)+2400000,"scopes":["user:profile","user:inference"]}}, f)
     credentials.chmod(0o600)
@@ -78,6 +89,30 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.call("access").stdout,b"fake-access\n")
         self.assertEqual(self.call("access",email="else@example.test").returncode,11)
         self.assertEqual(json.loads(self.path.read_bytes())["email"], EMAIL)
+
+    def test_browser_handoff_is_private(self):
+        # Place the opener and socket beside accounts/, like the sign-in runner. Capture its handoff locally.
+        target = self.root / "signin-bin" / "open"
+        target.parent.mkdir()
+        target.write_text("#!" + sys.executable + " -I\n" +
+                          "import os, socket, sys\n" +
+                          "with socket.socket(socket.AF_UNIX) as sock:\n" +
+                          "    sock.connect(os.environ['NEXUS_SIGNIN_SOCKET'])\n" +
+                          "    sock.sendall((os.environ['NEXUS_SIGNIN_FLOW'] + ' ' + sys.argv[1]).encode())\n")
+        target.chmod(0o700)
+        self.env["BROWSER"] = str(target)
+        sentinel = self.account.parent / "other" / "sentinel"
+        sentinel.parent.mkdir(mode=0o700)
+        sentinel.write_text("synthetic-only")
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.settimeout(3)
+            listener.bind(self.env["NEXUS_SIGNIN_SOCKET"])
+            listener.listen(1)
+            result = self.call("enroll", "isolation")
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+            client, _ = listener.accept()
+            with client:
+                self.assertEqual(client.recv(1024), b"fixture https://example.test/synthetic-login")
 
     def test_rejection_preserves_existing(self):
         self.assertEqual(self.call("enroll").returncode,0)
