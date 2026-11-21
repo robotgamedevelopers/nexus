@@ -7,6 +7,7 @@
     "ink": "#f3f3f3",
     "notice_ink": "#ffb4b4",
     "status_ink": "#d8d8d8",
+    "switch_email_ink": "#86c5ff",
     "radius": 25.2,
     "show_notices": true,
     "show_tools": true

@@ -19,10 +19,13 @@ void put_entry(Writer& w, const Entry& e) {
     frame.u8(e.kind);
     frame.u8(e.closed ? 1 : 0);
     frame.str(e.text);
+    if (e.account_email_end != 0) {
+        frame.u32(e.account_email_end);
+    }
     w.bytes(frame.out());
 }
 
-// An entry of a framed format: what it adds past the text is skipped.
+// Older entry frames end at the text. Only a Notice owns the optional address span.
 bool get_entry(Reader& r, Entry& e, std::uint64_t* skipped) {
     const Bytes frame = r.bytes();
     Reader in(frame);
@@ -30,6 +33,9 @@ bool get_entry(Reader& r, Entry& e, std::uint64_t* skipped) {
     const std::uint8_t closed = in.u8();
     e.text = in.str();
     e.closed = closed == 1;
+    if (e.kind == 2 && in.ok() && !in.done()) {
+        e.account_email_end = in.u32();
+    }
     if (in.ok() && !in.done() && skipped != nullptr) {
         ++*skipped;
     }

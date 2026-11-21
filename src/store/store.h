@@ -71,6 +71,7 @@ struct Entry {
     std::uint8_t kind = 0;
     std::string text;
     bool closed = true;
+    std::uint32_t account_email_end = 0;
     bool operator==(const Entry&) const = default;
 };
 

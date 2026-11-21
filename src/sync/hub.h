@@ -438,6 +438,7 @@ private:
                  std::vector<std::string>* report);
     void take(accounts::Registry next);
     void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
+    EntryRef switchNotice(const std::string& account) const;
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
     std::vector<std::string> subscriptionsFor(const std::string& friendName) const;
     std::string firstAutoAccount(const std::vector<std::string>& subscriptions) const;

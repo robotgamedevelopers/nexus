@@ -810,7 +810,7 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.find(kAda)->info.account == "a2");
     bool told = false;
     for (const std::string& line : s.transcript()) {
-        told = told || has(line, "The account a1 reached its usage limit, so this session now runs on the account a2");
+        told = told || has(line, "Switched to a2");
     }
     CHECK(told);
     CHECK(s.serveUntil([&] { return none(s) || idle(s); }, 10));

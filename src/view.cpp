@@ -981,6 +981,29 @@ struct Builder {
         prKitPlace(kit, node, &place);
     }
 
+    void switchLabel(PrLayoutNode bubble, const Entry& entry) {
+        const std::string_view text = entry.text;
+        const auto start = kAccountSwitchPrefix.size();
+        const std::size_t end = entry.accountEmailEnd;
+        const auto body = textStyle(PrKitTextRole_Body, kStatusTone);
+        if (!text.starts_with(kAccountSwitchPrefix) || end <= start || end > text.size() ||
+                (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80)) {
+            label(bubble, text, body);
+            return;
+        }
+        // Keep the address in one wrapping paragraph. A local inline color leaves the Kit theme's control colors alone.
+        const auto paragraph = prKitText(kit, bubble, {}, body);
+        prLayoutTreeFrameText(tree, paragraph, 0, sv(text.substr(0, start)));
+        auto run = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, paragraph));
+        run.groups[PrLayoutGroup_Box] = prLayoutStyleDefault().groups[PrLayoutGroup_Box];
+        auto ink = prLayoutColorStyleRecord(tree, run.groups[PrLayoutGroup_Color]);
+        ink.color = prColor16FromColor(rgb(look.transcriptStyle.switchEmailInk));
+        run.groups[PrLayoutGroup_Color] = prLayoutColorStyleIntern(tree, &ink);
+        const auto address = prLayoutTreeFrameElement(tree, paragraph, 0, prLayoutStyleIntern(tree, &run));
+        prLayoutTreeFrameText(tree, address, 0, sv(text.substr(start, end - start)));
+        prLayoutTreeFrameText(tree, paragraph, 0, sv(text.substr(end)));
+    }
+
     // One item, keyed by its tab and place, so that it keeps its node and its set text as the items in sight change.
     PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, const TranscriptItems& items, std::size_t i,
             uint64_t base) {
@@ -993,7 +1016,11 @@ struct Builder {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = element(entry, Part::Bubble);
                 const auto conversationTone = e.kind == EntryKind::Person ? kPersonTone : kChatTone;
-                label(bubble, e.text, textStyle(PrKitTextRole_Body, e.kind == EntryKind::Notice ? kNoticeTone : conversationTone));
+                if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
+                    switchLabel(bubble, e);
+                } else {
+                    label(bubble, e.text, textStyle(PrKitTextRole_Body, e.kind == EntryKind::Notice ? kNoticeTone : conversationTone));
+                }
                 return entry;
             }
             case EntryKind::Tool:

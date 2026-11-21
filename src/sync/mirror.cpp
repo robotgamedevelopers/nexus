@@ -93,7 +93,7 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             if (!e.closed) {
                 break;
             }
-            model.append(i, Entry{e.kind, e.text});
+            model.append(i, Entry{e.kind, e.text, e.accountEmailEnd});
             ++seen.next;
             changed = true;
         }

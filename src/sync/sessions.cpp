@@ -45,7 +45,7 @@ codec::EntryChange entryChange(const SessionEntry& e, const EntryRef* had, bool 
             (!tables || (codec::tableText((*had)->text) && codec::tableText(e.text)))) {
         offset = (*had)->text.size();
     }
-    return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset)};
+    return codec::EntryChange{e.kind, e.closed, offset, e.text.substr(offset), e.accountEmailEnd};
 }
 
 // One changed session: what it is, its activity, its first index, the index k of the first entry `a` does not hold as
@@ -119,7 +119,7 @@ SessionRef applySession(codec::SessionChange&& c, const SessionView* a) {
             }
             text = (*had)->text + text;
         }
-        t->entries.push_back(std::make_shared<const SessionEntry>(SessionEntry{e.kind, std::move(text), e.closed}));
+        t->entries.push_back(std::make_shared<const SessionEntry>(SessionEntry{e.kind, std::move(text), e.closed, e.accountEmailEnd}));
         ++i;
     }
     if (!c.queueChanged) {

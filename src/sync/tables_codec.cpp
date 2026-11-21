@@ -127,6 +127,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             y->kind = kindOut(e.kind);
             y->closed = e.closed;
             y->offset = e.offset;
+            y->account_email_end = e.accountEmailEnd;
             putText(b.main, y->tail, e.tail, scratch);
         }
         x->queue_changed = s.queueChanged;
@@ -232,7 +233,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.keepFrom = x.keep_from;
             s.entries.reserve(static_cast<std::size_t>(x.entries.size()));
             for (const wire::EntryChange& y : x.entries) {
-                s.entries.push_back(EntryChange{kindIn(y.kind), y.closed, y.offset, textOf(y.tail)});
+                s.entries.push_back(EntryChange{kindIn(y.kind), y.closed, y.offset, textOf(y.tail), y.account_email_end});
             }
             s.queueChanged = x.queue_changed;
             for (const wire::SessionChangeQueueText& q : x.queue) {

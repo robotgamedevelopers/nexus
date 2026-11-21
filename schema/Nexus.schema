@@ -66,6 +66,7 @@ table EntryChange
     closed bool
     offset uint64
     tail   *string
+    account_email_end uint32
 }
 
 // One session of a sessions diff. Unchanged (`changed` false): the state diffed from holds it as it is, and nothing
@@ -207,6 +208,7 @@ table StoreEntry
     kind   EntryKind
     closed bool
     text   *string
+    account_email_end uint32
 }
 
 // A session's driver as the server keeps it across restarts: the next turn number, the turn open (0: none), the last

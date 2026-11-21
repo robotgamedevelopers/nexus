@@ -458,6 +458,9 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
         changes.push_back(SessionChange{entry(EntryKind::Notice, refused), {}});
     } else if (!(info == session->info)) {
         changes.push_back(infoChange(info));
+        if (!session->info.account.empty() && !info.account.empty() && session->info.account != info.account) {
+            changes.push_back(SessionChange{switchNotice(info.account), {}});
+        }
     }
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
@@ -548,11 +551,26 @@ std::string Hub::harnessOf(const std::string& account, const std::string& otherw
     return a == nullptr ? otherwise : a->provider;
 }
 
+EntryRef Hub::switchNotice(const std::string& account) const {
+    const auto* destination = accounts_ ? accounts_->account(account) : nullptr;
+    const auto& label = destination && !destination->label.empty() ? destination->label : account;
+    std::string text(kAccountSwitchPrefix);
+    if (destination && !destination->email.empty()) text += destination->email;
+    const auto emailEnd = static_cast<std::uint32_t>(text.size());
+    if (emailEnd == kAccountSwitchPrefix.size()) text += label;
+    else text += " (" + label + ")";
+    return std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Notice, std::move(text), true, emailEnd});
+}
+
 // A session's new settings, from the server rather than the person, with the notice that tells it why: one step.
 bool Hub::moveTo(SessionId id, const SessionInfo& info, const std::string& notice) {
     std::string failed;
-    if (!store_.commit(id, {infoChange(info), SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0,
-                       &failed)) {
+    std::vector<SessionChange> changes{infoChange(info)};
+    if (!notice.empty()) changes.push_back({entry(EntryKind::Notice, notice), {}});
+    const auto& previous = store_.find(id)->info.account;
+    if (!previous.empty() && !info.account.empty() && previous != info.account)
+        changes.push_back({switchNotice(info.account), {}});
+    if (!store_.commit(id, changes, std::string(), 0, &failed)) {
         return false;
     }
     refresh(id);
@@ -1559,8 +1577,7 @@ bool Hub::rotate(SessionId id, std::string* why, const std::vector<std::string>&
     }
     info.account = next;
     info.harness = harnessOf(next, info.harness);
-    if (!moveTo(id, info, "The account " + was + " reached its usage limit, so this session now runs on the account " +
-                next + ", the next signed-in account of " + info.friendName + "'s.")) {
+    if (!moveTo(id, info, {})) {
         return refuse("session " + std::to_string(id) + ": the store did not take the move");
     }
     return true;

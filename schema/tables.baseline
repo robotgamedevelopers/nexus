@@ -43,6 +43,7 @@ table EntryChange
     field closed id=0x85530f5090e836c5 kind=1
     field offset id=0x0268b0f8129435ca kind=9
     field tail id=0xd94c56ef0798d723 kind=17 type=string
+    field account_email_end id=0xb2ac393f2277c4d1 kind=8
 
 table Friend
     field name id=0xc4bcadba8e631b86 kind=17 type=string
@@ -86,6 +87,9 @@ table SessionInfo
     field effort id=0x0083c43b32948f2f kind=17 type=string
     field instance id=0x414a134c24ef8152 kind=17 type=string
     field auto_account id=0xbf329c2c6c784fde kind=1
+    field limit_request id=0xec5a07037be2a186 kind=9
+    field limit_account id=0xaac947ef35b48e90 kind=17 type=string
+    field limit_model id=0xe1e90ce0b9ed7706 kind=17 type=string
 
 table SessionsDiff
     field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
@@ -113,6 +117,7 @@ table StoreEntry
     field kind id=0xef9c96d721673243 kind=7 enum=EntryKind
     field closed id=0x85530f5090e836c5 kind=1
     field text id=0xfa04f4ef1995407e kind=17 type=string
+    field account_email_end id=0xb2ac393f2277c4d1 kind=8
 
 table StoreSession
     field id id=0x08b72e07b55c3ac0 kind=9
@@ -144,6 +149,8 @@ enum ActionKind
     variant SignInClaim id=0x7439c20e4947e3b5
     variant SignInOpened id=0xa65506e3bb15f846
     variant SignInCallback id=0x5c16b9e2e6fb5e04
+    variant SignOut id=0x5cdb26887b48e1e8
+    variant ResolveLimit id=0x0610706c3ede743e
 
 enum Activity
     variant Idle id=0xc92905d14a9421f3
@@ -180,4 +187,10 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-21 (UTC) — Record automatic subscription selection on sessions and friends
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Preserve the email span in an account switch notice
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record paused model choices and local sign-out actions
 - no compatibility-affecting edits; the wire absorbs the rest

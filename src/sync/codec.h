@@ -30,6 +30,7 @@ struct EntryChange {
     bool closed = true;
     std::uint64_t offset = 0;
     std::string tail;
+    std::uint32_t accountEmailEnd = 0;
 };
 
 // One session of a diff. Unchanged: the state diffed from holds it as it is, and only its id is set. Changed: what it

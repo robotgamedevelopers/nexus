@@ -399,7 +399,10 @@ void hubReloadAndRotate() {
     // A session from before accounts, on an account name the registry does not hold: settled at the start.
     CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
     CHECK(hub.apply(act(2, sync::ActionKind::SetAccount, "", "", "old", 1), &why, "w"));
-    std::vector<std::string> report = hub.useAccounts(sample(), &keeper);
+    Registry registry = sample();
+    registry.accounts[1].email = "subscriber@example.test";
+    registry.accounts[1].label = "weekend";
+    std::vector<std::string> report = hub.useAccounts(registry, &keeper);
     CHECK(has(report, "session 1 (ada): account old -> none"));
     CHECK(store.find(1)->info.account.empty());
     CHECK(hub.apply(act(3, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
@@ -416,9 +419,12 @@ void hubReloadAndRotate() {
     hub.reportSignedIn("home", true);
     CHECK(hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "home");
+    const auto& switched = *store.find(1)->transcript.back();
+    CHECK(switched.text == "Switched to subscriber@example.test (weekend)");
+    CHECK(switched.accountEmailEnd == std::string("Switched to subscriber@example.test").size());
     CHECK(hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.harness == "codex");
-    CHECK(has({lastNotice(store, 1)}, "reached its usage limit, so this session now runs on the account cx"));
+    CHECK(lastNotice(store, 1) == "Switched to cx");
     bool exhausted = false;
     CHECK(!hub.rotate(1, &why, {"work", "home"}, &exhausted) && exhausted);
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.autoAccount);

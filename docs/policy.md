@@ -119,6 +119,7 @@ appearance by tab. The shipped profile uses these defaults:
     "ink": "#f3f3f3",
     "notice_ink": "#ffb4b4",
     "status_ink": "#d8d8d8",
+    "switch_email_ink": "#86c5ff",
     "radius": 25.2,
     "show_notices": true,
     "show_tools": true
@@ -128,7 +129,8 @@ appearance by tab. The shipped profile uses these defaults:
 
 `fill` and `ink` set the conversation bubble background and text. Set `person_ink` to give sent and queued
 messages their own text color. Omitting it uses `ink` for both speakers. `notice_ink` sets the notice color and
-`status_ink` sets the status text color. Colors accept six hexadecimal digits after `#`. The corner radius
+`status_ink` sets the status text color, including the words around the address in an account-switch notice.
+`switch_email_ink` sets the address color in that notice. Colors accept six hexadecimal digits after `#`. The corner radius
 accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them
 again. Apply the client policy to see the changes in a running window.

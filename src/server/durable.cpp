@@ -9,7 +9,7 @@ namespace {
 sync::EntryRef toRef(const store::Entry& e) {
     const EntryKind kind = e.kind <= static_cast<std::uint8_t>(EntryKind::Tool) ? static_cast<EntryKind>(e.kind) :
         EntryKind::Notice;
-    return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, e.text, e.closed});
+    return std::make_shared<const sync::SessionEntry>(sync::SessionEntry{kind, e.text, e.closed, e.account_email_end});
 }
 
 sync::DriverState toState(const store::Driver& d) {
@@ -93,7 +93,8 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
             sc.driver = toDriver(*c.driver);
         } else if (c.entry) {
             sc.kind = store::Change::Kind::Append;
-            sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed};
+            sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed,
+                                    c.entry->accountEmailEnd};
         } else {
             sc.kind = store::Change::Kind::Enqueue;
             sc.prompt = c.prompt;

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,7 +15,12 @@ struct FriendInfo { std::string name; std::string model; };
 // line naming it and what it does (its name, a colon, its summary).
 enum class EntryKind { Person, Friend, Notice, Tool };
 
-struct Entry { EntryKind kind; std::string text; };
+inline constexpr std::string_view kAccountSwitchPrefix = "Switched to ";
+struct Entry {
+    EntryKind kind;
+    std::string text;
+    std::uint32_t accountEmailEnd = 0;  // byte offset after the address in an account-switch notice; zero for other entries
+};
 
 // Native presentation and lifecycle. The active fork separately assigns each tab type to a group.
 enum class TabKind { Sprint, Friend, Terminal, Extension };

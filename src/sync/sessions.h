@@ -63,6 +63,7 @@ struct SessionEntry {
     EntryKind kind = EntryKind::Notice;
     std::string text;
     bool closed = true;     // an open entry may still grow by text appended to its end; a closed one never changes
+    std::uint32_t accountEmailEnd = 0;
     bool operator==(const SessionEntry&) const = default;
 };
 

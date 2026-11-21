@@ -1015,6 +1015,26 @@ PrLayoutNode checkTextPaint(const Harness& h, const std::string& text, unsigned 
 
 // In the see-through overlay only the window background and the tab strip's fill let what is behind show through:
 // the prompt box, its border, the bubbles (the queued one too) and all text are opaque.
+void switchNoticeBubble() {
+    Harness h;
+    const std::string prefix(kAccountSwitchPrefix);
+    const std::string email = "subscriber@example.test";
+    const std::string suffix = " (work)";
+    const auto end = static_cast<std::uint32_t>(prefix.size() + email.size());
+    h.model.append(0, Entry{EntryKind::Notice, prefix + email + suffix, end});
+    h.frame();
+    h.frame();
+    const TranscriptStyle stock;
+    const auto bubble = checkTextPaint(h, prefix, stock.statusInk, stock.fill);
+    CHECK(bubble == checkTextPaint(h, email, stock.switchEmailInk, stock.fill));
+    CHECK(bubble == checkTextPaint(h, suffix, stock.statusInk, stock.fill));
+    const auto prefixBounds = h.bounds(h.findText(h.window(), prefix));
+    const auto emailBounds = h.bounds(h.findText(h.window(), email));
+    const auto suffixBounds = h.bounds(h.findText(h.window(), suffix));
+    CHECK(near(prefixBounds.top, emailBounds.top) && near(emailBounds.top, suffixBounds.top));
+    CHECK(prefixBounds.right <= emailBounds.left + 1 && emailBounds.right <= suffixBounds.left + 1);
+}
+
 void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
@@ -2528,6 +2548,7 @@ int main(int argc, char** argv) {
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     noModelUnderThePrompt();
+    switchNoticeBubble();
     conversationBubblesAndSignInCard();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
