@@ -1,5 +1,6 @@
 """Vendor session protocols. Each invocation owns one provider process and one Nexus turn."""
 
+import re
 import secrets
 import time
 import uuid
@@ -11,6 +12,46 @@ class Failure(Exception):
         super().__init__(message)
         self.code = code
         self.revoked = revoked
+
+
+def usage_limit():
+    return Failure("The provider reports that this account has exhausted its included usage.", "usage-limit")
+
+
+def grok_quota_kind(fields):
+    kind = fields.get("errorKind") or fields.get("kind") or fields.get("code")
+    return kind in ("usage_limit_reached", "usage_pool_exhausted") if isinstance(kind, str) else None
+
+
+def turn_quota(provider, error):
+    """Classify a provider's turn failure, never content from the transcript."""
+    if not isinstance(error, dict) or error.get("code") in (401, 403):
+        return False
+    data = error.get("data", error)
+    fields = data if isinstance(data, dict) else {}
+    if provider == "muse":
+        # MSP attaches this typed detail only to an exhausted quota.
+        quota = fields.get("quota")
+        return isinstance(quota, dict) and quota.get("limitKind") == "tierLimit"
+    if provider == "codex" and fields.get("codexErrorInfo") is not None:
+        return fields["codexErrorInfo"] == "usageLimitExceeded"
+    if provider == "grok":
+        kind = grok_quota_kind(fields)
+        if kind is not None:
+            return kind
+    # Antigravity uses QUOTA_EXHAUSTED for a single model as well; the
+    # reason alone says nothing about the remaining account credits.
+    # Some ACP and older app-server errors only carry a human-readable diagnostic.
+    # Match explicit provider phrases at the start. Other balances, 429s and
+    # ambiguous throttling errors must leave the selected account alone.
+    prefixes = {
+        "antigravity": r"out of (?:ai )?credits",
+        "grok": r"usage limit reached|usage balance exhausted|out of credits",
+        "codex": r"usage limit reached|you(?:'ve| have) (?:hit|reached) your usage limit",
+    }
+    pattern = rf"^(?:{prefixes[provider]})(?:[.!:]|$)"
+    return any(isinstance(value, str) and re.match(pattern, value.strip(), re.I)
+               for value in (error.get("message"), fields.get("message"), data))
 
 
 # Keep unknown or newly introduced plans out of the prompt path until their billing is known.
@@ -105,9 +146,10 @@ async def codex(rpc, turn):
     opts = {"threadId": sid, "input": [text(turn.prompt)]}
     if turn.effort:
         opts["effort"] = turn.effort
-    result = await rpc.call("turn/start", opts)
+    result = await rpc.call("turn/start", opts, quota_provider=turn.harness)
     tid = result["turn"]["id"]
     rpc.interrupt = {"id": -1, "method": "turn/interrupt", "params": {"threadId": sid, "turnId": tid}}
+    failure_notice = None
     while True:
         method, params = await rpc.event()
         if params.get("threadId") != sid:
@@ -116,8 +158,13 @@ async def codex(rpc, turn):
             item = params["item"]
             if item.get("type") == "agentMessage":
                 turn.block(item["text"])
+        if method == "error" and params.get("turnId") == tid and params.get("willRetry") is False:
+            failure_notice = params.get("error")
         if method == "turn/completed" and params["turn"]["id"] == tid:
-            if params["turn"]["status"] != "completed":
+            completed = params["turn"]
+            if completed["status"] == "failed" and turn_quota("codex", completed.get("error") or failure_notice):
+                raise usage_limit()
+            if completed["status"] != "completed":
                 raise Failure("Codex did not complete the turn.")
             return
 
@@ -209,6 +256,9 @@ async def acp(rpc, turn):
         )
 
     def update(method, params):
+        if (turn.harness == "grok" and method == "_x.ai/session/prompt_complete"
+                and params.get("sessionId") == sid and grok_quota_kind(params)):
+            raise usage_limit()
         u = params.get("update", {})
         if (
             method == "session/update"
@@ -218,7 +268,12 @@ async def acp(rpc, turn):
             turn.delta(u["content"]["text"])
 
     rpc.interrupt = {"method": "session/cancel", "params": {"sessionId": sid}}
-    result = await rpc.call("session/prompt", {"sessionId": sid, "prompt": parts}, update, timeout=None)
+    result = await rpc.call(
+        "session/prompt", {"sessionId": sid, "prompt": parts}, update, timeout=None, quota_provider=turn.harness
+    )
+    metadata = result.get("_meta")
+    if turn.harness == "grok" and isinstance(metadata, dict) and grok_quota_kind(metadata):
+        raise usage_limit()
     if result.get("stopReason") != "end_turn":
         raise Failure("The ACP harness ended the turn before completion.")
 
@@ -251,7 +306,7 @@ async def muse(rpc, turn):
     }
     if turn.effort:
         opts["reasoningEffort"] = turn.effort
-    result = await rpc.call("turn/start", opts)
+    result = await rpc.call("turn/start", opts, quota_provider=turn.harness)
     tid = result["turnId"]
     rpc.interrupt = {
         "id": -1,
@@ -267,6 +322,8 @@ async def muse(rpc, turn):
             if item.get("turnId") == tid and item.get("kind") == "agentMessage":
                 turn.block(item["text"])
         if method == "turn/completed" and params["turnId"] == tid:
+            if params["terminal"] == "failed" and turn_quota("muse", params.get("error")):
+                raise usage_limit()
             if params["terminal"] != "completed":
                 raise Failure("Muse did not complete the turn.")
             return

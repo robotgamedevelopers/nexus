@@ -13,7 +13,7 @@ from collections import deque
 from pathlib import Path
 
 from .account_runtime import enrolled, home_for, process_env, remove_receipt_if_current
-from .backends import BACKENDS, Failure
+from .backends import BACKENDS, Failure, turn_quota, usage_limit
 
 LIMIT = 1 << 20
 SESSION_ID = re.compile(r"(?!-)[!-~]{1,256}")
@@ -28,6 +28,7 @@ def error(code, cause, *, account=None, **fields):
     fix = {
         "protocol": "Check the Nexus driver protocol.",
         "no-credential": f"Complete the sign-in prompt in Nexus. To open it for this account, run nexus-server config sign-in {account}.",
+        "usage-limit": "Wait for the included usage to reset or select another signed-in account.",
         "session-not-found": "The next prompt uses a new harness session.",
     }
     emit(
@@ -75,7 +76,7 @@ class Rpc:
         msg = await self.read()
         return msg.get("method"), msg.get("params") or {}
 
-    async def call(self, method, params, handle=None, timeout=45):
+    async def call(self, method, params, handle=None, timeout=45, *, quota_provider=None):
         self.seq += 1
         await self.write({"id": self.seq, "method": method, "params": params})
         async with asyncio.timeout(timeout):
@@ -110,8 +111,8 @@ class Rpc:
                                                   "not logged in"}
                     ):
                         code = "no-credential"
-                    elif "usage limit" in detail or "rate limit" in detail:
-                        code = "usage-limit"
+                    elif quota_provider and turn_quota(quota_provider, err):
+                        raise usage_limit()
                     else:
                         code = "harness"
                     raise Failure(f"The harness refused {method}.", code, revoked=code == "no-credential")

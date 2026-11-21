@@ -180,6 +180,82 @@ class Protocol(unittest.TestCase):
             (home / "temporary-auth-error").unlink()
             self.assertEqual(self.reply(p, 2)[-1]["outcome"], "ok")
 
+    def test_turn_failure_routes_only_on_confirmed_exhaustion(self):
+        cases = {
+            "codex": (
+                ({"codexErrorInfo": "usageLimitExceeded"}, "usage-limit"),
+                ({"codexErrorInfo": "rateLimitExceeded", "message": "Usage limit reached"}, "harness"),
+                ({"codexErrorInfo": "sessionBudgetExceeded"}, "harness"),
+            ),
+            "grok": (
+                ({"kind": "usage_pool_exhausted"}, "usage-limit"),
+                ({"kind": "global_rate_limit"}, "harness"),
+                ({"kind": "concurrency_limit"}, "harness"),
+            ),
+            "antigravity": (
+                ({"reason": "QUOTA_EXHAUSTED", "message": "Out of credits."}, "usage-limit"),
+                ({"reason": "QUOTA_EXHAUSTED", "message": "You have exhausted your quota on this model."}, "harness"),
+                ({"reason": "QUOTA_EXHAUSTED"}, "harness"),
+            ),
+            "muse": (
+                ({"quota": {"limitKind": "tierLimit"}}, "usage-limit"),
+                ({"message": "step limit reached", "retryable": True}, "harness"),
+            ),
+        }
+        for provider, details in cases.items():
+            with self.driver(provider) as (p, home):
+                for turn, (detail, wanted) in enumerate(details, start=1):
+                    with self.subTest(provider=provider, detail=detail):
+                        error = {"code": -32000, "data": detail}
+                        (home / "prompt-errors.json").write_text(json.dumps({"response": {"error": error}}))
+                        events = self.reply(p, turn)
+                        self.assertEqual(events[-2]["code"], wanted, events)
+                        self.assertEqual(events[-1]["outcome"], "error")
+                        self.assertTrue((home / account_runtime.RECEIPT).exists())
+
+    def test_acp_transcript_and_success_message_cannot_request_rotation(self):
+        for provider in ("antigravity", "grok"):
+            with self.subTest(provider=provider), self.driver(provider) as (p, home):
+                message = "Out of credits."
+                events = [{"method": "session/update", "params": {
+                    "sessionId": "provider-session",
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": message}},
+                }}]
+                result = {"stopReason": "end_turn", "_meta": {"message": message}}
+                (home / "prompt-errors.json").write_text(json.dumps({"events": events, "response": {"result": result}}))
+                reply = self.reply(p, 1)
+                self.assertEqual(reply[-1]["outcome"], "ok")
+                self.assertEqual([e["delta"] for e in reply if e["kind"] == "text"], [message])
+
+    def test_provider_terminal_quota_and_unrelated_errors(self):
+        for provider in ("codex", "muse", "grok"):
+            with self.subTest(provider=provider), self.driver(provider) as (p, home):
+                for turn in range(1, 3):
+                    sid = "provider-session"
+                    event_session = sid if turn == 1 else "unrelated-session"
+                    if provider == "codex":
+                        response = {"turn": {"id": "t"}}
+                        events = [
+                            {"method": "error", "params": {"threadId": event_session, "turnId": "t", "willRetry": False,
+                                                          "error": {"codexErrorInfo": "usageLimitExceeded"}}},
+                            {"method": "turn/completed", "params": {"threadId": sid, "turn": {"id": "t", "status": "failed"}}},
+                        ]
+                    elif provider == "muse":
+                        response = {"turnId": "t"}
+                        events = [
+                            {"method": "turn/completed", "params": {"sessionId": event_session, "turnId": "t", "terminal": "failed",
+                                                                   "error": {"quota": {"limitKind": "tierLimit"}}}},
+                            {"method": "turn/completed", "params": {"sessionId": sid, "turnId": "t", "terminal": "failed"}},
+                        ]
+                    else:
+                        response = {"stopReason": "cancelled"}
+                        events = [{"method": "_x.ai/session/prompt_complete",
+                                   "params": {"sessionId": event_session, "errorKind": "usage_limit_reached"}}]
+                    (home / "prompt-errors.json").write_text(json.dumps({"events": events, "response": {"result": response}}))
+                    reply = self.reply(p, turn)
+                    self.assertEqual(reply[-1]["outcome"], "error")
+                    self.assertEqual(reply[-2]["code"], "usage-limit" if turn == 1 else "harness")
+
     def test_two_accounts_of_same_provider(self):
         for provider in HARNESSES:
             with self.subTest(provider=provider), tempfile.TemporaryDirectory() as root:

@@ -103,6 +103,13 @@ for line in sys.stdin:
         prompt = parts[-1]["text"]
         assert prompt in ("Example?", "hold")
         (home / "sent").touch()
+        scenario = home / "prompt-errors.json"
+        if scenario.exists():
+            fault = json.loads(scenario.read_text())
+            for notification in fault.get("events", []):
+                event(notification["method"], **notification["params"])
+            print(json.dumps({"id": msg["id"], **fault["response"]}), flush=True)
+            continue
         if prompt == "hold":
             time.sleep(50)
         if m == "session/prompt":

@@ -52,3 +52,13 @@ The driver checks the actual subscription before sending the prompt.
 
 Run `python3 -m unittest discover -s drivers/rpc -v` from the repository root. The
 tests run real adapter processes and scripted vendor peers with temporary account homes.
+
+### Subscription exhaustion
+
+The bridge emits `usage-limit` on a turn that the provider reports failed because
+the account used its included credits. Codex distinguishes this from its session
+budget and temporary rate limit. Grok identifies exhausted usage separately from
+concurrency and global limits. Muse reports a tier limit on the failed turn.
+Antigravity can report exhausted credits explicitly. Its generic quota code also
+covers individual models, so Nexus needs the account-credit diagnostic before
+requesting rotation. The driver keeps the enrollment receipt in all these cases.
