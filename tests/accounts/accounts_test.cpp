@@ -344,7 +344,7 @@ void hubActions() {
 
     // A create takes the friend's default, and runs its provider's harness.
     CHECK(hub.apply(sync::Action{n++, sync::ActionKind::Create, 0, "ada", "", ""}, &why, "w"));
-    CHECK(store.find(1)->info.account == "work" && store.find(1)->info.harness == "claude");
+    CHECK(store.find(1)->info.account == "work" && store.find(1)->info.autoAccount && store.find(1)->info.harness == "claude");
     // Repeated key presses resolve against the server's latest account, in link order, wrapping both ways.
     CHECK(hub.apply(act(n++, sync::ActionKind::SetAccount, "", "", "+next", 1), &why, "w"));
     CHECK(store.find(1)->info.account == "cx");
@@ -404,6 +404,10 @@ void hubReloadAndRotate() {
     CHECK(store.find(1)->info.account.empty());
     CHECK(hub.apply(act(3, sync::ActionKind::SetAccount, "", "", "work", 1), &why, "w"));
 
+    CHECK(!store.find(1)->info.autoAccount && !hub.rotate(1, &why) && has({why}, "pinned"));
+    CHECK(hub.apply(act(4, sync::ActionKind::SetAccount, "", "", sync::kAutoAccountTarget, 1), &why, "w"));
+    CHECK(store.find(1)->info.autoAccount);
+
     // Rotation: the next signed-in link after the current one; none signed in, a notice and no move.
     CHECK(!hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "work");
@@ -415,6 +419,9 @@ void hubReloadAndRotate() {
     CHECK(hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.harness == "codex");
     CHECK(has({lastNotice(store, 1)}, "reached its usage limit, so this session now runs on the account cx"));
+    bool exhausted = false;
+    CHECK(!hub.rotate(1, &why, {"work", "home"}, &exhausted) && exhausted);
+    CHECK(store.find(1)->info.account == "cx" && store.find(1)->info.autoAccount);
     hub.reportSignedIn("home", false);
     CHECK(!hub.rotate(1, &why));
     CHECK(!hub.rotate(9, &why) && has({why}, "no session 9"));
@@ -446,6 +453,47 @@ void hubReloadAndRotate() {
     CHECK(store.find(1)->info.account == "cx" && store.find(1)->transcript.size() == entries + 1);
     // The keeper was given each registry applied.
     CHECK(keeper.kept.size() == 4 && keeper.kept.back() == withAda);
+}
+
+// Auto routes only among linked subscriptions. A real registry account may itself be named "auto".
+void hubAutoSubscriptions() {
+    sync::MemoryStore store;
+    sync::Hub hub(store);
+    Keeper keeper;
+    Registry fleet = sample();
+    fleet.accounts[0].billing = accounts::Billing::Api;
+    fleet.accounts[1].name = "auto";
+    fleet.friends[0].accounts = {"work", "auto", "cx"};
+    fleet.friends[1].accounts.clear();
+    hub.probeSignInWith([](const accounts::Account& a) { return a.name != "auto"; });
+    CHECK(hub.useAccounts(fleet, &keeper).empty());
+    std::uint64_t n = 0;
+    auto make = [&](sync::SessionId from = 0) {
+        return hub.apply(sync::Action{++n, sync::ActionKind::Create, from, "ada", "", ""}, nullptr, "w");
+    };
+    auto set = [&](const std::string& target) {
+        return hub.apply(act(++n, sync::ActionKind::SetAccount, "", "", target, 1), nullptr, "w");
+    };
+    CHECK(make());
+    CHECK(store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    CHECK(make(1));
+    CHECK(store.find(2)->info.autoAccount && store.find(2)->info.account == "cx");
+    std::string why;
+    CHECK(!hub.rotate(1, &why));
+    CHECK(set("cx"));  // pin the same payer
+    CHECK(!store.find(1)->info.autoAccount);
+    CHECK(make(1));
+    CHECK(!store.find(3)->info.autoAccount && store.find(3)->info.account == "cx");
+    CHECK(set("auto") && !store.find(1)->info.autoAccount && store.find(1)->info.account == "auto");
+    CHECK(set(sync::kAutoAccountTarget) && store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    hub.reportSignedIn("auto", true);
+    CHECK(hub.nextSubscription(1, {}, why) == "auto" && store.find(1)->info.account == "cx");
+    CHECK(hub.rotate(1, &why) && store.find(1)->info.account == "auto");
+    fleet.friends[0].accounts = {"work", "cx"};
+    std::vector<std::string> report;
+    CHECK(hub.applyAccounts(fleet, "reload", &report));
+    CHECK(!store.find(1)->info.autoAccount && store.find(1)->info.account == "cx");
+    CHECK(!hub.state().friends().front().canAutoAccount && !set(sync::kAutoAccountTarget));
 }
 
 // A memory store that fails from a chosen step on, as a disk that stops taking writes: that step and every later one
@@ -905,6 +953,7 @@ void hubFriends() {
     edit.accounts[0].email = "dev+work@example.test";
     edit.accounts.push_back({"unused", "fake", accounts::Billing::Subscription, "", false, "unlinked@example.test"});
     sync::ServerFriend ada{"ada", {{"work", "Work", false, "dev+work@example.test"}, {"home"}, {"cx"}}};
+    ada.canAutoAccount = true;
     const sync::ServerFriend bo{"bo", {{"home"}}};
     CHECK(hub.useAccounts(edit, &keeper).empty());
     CHECK(hub.state().friendsKnown() && (hub.state().friends() == Names{ada, bo}));
@@ -952,6 +1001,7 @@ const Group kGroups[] = {
     {"picks", picks},
     {"hub_actions", hubActions},
     {"hub_reload_rotate", hubReloadAndRotate},
+    {"hub_auto_subscriptions", hubAutoSubscriptions},
     {"hub_store_fails", hubStoreFails},
     {"hub_adopt_defaults", hubAdoptDefaults},
     {"hub_probe", hubProbe},

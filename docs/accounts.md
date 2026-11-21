@@ -26,8 +26,9 @@ with the commands below.
   own login). A new session takes the account of the session it copies when that account is linked to its friend,
   else the account selected by the server profile as described below. A session's harness is its account's provider, so switching a session's account can
   switch harness.
-- When a session's account reaches its usage limit, the shipped server policy picks the friend's next signed-in linked account,
-  in link order, and tells the session. If there is none, the session is told that too, and stays.
+- In **auto**, a subscription usage limit moves the conversation to the next signed-in linked subscription in
+  the friend's configured order. Each payer can be tried once for the interrupted request. If every eligible payer
+  is exhausted, the session reports that. Selecting a named account pins the conversation to that account.
 - When a change takes a friend out of friends.json, the server stops the work running in each of its sessions (the
   turn open gets the person's stop; its driver is ended) and tells each session once. The sessions are kept as they
   are (account, harness, instance, transcript and queued prompts); while the friend is out nothing starts in them and
@@ -138,10 +139,16 @@ When the selected account needs a login, press **Enter** in the prompt or click 
 above it. The card shows the selected account’s label (or name) and its configured email on a separate line when available. This opens the selected account’s browser flow. An empty prompt works. Any draft
 stays in the composer through sign-in. Press **Enter** again after sign-in to send it.
 
-For a fresh session, the shipped server profile sets `"account_default": "first"` in its `config.json`
-and starts on the first linked account for that friend. Set `account_default` to `"preferred"` to
-use that friend's explicit `default` in `friends.json`. Existing profiles that omit the option
-also use the explicit default.
+When a friend has at least two linked subscription accounts, **auto** is the first menu choice and the
+stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When
+none are signed in, the first subscription supplies the sign-in card. The account shown alongside **auto** is
+the actual payer. Selecting its name pins it even if the payer stays the same. Older sessions retain their
+existing selections, and a copy of a session for the same friend inherits its selection mode.
+
+Set `"auto_accounts": false` in the server profile to start fresh sessions on a named account. In that case,
+or with fewer than two subscriptions, the shipped `"account_default": "first"` selects the first linked account.
+Set it to `"preferred"` to use the friend's explicit `default` in `friends.json`. When a roster edit leaves
+an Auto session with only one subscription, that account becomes its named selection.
 
 Switching the active Nexus session keeps its transcript. A turn already running finishes on its
 original account. The first prompt on the new account starts a fresh harness session with recent

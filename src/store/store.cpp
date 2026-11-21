@@ -161,6 +161,22 @@ void get_continuation(Reader& r, Driver& d) {
     r = extension;
 }
 
+// Optional trailing tag. Older records and snapshots retain their named account as a pin.
+constexpr std::uint8_t kAutoAccount = 0xA2;
+
+void put_auto_account(Writer& w, const Info& info) {
+    if (info.auto_account)
+        w.u8(kAutoAccount);
+}
+
+void get_auto_account(Reader& r, Info& info) {
+    Reader extension = r;
+    if (!r.done() && extension.u8() == kAutoAccount) {
+        info.auto_account = true;
+        r = extension;
+    }
+}
+
 // A change's fields: an append's entry, an enqueue's prompt, a driver, an info; a dequeue has none.
 void put_change(Writer& w, const Change& c) {
     if (c.kind == Change::Kind::Append) {
@@ -175,6 +191,7 @@ void put_change(Writer& w, const Change& c) {
     } else if (c.kind == Change::Kind::SetInfo) {
         put_info(w, c.info);
         put_info_tail(w, c.info);
+        put_auto_account(w, c.info);
     }
 }
 
@@ -619,6 +636,7 @@ Status Store::replay_record(std::span<const std::uint8_t> rec, std::uint64_t seq
             get_info(in, c.info);
             if (framed) {
                 get_info_tail(in, c.info);
+                get_auto_account(in, c.info);
             }
         } else if (framed) {
             ++skipped_;
@@ -694,6 +712,7 @@ Bytes Store::encode_snapshot() const {
         put_info_tail(frame, t.info);
         put_session_account(frame, t.driver);
         put_continuation(frame, t.driver);
+        put_auto_account(frame, t.info);
         w.bytes(frame.out());
     }
     w.u32(std::uint32_t(applied_.size()));
@@ -777,6 +796,7 @@ Status Store::replay_snapshot(std::span<const std::uint8_t> snap) {
             get_info_tail(in, t.info);
             get_session_account(in, t.driver);
             get_continuation(in, t.driver);
+            get_auto_account(in, t.info);
         }
         // A framed session may go on with what a later format adds, which is skipped.
         if (framed && !framedIn.ok()) {

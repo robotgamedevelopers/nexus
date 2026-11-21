@@ -11,6 +11,11 @@ def new_session(state, config = {}):
             result["instance"] = source["instance"]
     roster = state["roster"]
     if roster != None:
+        if roster.get("can_auto_account", False):
+            if source != None and source["friend"] == state["friend"]:
+                result["auto_account"] = source.get("auto_account", False)
+            else:
+                result["auto_account"] = config.get("auto_accounts", True)
         if source == None or (result["account"] and result["account"] not in roster["linked"]):
             mode = config.get("account_default", "preferred")
             if mode == "first":

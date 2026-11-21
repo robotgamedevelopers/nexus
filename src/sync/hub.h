@@ -331,13 +331,14 @@ public:
     void signOutWith(std::function<std::string(const accounts::Account&)> hook) { signOut_ = std::move(hook); }
     void probeSignInWith(std::function<bool(const accounts::Account&)> probe) { probe_ = std::move(probe); }
 
-    // Where a usage limit on session `id`'s account is reported: the session moves to its friend's next signed-in
-    // linked account, in link order, with a notice; with none, the notice says so and the session stays. False, with
-    // why, when the session is not held, the hub holds no accounts, or there was none to move to.
     // Pure request handlers. The server commits the returned text with the request's acknowledgement.
     using NativeService = std::function<std::string(const std::string&)>;
     void registerService(std::string name, NativeService handler) { services_[std::move(name)] = std::move(handler); }
-    bool rotate(SessionId id, std::string* why = nullptr);
+    // Preview the policy's next signed-in subscription, skipping payers already tried on this turn.
+    std::string nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason) const;
+    // Commit an automatic move. noEligible distinguishes a settled refusal from a failed store write.
+    bool rotate(SessionId id, std::string* why = nullptr, const std::vector<std::string>& exhausted = {},
+                bool* noEligible = nullptr);
 
     // The secret dialog (sync/secrets.h, docs/secrets.md, models/Secrets.tla). Until secretsWith() the hub takes no
     // asks and every secret answer or cancel is counted and dropped. `keeper` writes a value to its account's file,
@@ -438,6 +439,8 @@ private:
     void take(accounts::Registry next);
     void stateFriends();    // the registry's friends into the state (Sessions::setFriends), when they changed
     bool moveTo(SessionId id, const SessionInfo& info, const std::string& notice);
+    std::vector<std::string> subscriptionsFor(const std::string& friendName) const;
+    std::string firstAutoAccount(const std::vector<std::string>& subscriptions) const;
     std::string harnessOf(const std::string& account, const std::string& otherwise) const;
     void offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info);
     bool resolveLimit(const Action& action, std::string* why, const std::string& client);
@@ -451,7 +454,7 @@ private:
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
     std::map<std::string, NativeService> services_;
-    policy::Host application_{"server"};
+    mutable policy::Host application_{"server"};
     std::function<std::string()> bundlePath_;
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;

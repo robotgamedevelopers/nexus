@@ -98,6 +98,7 @@ struct Info {
     std::string model;
     std::string effort;
     std::string instance{};     // the friend's instance (empty: its default)
+    bool auto_account = false;
     bool operator==(const Info&) const = default;
 };
 

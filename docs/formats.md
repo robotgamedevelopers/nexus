@@ -129,11 +129,12 @@ server's state is.
 | --- | --- | --- | --- |
 | record | 1 | | a friend tab's, by name: migrated at open |
 | record | 2 | | by session, unframed, entry kinds 0 to 2 |
-| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame ends with the instance (`str`), a driver's with the summary flag (`u8`) and its session's directory (`str`), followed by the optional session account (`0xA1`, `str`) |
+| record | 3 | 3 | by session; each change framed by its length, each entry framed in it; trailing fields skipped. Appended since: an info's frame carries the instance (`str`) and optional Auto marker (`0xA2`), a driver's with the summary flag (`u8`) and its session's directory (`str`), followed by the optional session account (`0xA1`, `str`) |
 | snapshot | 1, 2 | | friend tabs (1 before drivers): migrated at open |
 | snapshot | 3 | | by session, unframed, entry kinds 0 to 2 |
-| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) |
+| snapshot | 4 | 4 | by session; each session framed, each entry framed in it; trailing fields skipped. Appended since, after the driver: the summary flag, its session's directory, then the instance, then the optional session account (`0xA1`, `str`) and optional Auto marker (`0xA2`) |
 
+- The Auto marker records automatic subscription selection. Its absence preserves the stored named selection.
 - Absent instance: **the friend's default instance**, settled at the server's start with a notice, as above.
 - An interrupted request may append a continuation to the driver record or session snapshot. Tag `0xA3` introduces the original prompt (`str`), the exhausted account names (`u32` count, then each `str`), and a model-limit decision pending (`u8`). No tag means no outstanding continuation. Its transcript effects and turn boundary commit together. An open turn on recovery may already have executed, so the server cuts it. A checkpoint between turns can safely continue.
 - Absent summary flag: **none owed**. An absent session account means the owner of the harness ID is unknown.

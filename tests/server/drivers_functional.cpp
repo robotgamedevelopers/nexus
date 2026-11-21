@@ -802,8 +802,9 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"the limit\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
         "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"error\"}\n"
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    s.hub->reportSignedIn("a1", true);
     s.hub->reportSignedIn("a2", true);
-    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
     s.send("first");
     CHECK(s.serveUntil([&] { return s.store.find(kAda)->info.account == "a2"; }, 10));
     CHECK(s.store.find(kAda)->info.account == "a2");

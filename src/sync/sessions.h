@@ -51,6 +51,7 @@ struct SessionInfo {
     std::string effort;
     std::string instance{};     // which of its friend's instances (accounts/registry.h): a machine and a directory; empty
                                 // before the server holds the friend's instances, or when the friend has none
+    bool autoAccount = false;    // account names the concrete credential in both modes
     // Published by the server while a turn is paused. Empty targets are unavailable options.
     std::uint64_t limitRequest = 0;
     std::string limitAccount{};
@@ -75,12 +76,15 @@ struct AccountChoice {
     bool operator==(const AccountChoice&) const = default;
 };
 
+inline constexpr char kAutoAccountTarget[] = "!auto";  // reserved SetAccount intent, invalid as a registry name
+
 // A friend the server holds (accounts/registry.h, its friends.json): what a window needs to show the friend's tab and
 // to start a session with it (an ensure naming it). The server is the authority on who the friends are; the window
 // shows them. A later version adds fields here and in schema/Nexus.schema's Friend.
 struct ServerFriend {
     std::string name;
     std::vector<AccountChoice> accounts{};   // in link order, empty with an older server
+    bool canAutoAccount = false;
     bool operator==(const ServerFriend&) const = default;
 };
 

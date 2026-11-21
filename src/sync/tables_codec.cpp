@@ -118,6 +118,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         x->info.limit_request = s.info.limitRequest;
         putText(b.main, x->info.limit_account, s.info.limitAccount, scratch);
         putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
+        x->info.auto_account = s.info.autoAccount;
         x->activity = activityOut(s.activity);
         x->first = s.first;
         x->keep_from = s.keepFrom;
@@ -152,6 +153,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         for (const ServerFriend& f : change.friends) {
             wire::Friend* w = added(wire::SessionsDiffFriendsAdd(b.main, d->friends));
             putText(b.main, w->name, f.name, scratch);
+            w->can_auto_account = f.canAutoAccount;
             for (const AccountChoice& account : f.accounts) {
                 auto* choice = added(wire::FriendAccountsAdd(b.main, w->accounts));
                 putText(b.main, choice->name, account.name, scratch);
@@ -224,6 +226,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.limitRequest = x.info.limit_request;
             s.info.limitAccount = textOf(x.info.limit_account);
             s.info.limitModel = textOf(x.info.limit_model);
+            s.info.autoAccount = x.info.auto_account;
             s.activity = activityIn(x.activity);
             s.first = x.first;
             s.keepFrom = x.keep_from;
@@ -256,6 +259,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         out.friends.reserve(static_cast<std::size_t>(d->friends.size()));
         for (const wire::Friend& f : d->friends) {
             ServerFriend friendState{textOf(f.name)};
+            friendState.canAutoAccount = f.can_auto_account;
             friendState.accounts.reserve(static_cast<std::size_t>(f.accounts.size()));
             for (const wire::AccountChoice& choice : f.accounts) {
                 friendState.accounts.push_back(

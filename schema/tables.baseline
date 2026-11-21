@@ -47,6 +47,7 @@ table EntryChange
 table Friend
     field name id=0xc4bcadba8e631b86 kind=17 type=string
     field accounts id=0x769ca48154530abd kind=14 elem=13 type=AccountChoice array=unbounded
+    field can_auto_account id=0xbb15df0a66f3b845 kind=1
 
 table Hello
     field proto id=0xf94687246d893231 kind=8
@@ -84,6 +85,7 @@ table SessionInfo
     field model id=0x9de543933e6e703a kind=17 type=string
     field effort id=0x0083c43b32948f2f kind=17 type=string
     field instance id=0x414a134c24ef8152 kind=17 type=string
+    field auto_account id=0xbf329c2c6c784fde kind=1
 
 table SessionsDiff
     field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
@@ -175,4 +177,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-21 (UTC) — Include the configured sign-in email on linked account choices
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-21 (UTC) — Record automatic subscription selection on sessions and friends
 - no compatibility-affecting edits; the wire absorbs the rest

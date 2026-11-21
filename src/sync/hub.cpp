@@ -240,8 +240,17 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
             return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
         const SessionInfo defaults = info;
         std::string error;
-        if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f, bool(accounts_), info, error))
+        const auto pool = subscriptionsFor(info.friendName);
+        if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
+                                bool(accounts_), pool.size() > 1, info, error))
             return counted(action, "New session application: " + error, why, client);
+        if (info.autoAccount) {
+            if (pool.size() < 2)
+                return counted(action, "Automatic account selection needs two linked subscriptions.", why, client);
+            if (!from || from->info.friendName != info.friendName || !from->info.autoAccount ||
+                    !signedIn_.contains(info.account) || std::find(pool.begin(), pool.end(), info.account) == pool.end())
+                info.account = firstAutoAccount(pool);
+        }
         if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
                 !printable(info.model) || !printable(info.effort) ||
                 (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
@@ -409,7 +418,14 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
     }
     SessionInfo info = session->info;
     std::string account = action.text;
-    if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
+    const bool chooseAuto = action.kind == ActionKind::SetAccount && account == kAutoAccountTarget;
+    if (refused.empty() && chooseAuto) {
+        const auto pool = subscriptionsFor(info.friendName);
+        if (pool.size() < 2)
+            refused = "Link at least two subscription accounts in friends.json to use auto.";
+        else
+            account = firstAutoAccount(pool);
+    } else if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
         const auto* who = accounts_ ? accounts_->friendNamed(info.friendName) : nullptr;
         if (!who || who->accounts.empty()) {
             refused = "Link an account to " + info.friendName + " in friends.json to switch accounts.";
@@ -428,6 +444,7 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
     }
     if (action.kind == ActionKind::SetAccount) {
         info.account = account;
+        info.autoAccount = chooseAuto;
         if (accounts_) {
             info.harness = harnessOf(info.account, info.harness);
         }
@@ -504,6 +521,26 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     }
     refresh(id);
     return true;
+}
+
+std::vector<std::string> Hub::subscriptionsFor(const std::string& friendName) const {
+    std::vector<std::string> pool;
+    const auto* who = accounts_ ? accounts_->friendNamed(friendName) : nullptr;
+    if (who) {
+        for (const auto& name : who->accounts) {
+            const auto* account = accounts_->account(name);
+            if (account && account->billing == accounts::Billing::Subscription)
+                pool.push_back(name);
+        }
+    }
+    return pool;
+}
+
+std::string Hub::firstAutoAccount(const std::vector<std::string>& pool) const {
+    for (const auto& name : pool)
+        if (signedIn_.contains(name)) return name;
+    // With no usable login, the concrete first choice can show its sign-in card.
+    return pool.empty() ? std::string{} : pool.front();
 }
 
 std::string Hub::harnessOf(const std::string& account, const std::string& otherwise) const {
@@ -643,26 +680,39 @@ bool Hub::settleOne(SessionId id, std::vector<std::string>* report, const std::s
             "): this session's driver restarts keeping them out; a turn already open is stopped now if more are "
             "kept out, and otherwise finishes as it started.";
     }
-    if (info.account.empty()) {
-        return instanceNotice.empty() || moveTo(id, info, instanceNotice);
-    }
     const std::string was = info.account;
     std::string notice;
-    if (!accounts_->linked(info.friendName, was)) {
+    if (info.autoAccount) {
+        const auto pool = subscriptionsFor(info.friendName);
+        if (pool.size() < 2) {
+            info.autoAccount = false;
+            notice = "Automatic account selection ended because fewer than two subscription accounts remain linked to " +
+                info.friendName + " (" + cause + ").";
+        }
+        if (std::find(pool.begin(), pool.end(), was) == pool.end()) {
+            info.account = firstAutoAccount(pool);
+            info.harness = harnessOf(info.account, info.harness);
+            if (!notice.empty()) notice += " ";
+            notice += info.account.empty() ? "No subscription account is selected." :
+                "The selected subscription account is now " + info.account + ".";
+        }
+    } else if (!was.empty() && !accounts_->linked(info.friendName, was)) {
         info.account = accounts::landing(*accounts_, signedIn_, info.friendName);
         info.harness = harnessOf(info.account, info.harness);
         notice = "The account " + was + " is no longer one of " + info.friendName + "'s accounts (" + cause +
             "), so this session now runs on " + (info.account.empty() ? std::string("no account (the harness's own "
             "login)") : "the account " + info.account) + ". Link an account to " + info.friendName + " in "
             "friends.json to choose another.";
-    } else if (info.harness != harnessOf(was, info.harness)) {
+    }
+    if (info.account == was && info.harness != harnessOf(was, info.harness)) {
         info.harness = harnessOf(was, info.harness);
-        notice = "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
+        if (!notice.empty()) notice += " ";
+        notice += "The account " + was + "'s provider is now " + info.harness + " (" + cause + "), so this session "
             "now runs " + info.harness + ".";
     } else if (const auto* row = accounts_->account(was); before && row && row->provider == "claude" &&
                before->account(was) && before->account(was)->email != row->email) {
         notice = "The configured Claude email for " + was + " changed. This session will use the updated login.";
-    } else if (instanceNotice.empty()) {
+    } else if (notice.empty() && instanceNotice.empty()) {
         return true;
     }
     if (!moveTo(id, info, instanceNotice.empty() ? notice : notice.empty() ? instanceNotice :
@@ -698,14 +748,17 @@ std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const
     for (const auto& f : registry.friends) {
         ServerFriend& row = friends.emplace_back(ServerFriend{f.name});
         row.accounts.reserve(f.accounts.size());
+        std::size_t subscriptions = 0;
         for (const auto& name : f.accounts) {
             if (const auto a = index.find(name); a != index.end()) {
                 // Measure admission with every optional sign-in bit set.
                 const bool needs = !signedIn || (canSignIn && hasSignIn(a->second->provider) &&
                                                   !signedIn->contains(name));
                 row.accounts.push_back({name, a->second->label, needs, a->second->email});
+                if (a->second->billing == accounts::Billing::Subscription) ++subscriptions;
             }
         }
+        row.canAutoAccount = subscriptions > 1;
     }
     return friends;
 }
@@ -1451,45 +1504,54 @@ void Hub::secretEffects(const SecretEffects& effects) {
     }
 }
 
-bool Hub::rotate(SessionId id, std::string* why) {
+std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& exhausted, std::string& reason) const {
+    reason.clear();
+    const auto* session = store_.find(id);
+    const auto* who = session && accounts_ ? accounts_->friendNamed(session->info.friendName) : nullptr;
+    if (!who) {
+        reason = "No subscription roster is available for this session";
+        return {};
+    }
+    const auto& current = session->info.account;
+    std::vector<std::string> eligible;
+    for (const auto& name : subscriptionsFor(who->name)) {
+        if (name != current && signedIn_.contains(name) &&
+                std::find(exhausted.begin(), exhausted.end(), name) == exhausted.end())
+            eligible.push_back(name);
+    }
+    const auto next = policy::accountAfterLimit(application_, bundlePath_(), current, who->accounts, eligible, reason);
+    if (reason.empty() && next.empty() && !eligible.empty())
+        reason = "account_after_limit chose to keep the current account";
+    return next;
+}
+
+bool Hub::rotate(SessionId id, std::string* why, const std::vector<std::string>& exhausted, bool* noEligible) {
+    if (noEligible) *noEligible = false;
     auto refuse = [&](const std::string& what) {
-        if (why != nullptr) {
-            *why = what;
-        }
+        if (why != nullptr) *why = what;
         return false;
     };
     const StoredSession* s = store_.find(id);
-    if (s == nullptr) {
-        return refuse("no session " + std::to_string(id));
-    }
-    if (!accounts_) {
-        return refuse("this server holds no accounts to rotate to");
-    }
+    if (!s) return refuse("no session " + std::to_string(id));
     SessionInfo info = s->info;
-    const std::string was = info.account.empty() ? std::string("in use") : info.account;
-    std::string next;
-    std::string policyReason;
-    const auto* who = accounts_->friendNamed(info.friendName);
-    if (who) {
-        std::vector<std::string> eligible;
-        for (const auto& name : who->accounts) {
-            if (name != info.account && signedIn_.count(name))
-                eligible.push_back(name);
-        }
-        next = policy::accountAfterLimit(application_, bundlePath_(), info.account, who->accounts, eligible, policyReason);
-        if (policyReason.empty() && next.empty() && !eligible.empty())
-            policyReason = "account_after_limit chose to keep the current account";
+    if (!info.autoAccount) {
+        if (noEligible) *noEligible = true;
+        return refuse("session " + std::to_string(id) + " is pinned to its selected account");
     }
+    const std::string was = info.account;
+    std::string policyReason;
+    const auto next = nextSubscription(id, exhausted, policyReason);
     if (next.empty()) {
         const std::string notice = !policyReason.empty() ? "Account policy: " + policyReason + ". See docs/policy.md." :
             "The account " + was + " reached its usage limit, and " + info.friendName +
-            " has no other signed-in account to move to. Link another account to " + info.friendName + " in "
+            " has no other signed-in account available for this turn. Link another account to " + info.friendName + " in "
             "friends.json, or sign in one it has (docs/accounts.md).";
         std::string failed;
         if (!store_.commit(id, {SessionChange{entry(EntryKind::Notice, notice), {}}}, std::string(), 0, &failed)) {
             return refuse(failed);
         }
         refresh(id);
+        if (noEligible) *noEligible = true;
         return refuse("session " + std::to_string(id) + ": " +
             (policyReason.empty() ? info.friendName + " has no other signed-in account" : policyReason));
     }

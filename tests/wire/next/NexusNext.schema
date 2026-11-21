@@ -52,6 +52,7 @@ table SessionInfo
     model       *string
     effort      *string
     instance    *string
+    auto_account bool
     limit_request uint64
     limit_account *string
     limit_model   *string
@@ -112,6 +113,7 @@ table Friend
 {
     name *string
     accounts []AccountChoice
+    can_auto_account bool
 }
 
 // A live in-app sign-in flow as one window sees it (sync/signin.h SignInOffer), from format 5: its id, its account, its

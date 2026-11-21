@@ -88,16 +88,18 @@ An existing `account_shortcuts` map still sends its configured `account_command`
 `"account_navigation": {"steps": {"advance": 1}, "wrap": false}` stops at the final account. If a profile specifies
 both maps for the same chord, `account_picker_shortcuts` takes precedence.
 
-The applied stock profile sets `"account_default": "first"` for new conversations. Profiles without this option
-retain their friend’s configured `preferred` default, including an empty one. New sessions copied from a linked
-source retain the source’s explicit account.
+The stock server profile sets `"auto_accounts": true`. Fresh conversations with at least two linked
+subscriptions start in Auto. The first signed-in subscription pays, or the first linked subscription supplies
+the sign-in card. A same-friend copy inherits the source selection mode. Named defaults follow
+`account_default`, either `"first"` (stock) or `"preferred"`. Forks can set `auto_accounts` to false to use
+named defaults for every new session.
 
 ## Events available in the native hosts
 
 | Host and event | Context | Result |
 |---|---|---|
 | Client `text_zoom` | Integer `current` text scale step, signed key `delta`, inclusive `min` and `max` supported by the renderer | An integer in range. On an invalid answer the window keeps the current scale and reports the error. |
-| Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked accounts | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
+| Server `account_after_limit` | `current` account name, `linked` names in configuration order, and `eligible` names of other signed-in linked subscriptions that have not exhausted this request | An eligible name, or `None` to stay. An invalid answer keeps the session on its current account and adds a notice. |
 | Server `model_after_limit` | `friend`, concrete `account`, current `model` after a Claude Fable limit | The model to offer on the same account, or `None` to omit this choice. Stock policy reads `fable_fallback_model`, defaulting to the Claude `opus` alias. The server resumes only when the person selects an available option. |
 
 The shipped client advances a tab by the key's delta. A server-side relative account command uses the linked accounts in order.
@@ -157,7 +159,7 @@ echo '{"friend":"reviewer","intent":"send","text":"hello","model":"","queued":0,
 | Client `window` | Receives the active tab kind, registered type ID, prompt availability and presence of link status. Returns the ordered panel list, keyboard shortcuts, and optional tab registrations and label. The window caches this description until its state changes or it observes an applied revision during a frame. |
 | Client `prompt_key` | Receives `key` (`Enter` or `Command+Enter`), `text`, `friend`, `model`, queue length `queued`, and displayed `busy` state. Returns a command list. |
 | Server `message` | Receives the same text and session fields with `intent` (`send` or `queue`) and server-side `busy` (an open turn). Returns a command list. |
-| Server `new_session` | Receives `friend`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred` and `instances`. Returns string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
+| Server `new_session` | Receives `friend`, driver `defaults`, an optional `source` session, and an optional `roster` with `linked`, `preferred`, `instances` and `can_auto_account`. Returns optional boolean `auto_account` (default false) and string fields `account`, `instance`, `model` and `effort`. The host validates these before creating the session. |
 
 Message command lists accept up to 16 operations. Each operation is a dictionary with an `op` field. A `notice`
 carries `text`. A client `draft` replaces the current draft. A final `send` or `queue` can supply replacement

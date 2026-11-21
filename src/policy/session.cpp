@@ -5,7 +5,7 @@
 
 namespace nexus::policy {
 bool newSession(Host& host, const std::string& path, const sync::SessionInfo& defaults, const sync::SessionInfo* source,
-    const accounts::Friend* who, bool hasRoster, sync::SessionInfo& result, std::string& why) {
+    const accounts::Friend* who, bool hasRoster, bool canAutoAccount, sync::SessionInfo& result, std::string& why) {
     std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> w(prJsonWriterCreate(), prJsonWriterDestroy);
     auto key = [&](std::string_view name) { prJsonWriterKey(w.get(), {name.data(), name.size()}); };
     auto text = [&](std::string_view s) { prJsonWriterString(w.get(), {s.data(), s.size()}); };
@@ -14,6 +14,8 @@ bool newSession(Host& host, const std::string& path, const sync::SessionInfo& de
         prJsonWriterBeginObject(w.get());
         field("friend", info.friendName);
         field("account", info.account);
+        key("auto_account");
+        prJsonWriterBool(w.get(), info.autoAccount);
         field("instance", info.instance);
         field("model", info.model);
         field("effort", info.effort);
@@ -30,6 +32,8 @@ bool newSession(Host& host, const std::string& path, const sync::SessionInfo& de
     if (hasRoster) {
         prJsonWriterBeginObject(w.get());
         field("preferred", who ? who->preferred : "");
+        key("can_auto_account");
+        prJsonWriterBool(w.get(), canAutoAccount);
         key("linked");
         prJsonWriterBeginArray(w.get());
         if (who) for (const auto& account : who->accounts) text(account);
@@ -53,7 +57,17 @@ bool newSession(Host& host, const std::string& path, const sync::SessionInfo& de
         value.assign(s.data, s.size);
         return true;
     };
-    if (prJsonParse(d.get(), {answer.data(), answer.size()}, nullptr) && prJsonCount(d.get(), 0) == 4 &&
+    if (!prJsonParse(d.get(), {answer.data(), answer.size()}, nullptr)) {
+        why = "return a session object";
+        return false;
+    }
+    const auto mode = prJsonMember(d.get(), 0, {"auto_account", 12});
+    if (mode != kPrJsonMissing && prJsonKind(d.get(), mode) != PrJsonKind_False && prJsonKind(d.get(), mode) != PrJsonKind_True) {
+        why = "auto_account must be a boolean";
+        return false;
+    }
+    result.autoAccount = mode != kPrJsonMissing && prJsonKind(d.get(), mode) == PrJsonKind_True;
+    if (prJsonCount(d.get(), 0) == (mode == kPrJsonMissing ? 4u : 5u) &&
             extract("model", result.model) && extract("account", result.account) &&
             extract("instance", result.instance) && extract("effort", result.effort))
         return true;

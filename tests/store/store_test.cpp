@@ -1375,7 +1375,7 @@ void put_main_driver(Writer& w, std::uint64_t next, const std::string& session) 
 // as it skips what any later frame adds. Both kept across a crash and a compaction.
 void test_instance() {
     auto defaults = [](const Session* t) {
-        return t != nullptr && t->info.instance.empty() && !t->driver.summary && t->driver.session_dir.empty() &&
+        return t != nullptr && t->info.instance.empty() && !t->info.auto_account && !t->driver.summary && t->driver.session_dir.empty() &&
                !t->driver.session_account;
     };
     {
@@ -1429,6 +1429,7 @@ void test_instance() {
         CHECK(o.s->session(1)->driver.session == "s-1" && o.s->applied("w1") == 4);
         Change c = info("ada");
         c.info.instance = "rocketnet";
+        c.info.auto_account = true;
         Change d = setDriver(3, 0, "", {});
         d.driver.summary = true;
         d.driver.session_dir = "/work/rocketnet";
@@ -1448,6 +1449,7 @@ void test_instance() {
         Writer infoFrame;
         put_main_info(infoFrame, {"ada", "claude", "", "", ""});
         infoFrame.str("rocketnet");
+        infoFrame.u8(0xA2);
         want.bytes(infoFrame.out());
         want.u8(std::uint8_t(Change::Kind::SetDriver));
         Writer driverFrame;
@@ -1474,7 +1476,7 @@ void test_instance() {
     {
         Opened o = open_store(fs);
         CHECK_OK(o.st);
-        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->applied("w1") == 5);
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->info.auto_account && o.s->applied("w1") == 5);
         CHECK(o.s != nullptr && o.s->session(1)->driver.summary &&
               o.s->session(1)->driver.continuation_prompt == "finish the report" &&
               o.s->session(1)->driver.exhausted_accounts == std::vector<std::string>({"home", "work"}) &&
@@ -1490,6 +1492,7 @@ void test_instance() {
         CHECK_OK(o.s->commit(1, made("ada")));
         Change c = info("ada");
         c.info.instance = "rocketnet";
+        c.info.auto_account = true;
         Change d = setDriver(3, 0, "s-2", {});
         d.driver.summary = true;
         d.driver.session_dir = "/work/rocketnet";
@@ -1503,7 +1506,7 @@ void test_instance() {
     {
         Opened o = open_store(fs2, small);
         CHECK_OK(o.st);
-        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->driver.summary &&
+        CHECK(o.s != nullptr && o.s->session(1)->info.instance == "rocketnet" && o.s->session(1)->info.auto_account && o.s->session(1)->driver.summary &&
               o.s->session(1)->driver.continuation_prompt == "finish the report" &&
               o.s->session(1)->driver.exhausted_accounts == std::vector<std::string>({"home", "work"}) &&
               o.s->session(1)->driver.model_limit_pending && o.s->session(1)->driver.session_account == "work" && o.s->session(1)->driver.session_dir == "/work/rocketnet" &&
