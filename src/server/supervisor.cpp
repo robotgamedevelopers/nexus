@@ -234,6 +234,9 @@ void Supervisor::acceptModelChoice(const sync::DriverState& durable) {
 
 Output Supervisor::rotationExhausted() {
     if (awaitingRotation()) {
+        if (!config_.autoAccount)
+            effect(Effect::What::Notice, "The selected account " + config_.account +
+                " already reached its limit on this request. The interrupted work stopped.");
         clearContinuation();
         held_ = true;
         out_.durable = true;
@@ -253,11 +256,8 @@ Output Supervisor::setAccount(std::string account, Millis now, bool automatic,
                               const std::vector<std::string>* command) {
     // Changing the account may start queued work. Bind its verified launch arguments first.
     if (command) config_.command = *command;
-    if (config_.autoAccount && !automatic && !state_.modelLimitPending && state_.openTurn == 0 &&
-        !state_.continuationPrompt.empty()) {
-        clearContinuation();
-        out_.durable = true;
-    }
+    // A named selection can finish a pending handoff. advance() checks the new payer against
+    // the checkpoint, just as recovery does when the selection was committed before a restart.
     config_.autoAccount = automatic;
     config_.account = std::move(account);
     advance(now);

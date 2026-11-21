@@ -1501,6 +1501,33 @@ void testContinuation() {
     CHECK((whats(o) == std::vector<What>{What::Reply, What::Error}));
     CHECK(s.state().openTurn == 0 && s.state().continuationPrompt == "original task" && s.awaitingRotation());
 
+    // A named pin committed while auto is handing off must consume the same pending request as
+    // recovery from that selection. Later work stays queued behind it in both cases.
+    for (const bool restartAfterPin : {false, true}) {
+        Config pinned = c;
+        if (restartAfterPin) {
+            pinned.autoAccount = false;
+            pinned.account = "second";
+        }
+        Supervisor switched(pinned, s.state(), kStart, &o);
+        if (!restartAfterPin) {
+            CHECK(o.commands.empty());
+            o = switched.setAccount("second", kStart, false);
+        }
+        CHECK(kinds(o) == std::vector<Kind>{Kind::Start});
+        o = switched.message(Hello{1, "h"}, kStart);
+        const auto lines = written(o);
+        CHECK(lines.size() == 1 && std::holds_alternative<Send>(lines.front()) &&
+              std::get<Send>(lines.front()).turn == 2 &&
+              std::get<Send>(lines.front()).prompt.ends_with("original task"));
+        CHECK(switched.state().waiting == std::vector<std::string>{"later task"});
+    }
+    Supervisor unchanged(c, s.state(), kStart, &o);
+    CHECK(unchanged.setAccount("first", kStart, false).commands.empty() && unchanged.awaitingRotation());
+    o = unchanged.rotationExhausted();
+    CHECK(o.durable && whats(o) == std::vector<What>{What::Notice} && unchanged.held());
+    CHECK(unchanged.state().waiting == std::vector<std::string>{"later task"});
+
     // The checkpoint before a move survives a restart. No work goes back to an exhausted payer.
     Supervisor recovered(c, s.state(), kStart, &o);
     CHECK(o.commands.empty() && recovered.awaitingRotation());
