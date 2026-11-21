@@ -457,6 +457,7 @@ private:
     std::map<std::string, NativeService> services_;
     mutable policy::Host application_{"server"};
     std::function<std::string()> bundlePath_;
+    bool needsVerifiedLogin(const accounts::Account& account);
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
     std::function<std::string(const accounts::Account&)> signOut_;

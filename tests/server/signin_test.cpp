@@ -1172,6 +1172,18 @@ void hub_enrolled() {
     CHECK(s.act(sync::ActionKind::SignInClaim, replacement->first, "w1"));
     s.hub->signInEnrolled(named.name, "claude", replacement->first);
     CHECK(s.hub->signedIn().contains(named.name) && s.responder.logins.back() == named.name);
+    sync::Action move;
+    move.kind = sync::ActionKind::SetAccount;
+    move.session = 1;
+    move.text = named.name;
+    CHECK(s.hub->apply(move, &why));
+    sync::Action prompt;
+    prompt.kind = sync::ActionKind::Send;
+    prompt.session = 1;
+    prompt.text = "fixture";
+    s.hub->probeSignInWith([](const accounts::Account&) { return false; });
+    CHECK(!s.hub->apply(prompt, &why) && why.find(named.email) != std::string::npos);
+    CHECK(!s.hub->signedIn().contains(named.name));
 
     registry.accounts.back().provider = "grok";
     s.hub->probeSignInWith([](const accounts::Account&) { return false; });

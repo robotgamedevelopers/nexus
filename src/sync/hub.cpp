@@ -352,6 +352,12 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
             }
         }
     }
+    if (refused.empty() && (kind == ActionKind::Send || kind == ActionKind::Queue) && accounts_) {
+        const auto* a = accounts_->account(session.info.account);
+        if (a && needsVerifiedLogin(*a)) {
+            refused = "Sign in to " + a->email + " (" + a->name + ") in Nexus before sending a prompt.";
+        }
+    }
     if (!refused.empty()) {
         if (!commit({SessionChange{entry(EntryKind::Notice, refused), {}}})) {
             return false;
@@ -881,7 +887,11 @@ void Hub::take(accounts::Registry next) {
     }
     for (const accounts::Account& a : accounts_->accounts) {
         const accounts::Account* before = was ? was->account(a.name) : nullptr;
-        if (!sameLogin(before, a)) {
+        if (sameLogin(before, a)) {
+            if (a.requiresVerifiedEmail() && signedIn_.contains(a.name) && (!probe_ || !probe_(a))) {
+                signedIn_.erase(a.name);
+            }
+        } else {
             if (before && a.requiresVerifiedEmail()) secretEffects(desk_.retireLogin(a.name, loginFile(a.provider)));
             if (probe_ && probe_(a)) signedIn_.insert(a.name);
         }
@@ -895,6 +905,13 @@ void Hub::take(accounts::Registry next) {
         }
     }
     needAll();
+}
+
+bool Hub::needsVerifiedLogin(const accounts::Account& account) {
+    if (!account.requiresVerifiedEmail()) return false;
+    if (signedIn_.contains(account.name) && probe_ && probe_(account)) return false;
+    reportSignedIn(account.name, false);
+    return true;
 }
 
 void Hub::reportSignedIn(const std::string& account, bool signedIn) {
@@ -1031,7 +1048,7 @@ bool Hub::requestSignIn(const std::string& account, std::string* said) {
         *said = "this server does not sign accounts in in the window";
         return false;
     }
-    if (signedIn_.count(account) != 0) {
+    if (!needsVerifiedLogin(*a) && signedIn_.count(account) != 0) {
         *said = "signed in";
         return true;
     }
