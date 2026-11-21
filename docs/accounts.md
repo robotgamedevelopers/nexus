@@ -38,12 +38,10 @@ with the commands below.
   removed), the server moves it at once to the friend's default if that is signed in, else to its first
   signed-in linked account, else to none, and tells the session. When an account's provider changes, its sessions take
   the new harness and are told. A default that is unlinked or removed becomes none.
-- Which accounts are signed in is the server's own state; it is not in these files. When the server starts, and when an
-  account is set up, it is signed in if its login is there (for a `claude` account, the token file
-  `~/.nexus/server/accounts/<name>/oauth-token`). From then on the drivers report it: a driver that starts on the
-  account and reports its credential signs it in; one that reports no credential, or a failed authentication, marks it
-  as needing sign-in; one that reports a usage limit (`usage-limit`, `docs/driver-protocol.md`) moves its session on,
-  as above.
+- The server tracks which accounts are signed in. For Claude with a configured email it checks the
+  verified login in the named account's directory. For Claude without an email it checks the legacy
+  setup token. A missing or refused credential requires sign-in. A subscription cap limits usage
+  independently of whether the account is signed in.
 - A session on no account whose friend's driver needs one (the Claude driver's line passes `--account`) starts no
   driver: its prompt is not sent, and it is told to link an account to the friend and set the session to it.
 
@@ -117,7 +115,7 @@ the AI: they hold no secret.
 | `provider` | each account | yes | 1 to 32 lowercase letters, digits or `-`, as `claude` or `codex` |
 | `billing` | each account | no (`subscription`) | `"subscription"` (the provider's subscription plan) or `"api"` (billed at API rate, per token); a friend on an `api` account is always limited (friends.json's `limit`) |
 | `label` | each account | no | Short display text for the account picker. Up to 254 UTF-8 bytes without ASCII control characters. An omitted or empty label displays the stable account name. |
-| `email` | each account | no | Address shown to connected windows for this linked account. Changing it updates the sign-in caption. The provider verifies the login separately. Up to 254 UTF-8 bytes without ASCII control characters. |
+| `email` | each account | no | Address shown to connected windows for this linked account. For Claude it also selects the identity the browser must authenticate. Changing the email requires a matching verified login before this account can be used. Up to 254 UTF-8 bytes without ASCII control characters. |
 | `sign_in_on_use` | each account | no (`false`) | `true` defers sign-in until the account is selected or needs its driver. Opening the overlay leaves unused accounts alone. |
 
 The name is also the directory of its login, `~/.nexus/server/accounts/<name>/`.
@@ -130,10 +128,9 @@ you want to cycle them. Run `nexus-server config check` and
 `nexus-server config reload`. The same provider driver handles both logins. Each has its own
 sign-in and private account directory. Keep an enrolled account's name when adding another login.
 
-In the stock client, open the friend's tab. Press **⌘↓** for the next linked account or **⌘↑** for
-the previous one. Both wrap in the order listed for that friend. The server remembers the selected
-account on that session, including after a reconnect. Other sessions of the same friend keep their
-own accounts, and a new session copied from this one inherits its account if it is still linked.
+Open the friend's tab and press **⌘↓** or **⌘↑** to open its account menu and move the
+highlight. Press **Enter** to select the highlighted row or **Esc** to cancel. The server remembers
+the selection for this session across reconnects. Other sessions keep their own selections.
 
 When the selected account needs a login, press **Enter** in the prompt or click **Sign in to**
 above it. The card shows the selected account’s label (or name) and its configured email on a separate line when available. This opens the selected account’s browser flow. An empty prompt works. Any draft
@@ -150,12 +147,47 @@ or with fewer than two subscriptions, the shipped `"account_default": "first"` s
 Set it to `"preferred"` to use the friend's explicit `default` in `friends.json`. When a roster edit leaves
 an Auto session with only one subscription, that account becomes its named selection.
 
-Switching the active Nexus session keeps its transcript. A turn already running finishes on its
-original account. The first prompt on the new account starts a fresh harness session with recent
-entries from the transcript. Later starts on that same account and working directory can resume
-its harness session. A return to the first account after a turn on the second starts fresh with the
-updated transcript. The same rules apply when usage-limit policy switches accounts automatically.
-On the first start after upgrading, an older harness ID with no recorded owner also starts fresh.
+A change of payer adds a dark transcript bubble, for example **Switched to work@example.org (work)**.
+Only the email uses the accent color, configurable with `transcript_style.switch_email_ink`.
+When the account has no configured email, the bubble shows its short name.
+
+### Continuing after a usage limit
+
+Choosing another account manually keeps the transcript and lets an open turn finish on its original
+account. The first prompt on a new payer starts a fresh harness session with recent conversation
+history. On the same account and in the same working directory Nexus can resume the harness session.
+
+In **auto**, an account-wide subscription limit reported during a turn starts a new turn on the next
+eligible subscription. The friend keeps its working directory. Nexus supplies the unfinished request,
+recent conversation, partial reply and available tool activity so the friend can check completed work
+before continuing. The continuation runs before queued prompts. Nexus tries each eligible account
+once for that request and reports when the list is exhausted. An ordinary throttle or failed connection
+does not establish that an account is out of credits.
+
+When Claude reports a **Fable-only** limit, Nexus pauses the turn. If both alternatives are available,
+the friend tab asks **“Out of Fable. Switch to another account or drop to Opus?”** Choose the account
+option to keep the model or the model option to keep the account. Each button shows its keyboard
+shortcut. The server checks the choice again and continues the unfinished work. Both named and
+automatic selections get this choice. Forks can set `fable_fallback_model` in server policy and
+`limit_choice_keys` in client policy.
+
+### Signing in to the right Claude account
+
+Use the email on the centered sign-in card to choose the matching identity in Claude's browser page.
+Your browser may already be signed in to a different Claude account. Select the intended account,
+or sign out of Claude in that browser and sign in with the displayed email. Nexus accepts the grant
+only when Claude reports that email for the login just completed. A mismatch or missing identity
+leaves the selected slot awaiting sign-in.
+
+To clear an existing Nexus login, select the **named** Claude account in the menu, type `/logout`
+in the friend's prompt, and press **Enter**. Finish or stop active work using that login and finish
+or cancel an in-progress sign-in first. This removes the Nexus credential for that account across
+the friends that share it. Other account slots and the sign-in session in your browser are independent.
+Press **Enter** on the sign-in card to enroll that account again.
+
+A configured Claude email also applies to existing accounts at upgrade. An older `setup-token`
+contains no email that Nexus can verify. The first use requires one browser sign-in to establish
+the identity for that slot. The upgrade preserves the old credential file and conversation history.
 
 ## friends.json
 
@@ -257,7 +289,7 @@ its `machine` equals, ignoring case, either that name or the full host name: on 
 names none, the server has no machine: no instance is on it, and it says so in its log.
 
 The same config may say `claude <absolute path>`: the `claude` program a claude account's sign-in runs
-(`claude setup-token`, docs/secrets.md "Sign-in"). Without it the sign-in runs the first `claude` on the server's PATH.
+(browser enrollment, described in [Sign-in](secrets.md#sign-in-a-claude-account-in-the-browser)). Without it the sign-in runs the first `claude` on the server's PATH.
 
 To have an account signed in, an AI runs `nexus-server config sign-in <account>` (over ssh too). It waits, asking the
 server once a second, and prints one line: `signed in` (at once when the account already is), or `refused: <why>`
@@ -433,25 +465,24 @@ The owner's rule (2026-11-14): a person pastes a key or signs in once, ever; nex
 A login that can be renewed without a person, nexus renews before it ends, with no prompt. One that cannot, nexus knows
 the end of, and says so well ahead. The only time it asks for a second paste is a login the provider revoked or that
 ended with no way to renew it, and its dialog says which. Each account's login is that account's own: it is stored in
-that account's directory on the server it was pasted into, and used only for that account's sessions.
+that account's directory on the server and used only for that account's sessions. Explicit logout removes it.
+Adding a required Claude email to a legacy login requires a browser sign-in to establish its identity.
 
 | provider | what is stored | how long it lasts | renewed by | what nexus does | sources |
 |---|---|---|---|---|---|
-| `claude` | `oauth-token`: the token `claude setup-token` prints, for the account's Claude subscription | one year from when it was made | nothing: it has no refresh token; a person runs `claude setup-token` again | built: counts the year from the file's time, tells the account's sessions 30, 7 and 1 days ahead, and on the day asks for a new one in the window, saying why | code.claude.com/docs/en/authentication ("Generate a long-lived token": one year, no refresh); code.claude.com/docs/en/errors ("OAuth token has expired", "OAuth token revoked") |
+| `claude` with `email` | `verified-claude.json` with the verified address and private OAuth grant | the grant declares its access expiry | Claude CLI uses the private refresh grant | checks the email before use and requests renewal when the access token is near expiry | [Verified Claude sign-in](secrets.md#verified-claude-sign-in) |
+| `claude` without `email` | `oauth-token`: the token `claude setup-token` prints, for the account's Claude subscription | one year from when it was made | nothing: it has no refresh token; a person runs `claude setup-token` again | built: counts the year from the file's time, tells the account's sessions 30, 7 and 1 days ahead, and on the day asks for a new one in the window, saying why | code.claude.com/docs/en/authentication ("Generate a long-lived token": one year, no refresh); code.claude.com/docs/en/errors ("OAuth token has expired", "OAuth token revoked") |
 | `codex` | ChatGPT browser grant in the account’s private Codex home | managed by the Codex CLI | Codex | Nexus enrolls the named account with device authorization and verifies its subscription on every turn | [Codex adapter](../drivers/rpc/README.md) |
 | `antigravity`, `grok`, `muse` | browser grant in the named account’s private harness home | managed by the vendor CLI | the corresponding CLI | Nexus opens a private enrollment page, verifies the account’s receipt on restart and checks subscription access before sending a prompt | [Harness drivers](../drivers/rpc/README.md) |
 | gemini (Google sign-in) | `oauth_creds.json`: access and refresh tokens | access tokens about an hour | google-auth-library refreshes them from the refresh token, unattended | roadmap (`login-life-gemini`): no gemini driver yet | geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli `packages/core/src/code_assist/oauth2.ts` |
 | an API key (Anthropic Console, OpenAI, Gemini, xAI) | the key | until it is revoked; an xAI key may carry an optional expiry chosen when it is made | nothing needed | roadmap (`login-life-api-keys`): no provider of nexus stores a key yet | each provider's key docs (docs.x.ai for the optional expiry) |
 
-**Claude, in full.** A claude account's login is the long-lived token from `claude setup-token`, which runs Claude Code
-on the account's Claude subscription rather than API billing. Anthropic documents it as lasting one year, with no
-refresh: the only renewal is to run `claude setup-token` again. (Claude Code's own interactive `/login` stores an access
-token, a refresh token and an expiry, and refreshes them itself; how to refresh is not documented for other programs,
-so nexus does not store or refresh those.) So nexus-server:
+**Claude without a configured email.** The legacy `claude setup-token` login lasts one year and
+has no refresh grant. Nexus applies these checks to that login format.
 
 - Counts the year from when the file was written (its modification time). A token made some days before it was pasted
   ends that much sooner than the server counts; the 30 days' notice covers that.
-- Checks every stored claude login when it starts and once an hour. 30 days, 7 days and 1 day before the end it tells
+- Checks each legacy Claude login when it starts and once an hour. 30 days, 7 days and 1 day before the end it tells
   every session on the account, and `server.log`, the date and that nothing changes until then; each notice once (a
   restart tells the one due then again).
 - On the day, signs the account out and asks for a new token in the window: "a1's Claude login ended on 2027-11-14, a
@@ -463,7 +494,7 @@ so nexus does not store or refresh those.) So nexus-server:
   the link) instead.
 - When the file is not one token (two words, empty), asks for a new one, saying so.
 
-At the start, an account whose login is missing, not one token, unusable as it lies, or past its year is not signed in.
+At startup, these legacy checks mark a missing, malformed, inaccessible or expired setup token as requiring sign-in.
 
 ## Known limits
 
