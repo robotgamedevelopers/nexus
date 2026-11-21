@@ -820,6 +820,8 @@ void usageLimit(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(has(readFile(dir + "/starts.log"), "account=a2\n"));
 }
 
+// Exercise both acknowledged choices through a responding supervisor and two real child processes. The friend
+// links a third subscription which is signed in but belongs to a different driver's provider.
 // Observe the real pipe writes across two account-owned processes. A tool already ran and the interrupted reply
 // was still streaming when the first process reported quota. One visible request yields two distinct sends.
 void continuation(Server& s, const std::string& dir, const std::string& fake) {
@@ -861,9 +863,20 @@ void fableChoice(Server& s, const std::string& dir, const std::string& fake, boo
         "on-start 1 emit {\"kind\":\"error\",\"cause\":\"Fable limit reached\",\"fix\":\"choose\",\"code\":\"model-limit\"}\n"
         "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Second section done.\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n", "claude");
-    s.hub->reportSignedIn("a1", true);
-    s.hub->reportSignedIn("a2", true);
+    accounts::Registry r;
+    r.accounts = {{"a1", "claude"}, {"foreign", "codex"}, {"a2", "claude"}};
+    r.friends = {{"ada", {"foreign", "a1"}, "a1"}};
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    CHECK(!s.hub->state().friends().front().canAutoAccount);
+    CHECK(!s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    r.friends[0].accounts.push_back("a2");
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    for (const auto& a : r.accounts) s.hub->reportSignedIn(a.name, true);
+    CHECK(s.hub->state().friends().front().canAutoAccount);
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    CHECK(s.store.find(kAda)->info.account == "a1");
+    std::string why;
+    CHECK(s.hub->nextSubscription(kAda, {}, why) == "a2");
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetModel, "fable")));
     s.send("finish both sections");
 

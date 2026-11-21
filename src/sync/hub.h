@@ -146,12 +146,16 @@ extern const char* const kReceived;         // the placeholder reply: "(received
 extern const char* const kDefaultHarness;   // the harness of a session made with no Responder: "claude"
 
 // What a send, a queue, a stop and a change of a session's settings do once they are within the hub's limits.
+using AccountRoutes = std::map<std::string, std::string>; // friend to installed account-capable provider
+
 class Responder {
 public:
     virtual ~Responder() = default;
     // What a session made with `friendName` is when it copies from no other: its harness, and the friend's default
     // account, model and effort.
     virtual SessionInfo defaults(const std::string& friendName) const = 0;
+    // A responder with fixed per-friend drivers advertises them. Others can accept any linked provider.
+    virtual std::optional<AccountRoutes> accountRoutes() const { return std::nullopt; }
     // The changes a send of `prompt` makes to session `id` (the person's entry and anything after it, or a notice that
     // refuses it), which the hub commits in one step with the client's counter.
     virtual std::vector<SessionChange> send(SessionId id, const std::string& prompt) = 0;

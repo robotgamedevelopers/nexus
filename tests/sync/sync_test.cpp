@@ -1024,6 +1024,11 @@ void hub_model_limit_choice() {
         Actions actions(1);
         actions.add(select);
         select = Actions::parse(actions.init_diff()).at(0);
+        for (const auto kind : {ActionKind::SetAccount, ActionKind::SetModel}) {
+            std::string why;
+            CHECK(!hub.apply(act(kind, 1, "other"), &why));
+            CHECK(why.find("pending model-limit choice") != std::string::npos);
+        }
         auto stale = select;
         stale.request--;
         CHECK(!hub.apply(stale));

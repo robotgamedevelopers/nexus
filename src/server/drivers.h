@@ -123,6 +123,7 @@ public:
     void sent(sync::SessionId id, bool committed) override;
     // sync::Responder: what a new session with a friend is (its harness; no default account, model or effort yet), and
     // a session's settings, changed: from its next turn on.
+    std::optional<sync::AccountRoutes> accountRoutes() const override;
     sync::SessionInfo defaults(const std::string& friendName) const override;
     void configured(sync::SessionId id, const sync::SessionInfo& info) override;
     // sync::Responder: a session just made shows down when its friend has no driver configured.
@@ -197,6 +198,7 @@ private:
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
     bool limitedOf(const sync::SessionInfo& info) const;
     std::vector<std::string> keepsOut() const;
+    DriverTable readDriverTable(std::string& problem) const;
     ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
     Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);

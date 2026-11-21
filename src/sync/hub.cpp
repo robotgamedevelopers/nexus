@@ -422,13 +422,16 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
         refused = std::string("The ") + settingName(action.kind) + " was not changed: a setting is at most " +
             std::to_string(limits_.setting) + " printable characters.";
     }
+    if (session->driver.modelLimitPending &&
+            (action.kind == ActionKind::SetAccount || action.kind == ActionKind::SetModel))
+        return counted(action, "Resolve the pending model-limit choice or stop the interrupted work before changing its account or model.", why, client);
     SessionInfo info = session->info;
     std::string account = action.text;
     const bool chooseAuto = action.kind == ActionKind::SetAccount && account == kAutoAccountTarget;
     if (refused.empty() && chooseAuto) {
         const auto pool = subscriptionsFor(info.friendName);
         if (pool.size() < 2)
-            refused = "Link at least two subscription accounts in friends.json to use auto.";
+            refused = "Link at least two subscription accounts for this friend’s driver in friends.json to use auto.";
         else
             account = firstAutoAccount(pool);
     } else if (refused.empty() && action.kind == ActionKind::SetAccount && account.starts_with('+')) {
@@ -532,13 +535,24 @@ bool Hub::setOpen(SessionId id, const std::string& text) {
     return true;
 }
 
+namespace {
+// An absent routing constraint belongs to an unrestricted responder. A missing friend in an installed table
+// has no account-capable driver. Its registry can still be edited and its named accounts displayed.
+bool canRoute(const std::optional<AccountRoutes>& routes, const std::string& who, const std::string& provider) {
+    if (!routes) return true;
+    const auto it = routes->find(who);
+    return it != routes->end() && it->second == provider;
+}
+} // namespace
+
 std::vector<std::string> Hub::subscriptionsFor(const std::string& friendName) const {
     std::vector<std::string> pool;
     const auto* who = accounts_ ? accounts_->friendNamed(friendName) : nullptr;
     if (who) {
+        const auto routes = responder_ ? responder_->accountRoutes() : std::nullopt;
         for (const auto& name : who->accounts) {
             const auto* account = accounts_->account(name);
-            if (account && account->billing == accounts::Billing::Subscription)
+            if (account && account->billing == accounts::Billing::Subscription && canRoute(routes, who->name, account->provider))
                 pool.push_back(name);
         }
     }
@@ -766,7 +780,8 @@ AccountIndex indexAccounts(const accounts::Registry& registry) {
 }
 
 std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const AccountIndex& index,
-                                      const std::set<std::string>* signedIn = nullptr, bool canSignIn = false) {
+                                      const std::set<std::string>* signedIn = nullptr, bool canSignIn = false,
+                                      const std::optional<AccountRoutes>& routes = {}) {
     std::vector<ServerFriend> friends;
     friends.reserve(registry.friends.size());
     for (const auto& f : registry.friends) {
@@ -779,7 +794,8 @@ std::vector<ServerFriend> windowRoster(const accounts::Registry& registry, const
                 const bool needs = !signedIn || (canSignIn && hasSignIn(a->second->provider) &&
                                                   !signedIn->contains(name));
                 row.accounts.push_back({name, a->second->label, needs, a->second->email});
-                if (a->second->billing == accounts::Billing::Subscription) ++subscriptions;
+                if (a->second->billing == accounts::Billing::Subscription && canRoute(routes, f.name, a->second->provider))
+                    ++subscriptions;
             }
         }
         row.canAutoAccount = subscriptions > 1;
@@ -1552,10 +1568,8 @@ std::string Hub::nextSubscription(SessionId id, const std::vector<std::string>& 
     }
     const auto& current = session->info.account;
     std::vector<std::string> eligible;
-    for (const auto& name : who->accounts) {
-        const auto* account = accounts_->account(name);
-        if (account && account->billing == accounts::Billing::Subscription &&
-                (provider.empty() || account->provider == provider) && name != current && signedIn_.contains(name) &&
+    for (const auto& name : subscriptionsFor(who->name)) {
+        if ((provider.empty() || harnessOf(name, {}) == provider) && name != current && signedIn_.contains(name) &&
                 std::find(exhausted.begin(), exhausted.end(), name) == exhausted.end())
             eligible.push_back(name);
     }
@@ -1845,7 +1859,8 @@ void Hub::refresh(SessionId id) {
 // the server's, and a window shows a tab for each (sync/client.h applyFriends).
 void Hub::stateFriends() {
     auto friends = windowRoster(*accounts_, indexAccounts(*accounts_), &signedIn_,
-                                signInHooks_.has_value() && secretKeeper_ != nullptr);
+                                signInHooks_.has_value() && secretKeeper_ != nullptr,
+                                responder_ ? responder_->accountRoutes() : std::nullopt);
     if (!state_.friendsKnown() || state_.friends() != friends) {
         state_.setFriends(std::move(friends));
     }

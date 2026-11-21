@@ -384,15 +384,10 @@ std::vector<std::string> Drivers::keepsOut() const {
     return hub_ != nullptr && hub_->accounts() != nullptr ? hub_->accounts()->keepsOut : std::vector<std::string>{};
 }
 
-ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
+DriverTable Drivers::readDriverTable(std::string& problem) const {
     std::string text;
     if (options_.readTable) {
-        std::string problem;
-        if (!options_.readTable(&text, &problem)) {
-            ResolvedDriver r;
-            r.problem = problem;
-            return r;
-        }
+        if (!options_.readTable(&text, &problem)) return {};
     } else {
         std::ifstream in(options_.tableNow ? options_.tableNow() : options_.table);
         if (in) {
@@ -400,13 +395,37 @@ ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable
             all << in.rdbuf();
             text = all.str();
         } else if (errno != ENOENT) {
-            ResolvedDriver r;
-            r.problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) +
-                "), so the prompt to " + friendName + " was not sent. Make the file readable by this user.";
-            return r;
+            problem = "nexus-server cannot read " + options_.table + " (" + std::strerror(errno) +
+                "). Make the file readable by this user.";
+            return {};
         }
     }
-    DriverTable parsed = parseDriverTable(text, options_.home);
+    return parseDriverTable(text, options_.home);
+}
+
+std::optional<sync::AccountRoutes> Drivers::accountRoutes() const {
+    std::string problem;
+    const DriverTable table = readDriverTable(problem);
+    sync::AccountRoutes routes;
+    if (problem.empty()) {
+        for (const auto& [name, row] : table.friends) {
+            const auto driver = table.drivers.find(row.harness);
+            if (driver != table.drivers.end() &&
+                    std::find(driver->second.begin(), driver->second.end(), "--account") != driver->second.end())
+                routes.emplace(name, row.harness);
+        }
+    }
+    return routes;
+}
+
+ResolvedDriver Drivers::resolveFriend(const std::string& friendName, DriverTable* table) const {
+    std::string problem;
+    DriverTable parsed = readDriverTable(problem);
+    if (!problem.empty()) {
+        ResolvedDriver r;
+        r.problem = std::move(problem);
+        return r;
+    }
     ResolvedDriver r = resolveDriver(parsed, friendName, options_.table);
     if (table != nullptr) {
         *table = std::move(parsed);
