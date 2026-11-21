@@ -1949,6 +1949,8 @@ void sprintTabWithoutFriendsShowsTheNotice() {
 int main(int argc, char** argv) {
     if (argc == 3) {
         Harness h;
+        CHECK(h.view.nativeTabs.empty());
+        h.view.nativeTabs.emplace("text_editor", drawTabTextArea);
         h.view.application->watch(argv[1]);
         h.type("before");
         h.enter();

@@ -1265,7 +1265,7 @@ struct Builder {
                     break;
                 }
                 case Panel::TextArea:
-                    drawTextEditor(kit, window, model, asking == nullptr);
+                    drawTabTextArea(kit, window, model, asking == nullptr);
                     break;
                 case Panel::Label:
                     label(window, view.windowApp.label, textStyle(PrKitTextRole_Body, PrKitTone_Primary));

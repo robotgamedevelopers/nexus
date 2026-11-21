@@ -3,9 +3,9 @@
 #include "pr/ui.h"
 
 namespace nexus {
-void drawTextEditor(PrKit* kit, PrLayoutNode parent, Model& model, bool canFocus) {
+void drawTabTextArea(PrKit* kit, PrLayoutNode parent, Model& model, bool canFocus) {
     const auto& tab = model.tab(model.active());
-    const auto id = "editor-" + std::to_string(tab.id);
+    const auto id = "tab-text-area-" + std::to_string(tab.id);
     PrKitTextArea area{};
     area.key = prUiKey(kit->ui, parent, {id.data(), id.size()});
     area.text = {tab.draft.data(), tab.draft.size()};
@@ -18,8 +18,5 @@ void drawTextEditor(PrKit* kit, PrLayoutNode parent, Model& model, bool canFocus
     PrStringView changed{};
     if (prKitTextChanged(kit, node, &changed))
         model.edit_extension(model.active(), std::string(changed.data, changed.size));
-}
-NativeTabs nativeTabTypes() {
-    return {{"text_editor", drawTextEditor}};
 }
 }

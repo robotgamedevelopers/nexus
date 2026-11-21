@@ -4,28 +4,9 @@ A fork can register a new tab type, group, shortcut and server handler together.
 renderer by name or draw a panel list composed in Starlark. The server can dispatch to a native service, handle
 a request in Starlark, or pass a message to its normal AI driver.
 
-[The editor example](../policy/examples/editor.json) defines two independent registrations. To try both in a
-fresh fork, copy the example over the empty `policy/rules/config.json`. In a customized fork merge its
-`tab_types` and `services` entries with yours. Apply the client and server revisions on their respective machines.
-
-```sh
-build/nexus-policy apply client policy/rules
-build/nexus-policy apply server policy/rules
-git add policy/rules
-git commit -m "Wire editor tabs and text services"
-```
-
-* **Command-E** opens a native Prax text editor in the **Writing** group. Its buffer is local to that tab until
-  it closes. **Command-Enter** submits the buffer to the configured `text-tools` conversation. Server Starlark
-  dispatches to the native `text.sha256` service and the tab displays the resulting digest.
-* **Command-Shift-W** opens the **Word count** tab in **Tools**. Its UI uses the label, text area and service reply
-  panels. Its server handler counts words in Starlark. Both examples bind **Command-W** to close their own tabs.
-  The shortcut modifier named `Command` maps to the platform's Nexus command modifier.
-
-Opening and typing in either tab works offline. To use the example services, add friends named `text-tools`
-and `word-count` to the [server roster](accounts.md), then check and reload the roster. A submission uses the
-existing conversation transport and its acknowledgement. The result is an entry in that friend's conversation.
-Tabs targeting the same conversation share its latest result. These example handlers need no provider login.
+The [plugin test fixtures](../tests/policy/fixtures/plugins) exercise both registration paths in an isolated configuration.
+Each open tab has its own buffer. Submitting to a service uses the existing conversation transport and requires
+the target friend in the server roster. Tabs targeting the same conversation share its latest result.
 
 ## Registering another type
 
@@ -37,11 +18,10 @@ fields choose a conversation and submission key. Each open tab has its own buffe
 
 The schema above belongs to the shipped [window application](../policy/rules/client/window.star). A fork can
 change how its config is interpreted or implement a registration in code inside `handle("window", state, config)`.
-Return the registrations as `tab_types`, plus `panels` and `shortcuts`. A shortcut is a list such as
-`["Command+E", "open_tab", "editor"]`. The other operations are `select_tab` (zero-based index), `zoom`
+Return the registrations as `tab_types`, plus `panels` and `shortcuts`. An `open_tab` shortcut takes a key chord, the operation name and the registered type ID. The other operations are `select_tab` (zero-based index), `zoom`
 (signed delta), `open_terminal`, `close_terminal`, `close_tab`, `stop` and `invoke_service`.
 
-A native UI developer registers a C++ draw function in [the native tab registry](../src/native_tabs.cpp).
+A native UI developer registers a C++ draw function in the [view](../src/view.h)'s `nativeTabs` registry.
 The draw function gets Prax's kit and parent node, the model and permission to take keyboard focus. A native
 server developer registers a bounded, side-effect-free text handler through `Hub::registerService` in the server
 composition root. A script developer imports a module from [the conversation application](../policy/rules/server/conversation.star)

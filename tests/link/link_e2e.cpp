@@ -85,6 +85,7 @@
 #include "sync/client.h"
 #include "sync/friend_strip.h"
 #include "sync/hub.h"
+#include "server/sha256.h"
 #include "sync/mirror.h"
 
 extern char** environ;
@@ -1324,7 +1325,7 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
         return w.session->allAcknowledged() && !transcript.empty() && transcript.back().text == "handled: after edit";
     }));
 
-    // Change only the server application again. Its native plugin receives the buffer over the same link.
+    // Asking the production server for a test-only plugin reports a missing registration over the link.
     CHECK(writeFile(rules + "/server.star", "def handle(event, state, config):\n"
         "    return [{\"op\": \"native\", \"name\": \"text.sha256\"}]\n"));
     const auto rebound = runCommand(Command{cli, {"apply", "server", rules, dir}, "bind native service"}, 20);
@@ -1333,8 +1334,20 @@ int friendsFromServer(const std::string& binary, const std::string& dir, const s
     CHECK(settle([&] {
         const auto& transcript = w.model.tab(tabOf(w.model, "ada")).transcript;
         return w.session->allAcknowledged() && !transcript.empty() &&
-            transcript.back().text == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+            transcript.back().text == "No native service registered as text.sha256.";
     }));
+
+    // The test host registers its own implementation against the same applied application.
+    sync::MemoryStore pluginStore;
+    std::string pluginPolicy;
+    sync::Hub pluginHub(pluginStore, {}, nullptr, [&] { return pluginPolicy; });
+    pluginHub.registerService("text.sha256", server::sha256Hex);
+    CHECK(pluginHub.apply(ensures().front()));
+    pluginPolicy = dir + "/policy.bundle.json";
+    CHECK(pluginHub.apply(act(sync::ActionKind::Send, sid("ada"), "abc")));
+    const auto* result = pluginHub.state().find(sid("ada"));
+    CHECK(result && !result->entries.empty() &&
+        result->entries.back()->text == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 
     w.session->shutdown();
     const auto end = Clock::now() + std::chrono::seconds(3);

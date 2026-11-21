@@ -36,8 +36,14 @@ are in progress. The layers are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## The window today
 
-nexus runs as an overlay: a see-through window over the whole screen, above other apps and their fullscreen
-Spaces, with no Dock icon. Command plus the tilde key (the key left of 1) shows it and hides it, from any app.
+On macOS the client starts hidden at login and connects to its server. Command plus the tilde key
+(the physical key left of 1, without Shift) toggles the overlay from any app. To set up login launch for a
+client installed in `~/Applications/Nexus.app`, copy the [client LaunchAgent](macos/com.robotgamedevelopers.nexus-client.plist)
+to `~/Library/LaunchAgents/`. It takes effect at the next GUI login. Its last argument is the server host,
+which defaults to `localhost`.
+
+The overlay is a see-through window over the whole screen, above other apps and their fullscreen
+Spaces, with no Dock icon.
 Escape hides it too, and so does switching away: Command-Tab, a click on another app, or Mission Control. With
 `--windowed` it is a normal window instead.
 
@@ -169,7 +175,7 @@ See [accounts and friends](docs/accounts.md) for configuration.
 
 Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
 rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
-without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](docs/plugins.md) for a native Prax editor and a Starlark-only tab.
+without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](docs/plugins.md) for the native and Starlark registration APIs.
 The Claude driver also supports model and effort defaults at startup. See [customizing Nexus in your fork](docs/policy.md).
 
 Model and effort can be set in the drivers file and

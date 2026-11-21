@@ -17,7 +17,7 @@ add_test(NAME link_unit COMMAND link_unit)
 set_tests_properties(link_unit PROPERTIES LABELS unit TIMEOUT 30)
 
 add_executable(link_e2e link_e2e.cpp)
-target_link_libraries(link_e2e PRIVATE nexus_link)
+target_link_libraries(link_e2e PRIVATE nexus_link nexus_builds)
 target_include_directories(link_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync ${CMAKE_SOURCE_DIR}/tests)
 target_compile_options(link_e2e PRIVATE ${warnings})
 add_dependencies(link_e2e nexus-server nexus_fake_driver nexus_fake_claude nexus-server-leaky)

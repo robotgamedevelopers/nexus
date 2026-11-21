@@ -10,9 +10,6 @@ def handle(event, state, config):
         if service:
             if "native" in service:
                 return [{"op": "native", "name": service["native"]}]
-            if service.get("handler") == "word_count":
-                words = len(state["text"].split())
-                return [{"op": "notice", "text": str(words) + (" word" if words == 1 else " words")}]
             fail("Unknown service handler for " + state["friend"])
         # The text argument defaults to the submitted text. A fork can inspect it,
         # transform it, attach notices, or choose to queue against live session state.

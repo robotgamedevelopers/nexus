@@ -127,7 +127,7 @@ struct View {
     PrVec2 extent{};                            // the window's extent in px, which the host sets before each frame
     std::shared_ptr<policy::Host> application = std::make_shared<policy::Host>("client");
     WindowApplication windowApp;
-    NativeTabs nativeTabs = nativeTabTypes();
+    NativeTabs nativeTabs;
     std::map<std::string, KitTabs> extensionStrips;
     std::function<std::string(const std::string& service, const std::string& text)> requestService;
     std::string extensionProblem;

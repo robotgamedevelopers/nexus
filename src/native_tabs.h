@@ -9,6 +9,5 @@
 namespace nexus {
 using NativeTabDraw = void (*)(PrKit*, PrLayoutNode, Model&, bool canFocus);
 using NativeTabs = std::map<std::string, NativeTabDraw>;
-NativeTabs nativeTabTypes();
-void drawTextEditor(PrKit* kit, PrLayoutNode parent, Model& model, bool canFocus);
+void drawTabTextArea(PrKit* kit, PrLayoutNode parent, Model& model, bool canFocus);
 }
