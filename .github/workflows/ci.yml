@@ -1446,6 +1446,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Select the Rust toolchain for the embedded Starlark host
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: 1.98.1
       # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
       - name: Build directory and caches outside the workspace
         run: |
