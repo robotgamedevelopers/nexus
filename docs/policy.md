@@ -101,7 +101,8 @@ appearance by tab. The shipped profile uses these defaults:
 }
 ```
 
-`fill` and `ink` set the conversation bubble background and text. `notice_ink` sets the notice color and
+`fill` and `ink` set the conversation bubble background and text. Set `person_ink` to give sent and queued
+messages their own text color. Omitting it uses `ink` for both speakers. `notice_ink` sets the notice color and
 `status_ink` sets the status text color. Colors accept six hexadecimal digits after `#`. The corner radius
 accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them

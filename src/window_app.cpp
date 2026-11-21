@@ -192,7 +192,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     }
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
-        if (key != "fill" && key != "ink" && key != "notice_ink" && key != "status_ink" &&
+        if (key != "fill" && key != "ink" && key != "person_ink" && key != "notice_ink" && key != "status_ink" &&
                 key != "radius" && key != "show_notices" && key != "show_tools") {
             why = "unknown transcript_style field: " + std::string(key);
             return false;
@@ -200,11 +200,14 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     }
     const bool valid =
         readColor(d, obj, {"fill", 4}, style.fill) && readColor(d, obj, {"ink", 3}, style.ink) &&
+        readColor(d, obj, {"person_ink", 10}, style.personInk) &&
         readColor(d, obj, {"notice_ink", 10}, style.noticeInk) && readColor(d, obj, {"status_ink", 10}, style.statusInk) &&
         readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
         readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools);
+    if (prJsonMember(d, obj, {"person_ink", 10}) == kPrJsonMissing)
+        style.personInk = style.ink;
     if (!valid)
-        why = "transcript_style needs #RRGGBB colors (fill, ink, notice_ink, status_ink), "
+        why = "transcript_style needs #RRGGBB colors (fill, ink, person_ink, notice_ink, status_ink), "
               "radius from 0 to 64 and boolean show_notices and show_tools";
     return valid;
 }

@@ -2088,7 +2088,7 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
         CHECK((window.overlayOpacity == 0.125f) == (i < 4));
         nexus::TranscriptStyle expected;
         if (i == 2) {
-            expected.ink = 0xaabbcc;
+            expected.ink = expected.personInk = 0xaabbcc;
             expected.radius = 0;
         } else if (i == 3) {
             expected.radius = 64;
@@ -2253,7 +2253,10 @@ int main(int argc, char** argv) {
             // The new harness starts on stock, then reads the live fork. Entries remain in the model across each reload.
             Harness styled;
             styled.view.accountCaption = [] { return "Fixture account"; };
+            styled.model.append(0, {EntryKind::Person, "Fixture question"});
             styled.model.append(0, {EntryKind::Friend, "Fixture chat"});
+            styled.model.set_draft(0, "Fixture queued");
+            styled.model.queue(0);
             styled.model.append(0, {EntryKind::Notice, "Fixture notice"});
             styled.model.append(0, {EntryKind::Tool, "Fixture tool"});
             styled.frame();
@@ -2276,6 +2279,8 @@ int main(int argc, char** argv) {
                 CHECK(colors.fill == 0x102030 && colors.showNotices == notices && !colors.showTools);
             };
             waitForStyle(false);
+            checkTextPaint(styled, "Fixture question", 0x9a9a9a, 0x102030);
+            checkTextPaint(styled, "Fixture queued", 0x9a9a9a, 0x102030);
             checkTextPaint(styled, "Fixture chat", 0xf0e0d0, 0x102030);
             checkTextPaint(styled, "Fixture account", 0xcfdfa0, 0x102030);
             CHECK(!styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
@@ -2283,7 +2288,7 @@ int main(int argc, char** argv) {
             waitForStyle(true);
             CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
             checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
-            CHECK(styled.active().transcript.size() == 3 && styled.entries().size() == 2);
+            CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 4);
         }
         return failures ? 1 : 0;
     }

@@ -386,6 +386,7 @@ PrKitTextStyle textStyle(PrKitTextRole role, PrKitTone tone, PrKitTextAlign alig
 
 // Dedicated theme slots keep transcript colors independent of controls and the sign-in card.
 constexpr auto kChatTone = PrKitTone_AxisX;
+constexpr auto kPersonTone = PrKitTone_AxisW;
 constexpr auto kNoticeTone = PrKitTone_AxisY;
 constexpr auto kStatusTone = PrKitTone_AxisZ;
 
@@ -916,7 +917,8 @@ struct Builder {
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = element(entry, Part::Bubble);
-                label(bubble, e.text, textStyle(PrKitTextRole_Body, e.kind == EntryKind::Notice ? kNoticeTone : kChatTone));
+                const auto conversationTone = e.kind == EntryKind::Person ? kPersonTone : kChatTone;
+                label(bubble, e.text, textStyle(PrKitTextRole_Body, e.kind == EntryKind::Notice ? kNoticeTone : conversationTone));
                 return entry;
             }
             case EntryKind::Tool:
@@ -1020,7 +1022,7 @@ struct Builder {
         for (const std::string& text : tab.queue) {
             PrLayoutNode entry = element(column, Part::Entry);
             PrLayoutNode bubble = element(entry, Part::Bubble);
-            label(bubble, text, textStyle(PrKitTextRole_Body, kChatTone));
+            label(bubble, text, textStyle(PrKitTextRole_Body, kPersonTone));
             PrLayoutNode tag = label(bubble, "queued", textStyle(PrKitTextRole_Meta, kStatusTone, PrKitTextAlign_End));
             PrKitPlace place{};
             place.margin.top = 0.3f * kMetaSize * k();
@@ -1448,6 +1450,7 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
     // These tones are used by the fork's transcript and status labels. Keep the palette for controls
     // and the inverse ink of the sign-in card independent of the conversation.
     p.axisX = rgb(transcript.ink);
+    p.axisW = rgb(transcript.personInk);
     p.axisY = rgb(transcript.noticeInk);
     p.axisZ = rgb(transcript.statusInk);
     p.textInverse = rgb(card.ink);

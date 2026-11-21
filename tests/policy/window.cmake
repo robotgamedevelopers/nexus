@@ -4,7 +4,7 @@ file(COPY "${RULES}/client" DESTINATION "${ROOT}/rules")
 file(READ "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/config.json" config)
 string(JSON config SET "${config}" overlay_opacity 0.35)
 string(JSON config SET "${config}" message_card [[{"fill":"#edf2ea","ink":"#192218","text_size":38,"radius":24}]])
-string(JSON config SET "${config}" transcript_style [[{"fill":"#102030","ink":"#f0e0d0","notice_ink":"#ffa0a0","status_ink":"#cfdfa0","radius":12,"show_notices":false,"show_tools":false}]])
+string(JSON config SET "${config}" transcript_style [[{"fill":"#102030","ink":"#f0e0d0","person_ink":"#9a9a9a","notice_ink":"#ffa0a0","status_ink":"#cfdfa0","radius":12,"show_notices":false,"show_tools":false}]])
 string(JSON config SET "${config}" account_shortcuts [[{"Command+ArrowUp":"custom"}]])
 file(WRITE "${ROOT}/rules/config.json" "${config}")
 file(WRITE "${ROOT}/rules/client.star" [=[

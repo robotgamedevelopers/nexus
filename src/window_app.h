@@ -37,6 +37,7 @@ struct MessageCardStyle {
 struct TranscriptStyle {
     unsigned fill = 0x252525;
     unsigned ink = 0xf3f3f3;
+    unsigned personInk = ink;
     unsigned noticeInk = 0xffb4b4;
     unsigned statusInk = 0xd8d8d8;
     float radius = style::kBubbleRadius;
