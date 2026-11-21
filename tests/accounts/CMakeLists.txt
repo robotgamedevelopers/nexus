@@ -18,7 +18,7 @@ add_dependencies(model_checks accounts_test)
 
 # The walk TLC checks, on Linux and macOS only (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
-    add_executable(accounts_walk accounts_walk.cpp)
+    add_executable(accounts_walk accounts_walk.cpp credit_handoff_trace.cpp)
     target_link_libraries(accounts_walk PRIVATE nexus_sync)
     target_compile_options(accounts_walk PRIVATE ${warnings})
     add_dependencies(model_checks accounts_walk)
@@ -47,6 +47,15 @@ tlc_test(tlc_accounts_instances MCAccounts MCAccountsInstances.cfg pass WORKERS 
 # start and end: the limit's rules (docs/accounts.md, "limit") beside every other operation (29,175 distinct states,
 # 6 s on four workers on a loaded Mac, 2026-11-15).
 tlc_test(tlc_accounts_limit MCAccounts MCAccountsLimit.cfg pass WORKERS 4)
+
+# One unfinished turn: signed-in subscription order, explicit pins, finite exhaustion and transcript continuity.
+tlc_test(tlc_accounts_credit_handoff CreditHandoff CreditHandoff.cfg pass)
+tlc_test(tlc_accounts_credit_bounce_rejected CreditHandoff WCreditBounce.cfg invariant PROPERTY NeverReturn)
+tlc_test(tlc_accounts_credit_pin_rejected CreditHandoff WCreditIgnorePin.cfg invariant PROPERTY PinHolds)
+tlc_test(tlc_accounts_credit_duplicate_rejected CreditHandoff WCreditDuplicate.cfg invariant PROPERTY WorkIntact)
+foreach(mode auto pin)
+    tlc_test(tlc_accounts_credit_trace_${mode} CreditHandoffTrace CreditHandoffTrace.cfg pass CREDITMODE ${mode})
+endforeach()
 
 # Reversed witnesses: each broken variant must be rejected by the property named.
 tlc_test(tlc_accounts_witness_remove_stays       WAccRemoveStays       WAccRemoveStays.cfg       invariant

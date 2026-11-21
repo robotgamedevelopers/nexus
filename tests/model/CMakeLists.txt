@@ -104,7 +104,7 @@ function(tlc_test name module cfg expect)
     set(options PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
     cmake_parse_arguments(T "${options}"
-        "PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
+        "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
     # place, each with every invariant (tlc.cmake, SPLIT); the spec defines A /\ B as P, so between them every property
     # of the cfg is checked. TEMPORALCFG optionally appends model configuration to just the temporal parts.
@@ -178,6 +178,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DRECONNECTWALK=$<TARGET_FILE:reconnect_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SECWALK)
         list(APPEND defs -DSECWALK=$<TARGET_FILE:secrets_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DFORMAT=${T_FORMAT})
+    elseif(T_CREDITMODE)
+        list(APPEND defs -DCREDITWALK=$<TARGET_FILE:accounts_walk> -DCREDITMODE=${T_CREDITMODE})
     elseif(T_ACCWALK)
         list(APPEND defs -DACCWALK=$<TARGET_FILE:accounts_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_SUPWALK)
