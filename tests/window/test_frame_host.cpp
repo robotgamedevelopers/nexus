@@ -286,10 +286,11 @@ void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
 
 void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     Window w("chat");
-    auto snapshot = [&](const std::string& harness, const std::string& account, bool needsSignIn, std::uint64_t next) {
+    auto snapshot = [&](const std::string& harness, const std::string& account, bool needsSignIn, std::uint64_t next, bool automatic = false) {
         auto session = std::make_shared<sync::SessionView>();
         session->id = 31;
         session->info = {"chat", harness, account, "", ""};
+        session->info.autoAccount = automatic;
         w.link.state.phase = sync::LinkPhase::Connected;
         w.link.state.sessions = sync::Sessions({session});
         w.link.state.sessions.setFriends({{"chat", {{"home", "Home", false}, {"work", "Work", needsSignIn}}}});
@@ -316,7 +317,10 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     CHECK(w.view.signOut() && w.link.sent.size() == 3);
     snapshot("muse", "work", false, 11);
     CHECK(!w.view.signOut() && w.link.sent.size() == 3);
-    snapshot("claude", "unlinked", false, 12);
+    snapshot("claude", "work", false, 12, true);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
+    CHECK(w.view.problem.find("named account") != std::string::npos);
+    snapshot("claude", "unlinked", false, 13);
     CHECK(!w.view.signOut() && w.link.sent.size() == 3);
 }
 

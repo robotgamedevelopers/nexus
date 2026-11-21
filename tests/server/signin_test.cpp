@@ -932,6 +932,10 @@ void signOut() {
     sync::Action select;
     select.kind = sync::ActionKind::SetAccount;
     select.session = 1;
+    select.text = sync::kAutoAccountTarget;
+    CHECK(s.hub->apply(select));
+    a.account = s.store.find(1)->info.account;
+    CHECK(!logout() && holds(why, "named account") && removed.size() == 1);
     select.text = "a3";
     CHECK(s.hub->apply(select));
     a.account = "a3";
