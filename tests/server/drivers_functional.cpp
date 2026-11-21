@@ -714,12 +714,13 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
 
 // ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and
 // the server's accounts: a1 and a2, both ada's, a1 her default.
-void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, const std::string& script) {
+void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, const std::string& script,
+                   const std::string& provider = "fake") {
     writeFile(dir + "/ada.script", script);
-    writeFile(dir + "/drivers", "driver fake " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
-        "friend ada fake " + dir + "\n");
+    writeFile(dir + "/drivers", "driver " + provider + " " + fake + " --script " + dir + "/ada.script --account from-the-file\n"
+        "friend ada " + provider + " " + dir + "\n");
     accounts::Registry r;
-    r.accounts = {{"a1", "fake"}, {"a2", "fake"}};
+    r.accounts = {{"a1", provider}, {"a2", provider}};
     r.friends = {{"ada", {"a1", "a2"}, "a1"}};
     CHECK(s.hub->useAccounts(r, nullptr).empty());
 }
@@ -845,6 +846,60 @@ void continuation(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(std::count(transcript.begin(), transcript.end(), "P finish my draft") == 1);
     CHECK(std::count(transcript.begin(), transcript.end(), "F Finished the remainder.") == 1);
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "a2" && s.driver().continuationPrompt.empty());
+}
+
+// Exercise the same decision a window sees across the wire. The first process has already done work;
+// either choice continues it under the explicitly selected account and model in a second process.
+void fableChoice(Server& s, const std::string& dir, const std::string& fake, bool switchAccount) {
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\nrecord " + dir + "/launches\n"
+        "emit {\"kind\":\"hello\",\"protocol\":1,\"harness\":\"claude\",\"features\":[\"limit\"]}\n"
+        "emit {\"kind\":\"credential\",\"billing\":\"subscription\",\"plan\":\"max\"}\n"
+        "send\nrecord-send " + dir + "/sends\n"
+        "on-start 1 emit {\"kind\":\"session\",\"id\":\"first-fable-session\"}\n"
+        "on-start 1 emit {\"kind\":\"tool\",\"name\":\"Write\",\"summary\":\"draft saved\"}\n"
+        "on-start 1 emit {\"kind\":\"text\",\"delta\":\"First section done.\"}\n"
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"Fable limit reached\",\"fix\":\"choose\",\"code\":\"model-limit\"}\n"
+        "on-start 2 emit {\"kind\":\"text\",\"delta\":\"Second section done.\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n", "claude");
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetModel, "fable")));
+    s.send("finish both sections");
+
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().modelLimitPending; }, 10));
+    CHECK(s.driver().continuationPrompt == "finish both sections" && !has(readFile(dir + "/sends"), "send 2:"));
+    sync::Sessions mirror;
+    mirror.apply_string(s.hub->state().init_diff());
+    const auto& offer = mirror.find(kAda)->info;
+    CHECK(offer.limitRequest != 0 && offer.account == "a1" && offer.model == "fable");
+    CHECK(offer.limitAccount == "a2" && offer.limitModel == "opus");
+
+    auto choice = s.action(sync::ActionKind::ResolveLimit, switchAccount ? "account" : "model");
+    choice.account = offer.account;
+    choice.request = offer.limitRequest;
+    choice.friendName = switchAccount ? offer.limitAccount : offer.limitModel;
+    CHECK(s.hub->apply(choice));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 3; }, 10));
+
+    const auto& info = s.store.find(kAda)->info;
+    CHECK(info.account == (switchAccount ? "a2" : "a1") && info.model == (switchAccount ? "fable" : "opus"));
+    CHECK(s.pids.size() == 2 && s.sup().model() == info.model);
+    CHECK(!s.driver().modelLimitPending && s.driver().continuationPrompt.empty());
+    const auto launches = readFile(dir + "/launches");
+    CHECK(has(launches, "resume=\naccount=a1\n"));
+    if (switchAccount) {
+        CHECK(has(launches, "resume=\naccount=a2\n") && !has(launches, "resume=first-fable-session"));
+    } else {
+        CHECK(has(launches, "resume=first-fable-session\naccount=a1\n"));
+    }
+    const auto sends = readFile(dir + "/sends");
+    CHECK(has(sends, "send 1:\nfinish both sections\n") && has(sends, "send 2:\n[nexus:"));
+    CHECK(has(sends, "Tool activity: Write: draft saved") && has(sends, "First section done."));
+    CHECK(has(sends, "Do not repeat completed work.]\n\nfinish both sections\n"));
+    const auto transcript = s.transcript();
+    CHECK(std::count(transcript.begin(), transcript.end(), "P finish both sections") == 1);
+    CHECK(std::count(transcript.begin(), transcript.end(), "F Second section done.") == 1);
 }
 
 // A session on no account, whose friend's driver takes one: no driver starts, and the session is told how to link an
@@ -1701,7 +1756,10 @@ int main(int argc, char** argv) {
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
                 {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
-                {"usage_limit", usageLimit}, {"continuation", continuation}, {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
+                {"usage_limit", usageLimit}, {"continuation", continuation},
+                {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
+                {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},
+                {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},
                 {"friend_removed", friendRemoved}, {"friend_back_limited", friendBackLimited},
                 {"friend_removed_starting", friendRemovedStarting}, {"friend_back_before_stop", friendBackBeforeStop},
                 {"friend_back_limited_queue", friendBackLimitedQueue}, {"friend_back_moved", friendBackMoved},
