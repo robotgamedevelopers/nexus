@@ -130,6 +130,7 @@ public:
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
+    std::string retireForSignOut(const std::string& account);
     // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
     // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
     // sent is refused with a notice, and what is queued stays queued; put back, what waits goes on.

@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace nexus::policy {
-enum class Delivery { None, Send, Queue, Native };
+enum class Delivery { None, Send, Queue, Native, SignOut };
 struct MessagePlan {
     Delivery delivery = Delivery::None;
     std::optional<std::string> text;

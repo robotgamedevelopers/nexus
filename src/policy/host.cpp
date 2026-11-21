@@ -119,6 +119,9 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
             plan.notices.emplace_back(text.data, text.size);
         } else if (name == "draft" && client && text.data && text.size <= 32768) {
             plan.text.emplace(text.data, text.size);
+        } else if (name == "sign_out" && client && !text.data && prJsonCount(d, 0) == 1 &&
+                   std::string_view(intent) == "Enter" && state.text == "/logout") {
+            plan.delivery = Delivery::SignOut;
         } else if (name == "send" || name == "queue") {
             plan.delivery = name == "send" ? Delivery::Send : Delivery::Queue;
             if (text.data)

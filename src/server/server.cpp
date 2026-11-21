@@ -508,6 +508,16 @@ bool Server::restoreAll(std::string* why) {
     // The accounts and friends: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>([this] { return dirNow("nexus-config"); });
+    hub_->signOutWith([this](const accounts::Account& account) -> std::string {
+        if (signIns_ && signIns_->running(account.name))
+            return "Finish the browser sign-in for this account, then retry /logout.";
+        // Make the command's sequence number durable before unlinking either login file.
+        std::string why;
+        if (!store_.flush(&why)) return "Could not persist the sign-out command: " + why;
+        store_.beginBatch();
+        auto error = drivers_->retireForSignOut(account.name);
+        return error.empty() ? secretFiles_->forgetClaude(account.name) : error;
+    });
     // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).

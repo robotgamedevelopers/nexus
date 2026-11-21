@@ -168,6 +168,7 @@ enum ActionKind
     SignInClaim,
     SignInOpened,
     SignInCallback,
+    SignOut,
     Rename
 }
 

@@ -241,6 +241,14 @@ Output Supervisor::rotationExhausted() {
     return finish();
 }
 
+Output Supervisor::retireIdleLogin(Millis now) {
+    if (phase_ == Phase::Idle) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    return finish();
+}
+
 Output Supervisor::setAccount(std::string account, Millis now, bool automatic,
                               const std::vector<std::string>* command) {
     // Changing the account may start queued work. Bind its verified launch arguments first.

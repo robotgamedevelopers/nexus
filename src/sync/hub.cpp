@@ -203,6 +203,9 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
             action.kind == ActionKind::SignInCallback) {
         return signInAction(action, why, client);
     }
+    if (action.kind == ActionKind::SignOut) {
+        return signOutAction(action, why, client);
+    }
     if (action.kind == ActionKind::Unknown) {
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
@@ -1113,6 +1116,40 @@ Sessions Hub::stateFor(const std::string& opener, const std::string& client) con
     }
     s.setOffers(std::move(offers));
     return s;
+}
+
+bool Hub::signOutAction(const Action& action, std::string* why, const std::string& client) {
+    const auto* session = store_.find(action.session);
+    if (!session)
+        return counted(action, "The selected session no longer exists. Select a friend and retry.", why, client);
+    // Count before removing a credential, so an interrupted command cannot remove a replacement on replay.
+    if (!count(action, why, client)) return false;
+    std::string error;
+    const auto& name = action.account;
+    const auto* account = accounts_ ? accounts_->account(name) : nullptr;
+    const auto flow = signIns_.flowOf(name);
+    if (!account || session->info.account != name || !accounts_->linked(session->info.friendName, name)) {
+        error = "The account selection changed. Select the account to sign out and try again.";
+    } else if (account->provider != "claude" || !signOut_) {
+        error = "This server supports sign-out only for a configured Claude login.";
+    } else if (desk_.busy(name) || (flow && flow->second != SignInState::Needed)) {
+        error = "Finish or cancel the open sign-in for this account, then retry /logout.";
+    } else {
+        error = signOut_(*account);
+    }
+    if (error.empty()) {
+        signedIn_.erase(name);
+        stateFriends();
+    }
+    const auto message = error.empty() ? "Signed out of " + name + " in Nexus." : error;
+    std::string failed;
+    if (!store_.commit(action.session, {SessionChange{entry(EntryKind::Notice, message), {}}}, {}, 0, &failed)) {
+        if (why) *why = failed;
+        return false;
+    }
+    refresh(action.session);
+    if (why) *why = error;
+    return error.empty();
 }
 
 bool Hub::signInAction(const Action& action, std::string* why, const std::string& client) {

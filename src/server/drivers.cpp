@@ -660,6 +660,22 @@ void Drivers::made(sync::SessionId id) {
     showResolved(id, resolve(id));
 }
 
+std::string Drivers::retireForSignOut(const std::string& account) {
+    for (const auto& [id, slot] : slots_) {
+        (void)id;
+        const auto& sup = slot.sup;
+        if ((sup.driverAccount() == account && (sup.phase() == Phase::Starting || sup.state().openTurn != 0)) ||
+                (sup.account() == account && !sup.state().waiting.empty()))
+            return "Finish or stop the work using " + account + ", then retry /logout.";
+    }
+    const auto now = options_.clock();
+    for (auto& [id, slot] : slots_)
+        if (slot.sup.driverAccount() == account && slot.sup.phase() == Phase::Idle &&
+                !run(id, slot.sup.retireIdleLogin(now), now, false))
+            return "Nexus could not retire the driver for " + account + ". Check the server and retry /logout.";
+    return {};
+}
+
 void Drivers::signedIn(const std::string& account) {
     const Millis now = options_.clock();
     for (auto& [id, t] : slots_) {

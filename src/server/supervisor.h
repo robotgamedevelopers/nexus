@@ -161,6 +161,7 @@ public:
     // it lifts the hold on starting drivers, without a restart, so what waits goes on (models/Supervisor.tla SignIn).
     // Nothing when starting is not held back.
     Output signedIn(Millis now);
+    Output retireIdleLogin(Millis now);
     // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out; while the
     // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
     Output stop(Millis now);

@@ -690,6 +690,9 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.find(kAda)->info.model == "fast");
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "work")));
     CHECK(s.store.find(kAda)->info.account == "work");
+    const std::string actual = s.sup().driverAccount();
+    CHECK(!s.drivers->retireForSignOut(actual).empty());
+    CHECK(s.drivers->retireForSignOut("unrelated").empty());
     // the turn open runs on under the account it started with
     CHECK(s.drivers->pid(kAda) == before && s.sup().gathering());
     CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
@@ -702,6 +705,11 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.transcript().size() == 5 && has(s.transcript().back(), "belongs to a different account"));
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "work");
     CHECK(!has(readFile(dir + "/starts.log"), "resume=s-1"));
+    CHECK(s.drivers->retireForSignOut("unrelated").empty() && idle(s));
+    CHECK(s.drivers->retireForSignOut("work").empty());
+    CHECK(s.sup().phase() == Phase::Ending);
+    CHECK(s.serveUntil([&] { return none(s); }, 10));
+    CHECK(s.sup().failedStarts() == 0);
 }
 
 // ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and

@@ -204,7 +204,8 @@ bool isSecret(ActionKind kind) {
 // The sign-in's kinds (format 5 on, sync/signin.h), which these formats never carry: a window sends one only for a
 // flow it received, which a server sends only on a link of 5 or later.
 bool isSignIn(ActionKind kind) {
-    return kind == ActionKind::SignInClaim || kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
+    return kind == ActionKind::SignOut || kind == ActionKind::SignInClaim ||
+        kind == ActionKind::SignInOpened || kind == ActionKind::SignInCallback;
 }
 
 // One action in format 3: its kind, then its fields framed by their length (its session, friend, text, account,

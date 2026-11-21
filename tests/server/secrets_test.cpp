@@ -15,6 +15,7 @@
 
 #ifndef _WIN32
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -979,6 +980,28 @@ void files_disk() {
     CHECK(readFile(*fs, target.string()) == "untouched");
     CHECK(readFile(*fs, f.path("a1", kToken)) == kValue);
     CHECK(names(*fs, (dir / "accounts" / "a1").string()) == std::vector<std::string>{"oauth-token"});
+    // Sign-out uses precisely the selected directory and the same lock as credential refresh.
+    CHECK(f.keep("a1", "verified-claude.json", sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    CHECK(f.keep("a1", "other-secret", sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    CHECK(f.keep("a2", kToken, sync::SecretValue(kOther), &why) == sync::Kept::Durable);
+    const int lock = ::open(f.path("a1", "verified-claude.lock").c_str(), O_CREAT | O_RDWR, 0600);
+    CHECK(lock >= 0 && ::flock(lock, LOCK_EX | LOCK_NB) == 0);
+    CHECK(!f.forgetClaude("a1").empty() && readFile(*fs, f.path("a1", kToken)) == kValue);
+    ::close(lock);
+    CHECK(!f.forgetClaude("../a1").empty() && !f.forgetClaude("linked").empty() && !f.forgetClaude("wide").empty());
+    if (std::filesystem::exists(dir / "accounts" / "A1")) CHECK(!f.forgetClaude("A1").empty());
+    CHECK(f.keep("a1", ".verified-claude.write", sync::SecretValue(kValue), &why) == sync::Kept::Durable);
+    const auto renewal = dir / "accounts" / "a1" / ".verified-claude-renew";
+    std::filesystem::create_directories(renewal / "config");
+    std::filesystem::create_directory_symlink(dir / "accounts" / "a2", renewal / "config" / "linked");
+    CHECK(f.forgetClaude("a1").empty() && f.forgetClaude("a1").empty());
+    CHECK(!std::filesystem::exists(renewal) && !std::filesystem::exists(f.path("a1", ".verified-claude.write")));
+    CHECK(!std::filesystem::exists(f.path("a1", "verified-claude.json")));
+    CHECK(!std::filesystem::exists(f.path("a1", kToken)));
+    CHECK(readFile(*fs, f.path("a1", "other-secret")) == kOther && readFile(*fs, f.path("a2", kToken)) == kOther);
+    CHECK(std::filesystem::exists(f.path("a1", "verified-claude.lock")));
+    std::filesystem::create_symlink(f.path("a1", "other-secret"), f.path("a2", "verified-claude.json"));
+    CHECK(!f.forgetClaude("a2").empty() && readFile(*fs, f.path("a2", kToken)) == kOther);
     std::filesystem::remove_all(dir);
 }
 #endif

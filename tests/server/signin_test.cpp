@@ -695,8 +695,15 @@ void codecs() {
     up.add(claim);
     up.add(opened);
     up.add(cb);
+    sync::Action signOut;
+    signOut.kind = sync::ActionKind::SignOut;
+    signOut.session = 17;
+    signOut.account = "logout-profile";
+    up.add(signOut);
     const std::vector<sync::Action> got = sync::Actions::parse(up.init_diff(), sync::kSignInFormat);
-    CHECK(got.size() == 3 && got[0].kind == sync::ActionKind::SignInClaim && got[0].request == 4 &&
+    CHECK(got.size() == 4 && got[3].kind == sync::ActionKind::SignOut && got[3].session == 17 &&
+          got[3].account == "logout-profile");
+    CHECK(got[0].kind == sync::ActionKind::SignInClaim && got[0].request == 4 &&
           got[0].text == "w1");
     CHECK(got[1].kind == sync::ActionKind::SignInOpened && got[2].kind == sync::ActionKind::SignInCallback &&
           got[2].secret.bytes() == kCallback);
@@ -708,16 +715,17 @@ void codecs() {
         older.setFormat(format);
         older.add(cb);
         older.add(claim);
+        older.add(signOut);
         const std::string wire = older.init_diff();
-        CHECK(!leaks(wire) && !holds(wire, "w1"));
+        CHECK(!leaks(wire) && !holds(wire, "w1") && !holds(wire, "logout-profile"));
         const std::vector<sync::Action> back = sync::Actions::parse(wire, format);
-        CHECK(back.size() == 2 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
+        CHECK(back.size() == 3 && back[2].kind == sync::ActionKind::Stop && back[2].session == 0 && back[0].kind == sync::ActionKind::Stop && back[0].session == 0 &&
               back[1].kind == sync::ActionKind::Stop && back[1].session == 0 && back[0].secret.empty() &&
               back[1].text.empty());
     }
     // A server reading a link of 4 takes none of them even if they come: unknown, nothing of them kept.
     const std::vector<sync::Action> asFour = sync::Actions::parse(up.init_diff(), sync::kTablesFormat);
-    CHECK(asFour.size() == 3);
+    CHECK(asFour.size() == 4);
     for (const sync::Action& a : asFour) {
         CHECK(a.kind == sync::ActionKind::Unknown && a.text.empty() && a.request == 0 && a.secret.empty());
     }
@@ -889,6 +897,46 @@ struct Server {
         return hub->apply(a, &why, "c1");
     }
 };
+
+void signOut() {
+    store::MemFs fs;
+    Keeper k;
+    Server s(fs, k);
+    std::vector<std::string> removed;
+    std::string error;
+    s.hub->signOutWith([&](const accounts::Account& account) {
+        if (error.empty()) removed.push_back(account.name);
+        return error;
+    });
+    sync::Action a;
+    a.session = 1;
+    a.kind = sync::ActionKind::SignOut;
+    a.account = "a2";
+    std::string why;
+    auto logout = [&] {
+        a.num = ++s.num;
+        return s.hub->apply(a, &why, "c1");
+    };
+    CHECK(!logout() && removed.empty() && holds(why, "selection changed"));
+    a.account = "a1";
+    CHECK(s.act(sync::ActionKind::SignInClaim, 1, "window"));
+    CHECK(!logout() && removed.empty() && holds(why, "open sign-in"));
+    s.hub->reportSignedIn("a1", true);
+    error = "Login lock is busy.";
+    CHECK(!logout() && s.hub->signedIn().count("a1") && holds(s.transcript(1), error));
+    error.clear();
+    CHECK(logout() && s.store.applied("c1") == a.num);
+    CHECK(removed == std::vector<std::string>{"a1"} && !s.hub->signedIn().count("a1") && s.hub->signedIn().count("a2"));
+    CHECK(s.hub->state().friends().front().accounts.front().needsSignIn);
+    CHECK(holds(s.transcript(1), "Signed out of a1"));
+    sync::Action select;
+    select.kind = sync::ActionKind::SetAccount;
+    select.session = 1;
+    select.text = "a3";
+    CHECK(s.hub->apply(select));
+    a.account = "a3";
+    CHECK(!logout() && holds(why, "Claude") && removed.size() == 1);
+}
 
 void hub() {
     store::MemFs fs;
@@ -1354,7 +1402,7 @@ struct Group {
 
 const Group kGroups[] = {
     {"urls", urls}, {"desk", desk}, {"opener", opener}, {"gate", gate}, {"scanner", scanner},
-    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); }}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
+    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); signOut(); }}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
 };
 
 } // namespace

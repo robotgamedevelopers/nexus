@@ -162,6 +162,7 @@ struct View {
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    std::function<bool()> signOut; // true when the selected account accepted the explicit composer command
     std::optional<AccountPicker> accountPicker;
     std::function<void(const std::string&)> pickerCommand;
     std::function<void(const std::string&)> chooseAccount;
