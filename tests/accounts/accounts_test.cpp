@@ -415,6 +415,7 @@ void hubReloadAndRotate() {
     CHECK(!hub.rotate(1, &why));
     CHECK(store.find(1)->info.account == "work");
     CHECK(has({lastNotice(store, 1)}, "has no other signed-in account"));
+    hub.probeSignInWith([](const accounts::Account& a) { return a.email == "subscriber@example.test"; });
     hub.reportSignedIn("cx", true);
     hub.reportSignedIn("home", true);
     CHECK(hub.rotate(1, &why));
