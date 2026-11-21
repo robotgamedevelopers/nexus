@@ -278,6 +278,7 @@ interface Turn {
     textOpen: boolean;          // a text block is open
     held: string;               // a high surrogate held back from the last delta, to go with the next
     streamed: Set<string>;      // ids of the API messages whose text arrived as stream events
+    rejectedLimit?: 'model-limit' | 'usage-limit' | 'harness';
     failure?: Failure;
 }
 
@@ -285,6 +286,7 @@ interface Failure {
     cause: string;
     code: ErrorCode;
     fix: string;
+    rateLimited?: boolean;      // the SDK tagged the assistant error rate_limit
     model?: boolean;            // the model cannot be used
 }
 
@@ -958,6 +960,14 @@ export class Driver {
                 return;
             case 'rate_limit_event': {
                 const info = m.rate_limit_info;
+                const turn = this.current();
+                if (turn && info.status === 'rejected') {
+                    // Only turn failures consume this observation. Service throttling and quota warnings do not move accounts.
+                    const window: string = info.rateLimitType ?? '';
+                    if (window === 'seven_day_fable') turn.rejectedLimit = 'model-limit';
+                    else if (window === 'five_hour' || window === 'seven_day') turn.rejectedLimit = 'usage-limit';
+                    else if (window) turn.rejectedLimit = 'harness';
+                }
                 if (info.isUsingOverage === true || info.overageInUse === true) {
                     this.refuseCredential('Claude began drawing on paid extra usage (overage) beyond the subscription; nexus runs Claude only on the subscription\'s included usage',
                         'turn extra usage off for this account in its Claude settings, or wait until the subscription\'s limit resets');
@@ -1098,11 +1108,14 @@ export class Driver {
         if (t.failure === undefined && this.resumeLost(said)) {
             return;
         }
-        const f = t.failure ?? {
+        const f: Failure = t.failure ?? {
             cause: `Claude ended the turn with an error (${r.subtype}): ${said || 'no cause given'}`,
             code: 'harness' as const,
             fix: kFixAgain,
         };
+        if (t.rejectedLimit && (!t.failure || f.rateLimited) && f.code !== 'model-limit') {
+            f.code = t.rejectedLimit;
+        }
         if (t.failure?.model === true && t.revertTo !== undefined) {
             // The model this turn changed to cannot run: the one before comes back from the next turn.
             const back = t.revertTo.model ?? this.args.model ?? '';
@@ -1214,9 +1227,14 @@ function failure(code: NonNullable<SDKAssistantMessage['error']>, said: string, 
         case 'billing_error':
             return { cause: `Claude's login cannot be used (${detail})`, code: 'no-credential',
                 fix: tokenFix(account) };
-        case 'rate_limit':
-            return { cause: `the subscription's usage limit is reached (${detail})`, code: 'harness',
-                fix: 'wait until the limit resets (the cause says when), or move the session to another account' };
+        case 'rate_limit': {
+            // Older SDKs only give the scope in the provider's typed error message.
+            const fable = /\bfable(?:['’]s)?(?: usage| weekly| credit)? limits?\b|\bout of fable\b|\blimit (?:reached )?for (?:claude[- ])?fable\b/i.test(said);
+            const accountQuota = /\b(?:weekly|session|subscription|five[- ]hour|5[- ]hour|usage) limit\b|\bout of (?:subscription |usage )?credits\b/i.test(said);
+            return { cause: `Claude reported a rate limit (${detail})`, rateLimited: true,
+                code: fable ? 'model-limit' : accountQuota ? 'usage-limit' : 'harness',
+                fix: 'check the reported limit and reset time' };
+        }
         case 'model_not_found':
             return { cause: `Claude has no such model (${detail})`, code: 'harness', fix: 'choose a model Claude has', model: true };
         default:

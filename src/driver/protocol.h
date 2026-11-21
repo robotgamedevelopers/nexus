@@ -146,7 +146,7 @@ struct Done {
 
 // What kind of error: a broken protocol rule, no usable credential, a --resume id the harness does not know, the
 // harness's own failure, or anything else (also what a code this version does not know reads as).
-enum class ErrorCode { Protocol, NoCredential, SessionNotFound, Harness, UsageLimit, Other };
+enum class ErrorCode { Protocol, NoCredential, SessionNotFound, Harness, UsageLimit, ModelLimit, Other };
 
 // Something went wrong: what, and what a person does about it. `turn` when it belongs to one.
 struct Error {

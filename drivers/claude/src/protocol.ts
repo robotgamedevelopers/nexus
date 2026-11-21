@@ -57,7 +57,7 @@ export type Decoded = { message: ServerMessage } | { error: string; turn?: numbe
 
 export type Billing = 'subscription' | 'api-key' | 'none';
 export type Outcome = 'ok' | 'stopped' | 'error';
-export type ErrorCode = 'protocol' | 'no-credential' | 'session-not-found' | 'harness' | 'other';
+export type ErrorCode = 'protocol' | 'no-credential' | 'session-not-found' | 'harness' | 'usage-limit' | 'model-limit' | 'other';
 
 export interface Usage {
     input_tokens?: number;

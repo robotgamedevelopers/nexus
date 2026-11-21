@@ -403,12 +403,38 @@ void test('the usage limit fails the turn with its cause; the driver goes on', a
     const out = host.take();
     assert.deepEqual(out.map((m) => m.kind), ['error', 'done']);
     const e = errorOf(out);
-    assert.equal(e.code, 'harness');
+    assert.equal(e.code, 'usage-limit');
     assert.equal(e.turn, 1);
     assert.ok(e.cause.includes(said));
     assert.deepEqual(out[1], { kind: 'done', turn: 1, outcome: 'error',
         usage: { input_tokens: 100, output_tokens: 20, cache_read_tokens: 5, cache_write_tokens: 0 } });
     assert.equal(host.exitCode, undefined);
+});
+
+void test('a reported Fable cap is a model choice; a transient throttle stays an ordinary error', async () => {
+    for (const [message, code] of [['Fable limit reached', 'model-limit'], ['Too many requests', 'harness']] as const) {
+        const { host, driver } = await started();
+        driver.feed(line({ kind: 'send', turn: 1, prompt: 'continue' }));
+        await settle();
+        host.harness.emit(init(S), assistant(S, 'm1', [{ type: 'text', text: message }], 'rate_limit'),
+            result(S, { isError: true, result: message, cost: 0 }));
+        await settle();
+        assert.equal(errorOf(host.take()).code, code);
+    }
+});
+
+void test('the rejected subscription window scopes a failed turn, even when it follows the assistant error', async () => {
+    for (const [window, code] of [['five_hour', 'usage-limit'], ['seven_day_fable', 'model-limit'],
+        ['seven_day_opus', 'harness']] as const) {
+        const { host, driver } = await started();
+        driver.feed(line({ kind: 'send', turn: 1, prompt: 'continue' }));
+        await settle();
+        host.harness.emit(init(S), assistant(S, 'm1', [{ type: 'text', text: 'Too many requests' }], 'rate_limit'),
+            rateLimit(S, { status: 'rejected', rateLimitType: window }),
+            result(S, { isError: true, result: 'Too many requests', cost: 0 }));
+        await settle();
+        assert.equal(errorOf(host.take()).code, code);
+    }
 });
 
 void test('a login that fails ends the turn and the driver with no-credential', async () => {

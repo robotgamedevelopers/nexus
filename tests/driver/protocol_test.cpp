@@ -85,6 +85,7 @@ std::vector<DriverMessage> driverMessages() {
         Error{"the cause", "the fix", std::nullopt, ErrorCode::Other},
         Error{"a turn's cause", "its fix", 9, ErrorCode::Protocol},
         Error{"no login", "log in", std::nullopt, ErrorCode::NoCredential},
+        Error{"Fable limit reached", "choose account or Opus", 3, ErrorCode::ModelLimit},
         Error{"no such session", "start without --resume", std::nullopt, ErrorCode::SessionNotFound},
         Error{"the harness failed", "see its log", 9, ErrorCode::Harness},
         AskSecret{1, "work", "oauth-token", "the login expired"},

@@ -460,6 +460,7 @@ std::string_view errorCodeName(ErrorCode code) {
         case ErrorCode::SessionNotFound: return "session-not-found";
         case ErrorCode::Harness: return "harness";
         case ErrorCode::UsageLimit: return "usage-limit";
+        case ErrorCode::ModelLimit: return "model-limit";
         case ErrorCode::Other: break;
     }
     return "other";
@@ -618,7 +619,7 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
             m.turn = turn;
         const std::string code = f.str("code", false);
         for (ErrorCode c : {ErrorCode::Protocol, ErrorCode::NoCredential, ErrorCode::SessionNotFound,
-                 ErrorCode::Harness, ErrorCode::UsageLimit})
+                 ErrorCode::Harness, ErrorCode::UsageLimit, ErrorCode::ModelLimit})
             if (code == errorCodeName(c))
                 m.code = c;
         return result<DriverMessage>(std::move(m), f);
