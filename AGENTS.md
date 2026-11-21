@@ -22,6 +22,12 @@ The rules for an AI working in this repository. Each one holds on every change.
    cannot is noticed well ahead. The one second paste is for a login the provider revoked, or one that ended with no
    way to renew it, and the dialog says which (`docs/accounts.md`, "How long a login lasts").
 
+A person's setup is portable configuration data and server-side Starlark policy. When designing behavior, identify
+the question the engine asks, the data it supplies, and the answers it can safely apply. Put choices about how a
+person works in their editable profile. The engine validates answers and owns persistence, action ordering,
+credentials, billing constraints and permission enforcement. Changing a policy answer takes effect without
+rebuilding Nexus. Document each shipped hook and when its changes take effect in `docs/policy.md`.
+
 The sprint tab, the friends and the terminals are one person's configuration, not hardwired; the locked rules below
 that fix them (such as the sprint tab pinned at Command-1) move into configuration with the client-config work.
 All rendering is Prax, at its highest layer that does the job: nexus never hand-rolls UI that Prax has, and a gap in

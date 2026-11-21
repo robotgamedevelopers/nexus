@@ -93,6 +93,7 @@
      ))
   (:id "configuration" :type :roadmap :title "Configuration through your AI"
    :rows (
+     ("personal-policy" "Portable personal configuration and server-side Starlark policy: the engine asks typed questions and validates the answers. Driver-start model and effort defaults are implemented (docs/policy.md); extend coverage across the non-core choices so a person and their AIs can change how they work without rebuilding Nexus")
      ("client-config" "Client config as data: ~/.nexus/client becomes documented, versioned, human-editable JSON in git, with the same verbs and apply report as the server's (docs/accounts.md); a person's AI changes it through the server, which relays the change to the client that asked and never stores, caches or syncs it: each machine's config is its own. Tab layout is client config too: a tab per friend or a tab per instance of a friend (the server sends every session's friend and instance names, and keeps no tabs of its own)")
      ("client-template" "A client-config template on the server, kept up to date: any change to the template becomes a pending update that each client applies at its next connect; config stays local to each machine, with no live sync. Open question: how a machine's local edits survive an update (proposal: an update replaces only the fields the template change touched)")
      ("client-promote" "Promote one machine's client config to the template, with a pending update for every other machine" :later t)
@@ -105,6 +106,7 @@
      )
    :columns (("done" "done"))
    :cells (
+     ("personal-policy" "done" "t-personal-policy")
      ("client-config" "done" "t-client-config")
      ("client-template" "done" "t-client-template")
      ("client-promote" "done" "t-client-promote")
@@ -174,6 +176,7 @@
   (:id "t-ts-mosh" :type :task :title "Tailscale 5. mosh over tsnet through a loopback relay, its latency measured in ms" :state :todo)
   (:id "t-ts-discovery" :type :task :title "Tailscale 6. Discovery of nexus servers among the tailnet's peers" :state :todo)
   (:id "t-ts-expiry" :type :task :title "Tailscale 7. Expiry and recovery in the app; ssh retired once 4 to 6 are secured" :state :todo)
+  (:id "t-personal-policy" :type :task :title "Extend portable server-side Starlark policy across personal workflow decisions" :state :todo)
   (:id "t-client-config" :type :task :title "Client config as documented, versioned JSON in git, relayed by the server, never stored by it" :state :todo)
   (:id "t-client-template" :type :task :title "Client-config template on the server: pending updates applied at each client's next connect" :state :todo)
   (:id "t-client-promote" :type :task :title "Promote one machine's client config to the template" :state :todo)

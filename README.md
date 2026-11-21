@@ -123,7 +123,7 @@ first state it says it is connecting and takes no typing; after that it is quiet
 server for 6 s, when it says how long.
 
 What syncs, so far: each prompt sent or queued in the window goes to the server once, in order, and the server
-answers each sent prompt with a placeholder reply, "(received)". Every window connected to the server shows every
+runs the configured friend’s driver. Its reply appears in the same tab. Every window connected to the server shows every
 tab's transcript and queue. A window that was away for long sees "N earlier entries not shown" in place of what it
 missed (the server sends each transcript's newest 16 entries, so that a diff stays small however far behind a window
 is). The friend tabs are the server's friends, sent in its state; a server from before that list sends none, and the
@@ -157,14 +157,18 @@ denied to it, by rule (a list, not complete). None of the routes the tests try r
 wall"), among them this machine reached by way of another one. On Linux and WSL2 that sandbox's bubblewrap and socat
 are built by nexus (`cmake/sandbox.cmake`), not installed. Without the directory, or with a token file that is missing,
 not one line, or readable by anyone but its owner,
-the driver refuses to start with a `no-credential` error naming the file. To log an account in:
+the driver refuses to start with a `no-credential` error naming the file. With the server running and the window connected, start the in-app sign-in for the configured account:
 
 ```sh
-mkdir -p -m 700 ~/.nexus/server/accounts/main
-CLAUDE_CONFIG_DIR=~/.nexus/server/accounts/main claude setup-token   # sign in with the subscription account
-# save the token it prints, alone on one line, with mode 0600:
-(umask 077 && cat > ~/.nexus/server/accounts/main/oauth-token)       # paste, Enter, then Control-D
+nexus-server config sign-in main
 ```
+
+Replace `main` with the account linked to the friend. Follow the sign-in in Nexus, select the friend’s tab, type
+a message and press Enter. The server reports the result of sign-in to the command.
+See [accounts and friends](docs/accounts.md) for configuration.
+
+A [personal Starlark policy](docs/policy.md) can choose model and effort defaults on the server. Edit the profile
+to change the next driver start without rebuilding Nexus.
 
 Model and effort can be set in the drivers file and
 changed between turns. Build and test it:
@@ -191,8 +195,7 @@ cmake --build build -j "$(sysctl -n hw.ncpu)"
 open -n build/nexus.app --args --server studio
 ```
 
-Not yet: the window reattaching to a restarted server by itself (today it says it has had no contact; the server
-side of it is there); the friends' AIs answering (layer 3); the plus button's upload; iOS.
+The Claude driver supports subscription conversations. Other providers, the upload button and iOS remain on the roadmap.
 
 ## What it builds on
 
