@@ -244,6 +244,28 @@ void accountPickerRechecksTheServerRoster() {
     CHECK(w.link.sent.empty());
 }
 
+void automaticAccountIsASelectionMode() {
+    sync::SessionView session;
+    session.id = 31;
+    session.info.account = "auto";
+    session.info.autoAccount = true;
+    sync::ServerFriend roster{"chat", {{"auto"}, {"work"}}, true};
+    auto picker = AccountPicker::open(2, session, roster, 0);
+    CHECK(picker && picker->options.size() == 3);
+    if (!picker || picker->options.size() != 3) return;
+    CHECK(picker->highlighted == 0 && picker->current == sync::kAutoAccountTarget);
+    CHECK(picker->rowLabel(picker->options[0], "auto") == "auto");
+    CHECK(picker->rowLabel(picker->options[1], "auto") == "auto (account)");
+    CHECK(!picker->choice(sync::kAutoAccountTarget));
+    CHECK(picker->choice("auto") == "auto");  // pin the actual account named "auto"
+
+    session.info.account = "work";
+    CHECK(!picker->refresh(2, session, roster));  // the server rotated while the menu was open
+    roster.accounts.resize(1);
+    picker = AccountPicker::open(2, session, roster, 0);
+    CHECK(picker && picker->options.size() == 1 && !picker->choice(sync::kAutoAccountTarget));
+}
+
 void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
     Model model({}, true);
     View view;
@@ -349,6 +371,7 @@ void dismissedFriendRemainsLocal() {
 int main() {
     dismissedFriendRemainsLocal();
     accountCommandsUseTheActiveConversation();
+    automaticAccountIsASelectionMode();
     accountPickerRechecksTheServerRoster();
     explicitSignInKeepsTheDraft();
     enterDuringAccountSwitchWaitsForServerState();

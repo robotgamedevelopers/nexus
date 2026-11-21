@@ -2,9 +2,9 @@
 EXTENDS AccountPicker, AccountPickerTraceData
 VARIABLE cursor
 allVars == <<cursor, vars>>
-Take(r) == CASE r.op = "open" -> Open(r.tab, r.session, r.options, r.current, r.direction, r.ready)
+Take(r) == CASE r.op = "open" -> Open(r.tab, r.session, r.options, r.current, r.account, r.direction, r.ready)
              [] r.op = "step" -> Step(r.direction)
-             [] r.op = "refresh" -> Refresh(r.tab, r.session, r.options, r.current)
+             [] r.op = "refresh" -> Refresh(r.tab, r.session, r.options, r.current, r.account)
              [] r.op \in {"cancel", "lost", "modal"} -> Cancel
              [] r.op = "confirm" -> Choose(picker.highlight)
              [] r.op = "row" -> Choose(r.id)

@@ -1620,14 +1620,15 @@ void accountPickerIsAnExplicitChoice() {
     host.view = &h.view;
     host.connect(&link, "test");
     h.view.selected = [&] { host.personSelected(); };
-    const auto publish = [&](const std::string& account) {
+    const auto publish = [&](const std::string& account, bool automatic = false, bool supportsAuto = false) {
         auto session = std::make_shared<sync::SessionView>();
         session->id = 17;
         session->info = {"f1", "codex", account, "", ""};
+        session->info.autoAccount = automatic;
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setFriends({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}},
+        link.state.sessions.setFriends({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
                                       {"f2"}});
         link.changed = true;
         host.pollLink();
@@ -1696,6 +1697,29 @@ void accountPickerIsAnExplicitChoice() {
     h.pointer(PrAppEventKind_PointerUp, point);
     CHECK(!h.view.accountPicker && signIns == 0 && h.active().draft == "keep my draft");
     CHECK(link.sent.size() == 2 && link.sent[1].kind == sync::ActionKind::SetAccount && link.sent[1].text == "b");
+    // With a capable server the first row becomes "auto". It remains distinct from the concrete account in use.
+    publish("a", false, true);
+    arrow(false, style::kCommand);
+    CHECK(preview(sync::kAutoAccountTarget, "a") && link.sent.size() == 2);
+    CHECK(h.view.accountRows.size() == 4);
+    if (h.view.accountRows.size() != 4) return;
+    CHECK(h.hasText(h.view.accountRows.front(), "auto"));
+    h.enter();
+    h.frame();
+    CHECK(link.sent.size() == 3 && link.sent.back().text == sync::kAutoAccountTarget);
+    publish("a", true, true);
+    CHECK(h.hasText(h.view.accountAnchor, "Account · auto (Personal)"));
+    arrow(true, style::kCommand);
+    CHECK(preview("a", sync::kAutoAccountTarget));
+    // Pinning the account already serving the conversation changes the selection mode.
+    const auto sameAccount = h.centre(h.view.accountRows[1]);
+    h.pointer(PrAppEventKind_PointerDown, sameAccount);
+    h.pointer(PrAppEventKind_PointerUp, sameAccount);
+    CHECK(link.sent.size() == 4 && link.sent.back().text == "a");
+    publish("c", true, true);
+    CHECK(h.hasText(h.view.accountAnchor, "Account · auto (Archive)"));
+    CHECK(h.view.signInAccount().name == "c");
+
 }
 
 void arrowsFollowTheActiveTab() {
@@ -2383,6 +2407,7 @@ int main(int argc, char** argv) {
         CHECK(service == "word-count" && payload == "script buffer");
         h.key('W', PrAppKeyCode_KeyW, style::kCommand);
         CHECK(h.active().type == "editor" && h.active().draft == "native buffer");
+        CHECK(h.view.windowApp.autoAccountLabel == "rotate");
         checkTranscriptStyleValidation(*h.view.application);
         if (argc == 4) {
             // The new harness starts on stock, then reads the live fork. Entries remain in the model across each reload.

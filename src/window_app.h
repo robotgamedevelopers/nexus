@@ -64,6 +64,7 @@ public:
     std::optional<bool> closable;
     uint64_t layoutGeneration = 0;
     std::string label;
+    std::string autoAccountLabel = "auto";
     SignInAccount signInAccount;
     MessageCardStyle messageCard;
     TranscriptStyle transcriptStyle;

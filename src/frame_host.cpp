@@ -373,7 +373,7 @@ void FrameHost::refreshPicker() {
     }
     const auto tab = model->tab(model->active()).id;
     const auto* session = accountState_.find(mirror.session(tab));
-    if (!session || !picker->refresh(tab, session->id, roster->accounts, session->info.account))
+    if (!session || !picker->refresh(tab, *session, *roster))
         picker.reset();
 }
 
@@ -424,7 +424,7 @@ void FrameHost::pickerCommand(const std::string& command) {
     const auto tab = model->tab(model->active()).id;
     const auto* session = accountState_.find(mirror.session(tab));
     if (!session || accountSelections_.contains(session->id)) return;
-    picker = AccountPicker::open(tab, session->id, roster->accounts, session->info.account, direction);
+    picker = AccountPicker::open(tab, *session, *roster, direction);
 }
 
 void FrameHost::wire() {
@@ -454,11 +454,14 @@ void FrameHost::wire() {
         const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
         if (!session) return {};
         const auto& name = session->info.account;
-        for (const auto& choice : roster->accounts) {
-            if (choice.name == name)
-                return "Account · " + (choice.label.empty() ? name : choice.label);
+        const auto choice = std::find_if(roster->accounts.begin(), roster->accounts.end(),
+                                         [&](const auto& a) { return a.name == name; });
+        const auto& label = choice != roster->accounts.end() && !choice->label.empty() ? choice->label : name;
+        if (offersAuto(*roster) && session->info.autoAccount) {
+            const auto& mode = view->windowApp.autoAccountLabel;
+            return label.empty() ? "Account · " + mode : "Account · " + mode + " (" + label + ")";
         }
-        return name.empty() ? "Account · None" : "Account · " + name;
+        return label.empty() ? "Account · None" : "Account · " + label;
     };
     view->growing = [this](std::size_t id) -> const std::string* {
         const sync::SessionEntry* open = mirror.open(id);

@@ -10,7 +10,8 @@
 namespace {
 using namespace nexus;
 
-void options(std::ostream& out, const std::vector<sync::AccountChoice>& choices) {
+template<class Choice>
+void options(std::ostream& out, const std::vector<Choice>& choices) {
     out << "<<";
     for (std::size_t i = 0; i < choices.size(); ++i) {
         if (i) out << ", ";
@@ -27,7 +28,8 @@ struct Trace {
     test::FakeLink link;
     FrameHost host;
     std::vector<sync::AccountChoice> roster;
-    std::string current;
+    std::string current, account;
+    bool offersAutomatic = false;
     std::size_t tab = 1;
     sync::SessionId session = 1;
     std::size_t seen = 0;
@@ -44,16 +46,20 @@ struct Trace {
     void record(const std::string& op, int direction = 0, const std::string& id = "", bool ready = true) {
         if (op != "init") out << ",\n";
         out << "[op |-> " << std::quoted(op) << ", tab |-> " << tab << ", session |-> " << session
-            << ", current |-> " << std::quoted(current) << ", direction |-> " << direction
+            << ", current |-> " << std::quoted(current) << ", account |-> " << std::quoted(account)
+            << ", direction |-> " << direction
             << ", id |-> " << std::quoted(id) << ", ready |-> " << (ready ? "TRUE" : "FALSE") << ", options |-> ";
-        options(out, roster);
+        auto observed = roster;
+        if (offersAutomatic) observed.insert(observed.begin(), sync::AccountChoice{sync::kAutoAccountTarget});
+        options(out, observed);
         const auto& picker = view.accountPicker;
         out << ", picker |-> [tab |-> " << (picker ? picker->tab : 0)
             << ", session |-> " << (picker ? picker->session : 0)
             << ", current |-> " << std::quoted(picker ? picker->current : "")
+            << ", account |-> " << std::quoted(picker ? picker->account : "")
             << ", highlight |-> " << std::quoted(picker ? picker->options.at(picker->highlighted).name : "")
             << ", options |-> ";
-        options(out, picker ? picker->options : std::vector<sync::AccountChoice>{});
+        options(out, picker ? picker->options : std::vector<PickerOption>{});
         sync::SessionId target = 0;
         std::string account;
         for (; seen < link.sent.size(); ++seen) {
@@ -69,10 +75,12 @@ struct Trace {
 
     // Supply server observations, independently of the state that the picker kept from the previous snapshot.
     void publish(std::string names, const std::string& active, std::size_t activeTab = 1,
-                 sync::SessionId firstSession = 1, bool modal = false) {
+                 sync::SessionId firstSession = 1, bool modal = false, bool capable = false, bool automatic = false) {
         tab = activeTab;
         session = tab == 1 ? firstSession : 2;
-        current = active;
+        account = active;
+        offersAutomatic = capable && names.size() > 1;
+        current = offersAutomatic && automatic ? sync::kAutoAccountTarget : active;
         roster.clear();
         for (char name : names) roster.push_back({std::string(1, name)});
         if (model.tab_count() > tab) model.select_tab(tab);
@@ -80,13 +88,16 @@ struct Trace {
         for (std::size_t i = 1; i <= 2; ++i) {
             auto entry = std::make_shared<sync::SessionView>();
             entry->id = i == 1 ? firstSession : 2;
-            entry->info = {i == 1 ? "one" : "two", "codex", current, "", ""};
+            entry->info = {i == 1 ? "one" : "two", "codex", active, "", ""};
+            entry->info.autoAccount = automatic;
             sessions.push_back(entry);
         }
         if (sessions.front()->id > sessions.back()->id) std::swap(sessions.front(), sessions.back());
         link.state.phase = sync::LinkPhase::Connected;
         link.state.sessions = sync::Sessions(std::move(sessions));
-        link.state.sessions.setFriends({{"one", roster}, {"two", roster}});
+        sync::ServerFriend one{"one", roster}, two{"two", roster};
+        one.canAutoAccount = two.canAutoAccount = capable;
+        link.state.sessions.setFriends({one, two});
         link.state.sessions.setNextAction(link.sent.size() + 1);
         if (modal) {
             sync::SecretRequest ask;
@@ -134,6 +145,12 @@ struct Trace {
         command("next"); publish("ab", "b"); command("confirm"); // current account changed elsewhere
         command("next"); publish("ba", "b", 2); row("a");        // switched tabs while previewing
         command("next"); publish("ab", "b");
+        publish("ab", "a", 1, 1, false, true);
+        command("previous"); command("confirm"); // enter automatic mode
+        publish("ab", "a", 1, 1, false, true, true);
+        command("open"); publish("ab", "b", 1, 1, false, true, true); // automatic payer rotated
+        command("open"); row("b"); // explicitly pin the current payer
+        publish("ab", "b");
         command("next"); publish("ab", "b", 1, 3); row("a");    // the shown session disappeared
         command("next", false);                                  // mirror still binds the old session
         publish("ba", "b", 2, 3);

@@ -63,6 +63,11 @@ Clicking a row confirms that account directly. Escape cancels and keeps the over
 friend, session, current account or connection dismisses the picker. If the server reorders its accounts, the
 highlight follows the same account ID. The server validates an exact account selection before applying it.
 
+When the server offers automatic selection for a friend with multiple linked accounts, the first menu row is
+**auto**. The tab caption also shows the concrete account currently in use. The sign-in card always identifies
+that concrete account. Set `account_auto_label` in the client configuration or return it from the Starlark
+`app.window` event to customize the mode’s display name.
+
 The stock Starlark window program reads two optional maps from the fork’s client `config.json`:
 
 ```json

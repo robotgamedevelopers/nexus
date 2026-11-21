@@ -123,6 +123,7 @@ def handle(event, state, config):
         return {
             "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": config.get("transcript_style", {}),
+            "account_auto_label": config.get("account_auto_label", "auto"),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
             "closable": closable,

@@ -584,10 +584,10 @@ struct Builder {
         std::string chosen;
         for (std::size_t i = 0; i < picker.options.size(); ++i) {
             const auto& option = picker.options[i];
-            const auto& displayed = option.label.empty() ? option.name : option.label;
+            const auto label = picker.rowLabel(option, view.windowApp.autoAccountLabel);
             const bool preview = i == picker.highlighted;
             const auto row = prKitMenuItem(kit, view.accountMenu,
-                {.key = prUiKey(ui, view.accountMenu, sv(option.name)), .text = sv(displayed),
+                {.key = prUiKey(ui, view.accountMenu, sv(option.name)), .text = sv(label),
                  .icon = PrKitIconKind(preview ? PrKitIconKind_ChevronRight : PrKitIconKind_None),
                  .checked = option.name == picker.current}, {});
             PrKitPlace rowSize{};

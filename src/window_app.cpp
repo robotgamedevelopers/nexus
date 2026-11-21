@@ -221,11 +221,17 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
     TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
-    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, float& overlayOpacity, std::string& why) {
+    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, float& overlayOpacity, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
         return false;
+    const auto name = prJsonMember(d, 0, {"account_auto_label", 18});
+    autoLabel = name == kPrJsonMissing ? "auto" : stringAt(d, name);
+    if (!groupName(autoLabel)) {
+        why = "account_auto_label must be a nonempty display name of up to 64 bytes";
+        return false;
+    }
     const auto opacity = prJsonMember(d, 0, {"overlay_opacity", 15});
     if (!readMessageCard(d, prJsonMember(d, 0, {"message_card", 12}), card)) {
         why = "message_card needs #RRGGBB fill, ink and email_ink, text_size from 12 to 72, and radius from 0 to 64";
@@ -359,10 +365,10 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     std::map<std::string, TabType> registrations;
     std::vector<TabGroup> layout;
     std::optional<bool> mayClose;
-    std::string caption;
+    std::string caption, autoLabel;
     float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, opacity, why)) {
         if (generation != appliedGeneration_ || groups != layout || types != registrations)
             ++layoutGeneration;
         appliedGeneration_ = generation;
@@ -372,6 +378,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         groups = std::move(layout);
         closable = mayClose;
         label = std::move(caption);
+        autoAccountLabel = std::move(autoLabel);
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;
@@ -387,7 +394,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, opacity, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, opacity, why)) {
             keys.clear();
             parts.clear();
             registrations.clear();
@@ -406,6 +413,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
             closable = mayClose;
         }
         label = std::move(caption);
+        autoAccountLabel = std::move(autoLabel);
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;

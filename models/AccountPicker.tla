@@ -6,15 +6,17 @@ EXTENDS Integers, Sequences
 Accounts == {"a", "b"}
 Tabs == {1, 2}
 Sessions == {1, 2, 3}
-Rosters == {<<>>, <<"a">>, <<"b">>, <<"a", "b">>, <<"b", "a">>}
+Auto == "!auto"
+Rosters == {<<>>, <<"a">>, <<"b">>, <<"a", "b">>, <<"b", "a">>, <<Auto, "a", "b">>, <<Auto, "b", "a">>}
 Directions == {-1, 0, 1}
 Names(o) == {o[i] : i \in DOMAIN o}
+Modes(o, a) == IF Auto \in Names(o) THEN {Auto, a} ELSE {a}
 NoRequest == [session |-> 0, account |-> ""]
-Closed == [tab |-> 0, session |-> 0, options |-> <<>>, current |-> "", highlight |-> ""]
-Snapshot(t, s, o, c) == [tab |-> t, session |-> s, options |-> o, current |-> c]
+Closed == [tab |-> 0, session |-> 0, options |-> <<>>, current |-> "", account |-> "", highlight |-> ""]
+Snapshot(t, s, o, c, a) == [tab |-> t, session |-> s, options |-> o, current |-> c, account |-> a]
 VARIABLES picker, request, event, observed
 vars == <<picker, request, event, observed>>
-Init == picker = Closed /\ request = NoRequest /\ event = "init" /\ observed = Snapshot(0, 0, <<>>, "")
+Init == picker = Closed /\ request = NoRequest /\ event = "init" /\ observed = Snapshot(0, 0, <<>>, "", "")
 
 \* The selection is a name even though the rendered list highlights a row.
 Index(o, id) == CHOOSE i \in DOMAIN o : o[i] = id
@@ -22,10 +24,10 @@ Advance(o, id, d) ==
     IF id \in Names(o) THEN o[1 + ((Index(o, id) - 1 + d) % Len(o))]
     ELSE IF d < 0 THEN o[Len(o)] ELSE o[1]
 
-Open(t, s, o, c, d, ready) ==
-    /\ picker = Closed /\ observed' = Snapshot(t, s, o, c)
+Open(t, s, o, c, a, d, ready) ==
+    /\ picker = Closed /\ observed' = Snapshot(t, s, o, c, a)
     /\ picker' = IF ~ready \/ o = <<>> THEN Closed ELSE [tab |-> t, session |-> s, options |-> o,
-                  current |-> c, highlight |-> Advance(o, c, d)]
+                  current |-> c, account |-> a, highlight |-> Advance(o, c, d)]
     /\ request' = NoRequest /\ event' = "open"
 
 Step(d) ==
@@ -33,9 +35,9 @@ Step(d) ==
     /\ picker' = [picker EXCEPT !.highlight = Advance(picker.options, picker.highlight, d)]
     /\ request' = NoRequest /\ event' = "step"
 
-Refresh(t, s, o, c) ==
-    /\ observed' = Snapshot(t, s, o, c)
-    /\ picker' = IF picker # Closed /\ t = picker.tab /\ s = picker.session /\ c = picker.current /\ picker.highlight \in Names(o)
+Refresh(t, s, o, c, a) ==
+    /\ observed' = Snapshot(t, s, o, c, a)
+    /\ picker' = IF picker # Closed /\ t = picker.tab /\ s = picker.session /\ c = picker.current /\ a = picker.account /\ picker.highlight \in Names(o)
                  THEN [picker EXCEPT !.options = o] ELSE Closed
     /\ request' = NoRequest /\ event' = "refresh"
 
@@ -50,17 +52,17 @@ Choose(id) ==
                   THEN [session |-> picker.session, account |-> id] ELSE NoRequest
     /\ picker' = Closed /\ event' = "choose"
 
-Next == \/ \E t \in Tabs, s \in Sessions, o \in Rosters, c \in Accounts \cup {""}, d \in Directions, ready \in BOOLEAN : Open(t, s, o, c, d, ready)
+Next == \/ \E t \in Tabs, s \in Sessions, o \in Rosters, a \in Accounts \cup {""}, d \in Directions, ready \in BOOLEAN : \E c \in Modes(o, a) : Open(t, s, o, c, a, d, ready)
         \/ \E d \in Directions : Step(d)
-        \/ \E t \in Tabs, s \in Sessions, o \in Rosters, c \in Accounts \cup {""} : Refresh(t, s, o, c)
+        \/ \E t \in Tabs, s \in Sessions, o \in Rosters, a \in Accounts \cup {""} : \E c \in Modes(o, a) : Refresh(t, s, o, c, a)
         \/ Cancel
-        \/ \E id \in Accounts \cup {""} : Choose(id)
+        \/ \E id \in Accounts \cup {Auto, ""} : Choose(id)
 Spec == Init /\ [][Next]_vars
 
 ValidPreview == picker = Closed \/ (picker.tab \in Tabs /\ picker.session \in Sessions
-                 /\ picker.options \in Rosters /\ picker.current \in Accounts \cup {""}
+                 /\ picker.options \in Rosters /\ picker.current \in Modes(picker.options, picker.account) /\ picker.account \in Accounts \cup {""}
                  /\ picker.highlight \in Names(picker.options))
-LiveBinding == picker = Closed \/ Snapshot(picker.tab, picker.session, picker.options, picker.current) = observed
+LiveBinding == picker = Closed \/ Snapshot(picker.tab, picker.session, picker.options, picker.current, picker.account) = observed
 OnlyConfirmationSends == request = NoRequest \/ (event = "choose" /\ picker = Closed)
 TargetsDisplayedSession == [][request' # NoRequest =>
     (picker # Closed /\ request'.session = observed.session

@@ -199,7 +199,7 @@ Keys and contexts
 
 Sessions
 - A friend's tab holds that friend's sessions as subtabs, like a menu bar or a cross menu: friends run across the strip, and the selected friend's sessions drop down in a column under its tab. The column shows only while switching, and hides once a session is chosen.
-- Command-Up/Down open the account menu beneath the current friend’s tab and highlight the previous/next linked account, wrapping in link order. Enter switches to the highlighted account. Escape cancels the selection and leaves the overlay open. Shift-Command-Up/Down are reserved for session navigation.
+- Command-Up/Down open the account menu beneath the current friend’s tab and highlight the previous/next choice, wrapping in menu order. When the server offers automatic selection for multiple subscriptions, the first row is `auto`, followed by the linked accounts. Enter selects the highlighted mode or account. Escape cancels the selection and leaves the overlay open. Shift-Command-Up/Down are reserved for session navigation.
 - Command-N makes a new session with this friend as a subtab in this tab; Command-Shift-N makes it a tab of its own (like a browser's new tab and new window). A new session starts with the current session's account, model and effort.
 - A session can be dragged out of the column into the strip to become its own tab.
 - Switching a session's account happens inside its tab. When the harness cannot resume across accounts, the driver starts fresh, seeded with a summary of the conversation so far (part 5 of the friends work, `docs/roadmap.sexp`).
