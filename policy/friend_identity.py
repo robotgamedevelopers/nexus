@@ -41,13 +41,10 @@ def read_home_file(home, filename):
 
 
 def resolve(config, name, harness=None):
-    if not isinstance(config, dict) or not isinstance(config.get("friends"), dict):
-        raise ValueError("identities.json needs a friends object")
+    if not isinstance(config, dict):
+        raise ValueError("identities.json must be an object")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
         raise ValueError("invalid friend name")
-    spec = config["friends"].get(name)
-    if not isinstance(spec, dict):
-        raise ValueError(f"no home and startup files configured for {name}")
     command = config.get("nova_config", ["nova-config"])
     if not isinstance(command, list) or not command or not all(isinstance(v, str) and v for v in command):
         raise ValueError("nova_config must be a program and its arguments")
@@ -64,6 +61,9 @@ def resolve(config, name, harness=None):
         raise ValueError(f"invalid harness or model in the nova-config definition for {name}")
     if harness is not None and harness != route:
         raise ValueError(f"{name} uses the {route} harness in nova-config; the configured driver is {harness}")
+    spec = row.get("startup")
+    if not isinstance(spec, dict) or not spec:
+        raise ValueError(f"no startup definition for {name} in nova-config")
     home = spec.get("home")
     files = spec.get("files")
     prefix = spec.get("prefix")

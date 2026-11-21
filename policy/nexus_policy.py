@@ -144,7 +144,9 @@ def cli():
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
         cause = "Nexus driver policy: " + " ".join(str(error).splitlines())[:500]
         if args.command in ("driver", "friend-driver"):
-            print(json.dumps({"kind": "hello", "protocol": 1, "harness": getattr(args, "harness", "claude"), "features": ["limit"]}))
+            harness = getattr(args, "harness", "claude")
+            print(json.dumps({"kind": "hello", "protocol": 1, "harness": harness,
+                              "features": ["limit"] if harness == "claude" else []}))
             print(json.dumps({"kind": "error", "code": "other", "cause": cause,
                               "fix": "Check the server profile with nexus_policy check and retry."}))
         else:

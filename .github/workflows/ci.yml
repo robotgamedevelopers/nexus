@@ -378,8 +378,9 @@ jobs:
           runtime=$(mktemp -d "$RUNNER_TEMP/nexus-policy.XXXXXX")
           trap 'rm -rf "$runtime"' EXIT
           python3 -m venv "$runtime"
-          "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy
+          "$runtime/bin/python" -I -m pip --disable-pip-version-check install ./policy ./drivers/rpc
           "$runtime/bin/python" -m unittest discover -s policy -v
+          "$runtime/bin/python" -m unittest discover -s drivers/rpc -v
 
   claude-driver:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

@@ -147,7 +147,7 @@ store, the server stops; started again, it opens the store from what is durable.
 
 A friend's AI is reached through a driver, a child process of `nexus-server` per friend that speaks the line protocol
 in [docs/driver-protocol.md](docs/driver-protocol.md). Which program drives which friend comes from `~/.nexus/server/drivers`
-(an example: [drivers/claude/drivers.example](drivers/claude/drivers.example)). The Claude driver,
+(an example: [drivers/claude/drivers.example](drivers/claude/drivers.example)). Adapters for Codex, Antigravity, Grok and Muse, including their account requirements, are documented in the [RPC driver guide](drivers/rpc/README.md). The Claude driver,
 [drivers/claude](drivers/claude), runs Claude on the Claude Agent SDK (TypeScript, Node 20.19 or newer; the SDK is a
 dependency fetched by npm, never kept in this repository) with permission prompts bypassed, in the friend's directory.
 It runs only on a subscription: it removes every API-key variable from Claude's environment, loads no Claude settings

@@ -53,10 +53,13 @@ class PersonalPolicy(unittest.TestCase):
         registry = root / "registry"
         fixture = {"result": {"status": "ok"}, "items": [{"kind": "friend", "fields": {
             "name": "review", "harness": "codex", "model": "selected", "enabled": True}}]}
-        registry.write_text("#!" + sys.executable + "\nprint(" + repr(json.dumps(fixture)) + ")\n")
+        startup = {"home": str(checkout), "prefix": "open the home", "files": ["standing.md"]}
+        fixture["items"][0]["fields"]["startup"] = startup
+        def publish():
+            registry.write_text("#!" + sys.executable + "\nprint(" + repr(json.dumps(fixture)) + ")\n")
+        publish()
         registry.chmod(0o700)
-        config = {"nova_config": [str(registry)], "friends": {"review": {"home": str(checkout),
-                  "prefix": "open the home", "files": ["standing.md"]}}}
+        config = {"nova_config": [str(registry)]}
         (self.profile / "identities.json").write_text(json.dumps(config))
         capture = root / "driver.py"
         capture.write_text("import json,sys,os\nargs=sys.argv[1:]\n"
@@ -72,8 +75,8 @@ class PersonalPolicy(unittest.TestCase):
         different = subprocess.run([*self.command, "identity", str(self.profile), "review", "--harness", "claude"],
                                    capture_output=True, text=True)
         self.assertNotEqual(different.returncode, 0)
-        config["friends"]["review"]["files"] = ["../elsewhere"]
-        (self.profile / "identities.json").write_text(json.dumps(config))
+        startup["files"] = ["../elsewhere"]
+        publish()
         refused = subprocess.run(command, capture_output=True, text=True)
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(json.loads(refused.stdout.splitlines()[1])["kind"], "error")

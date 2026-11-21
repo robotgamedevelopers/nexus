@@ -121,20 +121,13 @@ the next start. A driver already answering a turn continues with its current set
 
 A server profile can keep `identities.json` next to `policy.star`. The launcher queries
 `nova-config friend show NAME --json` at each driver start. The registry supplies the friend's name,
-harness, model, pronouns, note and enabled state. The profile supplies the local home checkout, opening
-prompt and ordered home files. For example, a profile for a single reviewer could contain:
+harness, model, pronouns, note, enabled state and `startup` object. Its `home` is the absolute checkout
+of the named `repository`, its `prefix` holds the opening instructions, and `files` lists home documents
+in reading order. Set them together with `nova-config friend set NAME --startup '<json>' --actor NAME`.
+The profile only selects the registry command, for example:
 
 ```json
-{
-  "nova_config": ["/usr/local/bin/nova-config"],
-  "friends": {
-    "reviewer": {
-      "home": "/srv/friends/reviewer",
-      "prefix": "Follow the initialization procedure in your home README.",
-      "files": ["AGENTS.md", "README.md"]
-    }
-  }
-}
+{"nova_config": ["/usr/local/bin/nova-config"]}
 ```
 
 The home documents must be regular files tracked at HEAD. The launcher reads their working-copy text,
@@ -162,7 +155,7 @@ The CLI can verify a definition and report this metadata without starting a mode
 The adapter receives the startup context in an inherited temporary file descriptor
 named by `--startup-context-fd`. It consumes and closes the descriptor before launching the model.
 The shipped Claude adapter appends the text to the Claude Code system prompt on new and resumed queries.
-Other harnesses need a Nexus driver that consumes the same input and applies it as standing instructions.
+Codex, Antigravity, Grok and Muse consume the same descriptor through the [RPC adapters](../drivers/rpc/README.md).
 An identity profile alone does not install a driver or add a friend to the roster.
 
 ## Install and use
