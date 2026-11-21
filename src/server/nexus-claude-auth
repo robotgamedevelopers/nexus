@@ -1,0 +1,295 @@
+#!/usr/bin/python3 -I
+"""Nexus's trusted wrapper around Claude's account-private subscription login."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import math
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+BOUND = 65536
+STORE = "verified-claude.json"
+LOCK = "verified-claude.lock"
+# Ask the native client for a renewal while the old access token still has time left.
+REFRESH_MARGIN = 5 * 60 * 1000
+
+
+class Refusal(Exception):
+    def __init__(self, code):
+        self.code = code
+
+
+def private_file(fd):
+    info = os.fstat(fd)
+    if not (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
+            info.st_nlink == 1 and info.st_mode & 0o077 == 0):
+        raise Refusal(13)
+
+
+def read_json(path, *, private=True):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as f:
+        if private:
+            private_file(fd)
+        elif not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refusal(12)
+        data = f.read(BOUND + 1)
+    if len(data) > BOUND:
+        raise Refusal(12)
+    result = json.loads(data)
+    if not isinstance(result, dict):
+        raise Refusal(12)
+    return result
+
+
+def address(email):
+    if not isinstance(email, str) or not email or len(email.encode()) > 254 or any(ord(c) < 33 or ord(c) == 127 for c in email):
+        raise Refusal(12)
+    # Preserve non-ASCII codepoints, dots, suffixes and the whole domain.
+    return email.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+
+
+def token(value):
+    return isinstance(value, str) and 0 < len(value) < 32768 and all(32 < ord(c) < 127 for c in value)
+
+
+def validate(grant):
+    if not isinstance(grant, dict) or not token(grant.get("accessToken")) or not token(grant.get("refreshToken")):
+        raise Refusal(12)
+    expires = grant.get("expiresAt")
+    if isinstance(expires, bool) or not isinstance(expires, (float, int)) or not math.isfinite(expires) or expires <= 0:
+        raise Refusal(12)
+    scopes = grant.get("scopes")
+    if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes) or "user:inference" not in scopes:
+        raise Refusal(12)
+    return grant
+
+
+@contextlib.contextmanager
+def locked_account(path):
+    # Same-user 0700 account directories sit beneath the server's credential wall. Refuse links, case aliases and
+    # unexpected owners. The runner creates the account directory, never the access command.
+    if not path.is_absolute() or path.name not in os.listdir(path.parent):
+        raise Refusal(12)
+    dfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(dfd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Refusal(13)
+        fd = os.open(LOCK, os.O_NOFOLLOW | os.O_CREAT | os.O_RDWR | os.O_NONBLOCK, 0o600, dir_fd=dfd)
+        try:
+            private_file(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield dfd
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def write_json(path, value):
+    with path.open("x", encoding="utf8") as f:
+        json.dump(value, f, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def save(dfd, account, email, grant):
+    store = {"version": 1, "email": email, "credential": validate(grant)}
+    raw = json.dumps(store, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+    if len(raw) > BOUND:
+        raise Refusal(12)
+    name = account / ".verified-claude.write"
+    name.unlink(missing_ok=True)
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(name, account / STORE)
+        os.fsync(dfd)
+    finally:
+        if os.path.lexists(name):
+            os.unlink(name)
+
+
+def cli_command(claude, args, stage, enroll):
+    # Never inherit a bearer, an alternate API endpoint, an account profile, shell startup options or a proxy.
+    config = stage / "config"
+    env = {"HOME": str(stage), "CLAUDE_CONFIG_DIR": str(config), "TMPDIR": str(stage / "tmp"),
+           "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8", "TERM": "xterm-256color",
+           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+    opener = os.environ.get("BROWSER") if enroll else None
+    if enroll and (not opener or not os.path.isabs(opener) or not os.environ.get("NEXUS_SIGNIN_SOCKET") or not os.environ.get("NEXUS_SIGNIN_FLOW")):
+        raise Refusal(13)
+    if opener:
+        env["PATH"] = str(Path(opener).parent) + ":" + env["PATH"]
+        env["BROWSER"] = opener
+        for key in ("NEXUS_SIGNIN_SOCKET", "NEXUS_SIGNIN_FLOW"):
+            if key in os.environ:
+                env[key] = os.environ[key]
+    argv = [str(claude.resolve(strict=True)), *args]
+    if sys.platform == "darwin":
+        # Claude normally stores a subscription in Keychain. On OS denial it uses the private config directory's
+        # .credentials.json. Restrict the sign-in subprocess to a fresh HOME and keep it off shared Keychain services.
+        policy = """(version 1)
+(allow default)
+(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open"))
+(deny mach-lookup (global-name #"(?i)(securityd|securityserver|keychain|authd)"))
+(deny file-read* (subpath (param "CREDENTIALS")) (subpath (param "REALHOME"))
+                 (subpath "/Library/Keychains") (subpath "/private/var/Keychains"))
+(deny file-write*)
+(allow file-read* (subpath (param "STAGE")) (literal (param "CLI")))
+(allow file-write* (subpath (param "STAGE")) (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$"))
+"""
+        import pwd
+        args = ["/usr/bin/sandbox-exec", "-D", "STAGE=" + str(stage.resolve()),
+                "-D", "CLI=" + str(claude.resolve()), "-D", "REALHOME=" + str(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()),
+                "-D", "CREDENTIALS=" + str((stage.parent.parent.parent if enroll else stage.parent.parent).resolve())]
+        if opener:
+            # The runner owns the shim and its local socket. The shim can only hand its URL back to this flow.
+            policy += '(allow file-read* (subpath (param "OPENERS")) (literal (param "OPENER")) (literal (param "SOCKET")))\n'
+            args += ["-D", "OPENERS=" + str(Path(opener).parent.resolve()), "-D", "OPENER=" + str(Path(opener).resolve()),
+                     "-D", "SOCKET=" + env["NEXUS_SIGNIN_SOCKET"]]
+        argv = [*args, "-p", policy, *argv]
+    return argv, env
+
+
+def run_cli(claude, args, stage, *, enroll=False, input_data=None, capture=False, timeout=45):
+    argv, env = cli_command(claude, args, stage, enroll)
+    return subprocess.run(argv, env=env, cwd=stage, input=input_data,
+                          stdin=(subprocess.DEVNULL if input_data is None and not enroll else None),
+                          stdout=subprocess.PIPE if capture else (None if enroll else subprocess.DEVNULL),
+                          stderr=None if enroll else subprocess.DEVNULL, timeout=timeout, check=False)
+
+
+def fresh_stage(stage):
+    (stage / "config").mkdir()
+    (stage / "tmp").mkdir()
+
+
+def verified_login(claude, stage, email):
+    login = run_cli(claude, ["auth", "login", "--claudeai", "--email", email], stage, enroll=True, timeout=600)
+    if login.returncode:
+        raise Refusal(13)
+    status = run_cli(claude, ["auth", "status", "--json"], stage, capture=True)
+    if status.returncode or len(status.stdout) > BOUND:
+        raise Refusal(12)
+    who = json.loads(status.stdout)
+    if not isinstance(who, dict) or who.get("loggedIn") is not True or who.get("authMethod") != "claude.ai" or who.get("apiProvider") != "firstParty":
+        raise Refusal(12)
+    returned = who.get("email")
+    if address(returned) != address(email):
+        raise Refusal(11)
+    grant = validate(read_json(stage / "config" / ".credentials.json").get("claudeAiOauth"))
+    if grant["expiresAt"] <= time.time() * 1000:
+        raise Refusal(12)
+    # The email came from Claude's completed login in a new, empty HOME. The hint alone is never considered evidence.
+    return returned, grant
+
+
+def renew(claude, stage):
+    config = stage / "config"
+    # Ask the CLI for subscription usage in an empty, tool-free session. It refreshes its own subscription; there
+    # are no user messages or model calls. Only use renewed credentials that the CLI has written back to disk.
+    events = [
+        {"type": "control_request", "request_id": "start", "request": {"subtype": "initialize"}},
+        {"type": "control_request", "request_id": "usage", "request": {"subtype": "get_usage", "skip_behaviors": True}},
+    ]
+    data = b"".join(json.dumps(e).encode() + b"\n" for e in events)
+    run_cli(claude, ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                     "--no-session-persistence", "--strict-mcp-config", "--settings", '{"disableAllHooks":true}',
+                     "--setting-sources", "", "--tools", ""], stage, input_data=data, timeout=60)
+    return validate(read_json(config / ".credentials.json").get("claudeAiOauth"))
+
+
+def refresh_and_save(claude, account, dfd, store):
+    # A refresh can rotate the refresh token before our envelope is replaced. Keep the CLI's private working
+    # copy until the replacement is durable, then a retry can recover a renewal interrupted at that boundary.
+    stage = account / ".verified-claude-renew"
+    grant = store["credential"]
+    binding = hashlib.sha256(json.dumps(store, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if stage.exists():
+        info = stage.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Refusal(13)
+        try:
+            same = read_json(stage / "source.json").get("sha256") == binding
+        except FileNotFoundError:
+            same = False
+        if not same:
+            shutil.rmtree(stage)
+    if not stage.exists():
+        stage.mkdir(mode=0o700)
+        fresh_stage(stage)
+        write_json(stage / "config" / ".credentials.json", {"claudeAiOauth": grant})
+        write_json(stage / "config" / ".claude.json", {
+            "oauthAccount": {"emailAddress": store["email"]}, "hasCompletedOnboarding": True})
+        write_json(stage / "source.json", {"sha256": binding})
+    updated = validate(read_json(stage / "config" / ".credentials.json").get("claudeAiOauth"))
+    if updated == grant:
+        updated = renew(claude, stage)
+    if updated != grant:
+        save(dfd, account, store["email"], updated)
+    shutil.rmtree(stage)
+    return updated
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("operation", choices=["enroll", "access"])
+    parser.add_argument("--account-dir", required=True, type=Path)
+    parser.add_argument("--email", required=True)
+    parser.add_argument("--claude", required=True, type=Path)
+    args = parser.parse_args()
+    account = args.account_dir
+    if not args.claude.is_absolute():
+        raise Refusal(13)
+    address(args.email)
+    os.umask(0o077)
+    with locked_account(account) as dfd:
+        if args.operation == "enroll":
+            # The runner reaps the process group and removes .signin after a crash or cancellation.
+            scratch = Path(os.environ["CLAUDE_CONFIG_DIR"])
+            if scratch != account / ".signin" or scratch.is_symlink() or not scratch.is_dir():
+                raise Refusal(13)
+            with tempfile.TemporaryDirectory(dir=scratch, prefix="login-") as raw:
+                stage = Path(raw)
+                fresh_stage(stage)
+                email, grant = verified_login(args.claude, stage, args.email)
+                save(dfd, account, email, grant)
+            return
+        try:
+            store = read_json(account / STORE)
+        except FileNotFoundError:
+            raise Refusal(12)
+        if type(store.get("version")) is not int or store["version"] != 1:
+            raise Refusal(12)
+        if address(store.get("email")) != address(args.email):
+            raise Refusal(11)
+        grant = validate(store.get("credential"))
+        now = time.time() * 1000
+        if grant["expiresAt"] <= now + REFRESH_MARGIN:
+            grant = refresh_and_save(args.claude, account, dfd, store)
+        if grant["expiresAt"] <= time.time() * 1000:
+            raise Refusal(13)
+        sys.stdout.write(grant["accessToken"] + "\n")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Refusal as e:
+        sys.exit(e.code)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, OverflowError, TypeError, RecursionError):
+        # No exception text, provider output or credential content may escape a private operation.
+        sys.exit(13)

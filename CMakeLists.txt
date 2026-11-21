@@ -206,6 +206,8 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_signin_runner PUBLIC src)
     target_compile_options(nexus_signin_runner PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_signin_runner PUBLIC nexus_sync PRIVATE nexus_durable)
+    configure_file(src/server/nexus-claude-auth ${CMAKE_CURRENT_BINARY_DIR}/nexus-claude-auth COPYONLY)
+    add_custom_target(nexus-claude-auth)
     add_executable(nexus-signin-open src/server/signin_open.cpp)
     target_compile_options(nexus-signin-open PRIVATE ${NEXUS_WARNINGS})
 

@@ -48,6 +48,13 @@ target_compile_options(driver_table_test PRIVATE ${warnings})
 
 # The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
+    find_package(Python3 3.9 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME claude_auth_verified COMMAND ${Python3_EXECUTABLE} -I
+                 ${CMAKE_CURRENT_SOURCE_DIR}/claude_auth_helper_test.py ${CMAKE_BINARY_DIR}/nexus-claude-auth)
+        set_tests_properties(claude_auth_verified PROPERTIES LABELS functional TIMEOUT 120)
+    endif()
+
     add_executable(drivers_functional drivers_functional.cpp)
     target_link_libraries(drivers_functional PRIVATE nexus_drivers nexus_durable)
     target_compile_options(drivers_functional PRIVATE ${warnings})
