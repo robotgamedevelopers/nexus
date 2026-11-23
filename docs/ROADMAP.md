@@ -129,3 +129,22 @@ The layers of nexus's own Tailscale node (docs/tailscale.md), bottom up, each se
 [Source data](roadmap.sexp)
 
 <!-- nova-work:tailscale:end -->
+
+## Lessons from pi
+
+Mechanisms taken from pi (earendil-works/pi, MIT), bottom up, each secured before the next starts. Native per-harness drivers stay primary; pi is a source of lessons and possibly one more driver.
+
+<!-- nova-work:lessons-from-pi:start -->
+
+| feature | done |
+|---|:---:|
+| 1. Driver protocol additions: steer (taken in after the current turn's tool calls, before the next model call) and follow-up (taken in only when the run would otherwise end) as their own kinds beside send; an explicit settled event, since the end of one model run is not done while retries, compaction or queued messages can follow; the full queue sent on each change; each driver says in hello which native features its harness has, so a harness's own features keep working and the server offers only what the driver can do. TLA+ model and fake driver first | ❌ |
+| 2. Transcript entries: entries get an id and a parent, so a tab can fork and branch; a compaction entry (a summary and the first entry kept; the entries before it stay in the store and leave only what the model sees); an edit entry that hides an entry from the model without deleting it (a failed overflow attempt, say); a branch summary when a branch is left; usage entries that count cost and never reach the model. A store format bump with its store model, and a durable cursor (entries after an id) for whoever mirrors a session | ❌ |
+| 3. The prompt as data, customized by talking with your AI: named sections, changed by the AI on the person's word, checked by the server and appended as a patch (sections set or removed, tools added or removed), never a rewrite of the head, so the prompt cache survives, the prompt now is rebuilt from the transcript, and undo walks the history back. Native drivers apply a patch their own way | ❌ |
+| 4. A structured summary for an account switch or a move the harness cannot resume, in place of today's 16 KiB tail of recent turns: goal, constraints and preferences, progress (done, in progress, blocked), key decisions, next steps, critical context; exact paths, names and errors kept; files read and changed carried across summaries; a new summary updates the last one; the conversation given to the summarizer as flat text, never as a conversation to continue, with tool results cut short | ❌ |
+| 5. A pi driver for one friend who is not on Claude, through pi's RPC mode (pi --mode rpc, strict LF-delimited JSONL, an id on each command, a prompt's acceptance not its end, done at agent_settled): only after that provider's subscription sign-in is checked against its terms (pi's Claude sign-in presents itself as Claude Code, so Claude friends never go through pi); and pi's lists of retryable, non-retryable and context-overflow errors taken into every driver, a usage limit reported as usage-limit | ❌ |
+| complete | 0% |
+
+[Source data](roadmap.sexp)
+
+<!-- nova-work:lessons-from-pi:end -->
