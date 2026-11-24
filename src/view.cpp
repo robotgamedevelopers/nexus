@@ -1409,6 +1409,8 @@ struct Builder {
             const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
                 auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
+                // Keep Markdown in the paragraph's line flow. The kit's default monospace role is nonwrapping.
+                runStyle.wrap = PrKitWrap_Wrap;
                 const auto span = prKitText(kit, text, {}, runStyle);
                 const auto ordinary = run.inlineCode ? style.codeInk.value_or(plain) : plain;
                 const auto color = speaker == EntryKind::Bus ? style.busInk :

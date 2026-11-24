@@ -1205,6 +1205,58 @@ void markdownListsAndLinks() {
     checkTextPaint(h, "web link", h.look.tabs.selectedFill, h.look.tabs.fill);
 }
 
+void longInlineCommandWrapsInTheReply() {
+    const std::string lead = "The hook works.";
+    const std::string prose = " I started it under Monitor with the full stream, using the new build's wrapper:";
+    const std::string command = "/home/friend/.nexus/server/builds/" + std::string(64, 'a') +
+        "/drivers/claude/bin/bus/nova-bus hook --as friend --harness claude";
+    const auto intro = "**" + lead + "**" + prose;
+    struct Layout { float width; int zoom; float replyWidth; };
+    for (auto layout : {Layout{2525, 0, TranscriptStyle{}.replyWidth}, Layout{1450, 0, 72}, Layout{1080, 1, 56}}) {
+        Harness h;
+        h.extent = h.view.extent = {layout.width, 1400};
+        h.view.askedTextSteps = layout.zoom;
+        h.model.append(0, {EntryKind::Friend, intro});
+        // A single LF before the backtick is a Markdown soft break. The paragraph's last word still fits
+        // exactly where it would have appeared without the following inline command.
+        h.model.append(0, {EntryKind::Friend, intro + "\n`" + command + "`"});
+        for (int i = 0; i < 2; ++i) {
+            h.view.windowApp.surface.prompt.width = 98;
+            h.view.windowApp.transcriptStyle.replyWidth = layout.replyWidth;
+            h.frame();
+        }
+        const auto entries = h.entries();
+        CHECK(entries.size() == 2);
+        if (entries.size() != 2) continue;
+        const auto wrapperPosition = [&](PrLayoutNode entry, const std::string& text) {
+            const auto body = h.findText(entry, text);
+            const auto heading = h.findText(entry, lead);
+            PrLayoutRect word{};
+            CHECK(body && heading);
+            if (!body || !heading) return PrVec2{};
+            CHECK(prLayoutNodeTextRangeBoxes(h.tree, body, prose.find("wrapper:"), prose.size(),
+                PrLayoutCoordinates_Viewport, &word, 1) == 1);
+            return PrVec2{prLayoutUnitToPx(word.left) - h.bounds(heading).left,
+                prLayoutUnitToPx(word.top) - h.bounds(heading).top};
+        };
+        const auto reference = wrapperPosition(entries[0], prose);
+        const auto mixed = wrapperPosition(entries[1], prose + " ");
+        CHECK(near(reference.x, mixed.x) && near(reference.y, mixed.y));
+        const auto code = h.findText(entries[1], command);
+        CHECK(code);
+        if (!code) continue;
+        PrLayoutRect lines[64]{};
+        const auto count = prLayoutNodeTextRangeBoxes(h.tree, code, 0, command.size(),
+            PrLayoutCoordinates_Viewport, lines, 64);
+        CHECK(count > 1 && count < 64);
+        const auto reply = h.bounds(prLayoutNodeFirstChild(h.tree, entries[1]));
+        for (unsigned i = 0; i < count && i < 64; ++i) {
+            const auto line = prLayoutRectToPx(lines[i]);
+            CHECK(line.left >= reply.left - 1 && line.right <= reply.right + 1);
+        }
+    }
+}
+
 void conversationBubblesAndSignInCard() {
     Harness h;
     const std::string live = "Streaming reply";
@@ -3054,6 +3106,7 @@ int main(int argc, char** argv) {
     namedBusBubbles();
     copyMarkdownConversation();
     markdownListsAndLinks();
+    longInlineCommandWrapsInTheReply();
     conversationBubblesAndSignInCard();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
