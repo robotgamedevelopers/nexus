@@ -88,6 +88,11 @@ float promptPadY(float k, float height) {
     return std::max(0.0f, (height * k - oneLineArea(k)) / 2 - 1);
 }
 
+float caretInset(const PromptStyle& prompt, float offset, float scale) {
+    const float room = std::max(0.f, (prompt.height - prompt.caretHeight) / 2);
+    return std::max(0.f, room + offset) * scale;
+}
+
 PrColor faded(PrColor c, float alpha) {
     c.a = alpha;
     return c;
@@ -170,7 +175,7 @@ struct BoxRecipe {
             case Part::Conversation:
                 box.position = PrLayoutPosition_Relative;
                 box.display = PrLayoutDisplay_Flex;
-                padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
+                padding(box, kBubblePadY * k, kBubblePadX * k, caretInset(look.prompt, -look.prompt.caretOffsetY, k), kBubblePadX * k);
                 break;
             case Part::Centered:
                 box.display = PrLayoutDisplay_Flex;
@@ -1735,13 +1740,12 @@ struct Builder {
             // The prompt border and its configurable inset locate the first typing column.
             const float panelInset = view.conversation == column ? kBubblePadX : 0;
             strip.place.margin.left = scannerMargin(tab, panelInset);
-            const float caretRoom = std::max(0.f, (look.prompt.height - look.prompt.caretHeight) / 2);
-            const float above = std::max(0.f, caretRoom + look.prompt.caretOffsetY) * k();
-            const float below = std::max(0.f, caretRoom - look.prompt.caretOffsetY) * k();
+            const float above = caretInset(look.prompt, look.prompt.caretOffsetY, k());
+            const float below = caretInset(look.prompt, -look.prompt.caretOffsetY, k());
             const float panelPadding = view.conversation == column ? kBubblePadY * k() : 0;
             const bool followsText = prLayoutNodeFirstChild(tree, column) != kPrLayoutNodeNone;
             strip.place.margin.top = above - (followsText ? kGap * k() : panelPadding);
-            strip.place.margin.bottom = below - panelPadding;
+            strip.place.margin.bottom = view.conversation == column ? 0 : below;
             const auto row = prKitBox(kit, column, {}, strip);
             // Pending and sent bubbles share the scanner's row. Its absolute box leaves the
             // transcript height alone, and the bubble's stacking order keeps text in front.
