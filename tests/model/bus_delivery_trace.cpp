@@ -7,6 +7,8 @@
 #include <iostream>
 #include <stdexcept>
 
+void writePeerTrace(std::ostream&, nexus::sync::Hub&, const nexus::server::DurableStore&);
+
 namespace {
 using namespace nexus;
 using namespace nexus::sync;
@@ -110,11 +112,25 @@ void writeTrace(std::ostream& out) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
+    const bool peer = argc == 3 && std::string_view(argv[1]) == "--peer-roster";
+    if (!peer && argc != 2) return 2;
     try {
-        std::ofstream out(argv[1]);
+        std::ofstream out(argv[argc - 1]);
         out.exceptions(std::ios::badbit | std::ios::failbit);
-        writeTrace(out);
+        if (peer) {
+            store::MemFs fs;
+            DurableStore store;
+            std::string why;
+            if (!store.open(fs, "store", &why)) throw std::runtime_error(why);
+            Driver driver;
+            Hub hub(store, Limits{}, &driver);
+            accounts::Registry roster;
+            roster.friends.push_back({"ada", {}, {}, {}});
+            hub.useAccounts(roster, nullptr);
+            writePeerTrace(out, hub, store);
+        } else {
+            writeTrace(out);
+        }
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -392,7 +392,12 @@ elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
         message(FATAL_ERROR "watch_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED BUSDELIVERYWALK)
-    execute_process(COMMAND "${BUSDELIVERYWALK}" "${WORK}/BusDeliveryData.tla"
+    if(BUSPEERTRACE)
+        set(bus_args --peer-roster "${WORK}/BusPeerFilterData.tla")
+    else()
+        set(bus_args "${WORK}/BusDeliveryData.tla")
+    endif()
+    execute_process(COMMAND "${BUSDELIVERYWALK}" ${bus_args}
         RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "bus_delivery_trace failed (${walk_rc}): ${walk_out}")

@@ -21,7 +21,8 @@ add_custom_target(model_checks DEPENDS model_test overlay_test)
 # The walks whose traces TLC checks, which run on Linux and macOS only: a native Windows build has no TLC tests
 # (tlc_test below) and so no walks (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
-    add_executable(bus_delivery_trace bus_delivery_trace.cpp)
+    # BusGrants uses an injected registry runner in this headless walk, including on the model-only CI build.
+    add_executable(bus_delivery_trace bus_delivery_trace.cpp bus_peer_trace.cpp ${PROJECT_SOURCE_DIR}/src/server/bus_grants.cpp)
     target_link_libraries(bus_delivery_trace PRIVATE nexus_durable)
     target_compile_options(bus_delivery_trace PRIVATE ${warnings})
     add_dependencies(model_checks bus_delivery_trace)
@@ -107,7 +108,7 @@ function(tlc_test name module cfg expect)
         return()
     endif()
     set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE)
+        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -166,7 +167,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
-    if(T_BUSDELIVERYTRACE)
+    if(T_BUSPEERTRACE)
+        list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace> -DBUSPEERTRACE=ON)
+    elseif(T_BUSDELIVERYTRACE)
         list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
     endif()
     if(T_SERVICETRACE)
@@ -234,6 +237,13 @@ tlc_test(tlc_bus_delivery_early_reply BusDelivery witnesses/WBusEarlyReply.cfg i
 tlc_test(tlc_bus_delivery_cleared_bubble BusDelivery witnesses/WBusDedupFromBubble.cfg invariant PROPERTY AdmittedOnce)
 tlc_test(tlc_bus_delivery_global_receipt BusDelivery witnesses/WBusGlobalReceipt.cfg invariant PROPERTY AckOnlyDurable)
 tlc_test(tlc_bus_delivery_trace BusDeliveryTrace BusDeliveryTrace.cfg pass BUSDELIVERYTRACE)
+tlc_test(tlc_bus_delivery_peer_spec BusPeerFilter BusPeerFilter.cfg pass)
+foreach(fault Cached Outage Stall Forget)
+    string(TOLOWER "${fault}" name)
+    tlc_test(tlc_bus_delivery_peer_witness_${name} BusPeerFilter witnesses/WBusPeer${fault}.cfg invariant
+             PROPERTY DecisionMatchesEvidence)
+endforeach()
+tlc_test(tlc_bus_delivery_peer_trace BusPeerFilterTrace BusPeerFilterTrace.cfg pass BUSPEERTRACE)
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).
