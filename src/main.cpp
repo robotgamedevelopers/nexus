@@ -697,7 +697,7 @@ bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
     return true;
 }
 
-// Lays the window out at `extent` px for a display of `ratio`, renders it on the GPU into memory, and writes a PNG.
+// Lays the window out at `extent` px for a display of `ratio`, renders it into a pixel buffer, and writes a PNG.
 // A workaround: Prax has no public offscreen render of a UI tree (only its test fixture, tools/harness/kit_fixture.h).
 int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
@@ -789,10 +789,10 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prLayoutSceneRelease(scene);
 
     int code = 1;
-    PrGpuDevice* device = prGpuDeviceCreate(PrGpuBackend_Default, nullptr);
+    PrGpuDevice* device = prGpuDeviceCreate(PrGpuBackend_Memory, nullptr);
     PrDrawRenderer* renderer = nullptr;
     if (!device ||
-            prDrawRendererCreate(PrDrawRendererBackend_Default, device, nullptr, &renderer) != PrStatus_Ok) {
+            prDrawRendererCreate(PrDrawRendererBackend_Cpu, device, nullptr, &renderer) != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: no GPU device or renderer for the screenshot\n");
     } else {
         PrUVec2 size{uint32_t(extent.x * ratio), uint32_t(extent.y * ratio)};
