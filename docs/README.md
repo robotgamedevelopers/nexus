@@ -15,8 +15,8 @@ Windows has native window code and WSL2 terminal support. The connected Windows 
 On macOS the client starts hidden at login and connects to its server. Command plus the tilde key
 (the physical key left of 1, without Shift) toggles the overlay from any app. To set up login launch for a
 client installed in `~/Applications/nexus.app`, copy the [client LaunchAgent](../macos/com.robotgamedevelopers.nexus-client.plist)
-to `~/Library/LaunchAgents/`. It takes effect at the next GUI login. Its last argument is the server host,
-which defaults to `localhost`.
+to `~/Library/LaunchAgents/`. It takes effect at the next GUI login. Opening nexus directly uses the same server as login launch. The client reads the
+`server` line in `~/.nexus/client/config` (for example, `server studio`) and defaults to `localhost`.
 
 The overlay is a see-through window over the whole screen, above other apps and their fullscreen
 Spaces, with no Dock icon.

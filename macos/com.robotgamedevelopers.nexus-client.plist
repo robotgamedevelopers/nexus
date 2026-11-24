@@ -12,9 +12,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>exec "$HOME/Applications/nexus.app/Contents/MacOS/nexus" --server "$1"</string>
-        <string>nexus-client</string>
-        <string>localhost</string>
+        <string>exec "$HOME/Applications/nexus.app/Contents/MacOS/nexus"</string>
     </array>
 </dict>
 </plist>

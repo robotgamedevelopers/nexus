@@ -948,6 +948,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 #endif
+#if NEXUS_LINK
+    if (server == nullptr && state == nullptr && shot == nullptr && !demo && !demoTerminal && !bench && !printConfig)
+        server = clientConfig().serverHost.c_str();
+#endif
     if (server != nullptr) {
 #if NEXUS_LINK
         if (shot != nullptr || demo || demoTerminal || bench != 0 || printConfig) {
@@ -1152,11 +1156,6 @@ int main(int argc, char** argv) {
     // The tab selected at launch is no choice of the person's (FrameHost::personSelected): only a later one is.
     if (model.tab_count() != 0) {
         a.view.selectedId = model.tab(model.active()).id;
-    }
-    // Until the server's state arrives (frame_host.h takeFriends says then what a strip without friends lacks): with no
-    // server to take friends from, the line that says where they come from.
-    if (server == nullptr && !fromState) {
-        a.view.notice = "nexus shows the friends of a nexus-server: start nexus with --server and the server's host.";
     }
     // The screenshot stays opaque: an offscreen frame has nothing behind it to show through.
     a.overlay = !windowed && shot == nullptr;

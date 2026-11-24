@@ -1161,7 +1161,7 @@ struct Builder {
         view.transcript = kPrLayoutNodeNone;
         view.prompt = kPrLayoutNodeNone;
         view.promptBox = kPrLayoutNodeNone;
-        // The box takes the room the strip and any notice leave; the page is laid out at the box's extent from the last
+        // The box takes the room the strip leaves; the page is laid out at the box's extent from the last
         // layout (the strip's height beneath the window's in the first).
         PrLayoutNode box = element(window, Part::BoardBox);
         PrVec2 extent = boardExtent();
@@ -1176,13 +1176,6 @@ struct Builder {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
-        }
-        bool friends = false;
-        for (std::size_t i = 0; i < model.tab_count() && !friends; ++i)
-            friends = model.tab(i).kind == TabKind::Friend;
-        if (!friends && !view.notice.empty()) {
-            PrLayoutNode footer = element(window, Part::Footer);
-            caption(footer, view.notice, textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
         }
     }
 

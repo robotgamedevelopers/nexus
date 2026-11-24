@@ -2714,14 +2714,14 @@ void textKeysZoomTheBoard() {
     CHECK(h.board.scale < 1);
 }
 
-// With no friends, the sprint tab still shows, and the reason there are none is beneath it.
-void sprintTabWithoutFriendsShowsTheNotice() {
+// Directory diagnostics never become a footer on the dashboard.
+void dashboardKeepsRosterDiagnosticsOffscreen() {
     Harness h(std::vector<FriendInfo>{}, false, true);
     h.view.notice = "No friends to show.\nnova-config failed";
     h.frame();
     h.frame();
     CHECK(h.model.tab_count() == 1 && h.board.shows > 0);
-    CHECK(h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
+    CHECK(!h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
 }
 
 } // namespace
@@ -3174,7 +3174,7 @@ int main(int argc, char** argv) {
     sprintTabKeysCloseNothing();
     sprintTabSaysWhyThereIsNoPage();
     textKeysZoomTheBoard();
-    sprintTabWithoutFriendsShowsTheNotice();
+    dashboardKeepsRosterDiagnosticsOffscreen();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();

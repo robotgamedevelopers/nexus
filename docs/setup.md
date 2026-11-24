@@ -31,7 +31,7 @@ Install the matching nova-tools and nova-sprint executables for the server's OS 
 
 ## 4. Connect the human to the installing harness
 
-Bind the current harness, subscription account and workspace on the server. Configure the provider's sign-in helper and launch the client against that server. Use an existing verified nexus account when available. If enrollment is required, hand the provider dialog to the human. Keep credential files and tokens out of the chat.
+Bind the current harness, subscription account and workspace on the server. Configure the provider's sign-in helper. Set `server <host>` in `~/.nexus/client/config` to the selected server, preserving other settings. When upgrading a login launcher with an explicit host, transfer that host to the config before replacing the launcher. Open nexus normally and verify the configured tabs appear. Use an existing verified nexus account when available. If enrollment is required, hand the provider dialog to the human. Keep credential files and tokens out of the chat.
 
 In `~/.nexus/server/drivers`, keep the other entries and add the primary route. For example, for Codex on macOS, substitute the verified account name, actual workspace, Python with the nexus policy and RPC modules installed, and the Codex executable:
 
