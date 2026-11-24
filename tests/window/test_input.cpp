@@ -2410,7 +2410,9 @@ int main(int argc, char** argv) {
             CHECK(h.hasText(h.view.accountRows[i], std::string(1, 'a' + i) + "@example.test"));
         const auto menu = h.bounds(h.view.accountMenu);
         CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
-        CHECK(std::abs((menu.top + menu.bottom) / 2 - h.extent.y / 2) < 2);
+        const auto page = h.bounds(prLayoutNodeParent(h.tree, h.view.accountMenu));
+        CHECK(std::abs((menu.top + menu.bottom - page.top - page.bottom) / 2) < 2);
+        CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
@@ -2425,6 +2427,14 @@ int main(int argc, char** argv) {
         publish("c", 2);
         CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
               link.sent.back().account == "c" && link.sent.back().session == 17);
+        CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
+        CHECK(h.hasText(h.view.accountMenu, "Please sign in"));
+        CHECK(h.hasText(h.view.accountMenu, "c@example.test"));
+        down(0);
+        CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 0);
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        CHECK(!h.view.accountPicker && h.hasText(h.view.accountMenu, "Please sign in"));
         return failures ? 1 : 0;
     }
     if (argc == 5 && std::string(argv[1]) == "--group-drag") {

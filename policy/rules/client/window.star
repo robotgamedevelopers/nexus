@@ -80,7 +80,7 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
             default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
             for chord, command in config.get("account_picker_shortcuts", default_picker).items():
-                if config.get("centered_account_menu", False) and not state.get("account_picker_open") and command in ["previous", "next"]:
+                if config.get("centered_account_menu", False) and not state.get("account_picker_open") and not state.get("needs_sign_in") and command in ["previous", "next"]:
                     command = "open"
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         types = config.get("tab_types", [])
@@ -152,6 +152,8 @@ def handle(event, state, config):
                     if not state.get("account_picker_open"):
                         shortcuts = _bind(shortcuts, chord, ["resolve_limit", "model"])
         if state.get("account_picker_open", False):
+            if config.get("centered_account_menu", False):
+                panels = ["account", "prompt"]
             for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         return {

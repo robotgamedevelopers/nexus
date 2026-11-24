@@ -437,8 +437,55 @@ struct Builder {
         option("model", app.limitOffer.model, app.limitModelLabel);
     }
 
+    void accountSelector(PrLayoutNode parent, const AccountPicker& preview, bool needsSignIn) {
+        const auto card = element(element(parent, Part::ActionRow), Part::MessageCard);
+        view.accountMenu = card;
+        if (needsSignIn)
+            label(card, "Please sign in", textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center));
+        for (std::size_t i = 0; i < preview.options.size(); ++i) {
+            const auto& option = preview.options[i];
+            const auto row = prKitButton(kit, card, {.key = prUiKey(ui, card, sv(option.name))},
+                                         {.variant = PrKitButtonVariant_Ghost});
+            label(row, option.label, textStyle(PrKitTextRole_Body, PrKitTone_Inverse, PrKitTextAlign_Center));
+            view.accountRows.push_back(row);
+            if (i == preview.highlighted) {
+                auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
+                auto& group = record.groups[PrLayoutGroup_Decoration];
+                auto decoration = prLayoutDecorationStyleRecord(tree, group);
+                decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.switchEmailInk));
+                decoration.outlineWidth = prLayoutUnitFromPx(2 * k());
+                decoration.outlineStyle = PrDrawBorderStyle_Solid;
+                radius(decoration, 8 * k());
+                group = prLayoutDecorationStyleIntern(tree, &decoration);
+                prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
+                if (view.accountPicker && view.lastHighlightedAccount != option.name) {
+                    prUiSetFocus(ui, row);
+                    view.lastHighlightedAccount = option.name;
+                }
+            }
+            if (prKitActivated(kit, row) && view.pickerCommand && view.chooseAccount) {
+                if (!view.accountPicker) view.pickerCommand("open");
+                view.chooseAccount(option.name);
+            }
+        }
+    }
+
     void accountPanel(PrLayoutNode parent) {
         const auto& selected = view.windowApp.signInAccount;
+        if (view.windowApp.centeredAccounts && !asking) {
+            if (view.accountPicker) {
+                // Confirmation can close the picker in this frame.
+                const auto preview = *view.accountPicker;
+                accountSelector(parent, preview, !selected.name.empty());
+                return;
+            }
+            if (!selected.name.empty() && view.previewAccounts) {
+                if (auto preview = view.previewAccounts(0)) {
+                    accountSelector(parent, *preview, true);
+                    return;
+                }
+            }
+        }
         if (selected.name.empty()) return;
         const auto footer = element(parent, Part::ActionRow);
         const auto button = prKitButton(kit, footer, {.key = prUiKey(ui, footer, sv("sign-in-action"))}, {});
@@ -617,17 +664,6 @@ struct Builder {
             PrKitPlace rowSize{};
             rowSize.height = prKitPx(kit->theme.types[PrKitTextRole_Body].lineHeight + 8 * k());
             prKitPlace(kit, row, &rowSize);
-            if (preview && view.windowApp.centeredAccounts) {
-                auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
-                auto& group = record.groups[PrLayoutGroup_Decoration];
-                auto decoration = prLayoutDecorationStyleRecord(tree, group);
-                decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.switchEmailInk));
-                decoration.outlineWidth = prLayoutUnitFromPx(2 * k());
-                decoration.outlineStyle = PrDrawBorderStyle_Solid;
-                radius(decoration, 8 * k());
-                group = prLayoutDecorationStyleIntern(tree, &decoration);
-                prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
-            }
             view.accountRows.push_back(row);
             if (preview && view.lastHighlightedAccount != option.name) {
                 prUiSetFocus(ui, row);
@@ -1430,15 +1466,7 @@ struct Builder {
         }
         page(window, composing);
         view.displayedLimit = view.windowApp.limitOffer;
-        if (view.windowApp.centeredAccounts && view.accountPicker && !asking) {
-            const auto trigger = view.tabNodes[model.active()];
-            prKitSetOpen(kit, trigger, true);
-            const auto modal = prKitModal(kit, trigger, {.key = prUiKey(ui, trigger, sv("account-menu"))}, {});
-            if (modal != kPrLayoutNodeNone) accountRows(modal);
-            else if (view.pickerCommand) view.pickerCommand("cancel");
-        } else if (!view.accountPicker) {
-            view.lastHighlightedAccount.clear();
-        }
+        if (!view.accountPicker) view.lastHighlightedAccount.clear();
         secretDialog(window);
     }
 

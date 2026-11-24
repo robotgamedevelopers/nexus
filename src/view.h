@@ -167,6 +167,7 @@ struct View {
     std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
     LimitOffer displayedLimit;
     std::optional<AccountPicker> accountPicker;
+    std::function<std::optional<AccountPicker>(int)> previewAccounts;
     std::function<void(const std::string&)> pickerCommand;
     std::function<void(const std::string&)> chooseAccount;
     std::function<void(const std::string&)> accountCommand;

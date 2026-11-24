@@ -83,7 +83,8 @@ cancelling are local actions. After confirmation the server reports the selected
 needs sign-in, a separate Enter or click on the sign-in card starts the provider flow.
 
 With `centered_account_menu` enabled, friend tabs show only the friend’s name. An opening arrow
-highlights the current account in server order. Each row shows the configured email, falling back to
+highlights the current account in server order. When sign-in is required, the white sign-in card already
+contains the selector. Arrows move immediately and Enter selects the highlighted account. Each row shows the configured email, falling back to
 the account label if the roster has no email. Bind `ArrowUp` and `ArrowDown` in
 `account_picker_shortcuts` to use unmodified arrows from the prompt. Enable `sign_in_on_select`
 to start sign-in when the server acknowledges a different account that needs authentication.

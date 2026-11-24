@@ -409,8 +409,10 @@ void FrameHost::chooseAccount(std::string account) {
     auto& picker = view->accountPicker;
     if (!picker) return;
     const auto session = picker->session;
+    const bool current = picker->current == account;
     const auto selected = picker->choice(account);
     picker.reset();
+    if (current && view->windowApp.centeredAccounts && view->windowApp.signInOnSelect) activateSignIn();
     if (selected && !accountSelections_.contains(session)) {
         setAccount(session, *selected);
         if (view->windowApp.signInOnSelect)
@@ -437,13 +439,17 @@ void FrameHost::pickerCommand(const std::string& command) {
         picker->step(direction);
         return;
     }
-    if (phase != sync::LinkPhase::Connected || (view->secrets && view->secrets->showing())) return;
+    picker = previewAccounts(direction);
+}
+
+std::optional<AccountPicker> FrameHost::previewAccounts(int direction) const {
+    if (phase != sync::LinkPhase::Connected || (view->secrets && view->secrets->showing())) return std::nullopt;
     const auto* roster = activeAccountRoster();
-    if (!roster) return;
+    if (!roster) return std::nullopt;
     const auto tab = model->tab(model->active()).id;
     const auto* session = accountState_.find(mirror.session(tab));
-    if (!session || accountSelections_.contains(session->id)) return;
-    picker = AccountPicker::open(tab, *session, *roster, direction, view->windowApp.centeredAccounts);
+    if (!session || accountSelections_.contains(session->id)) return std::nullopt;
+    return AccountPicker::open(tab, *session, *roster, direction, view->windowApp.centeredAccounts);
 }
 
 LimitOffer FrameHost::currentLimit() const {
@@ -473,6 +479,7 @@ void FrameHost::wire() {
         action.text = choice;
         limitSelections_[shown.session] = {shown.request, link->send(std::move(action))};
     };
+    view->previewAccounts = [this](int direction) { return previewAccounts(direction); };
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
     view->dismissFriend = [this](const Tab& tab) {
