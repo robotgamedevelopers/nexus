@@ -90,6 +90,8 @@ table SessionInfo
     field limit_request id=0xec5a07037be2a186 kind=9
     field limit_account id=0xaac947ef35b48e90 kind=17 type=string
     field limit_model id=0xe1e90ce0b9ed7706 kind=17 type=string
+    field context_epoch id=0xa811c78198b72d52 kind=9
+    field catalog id=0xf9928605e9a2ddd8 kind=17 type=string
 
 table SessionsDiff
     field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
@@ -193,4 +195,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-21 (UTC) — Record paused model choices and local sign-out actions
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Synchronize context resets and harness capabilities
 - no compatibility-affecting edits; the wire absorbs the rest

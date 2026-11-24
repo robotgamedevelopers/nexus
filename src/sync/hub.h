@@ -79,6 +79,7 @@ struct SessionChange {
     std::optional<DriverState> driver = std::nullopt;
     bool take = false;
     std::optional<SessionInfo> info = std::nullopt;
+    bool clearTranscript = false;
 };
 
 // The take change: the oldest queued prompt leaves the queue.
@@ -164,6 +165,13 @@ public:
     virtual std::vector<SessionChange> queue(SessionId id, const std::string& prompt) = 0;
     // The changes a stop of the friend's work in session `id` makes (a start cancelled: its prompt no longer waiting,
     // and a notice; none for an open turn or nothing running), committed the same way.
+    virtual std::vector<SessionChange> resetContext(SessionId, const DriverState& state, bool compact) {
+        DriverState fresh;
+        fresh.nextTurn = state.nextTurn;
+        fresh.summary = compact;
+        return {{nullptr, {}, fresh}};
+    }
+    virtual std::string catalog(const SessionInfo&) const { return {}; }
     virtual std::vector<SessionChange> stop(SessionId id) = 0;
     // Whether the store took the step of the send, queue or stop just given. Only once it did may the responder act
     // on it.
@@ -429,7 +437,7 @@ private:
     bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
     bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
-    bool set(const Action& action, std::string* why, const std::string& client);
+    bool set(const Action& action, std::string* why, const std::string& client, bool announce = false);
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);

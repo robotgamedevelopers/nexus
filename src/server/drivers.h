@@ -119,6 +119,8 @@ public:
     // the hub with the window's action before anything is written to a driver.
     std::vector<sync::SessionChange> send(sync::SessionId id, const std::string& prompt) override;
     std::vector<sync::SessionChange> queue(sync::SessionId id, const std::string& prompt) override;
+    std::vector<sync::SessionChange> resetContext(sync::SessionId, const sync::DriverState&, bool compact) override;
+    std::string catalog(const sync::SessionInfo&) const override;
     std::vector<sync::SessionChange> stop(sync::SessionId id) override;
     void sent(sync::SessionId id, bool committed) override;
     // sync::Responder: what a new session with a friend is (its harness; no default account, model or effort yet), and
@@ -215,6 +217,11 @@ private:
     void collect(sync::SessionId id, Slot& t, Output& out, Millis now);
     void log(sync::SessionId id, const std::string& what) const;
 
+    struct CatalogCache {
+        Millis nextRead = 0;
+        std::string json;
+    };
+    mutable std::map<std::string, CatalogCache> catalogs_;
     const sync::SessionStore& store_;
     Options options_;
     Host* host_ = nullptr;

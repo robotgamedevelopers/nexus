@@ -12,7 +12,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
+enum class WindowCommand { ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -31,10 +31,31 @@ struct AccountItem {
     bool selected = false;
 };
 
+struct TabStyle {
+    unsigned fill = 0x1b1b1b, selectedFill = 0x86c5ff, selectedInk = 0xffffff, ink = 0x999999;
+    float opacity = 1, selectedOpacity = 0.5f, selectedRadius = 8;
+    float weight = 400, selectedWeight = 700, height = style::kStripHeight;
+    float tabHeight = 1.75f * style::kTabSize, gap = 0, leading = 0.8f * style::kU;
+    bool reserveWidth = true;
+    bool operator==(const TabStyle&) const = default;
+};
+
+struct PromptStyle {
+    unsigned fill = 0x303030, border = 0x3a3a3a, ink = 0xf3f3f3, selection = 0x3d5a80;
+    float width = style::kPromptPercent, radius = style::kPromptRadius, paddingX = style::kPromptPadX;
+    float height = style::kPromptHeight, gap = style::kPromptGap, maxLines = style::kPromptMaxLines;
+    bool showPlus = true;
+    bool operator==(const PromptStyle&) const = default;
+};
+
+PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
+
 struct AccountSurface {
     std::optional<std::vector<AccountItem>> items;
     std::vector<std::string> tabTitles;
-    bool showTabs = true, reorderTabs = true;
+    TabStyle tabs;
+    PromptStyle prompt;
+    bool showTabs = true, reorderTabs = true, promptCommand = false;
 };
 
 struct MessageCardStyle {
@@ -43,9 +64,9 @@ struct MessageCardStyle {
     unsigned emailInk = 0x477fba;
     float textSize = 34;
     float radius = 20;
-    float sideExtension = 0;
+    float sideExtension = 0, verticalExtension = 10, selectorWidthEm = 16;
     float rowHeight = 1.45f, rowGap = 0.15f, headingGap = 0.8f;
-    float emailWeight = 700;
+    float emailWeight = 700, unselectedWeight = 400, selectedRadius = 8, selectedOpacity = 0.5f;
     unsigned selectedFill = 0x86c5ff, selectedInk = 0xffffff;
     bool operator==(const MessageCardStyle&) const = default;
 };

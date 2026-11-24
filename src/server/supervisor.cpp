@@ -244,6 +244,21 @@ Output Supervisor::rotationExhausted() {
     return finish();
 }
 
+Output Supervisor::resetContext(bool compact, Millis now) {
+    const auto next = state_.nextTurn;
+    state_ = {};
+    state_.nextTurn = next;
+    state_.summary = compact;
+    gathered_.clear();
+    openPrompt_.clear();
+    if (phase_ != Phase::None && phase_ != Phase::Ending) {
+        retiring_ = true;
+        endQuietly(now);
+    }
+    out_.durable = true;
+    return finish();
+}
+
 Output Supervisor::retireIdleLogin(Millis now) {
     if (phase_ == Phase::Idle) {
         retiring_ = true;

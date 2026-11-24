@@ -840,6 +840,30 @@ public:
     std::vector<std::pair<SessionId, SessionInfo>> configuredTo;
 };
 
+void conversation_commands() {
+    class CatalogResponder : public RecordingResponder {
+        std::string catalog(const SessionInfo&) const override {
+            return R"({"default":"m0","models":{"m0":["low"],"m1":["high"]}})";
+        }
+    } responder;
+    MemoryStore store;
+    Hub hub(store, Limits{}, &responder);
+    withSessions(hub, {"ada", "bea"});
+    const auto send = [&](const char* command) { return hub.apply(act(ActionKind::Send, 1, command)); };
+    CHECK(send("/model"));
+    CHECK(store.find(1)->transcript.back()->text.find("m0 (current)") != std::string::npos);
+    CHECK(send("/model m1") && store.find(1)->info.model == "m1");
+    CHECK(send("/effort high") && store.find(1)->info.effort == "high");
+    CHECK(send("/effort low") && store.find(1)->info.effort == "high");
+    CHECK(send("remember me"));
+    CHECK(send("/compact") && store.find(1)->driver.summary);
+    CHECK(send("/clear"));
+    CHECK(store.find(1)->transcript.size() == 1 && store.find(1)->transcript.front()->text == "Context cleared.");
+    CHECK(store.find(1)->info.contextEpoch == 1 && !store.find(1)->driver.summary);
+    CHECK(store.find(1)->info.model == "m1" && store.find(1)->info.effort == "high");
+    CHECK(store.find(2)->info.contextEpoch == 0 && store.find(2)->transcript.empty());
+}
+
 void actions_stop_kind() {
     Actions a;
     a.add(act(ActionKind::Stop, sid("ada"), ""));
@@ -2652,6 +2676,7 @@ const Case kCases[] = {
     {"hub_ids_never_reused", hub_ids_never_reused},
     {"hub_unknown_session_refused", hub_unknown_session_refused},
     {"hub_settings", hub_settings},
+    {"conversation_commands", conversation_commands},
     {"hub_model_limit_choice", hub_model_limit_choice},
     {"hub_stop_reaches_the_responder_once", hub_stop_reaches_the_responder_once},
     {"hub_stop_without_responder_changes_nothing", hub_stop_without_responder_changes_nothing},

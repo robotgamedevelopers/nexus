@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace nexus::policy {
-enum class Delivery { None, Send, Queue, Native, SignOut };
+enum class Delivery { None, Send, Queue, Native, SignOut, ClearLocal, Clear, Compact, SetModel, SetEffort };
 struct MessagePlan {
     Delivery delivery = Delivery::None;
     std::optional<std::string> text;
@@ -20,5 +20,7 @@ struct MessageState {
     const std::string& model;
     std::size_t queued;
     bool busy;
+    std::string effort{}, harness{}, catalog{};
+    bool signedOut = false;
 };
 } // namespace nexus::policy

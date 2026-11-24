@@ -87,7 +87,7 @@ constexpr PrColor kSelection = rgb(0x3d5a80);  // selected prompt text (not in t
 // screen that has the pointer (menu bar included), above other apps and their fullscreen Spaces, shown and hidden by a
 // global hotkey, in the manner of iTerm2's hotkey window.
 constexpr float kOverlayOpacity = 0.60f;    // alpha of the window background; what is behind shows through, dimmed
-constexpr float kOverlayStripFill = 0.3f;     // alpha of the tab strip's fill over that background
+constexpr float kOverlayStripFill = 1.0f;     // alpha of the tab strip's fill over that background
 constexpr bool kOverlayBlur = false;          // true blurs what is behind (Prax's Blur backdrop); off: plain alpha
 constexpr bool kOverlayAccessory = true;      // no Dock icon or app switcher entry while the overlay runs
 // Command and Option, by key position, so that the overlay's keys are the same on every keyboard (AGENTS.md): Command

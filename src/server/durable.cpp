@@ -3,6 +3,7 @@
 namespace nexus::server {
 
 namespace {
+constexpr std::uint8_t kContextBoundary = 4;
 
 // The store keeps an entry's kind as it was written; a kind this build does not know (a later server's) is shown as a
 // notice, a plain dim line, and never handed on as a kind the window cannot draw.
@@ -50,6 +51,11 @@ bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why,
         sync::StoredSession& t = sessions_[id];
         t.info = toInfo(session.info);
         for (const store::Entry& e : session.transcript) {
+            if (e.kind == kContextBoundary) {
+                ++t.info.contextEpoch;
+                t.transcript.clear();
+                continue;
+            }
             t.transcript.push_back(toRef(e));
         }
         t.queue = session.queue;
@@ -83,7 +89,10 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     out.reserve(changes.size());
     for (const sync::SessionChange& c : changes) {
         store::Change sc;
-        if (c.take) {
+        if (c.clearTranscript) {
+            sc.kind = store::Change::Kind::Append;
+            sc.entry = store::Entry{kContextBoundary, "Context cleared.", true, 0};
+        } else if (c.take) {
             sc.kind = store::Change::Kind::Dequeue;
         } else if (c.info) {
             sc.kind = store::Change::Kind::SetInfo;
@@ -111,7 +120,10 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     if (!changes.empty()) {
         sync::StoredSession& t = sessions_[id];     // the store refused the step had it not held or made the session
         for (const sync::SessionChange& c : changes) {
-            if (c.take) {
+            if (c.clearTranscript) {
+                t.transcript.clear();
+                ++t.info.contextEpoch;
+            } else if (c.take) {
                 t.queue.erase(t.queue.begin());     // the store refused the step had the queue nothing left
             } else if (c.info) {
                 t.info = *c.info;

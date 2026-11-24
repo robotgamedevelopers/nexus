@@ -731,7 +731,11 @@ def main():
                 prior=prior,
             )
             try:
-                return run(login)
+                result = run(login)
+                if result == 0:
+                    from .refresh_catalog import after_login
+                    after_login(args.provider, args.binary, home)
+                return result
             finally:
                 login.close()
 

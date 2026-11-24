@@ -11,6 +11,10 @@
 // The SDK receives only the access token via a descriptor and its own isolated state as CLAUDE_CONFIG_DIR.
 // The driver checks the SDK's billing and credential source before handing it a prompt.
 
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Account } from './account.js';
@@ -61,7 +65,7 @@ try {
 }
 
 function startHarness(start: HarnessStart, account: Account): Harness {
-    return query({
+    const stream = query({
         prompt: start.prompts,
         options: {
             cwd: start.cwd,
@@ -91,6 +95,24 @@ function startHarness(start: HarnessStart, account: Account): Harness {
                 env, { hook: true }, start.limited, start.keepsOut),
         },
     });
+    void stream.supportedModels().then(async (rows) => {
+        const valid = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+        const models = Object.fromEntries(rows.filter(row => valid.test(row.value))
+            .map(row => [row.value, row.supportedEffortLevels ?? []]));
+        if (Object.keys(models).length === 0) return;
+        const data = JSON.stringify({ default: 'default' in models ? 'default' : '', models });
+        if (data.length > 16384) return;
+        const directory = join(homedir(), '.nexus', 'server', 'catalogs');
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const temp = join(directory, randomUUID());
+        try {
+            await writeFile(temp, data, { mode: 0o600, flag: 'wx' });
+            await rename(temp, join(directory, 'claude.json'));
+        } finally {
+            await rm(temp, { force: true });
+        }
+    }).catch(() => process.stderr.write('Claude model discovery did not update the Nexus catalog.\n'));
+    return stream;
 }
 
 runProcess(startHarness, removed, undefined, undefined, setup);

@@ -343,3 +343,10 @@ one): a typical frame's diff (one open entry grown by 120 bytes, 404 bytes) 0.02
 decode; a first state of sixteen sessions of sixteen 1 KiB entries (267 KB) 0.18 ms and 0.26 ms; eight 200-byte sends
 up 0.023 ms and 0.003 ms. Format 3 is faster per message (0.001 ms for the typical diff), and every one is far inside
 a 120 Hz frame's 8.3 ms.
+
+
+A session may advertise a `catalog` containing the model and effort choices reported by its
+harness. An empty catalog means discovery has supplied no choices. `context_epoch` advances
+on a server-side clear, so windows discard entries from the previous context even after a
+reconnect. The durable journal records this boundary as framed entry kind 4. Snapshots preserve
+boundaries. The active transcript and context handoff use entries after the last boundary.

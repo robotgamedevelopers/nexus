@@ -38,7 +38,7 @@ are in progress. The layers are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 On macOS the client starts hidden at login and connects to its server. Command plus the tilde key
 (the physical key left of 1, without Shift) toggles the overlay from any app. To set up login launch for a
-client installed in `~/Applications/Nexus.app`, copy the [client LaunchAgent](macos/com.robotgamedevelopers.nexus-client.plist)
+client installed in `~/Applications/nexus.app`, copy the [client LaunchAgent](macos/com.robotgamedevelopers.nexus-client.plist)
 to `~/Library/LaunchAgents/`. It takes effect at the next GUI login. Its last argument is the server host,
 which defaults to `localhost`.
 

@@ -44,6 +44,20 @@ directory and the WSL user's server directory. On separate machines, check out t
 apply locally. To roll back, revert the policy commit and apply again. Without an applied bundle, each host
 uses the rules packaged with its binary.
 
+## Start with the keyboard-driven client
+
+Copy `policy/rules/` into your own profile directory. Use
+[`keyboard-client.json`](../policy/examples/keyboard-client.json) as that copy's
+`config.json` to start with the dark tab strip, fixed-width sign-in dialog, keyboard
+account picker and matching prompt. The example contains no account or friend identities.
+Edit the JSON for visual changes. Edit `client/window.star` for tab titles, panels, prompt
+commands and shortcuts, and `client/accounts.star` for sign-in visibility, selection
+and dismissal. Apply only the client profile with the installed tool.
+
+```sh
+nexus-policy apply client /path/to/my-profile
+```
+
 ## Overlay opacity
 
 Set `"overlay_opacity": 0.60` in the client’s `config.json` and apply the client profile. The shipped
@@ -127,8 +141,33 @@ window["shortcuts"].append(["Command+K", "account_action", action])
 
 The returned `message_card` controls heading size, card fill, radius, `selected_fill`, `selected_ink`
 and `email_weight`. Set `row_height`, `row_gap` and `heading_gap` in multiples of the active body
-line height. `side_extension` adds a percentage of the content card’s width on each side, from 0 to 50.
+line height. `selector_width_em` fixes the selector width in body-font units (default 16).
+`vertical_extension` adds a percentage of the content height above and below the card (default 10).
+`selected_opacity` sets the highlight alpha (default 0.5). `selected_radius` sets its corner radius.
+`unselected_weight` sets the ordinary account font weight.
+`side_extension` adds a percentage of the content card’s width on each side, from 0 to 50.
 Only the background grows.
+
+The client Starlark window may return a `tab_style` object. Set `fill`, `opacity`, `ink` and
+`weight` for the strip and its ordinary titles. Set `selected_fill`, `selected_opacity`,
+`selected_radius`, `selected_ink` and `selected_weight` for the active tab. Colors use
+`#RRGGBB`, opacity ranges from 0 to 1, radii from 0 to 64, and font weights from 100 to 900.
+Set `height`, `tab_height`, `leading` and `gap` for strip height, pill height, leading space and space between tabs.
+With `reserve_width` enabled, the renderer measures both weights and reserves the wider title.
+
+Return `prompt_style` from the window event to set `fill`, `border`, `ink`, `selection`, `width`
+(percent), `radius`, `height`, `padding_x`, `gap`, `max_lines` and `show_plus`.
+Point sizes follow the user's zoom. The stock client reads these objects from its config.
+For the global overlay shortcut, the client handles an independent `overlay` event even
+while hidden. Return a physical key code and modifiers, for example
+`{"code":"KeyJ","modifiers":"Command+Shift"}`. The stock rule reads `overlay_hotkey`.
+Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
+continue to use logical key names. Applying a client profile updates the global binding.
+
+The fork can return `prompt_command` for a draft that should bypass the account reminder.
+The prompt handler receives `signed_out` and can return `clear_local` to clear the active
+friend's visible history and draft. The window can bind a key to `["replace_draft", text]`.
+The stock Tab binding derives its completions from `ui.catalog.models` and `ui.model`.
 
 Return `tab_titles` in current tab order to label tabs, `show_tabs` to show the strip and
 `reorder_tabs` to allow dragging. The same window description selects tab groups, plugin types,
@@ -346,3 +385,13 @@ To carry the friend roster too, copy the applied `accounts.json` and `friends.js
 adapt the instance machine and directory, install the driver binding, then use the normal `config check` and
 `config reload` workflow for the two files. An exported roster is a snapshot. Changes to those two copies take
 effect when applied to the server configuration. Each machine signs in through Nexus.
+
+
+### Conversation commands
+
+The stock server message handler implements `/model`, `/effort`, `/compact` and `/clear`.
+The first two list choices or accept a value from the session's harness catalog. Switching
+models resets the effort to the new model's default. Clearing retains the friend, account
+and model settings. Compaction releases the provider session and starts the next turn with
+Nexus's bounded transcript handoff. Both context operations require an idle conversation.
+When signed out, the stock client clears its own visible messages on `/clear`.

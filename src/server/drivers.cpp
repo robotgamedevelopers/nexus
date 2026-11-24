@@ -13,6 +13,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+
+#include "pr/json.h"
 #include <memory>
 #include <sstream>
 
@@ -577,6 +580,38 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
 
 // A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
 // A stop of a start cancels the turn about to begin: its prompt leaves the waiting prompts, committed with a notice.
+std::string Drivers::catalog(const sync::SessionInfo& info) const {
+    if (info.harness.empty() || info.harness.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_-") != std::string::npos)
+        return {};
+    const auto now = options_.clock();
+    auto& cached = catalogs_[info.harness];
+    if (now < cached.nextRead) return cached.json;
+    cached.nextRead = now + 1000;
+    cached.json.clear();
+    const auto path = std::filesystem::path(options_.table).parent_path() / "catalogs" / (info.harness + ".json");
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    std::string json(16385, '\0');
+    input.read(json.data(), static_cast<std::streamsize>(json.size()));
+    json.resize(static_cast<size_t>(input.gcount()));
+    if (json.size() > 16384) return {};
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> parsed(prJsonCreate(), prJsonDestroy);
+    if (!prJsonParse(parsed.get(), {json.data(), json.size()}, nullptr) ||
+            prJsonKind(parsed.get(), prJsonMember(parsed.get(), 0, {"models", 6})) != PrJsonKind_Object) return {};
+    cached.json = std::move(json);
+    return cached.json;
+}
+
+std::vector<sync::SessionChange> Drivers::resetContext(sync::SessionId id, const sync::DriverState& state, bool compact) {
+    pendingSup_.reset();
+    pendingOut_ = {};
+    auto slot = slots_.find(id);
+    if (slot == slots_.end()) return Responder::resetContext(id, state, compact);
+    pendingSup_ = slot->second.sup;
+    pendingOut_ = pendingSup_->resetContext(compact, options_.clock());
+    return changes(pendingOut_, *pendingSup_);
+}
+
 std::vector<sync::SessionChange> Drivers::stop(sync::SessionId id) {
     pendingSup_.reset();
     pendingOut_ = Output{};

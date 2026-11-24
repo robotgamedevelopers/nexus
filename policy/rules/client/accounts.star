@@ -17,6 +17,7 @@ def describe(window, state, config):
     appearance.update(window["message_card"])
     window["message_card"] = appearance
 
+    prompt_command = window["prompt_command"]
     options = ui.get("accounts", [])
     names = [a["name"] for a in options]
     current = ui.get("current", "")
@@ -58,9 +59,9 @@ def describe(window, state, config):
             bind(chord, command)
         if visible:
             for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
-                if chord != "Enter" or not ui.get("logout") or opened:
+                if chord != "Enter" or not prompt_command or opened:
                     bind(chord, command)
-        elif signed_out and not ui.get("logout"):
+        elif signed_out and not prompt_command:
             bindings["Enter"] = ["account_action", "reveal"]
     window["shortcuts"] = [b for b in window["shortcuts"] if b[1] != "account_picker" and b[0] not in bindings] + [[key] + action for key, action in bindings.items()]
     return window

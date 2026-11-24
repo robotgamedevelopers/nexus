@@ -46,6 +46,9 @@ for line in sys.stdin:
                 "_meta": {"antigravity": {"systemPrompt": {"append": True}}},
             },
         }
+    elif m == "model/list":
+        result = {"models": [{"modelId": "one", "variants": ["high"], "isDefault": True}]} if mode == "muse" else {
+            "data": [{"id": "one", "supportedReasoningEfforts": [{"reasoningEffort": "high"}], "isDefault": True}]}
     elif m == "account/read":
         if (home / "temporary-auth-error").exists():
             print(json.dumps({"id": msg["id"], "error": {"code": -32000, "message": "auth server timed out"}}), flush=True)

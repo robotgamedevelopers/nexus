@@ -68,6 +68,8 @@ def _panels(state):
     return panels
 
 def handle(event, state, config):
+    if event == "overlay":
+        return config.get("overlay_hotkey", {"modifiers": "Command", "code": "Backquote"})
     if event == "window":
         shortcuts = _shortcuts()
         count = state.get("tab_count", 0)
@@ -167,11 +169,16 @@ def handle(event, state, config):
         display = directory.get("providers", {}).get(provider, provider)
         window = {
             "sign_in_heading": "Please sign in to " + display if display else "Please sign in",
-            "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "email_ink":"#477fba", "text_size":34, "radius":20}),
+            "message_card": config.get("message_card", {"fill":"#303030", "ink":"#ffffff", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": config.get("transcript_style", {}),
             "centered_account_menu": config.get("centered_account_menu", False),
             "sign_in_on_select": config.get("sign_in_on_select", False),
             "account_auto_label": config.get("account_auto_label", "auto"),
+            "show_tabs": config.get("show_tabs", True),
+            "reorder_tabs": config.get("reorder_tabs", True),
+            "prompt_command": False,
+            "prompt_style": config.get("prompt_style", {}),
+            "tab_style": config.get("tab_style", {}),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
             "closable": closable,
@@ -182,12 +189,33 @@ def handle(event, state, config):
             "limit_account_label": account_button,
             "limit_model_label": model_button,
         }
+        words = state.get("ui", {}).get("draft", "").split()
+        window["prompt_command"] = bool(words) and words[0] in config.get("prompt_commands", ["/clear", "/compact", "/model", "/effort", "/logout"])
+        tabs = state.get("ui", {}).get("tabs", [])
+        if config.get("centered_account_menu", False) or config.get("tab_labels"):
+            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
         if config.get("centered_account_menu", False):
-            tabs = state.get("ui", {}).get("tabs", [])
-            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else t["label"] for t in tabs]
             window = account_window(window, state, config)
+        if state["tab"] == "friend" and state["prompt_open"]:
+            ui = state.get("ui", {})
+            draft = ui.get("draft", "")
+            catalog = ui.get("catalog", {})
+            models = catalog.get("models", {})
+            for command, choices in [("/model ", models.keys()), ("/effort ", models.get(ui.get("model") or catalog.get("default", ""), []))]:
+                if draft.startswith(command) and choices:
+                    value = draft[len(command):]
+                    matches = [v for v in choices if v.startswith(value)]
+                    if value in choices:
+                        next_value = choices[(choices.index(value) + 1) % len(choices)]
+                    elif matches:
+                        next_value = matches[0]
+                    else:
+                        continue
+                    window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
         return window
     if event == "prompt_key":
+        if state["key"] == "Enter" and state.get("signed_out") and state["text"].strip() == "/clear":
+            return [{"op": "clear_local"}]
         if state["text"] == "/logout":
             if state["key"] == "Enter":
                 return [{"op": "sign_out"}]

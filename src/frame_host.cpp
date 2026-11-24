@@ -523,6 +523,14 @@ void FrameHost::wire() {
         }
     };
     view->activateSignIn = [this]() { return activateSignIn(); };
+    view->clearOpen = [this](std::size_t tab) { mirror.clearOpen(tab); };
+    view->sessionCapabilities = [this](std::string& modelName, std::string& catalog) {
+        if (!model->tab_count()) return;
+        if (const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id))) {
+            modelName = session->info.model;
+            catalog = session->info.catalog;
+        }
+    };
     view->signInAccount = [this]() -> SignInAccount {
         // A captured state shows the same card as the connected session. Activation requires a live link.
         if (phase != sync::LinkPhase::Connected || !model->tab_count() ||
@@ -632,8 +640,9 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             return;
         }
         const auto* current = accountState_.find(sync::sessionOf(*model, i, mirror));
-        if (current && current->info.limitRequest) return;
-        if (i == model->active() && activateSignIn()) return;
+        const bool command = i == model->active() && view->windowApp.surface.promptCommand;
+        if (!command && current && current->info.limitRequest) return;
+        if (!command && i == model->active() && activateSignIn()) return;
         std::string text;
         std::string why;
         // The session the tab shows, the window's own choice; none until the server's state has one of the friend's

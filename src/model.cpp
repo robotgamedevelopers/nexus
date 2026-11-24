@@ -122,6 +122,12 @@ bool Model::take_queued(std::size_t i) {
     return true;
 }
 
+void Model::clear_transcript(std::size_t i) {
+    if (!friend_tab(i)) return;
+    tabs_[i].transcript.clear();
+    ++tabs_[i].transcriptGeneration;
+}
+
 bool Model::append(std::size_t i, Entry e) {
     if (!friend_tab(i))
         return false;

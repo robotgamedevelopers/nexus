@@ -51,10 +51,12 @@ public:
     // showed and what it showed of it. Ids are never reused, so a friend that comes back has a new tab, which starts
     // from the session's first entries as any new tab does.
     void forget(std::size_t id);
+    void clearOpen(std::size_t tabId);
 
 private:
     struct Shown {
         std::uint64_t next = 0;
+        std::uint64_t epoch = 0;
         EntryRef open;
         bool held = false;              // the last state applied held the session
         Activity activity = Activity::Idle;

@@ -373,6 +373,8 @@ struct Harness {
         std::vector<std::string> out;
         for (PrLayoutNode t : tabs()) {
             PrLayoutNode only = prLayoutNodeFirstChild(tree, t);
+            while (only != kPrLayoutNodeNone && prLayoutNodeKind(tree, only) != PrLayoutNodeKind_Text)
+                only = prLayoutNodeFirstChild(tree, only);
             PrStringView text = only != kPrLayoutNodeNone ? prLayoutNodeText(tree, only) : PrStringView{};
             out.emplace_back(text.data != nullptr ? text.data : "", text.size);
         }
@@ -757,8 +759,7 @@ void dragMovesATab() {
     for (std::size_t j = 0; j < t.size() && j < h.model.tab_count(); ++j) {
         PrLayoutNode only = prLayoutNodeFirstChild(h.tree, t[j]);
         CHECK(only != kPrLayoutNodeNone && prLayoutNodeNextSibling(h.tree, only) == kPrLayoutNodeNone);
-        PrStringView text = prLayoutNodeText(h.tree, only);
-        CHECK(std::string(text.data, text.size) == h.model.tab(j).name);
+        CHECK(h.hasText(t[j], h.model.tab(j).name));
     }
     // The tabs stand left to right in the new order.
     CHECK(t.size() == 4 && h.bounds(t[0]).right <= h.bounds(t[1]).left + 0.5f);
@@ -1077,7 +1078,7 @@ void conversationBubblesAndSignInCard() {
     if (area == kPrLayoutNodeNone) return;
     const auto button = prLayoutNodeFirstChild(h.tree, area);
     const auto fill = fillOf(h, button);
-    CHECK(fill.a == 1 && fill.r == 1 && fill.g == 1 && fill.b == 1);
+    CHECK(colorMatches(fill, h.look.messageCard.fill));
     const std::string hint = "Press Enter or click to sign in.";
     CHECK(h.hasText(button, hint));
     const auto title = prLayoutNodeFirstChild(h.tree, button);
@@ -1085,9 +1086,9 @@ void conversationBubblesAndSignInCard() {
     const auto instruction = prLayoutNodeNextSibling(h.tree, address);
     CHECK(h.hasText(title, "Sign in to Work") && h.hasText(address, email) && h.hasText(instruction, hint));
     CHECK(prLayoutNodeNextSibling(h.tree, instruction) == kPrLayoutNodeNone);
-    checkTextPaint(h, "Sign in to Work", 0, 0xffffff);
-    checkTextPaint(h, email, 0x477fba, 0xffffff);
-    checkTextPaint(h, hint, 0, 0xffffff);
+    checkTextPaint(h, "Sign in to Work", h.look.messageCard.ink, h.look.messageCard.fill);
+    checkTextPaint(h, email, h.look.messageCard.emailInk, h.look.messageCard.fill);
+    checkTextPaint(h, hint, h.look.messageCard.ink, h.look.messageCard.fill);
     CHECK(near(h.centre(button).x, h.centre(area).x));
     CHECK(near(h.centre(button).y, h.centre(area).y));
     CHECK(h.height(area) > 2 * h.height(button));
@@ -1147,7 +1148,8 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     const auto queued = checkTextPaint(h, "held", stock.ink, stock.fill);
     CHECK(checkTextPaint(h, "queued", stock.statusInk, stock.fill) == queued);
     for (auto tab : h.tabs())
-        CHECK(fillOf(h, tab).a == 1);   // title backplates stay opaque while the strip is translucent
+        CHECK(fillOf(h, prLayoutNodeParent(h.tree, tab)).a == 1);
+    CHECK(near(fillOf(h, h.view.tabNodes[h.model.active()]).a * 100, 50.0f));
     const PrKitPalette& p = h.kit->theme.palette;
     for (PrColor c : {p.text1, p.text2, p.text3, p.text4, p.textSelection})
         CHECK(c.a == 1);
@@ -2105,7 +2107,7 @@ void dragsStayInTheirZone() {
 // terminals follow them. Its page shows, below the strip, and no prompt.
 void sprintTabIsFirstAndCommandOne() {
     Harness h = withSprint();
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "f1", "f2"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f1", "f2"}));
     CHECK(h.active().kind == TabKind::Sprint);
     CHECK(h.board.shows > 0 && h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.board.extent.x == 1000 && h.board.extent.y > 600 && h.board.extent.y < 780);
@@ -2154,8 +2156,17 @@ void choosingTheSprintTabGoesHome() {
 // the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
 void commandDigitsWorkFromTheSprintTab() {
     Harness h = withSprint(3);
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "f1", "f2", "f3"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f1", "f2", "f3"}));
+    const auto positions = [&] {
+        std::vector<float> left;
+        const auto names = h.labels();
+        for (std::size_t i = 0; i < names.size(); ++i)
+            left.push_back(h.bounds(h.findText(h.tabs()[i], names[i])).left);
+        return left;
+    };
+    const auto original = positions();
     h.commandDigit(3);
+    CHECK(positions() == original);
     CHECK(h.active().name == "f2");
     h.commandDigit(2);
     CHECK(h.active().name == "f1");
@@ -2237,7 +2248,7 @@ void sprintTabNeverMoves() {
     CHECK(h.model.tab(0).kind == TabKind::Sprint && h.saves == 0);
     h.dragTab(1, 3);
     CHECK(h.ids() == "3 1 2 0" && h.saves == 1);
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "f2", "f3", "f1"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f2", "f3", "f1"}));
 }
 
 // The owner's report: alex dragged to the end of the friends, the overlay hidden on the sprint tab and shown again
@@ -2253,7 +2264,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.pointer(PrAppEventKind_PointerMove, PrVec2{start.x + 10, start.y});
     h.pointer(PrAppEventKind_PointerMove, end);
     h.pointer(PrAppEventKind_PointerUp, end);
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "emma", "f3", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "emma", "f3", "alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);             // hide
     CHECK(h.hides == 1);
@@ -2269,7 +2280,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.commandDigit(2);
     CHECK(h.active().name == "emma");
     h.dragTab(1, 3);                                         // emma to the end, past alex
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "f3", "alex", "emma"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f3", "alex", "emma"}));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
     CHECK(h.active().name == "emma" && prUiFocus(h.ui) == h.view.prompt);
@@ -2279,7 +2290,7 @@ void hideAndShowKeepTheSelectedTab() {
 void launchWithAlexLastShowsTheSprintTab() {
     std::vector<FriendInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
     Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
-    CHECK((h.labels() == std::vector<std::string>{"sprint", "rowan", "emma", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Sprint", "rowan", "emma", "alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
     CHECK(h.active().kind == TabKind::Sprint && prUiFocus(h.ui) != h.tabs()[3]);
@@ -2382,7 +2393,8 @@ int main(int argc, char** argv) {
         const auto publish = [&](const std::string& name, uint64_t ack) {
             auto session = std::make_shared<sync::SessionView>();
             session->id = 17;
-            session->info = {"f1", "codex", name, "", ""};
+            session->info = {"f1", "codex", name, "model-a", ""};
+            session->info.catalog = R"({"default":"model-a","models":{"model-a":["low","high"],"model-b":["high"]}})";
             link.state.phase = sync::LinkPhase::Connected;
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
@@ -2395,6 +2407,23 @@ int main(int argc, char** argv) {
         };
         publish("b", 1);
         h.commandDigit(2);
+        h.type("/model model-");
+        h.key(PrAppKey_Tab, PrAppKeyCode_Tab);
+        h.frame();
+        CHECK(h.active().draft == "/model model-a");
+        h.key(PrAppKey_Tab, PrAppKeyCode_Tab);
+        h.frame();
+        CHECK(h.active().draft == "/model model-b");
+        h.enter();
+        h.frame();
+        CHECK(!link.sent.empty() && link.sent.back().text == "/model model-b");
+        h.type("/effort h");
+        h.key(PrAppKey_Tab, PrAppKeyCode_Tab);
+        h.frame();
+        CHECK(h.active().draft == "/effort high");
+        h.enter();
+        h.frame();
+        CHECK(!link.sent.empty() && link.sent.back().text == "/effort high");
         h.type("draft");
         link.sent.clear();
         const auto down = [&](PrAppModifierFlags mods) {
@@ -2415,6 +2444,7 @@ int main(int argc, char** argv) {
         CHECK(colorMatches(fillOf(h, h.view.accountMenu), h.look.messageCard.fill));
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
+        CHECK(near(h.bounds(h.view.accountMenu).left, menu.left) && near(h.bounds(h.view.accountMenu).right, menu.right));
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
         h.type(" kept");
@@ -2434,13 +2464,15 @@ int main(int argc, char** argv) {
         h.frame();
         const float lineHeight = h.kit->theme.types[PrKitTextRole_Body].lineHeight;
         CHECK(h.kit->theme.types[PrKitTextRole_Strong].weight == 700);
-        checkTextPaint(h, "c@example.test", 0xffffff, h.look.transcriptStyle.switchEmailInk);
+        CHECK(near(fillOf(h, h.view.accountRows[2]).a * 100, 50.0f));
         checkTextPaint(h, "a@example.test", h.look.messageCard.ink, h.look.messageCard.fill);
         const auto card = h.bounds(h.view.accountMenu);
         const auto selectedRow = h.bounds(h.view.accountRows[2]);
         CHECK(selectedRow.left - card.left < 0.25f * lineHeight);
         CHECK(card.right - selectedRow.right < 0.25f * lineHeight);
         const auto backdrop = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.accountMenu));
+        const float extra = (card.bottom - card.top) * h.look.messageCard.verticalExtension / 100;
+        CHECK(near(card.top - backdrop.top, extra) && near(backdrop.bottom - card.bottom, extra));
         const float extension = (card.right - card.left) * h.look.messageCard.sideExtension / 100;
         CHECK(std::abs(card.left - backdrop.left - extension) < 2);
         CHECK(std::abs(backdrop.right - card.right - extension) < 2);
@@ -2466,6 +2498,13 @@ int main(int argc, char** argv) {
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
         CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
+        h.model.append(h.model.active(), {EntryKind::Notice, "local history"});
+        h.model.set_draft(h.model.active(), "/clear");
+        h.frame();
+        h.enter();
+        h.frame();
+        CHECK(link.sent.size() == sent && h.active().draft.empty() && h.active().transcript.empty());
+        CHECK(h.view.accountMenu == kPrLayoutNodeNone && prUiFocus(h.ui) == h.view.prompt);
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2);
         if (argc == 4) {
@@ -2476,6 +2515,13 @@ int main(int argc, char** argv) {
                 h.frame();
             }
             CHECK(h.hasText(h.tabs()[h.model.active()], "Session"));
+            h.frame();
+            CHECK(h.look.tabs.fill == 0x112233 && h.look.tabs.selectedWeight == 500);
+            CHECK(h.look.prompt.fill == 0x221144 && h.look.prompt.width == 72 && !h.look.prompt.showPlus);
+            CHECK(h.look.messageCard.fill == 0x223344 && h.look.messageCard.selectorWidthEm == 19);
+            std::string error;
+            const auto hotkey = overlayBinding(*h.view.application, error);
+            CHECK(error.empty() && hotkey.code == PrAppKeyCode_KeyJ && hotkey.modifiers == (style::kCommand | PrAppModifierFlag_Shift));
             CHECK(h.view.accountRows.size() == 1 && h.hasText(h.view.accountMenu, "Use my work account"));
             h.key(PrAppKey('K'), PrAppKeyCode_KeyK, style::kCommand);
             h.frame();

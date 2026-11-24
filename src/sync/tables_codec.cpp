@@ -117,6 +117,8 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, x->info.instance, s.info.instance, scratch);
         x->info.limit_request = s.info.limitRequest;
         putText(b.main, x->info.limit_account, s.info.limitAccount, scratch);
+        x->info.context_epoch = s.info.contextEpoch;
+        putText(b.main, x->info.catalog, s.info.catalog, scratch);
         putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
         x->info.auto_account = s.info.autoAccount;
         x->activity = activityOut(s.activity);
@@ -226,6 +228,8 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.instance = textOf(x.info.instance);
             s.info.limitRequest = x.info.limit_request;
             s.info.limitAccount = textOf(x.info.limit_account);
+            s.info.contextEpoch = x.info.context_epoch;
+            s.info.catalog = textOf(x.info.catalog);
             s.info.limitModel = textOf(x.info.limit_model);
             s.info.autoAccount = x.info.auto_account;
             s.activity = activityIn(x.activity);

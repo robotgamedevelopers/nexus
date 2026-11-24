@@ -56,6 +56,8 @@ table SessionInfo
     limit_request uint64
     limit_account *string
     limit_model   *string
+    context_epoch uint64
+    catalog *string
     title       *string
 }
 

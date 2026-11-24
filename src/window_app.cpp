@@ -71,6 +71,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         out.argument = static_cast<int>(value);
         return true;
     }
+    if (op == "replace_draft") {
+        out.command = WindowCommand::ReplaceDraft;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && prJsonKind(d, prJsonElement(d, row, 2)) == PrJsonKind_String && out.type.size() <= 32768;
+    }
     if (op == "resolve_limit") {
         out.command = WindowCommand::ResolveLimit;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -205,11 +210,16 @@ bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
         readColor(d, obj, {"fill", 4}, card.fill) && readColor(d, obj, {"ink", 3}, card.ink) &&
         readColor(d, obj, {"email_ink", 9}, card.emailInk) &&
         readPoints(d, obj, {"text_size", 9}, card.textSize, 12, 72) &&
+        readPoints(d, obj, {"selector_width_em", 17}, card.selectorWidthEm, 6, 80) &&
+        readPoints(d, obj, {"vertical_extension", 18}, card.verticalExtension, 0, 50) &&
         readPoints(d, obj, {"side_extension", 14}, card.sideExtension, 0, 50) &&
         readPoints(d, obj, {"row_height", 10}, card.rowHeight, 1, 4) &&
         readPoints(d, obj, {"row_gap", 7}, card.rowGap, 0, 4) &&
         readPoints(d, obj, {"heading_gap", 11}, card.headingGap, 0, 4) &&
+        readPoints(d, obj, {"unselected_weight", 17}, card.unselectedWeight, 100, 900) &&
+        readPoints(d, obj, {"selected_radius", 15}, card.selectedRadius, 0, 64) &&
         readPoints(d, obj, {"email_weight", 12}, card.emailWeight, 100, 900) &&
+        readPoints(d, obj, {"selected_opacity", 16}, card.selectedOpacity, 0, 1) &&
         readColor(d, obj, {"selected_fill", 13}, card.selectedFill) &&
         readColor(d, obj, {"selected_ink", 12}, card.selectedInk) &&
         readPoints(d, obj, {"radius", 6}, card.radius, 0, 64);
@@ -247,7 +257,36 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readSurface(const PrJson* doc, AccountSurface& surface) {
     surface = {};
-    if (!readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
+    auto& tabs = surface.tabs;
+    const auto style = prJsonMember(doc, 0, {"tab_style", 9});
+    if (style != kPrJsonMissing && (prJsonKind(doc, style) != PrJsonKind_Object ||
+            !readColor(doc, style, {"fill", 4}, tabs.fill) || !readColor(doc, style, {"ink", 3}, tabs.ink) ||
+            !readColor(doc, style, {"selected_fill", 13}, tabs.selectedFill) ||
+            !readColor(doc, style, {"selected_ink", 12}, tabs.selectedInk) ||
+            !readPoints(doc, style, {"opacity", 7}, tabs.opacity, 0, 1) ||
+            !readPoints(doc, style, {"selected_opacity", 16}, tabs.selectedOpacity, 0, 1) ||
+            !readPoints(doc, style, {"selected_radius", 15}, tabs.selectedRadius, 0, 64) ||
+            !readPoints(doc, style, {"weight", 6}, tabs.weight, 100, 900) ||
+            !readPoints(doc, style, {"selected_weight", 15}, tabs.selectedWeight, 100, 900) ||
+            !readPoints(doc, style, {"height", 6}, tabs.height, 12, 256) ||
+            !readPoints(doc, style, {"tab_height", 10}, tabs.tabHeight, 10, 256) ||
+            !readPoints(doc, style, {"gap", 3}, tabs.gap, 0, 128) ||
+            !readPoints(doc, style, {"leading", 7}, tabs.leading, 0, 128) ||
+            !readFlag(doc, style, {"reserve_width", 13}, tabs.reserveWidth))) return false;
+    auto& prompt = surface.prompt;
+    const auto box = prJsonMember(doc, 0, {"prompt_style", 12});
+    if (box != kPrJsonMissing && (prJsonKind(doc, box) != PrJsonKind_Object ||
+            !readColor(doc, box, {"fill", 4}, prompt.fill) || !readColor(doc, box, {"border", 6}, prompt.border) ||
+            !readColor(doc, box, {"ink", 3}, prompt.ink) || !readColor(doc, box, {"selection", 9}, prompt.selection) ||
+            !readPoints(doc, box, {"width", 5}, prompt.width, 10, 100) ||
+            !readPoints(doc, box, {"radius", 6}, prompt.radius, 0, 128) ||
+            !readPoints(doc, box, {"padding_x", 9}, prompt.paddingX, 0, 128) ||
+            !readPoints(doc, box, {"height", 6}, prompt.height, 1, 256) ||
+            !readPoints(doc, box, {"gap", 3}, prompt.gap, 0, 128) ||
+            !readPoints(doc, box, {"max_lines", 9}, prompt.maxLines, 1, 64) ||
+            !readFlag(doc, box, {"show_plus", 9}, prompt.showPlus))) return false;
+    if (!readFlag(doc, 0, {"prompt_command", 14}, surface.promptCommand) ||
+            !readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
             !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs)) return false;
     const auto titles = prJsonMember(doc, 0, {"tab_titles", 10});
     if (titles != kPrJsonMissing) {
@@ -290,7 +329,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     const auto title = stringAt(d, prJsonMember(d, 0, {"sign_in_heading", 15}));
     heading = title.empty() ? "Please sign in" : title;
     if (!readSurface(d, surface)) {
-        why = "invalid account_items or tab_titles";
+        why = "invalid tab_style, prompt_style, window flag, tab_titles or account_items; check the client window contract in docs/policy.md";
         return false;
     }
     centered = signInOnSelect = false;
@@ -397,6 +436,26 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     return true;
 }
 } // namespace
+
+PrAppHotkey overlayBinding(policy::Host& host, std::string& why) {
+    const auto answer = host.decide({}, "app.overlay", "{}", why);
+    if (answer.empty() || answer == "null") return style::kOverlayHotkey;
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (prJsonParse(doc.get(), {answer.data(), answer.size()}, nullptr)) {
+        const auto code = stringAt(doc.get(), prJsonMember(doc.get(), 0, {"code", 4}));
+        const auto mods = stringAt(doc.get(), prJsonMember(doc.get(), 0, {"modifiers", 9}));
+        PrAppModifierFlags flags = 0;
+        PrAppKey key{};
+        if (!mods.empty() && chord(std::string(mods) + "+A", key, flags))
+            for (unsigned i = 1; i < PrAppKeyCode_Count; ++i) {
+                const auto physical = static_cast<PrAppKeyCode>(i);
+                const auto name = prAppKeyCodeName(physical);
+                if (name.data && code == std::string_view(name.data, name.size)) return {physical, flags};
+            }
+    }
+    why = "app.overlay needs a physical key code and modifiers such as Command or Command+Shift";
+    return style::kOverlayHotkey;
+}
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
     bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen, LimitOffer offer, const std::string& ui) {

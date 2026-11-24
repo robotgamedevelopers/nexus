@@ -35,6 +35,8 @@ namespace nexus {
 struct Look {
     bool overlay = false;           // the window background and tab strip are see-through (style::kOverlayOpacity)
     int textSteps = 0;              // the text scale it is drawn at, in steps from 1 (style::textScale)
+    TabStyle tabs{};
+    PromptStyle prompt{};
     MessageCardStyle messageCard{};
     TranscriptStyle transcriptStyle{};
     float overlayOpacity = style::kOverlayOpacity;
@@ -43,7 +45,8 @@ struct Look {
 // The kit theme the window is drawn in: Studio's dark theme with the window's colours and type sizes (style.h) at the
 // text scale `steps` steps from 1.
 PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps = 0, float opacity = style::kOverlayOpacity,
-                       const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {});
+                       const MessageCardStyle& card = {}, const TranscriptStyle& transcript = {}, const TabStyle& tabs = {},
+                       const PromptStyle& prompt = {});
 
 // The shells of the terminal tabs, by Tab::id. Our own seam (Prax's terminal cannot run without a process), so that the
 // tab logic runs in tests without one; terminals.h is the one over Prax's terminal (pr/terminal.h).
@@ -113,6 +116,7 @@ using KitTabs = std::unique_ptr<PrKitTabs, KitTabsFree>;
 // round costs the same with fifty entries or fifty thousand. An item is an entry, or a run of tool lines, which stand
 // together. Each item's height is the one it took at its last layout, or until then an estimate from its text.
 struct TranscriptItems {
+    std::uint64_t generation = 0;
     std::size_t entries = 0;                    // the transcript's entries grouped into items so far
     std::vector<std::uint32_t> first;           // each item's first entry
     std::vector<std::uint32_t> lines;           // its lines (line feeds and one, summed over a run of tool lines)
@@ -135,6 +139,8 @@ struct View {
     WindowApplication windowApp;
     NativeTabs nativeTabs;
     std::map<std::string, KitTabs> groupStrips;
+    struct TabWidth { std::string title; float advance = 0; };
+    std::vector<TabWidth> tabWidths;
     std::vector<PrLayoutNode> tabNodes;
     PrLayoutNode accountAnchor = kPrLayoutNodeNone;
     PrLayoutNode accountMenu = kPrLayoutNodeNone;
@@ -162,6 +168,7 @@ struct View {
     // With a server (main.cpp --server): Enter and Command-Enter on a friend's tab call this with the tab's position
     // and whether it queues, in place of the model's send and queue; the server's state comes back into the model.
     std::function<void(std::size_t tab, bool queue)> submit;
+    std::function<void(std::size_t tabId)> clearOpen;
     std::function<bool()> signOut; // true when the selected account accepted the explicit composer command
     std::function<LimitOffer()> limitOffer;
     std::function<void(const LimitOffer&, const std::string&)> resolveLimit;
@@ -174,6 +181,7 @@ struct View {
     std::function<void(const std::string&)> chooseAccount;
     std::function<void(const std::string&)> accountCommand;
     std::function<std::string()> accountCaption;
+    std::function<void(std::string&, std::string&)> sessionCapabilities;
     std::function<SignInAccount()> signInAccount; // selected account while its sign-in is available
     std::function<bool()> activateSignIn;        // true when sign-in consumed Enter or a card click
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts

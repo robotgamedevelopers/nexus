@@ -4,6 +4,9 @@ import re
 import secrets
 import time
 import uuid
+import logging
+
+from .catalog import acp_catalog, discover
 from pathlib import Path
 
 
@@ -106,11 +109,19 @@ async def session(call, fresh, resume, session_id, notify):
     return await call(*fresh)
 
 
+async def refresh_choices(rpc, provider):
+    try:
+        await discover(rpc, provider)
+    except (Failure, OSError, ValueError, KeyError, TypeError):
+        logging.warning("%s did not provide a new model catalog", provider)
+
+
 async def codex(rpc, turn):
     await rpc.call("initialize", {
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
     })
     await rpc.notify("initialized", {})
+    await refresh_choices(rpc, "codex")
     auth = (await rpc.call("account/read", {"refreshToken": False}))["account"]
     if auth is None or auth.get("type") == "apiKey":
         raise Failure("Codex requires a ChatGPT subscription login.", "no-credential", revoked=True)
@@ -192,6 +203,10 @@ async def acp(rpc, turn):
         turn.resume,
         turn.missing,
     )
+    try:
+        acp_catalog(turn.harness, result)
+    except (OSError, ValueError, KeyError, TypeError):
+        logging.warning("%s did not provide a new model catalog", turn.harness)
     # ACP load can replay old transcript updates before the response.
     rpc.events.clear()
     if turn.harness == "antigravity":
@@ -283,6 +298,7 @@ async def muse(rpc, turn):
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
     })
     await rpc.notify("initialized", {})
+    await refresh_choices(rpc, "muse")
     turn.credential(await turn.provider.subscription_tier(rpc))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
     if turn.model:

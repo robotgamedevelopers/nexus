@@ -73,13 +73,22 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     field("text", state.text);
     field("friend", state.friendName);
     field("model", state.model);
+    prJsonWriterKey(w.get(), pr("signed_out"));
+    prJsonWriterBool(w.get(), state.signedOut);
+    field("effort", state.effort);
+    field("harness", state.harness);
     prJsonWriterKey(w.get(), pr("queued"));
     prJsonWriterNumber(w.get(), static_cast<double>(state.queued));
     prJsonWriterKey(w.get(), pr("busy"));
     prJsonWriterBool(w.get(), state.busy);
     prJsonWriterEndObject(w.get());
     const auto ctx = prJsonWriterText(w.get());
-    const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", std::string(ctx.data, ctx.size), why);
+    std::string context(ctx.data, ctx.size);
+    if (!client && !state.catalog.empty()) {
+        context.pop_back();
+        context += ",\"catalog\":" + state.catalog + "}";
+    }
+    const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", context, why);
     if (!why.empty())
         return false;
 
@@ -115,13 +124,20 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
             why = "a command takes an op string and an optional text string";
             return false;
         }
-        if (name == "notice" && text.data && text.size > 0 && text.size <= 1024) {
+        if (name == "notice" && text.data && text.size > 0 && text.size <= (client ? 1024u : 16384u)) {
             plan.notices.emplace_back(text.data, text.size);
         } else if (name == "draft" && client && text.data && text.size <= 32768) {
             plan.text.emplace(text.data, text.size);
+        } else if (client && name == "clear_local" && !text.data && state.signedOut) {
+            plan.delivery = Delivery::ClearLocal;
         } else if (name == "sign_out" && client && !text.data && prJsonCount(d, 0) == 1 &&
                    std::string_view(intent) == "Enter" && state.text == "/logout") {
             plan.delivery = Delivery::SignOut;
+        } else if (!client && !text.data && (name == "clear_context" || name == "compact_context")) {
+            plan.delivery = name == "clear_context" ? Delivery::Clear : Delivery::Compact;
+        } else if (!client && text.data && (name == "set_model" || name == "set_effort")) {
+            plan.delivery = name == "set_model" ? Delivery::SetModel : Delivery::SetEffort;
+            plan.text.emplace(text.data, text.size);
         } else if (name == "send" || name == "queue") {
             plan.delivery = name == "send" ? Delivery::Send : Delivery::Queue;
             if (text.data)

@@ -126,6 +126,8 @@ struct App {
     bool opened = false;            // open() ran for the window
     bool stopping = false;          // the run's shutdown has begun
     bool failed = false;            // Prax closed the overlay's window before it opened (overlayCloseFailed)
+    uint64_t hotkeyGeneration = 0;
+    PrAppHotkey registeredHotkey{};
     OverlayRules rules;             // when the overlay shows and hides (overlay.h)
     bool demoTerminal = false;      // --demo-terminal: the screenshot shows a terminal tab after a command
     bool backdrop = false;          // --backdrop: the screenshot is see-through over stripes
@@ -167,6 +169,7 @@ App& appOf(void* context) {
 // The overlay's tags: its hotkey's, and the timer of the key check after each show.
 constexpr uint64_t kHotkeyTag = 1;
 constexpr uint64_t kKeyCheckTag = 2;
+constexpr uint64_t kPolicyCheckTag = 3;
 // How long after a show the overlay must have the keyboard. Not measured: Prax gives an overlay the keyboard within
 // prAppWindowFocus, so this only has to outlast the frames that report it (a guess, as the earlier code's was).
 constexpr double kKeyCheckSeconds = 0.5;
@@ -355,12 +358,17 @@ bool start(void* context, PrStudioApp* studio) {
     if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok) {
         coverScreen(surface);
     }
-    PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), style::kOverlayHotkey, kHotkeyTag);
+    a.hotkeyGeneration = a.view.application->refresh();
+    std::string why;
+    a.registeredHotkey = overlayBinding(*a.view.application, why);
+    if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+    PrStatus status = prAppHotkeyRegister(prStudioAppApp(studio), a.registeredHotkey, kHotkeyTag);
+    prAppTimerSet(prStudioAppApp(studio), kPolicyCheckTag, 1, 1);
     if (status != PrStatus_Ok) {
         char line[512];
-        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (%s-backtick) did not register (status %d: %s), so "
-            "only launching nexus shows the overlay; another app may hold the key: change kOverlayHotkey in src/style.h",
-            style::kCommandName, int(status),
+        std::snprintf(line, sizeof line, "nexus: the overlay hotkey (key code %u) did not register (status %d: %s), so "
+            "only launching nexus shows the overlay; another app may hold the key: edit overlay_hotkey in the client profile",
+            unsigned(a.registeredHotkey.code), int(status),
             status == PrStatus_NotAllowed ? "another app or the system holds it" : "no global hotkeys");
         std::fprintf(stderr, "%s\n", line);
         // The one launch failure the person must be told: on Windows nexus has no terminal, so a message box says it.
@@ -379,7 +387,7 @@ void shutdown(void* context, PrStudioApp*) {
 }
 
 // The app's events: the hotkey, and the key check after a show.
-void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
+void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
     if (e->kind == PrAppEventKind_DisplaysChanged && a.window != nullptr)
@@ -388,6 +396,22 @@ void appEvent(void* context, PrStudioApp*, const PrAppEvent* e) {
         return;
     if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
         carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
+    } else if (e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
+        const auto generation = a.view.application->refresh();
+        if (generation == a.hotkeyGeneration) return;
+        a.hotkeyGeneration = generation;
+        std::string why;
+        const auto next = overlayBinding(*a.view.application, why);
+        auto* app = prStudioAppApp(studio);
+        if (why.empty() && (next.code != a.registeredHotkey.code || next.modifiers != a.registeredHotkey.modifiers)) {
+            if (prAppHotkeyRegister(app, next, kHotkeyTag) == PrStatus_Ok) a.registeredHotkey = next;
+            else {
+                prAppHotkeyRegister(app, a.registeredHotkey, kHotkeyTag);
+                why = "The overlay shortcut is unavailable. Choose another overlay_hotkey in the client profile.";
+            }
+        }
+        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        if (a.window) prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
     } else if (e->kind == PrAppEventKind_Timer && e->tag == kKeyCheckTag) {
         OverlayAct act = a.rules.keyCheck(overlayVisible(a), overlayActive(a));
         if (act == OverlayAct::Hide)
@@ -744,17 +768,33 @@ int main(int argc, char** argv) {
     }
 
     if (printConfig) {
+        policy::Host policy("client");
+        if (!home.empty()) policy.watch(home + "/policy.bundle.json");
+        WindowApplication description;
+        description.update(policy, "sprint", {}, false, false, 0, 0);
+        std::string why;
+        const auto hotkey = overlayBinding(policy, why);
+        if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+        std::string name;
+        for (const auto modifier : {PrAppModifierFlag_Shift, PrAppModifierFlag_Control, PrAppModifierFlag_Alt, PrAppModifierFlag_Super}) {
+            if (!(hotkey.modifiers & modifier)) continue;
+            const auto label = prAppModifierName(modifier);
+            name += modifier == style::kCommand ? style::kCommandName : std::string(label.data, label.size);
+            name += '-';
+        }
+        const auto code = prAppKeyCodeName(hotkey.code);
+        name += hotkey.code == PrAppKeyCode_Backquote ? "backtick" : std::string(code.data, code.size);
         std::printf("nexus: the overlay window, as nexus asks Prax for it\n"
             "role: Overlay (a borderless panel above other apps, on every Space and beside fullscreen apps)\n"
             "backdrop: %s; opens hidden; shown by the hotkey\n"
             "presence: %s\n"
-            "hotkey: %s-backtick (PrAppKeyCode %u, modifiers 0x%x)\n"
+            "hotkey: %s (PrAppKeyCode %u, modifiers 0x%x)\n"
             "frame: the whole screen with the pointer, menu bar or taskbar included, set through the native window at "
             "each show\n"
             "default background alpha: %.2f; tab strip fill alpha: %.2f\n",
             style::kOverlayBlur ? "Blur" : "Transparent", style::kOverlayAccessory ? "Accessory" : "Regular",
-            style::kCommandName, unsigned(style::kOverlayHotkey.code), unsigned(style::kOverlayHotkey.modifiers),
-            double(style::kOverlayOpacity), double(style::kOverlayStripFill));
+            name.c_str(), unsigned(hotkey.code), unsigned(hotkey.modifiers),
+            double(description.overlayOpacity), double(description.surface.tabs.opacity));
         return 0;
     }
 

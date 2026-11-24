@@ -49,8 +49,13 @@ file(MAKE_DIRECTORY "${ROOT}/alternative")
 file(WRITE "${ROOT}/rules/client.star" [=[
 load("client/window.star", base = "handle")
 def handle(event, state, config):
+    if event == "overlay":
+        return {"code":"KeyJ","modifiers":"Command+Shift"}
     window = base(event, state, config)
     if event == "window" and state["tab"] == "friend":
+        window["tab_style"] = {"fill":"#112233","selected_fill":"#f08050","selected_opacity":0.75,"selected_weight":500,"gap":6}
+        window["prompt_style"] = {"fill":"#221144","width":72,"show_plus":False}
+        window["message_card"] = {"fill":"#223344","selector_width_em":19,"selected_radius":3}
         window["tab_titles"] = ["Home", "Session"]
         window["panels"] = ["account"]
         window["account_items"] = [{"text":"Use my work account", "action":"select:b"}]

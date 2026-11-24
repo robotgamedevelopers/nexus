@@ -54,7 +54,7 @@ bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std:
         }
         if (c.take) {
             --queued;
-        } else if (!c.driver && !c.entry && !c.info) {
+        } else if (!c.driver && !c.entry && !c.info && !c.clearTranscript) {
             ++queued;
         }
     }
@@ -64,7 +64,10 @@ bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std:
 namespace {
 
 void applyTo(StoredSession& s, const SessionChange& c) {
-    if (c.take) {
+    if (c.clearTranscript) {
+        s.transcript.clear();
+        ++s.info.contextEpoch;
+    } else if (c.take) {
         s.queue.erase(s.queue.begin());
     } else if (c.info) {
         s.info = *c.info;
@@ -296,7 +299,8 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
     const std::string* text = &action.text;
     if (kind != ActionKind::Stop && text->size() <= limits_.text) {
         const policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
-            session.driver.openTurn != 0};
+            session.driver.openTurn != 0, session.info.effort, session.info.harness,
+            responder_ ? responder_->catalog(session.info) : std::string{}};
         if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
             refused = "Message application: " + refused;
         } else {
@@ -304,6 +308,35 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                 notices.emplace_back(entry(EntryKind::Notice, notice), std::string());
             if (plan.text)
                 text = &*plan.text;
+            if (plan.delivery == policy::Delivery::SetModel || plan.delivery == policy::Delivery::SetEffort) {
+                Action setting = action;
+                setting.kind = plan.delivery == policy::Delivery::SetModel ? ActionKind::SetModel : ActionKind::SetEffort;
+                setting.text = *text;
+                return set(setting, why, client, true);
+            }
+            if (plan.delivery == policy::Delivery::Clear || plan.delivery == policy::Delivery::Compact) {
+                const bool compact = plan.delivery == policy::Delivery::Compact;
+                if (session.driver.openTurn || !session.driver.waiting.empty() || !session.queue.empty() ||
+                        !session.driver.continuationPrompt.empty()) {
+                    refused = "Finish or stop the current work before changing its context.";
+                } else {
+                    DriverState fresh;
+                    fresh.nextTurn = session.driver.nextTurn;
+                    fresh.summary = compact;
+                    auto changes = responder_ ? responder_->resetContext(action.session, session.driver, compact)
+                                              : std::vector<SessionChange>{{nullptr, {}, fresh}};
+                    if (!compact) {
+                        SessionChange reset{};
+                        reset.clearTranscript = true;
+                        changes.push_back(reset);
+                    }
+                    changes.push_back({entry(EntryKind::Notice, compact ? "Context compacted for the next turn." : "Context cleared."), {}});
+                    const bool ok = commit(changes);
+                    if (responder_) responder_->sent(action.session, ok);
+                    if (ok) refresh(action.session);
+                    return ok;
+                }
+            }
             if (plan.delivery == policy::Delivery::Native) {
                 auto service = services_.find(plan.service);
                 if (service == services_.end())
@@ -415,7 +448,7 @@ bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, 
 }
 
 // A session's account, model or effort, from its next turn on.
-bool Hub::set(const Action& action, std::string* why, const std::string& client) {
+bool Hub::set(const Action& action, std::string* why, const std::string& client, bool announce) {
     const StoredSession* session = store_.find(action.session);
     std::string refused;
     if (action.text.size() > limits_.setting || !printable(action.text)) {
@@ -458,6 +491,7 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             info.harness = harnessOf(info.account, info.harness);
         }
     } else if (action.kind == ActionKind::SetModel) {
+        if (announce && info.model != action.text) info.effort.clear();
         info.model = action.text;
     } else {
         info.effort = action.text;
@@ -471,6 +505,8 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client)
             changes.push_back(SessionChange{switchNotice(info.account), {}});
         }
     }
+    if (announce && refused.empty())
+        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + "."), {}});
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
             !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {
@@ -1834,6 +1870,7 @@ void Hub::refresh(SessionId id) {
     auto open = open_.find(id);
     SessionView view = tailOf(id, stored->info, stored->transcript, stored->queue, limits_.tail,
         open == open_.end() ? nullptr : open->second);
+    if (responder_) view.info.catalog = responder_->catalog(stored->info);
     if (stored->driver.modelLimitPending)
         offerLimitChoice(id, stored->driver, view.info);
     auto activity = activity_.find(id);

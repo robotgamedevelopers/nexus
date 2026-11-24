@@ -182,7 +182,7 @@ void accountCommandsUseTheActiveConversation() {
     w.host.signIn.shown();
     w.host.signIn.step();
     CHECK(w.link.sent.size() == 2);
-    CHECK((w.view.signInAccount() == SignInAccount{"home", "", ""}));
+    CHECK((w.view.signInAccount() == SignInAccount{"home", "", "", "", "Ada"}));
     CHECK(w.view.activateSignIn());
     CHECK(w.view.activateSignIn());
     CHECK(w.link.sent.size() == 3 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
@@ -280,7 +280,7 @@ void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
     sync::Sessions saved({conversation});
     saved.setFriends({{"Ada", {{"first", "Home", true, "home@example.test"}, {"second", "Work", true, "work@example.test"}}}});
     host.showState(saved, false);
-    CHECK((view.signInAccount() == SignInAccount{"second", "Work", "work@example.test"}));
+    CHECK((view.signInAccount() == SignInAccount{"second", "Work", "work@example.test", "codex", "Ada"}));
     CHECK(!view.activateSignIn() && !host.signIn.opener.armed());
 }
 
@@ -373,7 +373,7 @@ void explicitSignInKeepsTheDraft() {
     w.host.pollLink();
     w.link.sent.clear();
     const auto i = w.model.active();
-    CHECK((w.view.signInAccount() == SignInAccount{"work", "Work", "work@example.test"}));
+    CHECK((w.view.signInAccount() == SignInAccount{"work", "Work", "work@example.test", "grok", "chat"}));
     w.view.submit(i, false);
     CHECK(w.model.tab(i).draft.empty());
     w.model.set_draft(i, "  keep this draft  ");

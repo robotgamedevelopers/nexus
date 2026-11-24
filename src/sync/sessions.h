@@ -56,6 +56,8 @@ struct SessionInfo {
     std::uint64_t limitRequest = 0;
     std::string limitAccount{};
     std::string limitModel{};
+    std::uint64_t contextEpoch = 0;
+    std::string catalog{}; // server-advertised harness model and effort choices in JSON
     bool operator==(const SessionInfo&) const = default;
 };
 

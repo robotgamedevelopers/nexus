@@ -1,0 +1,52 @@
+{
+  "overlay_hotkey": {
+    "code": "Backquote",
+    "modifiers": "Command"
+  },
+  "overlay_opacity": 0.6,
+  "tab_style": {
+    "fill": "#1b1b1b",
+    "opacity": 1,
+    "ink": "#999999",
+    "weight": 400,
+    "selected_fill": "#86c5ff",
+    "selected_ink": "#ffffff",
+    "selected_opacity": 0.5,
+    "selected_radius": 8,
+    "selected_weight": 700,
+    "reserve_width": true
+  },
+  "tab_labels": {
+    "sprint": "Sprint"
+  },
+  "prompt_style": {
+    "fill": "#303030",
+    "border": "#3a3a3a",
+    "ink": "#f3f3f3",
+    "width": 82,
+    "radius": 20.16,
+    "show_plus": true
+  },
+  "message_card": {
+    "fill": "#303030",
+    "ink": "#ffffff",
+    "selected_opacity": 0.5,
+    "text_size": 34,
+    "radius": 20,
+    "email_ink": "#477fba",
+    "selected_radius": 8,
+    "selector_width_em": 16,
+    "side_extension": 20,
+    "vertical_extension": 10,
+    "unselected_weight": 400,
+    "email_weight": 700
+  },
+  "centered_account_menu": true,
+  "sign_in_on_select": true,
+  "account_picker_shortcuts": {
+    "ArrowUp": "previous",
+    "ArrowDown": "next",
+    "Command+ArrowUp": "previous",
+    "Command+ArrowDown": "next"
+  }
+}

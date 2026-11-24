@@ -56,6 +56,8 @@ table SessionInfo
     limit_request uint64
     limit_account *string
     limit_model   *string
+    context_epoch uint64
+    catalog *string
 }
 
 // One entry a sessions diff carries: its kind, whether it is closed, how many bytes of its text the state diffed from

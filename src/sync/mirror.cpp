@@ -47,6 +47,14 @@ const Activity* Mirror::activity(std::size_t id) const {
     return it == seen_.end() || !it->second.held ? nullptr : &it->second.activity;
 }
 
+void Mirror::clearOpen(std::size_t tabId) {
+    auto it = seen_.find(tabId);
+    if (it != seen_.end() && it->second.open) {
+        it->second.open.reset();
+        ++it->second.next;
+    }
+}
+
 void Mirror::forget(std::size_t id) {
     session_.erase(id);
     seen_.erase(id);
@@ -78,6 +86,12 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             continue;
         }
         Shown& seen = seen_[tab.id];
+        if (seen.epoch != view->info.contextEpoch) {
+            model.clear_transcript(i);
+            seen = {};
+            seen.epoch = view->info.contextEpoch;
+            changed = true;
+        }
         if (!seen.held || seen.activity != view->activity) {
             seen.held = true;
             seen.activity = view->activity;
