@@ -26,6 +26,7 @@ wire::EntryKind kindOut(EntryKind k) {
         case EntryKind::Friend: return wire::EntryKind::Friend;
         case EntryKind::Notice: return wire::EntryKind::Notice;
         case EntryKind::Tool: return wire::EntryKind::Tool;
+        case EntryKind::Bus: return wire::EntryKind::Bus;
     }
     return wire::EntryKind::Notice;
 }
@@ -38,6 +39,7 @@ EntryKind kindIn(wire::EntryKind k) {
         case wire::EntryKind::Friend: return EntryKind::Friend;
         case wire::EntryKind::Notice: return EntryKind::Notice;
         case wire::EntryKind::Tool: return EntryKind::Tool;
+        case wire::EntryKind::Bus: return EntryKind::Bus;
         default: return EntryKind::Notice;
     }
 }

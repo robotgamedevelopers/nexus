@@ -51,6 +51,7 @@ const UnitViewInfo * UnitView()
         { 2, "Friend", 0x9f57a2661b8a7e2dull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Notice", 0x9117fb5195e75151ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 4, "Tool", 0x5a71f1fb3a12c6a7ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 5, "Bus", 0x166a3d19b1137d79ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const TableFieldInfo Change_view_arm_fields[] = {
     { "enqueue", "enqueue", "string", 0x0c88bce25446069dull, 17, false, true, []( const void * slot ) -> const void * { return (const void *) TableBlobAt( *(const TableRef *) slot ); }, NULL, false, false, 0, (uint32_t) offsetof( Change, enqueue ), (uint32_t) sizeof( TableRef ), 0xffffffffu, 0xffffffffu, NULL, false, 0.0, 0.0, 0, 0, 0, 0, 0, NULL, -1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "", TableDocNone, 0, NULL, false, false, 0, 0, false },
@@ -66,7 +67,7 @@ const UnitViewInfo * UnitView()
     static const ViewVocabulary enums[] = {
         { "ActionKind", "Nexus.schema", 21, 8, 22, ActionKind_view_variants, TableDocNone, 0, NULL },
         { "Activity", "Nexus.schema", 4, 8, 5, Activity_view_variants, TableDocNone, 0, NULL },
-        { "EntryKind", "Nexus.schema", 4, 8, 5, EntryKind_view_variants, TableDocNone, 0, NULL },
+        { "EntryKind", "Nexus.schema", 5, 8, 6, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary unions[] = {
         { "Change", "Nexus.schema", 5, 8, 6, Change_view_variants, TableDocNone, 0, NULL },

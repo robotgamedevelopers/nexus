@@ -1360,13 +1360,16 @@ struct Builder {
         });
     }
 
-    void message(PrLayoutNode parent, std::string_view source, PrKitTone tone, double gain = 1, const View::GlyphTrail* trail = nullptr) {
+    void message(PrLayoutNode parent, std::string_view source, EntryKind speaker, double gain = 1,
+            const View::GlyphTrail* trail = nullptr) {
         const auto& style = look.transcriptStyle;
+        const auto tone = speaker == EntryKind::Person ? kPersonTone : kChatTone;
         std::optional<unsigned> sourceInk;
-        if (tone == kPersonTone) {
+        if (speaker == EntryKind::Bus) {
+            sourceInk = style.busInk;
+        } else if (speaker == EntryKind::Person) {
             const auto tagged = style.messageInks.find(source);
             if (tagged != style.messageInks.end()) sourceInk = tagged->second;
-            else if (source.starts_with("nova-bus: ")) sourceInk = style.linkInk.value_or(look.tabs.selectedFill);
         }
         const bool bold = tone == kPersonTone && look.transcriptStyle.personBold;
         const auto body = textStyle(bold ? PrKitTextRole_Strong : PrKitTextRole_Body, tone);
@@ -1380,7 +1383,7 @@ struct Builder {
             select(plainLabel(label(parent, source, body)));
             return;
         }
-        const auto& paragraphs = view.markdown.get(source, tone == kPersonTone);
+        const auto& paragraphs = view.markdown.get(source, speaker != EntryKind::Friend);
         if (paragraphs.size() == 1 && paragraphs.front().runs.size() == 1 && paragraphs.front().runs.front().href.empty() && !paragraphs.front().depth &&
                 paragraphs.front().runs.front().role == PrKitTextRole_Body && paragraphs.front().runs.front().text == source) {
             select(plainLabel(label(parent, source, body)));
@@ -1408,7 +1411,9 @@ struct Builder {
                 auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
                 const auto span = prKitText(kit, text, {}, runStyle);
                 const auto ordinary = run.inlineCode ? style.codeInk.value_or(plain) : plain;
-                ink(span, run.href.empty() ? ordinary : style.linkInk.value_or(look.tabs.selectedFill), true, gain);
+                const auto color = speaker == EntryKind::Bus ? style.busInk :
+                    run.href.empty() ? ordinary : style.linkInk.value_or(look.tabs.selectedFill);
+                ink(span, color, true, gain);
                 if (run.inlineCode) {
                     auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, span));
                     auto& fontGroup = record.groups[PrLayoutGroup_Font];
@@ -1441,7 +1446,7 @@ struct Builder {
                 if (trail) {
                     const auto offset = source.find(run.text, sourceOffset);
                     if (offset != source.npos) {
-                        glyphLight(leaf, offset, *trail, run.href.empty() ? ordinary : style.linkInk.value_or(look.tabs.selectedFill));
+                        glyphLight(leaf, offset, *trail, color);
                         sourceOffset = offset + run.text.size();
                     }
                 }
@@ -1486,13 +1491,26 @@ struct Builder {
         const PrUiKey key = prHashMixKeys(base | 2, items.first[i]);
         const Entry& e = tab.transcript[items.first[i]];
         switch (e.kind) {
+            case EntryKind::Bus: {
+                const auto row = element(column, Part::ReplyRow, 0, key);
+                const auto bubble = element(row, Part::Bubble);
+                std::string_view body = e.text;
+                const auto separator = body.find('\n');
+                if (separator != body.npos) {
+                    const auto sender = label(bubble, body.substr(0, separator), textStyle(PrKitTextRole_Meta, kChatTone));
+                    ink(sender, look.transcriptStyle.busInk);
+                    view.selection.paragraph(sender, prColor16FromColor(faded(rgb(look.prompt.selection), 0.65f)));
+                    body.remove_prefix(separator + 1);
+                }
+                message(bubble, body, e.kind);
+                return row;
+            }
             case EntryKind::Person:
             case EntryKind::Friend:
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
                 PrLayoutNode bubble = e.kind == EntryKind::Friend ? element(entry, Part::AssistantMessage) :
                     e.kind == EntryKind::Person ? element(entry, Part::Bubble) : entry;
-                const auto conversationTone = e.kind == EntryKind::Person ? kPersonTone : kChatTone;
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
                 } else if (e.kind == EntryKind::Notice) {
@@ -1514,7 +1532,7 @@ struct Builder {
                     const bool justClosed = e.kind == EntryKind::Friend && reply.tab == tab.id &&
                         reply.generation == tab.transcriptGeneration && items.first[i] == reply.entry && !reply.ranges.empty();
                     const auto compact = e.kind == EntryKind::Person ? view.attachmentLabels.find({tab.id, e.text}) : view.attachmentLabels.end();
-                    message(bubble, compact == view.attachmentLabels.end() ? e.text : compact->second, conversationTone, gain, justClosed ? &reply : nullptr);
+                    message(bubble, compact == view.attachmentLabels.end() ? e.text : compact->second, e.kind, gain, justClosed ? &reply : nullptr);
                 }
                 return entry;
             }
@@ -1612,7 +1630,7 @@ struct Builder {
                 lightNewText(reply, *growing, reply.bytes, growing->size());
                 reply.bytes = growing->size();
             }
-            message(element(element(column, Part::ReplyRow), Part::AssistantMessage), *growing, kChatTone, 1, &reply);
+            message(element(element(column, Part::ReplyRow), Part::AssistantMessage), *growing, EntryKind::Friend, 1, &reply);
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
         if (!view.problem.empty()) {
@@ -1718,7 +1736,7 @@ struct Builder {
             const double wave = 0.5 - 0.5 * std::cos(view.time * 6.283185307179586 / settings.pendingTextSeconds);
             const double gain = animate ? 1 - settings.pendingTextPulse * wave : 1;
             view.energyAnimating |= animate && settings.pendingTextPulse > 0;
-            message(bubble, text, kPersonTone, gain);
+            message(bubble, text, EntryKind::Person, gain);
 
             if (settings.pendingOutlineWidth <= 0) return;
             const bool moving = settings.pendingDashSeconds > 0 && !prUiUserPreferences(ui).reducedMotion &&
@@ -1746,10 +1764,10 @@ struct Builder {
         for (const auto& text : tab.queue) {
             const auto compact = view.attachmentLabels.find({tab.id, text});
             message(element(element(column, Part::Entry), Part::Bubble),
-                compact == view.attachmentLabels.end() ? text : compact->second, kPersonTone);
+                compact == view.attachmentLabels.end() ? text : compact->second, EntryKind::Person);
         }
         for (const auto& sendingBubble : view.outgoing)
-            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::Bubble), sendingBubble.text, kPersonTone);
+            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::Bubble), sendingBubble.text, EntryKind::Person);
         if (!tab.held.empty()) pendingBubble(tab.held);
     }
 

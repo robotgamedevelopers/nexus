@@ -6,6 +6,7 @@
     "highlight_energy": 2.5,
     "fill": "#252525",
     "ink": "#f3f3f3",
+    "bus_ink": "#86c5ff",
     "notice_ink": "#ffb4b4",
     "status_ink": "#d8d8d8",
     "switch_email_ink": "#86c5ff",

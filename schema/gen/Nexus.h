@@ -14,7 +14,7 @@ namespace nexuswire {
 // sides at the same id speak identical bits; there is no other versioning.
 inline constexpr uint64_t ProtocolId = 0xcb24df40c7376c7dull;
 
-// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 4] (SPEC §4.2)
+// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 5] (SPEC §4.2)
 enum class EntryKind : uint8_t
 {
     None = 0,
@@ -22,7 +22,8 @@ enum class EntryKind : uint8_t
     Friend = 2,
     Notice = 3,
     Tool = 4,
-    Max = 4, // the exported extent (SPEC §4.2)
+    Bus = 5,
+    Max = 5, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any EntryKind value, out-of-set included
@@ -35,6 +36,7 @@ inline const char * EnumName( EntryKind value )
         case EntryKind::Friend: return "Friend";
         case EntryKind::Notice: return "Notice";
         case EntryKind::Tool: return "Tool";
+        case EntryKind::Bus: return "Bus";
         default: return "???";
     }
 }

@@ -2,6 +2,7 @@
 #include "policy/session.h"
 
 #include <algorithm>
+#include <charconv>
 #include <deque>
 #include <memory>
 #include <numeric>
@@ -173,6 +174,22 @@ bool isSet(ActionKind kind) {
     return kind == ActionKind::SetAccount || kind == ActionKind::SetModel || kind == ActionKind::SetEffort;
 }
 
+std::string busReceiptKey(const std::string& recipient, const std::string& id) {
+    const std::string_view streamId(id);
+    const auto dash = streamId.find('-');
+    const auto number = [](std::string_view digits) {
+        if (digits.empty() || (digits.size() > 1 && digits.front() == '0')) return false;
+        std::uint64_t value;
+        const auto end = digits.data() + digits.size();
+        const auto parsed = std::from_chars(digits.data(), end, value);
+        return parsed.ec == std::errc{} && parsed.ptr == end;
+    };
+    if (!accounts::isName(recipient) || dash == std::string_view::npos ||
+            !number(streamId.substr(0, dash)) || !number(streamId.substr(dash + 1))) return {};
+    // Window IDs cannot contain ':'. Replays may arrive out of order, so every message ID has its own receipt.
+    return "nexus:bus:in:" + recipient + ":" + id;
+}
+
 } // namespace
 
 // An action that changes no session: the client's counter moves in a step of its own, so it is never taken again.
@@ -276,6 +293,61 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return set(action, why, client);
     }
     return applyMessage(action, *session, why, client);
+}
+
+bool Hub::hasBusReceipt(const std::string& recipient, const std::string& id) const {
+    const auto key = busReceiptKey(recipient, id);
+    return !key.empty() && store_.applied(key) != 0;
+}
+
+bool Hub::receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
+                     const std::string& displayBody, const std::string& promptBody, std::string* why) {
+    if (why) why->clear();
+    const auto refuse = [&](const std::string& problem) {
+        if (why) *why = problem;
+        return false;
+    };
+    const auto receipt = busReceiptKey(recipient, id);
+    if (receipt.empty()) return refuse("The message bus recipient or message ID is invalid.");
+    if (store_.applied(receipt)) return true;
+    if (sender.empty() || sender.size() > 64 ||
+            sender.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos)
+        return refuse("The message bus sender is invalid.");
+    if (displayBody.size() > limits_.text || sender.size() + 1 + displayBody.size() > limits_.text ||
+            promptBody.size() > limits_.text)
+        return refuse("The message exceeds this Nexus server's prompt limit.");
+    if (blankText(displayBody) || blankText(promptBody) || !codec::tableText(displayBody) || !codec::tableText(promptBody))
+        return refuse("The message needs nonempty UTF-8 text.");
+
+    const auto* fr = accounts_ ? accounts_->friendNamed(recipient) : nullptr;
+    if (!fr || !responder_) return refuse("The recipient has no configured Nexus friend and driver.");
+    if (!state_.first(recipient) && !apply(Action{0, ActionKind::Ensure, 0, recipient, {}, {}}, why)) return false;
+    const auto& sessions = state_.sessions();
+    const auto target = std::find_if(sessions.begin(), sessions.end(), [&](const SessionRef& s) {
+        return s->info.friendName == recipient && (s->info.instance.empty() ||
+            (!fr->instances.empty() && s->info.instance == fr->instances.front().name));
+    });
+    if (target == sessions.end()) return refuse("The recipient needs a session on its default instance.");
+    const auto sessionId = (*target)->id;
+    const auto& session = *store_.find(sessionId);
+    const auto* account = accounts_->account(session.info.account);
+    if (account && (needsVerifiedLogin(*account) || !signedIn_.contains(account->name)))
+        return refuse("Sign in to the recipient's account to receive this message.");
+    if (!session.queue.empty())
+        return refuse("The recipient has older queued prompts. Delivery will retry after they are taken.");
+
+    std::string problem;
+    auto changes = responder_->prepareBus(sessionId, promptBody, problem);
+    if (!problem.empty()) {
+        responder_->sent(sessionId, false);
+        return refuse(problem);
+    }
+    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, sender + "\n" + displayBody), {}});
+    const bool accepted = store_.commit(sessionId, changes, receipt, 1, &problem);
+    responder_->sent(sessionId, accepted);
+    if (!accepted) return refuse(problem);
+    refresh(sessionId);
+    return true;
 }
 
 bool Hub::applyMessage(const Action& action, const StoredSession& session, std::string* why, const std::string& client) {

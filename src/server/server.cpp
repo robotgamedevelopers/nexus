@@ -26,6 +26,7 @@
 #include "link/bootstrap.h"
 #include "link/mosh_link.h"
 #include "server/builds.h"
+#include "server/bus_inbox.h"
 #include "server/config_repo.h"
 #include "server/drain.h"
 #include "server/driver_table.h"
@@ -420,6 +421,8 @@ private:
     DurableStore store_;
     std::unique_ptr<Drivers> drivers_;
     std::unique_ptr<sync::Hub> hub_;
+    std::unique_ptr<BusInbox> bus_;
+    Millis nextBusRefresh_ = 0;
     std::unique_ptr<ConfigRepo> config_;
     // In-app sign-in's processes (server/signin_runner.h): `claude setup-token` per flow a window claims.
     std::unique_ptr<SignInRunner> signIns_;
@@ -493,6 +496,7 @@ bool Server::restoreAll(std::string* why) {
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
+    bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
     secretFs_ = store::make_posix_fs();
@@ -945,6 +949,7 @@ void Server::configApply(int fd, const std::string& request) {
         const bool reload = request == "config reload";
         config_->applying(reload);   // only a reload commits over the working files: they are what it applies
         ok = hub_->applyAccounts(next, message, &lines);
+        nextBusRefresh_ = 0;
         config_->applying(false);
         for (const std::string& n : config_->notes()) {
             lines.push_back(n);
@@ -1100,6 +1105,11 @@ PassOrder::Outcome Server::wait(std::string* why) {
             std::fprintf(stderr, "nexus-server: config push: %s\n", pushWhy.c_str());
         }
     }
+    const auto now = nowMs();
+    if (!drain_.draining() && now >= nextBusRefresh_) {
+        bus_->refresh(dirNow("drivers"), hub_->accounts(), now);
+        nextBusRefresh_ = now + kResolveMs;
+    }
     pass_.fds = {pollfd{listen_, POLLIN, 0}};
     pass_.owner = {0};
     int waitMs = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
@@ -1131,6 +1141,11 @@ PassOrder::Outcome Server::wait(std::string* why) {
     pass_.linkFds = pass_.fds.size();
     for (const pollfd& p : drivers_->fds())
         pass_.fds.push_back(p);
+    if (!drain_.draining()) {
+        for (const auto& p : bus_->listeners.fds()) pass_.fds.push_back(p);
+        const int busWait = bus_->listeners.waitMs();
+        if (busWait >= 0) waitMs = std::min(waitMs, busWait);
+    }
     if (config_) {
         for (int fd : config_->pushFds()) {
             pass_.fds.push_back(pollfd{fd, POLLIN, 0});
@@ -1174,6 +1189,10 @@ PassOrder::Outcome Server::apply(std::string* why) {
         *why = "the store failed; stopping without acknowledging the actions since";
         return PassOrder::Outcome::Failed;
     }
+    if (!drain_.draining() && !stopping_ && bus_->listeners.serve([this](const std::string& recipient,
+                                                                         const BusMessage& message) {
+        return bus_->receive(*hub_, recipient, message);
+    })) changed = true;
     // A secret request past its deadline is refused (timeout), and a held value whose time has come is written again
     // (docs/secrets.md: a value that arrived is never dropped while the server runs), in this pass's batch like any
     // step. nexus's own ask whose paste was refused malformed is asked again.
@@ -1277,6 +1296,7 @@ PassOrder::Outcome Server::flush(std::string* why) {
 }
 
 void Server::release() {
+    bus_->listeners.flushed();
     drivers_->release(nowMs());
 }
 

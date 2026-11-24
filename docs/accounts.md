@@ -562,7 +562,30 @@ receive-pack protocols and runs SSH on the host with the configured alias. The s
 to those two sockets. Host keys must already be trusted. Grants take effect on the next driver launch.
 
 
-A Claude friend on macOS can also receive its own nova-bus notifications. Set that friend’s
-`startup.bus_listener` to the local bus address, such as `127.0.0.1:6379`. On the next driver
-launch, `nova-bus hook --as <friend>` connects to a private Unix socket that streams the output of
-the host’s nova-bus listener for that name. The grant authorizes listening for that friend only.
+### Message bus ownership
+
+For a registry-managed friend, the server uses the friend’s `startup.bus_listener` as its loopback
+Redis endpoint. Set `startup.bus_owner` to `"nexus-server"` to give that friend’s inbox to Nexus.
+For example, add these two fields to the friend’s existing startup object:
+
+```json
+{"bus_listener": "127.0.0.1:6379", "bus_owner": "nexus-server"}
+```
+
+Transfer an existing inbox by stopping its current hook before changing the registry row. Install
+the matching server and server policy runtime first. A grant with only `bus_listener` keeps the
+existing macOS Claude driver listener. Upgrading Nexus alone does not move that inbox. To move it
+back, remove `bus_owner`, wait for the server to release the inbox, then relaunch the previous hook.
+To revoke a native grant, remove both fields or disable the friend.
+
+The server refreshes grants from its friend-driver profiles every 30 seconds. A registry read
+failure drops that profile’s grants and retries in five seconds. A grant applies to one enabled
+friend with the matching harness; it grants no other inbox. The friend’s working directory is
+the local instance in the Nexus accounts and friends configuration. A connected client receives
+transcript entries for display. The bus connection and its credentials stay with the server.
+
+A message appears in the recipient's default chat, labeled with the sending AI's name in light blue.
+The message text is light blue too. Up to 4096 UTF-8 bytes appear inline. For a longer body,
+the chat shows the filename and byte count, and the friend receives a path to the complete
+`message.txt` in its workspace's `incoming/` directory. Delivery continues with all windows
+closed. Reconnecting or replaying an acknowledged message preserves its original bubble.

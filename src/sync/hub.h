@@ -160,6 +160,12 @@ public:
     // The changes a send of `prompt` makes to session `id` (the person's entry and anything after it, or a notice that
     // refuses it), which the hub commits in one step with the client's counter.
     virtual std::vector<SessionChange> send(SessionId id, const std::string& prompt) = 0;
+    // Prepare a literal prompt from the bus. On acceptance, return the driver's state changes without a person's
+    // transcript entry. On refusal, set why. The hub finishes either outcome through sent().
+    virtual std::vector<SessionChange> prepareBus(SessionId, const std::string&, std::string& why) {
+        why = "The session has no message bus responder.";
+        return {};
+    }
     // The changes a queue of `prompt` makes: the prompt at the end of the queue first, then anything that follows (the
     // oldest taken at once, when the friend is free), committed the same way.
     virtual std::vector<SessionChange> queue(SessionId id, const std::string& prompt) = 0;
@@ -253,6 +259,13 @@ public:
     // `client` given, the store's counter for it becomes action.num in the same step, and `why` says why. Returns
     // false when refused, or when the store did not take the step (failed() then says whether it can take any more).
     bool apply(const Action& action, std::string* why = nullptr, const std::string& client = std::string());
+
+    // Admit this bus envelope once into the recipient's first session on its default instance. Its transcript
+    // entry, pending turn and receipt commit together. The caller acknowledges the bus only after the batch flush.
+    bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
+                    const std::string& displayBody, const std::string& promptBody, std::string* why = nullptr);
+    // Includes receipts admitted in the current batch. The bus acknowledgement still waits for its flush.
+    bool hasBusReceipt(const std::string& recipient, const std::string& id) const;
 
     // Changes that come from the server rather than a client (a friend's reply), in one step of the store, to a session
     // it holds. False, with why, when the store did not take it.

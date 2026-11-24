@@ -50,7 +50,7 @@ add_executable(nexus_versions_test nexus_versions_test.cpp)
 target_link_libraries(nexus_versions_test PRIVATE nexus_sync nexus_wire_next_side nexus_wire_prev_side)
 target_compile_options(nexus_versions_test PRIVATE ${NEXUS_WARNINGS})
 
-foreach(group sessions actions hello signin)
+foreach(group sessions bus actions hello signin)
     add_test(NAME wire_unit_nexus_${group} COMMAND nexus_versions_test ${group})
     set_tests_properties(wire_unit_nexus_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

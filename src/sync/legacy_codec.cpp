@@ -16,6 +16,7 @@ std::string named(SessionId id) {
 // to a window of format 1 as the friend's text, as servers before format 2 sent it. A kind this build does not know (a
 // later server's) is read as a notice, which the window draws as a plain dim line.
 std::uint8_t kindOnWire(EntryKind k, std::uint32_t format) {
+    if (k == EntryKind::Bus) return static_cast<std::uint8_t>(EntryKind::Notice);
     if (format < 2 && k == EntryKind::Tool) {
         return static_cast<std::uint8_t>(EntryKind::Friend);
     }

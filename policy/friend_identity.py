@@ -40,17 +40,66 @@ def read_home_file(home, filename):
     return data.decode("utf-8")
 
 
-def resolve(config, name, harness=None):
+def registry_items(config, *arguments):
     if not isinstance(config, dict):
         raise ValueError("identities.json must be an object")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
-        raise ValueError("invalid friend name")
     command = config.get("nova_config", ["nova-config"])
     if not isinstance(command, list) or not command or not all(isinstance(v, str) and v for v in command):
         raise ValueError("nova_config must be a program and its arguments")
-    response = json.loads(output([command[0], "friend", "show", name, "--json", *command[1:]]))
-    items = response.get("items", [])
-    if response.get("result", {}).get("status") != "ok" or len(items) != 1 or items[0].get("kind") != "friend":
+    response = json.loads(output([command[0], "friend", *arguments, "--json", *command[1:]]))
+    if (not isinstance(response, dict) or not isinstance(response.get("result"), dict)
+            or response["result"].get("status") != "ok" or not isinstance(response.get("items"), list)):
+        raise ValueError("nova-config could not read the friend registry")
+    return response["items"]
+
+
+def bus_endpoint(address):
+    if address == "":
+        return ""
+    if (not isinstance(address, str) or not re.fullmatch(r"127[.]0[.]0[.]1:[1-9][0-9]{0,4}", address)
+            or int(address.rsplit(":", 1)[1]) > 65535):
+        raise ValueError("startup.bus_listener must be 127.0.0.1:<port> with port 1 through 65535")
+    return address
+
+
+def bus_owner(startup):
+    owner = startup.get("bus_owner", "")
+    if owner not in ("", "nexus-server"):
+        raise ValueError("startup.bus_owner must be nexus-server or omitted")
+    if owner and not bus_endpoint(startup.get("bus_listener", "")):
+        raise ValueError("startup.bus_owner requires startup.bus_listener for that friend")
+    return owner
+
+
+def bus_grants(config):
+    grants = []
+    for item in registry_items(config, "list"):
+        if not isinstance(item, dict) or not isinstance(item.get("fields"), dict):
+            raise ValueError("nova-config returned invalid friend registry fields")
+        row = item["fields"]
+        if item.get("kind") != "friend" or row.get("enabled") is not True:
+            continue
+        startup = row.get("startup") or {}
+        if not isinstance(startup, dict):
+            raise ValueError("the friend registry startup field must be an object")
+        if bus_owner(startup) != "nexus-server":
+            continue
+        address = bus_endpoint(startup["bus_listener"])
+        name, harness = row.get("name"), row.get("harness")
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name)
+                or not isinstance(harness, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", harness)):
+            raise ValueError("invalid friend name or harness on a message bus grant")
+        grants.append((name, harness, address))
+    if len({name for name, _, _ in grants}) != len(grants):
+        raise ValueError("nova-config returned two message bus grants for one friend")
+    return grants
+
+
+def resolve(config, name, harness=None):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
+        raise ValueError("invalid friend name")
+    items = registry_items(config, "show", name)
+    if len(items) != 1 or items[0].get("kind") != "friend":
         raise ValueError(f"nova-config returned no unique definition for {name}")
     row = items[0]["fields"]
     if row.get("name") != name or row.get("enabled") is not True:
@@ -100,6 +149,6 @@ def resolve(config, name, harness=None):
     return prompt, {"friend": name, "harness": route, "model": model, "home": home,
                     "repository": spec.get("repository", ""), "pronouns": row.get("pronouns", ""),
                     "writable_dirs": directories("writable_dirs"), "readable_dirs": directories("readable_dirs"),
-                    "bus_listener": spec.get("bus_listener", ""),
+                    "bus_listener": bus_endpoint(spec.get("bus_listener", "")), "bus_owner": bus_owner(spec),
                     "github_ssh_alias": spec.get("github_ssh_alias", ""), "revision": revision, "files": files,
                     "sha256": hashlib.sha256(prompt.encode()).hexdigest()}

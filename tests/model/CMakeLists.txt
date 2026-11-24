@@ -21,6 +21,11 @@ add_custom_target(model_checks DEPENDS model_test overlay_test)
 # The walks whose traces TLC checks, which run on Linux and macOS only: a native Windows build has no TLC tests
 # (tlc_test below) and so no walks (NEXUS_SERVER_PARTS in CMakeLists.txt).
 if(NEXUS_SERVER_PARTS)
+    add_executable(bus_delivery_trace bus_delivery_trace.cpp)
+    target_link_libraries(bus_delivery_trace PRIVATE nexus_durable)
+    target_compile_options(bus_delivery_trace PRIVATE ${warnings})
+    add_dependencies(model_checks bus_delivery_trace)
+
     add_executable(trace_walk trace_walk.cpp)
     target_link_libraries(trace_walk PRIVATE nexus_model)
     target_compile_options(trace_walk PRIVATE ${warnings})
@@ -102,7 +107,7 @@ function(tlc_test name module cfg expect)
         return()
     endif()
     set(options PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
-        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK)
+        SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
     # SPLIT P=A+B: <name>_rest checks every property of the cfg but P, and <name>_temporal_1, _2 check A and B in its
@@ -161,7 +166,9 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DSPLIT=${T_SPLITMODE})
     endif()
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
-    if(T_PICKERTRACE)
+    if(T_BUSDELIVERYTRACE)
+        list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
+    elseif(T_PICKERTRACE)
         list(APPEND defs -DPICKERWALK=$<TARGET_FILE:account_picker_trace>)
     elseif(T_PLUGINTRACE)
         list(APPEND defs -DWALK=$<TARGET_FILE:trace_walk> -DPLUGINTRACE=ON -DDATA=PluginTabTraceData)
@@ -218,6 +225,12 @@ function(tlc_test name module cfg expect)
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${tlc_script})
     set_tests_properties(${name} PROPERTIES LABELS ${label} TIMEOUT ${ctest_timeout} PROCESSORS ${T_WORKERS})
 endfunction()
+
+tlc_test(tlc_bus_delivery_spec BusDelivery BusDelivery.cfg pass)
+tlc_test(tlc_bus_delivery_early_reply BusDelivery witnesses/WBusEarlyReply.cfg invariant PROPERTY AckOnlyDurable)
+tlc_test(tlc_bus_delivery_cleared_bubble BusDelivery witnesses/WBusDedupFromBubble.cfg invariant PROPERTY AdmittedOnce)
+tlc_test(tlc_bus_delivery_global_receipt BusDelivery witnesses/WBusGlobalReceipt.cfg invariant PROPERTY AckOnlyDurable)
+tlc_test(tlc_bus_delivery_trace BusDeliveryTrace BusDeliveryTrace.cfg pass BUSDELIVERYTRACE)
 
 # The spec, every property, no error. The instances with tens of thousands of states get eight workers: TLC's time on
 # them falls nearly in proportion (MCWindow3.cfg 28 s on two workers, 8 s on eight, on the studio at full speed).

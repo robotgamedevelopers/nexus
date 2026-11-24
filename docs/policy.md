@@ -245,6 +245,7 @@ The Starlark `window` result accepts these color settings, also available in the
 | --- | --- |
 | `transcript_style.ink` | AI reply text |
 | `transcript_style.person_ink` | Sent and queued message text |
+| `transcript_style.bus_ink` | Sender and message text in a message bus bubble (default `#86c5ff`) |
 | `transcript_style.fill` | Sent message bubbles and tool blocks |
 | `transcript_style.panel_fill` | Output panel (defaults to the tab strip fill) |
 | `transcript_style.command_ink` | AI tool activity, including shell commands |

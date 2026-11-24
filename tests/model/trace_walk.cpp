@@ -287,6 +287,7 @@ const char* kind_name(EntryKind k) {
     case EntryKind::Friend: return "Friend";
     case EntryKind::Notice: return "Notice";
     case EntryKind::Tool: return "Tool";
+    case EntryKind::Bus: return "Bus";
     }
     return "?";
 }

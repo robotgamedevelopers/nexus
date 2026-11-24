@@ -118,6 +118,7 @@ public:
     // sync::Responder: a send, a queue (Command-Enter) and a stop (Command-Escape) of the person's, each committed by
     // the hub with the window's action before anything is written to a driver.
     std::vector<sync::SessionChange> send(sync::SessionId id, const std::string& prompt) override;
+    std::vector<sync::SessionChange> prepareBus(sync::SessionId id, const std::string& prompt, std::string& why) override;
     std::vector<sync::SessionChange> queue(sync::SessionId id, const std::string& prompt) override;
     std::vector<sync::SessionChange> resetContext(sync::SessionId, const sync::DriverState&, bool compact) override;
     std::string friendInfo(const std::string&) const override;
@@ -207,6 +208,7 @@ private:
     Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);
     Supervisor& pending(sync::SessionId id, const ResolvedDriver& driver, Millis now);
+    std::vector<sync::SessionChange> preparePrompt(sync::SessionId id, const std::string& prompt, std::string* busRefusal);
     std::vector<sync::SessionChange> changes(const Output& out, const Supervisor& sup) const;
     bool showOpen(sync::SessionId id, const Slot& t);
     bool showResolved(sync::SessionId id, const ResolvedDriver& driver);

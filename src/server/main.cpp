@@ -57,6 +57,7 @@
 #include "link/bootstrap.h"
 #include "no_core.h"
 #include "server/builds.h"
+#include "server/bus_listener.h"
 #include "server/handover.h"
 #include "server/home.h"
 #include "server/server.h"
@@ -128,6 +129,7 @@ int main(int argc, char** argv) {
     if (argc < 2)
         return usage();
     const std::string command = argv[1];
+    if (command == "bus-deliver") return argc == 3 ? nexus::server::busDeliver(argv[2]) : usage();
     std::string dir;
     nexus::server::Client client;
     bool haveNext = false;

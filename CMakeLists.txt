@@ -340,9 +340,13 @@ if(NEXUS_LINK)
     target_link_libraries(nexus_link PUBLIC nexus_sync nexus_window_logic mosh_transport)
 
     # The server the window talks to with --server: headless, on the machine that keeps going.
+    add_library(nexus_bus STATIC src/server/bus_listener.cpp src/server/bus_attachment.cpp
+        src/server/bus_grants.cpp src/server/bus_inbox.cpp)
+    target_compile_options(nexus_bus PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_bus PUBLIC nexus_link nexus_builds nexus_drivers)
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_server PUBLIC nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
+    target_link_libraries(nexus_server PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
         nexus_signin_runner nexus_handover nexus_supervision)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
@@ -358,7 +362,7 @@ if(NEXUS_LINK)
     add_library(nexus_server_leaky STATIC EXCLUDE_FROM_ALL src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
     target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
-    target_link_libraries(nexus_server_leaky PUBLIC nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo
+    target_link_libraries(nexus_server_leaky PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo
         nexus_builds nexus_signin_runner nexus_handover nexus_supervision)
     add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
     target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})

@@ -47,6 +47,10 @@ later field goes after them.
   claims nothing about who wrote it.
 - Unknown activity: **Busy** (the pulsing light blue). Something a later server knows is going on; busy says work
   may be under way without claiming the friend is waiting (idle) or broken (down). A stop is always allowed.
+- A server records an incoming bus message as framed store entry kind 5 and sends it as `EntryKind.Bus` on a
+  table link. Its text starts with the bus sender’s name and one newline, followed by the display body. Newlines
+  in the body are preserved. Windows use the entry kind to identify bus traffic. An older table reader renders
+  the text as a Notice. On links of formats 1 to 3 the server sends the text as a Notice directly.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
 - Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
   action; the server, which knows the link's format, never offers that window a request.

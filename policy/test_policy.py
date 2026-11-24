@@ -77,6 +77,23 @@ class PersonalPolicy(unittest.TestCase):
         publish()
         flags, _ = json.loads(subprocess.check_output(command, text=True))
         self.assertEqual([flags[i+1] for i, flag in enumerate(flags) if flag == "--write-dir"], startup["writable_dirs"])
+        startup["bus_listener"] = "127.0.0.1:6379"
+        startup["bus_owner"] = "nexus-server"
+        publish()
+        flags, _ = json.loads(subprocess.check_output(command, text=True))
+        self.assertNotIn("--bus-listener", flags)
+        self.assertNotIn("127.0.0.1:6379", flags)
+        # Existing Claude listener grants remain driver-owned until explicitly transferred.
+        startup.pop("bus_owner")
+        fixture["items"][0]["fields"]["harness"] = "claude"
+        publish()
+        claude = list(command)
+        claude[claude.index("codex")] = "claude"
+        flags, _ = json.loads(subprocess.check_output(claude, text=True))
+        self.assertEqual(flags[flags.index("--bus-listener") + 1], "review@127.0.0.1:6379")
+        startup.pop("bus_listener")
+        fixture["items"][0]["fields"]["harness"] = "codex"
+        publish()
         different = subprocess.run([*self.command, "identity", str(self.profile), "review", "--harness", "claude"],
                                    capture_output=True, text=True)
         self.assertNotEqual(different.returncode, 0)
@@ -85,6 +102,35 @@ class PersonalPolicy(unittest.TestCase):
         refused = subprocess.run(command, capture_output=True, text=True)
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(json.loads(refused.stdout.splitlines()[1])["kind"], "error")
+
+    def test_bus_grants_are_explicit_server_subscriptions(self):
+        root = self.profile.parent
+        registry = root / "registry"
+        registry.write_text("#!" + sys.executable + "\nimport pathlib,sys\n"
+                            "assert sys.argv[1:] == ['friend','list','--json']\n"
+                            "print(pathlib.Path(__file__).with_name('rows.json').read_text())\n")
+        registry.chmod(0o700)
+        (self.profile / "identities.json").write_text(json.dumps({"nova_config": [str(registry)]}))
+
+        def row(name, harness, startup, enabled=True):
+            return {"kind": "friend", "fields": {"name": name, "harness": harness,
+                    "enabled": enabled, "startup": startup}}
+
+        def query(rows):
+            (root / "rows.json").write_text(json.dumps({"result": {"status": "ok"}, "items": rows}))
+            return subprocess.run([*self.command, "bus-grants", str(self.profile)], capture_output=True, text=True)
+
+        grant = {"bus_owner": "nexus-server", "bus_listener": "127.0.0.1:6379"}
+        rows = [row("one", "codex", grant), row("two", "claude", {"bus_listener": "127.0.0.1:6379"}),
+                row("three", "claude", grant, False), row("four", "muse", {})]
+        got = query(rows)
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(got.stdout, "one\tcodex\t127.0.0.1:6379\n")
+        for address in ("::1:6379", "127.0.0.1:65536", "127.0.0.1:0", "db:6379", "", None):
+            with self.subTest(address=address):
+                invalid = query([*rows, row("bad", "claude", dict(grant, bus_listener=address))])
+                self.assertNotEqual(invalid.returncode, 0)
+                self.assertEqual(invalid.stdout, "")
 
     def test_refusals(self):
         sources = ['load("other.star", "x")', 'print("unframed output")',

@@ -28,6 +28,7 @@ enum EntryKind
     Friend,
     Notice,
     Tool,
+    Bus,
     Image
 }
 

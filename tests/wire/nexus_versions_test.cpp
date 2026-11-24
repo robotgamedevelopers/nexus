@@ -350,6 +350,40 @@ void test_signin() {
     CHECK(newer.unknown() == 0 && newer.offers().empty() && newer.sessions().size() == 1 && newer.requests().size() == 1);
 }
 
+void test_bus() {
+    const std::string payload = "bo\nfirst line\nsecond line";
+    const Sessions complete({session(7, "ada", Activity::Idle, {entry(nexus::EntryKind::Bus, payload)})});
+    // A wire diff can carry only the suffix of an entry already held. Its kind and sender survive
+    // when that suffix contains more lines of the body.
+    const Sessions partial({session(7, "ada", Activity::Idle, {entry(nexus::EntryKind::Bus, "bo\nfirst", false)})});
+    Sessions receiver;
+    receiver.apply_string(partial.init_diff());
+    receiver.apply_string(complete.diff_from(partial));
+    CHECK(receiver == complete);
+
+    const auto snapshot = bytes(complete.init_diff());
+    const std::vector<std::string> texts{payload};
+    const auto previous = wiretest::prevReadSessions(snapshot);
+    CHECK(previous.loaded && !previous.damaged && !previous.refused && previous.unknown == 1);
+    CHECK(previous.kinds == std::vector<std::string>{"None"} && previous.texts == texts);
+    const auto next = wiretest::nextReadSessions(snapshot);
+    CHECK(next.loaded && !next.damaged && !next.refused && next.unknown == 0);
+    CHECK(next.kinds == std::vector<std::string>{"Bus"} && next.texts == texts);
+
+    for (std::uint32_t format : {1u, 2u, 3u}) {
+        Sessions server = complete;
+        server.setFormat(format);
+        Sessions window;
+        window.setFormat(format);
+        window.apply_string(server.init_diff());
+        const auto* visible = window.find(7);
+        CHECK(visible && visible->entries.size() == 1);
+        if (visible && visible->entries.size() == 1) {
+            CHECK(visible->entries[0]->kind == nexus::EntryKind::Notice && visible->entries[0]->text == payload);
+        }
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -357,6 +391,7 @@ struct Group {
 
 const Group groups[] = {
     {"sessions", test_sessions},
+    {"bus", test_bus},
     {"actions", test_actions},
     {"hello", test_hello},
     {"signin", test_signin},

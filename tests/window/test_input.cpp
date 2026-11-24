@@ -1143,6 +1143,28 @@ void copyMarkdownConversation() {
     CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 1);
 }
 
+void namedBusBubbles() {
+    Harness h;
+    h.model.append(0, {EntryKind::Bus, "sage\n**Build passed** and [logs](https://example.test/log)"});
+    h.model.append(0, {EntryKind::Bus, "birch\nmessage.txt (4097 bytes)"});
+    h.model.append(0, {EntryKind::Person, "nova-bus: this is ordinary human text"});
+    for (int i = 0; i < 2; ++i) {
+        h.view.windowApp.transcriptStyle.linkInk = 0x00ff00;
+        h.frame();
+    }
+    const TranscriptStyle stock;
+    CHECK(h.look.transcriptStyle.linkInk == 0x00ff00);
+    const auto first = checkTextPaint(h, "sage", stock.busInk, stock.fill);
+    CHECK(checkTextPaint(h, "Build passed", stock.busInk, stock.fill) == first);
+    CHECK(checkTextPaint(h, "logs", stock.busInk, stock.fill) == first);
+    const auto second = checkTextPaint(h, "birch", stock.busInk, stock.fill);
+    CHECK(checkTextPaint(h, "message.txt (4097 bytes)", stock.busInk, stock.fill) == second);
+    CHECK(first != second);
+    const auto human = checkTextPaint(h, "nova-bus: this is ordinary human text", stock.personInk, stock.fill);
+    CHECK(h.bounds(first).left < h.bounds(human).left);
+    CHECK(h.bounds(h.findText(h.window(), "sage")).bottom <= h.bounds(h.findText(h.window(), "Build passed")).top + 1);
+}
+
 void markdownListsAndLinks() {
     Harness h;
     const std::string words = "First line wraps onto the next when several more words fill the available width and force it to wrap across the column.";
@@ -3029,6 +3051,7 @@ int main(int argc, char** argv) {
     newGlyphsFadeWithoutRelightingOldText();
     noModelUnderThePrompt();
     switchNoticeBubble();
+    namedBusBubbles();
     copyMarkdownConversation();
     markdownListsAndLinks();
     conversationBubblesAndSignInCard();

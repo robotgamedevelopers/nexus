@@ -14,7 +14,7 @@ namespace nexuswirenext {
 // sides at the same id speak identical bits; there is no other versioning.
 inline constexpr uint64_t ProtocolId = 0x2f2450356481543cull;
 
-// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 5] (SPEC §4.2)
+// enum EntryKind — None = 0 implicit, variants dense from 1, wire range [0, 6] (SPEC §4.2)
 enum class EntryKind : uint8_t
 {
     None = 0,
@@ -22,8 +22,9 @@ enum class EntryKind : uint8_t
     Friend = 2,
     Notice = 3,
     Tool = 4,
-    Image = 5,
-    Max = 5, // the exported extent (SPEC §4.2)
+    Bus = 5,
+    Image = 6,
+    Max = 6, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any EntryKind value, out-of-set included
@@ -36,6 +37,7 @@ inline const char * EnumName( EntryKind value )
         case EntryKind::Friend: return "Friend";
         case EntryKind::Notice: return "Notice";
         case EntryKind::Tool: return "Tool";
+        case EntryKind::Bus: return "Bus";
         case EntryKind::Image: return "Image";
         default: return "???";
     }

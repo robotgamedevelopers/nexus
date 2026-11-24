@@ -534,6 +534,16 @@ Supervisor& Drivers::pending(sync::SessionId id, const ResolvedDriver& driver, M
 }
 
 std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::string& prompt) {
+    return preparePrompt(id, prompt, nullptr);
+}
+
+std::vector<sync::SessionChange> Drivers::prepareBus(sync::SessionId id, const std::string& prompt, std::string& why) {
+    why.clear();
+    return preparePrompt(id, prompt, &why);
+}
+
+std::vector<sync::SessionChange> Drivers::preparePrompt(sync::SessionId id, const std::string& prompt,
+                                                       std::string* busRefusal) {
     const Millis now = options_.clock();
     pendingSup_.reset();
     pendingOut_ = Output{};
@@ -541,10 +551,18 @@ std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::st
     // friends.json gets the notice that says how to put it back.
     const ResolvedDriver r = resolve(id);
     if (!r.problem.empty()) {
+        if (busRefusal) {
+            *busRefusal = r.problem;
+            return {};
+        }
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
             r.problem), {}}};
     }
     if (!listed(id)) {
+        if (busRefusal) {
+            *busRefusal = "The message bus recipient is not in the current friend roster.";
+            return {};
+        }
         const std::string name = friendOf(id);
         const bool none = hub_ == nullptr || hub_->accounts() == nullptr;
         return {sync::SessionChange{entry(EntryKind::Person, prompt), {}}, sync::SessionChange{entry(EntryKind::Notice,
@@ -556,7 +574,17 @@ std::vector<sync::SessionChange> Drivers::send(sync::SessionId id, const std::st
             "`nexus-server config reload` (docs/accounts.md); this session and its queued prompts are kept."), {}}};
     }
     Supervisor& sup = pending(id, r, now);
-    append(pendingOut_, sup.prompt(prompt, now));
+    auto submitted = sup.prompt(prompt, now);
+    if (busRefusal) {
+        // Supervisor::prompt emits its admission first, before any effects of starting or advancing the turn.
+        // A refused bus message stays in its inbox. An admitted one has its attributed entry written by the hub.
+        if (submitted.effects.empty() || submitted.effects.front().what != Effect::What::Prompt) {
+            *busRefusal = submitted.effects.empty() ? "The driver could not admit the message." : submitted.effects.front().text;
+            return {};
+        }
+        submitted.effects.erase(submitted.effects.begin());
+    }
+    append(pendingOut_, std::move(submitted));
     return changes(pendingOut_, sup);
 }
 

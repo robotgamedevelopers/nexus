@@ -29,7 +29,8 @@ enum EntryKind
     Person,
     Friend,
     Notice,
-    Tool
+    Tool,
+    Bus
 }
 
 // What a session's friend is doing. Absent (a writer that never sent it) reads Idle, which claims least; an unknown

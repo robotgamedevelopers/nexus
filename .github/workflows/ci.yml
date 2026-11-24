@@ -1174,6 +1174,9 @@ jobs:
           # One pass of nexus-server's loop (models/LoopPass.tla): its temporal instance in loop-pass-spec (no walk
           # build), and its two-window instance, eleven reversed witnesses, five seeded code walks and five faulty
           # walks in loop-pass-rest.
+          - shard: bus-delivery
+            run: '^tlc_bus_delivery_'
+            build: bus_delivery_trace
           - shard: loop-pass-spec
             run: '^tlc_loop_pass_spec$'
           - shard: loop-pass-rest
@@ -1185,7 +1188,7 @@ jobs:
           - shard: window
             run: ''
             build: trace_walk
-            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass)'
+            skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:
       CC: clang

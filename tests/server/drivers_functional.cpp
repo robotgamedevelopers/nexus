@@ -729,6 +729,55 @@ bool signedIn(Server& s, const std::string& account) {
     return s.hub->signedIn().count(account) == 1;
 }
 
+// A bus prompt takes the real driver's bounded admission route, with its own transcript attribution.
+void busAdmission(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string sends = dir + "/bus-sends";
+    const std::string record = "send\nrecord-send " + sends + "\n";
+    const std::string done = "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    setUpAccounts(s, dir, fake, std::string(kHello) + record + "await-stop\n" + done +
+        record + done + record + done + record + done);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
+    CHECK(s.hub->apply(sync::Action{0, sync::ActionKind::Create, 0, "ada", {}, {}}));
+    std::string why;
+    auto receive = [&](const std::string& id, const std::string& text) {
+        return s.hub->receiveBus("ada", id, "bea", text, text, &why);
+    };
+    CHECK(!receive("100-0", "/clear") && !s.hub->hasBusReceipt("ada", "100-0"));
+    s.hub->reportSignedIn("a1", true);
+    CHECK(!receive("0100-0", "/clear") && !receive("18446744073709551616-0", "/clear"));
+    CHECK(!s.hub->receiveBus("ada", "100-0", "bea\nspoof", "/clear", "/clear", &why));
+    CHECK(!s.hub->receiveBus("ada", "100-0", "bea", std::string("x\0y", 3), "/clear", &why));
+    CHECK(!s.hub->hasBusReceipt("ada", "100-0"));
+    CHECK(receive("100-0", "/clear"));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "/clear\n"); }, 10));
+    const auto* primary = s.store.find(kAda);
+    CHECK(primary->info.contextEpoch == 0);
+    CHECK(primary->transcript.back()->kind == EntryKind::Bus && primary->transcript.back()->text == "bea\n/clear");
+
+    // The open turn stays open, the next incoming turn waits. Older explicitly queued work has priority.
+    CHECK(receive("99-0", "/model literal"));
+    CHECK(s.driver().waiting == std::vector<std::string>{"/model literal"});
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Queue, "human queued")));
+    CHECK(!receive("101-0", "later") && !s.hub->hasBusReceipt("ada", "101-0"));
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "human queued\n") && idle(s); }, 10));
+    CHECK(receive("101-0", "later"));
+    CHECK(s.serveUntil([&] { return has(readFile(sends), "later\n") && idle(s); }, 10));
+    const std::string observed = readFile(sends);
+    CHECK(observed == "send 1:\n/clear\nsend 2:\n/model literal\nsend 3:\nhuman queued\nsend 4:\nlater\n");
+    CHECK(s.store.find(2)->driver.nextTurn == 1);
+    for (const auto& e : primary->transcript)
+        CHECK(e->kind != EntryKind::Person || e->text == "human queued");
+
+    // The receipt outlives the visible message and a login change. A replay cannot affect another recipient.
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Send, "/clear")));
+    s.hub->reportSignedIn("a1", false);
+    const auto afterClear = primary->transcript.size();
+    CHECK(receive("100-0", "different replay body") && why.empty());
+    CHECK(primary->transcript.size() == afterClear && primary->driver.nextTurn == 5);
+    CHECK(!s.hub->hasBusReceipt("bea", "100-0") && !s.hub->hasBusReceipt("ada:100-0", "101-0"));
+}
+
 // A driver's credential event reports its account signed in, and the driver runs on the session's account: the
 // drivers file's --account value is replaced by it.
 void signIn(Server& s, const std::string& dir, const std::string& fake) {
@@ -1768,7 +1817,7 @@ int main(int argc, char** argv) {
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
-                {"window", window}, {"sign_in", signIn}, {"no_credential", noCredential},
+                {"window", window}, {"bus_admission", busAdmission}, {"sign_in", signIn}, {"no_credential", noCredential},
                 {"usage_limit", usageLimit}, {"continuation", continuation},
                 {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
                 {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},

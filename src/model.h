@@ -13,7 +13,9 @@ struct FriendInfo { std::string name; std::string model; };
 
 // Person: the person's prompt; Friend: the friend's text; Notice: a line from nexus; Tool: the friend used a tool, one
 // line naming it and what it does (its name, a colon, its summary).
-enum class EntryKind { Person, Friend, Notice, Tool };
+// Bus is an envelope accepted by the server. Its text is the sender, one newline, then the display body.
+// Value 4 is reserved for a durable context boundary and is never a visible entry.
+enum class EntryKind { Person, Friend, Notice, Tool, Bus = 5 };
 
 inline constexpr std::string_view kAccountSwitchPrefix = "Switched to ";
 struct Entry {

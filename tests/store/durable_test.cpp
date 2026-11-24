@@ -12,6 +12,7 @@
 #include "store/journal.h"
 #include "sync/actions.h"
 #include "sync/hub.h"
+#include "sync/mirror.h"
 
 #include <cstdio>
 #include <cstring>
@@ -454,7 +455,7 @@ void test_migrate() {
 }
 
 // An entry of a kind a later server wrote, which this build does not know, is shown as a notice (a plain dim line);
-// the kinds it knows, Tool among them, as they are.
+// the clear boundary still consumes kind 4, and Tool and Bus survive with their original kinds.
 void test_kinds() {
     store::MemFs fs;
     {
@@ -464,10 +465,10 @@ void test_kinds() {
         made.kind = store::Change::Kind::SetInfo;
         made.info = store::Info{"ada", "claude", "", "", ""};
         std::vector<store::Change> step = {made};
-        for (std::uint8_t kind : {std::uint8_t(3), std::uint8_t(7)}) {
+        for (std::uint8_t kind : {0, 4, 3, 5, 7}) {
             store::Change c;
             c.kind = store::Change::Kind::Append;
-            c.entry = store::Entry{kind, "kind " + std::to_string(kind), true};
+            c.entry = store::Entry{kind, kind == 5 ? "bo\nhello" : "kind " + std::to_string(kind), true};
             step.push_back(c);
         }
         CHECK(s != nullptr && s->commit(1, step).is_ok());
@@ -475,10 +476,11 @@ void test_kinds() {
     server::DurableStore ds;
     CHECK(openOn(fs, ds));
     const StoredSession* t = ds.find(1);
-    CHECK(t != nullptr && t->transcript.size() == 2);
-    if (t != nullptr && t->transcript.size() == 2) {
+    CHECK(t != nullptr && t->info.contextEpoch == 1 && t->transcript.size() == 3);
+    if (t != nullptr && t->transcript.size() == 3) {
         CHECK(t->transcript[0]->kind == EntryKind::Tool && t->transcript[0]->text == "kind 3");
-        CHECK(t->transcript[1]->kind == EntryKind::Notice && t->transcript[1]->text == "kind 7");
+        CHECK(t->transcript[1]->kind == EntryKind::Bus && t->transcript[1]->text == "bo\nhello");
+        CHECK(t->transcript[2]->kind == EntryKind::Notice && t->transcript[2]->text == "kind 7");
     }
 }
 
@@ -513,6 +515,41 @@ void test_switch_notice_reconnect() {
     }
 }
 
+// A new window can reconstruct the sender and body after journal recovery or compaction. An
+// identical human-authored payload remains a human entry, even when it resembles a bus record.
+void test_bus_reconnect() {
+    const std::string payload = "bo\nfirst line\nsecond line";
+    for (bool compact : {false, true}) {
+        store::MemFs fs;
+        {
+            server::DurableStore ds;
+            store::StoreOptions options;
+            if (compact) options.compact_bytes = 0;
+            CHECK(openOn(fs, ds, options));
+            Hub hub(ds);
+            CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
+            CHECK(hub.commit(1, {{entry(EntryKind::Person, payload), {}},
+                                 {entry(EntryKind::Bus, payload), {}}}, nullptr));
+        }
+        fs.crash(fs.plan_all(false));
+        server::DurableStore recovered;
+        CHECK(openOn(fs, recovered));
+        Hub server(recovered);
+        Sessions window;
+        window.apply_string(server.state().init_diff());
+        Model model({{"ada", ""}});
+        Mirror mirror;
+        CHECK(mirror.apply(model, window));
+        CHECK(!mirror.apply(model, window));
+        const auto& transcript = model.tab(0).transcript;
+        CHECK(transcript.size() == 2);
+        if (transcript.size() == 2) {
+            CHECK(transcript[0].kind == EntryKind::Person && transcript[0].text == payload);
+            CHECK(transcript[1].kind == EntryKind::Bus && transcript[1].text == payload);
+        }
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -520,7 +557,8 @@ struct Group {
 
 const Group kGroups[] = {{"restart", test_restart}, {"resend", test_resend}, {"crash", test_crash},
                          {"batch", test_batch}, {"batch_flush", test_batch_flush}, {"take", test_take},
-                         {"migrate", test_migrate}, {"kinds", test_kinds}, {"switch_notice_reconnect", test_switch_notice_reconnect}};
+                         {"migrate", test_migrate}, {"kinds", test_kinds}, {"switch_notice_reconnect", test_switch_notice_reconnect},
+                         {"bus_reconnect", test_bus_reconnect}};
 
 } // namespace
 

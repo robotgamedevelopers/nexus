@@ -128,11 +128,30 @@ if(NOT WIN32)
     endforeach()
 endif()
 
+if(NEXUS_LINK)
+    foreach(test bus_attachment_functional bus_listener_functional bus_grants_functional)
+        add_executable(${test} ${test}.cpp)
+        target_compile_options(${test} PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(${test} PRIVATE nexus_bus)
+        add_test(NAME ${test} COMMAND ${test})
+        set_tests_properties(${test} PROPERTIES LABELS functional TIMEOUT 30)
+    endforeach()
+    if(Python3_Interpreter_FOUND)
+        add_executable(bus_chat_probe bus_chat_probe.cpp)
+        target_compile_options(bus_chat_probe PRIVATE ${NEXUS_WARNINGS})
+        target_link_libraries(bus_chat_probe PRIVATE nexus_link)
+        add_test(NAME bus_chat_functional COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/bus_chat_functional.py $<TARGET_FILE:nexus-server>
+            $<TARGET_FILE:nexus_fake_driver> $<TARGET_FILE:bus_chat_probe>)
+        set_tests_properties(bus_chat_functional PROPERTIES LABELS functional TIMEOUT 60)
+    endif()
+endif()
+
 # Each case in a directory of its own under the build tree.
 if(NOT WIN32)
     foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
-                 stop_hammered account window unconfigured sign_in no_credential usage_limit continuation fable_switch_account fable_switch_model limit_unsupported no_account
+                 stop_hammered account window unconfigured bus_admission sign_in no_credential usage_limit continuation fable_switch_account fable_switch_model limit_unsupported no_account
                  friend_removed friend_back_limited friend_removed_starting friend_back_before_stop
                  friend_back_limited_queue friend_back_moved friend_back_account no_registry no_registry_listed
                  instance_dir instance_elsewhere instance_moved

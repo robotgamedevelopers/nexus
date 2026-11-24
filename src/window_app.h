@@ -93,6 +93,7 @@ struct TranscriptStyle {
     unsigned fill = 0x252525;
     unsigned ink = 0xf3f3f3;
     unsigned personInk = ink;
+    unsigned busInk = 0x86c5ff;
     std::map<std::string, unsigned, std::less<>> messageInks;
     std::optional<unsigned> panelFill, linkInk, readPathInk, commandInk, codeInk;
     unsigned codeFill = 0x303030;

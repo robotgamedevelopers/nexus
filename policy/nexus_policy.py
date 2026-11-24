@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from friend_identity import resolve
+from friend_identity import bus_grants, resolve
 
 import starlark
 
@@ -102,6 +102,8 @@ def cli():
     driver.add_argument("node")
     driver.add_argument("entry")
     driver.add_argument("arguments", nargs=argparse.REMAINDER)
+    bus = commands.add_parser("bus-grants", help="list enabled friend, harness and loopback endpoint grants for nexus-server")
+    bus.add_argument("profile", type=Path)
     inspect = commands.add_parser("identity", help="verify the friend definition and home without starting a model")
     inspect.add_argument("profile", type=Path)
     inspect.add_argument("friend")
@@ -114,12 +116,16 @@ def cli():
     launch.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
-        if args.command in ("identity", "friend-driver"):
+        if args.command in ("identity", "friend-driver", "bus-grants"):
             directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 config = json.loads(read_profile_file(directory, "identities.json"))
             finally:
                 os.close(directory)
+            if args.command == "bus-grants":
+                for grant in bus_grants(config):
+                    print("\t".join(grant))
+                return 0
             instructions, identity = resolve(config, args.friend, args.harness)
             if args.command == "identity":
                 print(json.dumps(identity))
@@ -141,12 +147,11 @@ def cli():
                 extra.extend(["--limit", "cwd"])
             for path in identity["writable_dirs"]:
                 extra.extend(["--write-dir", path])
-            if identity["bus_listener"]:
-                address = identity["bus_listener"]
-                if (args.harness != "claude" or not isinstance(address, str) or not re.fullmatch(r"127[.]0[.]0[.]1:[1-9][0-9]{0,4}", address)
-                        or int(address.split(":")[1]) > 65535):
-                    raise ValueError("bus_listener requires a Claude friend and a loopback Redis endpoint")
-                extra.extend(["--bus-listener", args.friend + "@" + address])
+            # Existing registry rows keep their driver listener until the inbox owner transfers it.
+            if identity["bus_listener"] and not identity["bus_owner"]:
+                if args.harness != "claude":
+                    raise ValueError("a driver-owned bus_listener requires a Claude friend")
+                extra.extend(["--bus-listener", args.friend + "@" + identity["bus_listener"]])
             if identity["readable_dirs"] or identity["github_ssh_alias"]:
                 if args.harness != "claude":
                     raise ValueError("this harness does not implement read-only directory and GitHub grants")

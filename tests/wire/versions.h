@@ -24,6 +24,7 @@ struct Read {
     bool titlePresent = false;  // the later version's added field (a reader of this version never sees it)
     std::string title;
     std::vector<std::string> kinds;     // each entry's kind, by name ("None": a kind the reader does not know)
+    std::vector<std::string> texts;     // each entry's text tail, in order
     std::vector<std::string> changes;   // each record change's arm, by name ("None": an arm the reader does not know)
     std::vector<std::string> queue;     // the first session's queue
     int sessions = 0;                   // how many sessions the diff names
