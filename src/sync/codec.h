@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,6 +48,7 @@ struct SessionChange {
     bool queueChanged = false;
     std::vector<std::string> queue;
     std::uint32_t activeAgents = 0;
+    std::optional<std::vector<std::string>> busSenders{};
 };
 
 // A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends

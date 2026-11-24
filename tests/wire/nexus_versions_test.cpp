@@ -370,14 +370,36 @@ void test_bus() {
     CHECK(next.loaded && !next.damaged && !next.refused && next.unknown == 0);
     CHECK(next.kinds == std::vector<std::string>{"Bus"} && next.texts == texts);
 
+    auto withSenders = [&](std::vector<std::string> senders) {
+        auto view = std::make_shared<SessionView>(*complete.sessions().front());
+        view->busSenders = std::move(senders);
+        return Sessions({view});
+    };
+    const std::vector<std::string> senders{"bo", "cy"};
+    const Sessions known = withSenders(senders);
+    const Sessions none = withSenders({});
+    CHECK(receiver.find(7) && !receiver.find(7)->busSenders);
+    receiver.apply_string(known.diff_from(complete));
+    CHECK(receiver.find(7) && receiver.find(7)->busSenders == senders);
+    receiver.apply_string(none.diff_from(known));
+    CHECK(receiver.find(7) && receiver.find(7)->busSenders && receiver.find(7)->busSenders->empty());
+    receiver.apply_string(complete.diff_from(none));
+    CHECK(receiver.find(7) && !receiver.find(7)->busSenders);
+    const auto earlier = wiretest::prevReadSessions(bytes(known.init_diff()));
+    CHECK(earlier.loaded && !earlier.damaged && !earlier.refused);
+    CHECK(earlier.unknown > previous.unknown && earlier.kinds == previous.kinds && earlier.texts == texts);
+
     for (std::uint32_t format : {1u, 2u, 3u}) {
-        Sessions server = complete;
+        Sessions server = known;
         server.setFormat(format);
+        Sessions withoutSenders = complete;
+        withoutSenders.setFormat(format);
+        CHECK(server.init_diff() == withoutSenders.init_diff());
         Sessions window;
         window.setFormat(format);
         window.apply_string(server.init_diff());
         const auto* visible = window.find(7);
-        CHECK(visible && visible->entries.size() == 1);
+        CHECK(visible && !visible->busSenders && visible->entries.size() == 1);
         if (visible && visible->entries.size() == 1) {
             CHECK(visible->entries[0]->kind == nexus::EntryKind::Notice && visible->entries[0]->text == payload);
         }

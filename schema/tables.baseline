@@ -7,6 +7,9 @@ table 2537019088dd9582.b11e8b146c5a21d8
 table 678cbc61d1a17693.b11e8b146c5a21d8
     field value id=0x7ce4fd9430e80cea kind=12
 
+table 678cbc61d1a17693.cb68e7f0012df3cc
+    field value id=0x7ce4fd9430e80cea kind=12
+
 table AccountChoice
     field name id=0xc4bcadba8e631b86 kind=17 type=string
     field label id=0x39f7fcec8fcb623d kind=17 type=string
@@ -78,6 +81,9 @@ table SessionChange
     field entries id=0xc5b2a72c0845a253 kind=14 elem=13 type=EntryChange array=unbounded
     field queue_changed id=0x1e51c98fb1beabbb kind=1
     field queue id=0xb11e8b146c5a21d8 kind=14 elem=12 type=SessionChangeQueueText array=unbounded
+    field active_agents id=0xbfeb08aad574e406 kind=8
+    field bus_senders_known id=0x3cd29b5c25941ab8 kind=1
+    field bus_senders id=0xcb68e7f0012df3cc kind=14 elem=12 type=SessionChangeBusSendersText array=unbounded
 
 table SessionInfo
     field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
@@ -158,12 +164,14 @@ enum Activity
     variant Idle id=0xc92905d14a9421f3
     variant Busy id=0x2a02d2a7e41d6700
     variant Down id=0x032c13736048bf35
+    variant Working id=0x2e0c68be1fa79ae8
 
 enum EntryKind
     variant Person id=0x40d76f1f51639ec0
     variant Friend id=0x9f57a2661b8a7e2d
     variant Notice id=0x9117fb5195e75151
     variant Tool id=0x5a71f1fb3a12c6a7
+    variant Bus id=0x166a3d19b1137d79
 
 union Change
     arm append id=0x3e7fe942f71f1e61 payload=StoreEntry
@@ -198,4 +206,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-24 (UTC) — Synchronize context resets and harness capabilities
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Publish the allowed bus senders for a session
 - no compatibility-affecting edits; the wire absorbs the rest

@@ -57,6 +57,7 @@ codec::SessionChange sessionChange(const SessionView& b, const SessionView* a, b
     c.info = b.info;
     c.activity = b.activity;
     c.activeAgents = b.activeAgents;
+    if (tables) c.busSenders = b.busSenders;
     c.first = b.first;
     std::uint64_t k = b.first;
     while (k < b.total()) {
@@ -87,6 +88,7 @@ SessionRef applySession(codec::SessionChange&& c, const SessionView* a) {
     t->info = std::move(c.info);
     t->activity = c.activity;
     t->activeAgents = c.activeAgents;
+    t->busSenders = std::move(c.busSenders);
     t->first = c.first;
     const std::uint64_t k = c.keepFrom;
     const std::uint64_t count = c.entries.size();
@@ -178,7 +180,7 @@ void Sessions::setOffers(std::vector<SignInOffer> offers) {
 
 bool SessionView::operator==(const SessionView& x) const {
     if (id != x.id || !(info == x.info) || activity != x.activity || activeAgents != x.activeAgents || first != x.first ||
-            entries.size() != x.entries.size() || queue != x.queue) {
+            entries.size() != x.entries.size() || queue != x.queue || busSenders != x.busSenders) {
         return false;
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {

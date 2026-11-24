@@ -89,6 +89,8 @@ table SessionChange
     queue_changed bool
     queue         []string
     active_agents uint32
+    bus_senders_known bool
+    bus_senders   []string
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file

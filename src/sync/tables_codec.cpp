@@ -127,6 +127,13 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         x->info.auto_account = s.info.autoAccount;
         x->activity = activityOut(s.activity);
         x->active_agents = s.activeAgents;
+        if (s.busSenders) {
+            x->bus_senders_known = true;
+            for (const auto& name : *s.busSenders) {
+                auto* sender = added(wire::SessionChangeBusSendersAdd(b.main, x->bus_senders));
+                putText(b.main, sender->value, name, scratch);
+            }
+        }
         x->first = s.first;
         x->keep_from = s.keepFrom;
         for (const EntryChange& e : s.entries) {
@@ -239,6 +246,17 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.autoAccount = x.info.auto_account;
             s.activity = activityIn(x.activity);
             s.activeAgents = x.active_agents;
+            if (x.bus_senders_known) {
+                auto& names = s.busSenders.emplace();
+                names.reserve(static_cast<std::size_t>(x.bus_senders.size()));
+                for (const auto& sender : x.bus_senders) {
+                    auto name = textOf(sender.value);
+                    if (name.empty() || (!names.empty() && name <= names.back())) {
+                        throw BadDiff("sessions diff has an empty, repeated or out-of-order bus sender");
+                    }
+                    names.push_back(std::move(name));
+                }
+            }
             s.first = x.first;
             s.keepFrom = x.keep_from;
             s.entries.reserve(static_cast<std::size_t>(x.entries.size()));

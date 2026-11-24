@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,8 @@ struct SessionView {
     std::vector<EntryRef> entries;      // the transcript's tail, oldest first, through its newest entry
     std::vector<std::string> queue;     // prompts queued for later, oldest first
     std::uint32_t activeAgents = 0;
+    // Visible bus senders, sorted and unique. An older server supplies no roster.
+    std::optional<std::vector<std::string>> busSenders{};
     std::uint64_t total() const { return first + entries.size(); }  // the transcript's length
     bool operator==(const SessionView& x) const;
 };

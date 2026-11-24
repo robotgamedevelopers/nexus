@@ -52,6 +52,10 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
+// table SessionChangeBusSendersText has NO block form: it is the generated ENTRY of the map SessionChange.bus_senders, and a map's entries are never rows: they are an extent inside the holder's own node, reached through the holder's map slot, not an out-of-line array with a pitch of its own (docs/SPEC-TABLES.md §19).
+// Its wire (§3) and its cook (§7) are unaffected — only this projection
+// is absent, and it is absent by construction rather than by refusal.
+
 // table SessionChange has NO block form: it is VARIABLE-LENGTH: SessionInfo.friend_name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
