@@ -1690,6 +1690,25 @@ void stateCursorUnderTheLastText() {
     CHECK(h.entries().size() == 2 && !h.view.breathing);
 }
 
+void scannerHasPromptPadding() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Friend, "Finished."});
+    h.view.cursor = [](std::size_t) { return CursorState::Busy; };
+    h.look.prompt.caretOffsetY = 2;
+    for (int zoom = 0; zoom < 2; ++zoom) {
+        if (zoom) h.larger();
+        h.frame();
+        h.frame();
+        const auto lamp = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
+        const auto text = h.bounds(h.entries().front());
+        const auto panel = h.bounds(h.view.conversation);
+        const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
+        const auto prompt = h.bounds(h.view.promptBox);
+        CHECK(std::abs((lamp.top - text.bottom) - (caret.top - prompt.top)) < 1);
+        CHECK(std::abs((panel.bottom - lamp.bottom) - (prompt.bottom - caret.bottom)) < 1);
+    }
+}
+
 void sendingKeepsBubbleOnScannerRow() {
     Harness h;
     h.view.cursor = [](std::size_t) { return CursorState::Busy; };
@@ -3238,6 +3257,7 @@ int main(int argc, char** argv) {
     toolLinesAreOneCompactLine();
     growingTextShowsAfterTheTranscript();
     stateCursorUnderTheLastText();
+    scannerHasPromptPadding();
     sendingKeepsBubbleOnScannerRow();
     nothingAroundTheOpenPrompt();
     commandTAddsAndShowsATerminal();

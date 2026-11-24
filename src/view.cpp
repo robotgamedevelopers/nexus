@@ -1735,7 +1735,13 @@ struct Builder {
             // The prompt border and its configurable inset locate the first typing column.
             const float panelInset = view.conversation == column ? kBubblePadX : 0;
             strip.place.margin.left = scannerMargin(tab, panelInset);
-            strip.place.margin.top = -(kGap - kCursorGap) * k();
+            const float caretRoom = std::max(0.f, (look.prompt.height - look.prompt.caretHeight) / 2);
+            const float above = std::max(0.f, caretRoom + look.prompt.caretOffsetY) * k();
+            const float below = std::max(0.f, caretRoom - look.prompt.caretOffsetY) * k();
+            const float panelPadding = view.conversation == column ? kBubblePadY * k() : 0;
+            const bool followsText = prLayoutNodeFirstChild(tree, column) != kPrLayoutNodeNone;
+            strip.place.margin.top = above - (followsText ? kGap * k() : panelPadding);
+            strip.place.margin.bottom = below - panelPadding;
             const auto row = prKitBox(kit, column, {}, strip);
             // Pending and sent bubbles share the scanner's row. Its absolute box leaves the
             // transcript height alone, and the bubble's stacking order keeps text in front.
@@ -1749,7 +1755,8 @@ struct Builder {
                 box.position = PrLayoutPosition_Absolute;
                 box.inset[PrRectSide_Left] = px(panelInset * k());
                 box.inset[PrRectSide_Right] = px(panelInset * k());
-                box.inset[PrRectSide_Bottom] = px((view.conversation == column ? kBubblePadY : 0) * k());
+                box.margin[PrRectSide_Bottom] = px(0);
+                box.inset[PrRectSide_Bottom] = px(below);
                 box.overflowX = PrLayoutOverflow_Hidden;
                 group = prLayoutBoxStyleIntern(tree, &box);
                 prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
