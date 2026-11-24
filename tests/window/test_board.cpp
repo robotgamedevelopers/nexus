@@ -11,6 +11,9 @@
 #include <cstring>
 #include <ctime>
 #include <regex>
+#include <filesystem>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -214,7 +217,7 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false) {
+    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false, std::string storageDirectory = {}) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -224,6 +227,7 @@ struct Harness {
         kit = prKitCreate(ui, &theme);
         PraxBoard::Desc b;
         if (prewarm) b.initialExtent = extent;
+        b.storageDirectory = std::move(storageDirectory);
         b.kit = kit;
         b.fonts = fonts;
         if (find)
@@ -751,9 +755,104 @@ void theRepositoryLinkIsHidden() {
     CHECK((h.opened == std::vector<std::string>{"https://github.com/mas-bandwidth/nova-tools"}));
 }
 
+void largeDashboardRefresh(bool reuse) {
+    Harness h;
+    std::string page = "<body><div id='streams'>";
+    for (int i = 0; i < 250; ++i)
+        page += "<div class='row'><span>Stream " + std::to_string(i) + "</span><span>Working</span><span>8</span></div>";
+    page += "</div><script>function poll(){fetch('/api/sprint').then(r=>r.json())}poll();";
+    if (reuse) page += "function renderOverall(){}";
+    page += "</script></body>";
+    h.server.page = page.c_str();
+    h.frames(10);
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5; ++i) {
+        h.model.select_tab(1); h.frame();
+        h.board->prepare(h.extent);
+        h.view.pendingBoardId = h.model.tab(0).id;
+        h.frames(5);
+        CHECK(h.model.active() == 0);
+    }
+    CHECK(h.server.pages == (reuse ? 1 : 6) && h.server.polls == 6);
+    std::printf("250 streams, five returns (%s): %.0f ms\n", reuse ? "reuse" : "reload",
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+}
+
+void activeAndTransferredCellsAnimate() {
+    Harness h;
+    h.server.page = R"HTML(<style>
+        #overall .cell { animation: pulse 2.4s ease-in-out infinite; }
+        .flash { animation: flash 1.5s ease-out; }
+        .cell { display:inline-block;width:20px;height:20px;background-color:rgb(90,50,10) }
+        </style><div id="overall"><i id="active" class="cell working"></i></div>
+        <div id="friends"><i id="moved" class="cell"></i></div>
+        <script>setTimeout(function(){document.querySelector("#moved").classList.add("flash")},500);
+        setInterval(function(){
+        document.body.setAttribute("data-pulse",getComputedStyle(document.querySelector("#active")).opacity);
+        document.body.setAttribute("data-transfer",getComputedStyle(document.querySelector("#moved")).backgroundColor);
+        },100)</script>)HTML";
+    std::set<std::string> pulses, flashes;
+    for (int i = 0; i < 55; ++i) {
+        h.frame();
+        h.dom([&](PrDomDocument* d) {
+            auto sample = [&](const char* key, auto& samples) {
+                if (auto* body = prDomDocumentBody(d)) {
+                    auto v = prDomElementGetAttribute(body, {key, std::strlen(key)});
+                    if (v.size) samples.emplace(v.data, v.size);
+                }
+            };
+            sample("data-pulse", pulses);
+            sample("data-transfer", flashes);
+        });
+    }
+    CHECK(pulses.size() > 2);
+    CHECK(flashes.size() > 2);
+}
+
+// The live board can poll in place. An app relaunch restores its section preference
+// and scroll offset from the origin's storage before exposing the first settled frame.
+void dashboardReaderState() {
+    const auto dir = std::filesystem::temp_directory_path() / ("nexus-board-" + std::to_string(std::random_device{}()));
+    constexpr auto page = R"HTML(<body style="height:4000px"><button id="fold">Section</button>
+        <script>const button=document.querySelector("#fold");
+        button.textContent=localStorage.getItem("section") || "open";
+        button.onclick=function(){button.textContent="closed";localStorage.setItem("section","closed")};
+        function renderOverall(){}
+        function poll(){fetch("/api/sprint").then(r=>r.json())}
+        </script></body>)HTML";
+    {
+        Harness h(nullptr, false, dir.string());
+        h.server.page = page;
+        h.frames(10);
+        h.click("fold");
+        CHECK(has(h.text(), "closed"));
+        h.setScrollTop(550);
+        h.frames(3);
+        h.model.select_tab(1);
+        h.frame();
+        h.board->prepare(h.extent);
+        h.view.pendingBoardId = h.model.tab(0).id;
+        h.frames(10);
+        CHECK(h.server.pages == 1 && h.server.polls > 0 && h.model.active() == 0);
+        CHECK(h.scrollTop() == 550);
+    }
+    {
+        Harness h(nullptr, false, dir.string());
+        h.server.page = page;
+        h.frames(10);
+        CHECK(has(h.text(), "closed"));
+        CHECK(h.scrollTop() == 550);
+    }
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main() {
+    largeDashboardRefresh(false);
+    largeDashboardRefresh(true);
+    activeAndTransferredCellsAnimate();
+    dashboardReaderState();
     loadsPollsAndFormats();
     offScreenRunsNothingAndCatchesUp();
     preparationWaitsForTheNewChart();

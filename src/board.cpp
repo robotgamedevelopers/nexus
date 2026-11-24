@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <charconv>
 #include <cstdio>
 #include <ctime>
 #include <thread>
@@ -544,7 +545,14 @@ void PraxBoard::step(std::vector<Message>& inbox) {
             case Message::Kind::Refresh:
                 if (page_) {
                     endScroll();
-                    navigate();
+                    // A live Sprint board refreshes its existing rows before reveal. Other pages reload.
+                    PrDomEventInit init = prDomEventInitDefault();
+                    init.cancelable = true;
+                    auto* event = prDomEventCreate(sv("nexus-dashboard-refresh"), &init);
+                    bool reload = true;
+                    prDomEventTargetDispatchEvent(prHtmlWindowAsEventTarget(prHtmlPageWindow(page_)), event, &reload);
+                    prDomEventRelease(event);
+                    if (reload) navigate();
                 }
                 break;
             case Message::Kind::Home:
@@ -602,6 +610,30 @@ void PraxBoard::publish() {
         prDomNodeFirstElementChild(prDomElementAsNode(pie));
     const bool settled = chartReady && delay != 0 && page_ != nullptr && load_ == Load::Loaded && recorded_ != nullptr && !dirty_ &&
         !prHtmlPageIsFetching(page_);
+    if (settled && !home_.empty() && withoutFragment(pageUrl()) == home_) {
+        auto* window = prHtmlPageWindow(page_);
+        auto* storage = prHtmlWindowStorage(window, PrHtmlStorageKind_Local);
+        auto* scroll = scroller();
+        if (storage && scroll) {
+            const auto key = sv("nexus-dashboard-scroll");
+            if (restoreScroll_) {
+                restoreScroll_ = false;
+                const auto stored = taken(prHtmlStorageGetItem(storage, key));
+                long top = 0;
+                auto parsed = std::from_chars(stored.data(), stored.data() + stored.size(), top);
+                if (parsed.ec == std::errc{} && top > 0) {
+                    prCssElementSetScrollTop(scroll, top);
+                    dirty_ = true;
+                    paint();
+                }
+            }
+            const long top = std::lround(prCssElementScrollTop(scroll));
+            if (top != savedScroll_) {
+                prHtmlStorageSetItem(storage, key, sv(std::to_string(top)));
+                savedScroll_ = top;
+            }
+        }
+    }
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -671,10 +703,17 @@ void PraxBoard::openPage() {
             fetcher_ = network_ != nullptr ? prFetchInterceptCreate(&intercept) : nullptr;
         }
     }
-    // Storage in memory only: the board keeps its scroll across a reload in session storage.
+    // The page owns its fold preferences in origin-scoped local storage.
     PrHtmlStorageProviderDesc storage{.quotaBytes = kPrHtmlStorageQuotaBytes};
-    localStorage_ = prHtmlStorageProviderCreate(&storage);
     sessionStorage_ = prHtmlStorageProviderCreate(&storage);
+    if (!desc_.storageDirectory.empty()) {
+        storagePool_ = prTaskPoolCreate(PrTaskPoolBackend_Default, 1);
+        if (storagePool_) {
+            storage.directory = sv(desc_.storageDirectory);
+            storage.pool = storagePool_;
+        }
+    }
+    localStorage_ = prHtmlStorageProviderCreate(&storage);
 
     // A task posted to the agent (a fetch's answer, say) ends the page's thread's wait by itself (prDomAgentWait).
     agent_ = prDomAgentCreate(nullptr);
@@ -731,6 +770,7 @@ void PraxBoard::closePage() {
     }
     prHtmlStorageProviderDestroy(localStorage_);
     prHtmlStorageProviderDestroy(sessionStorage_);
+    prTaskPoolDestroy(storagePool_);
     prImageCodecSetDestroy(images_);
     prCompressCodecSetDestroy(compress_);
     prDrawListRelease(recorded_);
@@ -775,6 +815,7 @@ void PraxBoard::loaded(void* context, PrHtmlPage*, PrStatus status) {
     const bool own = b.ownLoad_;
     b.ownLoad_ = false;
     if (status == PrStatus_Ok) {
+        b.restoreScroll_ = true;
         b.load_ = Load::Loaded;
         b.loadError_.clear();
         if (own) {

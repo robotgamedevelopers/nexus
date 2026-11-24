@@ -50,6 +50,7 @@
 #include "pr/html_view.h"
 #include "pr/kit.h"
 #include "pr/text.h"
+#include "pr/task.h"
 
 #include "scroll_glide.h"
 #include "sprint.h"
@@ -67,6 +68,7 @@ public:
         // The board's address. Empty: `find` on a thread of its own (findSprintBoard if unset).
         PrVec2 initialExtent{};
         std::string url;
+        std::string storageDirectory;
         std::function<SprintBoardAddress()> find;
         // A test's network: every request goes to `answer`, over Prax's null network, whose loop each frame runs. No
         // socket is opened. Unset: the platform's sockets and TLS.
@@ -230,6 +232,9 @@ private:
     PrHttp* http_ = nullptr;
     PrFetchNetwork* network_ = nullptr;
     PrFetchNetwork* fetcher_ = nullptr;
+    PrTaskPool* storagePool_ = nullptr;
+    bool restoreScroll_ = true;
+    long savedScroll_ = -1;
     PrHtmlStorageProvider* localStorage_ = nullptr;
     PrHtmlStorageProvider* sessionStorage_ = nullptr;
     PrDomAgent* agent_ = nullptr;

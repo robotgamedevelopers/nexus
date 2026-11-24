@@ -411,6 +411,8 @@ bool open(void* context, PrStudioWindow* window) {
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
     board.window = prStudioWindowAppWindow(window);
+    std::string clientDir, why;
+    if (clientHome(&clientDir, &why)) board.storageDirectory = clientDir + "/dashboard-storage";
     board.initialExtent = {1000, 780};
     PrAppDisplayInfo screen{};
     if (a.overlay && prAppDisplays(board.app, &screen, 1))
