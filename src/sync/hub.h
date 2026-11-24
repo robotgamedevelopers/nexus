@@ -250,6 +250,9 @@ public:
     explicit Hub(SessionStore& store, Limits limits = {}, Responder* responder = nullptr,
         std::function<std::string()> bundlePath = [] { return std::string(); });
 
+    // The enabled bus senders in each recipient's Nova profile. Returns true when a displayed roster changed.
+    bool setBusSenders(const std::map<std::string, std::set<std::string>>& names);
+
     // Applies one action (each once: the link's Applier sees to that), deciding against the sessions the store holds.
     // A send gives the responder's changes, or without one the prompt and then the placeholder reply; a queue puts the
     // prompt in the session's queue (with the responder's changes after it); a stop gives the responder's changes, or
@@ -482,6 +485,14 @@ private:
     SessionStore& store_;
     Limits limits_;
     Responder* responder_;
+    struct BusHistory {
+        std::uint64_t contextEpoch = 0;
+        std::size_t indexed = 0;
+        std::set<std::string> senders; // speakers represented by a typed Bus entry in this context
+        std::vector<std::string> allowed; // their sorted intersection with the current Nova roster
+    };
+    std::map<SessionId, BusHistory> busHistory_;
+    std::map<std::string, std::set<std::string>> busSenders_;
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
     std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;

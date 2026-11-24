@@ -54,6 +54,14 @@ later field goes after them.
   A bus entry's store frame can append the original driver prompt as a length-prefixed string. The server uses it
   when rebuilding context to retain a peer's attachment path and to exclude prompts still waiting for their turn.
   It stays in the store. An older frame with no tail still provides the sender and display body.
+  Before encoding the tail, the server checks each stored bus sender against the recipient's current
+  Nova profile. An unregistered sender's position carries a closed Bus entry with empty text, including
+  when an older codec writes that position as a Notice. This preserves transcript indices across roster
+  changes. A table link also carries `SessionChange.bus_senders_known` and `bus_senders`, the sorted
+  registered names that have spoken in this session's stored Bus entries. An explicit empty list hides
+  every bus row. A missing field identifies an older writer. A current window uses these names to update
+  bubbles it has already displayed, including entries preceding the bounded tail. A reconnecting window
+  can recover message bodies from the current tail, plus any earlier history the window already received.
 - A format 1 link carries a Tool entry as a Friend entry (the line's text unchanged) and no activity.
 - Absent secret requests (a link of format 2 or older): **none**. A window with none shows no dialog and sends no secret
   action; the server, which knows the link's format, never offers that window a request.

@@ -27,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "model.h"
@@ -115,6 +116,9 @@ struct SessionView {
 
 using SessionRef = std::shared_ptr<const SessionView>;
 
+// Whether the serialized sender and body of a Bus entry may be displayed under this session's roster.
+bool visibleBus(std::string_view text, const SessionView& view);
+
 // How much of a transcript a state carries: the newest entries, at most `entries` of them, while their text totals at
 // most `bytes`; the newest entry always, whatever its size.
 struct Tail {
@@ -125,7 +129,8 @@ struct Tail {
 // A session's tail of a whole transcript, by those rules; `open`, when given, is the newest entry, after the tail, and
 // outside its rules (it is within the hub's text limit): the newest closed entry is always carried with it.
 SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& transcript,
-                   std::vector<std::string> queue, Tail tail, EntryRef open = nullptr);
+                   std::vector<std::string> queue, Tail tail, EntryRef open = nullptr,
+                   std::optional<std::vector<std::string>> busSenders = std::nullopt);
 
 class Sessions {
 public:

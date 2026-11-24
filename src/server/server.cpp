@@ -374,6 +374,7 @@ private:
         std::vector<pollfd> fds;
         std::vector<std::size_t> owner;
         std::size_t linkFds = 0;
+        bool busRosterRefreshed = false;
     };
     Pass pass_;
 
@@ -501,7 +502,7 @@ bool Server::restoreAll(std::string* why) {
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
-    bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host);
+    bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
     secretFs_ = store::make_posix_fs();
@@ -1137,7 +1138,8 @@ PassOrder::Outcome Server::wait(std::string* why) {
         }
     }
     const auto now = nowMs();
-    if (!drain_.draining() && now >= nextBusRefresh_) {
+    pass_.busRosterRefreshed = !drain_.draining() && now >= nextBusRefresh_;
+    if (pass_.busRosterRefreshed) {
         bus_->refresh(dirNow("drivers"), hub_->accounts(), now);
         nextBusRefresh_ = now + kResolveMs;
     }
@@ -1216,7 +1218,7 @@ PassOrder::Outcome Server::hold(bool holdDrivers, std::string* why) {
 }
 
 PassOrder::Outcome Server::apply(std::string* why) {
-    bool changed = false;
+    bool changed = pass_.busRosterRefreshed && hub_->setBusSenders(bus_->knownSenders());
     if (!drivers_->serve(nowMs(), &changed)) {
         *why = "the store failed; stopping without acknowledging the actions since";
         return PassOrder::Outcome::Failed;

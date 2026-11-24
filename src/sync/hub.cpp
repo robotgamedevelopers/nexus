@@ -1954,12 +1954,49 @@ bool Hub::resolveLimit(const Action& action, std::string* why, const std::string
     return true;
 }
 
+bool Hub::setBusSenders(const std::map<std::string, std::set<std::string>>& names) {
+    if (names == busSenders_) return false;
+    busSenders_ = names;
+    bool changed = false;
+    for (auto& [id, history] : busHistory_) {
+        const auto roster = names.find(store_.find(id)->info.friendName);
+        std::vector<std::string> allowed;
+        if (roster != names.end()) {
+            for (const auto& sender : history.senders)
+                if (roster->second.contains(sender)) allowed.push_back(sender);
+        }
+        if (history.allowed != allowed) {
+            history.allowed = std::move(allowed);
+            refresh(id);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // The session's new tail, in place of its old one; every other session is shared with the state before.
 void Hub::refresh(SessionId id) {
     const StoredSession* stored = store_.find(id);
+    // Previously displayed rows can precede the tail. Publish the allowed names of their actual
+    // speakers too, so a connected window can withdraw revoked bubbles anywhere in its history.
+    auto& history = busHistory_[id];
+    if (history.contextEpoch != stored->info.contextEpoch) {
+        history = {};
+        history.contextEpoch = stored->info.contextEpoch;
+    }
+    const auto roster = busSenders_.find(stored->info.friendName);
+    for (; history.indexed < stored->transcript.size(); ++history.indexed) {
+        const auto& e = *stored->transcript[history.indexed];
+        if (e.kind != EntryKind::Bus) continue;
+        const auto newline = e.text.find('\n');
+        if (newline == 0 || newline == std::string::npos) continue;
+        auto [sender, first] = history.senders.insert(e.text.substr(0, newline));
+        if (first && roster != busSenders_.end() && roster->second.contains(*sender))
+            history.allowed.insert(std::lower_bound(history.allowed.begin(), history.allowed.end(), *sender), *sender);
+    }
     auto open = open_.find(id);
     SessionView view = tailOf(id, stored->info, stored->transcript, stored->queue, limits_.tail,
-        open == open_.end() ? nullptr : open->second);
+        open == open_.end() ? nullptr : open->second, history.allowed);
     if (responder_) view.info.catalog = responder_->catalog(stored->info);
     if (stored->driver.modelLimitPending)
         offerLimitChoice(id, stored->driver, view.info);

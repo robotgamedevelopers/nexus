@@ -191,30 +191,45 @@ bool SessionView::operator==(const SessionView& x) const {
     return true;
 }
 
+bool visibleBus(std::string_view text, const SessionView& view) {
+    if (text.empty()) return false;  // a redacted slot, still counted in raw transcript indexes
+    if (!view.busSenders) return true;
+    const auto separator = text.find('\n');
+    return separator != text.npos && std::binary_search(view.busSenders->begin(), view.busSenders->end(),
+                                                        text.substr(0, separator));
+}
+
 SessionView tailOf(SessionId id, SessionInfo info, const std::vector<EntryRef>& transcript,
-                   std::vector<std::string> queue, Tail tail, EntryRef open) {
+                   std::vector<std::string> queue, Tail tail, EntryRef open,
+                   std::optional<std::vector<std::string>> busSenders) {
     SessionView t;
     t.id = id;
     t.info = std::move(info);
     t.queue = std::move(queue);
+    t.busSenders = std::move(busSenders);
     // The tail of the closed entries, then the open entry, if any, which the tail's rules do not count: so a state
     // always carries the newest closed entry, and a window that missed entries always gets one after its notice.
     const std::size_t count = transcript.size();
     std::size_t from = count;
     std::size_t bytes = 0;
     while (from > 0) {
-        const std::size_t size = transcript[from - 1]->text.size();
+        EntryRef e = transcript[from - 1];
+        if (e->kind == EntryKind::Bus && !visibleBus(e->text, t)) {
+            // Preserve the durable position without sending any part of this event to a window.
+            static const EntryRef hidden = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Bus, {}, true});
+            e = hidden;
+        }
+        const std::size_t size = e->text.size();
         const bool newest = from == count;
         if (!newest && (count - from >= tail.entries || bytes + size > tail.bytes)) {
             break;
         }
         bytes += size;
+        t.entries.push_back(std::move(e));
         --from;
     }
     t.first = from;
-    for (std::size_t i = from; i < count; ++i) {
-        t.entries.push_back(transcript[i]);
-    }
+    std::reverse(t.entries.begin(), t.entries.end());
     if (open) {
         t.entries.push_back(std::move(open));
     }
