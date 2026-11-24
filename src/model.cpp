@@ -161,6 +161,30 @@ bool Model::append(std::size_t i, Entry e) {
     return true;
 }
 
+void Model::edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits) {
+    if (!friend_tab(i) || edits.empty()) return;
+    auto& tab = tabs_[i];
+    auto& old = tab.transcript;
+    std::vector<Entry> updated;
+    std::size_t count = old.size();
+    for (const auto& edit : edits) {
+        if (edit.erase) --count;
+        if (edit.replacement) ++count;
+    }
+    updated.reserve(count);
+    auto next = old.begin();
+    for (auto& edit : edits) {
+        const auto at = old.begin() + static_cast<std::ptrdiff_t>(edit.at);
+        std::move(next, at, std::back_inserter(updated));
+        if (edit.removed) *edit.removed = std::move(*at);
+        if (edit.replacement) updated.push_back(std::move(*edit.replacement));
+        next = at + (edit.erase ? 1 : 0);
+    }
+    std::move(next, old.end(), std::back_inserter(updated));
+    old = std::move(updated);
+    ++tab.transcriptGeneration;
+}
+
 // The fork assigns logical tab types to groups. Older descriptions retain the three built-in zones and
 // extension groups in the order they are first opened.
 std::string Model::home_group(TabKind kind, const std::string& type, const std::string& declared) const {

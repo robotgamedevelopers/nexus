@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +23,14 @@ struct Entry {
     EntryKind kind;
     std::string text;
     std::uint32_t accountEmailEnd = 0;  // byte offset after the address in an account-switch notice; zero for other entries
+};
+
+// A change at an index in the original transcript: insert before it, erase it, or replace it.
+struct TranscriptEdit {
+    std::size_t at;
+    bool erase;
+    std::optional<Entry> replacement;
+    Entry* removed = nullptr;   // when supplied, move the erased row here
 };
 
 // Native presentation and lifecycle. The active fork separately assigns each tab type to a group.
@@ -81,6 +90,8 @@ public:
                                       // transcript or a draft.
     void clear_transcript(std::size_t i);
     bool append(std::size_t i, Entry e);         // false and no change unless i is a friend's tab
+    // Edits are ordered by original index. Multiple insertions before one entry retain their order.
+    void edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits);
     bool move_tab(std::size_t from, std::size_t to); // false and no change unless both < tab_count() and the tabs at
                                                      // the destination group accepts the move; else the tab at `from`
                                                      // ends at `to`, the tabs between shift by one, everything the tab

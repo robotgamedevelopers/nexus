@@ -2011,6 +2011,97 @@ void mirror_marks_entries_not_received() {
     CHECK(notShownNotice(1) == "1 earlier entry not shown");
 }
 
+void mirror_bus_grants_reconcile_cached_history() {
+    Model m(friends2());
+    Mirror mirror;
+    const auto id = m.tab(0).id;
+    const auto hidden = entry(EntryKind::Bus, "");
+    const auto old = entry(EntryKind::Bus, "old\noutside the newest tail");
+    const auto first = entry(EntryKind::Bus, "peer\nfirst");
+    const auto second = entry(EntryKind::Bus, "peer\nsecond");
+    const auto tool = entry(EntryKind::Tool, "work");
+    const auto open = entry(EntryKind::Friend, "stream", false);
+    SessionView v = tailFor("ada", {}, {}, {});
+    auto apply = [&] { return mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})); };
+    auto texts = [&] {
+        std::vector<std::string> result;
+        for (const auto& row : m.tab(0).transcript) result.push_back(row.text);
+        return result;
+    };
+    v.first = 2;
+    v.entries = {old, entry(EntryKind::Person, "old\nlookalike"), entry(EntryKind::Friend, "reply"), first, second};
+    CHECK(apply());  // legacy server, no roster
+    m.append(0, Entry{EntryKind::Notice, "local"});
+    m.set_draft(0, "held");
+    m.hold_draft(0);
+    m.set_draft(0, "typing");
+    CHECK(mirror.apply(m, Sessions{}));  // disconnect
+
+    v.first = 5;
+    v.entries = {hidden, hidden, tool, open};
+    v.busSenders = std::vector<std::string>{};
+    v.queue = {"queued"};
+    CHECK(apply());
+    const std::vector<std::string> ordinary{notShownNotice(2), "old\nlookalike", "reply", "local", "work"};
+    CHECK(texts() == ordinary);
+    CHECK(m.tab(0).transcript.size() == ordinary.size() && m.tab(0).transcript[1].kind == EntryKind::Person &&
+          m.tab(0).transcript.back().kind == EntryKind::Tool);
+    CHECK(m.tab(0).held == "held" && m.tab(0).draft == "typing" && m.tab(0).queue == v.queue);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+    const auto generation = m.tab(0).transcriptGeneration;
+    CHECK(!apply() && m.tab(0).transcriptGeneration == generation);
+
+    v.busSenders = std::vector<std::string>{"old", "peer"};
+    v.entries = {first, second, tool, open};
+    CHECK(apply());  // a restored roster also recovers the previously displayed row outside this tail
+    const std::vector<std::string> restored{notShownNotice(2), old->text, "old\nlookalike", "reply", first->text,
+        second->text, "local", "work"};
+    CHECK(texts() == restored);
+    CHECK(m.tab(0).transcriptGeneration == generation + 1);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+    CHECK(!apply());
+    v.first = 2;
+    v.entries = {old, entry(EntryKind::Person, "old\nlookalike"), entry(EntryKind::Friend, "reply"),
+        first, second, tool, open};
+    CHECK(!apply());  // receiving the older entry again does not duplicate it
+    CHECK(texts() == restored);
+    CHECK(mirror.seen(id).next == 8 && mirror.open(id) == open.get());
+}
+
+void mirror_skips_masked_bus_slots_and_respects_clear() {
+    Model m(friends2());
+    Mirror mirror;
+    const auto id = m.tab(0).id;
+    SessionView v = tailFor("ada", {}, {}, {});
+    auto apply = [&] { return mirror.apply(m, Sessions({std::make_shared<const SessionView>(v)})); };
+    const auto peer = entry(EntryKind::Bus, "peer\nbody");
+    const auto closed = entry(EntryKind::Friend, "closed");
+    v.busSenders = std::vector<std::string>{};
+    v.entries = {entry(EntryKind::Bus, ""), closed};
+    CHECK(apply());
+    CHECK(m.tab(0).transcript.size() == 1 && m.tab(0).transcript[0].text == closed->text);
+    CHECK(mirror.seen(id).next == 2);
+    v.first = 1;
+    v.entries = {closed};
+    v.busSenders = std::vector<std::string>{"peer"};
+    CHECK(!apply());  // no body was ever received for the masked slot
+    CHECK(m.tab(0).transcript.size() == 1);
+    v.first = 0;
+    v.entries = {peer, closed};
+    CHECK(apply());  // an expanded tail now supplies its body
+    CHECK(m.tab(0).transcript.size() == 2 && m.tab(0).transcript[0].text == peer->text);
+    m.clear_transcript(0);
+    mirror.clearOpen(id);
+    v.busSenders.reset();  // another roster transition after the local clear
+    v.entries = {peer, closed, peer};
+    CHECK(apply());
+    CHECK(m.tab(0).transcript.size() == 1 && m.tab(0).transcript[0].text == peer->text);
+    CHECK(mirror.seen(id).next == 3);
+    v.busSenders = std::vector<std::string>{};
+    CHECK(apply());  // the roster governs even a nonempty bus row
+    CHECK(m.tab(0).transcript.empty() && mirror.seen(id).next == 3);
+}
+
 void mirror_waits_for_open_entry() {
     Model m(friends2(), false);
     Mirror mirror;
@@ -2667,6 +2758,8 @@ const Case kCases[] = {
     {"hub_limits", hub_limits},
     {"hub_shares_untouched_sessions", hub_shares_untouched_sessions},
     {"mirror_appends_in_order_once", mirror_appends_in_order_once},
+    {"mirror_bus_grants_reconcile_cached_history", mirror_bus_grants_reconcile_cached_history},
+    {"mirror_skips_masked_bus_slots_and_respects_clear", mirror_skips_masked_bus_slots_and_respects_clear},
     {"mirror_marks_entries_not_received", mirror_marks_entries_not_received},
     {"mirror_waits_for_open_entry", mirror_waits_for_open_entry},
     {"mirror_queue_keeps_draft", mirror_queue_keeps_draft},

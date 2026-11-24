@@ -1,8 +1,8 @@
 // The window's side of the down state: brings the window's model (model.h) up to the sessions nexus-server sends
 // (sync/sessions.h). Which session a friend's tab shows is the window's own, kept here and nowhere on the server or the
 // wire: the friend's first session (the lowest id) in the first state that holds one, and that one from then on. The
-// model's transcripts only grow, so the mirror appends what it has not shown yet: the session's closed entries, in
-// order, each once. An entry still open (the friend's text as it grows: the newest entry of the session) is not
+// mirror appends the session's closed entries in order, each once. Changes to the server's bus sender list can hide
+// or reveal bus rows within those entries. An entry still open (the friend's text as it grows) is not
 // appended: the mirror holds it (open()) for the window to show after the transcript, and appends it once it is
 // closed. When a state's tail starts past what the window has shown (it was away for longer than the tail holds), the
 // window gets a notice of how many entries it did not receive, then the tail. The model's queue is made the server's:
@@ -14,7 +14,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "model.h"
 #include "sync/sessions.h"
@@ -55,6 +58,12 @@ public:
     void clearOpen(std::size_t tabId);
 
 private:
+    struct BusSlot {
+        std::uint64_t rawIndex;
+        std::size_t ordinaryBefore;    // independent of any insertions or removals of other bus rows
+        bool visible;
+        std::unique_ptr<Entry> withdrawn{};  // a row this window previously displayed, retained through a roster outage
+    };
     struct Shown {
         std::uint64_t next = 0;
         std::uint64_t epoch = 0;
@@ -62,7 +71,12 @@ private:
         std::uint32_t agents = 0;
         bool held = false;              // the last state applied held the session
         Activity activity = Activity::Idle;
+        std::optional<std::vector<std::string>> busSenders;
+        std::vector<BusSlot> bus;
+        std::size_t visibleBus = 0;
+        std::uint64_t tailFirst = 0;
     };
+    static bool reconcileBus(Model& model, std::size_t tab, Shown& seen, const SessionView& view);
     std::map<std::size_t, SessionId> session_;  // tab id -> the session it shows: the window's own, never sent
     std::map<std::size_t, Shown> seen_;
 };
