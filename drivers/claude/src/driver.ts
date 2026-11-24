@@ -19,6 +19,7 @@
 
 import type { VerifiedLogin } from './verified.js';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import type {
@@ -573,7 +574,6 @@ export class Driver {
         if (this.args.busListener) start.busListener = this.args.busListener;
         if (this.args.gitRemote) start.gitRemote = this.args.gitRemote;
         if (this.args.readDirs) start.readDirs = this.args.readDirs;
-        if (this.args.startupContext !== undefined) start.startupContext = this.args.startupContext;
         if (resume === undefined) {
             start.sessionId = this.host.newSessionId();
         } else {
@@ -593,6 +593,8 @@ export class Driver {
         }
         let harness: Harness;
         try {
+            const setupGuide = readFileSync(new URL('friend-setup.txt', import.meta.url), 'utf8').trim();
+            start.startupContext = this.args.startupContext ? this.args.startupContext + '\n\n' + setupGuide : setupGuide;
             harness = this.host.startHarness(start);
         } catch (e) {
             this.fail(`the Claude harness did not start: ${message(e)}`);

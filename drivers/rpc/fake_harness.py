@@ -20,11 +20,16 @@ elif mode == "muse":
     assert os.environ["TBH_CREDENTIAL_BACKEND"] == "file"
 elif mode == "antigravity":
     assert os.environ["TMPDIR"] == str(home / "tmp")
-context = "Standing instructions from a synthetic home."
 session = "provider-session" if home.name == "sample" else "provider-second-session"
 pending = []
 session_open = False
 bad = (home / "signed-out").exists()
+
+
+def check_context(instructions):
+    assert instructions.startswith("Standing instructions from a synthetic home.\n\n")
+    assert "If they choose Nova Seed" in instructions
+    assert "https://github.com/mas-bandwidth/nova and its docs/SEED-CORE.md" in instructions
 
 
 def event(method, **params):
@@ -77,7 +82,8 @@ for line in sys.stdin:
         if mode == "codex":
             assert p["approvalPolicy"] == "never" and p["permissions"] == "nexus-chat"
             assert "sandbox" not in p
-            assert p["developerInstructions"] == context and p["modelProvider"] == "openai"
+            check_context(p["developerInstructions"])
+            assert p["modelProvider"] == "openai"
         if mode in {"antigravity", "grok"}:
             assert Path.cwd() == (home / "room").resolve() and Path(p["cwd"]) == home / "room"
         if mode == "muse":
@@ -85,7 +91,7 @@ for line in sys.stdin:
             if m == "session/start":
                 assert Path(p["workspaceRoot"]) == home / "room"
         if mode == "antigravity":
-            assert p["_meta"]["antigravity"]["systemPrompt"]["append"] == context
+            check_context(p["_meta"]["antigravity"]["systemPrompt"]["append"])
         result = {
             "approvalPolicy": "never",
             "activePermissionProfile": {"id": "other" if (home / "wrong-profile").exists() else "nexus-chat"},
@@ -100,9 +106,9 @@ for line in sys.stdin:
     elif m in {"session/prompt", "turn/start"}:
         parts = p.get("input", p.get("prompt"))
         if mode == "grok":
-            assert parts[0]["resource"]["text"] == context
+            check_context(parts[0]["resource"]["text"])
         if mode == "muse":
-            assert context in parts[0]["text"]
+            check_context(parts[0]["text"])
         prompt = parts[-1]["text"]
         assert prompt in ("Example?", "hold")
         (home / "sent").touch()

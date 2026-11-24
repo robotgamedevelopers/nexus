@@ -372,7 +372,8 @@ def main():
             data = f.read(262145)
         if not data or len(data) > 262144:
             raise ValueError("Invalid friend context.")
-        args.instructions = data.decode()
+        setup_guide = Path(__file__).with_name("friend-setup.txt").read_text(encoding="utf-8").strip()
+        args.instructions = data.decode() + "\n\n" + setup_guide
         try:
             args.account_home = home_for(args.harness, args.account)
             ready = enrolled(args.account_home, args.harness)

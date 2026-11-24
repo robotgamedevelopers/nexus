@@ -5,6 +5,12 @@ every field, what it may hold, an example of each file, the commands, and what t
 settings screen. You change these files by talking with your AI, and the AI edits them, checks them and applies them
 with the commands below.
 
+## Creating a friend
+
+Tell your AI, “I’d like to create a friend.” It should offer you two ways to begin. You can set up a friend directly, choosing its harness, account and working directory. Or you can use Nova Seed to explore a name, written memory and a working agreement together.
+
+If you choose Nova Seed, configure the friend as usual and open its tab. For the first conversation, ask it to read the Nova Seed repository and its short guide, `docs/SEED-CORE.md`. You and the friend can decide later whether to create a private memory home. [Nova Seed getting-started guide](https://github.com/mas-bandwidth/nova/blob/main/docs/GETTING-STARTED.md)
+
 ## What they are
 
 - An **account** is one login with one **provider**: the harness its sessions run. Set up each login under its own stable

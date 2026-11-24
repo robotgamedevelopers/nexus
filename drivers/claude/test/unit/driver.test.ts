@@ -248,14 +248,19 @@ void test('--resume resumes that session and reports it', async () => {
     ]);
 });
 
-void test('fresh and resumed harnesses each receive their standing instructions', async () => {
+void test('fresh and resumed harnesses receive their standing instructions and optional friend setup guide', async () => {
     for (const resume of [undefined, 'existing']) {
-        const host = new TestHost();
-        const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [],
-            startupContext: 'standing instructions', ...(resume === undefined ? {} : { resume }) });
-        driver.start();
-        await settle();
-        assert.equal(host.harness.start.startupContext, 'standing instructions');
+        for (const startupContext of ['', 'standing instructions']) {
+            const host = new TestHost();
+            const driver = new Driver(host, { account: 'main', cwd: '/work', settingSources: [],
+                startupContext, ...(resume === undefined ? {} : { resume }) });
+            driver.start();
+            await settle();
+            const context = host.harness.start.startupContext ?? '';
+            assert.ok(context.startsWith(startupContext));
+            assert.match(context, /If they choose Nova Seed/);
+            assert.match(context, /https:\/\/github\.com\/mas-bandwidth\/nova and its docs\/SEED-CORE\.md/);
+        }
     }
 });
 

@@ -8,7 +8,7 @@ To try it, [build the app and server](#build), [configure a friend and account](
 
 Use the desktop client on Apple silicon with macOS 26 or newer. Start with one friend on the same Mac, then add a second harness when you want a different model for the same project. If work should continue while your laptop sleeps, run the server on an always-on machine you can reach over SSH and UDP.
 
-A friend is the name on a tab. Its harness launches the provider's program, its account determines which subscription it uses, and its working directory determines where a turn starts. Put those choices in the server configuration. A registry-managed installation can also read the friend's home documents and directory grants from nova-config. [Accounts and friends](accounts.md)
+A friend is the name on a tab. Its harness launches the provider's program, its account determines which subscription it uses, and its working directory determines where a turn starts. Ask your AI to create a friend. You can set one up directly or use Nova Seed to shape a name, memory and working agreement together. A registry-managed installation can also read the friend's home documents and directory grants from nova-config. [Creating a friend](accounts.md#creating-a-friend)
 
 Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland, Android and iOS clients are still development work. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 
