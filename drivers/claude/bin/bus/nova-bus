@@ -2,7 +2,20 @@
 if [ "$1" = hook ]; then
     if [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_FRIEND" ]; then
         if [ "$#" = 3 ] || { [ "$#" = 5 ] && [ "$4" = --harness ] && [ "$5" = claude ]; }; then
-            exec /usr/bin/nc -dU "$NEXUS_BUS_LISTENER"
+            # Monitor can start with stdin at EOF. Read only the granted socket.
+            exec /usr/bin/python3 -I -c '
+import socket
+import sys
+
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.connect(sys.argv[1])
+        while chunk := listener.recv(65536):
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+except OSError as error:
+    sys.exit("nova-bus: " + str(error))
+' "$NEXUS_BUS_LISTENER"
         fi
     fi
     echo "Use hook --as $NEXUS_BUS_FRIEND with the granted listener." >&2
