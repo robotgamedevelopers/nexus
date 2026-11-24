@@ -174,6 +174,10 @@ bool isSet(ActionKind kind) {
     return kind == ActionKind::SetAccount || kind == ActionKind::SetModel || kind == ActionKind::SetEffort;
 }
 
+bool onDefaultInstance(const std::string& instance, const accounts::Friend* owner) {
+    return instance.empty() || (owner && !owner->instances.empty() && instance == owner->instances.front().name);
+}
+
 std::string busReceiptKey(const std::string& recipient, const std::string& id) {
     const std::string_view streamId(id);
     const auto dash = streamId.find('-');
@@ -235,55 +239,8 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (action.kind >= ActionKind::AddAccount) {
         return accountAction(action, why, client);
     }
-    if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure) {
-        if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
-            return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
-                " bytes", why, client);
-        }
-        if (!action.text.empty()) {
-            return counted(action, "a create or an ensure carries no text", why, client);
-        }
-        if (action.kind == ActionKind::Ensure) {
-            for (SessionId id : store_.ids()) {
-                if (store_.find(id)->info.friendName == action.friendName) {
-                    // The friend has a session: nothing to make, and nothing refused.
-                    return count(action, why, client);
-                }
-            }
-        }
-        SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
-                                                 : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
-        info.friendName = action.friendName;
-        const auto* f = accounts_ ? accounts_->friendNamed(action.friendName) : nullptr;
-        const auto* from = action.kind == ActionKind::Create && action.session ? store_.find(action.session) : nullptr;
-        if (action.kind == ActionKind::Create && action.session && !from)
-            return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
-        const SessionInfo defaults = info;
-        std::string error;
-        const auto pool = subscriptionsFor(info.friendName);
-        if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
-                                bool(accounts_), pool.size() > 1, info, error))
-            return counted(action, "New session application: " + error, why, client);
-        if (info.autoAccount) {
-            if (pool.size() < 2)
-                return counted(action, "Automatic account selection needs two linked subscriptions.", why, client);
-            if (!from || from->info.friendName != info.friendName || !from->info.autoAccount ||
-                    !signedIn_.contains(info.account) || std::find(pool.begin(), pool.end(), info.account) == pool.end())
-                info.account = firstAutoAccount(pool);
-        }
-        if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
-                !printable(info.model) || !printable(info.effort) ||
-                (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
-                (accounts_ && !info.instance.empty() && (!f || !f->instance(info.instance))) ||
-                (!accounts_ && info.account != defaults.account && (!from || info.account != from->info.account)) ||
-                (!accounts_ && info.instance != defaults.instance &&
-                    (!from || from->info.friendName != info.friendName || info.instance != from->info.instance)))
-            return counted(action, "New session application: choose an available account and instance and "
-                "printable model and effort within the setting limit", why, client);
-        if (accounts_)
-            info.harness = harnessOf(info.account, info.harness);
-        return make(action, info, why, client);
-    }
+    if (action.kind == ActionKind::Create || action.kind == ActionKind::Ensure)
+        return createSession(action, why, client);
     const StoredSession* session = store_.find(action.session);
     if (session == nullptr) {
         // Nothing runs in a session the server does not hold, and no session is made for it: refused, and counted.
@@ -293,6 +250,58 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
         return set(action, why, client);
     }
     return applyMessage(action, *session, why, client);
+}
+
+bool Hub::createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault) {
+    if (action.friendName.empty() || action.friendName.size() > limits_.friendName) {
+        return counted(action, "a session's friend is named by 1 to " + std::to_string(limits_.friendName) +
+            " bytes", why, client);
+    }
+    if (!action.text.empty()) {
+        return counted(action, "a create or an ensure carries no text", why, client);
+    }
+    if (action.kind == ActionKind::Ensure) {
+        for (SessionId id : store_.ids()) {
+            if (store_.find(id)->info.friendName == action.friendName) {
+                // The friend has a session: nothing to make, and nothing refused.
+                return count(action, why, client);
+            }
+        }
+    }
+    SessionInfo info = responder_ != nullptr ? responder_->defaults(action.friendName)
+                                             : SessionInfo{action.friendName, kDefaultHarness, {}, {}, {}};
+    info.friendName = action.friendName;
+    const auto* f = accounts_ ? accounts_->friendNamed(action.friendName) : nullptr;
+    const auto* from = action.kind == ActionKind::Create && action.session ? store_.find(action.session) : nullptr;
+    if (action.kind == ActionKind::Create && action.session && !from)
+        return counted(action, "no session " + std::to_string(action.session) + " to copy", why, client);
+    const SessionInfo defaults = info;
+    std::string error;
+    const auto pool = subscriptionsFor(info.friendName);
+    if (!policy::newSession(application_, bundlePath_(), defaults, from ? &from->info : nullptr, f,
+                            bool(accounts_), pool.size() > 1, info, error))
+        return counted(action, "New session application: " + error, why, client);
+    if (requireDefault && !onDefaultInstance(info.instance, f))
+        return counted(action, "The new session policy must select the recipient's default instance for bus delivery.", why, client);
+    if (info.autoAccount) {
+        if (pool.size() < 2)
+            return counted(action, "Automatic account selection needs two linked subscriptions.", why, client);
+        if (!from || from->info.friendName != info.friendName || !from->info.autoAccount ||
+                !signedIn_.contains(info.account) || std::find(pool.begin(), pool.end(), info.account) == pool.end())
+            info.account = firstAutoAccount(pool);
+    }
+    if (info.model.size() > limits_.setting || info.effort.size() > limits_.setting ||
+            !printable(info.model) || !printable(info.effort) ||
+            (accounts_ && !info.account.empty() && !accounts_->linked(action.friendName, info.account)) ||
+            (accounts_ && !info.instance.empty() && (!f || !f->instance(info.instance))) ||
+            (!accounts_ && info.account != defaults.account && (!from || info.account != from->info.account)) ||
+            (!accounts_ && info.instance != defaults.instance &&
+                (!from || from->info.friendName != info.friendName || info.instance != from->info.instance)))
+        return counted(action, "New session application: choose an available account and instance and "
+            "printable model and effort within the setting limit", why, client);
+    if (accounts_)
+        info.harness = harnessOf(info.account, info.harness);
+    return make(action, info, why, client);
 }
 
 bool Hub::hasBusReceipt(const std::string& recipient, const std::string& id) const {
@@ -321,14 +330,17 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
 
     const auto* fr = accounts_ ? accounts_->friendNamed(recipient) : nullptr;
     if (!fr || !responder_) return refuse("The recipient has no configured Nexus friend and driver.");
-    if (!state_.first(recipient) && !apply(Action{0, ActionKind::Ensure, 0, recipient, {}, {}}, why)) return false;
-    const auto& sessions = state_.sessions();
-    const auto target = std::find_if(sessions.begin(), sessions.end(), [&](const SessionRef& s) {
-        return s->info.friendName == recipient && (s->info.instance.empty() ||
-            (!fr->instances.empty() && s->info.instance == fr->instances.front().name));
-    });
-    if (target == sessions.end()) return refuse("The recipient needs a session on its default instance.");
-    const auto sessionId = (*target)->id;
+    SessionId sessionId = 0;
+    for (const auto& s : state_.sessions()) {
+        if (s->info.friendName == recipient && onDefaultInstance(s->info.instance, fr)) {
+            sessionId = s->id;
+            break;
+        }
+    }
+    if (!sessionId) {
+        sessionId = store_.nextId();
+        if (!createSession(Action{0, ActionKind::Create, 0, recipient, {}, {}}, why, {}, true)) return false;
+    }
     const auto& session = *store_.find(sessionId);
     const auto* account = accounts_->account(session.info.account);
     if (account && (needsVerifiedLogin(*account) || !signedIn_.contains(account->name)))

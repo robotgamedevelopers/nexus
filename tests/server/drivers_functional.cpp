@@ -1363,6 +1363,36 @@ void instanceRemoved(Server& s, const std::string& dir, const std::string& fake)
     CHECK(has(readFile(dir + "/starts.log"), "cwd=" + dir + "\n"));
 }
 
+// An inbound message follows the default instance, even when only another instance has a session.
+void busDefaultInstance(Server& s, const std::string& dir, const std::string& fake) {
+    const accounts::Instance first{"first", kHost, dir + "/first"};
+    const accounts::Instance second{"second", kHost, dir + "/second"};
+    std::filesystem::create_directories(first.dir);
+    std::filesystem::create_directories(second.dir);
+    setUpInstance(s, dir, fake, std::string(kHello) + "send\nrecord-send " + dir +
+        "/sends\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n", first);
+    auto roster = withInstance(second);
+    roster.friends.front().instances.push_back(first);
+    CHECK(s.hub->applyAccounts(roster, "change default", nullptr));
+    s.hub->reportSignedIn("a1", true);
+    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.instance == first.name);
+    std::string why;
+    CHECK(s.hub->receiveBus("ada", "100-0", "bea", "second workspace", "second workspace", &why));
+    const auto next = s.store.find(2);
+    CHECK(next && next->info.instance == second.name);
+    if (!next) return;
+    CHECK(s.serveUntil([&] { return next->driver.nextTurn == 2 && next->driver.openTurn == 0; }, 10));
+    CHECK(s.store.find(kAda)->driver.nextTurn == 1);
+
+    std::swap(roster.friends.front().instances[0], roster.friends.front().instances[1]);
+    CHECK(s.hub->applyAccounts(roster, "restore default", nullptr));
+    CHECK(s.hub->receiveBus("ada", "100-0", "bea", "duplicate", "duplicate", &why));
+    CHECK(s.hub->receiveBus("ada", "101-0", "bea", "first workspace", "first workspace", &why));
+    CHECK(s.serveUntil([&] { return s.driver().nextTurn == 2 && !s.driver().openTurn; }, 10));
+    CHECK(next->driver.nextTurn == 2 && s.store.size() == 2);
+    CHECK(readFile(dir + "/sends") == "send 1:\nsecond workspace\nsend 1:\nfirst workspace\n");
+}
+
 // A session that names no instance, while its friend has some (as a store that failed before the session was
 // settled leaves it): its driver works in the friend's default instance's directory, never the drivers file's.
 void instanceDefault(Server& s, const std::string& dir, const std::string& fake) {
@@ -1817,7 +1847,8 @@ int main(int argc, char** argv) {
                 {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
-                {"window", window}, {"bus_admission", busAdmission}, {"sign_in", signIn}, {"no_credential", noCredential},
+                {"window", window}, {"bus_admission", busAdmission}, {"bus_default_instance", busDefaultInstance},
+                {"sign_in", signIn}, {"no_credential", noCredential},
                 {"usage_limit", usageLimit}, {"continuation", continuation},
                 {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
                 {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},

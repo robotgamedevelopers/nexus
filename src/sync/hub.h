@@ -449,6 +449,7 @@ private:
     bool signInAction(const Action& action, std::string* why, const std::string& client);
     void secretEffects(const SecretEffects& effects);
     bool secretAction(const Action& action, std::string* why, const std::string& client);
+    bool createSession(const Action& action, std::string* why, const std::string& client, bool requireDefault = false);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
     bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
     bool set(const Action& action, std::string* why, const std::string& client, bool announce = false, const std::optional<std::string>& effort = {});
