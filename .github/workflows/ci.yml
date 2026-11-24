@@ -510,7 +510,8 @@ jobs:
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
-            labels: [self-hosted, fleet, Linux, X64, tlc]
+            # The native Ubuntu pool has the Android SDK. TLC alone also selects WSL2.
+            labels: [self-hosted, fleet, Linux, X64, tlc, android]
           - where: wsl2
             labels: [self-hosted, fleet, Linux, X64, wsl2]
     runs-on: ${{ matrix.labels }}

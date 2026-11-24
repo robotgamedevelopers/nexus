@@ -6,7 +6,7 @@ The host starts one nexus-server at boot. The server supervises the long-running
 
 Observed on November 24, 2026. A loaded launchd job can be waiting for its next scheduled run or retry. A registered job alone does not establish that its service is healthy.
 
-| Service | Current owner | What to verify at transfer |
+| Service | Owner before transfer | What to verify at transfer |
 | --- | --- | --- |
 | Redis for the message bus | launchd, `bus-redis-v2` | The same persistent data and endpoint survive restart. Existing clients can authenticate and reconnect. |
 | Sprint scheduler and repository watcher | launchd, `sprint-run` and `sprint-landwatch` | Preserve scheduling and repository state. Observe one owner for each job. |
@@ -14,6 +14,10 @@ Observed on November 24, 2026. A loaded launchd job can be waiting for its next 
 | Scheduled dispatch | launchd, `pingpong-nightly-dispatch` | Preserve the interval and verify a single dispatch per scheduled run. |
 | Message bus listeners | Two fleet-managed hook jobs and twelve independently registered hook jobs in launchd. Rowan also has a driver-scoped listener. | Reconcile by bus identity and recipient. Hand off each listener and verify delivery and replies without consuming a message twice. |
 | Friend directory | launchd, `com.robotgamedevelopers.nexus-friend-directory` | A registry update reaches connected clients while their overlays are closed. |
+
+Studio now runs Redis, the Sprint scheduler, watcher, worker, scheduled dispatch, friend directory watcher, and its selected inbox hooks under the always-on server. The former host jobs are disabled. The server starts again through the host service manager when it exits.
+
+During the live transfer, a bus message queued before Redis changed owners reached its recipient afterward with the same ID. With the client closed, the Sprint dashboard served its API and the worker registered all eight slots again. The scheduled dispatcher retained its interval. This check did not submit a production Sprint card or reboot Studio.
 
 The installed nova-fleet service play currently generates launchd or systemd units from nova-config service rows. The transfer needs an explicit owner in that deployment path so the next fleet reconciliation respects it. Preserve each row's arguments, secret seat and key names, schedule, environment, and log destination. Stage and test supervision before stopping the old owner. Switch shared Redis and active workers only with a recovery path to their existing data and jobs.
 
