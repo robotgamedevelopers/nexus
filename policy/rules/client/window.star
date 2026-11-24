@@ -20,7 +20,7 @@ def _prompt_style(config):
 def _transcript_style(config):
     style = dict(config.get("transcript_style", {}))
     if "scanner_curve" not in style:
-        style["scanner_curve"] = [[0, 0], [0.5, 1], [1, 0]]
+        style["scanner_curve"] = [[0, 0], [0.08, 0], [0.5, 1], [0.58, 1], [1, 0]]
     return style
 
 # Forks can extend this ordered command reference in their client config.

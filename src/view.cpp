@@ -491,17 +491,17 @@ struct ScannerLight {
     uint8_t level;
     signed char steps;
     uint16_t peak; // linear-light gain in sixty-fourths
+    uint8_t activity;
 
     void make(const Look& look, PrLayoutDecorationStyle& d) const {
         const auto off = rgb(look.prompt.fill);
-        auto on = rgb(look.transcriptStyle.scannerInk.value_or(look.tabs.selectedFill));
-        const double t = level / 63.0;
-        const double gain = peak / 64.0;
+        const auto on = rgb(look.transcriptStyle.scannerInk.value_or(look.tabs.selectedFill));
+        const double gain = std::lerp(0.09, peak / 64.0, level / 255.0);
         auto channel = [&](float a, float b) {
-            if (level == 0) return a;
-            const auto low = prColorTransferDecodeDouble(PrColorTransfer_Srgb, a);
-            const auto high = prColorTransferDecodeDouble(PrColorTransfer_Srgb, b);
-            return float(prColorTransferEncodeDouble(PrColorTransfer_Srgb, std::lerp(low, high * gain, t)));
+            if (activity == 0) return a;
+            const auto idle = prColorTransferDecodeDouble(PrColorTransfer_Srgb, a);
+            const auto lit = prColorTransferDecodeDouble(PrColorTransfer_Srgb, b) * gain;
+            return float(prColorTransferEncodeDouble(PrColorTransfer_Srgb, std::lerp(idle, lit, activity / 255.0)));
         };
         d.background = prColor16FromColor({channel(off.r,on.r), channel(off.g,on.g), channel(off.b,on.b), 1});
         radius(d, look.prompt.caretRadius * textScale(steps));
@@ -1709,9 +1709,11 @@ struct Builder {
                 view.scannerCount = count;
                 view.scannerSpread = 1;
                 view.scannerBusy = busy;
+                view.scannerStarted = view.time;
                 view.scannerChanged = busy ? view.time : -100;
             }
             if (busy != view.scannerBusy || (busy && count != view.scannerCount)) {
+                if (busy && !view.scannerBusy) view.scannerStarted = view.time;
                 view.scannerChanged = view.time;
                 view.scannerBusy = busy;
                 if (busy) {
@@ -1754,7 +1756,7 @@ struct Builder {
             }
             const auto& settings = look.transcriptStyle;
             const float gain = std::clamp(prUiDisplay(ui).headroom, 1.0f, settings.scannerPeak);
-            const double cycle = reduced ? 0.25 : elapsed / settings.scannerSeconds;
+            const double cycle = reduced ? 0.25 : ((busy ? view.time : view.scannerChanged) - view.scannerStarted) / settings.scannerSeconds;
             const double phase = cycle - std::floor(cycle);
             // Bound layout work for large fleets. The overflow label preserves the exact count.
             const float cellWidth = look.prompt.segmentSize(1).x;
@@ -1762,15 +1764,15 @@ struct Builder {
                 ((cellWidth + settings.scannerGap) * k() + 1))) / 2 + 1);
             const double sweep = sampleMotion(settings.scannerCurve, phase);
             const double head = (lamps - 1) * sweep;
+            const double activity = busy ? 1.0 : (reduced ? 0.0 : std::clamp(1.0 - elapsed / settings.scannerFade, 0.0, 1.0));
             for (unsigned i = 0; i < lamps; ++i) {
-                const double distance = (i - head) * (phase < 0.5 ? 1 : -1);
-                const double width = distance < 0 ? 1.55 : 0.78;
-                const double active = lamps == 1 ? (reduced ? 1.0 : std::lerp(double(settings.scannerPulseFloor), 1.0, sweep)) : 0.48 + 0.52 * std::exp(-distance * distance / (width * width));
-                const double light = busy ? active : (!reduced && view.scannerSpread > 0 && view.scannerChanged > 0 ?
-                    std::max(0.0, 1.0 - elapsed / settings.scannerFade) : 0);
+                const double distance = (i - head) / 0.55; // Gaussian width in lamp spacings
+                const double light = lamps == 1
+                    ? (reduced ? 1.0 : std::lerp(double(settings.scannerPulseFloor), 1.0, sweep))
+                    : std::exp(-0.5 * distance * distance);
                 const auto steps = static_cast<signed char>(look.textSteps);
                 const auto record = pr::uiStyle(ui, look, BoxRecipe{Part::ScannerSegment, steps},
-                    ScannerLight{uint8_t(std::lround(light * 63)), steps, uint16_t(std::lround(gain * 64))});
+                    ScannerLight{uint8_t(std::lround(light * 255)), steps, uint16_t(std::lround(gain * 64)), uint8_t(std::lround(activity * 255))});
                 const auto cell = prUiElement(ui, row, 0, record, 0);
                 if (i) {
                     PrKitPlace place{};

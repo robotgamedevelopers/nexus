@@ -201,7 +201,7 @@ struct View {
     std::size_t choiceTab = SIZE_MAX;
     unsigned scannerCount = 1;
     bool scannerBusy = false;
-    double scannerChanged = 0;
+    double scannerChanged = 0, scannerStarted = 0;
     double time = 0;                            // the frame's time in seconds, for the busy cursor's breathe
     size_t scannerTab = SIZE_MAX, energyTab = SIZE_MAX;
     std::string energyAccount;

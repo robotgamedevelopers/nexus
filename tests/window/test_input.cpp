@@ -1635,7 +1635,18 @@ void stateCursorUnderTheLastText() {
     state = CursorState::Working;
     h.frame();
     CHECK(lamps().size() == agents);
-    for (int i = 0; i < 20; ++i) h.frame();
+    auto blueAt = [&](double phase, unsigned cell) {
+        h.time = h.view.scannerStarted + h.look.transcriptStyle.scannerSeconds * phase - 1.0 / 60;
+        h.frame();
+        return fillOf(h, lamps()[cell]).b;
+    };
+    const auto rightPeak = blueAt(0.52, 3);
+    CHECK(blueAt(0.56, 3) == rightPeak);
+    CHECK(blueAt(0.57, 0) < rightPeak * 0.5f);
+    const auto returning = blueAt(0.79, 1);
+    CHECK(returning > blueAt(0.80, 3));
+    CHECK(near(blueAt(1.02, 0), rightPeak));
+    CHECK(near(blueAt(1.06, 0), rightPeak));
     for (int zoom = 0; zoom < 2; ++zoom) {
         if (zoom) { h.larger(); h.frame(); }
         const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));

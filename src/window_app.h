@@ -117,7 +117,7 @@ struct TranscriptStyle {
     float replyWidth = 100.0f / 1.5f;
     std::optional<unsigned> scannerInk;
     float highlightEnergy = 2.5f, highlightSeconds = 4, flashSeconds = 0.22f;
-    MotionCurve scannerCurve{{0, 0}, {0.5, 1}, {1, 0}};
+    MotionCurve scannerCurve{{0, 0}, {0.08, 0}, {0.5, 1}, {0.58, 1}, {1, 0}};
     float scannerPause = 0.1f, scannerEase = 1.f / 30, scannerFade = 0.17f;
     float scannerGap = 0.15f * style::kU, scannerOffset = 0;
     float scannerSeconds = 1.5f, scannerPeak = 3, scannerPulseFloor = 0.12f;

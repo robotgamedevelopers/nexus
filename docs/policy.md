@@ -442,7 +442,7 @@ The scanner reads the same height, aspect and corner radius. Both start at the p
 Return these settings in `prompt_style` from the Starlark `window` event, or set them in the client profile and apply it. Reduced motion keeps the cursor steady.
 
 The activity strip uses the tab selection color unless `transcript_style.scanner_ink` supplies another.
-Each segment uses the same dimensions as the prompt cursor. Each active agent gets one lit cell, including the friend during its own turn. Long strips show
+Each segment uses the same dimensions as the prompt cursor. Each active agent gets one cell, including the friend during its own turn. A single cell pulses. Across multiple cells a narrow peak of light sweeps back and forth over a dim strip of the same color, holding briefly at each end. Long strips show
 the remaining count numerically. `scanner_gap` sets the space between cells in points before zoom. `scanner_offset` shifts the strip horizontally from the prompt’s starting column (default 0).
 `highlight_seconds` sets the duration of a complete selection pulse (default 4 seconds). `flash_seconds` sets the selection flash’s exponential decay time (default 0.22 seconds). Idle settles to one cell in the prompt fill. Set `scanner_seconds`
 (0.4–10, default 1.5) for a full sweep, `scanner_peak` (1–8, default 3) for peak linear light,
