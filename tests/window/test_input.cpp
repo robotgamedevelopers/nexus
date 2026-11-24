@@ -135,6 +135,8 @@ struct FakeBoard final : Board {
     int hiddens = 0;                            // rounds it did not
     PrVec2 extent{};                            // the extent the last show was given
     float scale = 1;
+    bool ready = true;
+    bool prepared() override { return ready; }
     int homes = 0;                              // times the sprint tab was chosen (Board::home)
 
     bool show(PrLayoutNode, PrVec2 e, std::string* why) override {
@@ -2496,6 +2498,21 @@ void choosingTheSprintTabGoesHome() {
     h.pointer(PrAppEventKind_PointerUp, at);
     h.frame();
     CHECK(h.board.homes == 4 && h.active().kind == TabKind::Sprint);
+    h.commandDigit(2);
+    h.board.ready = false;
+    h.commandDigit(1);
+    h.frame();
+    CHECK(h.active().name == "f1" && h.view.transcript != kPrLayoutNodeNone);
+    h.commandDigit(3);
+    h.board.ready = true;
+    h.frame();
+    CHECK(h.active().name == "f2");
+    h.board.ready = false;
+    h.commandDigit(1);
+    CHECK(h.active().name == "f2");
+    h.board.ready = true;
+    h.frame();
+    CHECK(h.active().kind == TabKind::Sprint);
 }
 
 // Command-digit selects by strip position from the sprint tab and from a friend's, at launch and after coming back to

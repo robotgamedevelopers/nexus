@@ -33,6 +33,15 @@ Install the matching nova-tools and nova-sprint executables for the server's OS 
 
 Bind the current harness, subscription account and workspace on the server. Configure the provider's sign-in helper and launch the client against that server. Use an existing verified nexus account when available. If enrollment is required, hand the provider dialog to the human. Keep credential files and tokens out of the chat.
 
+In `~/.nexus/server/drivers`, keep the other entries and add the primary route. For example, for Codex on macOS, substitute the verified account name, actual workspace, Python with the nexus policy and RPC modules installed, and the Codex executable:
+
+```text
+primary codex personal /absolute/workspace
+primary-driver codex ["/absolute/venv/bin/python","-I","-m","nexus_policy","primary-driver","codex","/absolute/venv/bin/python","-I","-m","nexus_rpc.driver","codex","--binary","/absolute/bin/codex"]
+```
+
+For Claude, use `claude` in both records and pass the absolute Node and compiled Claude driver paths after `primary-driver","claude"`. Add `primary-resume <provider-session-id>` only when resuming that conversation. Load the driver table before opening the client.
+
 Apply the [keyboard client profile](policy.md#start-with-the-keyboard-driven-client). Open the conversation for the installing harness and have the human send their first message. Verify the reply arrives in that same tab. Offer friend administration only when asked.
 
 ## 5. Report what works

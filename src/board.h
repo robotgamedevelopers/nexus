@@ -104,6 +104,9 @@ public:
     void setTextScale(float k) override;
     // Loads the board again if the page shows another document, or is on its way to one.
     void home() override;
+    void prepare(PrVec2 extent) override;
+    void cancelPreparation() override;
+    bool prepared() override;
 
     // For tests and the screenshot: true once the document has loaded and its first answers have painted, with nothing
     // due now (as of the last step of the page's thread); the line show() gives while there is no page.
@@ -130,7 +133,7 @@ public:
 private:
     // What the window's thread hands the page's thread.
     struct Message {
-        enum class Kind { Event, WindowKey, Hidden, Home, Run } kind;
+        enum class Kind { Event, WindowKey, Hidden, Home, Refresh, Run } kind;
         PrAppEvent event{};                     // Event: placed in the page's CSS px; its text is in `text`
         std::string text;
         std::function<void(PrHtmlPage*)> run;  // Run
@@ -206,6 +209,8 @@ private:
     std::uint64_t done_ = 0;
     double time_ = 0;                       // the window's last frame
     PrAppDisplay display_ = prAppDisplayDefault();
+    std::uint64_t refreshStep_ = 0;
+    bool prewarming_ = false;
     bool onScreen_ = false;
     std::string lookupError_;               // protected by mutex_
     PrVec2 extent_{};                       // the pane's, px

@@ -146,6 +146,7 @@ private:
 
 PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.app) {
     extent_ = desc.initialExtent;
+    prewarming_ = extent_.x > 0 && extent_.y > 0;
     posted_ = extent_.x > 0 && extent_.y > 0 ? 1 : 0;
     const ZoneNames zones = localZoneNames();
     prelude_ = sprintPrelude(zones.standard, zones.daylight);
@@ -187,7 +188,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     std::vector<std::string> opens;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const bool tick = onScreen || onScreen_;
+        const bool tick = onScreen || onScreen_ || (refreshStep_ && !out_.settled && !out_.failed);
         time_ = seconds;
         display_ = display;
         onScreen_ = onScreen;
@@ -335,6 +336,26 @@ void PraxBoard::setTextScale(float k) {
     wake_.notify_one();
 }
 
+void PraxBoard::prepare(PrVec2 extent) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (extent.x > 0 && extent.y > 0) extent_ = extent;
+        refreshStep_ = posted_ + 1;
+    }
+    post(Message{Message::Kind::Refresh, {}, {}, {}});
+}
+
+void PraxBoard::cancelPreparation() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    refreshStep_ = 0;
+    if (waiting_) prDomAgentWake(waiting_);
+}
+
+bool PraxBoard::prepared() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return done_ >= refreshStep_ && (out_.settled || out_.failed || !lookupError_.empty());
+}
+
 void PraxBoard::home() {
     post(Message{Message::Kind::Home, {}, {}, {}});
 }
@@ -383,7 +404,7 @@ std::uint64_t PraxBoard::postedStep() {
 
 bool PraxBoard::readyToReveal(std::uint64_t step) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return done_ >= step && (out_.recorded || out_.failed || !lookupError_.empty());
+    return done_ >= step && (out_.settled || out_.failed || !lookupError_.empty());
 }
 
 bool PraxBoard::settled() {
@@ -462,7 +483,7 @@ void PraxBoard::run() {
             break;
         }
         if (inbox_.empty() && taken_ == posted_) {
-            if (agent_ != nullptr && (onScreen_ || (desc_.initialExtent.x > 0 && !out_.settled && !out_.failed))) {
+            if (agent_ != nullptr && (onScreen_ || (refreshStep_ && (done_ < refreshStep_ || (!out_.settled && !out_.failed))) || prewarming_)) {
                 // Until a task can run, a message comes, the layout thread finishes, or the window wakes it.
                 waiting_ = agent_;
                 lock.unlock();
@@ -482,7 +503,7 @@ void PraxBoard::run() {
         taken_ = taken;
         frameTime_ = time_;
         pageDisplay_ = display_;
-        visible_ = onScreen_ || (desc_.initialExtent.x > 0 && !out_.settled && !out_.failed);
+        visible_ = onScreen_ || (refreshStep_ && (done_ < refreshStep_ || (!out_.settled && !out_.failed))) || prewarming_;
 
         pageExtent_ = extent_;
         pageZoom_ = zoom_;
@@ -518,6 +539,12 @@ void PraxBoard::step(std::vector<Message>& inbox) {
             case Message::Kind::WindowKey:
                 if (scroller_.held()) {
                     scroller_.release(frameTime_);
+                }
+                break;
+            case Message::Kind::Refresh:
+                if (page_) {
+                    endScroll();
+                    navigate();
                 }
                 break;
             case Message::Kind::Home:
@@ -567,12 +594,18 @@ void PraxBoard::step(std::vector<Message>& inbox) {
 
 void PraxBoard::publish() {
     const double delay = agent_ != nullptr ? prDomAgentNextTaskDelay(agent_) : -1;
-    const bool settled = page_ != nullptr && load_ == Load::Loaded && recorded_ != nullptr && !dirty_ &&
+    auto* doc = page_ ? prHtmlWindowDocument(prHtmlPageWindow(page_)) : nullptr;
+    auto* pie = doc ? prDomNodeGetElementById(prDomDocumentAsNode(doc), sv("pie")) : nullptr;
+    // Sprint inserts the first slice (or its empty-state circle) after accepting its snapshot.
+    // Other documents, including static charts, do not use that dashboard contract.
+    const bool chartReady = !pie || !prDomNodeGetElementById(prDomDocumentAsNode(doc), sv("landed")) ||
+        prDomNodeFirstElementChild(prDomElementAsNode(pie));
+    const bool settled = chartReady && delay != 0 && page_ != nullptr && load_ == Load::Loaded && recorded_ != nullptr && !dirty_ &&
         !prHtmlPageIsFetching(page_);
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (out_.recorded != recorded_) {
+        if (settled && out_.recorded != recorded_) {
             prDrawListRelease(out_.recorded);
             out_.recorded = recorded_;
             if (recorded_ != nullptr) {
@@ -588,7 +621,9 @@ void PraxBoard::publish() {
         out_.retryAt = retryAt_;
         out_.canvas = canvas_;
         out_.overscroll = scroller_.overscroll();
+        changed = changed || out_.settled != settled;
         out_.settled = settled;
+        if (settled || failed) prewarming_ = false;
         out_.busy = dirty_ || scroller_.busy() || delay == 0;
         out_.nextTask = delay;
         for (std::string& url : opens_) {

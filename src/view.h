@@ -85,6 +85,9 @@ struct Board {
     // The sprint tab was chosen, by its Command key or a click on its tab, whether or not it showed already: a page
     // that has left the board goes back to it.
     virtual void home() = 0;
+    virtual void prepare(PrVec2) { home(); }
+    virtual void cancelPreparation() {}
+    virtual bool prepared() { return true; }
 };
 
 // The request a secret dialog shows (docs/secrets.md): never a value.
@@ -249,6 +252,7 @@ struct View {
     std::function<void()> moved;                // after a drag moved a tab: saves the order (tab_order.h)
     std::function<void()> selected;             // after a round that changed the selected tab (by Tab::id), the
                                                 // first round included: saves the selection (tab_order.h)
+    std::optional<std::size_t> pendingBoardId;
     std::size_t selectedId = ~std::size_t(0);   // the Tab::id selected at the end of the last round
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)

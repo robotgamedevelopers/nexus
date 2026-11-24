@@ -413,6 +413,28 @@ void offScreenRunsNothingAndCatchesUp() {
     CHECK(h.server.polls > polls);
 }
 
+// A cleared sprint replaces a populated chart while the friend page remains selected.
+void preparationWaitsForTheNewChart() {
+    Harness h;
+    h.frames(10);
+    CHECK(h.board->settled());
+    h.model.select_tab(1);
+    h.frame();
+    h.server.page = R"(<body><span id="landed">0</span><svg id="pie"></svg>
+        <script>setTimeout(function () {
+            document.querySelector("#pie").appendChild(document.createElementNS("http://www.w3.org/2000/svg","circle"));
+        }, 500);</script></body>)";
+    h.board->prepare(h.extent);
+    h.view.pendingBoardId = h.model.tab(0).id;
+    h.frames(4);
+    CHECK(h.server.pages == 2 && h.model.active() == 1 && !h.board->prepared());
+    h.frames(20);
+    CHECK(h.board->prepared() && h.model.active() == 0);
+    h.dom([&](PrDomDocument* d) {
+        CHECK(prDomNodeFirstElementChild(prDomElementAsNode(Harness::byId(d, "pie"))) != nullptr);
+    });
+}
+
 // A new build reloads the page, and nexus's script runs again in the new document: the clock and the digits are still
 // formatted, and the style is added again.
 void aNewBuildReloadsWithThePrelude() {
@@ -734,6 +756,7 @@ void theRepositoryLinkIsHidden() {
 int main() {
     loadsPollsAndFormats();
     offScreenRunsNothingAndCatchesUp();
+    preparationWaitsForTheNewChart();
     aNewBuildReloadsWithThePrelude();
     anUnreachableBoardSaysWhyAndRecovers();
     aFailedLookupIsTheLine();

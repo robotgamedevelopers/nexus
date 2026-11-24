@@ -210,6 +210,7 @@ void carryOut(App& a, OverlayAct act) {
 #endif
     if (act == OverlayAct::Hide) {
         a.preparingReveal = false;
+        if (a.board) a.board->cancelPreparation();
         a.boardRevealStep.reset();
         a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
@@ -222,6 +223,8 @@ void carryOut(App& a, OverlayAct act) {
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
     if (!prAppWindowIsVisible(window)) {
+        if (a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint)
+            a.board->prepare({});
         a.preparingReveal = true;
         a.revealFrameReady = false;
         a.boardRevealStep.reset();

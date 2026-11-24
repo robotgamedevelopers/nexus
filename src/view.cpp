@@ -938,6 +938,25 @@ struct Builder {
         return cached.advance;
     }
 
+    PrVec2 boardExtent() const {
+        return {view.extent.x, std::max(0.0f, view.extent.y - (look.tabs.height * k() + 1))};
+    }
+
+    void select(std::size_t index) {
+        if (index >= model.tab_count()) return;
+        const auto& tab = model.tab(index);
+        if (view.board && tab.kind == TabKind::Sprint && model.active() != index) {
+            if (view.pendingBoardId != tab.id) view.board->prepare(boardExtent());
+            view.pendingBoardId = tab.id;
+            if (!view.board->prepared()) { prUiRequestFrame(ui); return; }
+        } else if (view.board && tab.kind == TabKind::Sprint) {
+            view.board->home();
+        }
+        if (view.pendingBoardId && view.board) view.board->cancelPreparation();
+        view.pendingBoardId.reset();
+        model.select_tab(index);
+    }
+
     void strip(PrLayoutNode parent, PrKitTabs* tabs, std::size_t first, std::size_t end, const std::string& group,
             bool exchanges, PrKitFlex flex) {
         syncTabs(tabs, first, end);
@@ -1006,7 +1025,7 @@ struct Builder {
         // Right on the last tab selects kNoTab, which selects nothing: the next round puts the selection back.
         const uint64_t now = prKitTabsSelected(tabs);
         if (now != selected && now != kNoTab)
-            model.select_tab(first + prKitTabsIndex(tabs, now));
+            select(first + prKitTabsIndex(tabs, now));
     }
 
     // Prax keeps click selection independent of drag admission. Every contiguous group has its own strip. A fork
@@ -1145,7 +1164,7 @@ struct Builder {
         // The box takes the room the strip and any notice leave; the page is laid out at the box's extent from the last
         // layout (the strip's height beneath the window's in the first).
         PrLayoutNode box = element(window, Part::BoardBox);
-        PrVec2 extent{view.extent.x, std::max(0.0f, view.extent.y - (look.tabs.height * k() + 1))};
+        PrVec2 extent = boardExtent();
         if (view.boardBox != kPrLayoutNodeNone) {
             PrRect last = prLayoutRectToPx(prLayoutNodeBounds(tree, view.boardBox, PrLayoutCoordinates_Layout));
             if (last.right - last.left >= 1 && last.bottom - last.top >= 1)
@@ -2063,7 +2082,9 @@ struct Builder {
                 promptKey(active, "Command+Enter");
         }
         // A friend's draft comes back with the caret at its end.
-        if (view.prompted != model.tab(active).id) {
+        if (pickerInput) {
+            view.prompted = ~std::size_t(0);
+        } else if (view.prompted != model.tab(active).id) {
             view.prompted = model.tab(active).id;
             uint32_t end = uint32_t(model.tab(active).draft.size());
             prUiTextEditSetSelection(ui, edit, PrUiTextSelection{end, end});
@@ -2149,6 +2170,15 @@ struct Builder {
     bool pickerInput = false;
 
     void build(PrLayoutNode parent) {
+        if (view.pendingBoardId && view.board) {
+            if (view.board->prepared()) {
+                for (std::size_t i = 0; i < model.tab_count(); ++i) {
+                    if (model.tab(i).id == *view.pendingBoardId) { model.select_tab(i); break; }
+                }
+                view.board->cancelPreparation();
+                view.pendingBoardId.reset();
+            } else prUiRequestFrame(ui);
+        }
         PrLayoutNode window = element(parent, Part::Window);
         view.selection.begin(tree, model.tab_count() ? model.tab(model.active()).id : SIZE_MAX);
         view.energyAnimating = false;
@@ -2185,9 +2215,10 @@ struct Builder {
         std::erase_if(view.sentFlashes, [&](const View::SentFlash& flash) {
             return view.time - flash.since >= look.transcriptStyle.personFlashSeconds;
         });
+        const auto beforeStrip = model.active();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
-        if (view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
+        if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
@@ -2333,8 +2364,7 @@ struct Builder {
                 break;
             case WindowCommand::SelectTab: {
                 const auto index = static_cast<std::size_t>(key.argument);
-                if (model.select_tab(index) && model.tab(index).kind == TabKind::Sprint && view.board)
-                    view.board->home();
+                select(index);
                 break;
             }
             case WindowCommand::MoveTab: {
