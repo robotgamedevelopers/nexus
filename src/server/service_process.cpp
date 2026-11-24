@@ -308,7 +308,7 @@ int runServiceChild(int argc, char** argv) {
     if (child == 0) {
         close(gate[1]); close(execError[0]);
         char go = 0;
-        if (setpgid(0, 0) != 0 || read(gate[0], &go, 1) != 1 || go != 'G') _exit(1);
+        if (read(gate[0], &go, 1) != 1 || go != 'G') _exit(1);
         close(gate[0]);
         signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); signal(SIGPIPE, SIG_DFL);
         if (dup2(log.value, STDOUT_FILENO) >= 0 && dup2(log.value, STDERR_FILENO) >= 0 &&
@@ -320,12 +320,17 @@ int runServiceChild(int argc, char** argv) {
         _exit(127);
     }
     close(gate[0]); close(execError[1]);
-    // The child waits for this byte. If the guard dies before the marker is durable it sees EOF instead of starting.
+    // The child is blocked before exec. The guard alone sets its group: on Darwin two concurrent setpgid calls
+    // can return EPERM even when both request this same group. A guard that dies closes the gate without a launch.
     int status = 0;
-    bool prepared = setpgid(child, child) == 0 && markGroup(lock.value, child) && fsync(dir.value) == 0;
-    if (prepared && period) prepared = storeDue(dir.value, name, period, claim + period, false);
+    bool prepared = false;
+    if (setpgid(child, child) != 0) report(name, "create service process group", errno);
+    else if (!markGroup(lock.value, child)) report(name, "persist process group in service lease", errno);
+    else if (fsync(dir.value) != 0) report(name, "sync service lease directory", errno);
+    else if (period && !storeDue(dir.value, name, period, claim + period, false))
+        report(name, "persist scheduled service claim", errno);
+    else prepared = true;
     bool launched = prepared && !ownerGone(0) && write(gate[1], "G", 1) == 1;
-    if (!prepared) report(name, "persist service launch claim", errno);
     close(gate[1]);
     if (launched) {
         int error = 0;

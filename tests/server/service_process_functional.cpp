@@ -14,6 +14,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <fcntl.h>
@@ -87,9 +88,10 @@ int fixture(const fs::path& dir, const std::string& mode, const char* arg) {
         std::ofstream(dir / "overlap") << "started while earlier group still held the lock\n";
         return 71;
     }
-    if (!std::getenv("NEXUS_FIXTURE_VALUE") || std::string(std::getenv("NEXUS_FIXTURE_VALUE")) != argument ||
-        std::getenv("NEXUS_TEST_PARENT_ONLY") || arg != std::string(argument) || fs::current_path() != dir) {
-        std::ofstream(dir / "bad-launch") << "wrong environment, arguments, or working directory\n";
+    const char* value = std::getenv("NEXUS_FIXTURE_VALUE");
+    if (getpgrp() != getpid() || !value || std::string_view(value) != argument ||
+        std::getenv("NEXUS_TEST_PARENT_ONLY") || std::string_view(arg) != argument || fs::current_path() != dir) {
+        std::ofstream(dir / "bad-launch") << "wrong process group, environment, arguments, or working directory\n";
         return 72;
     }
     std::cout << "fixture stdout\n" << std::flush;
