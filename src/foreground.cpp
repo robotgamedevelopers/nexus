@@ -4,7 +4,6 @@
 #include <cstring>
 
 #if defined(__APPLE__)
-#include <libproc.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
 #endif
@@ -23,35 +22,6 @@ bool processInfo(int pid, kinfo_proc* out) {
 }
 
 } // namespace
-
-std::vector<int> childProcesses() {
-    std::vector<int> pids(256);
-    for (;;) {
-        const int n = proc_listchildpids(getpid(), pids.data(), int(pids.size() * sizeof(int)));
-        if (n < 0)
-            return {};
-        if (std::size_t(n) < pids.size()) {
-            pids.resize(std::size_t(n));
-            return pids;
-        }
-        pids.resize(pids.size() * 2);
-    }
-}
-
-int startedShell(const std::vector<int>& before, const std::vector<int>& after) {
-    int found = -1;
-    for (int pid : after) {
-        if (pid <= 0 || std::find(before.begin(), before.end(), pid) != before.end())
-            continue;
-        kinfo_proc info{};
-        if (!processInfo(pid, &info) || info.kp_eproc.e_tdev == NODEV || info.kp_eproc.e_pgid != pid)
-            continue;
-        if (found != -1)
-            return -1;
-        found = pid;
-    }
-    return found;
-}
 
 int foregroundGroup(int shell) {
     kinfo_proc info{};
@@ -104,14 +74,6 @@ std::vector<std::string> processArguments(int leader) {
 }
 
 #else
-
-std::vector<int> childProcesses() {
-    return {};
-}
-
-int startedShell(const std::vector<int>&, const std::vector<int>&) {
-    return -1;
-}
 
 std::vector<std::string> foregroundArguments(int) {
     return {};

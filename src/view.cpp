@@ -909,13 +909,14 @@ struct Builder {
     float tabAdvance(std::size_t index, const std::string& title) {
         auto& cached = view.tabWidths[index];
         if (cached.title != title) {
-            std::unique_ptr<PrTextShaper, decltype(&prTextShaperDestroy)> shaper(
-                prTextShaperCreate(PrTextShaperBackend_Default), prTextShaperDestroy);
+            std::unique_ptr<PrTextShaper, decltype(&prTextShaperDestroy)> fallback(
+                view.windowShaper ? nullptr : prTextShaperCreate(PrTextShaperBackend_Default), prTextShaperDestroy);
+            auto* shaper = view.windowShaper ? view.windowShaper : fallback.get();
             std::unique_ptr<PrTextLayout, decltype(&prTextLayoutDestroy)> layout(prTextLayoutCreate(), prTextLayoutDestroy);
             cached = {title, 0};
             for (const auto role : {kTabRole, kSelectedTabRole}) {
                 if (!shaper || !kit->fonts[role]) continue;
-                const PrTextLayoutDesc desc{.text = sv(title), .font = kit->fonts[role], .shaper = shaper.get()};
+                const PrTextLayoutDesc desc{.text = sv(title), .font = kit->fonts[role], .shaper = shaper};
                 prTextLayoutSet(layout.get(), &desc);
                 cached.advance = std::max(cached.advance, std::ceil(prTextLayoutExtent(layout.get()).x));
             }

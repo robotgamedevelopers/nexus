@@ -373,7 +373,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
                 readFlag(doc, item, {"synth", 5}, chirp.synth) &&
                 readPoints(doc, item, {"gain", 4}, chirp.gain, 0, 1));
         };
-        if (prJsonKind(doc, sounds) != PrJsonKind_Object || !cue({"tab", 3}, surface.tabChirp) ||
+        if (prJsonKind(doc, sounds) != PrJsonKind_Object || !cue({"copy", 4}, surface.copyChirp) || !cue({"tab", 3}, surface.tabChirp) ||
                 !cue({"confirm", 7}, surface.confirmChirp) ||
                 !cue({"open", 4}, surface.openChirp) || !cue({"close", 5}, surface.closeChirp) ||
                 !cue({"dialog", 6}, surface.dialogChirp) || !cue({"cancel", 6}, surface.cancelChirp) ||

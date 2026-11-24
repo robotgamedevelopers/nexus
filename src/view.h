@@ -159,7 +159,8 @@ struct View {
     std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> inlineFont{nullptr, prTextFontRelease};
     std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> promptFont{nullptr, prTextFontRelease};
     ChatSelection selection;
-    std::function<void(const std::string&)> copy, openLink;
+    std::function<bool(const std::string&)> copy;
+    std::function<void(const std::string&)> openLink;
     Model* model = nullptr;
     Look* look = nullptr;
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
@@ -170,6 +171,7 @@ struct View {
     NativeTabs nativeTabs;
     std::map<std::string, KitTabs> groupStrips;
     struct TabWidth { std::string title; float advance = 0; };
+    PrTextShaper* windowShaper = nullptr; // borrowed from the window for measuring tab titles
     std::vector<TabWidth> tabWidths;
     std::vector<PrLayoutNode> tabNodes;
     PrLayoutNode accountAnchor = kPrLayoutNodeNone;

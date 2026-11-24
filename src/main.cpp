@@ -377,7 +377,8 @@ bool open(void* context, PrStudioWindow* window) {
     prKitSetTheme(prStudioWindowKit(window), &theme);
     // The faces of the window's text fonts made in the Studio app's shaper now, before the first frame (font_prefetch.h):
     // made on the first frame, they were most of its work.
-    warmShaper(prStudioWindowShaper(window), a.fonts, a.overlay);
+    a.view.windowShaper = prStudioWindowShaper(window);
+    warmShaper(a.view.windowShaper, a.fonts, a.overlay);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window));
     a.terminals->machines = a.machines;
@@ -416,7 +417,10 @@ bool open(void* context, PrStudioWindow* window) {
     a.host.ui = prStudioWindowUi(window);
     // Command-V in the prompt: the clipboard's text comes back through the host, which cuts it to the prompt's room.
     a.view.copy = [&a](const std::string& text) {
-        if (a.window) prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, {text.data(),text.size()});
+        if (!a.window || prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard,
+                {text.data(), text.size()}) != PrStatus_Ok) return false;
+        a.audio.play(a.view.windowApp.surface.copyChirp);
+        return true;
     };
     a.view.paste = [&a] {
         if (a.window != nullptr) {

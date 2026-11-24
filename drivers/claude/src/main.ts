@@ -23,6 +23,7 @@ import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 import { sandboxHomeFiles, sandboxTools } from './tools.js';
 import { kDriverDir, wallOptions } from './wall.js';
+import { sendName } from './bus-sender.js';
 import { busListener } from './bus-listener.js';
 import { gitGrant } from './git-grant.js';
 import { Egress } from './egress.js';
@@ -91,6 +92,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         instructions.push('To listen on the message bus use Monitor with "' + join(bin, 'nova-bus') +
             '" hook --as ' + friend + '. Keep the full output for delivery.');
     }
+    if (start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself.');
     const startupContext = instructions.filter(Boolean).join('\n');
     const stream = query({
         prompt: start.prompts,
@@ -115,8 +117,8 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             allowDangerouslySkipPermissions: true,
             canUseTool: (_name, input) => Promise.resolve({ behavior: 'allow', updatedInput: input }),
             includePartialMessages: true,
-            mcpServers: { nexus: secretMcpServer(start.askSecret) },
-            toolAliases: { [kSecretToolName]: kSecretMcpToolName },
+            mcpServers: { nexus: secretMcpServer(start.askSecret, start.busSender) },
+            toolAliases: { [kSecretToolName]: kSecretMcpToolName, ...(start.busSender ? {[sendName]: `mcp__nexus__${sendName}`} : {}) },
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...wall,
         },

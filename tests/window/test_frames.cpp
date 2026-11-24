@@ -267,6 +267,7 @@ struct Window {
         // As the app does at launch, while nothing shows (main.cpp): the fallback fonts loaded before any frame.
         FontPrefetch(fonts).wait();
         // As the app does when its window opens, before the first frame (main.cpp open): the text fonts' faces made.
+        view.windowShaper = shaper;
         warmShaper(shaper, fonts, true);
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 2};
         tree = prLayoutTreeCreate(&desc);

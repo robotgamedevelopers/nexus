@@ -83,3 +83,5 @@ For a Nexus friend's incoming chat messages, transfer its inbox using the
 [message bus ownership settings](accounts.md#message-bus-ownership).
 The native receiver starts the hook for that inbox and turns its deliveries into chat bubbles.
 Remove the old standalone hook for that identity at handoff so only one listener owns it.
+
+A Claude session with a server-owned inbox can send through the in-process `nexus_bus_send` tool. Pass `to`, `subject`, `body` and optionally `reply_to`. The driver fixes the sender and endpoint from the friend grant and returns the bus receipt.

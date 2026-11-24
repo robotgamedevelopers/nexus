@@ -1131,7 +1131,7 @@ void copyMarkdownConversation() {
     FrameHost host;
     host.view = &h.view;
     host.model = &h.model;
-    h.view.copy = [&](const std::string& s) { copied = s; };
+    h.view.copy = [&](const std::string& s) { copied = s; return true; };
     auto event = [&](PrAppEvent e) { return host.event(e); };
     CHECK(event(pointerEvent(PrAppEventKind_PointerDown, {start.left + 0.1f, (start.top + start.bottom) / 2})));
     CHECK(event(pointerEvent(PrAppEventKind_PointerMove, {end.right - 0.1f, (end.top + end.bottom) / 2})));
@@ -1139,8 +1139,9 @@ void copyMarkdownConversation() {
     h.frame();
     CHECK(event(keyEvent(PrAppEventKind_KeyDown, 'C', PrAppKeyCode_KeyC, style::kCommand)));
     CHECK(copied == "Hello\n\nworld");
-    CHECK(prLayoutNodeHighlights(h.tree, hello, nullptr, 0) == 1);
-    CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 1);
+    h.frame();
+    CHECK(prLayoutNodeHighlights(h.tree, hello, nullptr, 0) == 0);
+    CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 0);
 }
 
 void namedBusBubbles() {
