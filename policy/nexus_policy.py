@@ -143,6 +143,14 @@ def cli():
             directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 config = json.loads(read_profile_file(directory, "identities.json"))
+                os.environ.pop("NEXUS_WORK_ROUTES", None)
+                if args.command == "friend-driver" and args.harness == "claude":
+                    try:
+                        routes = json.loads(read_profile_file(directory, "work-routes.json"))
+                    except FileNotFoundError:
+                        routes = {}
+                    if args.friend in routes:
+                        os.environ["NEXUS_WORK_ROUTES"] = json.dumps(routes[args.friend])
             finally:
                 os.close(directory)
             if args.command in ("bus-grants", "bus-roster"):

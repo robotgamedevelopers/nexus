@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 
 const remotePattern = /^git@([a-z0-9][a-z0-9-]*):([a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+\.git)$/u;
 
-export function gitGrant(remote: string, env: Record<string, string>) {
+export function gitGrant(remote: string, env: Record<string, string>, source = remote, project = false) {
     const match = remotePattern.exec(remote);
     const alias = match?.[1];
     const repo = match?.[2];
@@ -37,6 +37,6 @@ export function gitGrant(remote: string, env: Record<string, string>) {
     const i = Number(env['GIT_CONFIG_COUNT'] ?? 0);
     if (!Number.isSafeInteger(i) || i < 0) throw new Error('Invalid Git config count');
     return {sockets, env: {...env, GIT_CONFIG_COUNT: String(i + 1),
-        ['GIT_CONFIG_KEY_' + String(i)]: 'url.nexusgit::home.insteadOf', ['GIT_CONFIG_VALUE_' + String(i)]: remote,
-        NEXUS_GIT_SOCKET_DIR: directory}};
+        ['GIT_CONFIG_KEY_' + String(i)]: 'url.nexusgit::' + (project ? 'project' : 'home') + '.insteadOf', ['GIT_CONFIG_VALUE_' + String(i)]: source,
+        [project ? "NEXUS_PROJECT_GIT_SOCKET_DIR" : "NEXUS_GIT_SOCKET_DIR"]: directory}};
 }

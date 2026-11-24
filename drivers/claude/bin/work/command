@@ -1,0 +1,17 @@
+#!/usr/bin/python3 -I
+"""Call the current Nexus session's host-owned work route."""
+import json
+import os
+import socket
+import sys
+
+name = os.path.basename(sys.argv[0])
+with socket.socket(socket.AF_UNIX) as client:
+    client.connect(os.environ["NEXUS_WORK_SOCKET"])
+    client.sendall(json.dumps([name, *sys.argv[1:]]).encode())
+    client.shutdown(socket.SHUT_WR)
+    with client.makefile("rb") as reply:
+        result = json.load(reply)
+sys.stdout.write(result["stdout"])
+sys.stderr.write(result["stderr"])
+sys.exit(result["code"])

@@ -25,6 +25,7 @@ import { sandboxHomeFiles, sandboxTools } from './tools.js';
 import { kDriverDir, wallOptions } from './wall.js';
 import { sendName } from './bus-sender.js';
 import { busListener } from './bus-listener.js';
+import { workRoutes } from './work-routes.js';
 import { gitGrant } from './git-grant.js';
 import { Egress } from './egress.js';
 
@@ -68,6 +69,9 @@ try {
 }
 
 let grant: ReturnType<typeof gitGrant> | undefined;
+const configuredRoutes = env['NEXUS_WORK_ROUTES'];
+delete env['NEXUS_WORK_ROUTES'];
+let work: ReturnType<typeof workRoutes> | undefined;
 let busSocket: string | undefined;
 function startHarness(start: HarnessStart, account: Account): Harness {
     if (start.gitRemote) grant ??= gitGrant(start.gitRemote, env);
@@ -77,7 +81,13 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         Object.assign(wall.sandbox.network, {allowUnixSockets: grant.sockets});
         wall.sandbox.filesystem?.allowRead?.push(join(kDriverDir, 'bin/git-remote-nexusgit'));
     }
-    const childEnv = {...(grant?.env ?? env)};
+    let childEnv = {...(grant?.env ?? env)};
+    if (configuredRoutes && start.limited && wall.sandbox.network) {
+        work ??= workRoutes(configuredRoutes, childEnv, start.busSender, kDriverDir);
+        childEnv = {...work.env};
+        wall.sandbox.network.allowUnixSockets = [...(wall.sandbox.network.allowUnixSockets ?? []), ...work.sockets];
+        wall.sandbox.filesystem?.allowRead?.push(work.bin, join(kDriverDir, 'bin/git-remote-nexusgit'));
+    }
     const instructions = [start.startupContext];
     if (start.busListener && wall.sandbox.network) {
         const [friend, address] = start.busListener.split('@');

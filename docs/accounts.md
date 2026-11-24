@@ -595,3 +595,21 @@ in light blue. Up to 4096 UTF-8 bytes appear inline. For a longer body,
 the chat shows the filename and byte count, and the friend receives a path to the complete
 `message.txt` in its workspace's `incoming/` directory. Delivery continues with all windows
 closed. Reconnecting or replaying an acknowledged message preserves its original bubble.
+
+### Project tools in a Claude session on macOS
+
+The server profile can grant a friend a second Git repository, GitHub REST access, a bench login
+and bus presence. Put the entry in `work-routes.json` beside `identities.json` in the server-owned
+profile. The key is the registered friend's name. For example:
+
+```json
+{"example":{"repository":"org/project","githubAlias":"github-example","ghConfig":"/absolute/gh-example","bench":"build-host","benchUser":"nexus-example","benchKey":"/absolute/bench-key"}}
+```
+
+Use the friend's own authenticated GitHub CLI config, trusted GitHub SSH alias and dedicated bench
+account. Verify the GitHub login and the bench identity before enabling the entry. At the next driver
+launch, Git automatically routes the repository's ordinary GitHub SSH origin. The friend can use
+`gh api user`, repository REST endpoints (including pull requests and CI), `ssh build-host hostname`
+and noninteractive bench commands. The API accepts a method, literal string fields and simple field
+selection. For a server-owned bus sender, `nova-bus who` also works for CLI callers such as Sprint.
+Remove the entry and relaunch the driver to revoke the routes.
