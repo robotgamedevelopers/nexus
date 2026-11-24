@@ -45,6 +45,7 @@ public:
 
     // What the friend of the session behind a friend's tab (by Tab::id) is doing, as the last state applied that held
     // the session says: null until a state has held it, or when the last state applied did not.
+    std::uint32_t activeAgents(std::size_t id) const;
     const Activity* activity(std::size_t id) const;
 
     // Forgets the tab (by Tab::id) whose friend left the server's list (sync/client.h applyFriends): the session it
@@ -58,6 +59,7 @@ private:
         std::uint64_t next = 0;
         std::uint64_t epoch = 0;
         EntryRef open;
+        std::uint32_t agents = 0;
         bool held = false;              // the last state applied held the session
         Activity activity = Activity::Idle;
     };

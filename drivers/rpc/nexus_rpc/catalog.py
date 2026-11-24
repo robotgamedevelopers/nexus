@@ -9,18 +9,19 @@ from pathlib import Path
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 
 
-def save(provider, rows):
+def save(provider, rows, resolved=None, default_efforts=None):
     models = {}
-    default = ""
     for name, efforts, selected in rows:
         if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
             continue
         models[name] = list(dict.fromkeys(v for v in efforts if isinstance(v, str) and IDENTIFIER.fullmatch(v))) if isinstance(efforts, list) else []
-        if selected:
-            default = name
     if not models:
         return
-    data = json.dumps({"default": default, "models": models}, separators=(",", ":"))
+    catalog = {"order": list(models), "models": models}
+    for field, values in (("resolved", resolved), ("default_efforts", default_efforts)):
+        if values:
+            catalog[field] = {k: v for k, v in values.items() if k in models and isinstance(v, str) and IDENTIFIER.fullmatch(v)}
+    data = json.dumps(catalog, separators=(",", ":"))
     if len(data) > 16384:
         return
     root = Path.home() / ".nexus/server/catalogs"
@@ -28,10 +29,13 @@ def save(provider, rows):
     with tempfile.NamedTemporaryFile(mode="w", dir=root, delete=False) as temp:
         temp.write(data)
     os.replace(temp.name, root / (provider + ".json"))
+    return next(iter(models))
 
 
 async def discover(rpc, provider):
     rows = []
+    targets = {}
+    efforts = {}
     params = {}
     seen = set()
     while True:
@@ -39,6 +43,9 @@ async def discover(rpc, provider):
         if provider == "muse":
             rows = [(r["modelId"], r.get("variants"), r.get("isDefault")) for r in page["models"]]
             break
+        for row in page["data"]:
+            targets[row["id"]] = row.get("model")
+            efforts[row["id"]] = row.get("defaultReasoningEffort")
         rows.extend((r["id"], [e["reasoningEffort"] for e in r.get("supportedReasoningEfforts", [])], r.get("isDefault"))
                     for r in page["data"] if not r.get("hidden"))
         cursor = page.get("nextCursor")
@@ -48,7 +55,7 @@ async def discover(rpc, provider):
             return
         seen.add(cursor)
         params = {"cursor": cursor}
-    save(provider, rows)
+    return save(provider, rows, targets, efforts)
 
 
 def acp_catalog(provider, session):
@@ -66,4 +73,4 @@ def acp_catalog(provider, session):
     offered = list(values(model.get("options", []))) or [r["modelId"] for r in legacy.get("availableModels", [])]
     current = model.get("currentValue") or legacy.get("currentModelId")
     efforts = list(values(effort.get("options", [])))
-    save(provider, [(value, efforts if value == current else [], value == current) for value in offered])
+    return save(provider, [(value, efforts if value == current else [], value == current) for value in offered])

@@ -1,6 +1,28 @@
 load("client/accounts.star", account_window = "describe")
 """The window application. The platform draws the panels and captures the declared keys."""
 
+# Curves are [fraction of cycle, level] pairs. The native renderer interpolates them.
+def _prompt_style(config):
+    style = dict(config.get("prompt_style", {}))
+    if "caret_curve" not in style:
+        seconds = style.get("caret_seconds", 1.5)
+        top = min(style.get("caret_hold", 0.1) / seconds, 0.45)
+        bottom = min(style.get("caret_bottom_hold", style.get("caret_hold", 0.1)) / seconds, 0.45)
+        rise = (1.0 - top - bottom) / (1.0 + style.get("caret_fall_ratio", 0.5))
+        points = [[0, 0], [rise, 1]]
+        if top > 0:
+            points.append([rise + top, 1])
+        if bottom > 0:
+            points.append([1.0 - bottom, 0])
+        style["caret_curve"] = points + [[1, 0]]
+    return style
+
+def _transcript_style(config):
+    style = dict(config.get("transcript_style", {}))
+    if "scanner_curve" not in style:
+        style["scanner_curve"] = [[0, 0], [0.5, 1], [1, 0]]
+    return style
+
 def _shortcuts():
     keys = [["Command+" + digit, "select_tab", pos] for pos, digit in enumerate("1234567890".elems())]
     keys.extend([
@@ -169,15 +191,16 @@ def handle(event, state, config):
         display = directory.get("providers", {}).get(provider, provider)
         window = {
             "sign_in_heading": "Please sign in to " + display if display else "Please sign in",
+            "sounds": config.get("sounds", {}),
             "message_card": config.get("message_card", {"fill":"#303030", "ink":"#ffffff", "email_ink":"#477fba", "text_size":34, "radius":20}),
-            "transcript_style": config.get("transcript_style", {}),
+            "transcript_style": _transcript_style(config),
             "centered_account_menu": config.get("centered_account_menu", False),
             "sign_in_on_select": config.get("sign_in_on_select", False),
             "account_auto_label": config.get("account_auto_label", "auto"),
             "show_tabs": config.get("show_tabs", True),
             "reorder_tabs": config.get("reorder_tabs", True),
             "prompt_command": False,
-            "prompt_style": config.get("prompt_style", {}),
+            "prompt_style": _prompt_style(config),
             "tab_style": config.get("tab_style", {}),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
@@ -190,7 +213,7 @@ def handle(event, state, config):
             "limit_model_label": model_button,
         }
         words = state.get("ui", {}).get("draft", "").split()
-        window["prompt_command"] = bool(words) and words[0] in config.get("prompt_commands", ["/clear", "/compact", "/model", "/effort", "/logout"])
+        window["prompt_command"] = bool(words) and words[0] in config.get("prompt_commands", ["/clear", "/compact", "/model", "/effort", "/info", "/logout"])
         tabs = state.get("ui", {}).get("tabs", [])
         if config.get("centered_account_menu", False) or config.get("tab_labels"):
             window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
@@ -201,7 +224,40 @@ def handle(event, state, config):
             draft = ui.get("draft", "")
             catalog = ui.get("catalog", {})
             models = catalog.get("models", {})
-            for command, choices in [("/model ", models.keys()), ("/effort ", models.get(ui.get("model") or catalog.get("default", ""), []))]:
+            order = [m for m in catalog.get("order", models.keys()) if m in models and m != "default"]
+            model = ui.get("model")
+            if not model or model == "default":
+                model = order[0] if order else ""
+            efforts = models.get(model, [])
+            kind = ui.get("choice_kind", "")
+            lists = {"model": order, "effort": efforts}
+            if not kind and len(words) == 1 and words[0] in ["/model", "/effort"] and not state.get("account_picker_open"):
+                window["shortcuts"] = _bind(window["shortcuts"], "Enter", ["account_action", "picker:" + words[0][1:]])
+            if kind in lists:
+                values = lists[kind]
+                current_effort = ui.get("effort") or catalog.get("default_efforts", {}).get(model)
+                selected = ui.get("choice_value") or (model if kind == "model" else current_effort)
+                index = values.index(selected) if selected in values else 0
+                targets = catalog.get("resolved", {}) if kind == "model" else {}
+                items = [{"text": "Model" if kind == "model" else "Effort"}]
+                if not values:
+                    items.append({"text": "No choices reported yet"})
+                for i, value in enumerate(values):
+                    target = targets.get(value)
+                    items.append({"text": value + (" → " + target if target and target != value else ""),
+                                  "action": "choose:" + value, "selected": i == index})
+                window["account_items"] = items
+                window["panels"] = ["account", "prompt"]
+                keys = {"Escape": "picker:close"}
+                if values:
+                    keys.update({"ArrowUp": "point:" + values[(index-1) % len(values)],
+                                 "ArrowDown": "point:" + values[(index+1) % len(values)], "Enter": "choose:" + values[index]})
+                for chord, operation in keys.items():
+                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_action", operation])
+            completions = [("/model ", order), ("/effort ", efforts)]
+            if len(words) >= 2 and words[0] == "/model" and words[1] in models:
+                completions.append(("/model " + words[1] + " ", models[words[1]]))
+            for command, choices in completions:
                 if draft.startswith(command) and choices:
                     value = draft[len(command):]
                     matches = [v for v in choices if v.startswith(value)]
@@ -212,14 +268,24 @@ def handle(event, state, config):
                     else:
                         continue
                     window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
+        if state["tab"] == "friend" and state["prompt_open"] and not window.get("account_items"):
+            for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
+                window["shortcuts"] = _bind(window["shortcuts"], chord, ["replace_draft", ""])
         return window
     if event == "prompt_key":
+        if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:
+            return [{"op": "quiet" if state["text"].strip() == "/quiet" else "loud"}]
         if state["key"] == "Enter" and state.get("signed_out") and state["text"].strip() == "/clear":
             return [{"op": "clear_local"}]
         if state["text"] == "/logout":
             if state["key"] == "Enter":
                 return [{"op": "sign_out"}]
             return [{"op": "notice", "text": "Press Enter to sign out of the selected account."}]
+        if config.get("hold_on_enter", False) and not state["text"].lstrip().startswith("/"):
+            if state["key"] == "Command+Enter" or (state["key"] == "Enter" and not state["text"].strip()):
+                return [{"op": "release"}]
+            if state["key"] == "Enter":
+                return [{"op": "hold"}]
         if state["key"] == "Enter":
             return [{"op": "send"}]
         if state["key"] == "Command+Enter":

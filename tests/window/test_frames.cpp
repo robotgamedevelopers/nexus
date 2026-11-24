@@ -47,7 +47,7 @@
 #include "pr/draw_list.h"
 #include "pr/font_set.h"
 #include "pr/kit.h"
-#include "pr/kit_surface.h"
+#include "pr/kit_panel.h"
 #include "pr/layout_scene.h"
 #include "pr/layout_tree.h"
 #include "pr/layout_style.h"
@@ -353,12 +353,12 @@ struct Window {
                 .display = prAppDisplayDefault(), .preferences = {}};
             prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
                 Window& w = *static_cast<Window*>(context);
-                PrKitSurfaceStyle style{
+                PrKitPanelStyle style{
                     .box = {.overflow = PrKitOverflow_Clip,
                         .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
                     .background = PrKitBackground(w.look.overlay ? PrKitBackground_None : PrKitBackground_App),
                 };
-                w.host.build(w.kit, prKitSurface(w.kit, kPrLayoutNodeNone, {}, style));
+                w.host.build(w.kit, prKitPanel(w.kit, kPrLayoutNodeNone, {}, style));
             }, this);
         }
         {

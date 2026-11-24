@@ -40,17 +40,31 @@ struct TabStyle {
     bool operator==(const TabStyle&) const = default;
 };
 
+using MotionCurve = std::vector<std::pair<double, double>>;
+
 struct PromptStyle {
+    MotionCurve caretCurve;
     unsigned fill = 0x303030, border = 0x3a3a3a, ink = 0xf3f3f3, selection = 0x3d5a80;
     float width = style::kPromptPercent, radius = style::kPromptRadius, paddingX = style::kPromptPadX;
     float height = style::kPromptHeight, gap = style::kPromptGap, maxLines = style::kPromptMaxLines;
-    bool showPlus = true;
+    unsigned caretInk = 0xff801f;
+    float caretPeak = 3, caretAspect = 0.618034f;
+    float caretGap = 0;
+    float caretHeight = style::kCursorHeight, caretRadius = style::kCursorRadius, caretSeconds = 1.5f;
+    float caretHold = 0.1f, caretFallRatio = 0.5f;
+    float caretWidth(float height) const { return height * caretAspect; }
+    bool bold = false, showPlus = false;
     bool operator==(const PromptStyle&) const = default;
 };
 
 PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 
+struct Chirp {
+    float startHz = 440, endHz = 440, durationMs = 50, gain = 0;
+};
+
 struct AccountSurface {
+    Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp;
     std::optional<std::vector<AccountItem>> items;
     std::vector<std::string> tabTitles;
     TabStyle tabs;
@@ -75,12 +89,30 @@ struct TranscriptStyle {
     unsigned fill = 0x252525;
     unsigned ink = 0xf3f3f3;
     unsigned personInk = ink;
+    std::optional<unsigned> panelFill, linkInk, commandInk, codeInk;
+    unsigned codeFill = 0x303030;
+    float codePadding = 6, codeRadius = 7, codeSizeOffset = 2;
+    bool codeBackground = true;
     unsigned switchEmailInk = 0x86c5ff;
     unsigned noticeInk = 0xffb4b4;
     unsigned statusInk = 0xd8d8d8;
     float radius = style::kBubbleRadius;
     bool showNotices = true;
     bool showTools = true;
+    std::map<std::string, std::string, std::less<>> toolPrompts;
+    bool personBold = false;
+    float glyphPeak = 1, glyphSeconds = 0.4f, glyphStagger = 0.055f;
+    float personFlashPeak = 1, personFlashSeconds = 0.45f;
+    float replyWidth = 100.0f / 1.5f;
+    std::optional<unsigned> scannerInk;
+    float highlightEnergy = 2.5f, highlightSeconds = 4, flashSeconds = 0.22f;
+    MotionCurve scannerCurve{{0, 0}, {0.5, 1}, {1, 0}};
+    float scannerPause = 0.1f, scannerEase = 1.f / 30, scannerFade = 0.17f;
+    float scannerGap = 0.15f * style::kU, scannerOffset = 0;
+    float scannerSeconds = 1.5f, scannerPeak = 3;
+    float listGap = 0.4f; // em between a list marker and its text
+    bool markdown = true;
+    bool conversationPanel = true;
     bool operator==(const TranscriptStyle&) const = default;
 };
 

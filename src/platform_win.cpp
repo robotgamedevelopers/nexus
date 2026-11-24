@@ -64,8 +64,8 @@ void showLaunchError(const std::string& text) {
     MessageBoxW(nullptr, wide(shown).c_str(), L"nexus", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 
-bool coverScreen(const PrAppSurface& surface) {
-    if (surface.kind != PrAppSurfaceKind_Hwnd) {
+bool coverScreen(const PrSurface& surface) {
+    if (surface.kind != PrSurfaceKind_Hwnd) {
         return false;
     }
     HWND window = static_cast<HWND>(surface.handle);

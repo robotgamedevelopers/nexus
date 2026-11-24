@@ -7,10 +7,11 @@
 #include <vector>
 
 namespace nexus::policy {
-enum class Delivery { None, Send, Queue, Native, SignOut, ClearLocal, Clear, Compact, SetModel, SetEffort };
+enum class Delivery { None, Quiet, Loud, Hold, Release, Send, Queue, Native, SignOut, ClearLocal, Clear, Compact, SetModel, SetEffort };
 struct MessagePlan {
     Delivery delivery = Delivery::None;
     std::optional<std::string> text;
+    std::optional<std::string> effort;
     std::string service;
     std::vector<std::string> notices;
 };
@@ -22,5 +23,6 @@ struct MessageState {
     bool busy;
     std::string effort{}, harness{}, catalog{};
     bool signedOut = false;
+    std::string accountEmail{}, loginState{}, friendInfo{};
 };
 } // namespace nexus::policy

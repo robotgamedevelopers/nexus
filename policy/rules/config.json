@@ -3,6 +3,7 @@
   "account_default": "first",
   "overlay_opacity": 0.6,
   "transcript_style": {
+    "highlight_energy": 2.5,
     "fill": "#252525",
     "ink": "#f3f3f3",
     "notice_ink": "#ffb4b4",
@@ -10,6 +11,8 @@
     "switch_email_ink": "#86c5ff",
     "radius": 25.2,
     "show_notices": true,
+    "command_ink": "#dc7334",
+    "tool_prompts": {"Bash": "$ "},
     "show_tools": true
   }
 }

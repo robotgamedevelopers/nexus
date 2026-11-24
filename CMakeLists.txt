@@ -26,8 +26,8 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
 FetchContent_Declare(prax
-    URL https://codeload.github.com/pdoane/prax/tar.gz/e39b205bbba4845077889f4a0fbfb38525d943ff
-    URL_HASH SHA256=a323930502458e28586f85f6bac1e5af8bf17502753f9b26fc2dde141fab9ad5
+    URL https://codeload.github.com/pdoane/prax/tar.gz/87bcd16a6657ab8d93573cdf1291ba14c169f0dc
+    URL_HASH SHA256=9bb8fc2473af41ae1cef8a19d61444db82125a2477ea7b95faa24adb43f25909
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)
@@ -298,11 +298,11 @@ endif()
 
 if(NEXUS_WINDOW)
     # The window's tree over Prax's UI context and Studio Kit: built by the app, and headless by tests/window/.
-    add_library(nexus_view STATIC src/view.cpp src/window_app.cpp src/native_tabs.cpp src/font_prefetch.cpp)
+    add_library(nexus_view STATIC src/view.cpp src/chat_markdown.cpp src/chat_selection.cpp src/window_app.cpp src/native_tabs.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_view PUBLIC src)
     target_compile_options(nexus_view PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_view PUBLIC nexus_policy nexus_window_logic nexus_hitch
-        prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
+        prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app prax::core_cpp)
 
     # The terminal tabs' shells over Prax's terminal (view.h Terminals): built by the app, and run by the functional test.
     add_library(nexus_terminals STATIC src/terminals.cpp src/foreground.cpp)
@@ -317,7 +317,7 @@ if(NEXUS_WINDOW)
     target_include_directories(nexus_board PUBLIC src)
     target_compile_options(nexus_board PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
-        prax::dom prax::fetch prax::net prax::tls prax::http prax::image prax::compress prax::text prax::font prax::draw
+        prax::dom prax::fetch prax::net prax::tls prax::http prax::image_select prax::compress_select prax::text prax::font prax::draw
         prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
 
     # What the window does around the view each frame (src/frame_host.h), and its links opened in the system's browser
@@ -371,6 +371,12 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     # launch shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
     if(APPLE)
         add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+        set(NEXUS_MAC_SIGN_IDENTITY "" CACHE STRING "Signing identity for local nexus.app builds")
+        if(NEXUS_MAC_SIGN_IDENTITY)
+            add_custom_command(TARGET nexus POST_BUILD
+                COMMAND /usr/bin/codesign --force --sign "${NEXUS_MAC_SIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:nexus>"
+                VERBATIM)
+        endif()
         set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         target_link_libraries(nexus PRIVATE "-framework AppKit")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
@@ -388,9 +394,11 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             target_link_options(nexus PRIVATE /ENTRY:mainCRTStartup)
         endif()
     endif()
+    target_sources(nexus PRIVATE src/ui_audio.cpp)
+    target_link_libraries(nexus PRIVATE prax::audio)
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus PRIVATE nexus_policy nexus_frame nexus_view nexus_terminals nexus_board
-        prax::studio_app prax::gpu prax::image prax::compress)
+        prax::studio_app prax::app_select prax::gpu_select prax::draw_select prax::image_select prax::compress_select)
     if(NEXUS_LINK)
         target_compile_definitions(nexus PRIVATE NEXUS_LINK=1)
         target_link_libraries(nexus PRIVATE nexus_link nexus_sync)

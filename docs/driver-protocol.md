@@ -206,3 +206,5 @@ A turn the harness fails, with its cause first:
 < {"kind":"error","cause":"the harness lost its connection","fix":"send the prompt again","turn":3,"code":"harness"}
 < {"kind":"done","turn":3,"outcome":"error"}
 ```
+
+A driver can emit `{"kind":"child-agents","count":2}` after hello to publish its current number of active child agents. This process-scoped snapshot excludes the parent. Send zero when the last child ends. The supervisor resets the count on driver exit.

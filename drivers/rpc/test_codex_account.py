@@ -44,6 +44,31 @@ class Accounts(unittest.TestCase):
         file.chmod(0o600)
         return file
 
+    def test_personal_workspace_and_email_before_promotion(self):
+        server = self.operator / ".nexus/server"
+        for directory, name, config in [
+            ("profile", "config", {"personal_chatgpt_accounts": ["one"]}),
+            ("nexus-config", "accounts", {"accounts": [{"provider": "codex", "name": "one", "email": "me@example.com"}]})
+        ]:
+            (server / directory).mkdir(exist_ok=True)
+            (server / directory / (name + ".json")).write_text(json.dumps(config))
+        for email, plan, accept in [("me@example.com", "plus", True), ("me@example.com", "business", False),
+                                    ("someone@example.com", "pro", False)]:
+            with staged_login(self.home) as (stage, promote):
+                data = {"email": email, "https://api.openai.com/auth": {"chatgpt_plan_type": plan, "chatgpt_account_id": "example"}}
+                token = "x." + base64.urlsafe_b64encode(json.dumps(data).encode()).decode() + ".x"
+                file = self.write_login(stage, token)
+                record = json.loads(file.read_text())
+                record["tokens"]["account_id"] = "example"
+                file.write_text(json.dumps(record))
+                if accept:
+                    promote()
+                    before = grant_stamp(self.home)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Personal workspace"):
+                        promote()
+                    self.assertEqual(grant_stamp(self.home), before)
+
     def test_grant_stamp_requires_a_complete_private_chatgpt_login(self):
         self.assertIsNone(grant_stamp(self.home))
         (self.home / ".codex").mkdir(mode=0o700)
@@ -132,10 +157,16 @@ class Accounts(unittest.TestCase):
         alias = self.cwd / "alias"
         alias.symlink_to(private)
         (self.home / ".codex").mkdir()
+        cache = self.root / "cache"
+        cache.mkdir()
         for limited in (False, True):
             env = process_env("codex", self.home)
-            command = chat_command(BINARY, self.home, self.cwd, keep_out=[keep_out], limited=limited)
+            command = chat_command(BINARY, self.home, self.cwd, keep_out=[keep_out], limited=limited, write_dirs=[str(cache)])
             opts = command[3:]
+            for path, success in ((cache / "object", True), (self.root / "unlisted", False)):
+                res = subprocess.run([BINARY, "sandbox", *opts, "-P", PROFILE, "--", "/usr/bin/touch", str(path)],
+                                     cwd=self.cwd, env=env, capture_output=True, timeout=10)
+                self.assertEqual(res.returncode == 0, success, res.stderr)
             for path in (private, denied, alias, sibling):
                 with self.subTest(limited=limited, path=path.name):
                     res = subprocess.run(

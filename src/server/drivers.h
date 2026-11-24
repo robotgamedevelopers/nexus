@@ -120,6 +120,7 @@ public:
     std::vector<sync::SessionChange> send(sync::SessionId id, const std::string& prompt) override;
     std::vector<sync::SessionChange> queue(sync::SessionId id, const std::string& prompt) override;
     std::vector<sync::SessionChange> resetContext(sync::SessionId, const sync::DriverState&, bool compact) override;
+    std::string friendInfo(const std::string&) const override;
     std::string catalog(const sync::SessionInfo&) const override;
     std::vector<sync::SessionChange> stop(sync::SessionId id) override;
     void sent(sync::SessionId id, bool committed) override;

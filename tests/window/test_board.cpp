@@ -214,7 +214,7 @@ struct Harness {
     double time = 1000;
     PrVec2 extent{1000, 780};       // the window's, px
 
-    explicit Harness(std::function<SprintBoardAddress()> find = nullptr) {
+    explicit Harness(std::function<SprintBoardAddress()> find = nullptr, bool prewarm = false) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -223,6 +223,7 @@ struct Harness {
         PrKitTheme theme = windowTheme(fonts, false);
         kit = prKitCreate(ui, &theme);
         PraxBoard::Desc b;
+        if (prewarm) b.initialExtent = extent;
         b.kit = kit;
         b.fonts = fonts;
         if (find)
@@ -453,10 +454,13 @@ void aFailedLookupIsTheLine() {
 
 // The lookup's address is the page's.
 void aFoundAddressLoads() {
-    Harness h([] { return SprintBoardAddress{kUrl, {}}; });
-    for (int i = 0; i < 200 && !h.board->settled(); ++i)
-        h.frame();
+    Harness h([] { return SprintBoardAddress{kUrl, {}}; }, true);
+    h.model.select_tab(1);
+    for (int i = 0; i < 200 && !h.board->settled(); ++i) h.frame();
     CHECK(h.board->settled() && h.server.pages == 1);
+    h.model.select_tab(0);
+    h.frame();
+    CHECK(h.board->problem().empty() && has(h.text(), "first") && h.server.pages == 1);
 }
 
 // The Cost breakdown reaches one gap above the bottom of the first screen at a tall window and a short one, the gap the

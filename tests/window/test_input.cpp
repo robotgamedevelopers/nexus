@@ -15,7 +15,7 @@
 
 #include "pr/font_set.h"
 #include "pr/kit.h"
-#include "pr/kit_surface.h"
+#include "pr/kit_panel.h"
 #include "pr/layout_query.h"
 #include "pr/layout_tree.h"
 #include "pr/text.h"
@@ -163,6 +163,7 @@ struct Harness {
     FakeTerminals terminals;
     FakeBoard board;
     View view;
+    PrAppDisplay display = prAppDisplayDefault();
     double time = 1000;
     PrVec2 extent{1000, 780};
     int hides = 0;      // hide requests reaching the host seam (View::hide), which the overlay connects to hideOverlay
@@ -213,18 +214,18 @@ struct Harness {
             .delta = 1.0 / 60,
             .extent = extent,
             .maxRounds = rounds,
-            .display = prAppDisplayDefault(),
+            .display = display,
             .preferences = {},
         };
         // Under a surface that fills the viewport, as Prax's studio window builds the app's round (studio_window.cpp
         // build), so that the window is not the tree's root, as in the app.
         prUiFrame(ui, &desc, [](void* context, PrUi*, const PrUiRound*) {
             Harness& h = *static_cast<Harness*>(context);
-            PrKitSurfaceStyle style{
+            PrKitPanelStyle style{
                 .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
                 .background = PrKitBackground(h.look.overlay ? PrKitBackground_None : PrKitBackground_App),
             };
-            buildWindow(h.view, h.kit, prKitSurface(h.kit, kPrLayoutNodeNone, {}, style));
+            buildWindow(h.view, h.kit, prKitPanel(h.kit, kPrLayoutNodeNone, {}, style));
         }, this);
     }
 
@@ -269,7 +270,7 @@ struct Harness {
     // The transcript's entries, at the last layout: the children of its column.
     std::vector<PrLayoutNode> entries() const {
         std::vector<PrLayoutNode> out;
-        PrLayoutNode column = prLayoutNodeFirstChild(tree, view.transcript);
+        PrLayoutNode column = view.conversation ? view.conversation : prLayoutNodeFirstChild(tree, view.transcript);
         for (PrLayoutNode n = prLayoutNodeFirstChild(tree, column); n != kPrLayoutNodeNone;
                 n = prLayoutNodeNextSibling(tree, n))
             out.push_back(n);
@@ -908,7 +909,7 @@ bool inside(PrRect inner, PrRect outer) {
 }
 
 // The prompt's box at the current text scale: its corners rounded by the scaled radius, with the plus (its first child)
-// and the text area inside it, the plus at its left, and nothing after the area.
+// and the text area inside it, the plus at its left, and the insertion segment over the edit.
 void checkPromptBox(const Harness& h) {
     const float k = style::textScale(h.look.textSteps);
     PrLayoutNode box = h.view.promptBox;
@@ -919,16 +920,21 @@ void checkPromptBox(const Harness& h) {
     for (PrLayoutLength r : d.radii)
         CHECK(r.bits == radius.bits);
     PrRect outer = h.bounds(box);
-    PrLayoutNode plus = prLayoutNodeFirstChild(h.tree, box);
-    CHECK(plus != kPrLayoutNodeNone && plus != h.view.prompt);
-    CHECK(prLayoutNodeNextSibling(h.tree, plus) == h.view.prompt);
-    CHECK(prLayoutNodeNextSibling(h.tree, h.view.prompt) == kPrLayoutNodeNone);
-    PrRect p = h.bounds(plus);
+    CHECK(prLayoutNodeFirstChild(h.tree, box) == h.view.prompt);
+    const auto segment = prLayoutNodeNextSibling(h.tree, h.view.prompt);
+    CHECK(segment != kPrLayoutNodeNone);
+    if (segment != kPrLayoutNodeNone) {
+        const auto cell = h.bounds(segment);
+        CHECK(inside(cell, h.bounds(h.view.prompt)));
+        CHECK(near(cell.right - cell.left, 0.618034f * (cell.bottom - cell.top)));
+        const auto cellStyle = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, segment));
+        const PrColor orange = prLayoutDecorationStyleRecord(h.tree, cellStyle.groups[PrLayoutGroup_Decoration]).background;
+        CHECK(orange.a == 1 && orange.r > orange.g && orange.g > orange.b);
+        CHECK(prLayoutTreeCarets(h.tree, nullptr, 0) == 0);
+    }
     PrRect area = h.bounds(h.view.prompt);
-    CHECK(inside(p, outer));
     CHECK(inside(area, outer));
-    CHECK(p.right <= area.left);
-    CHECK(p.left > outer.left + 0.5f * style::kPromptPadX * k);
+    CHECK(near(area.left - outer.left, style::kPromptPadX * k + 1));
     // One line: the box is kPromptHeight tall. It is kPromptPercent of the window wide, centred, and the transcript's
     // column kColumnPercent.
     CHECK(near(outer.bottom - outer.top, style::kPromptHeight * k));
@@ -937,7 +943,7 @@ void checkPromptBox(const Harness& h) {
     CHECK(near(outer.right - outer.left, width * style::kPromptPercent / 100));
     CHECK(near(outer.left - window.left, window.right - outer.right));
     PrRect column = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.transcript));
-    CHECK(near(column.right - column.left, width * style::kColumnPercent / 100));
+    CHECK(near(column.right - column.left, width * h.look.prompt.width / 100));
     // The area draws no frame of its own: no fill, no border, no focus ring.
     PrLayoutStyle areaRecord = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, h.view.prompt));
     CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
@@ -973,6 +979,73 @@ PrColor fillOf(const Harness& h, PrLayoutNode node) {
     PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
     return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).background;
 }
+void promptSegmentTracksInsertionAndUsesHeadroom() {
+    Harness h({FriendInfo{"alex", "m1"}}, true);
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    auto cell = [&] { return prLayoutNodeNextSibling(h.tree, h.view.prompt); };
+    const auto start = h.bounds(cell());
+    h.type("abc");
+    h.frame();
+    CHECK(h.bounds(cell()).left > start.left);
+    auto redAt = [&](double phase) {
+        h.time = phase - 1.0 / 60;
+        h.frame();
+        return fillOf(h, cell()).r;
+    };
+    const double rise = (1.5 - 0.2) / 1.5;
+    const float floor = redAt(0);
+    CHECK(floor < 1 && redAt(1.401) == floor && redAt(1.499) == floor);
+    const float crest = redAt(rise);
+    CHECK(crest > 1 && redAt(rise + 0.095) == crest);
+    CHECK(std::abs(redAt(rise / 2) - redAt(rise + 0.1 + rise / 4)) < 0.01);
+    prUiTextEditSetSelection(h.ui, h.view.prompt, {0, 2});
+    h.frame();
+    CHECK(cell() == kPrLayoutNodeNone);
+}
+
+void newGlyphsFadeWithoutRelightingOldText() {
+    Harness h({FriendInfo{"alex", "m1"}}, true);
+    h.display.headroom = h.display.potentialHeadroom = 4;
+    auto settings = [&] {
+        h.view.windowApp.transcriptStyle.glyphPeak = 3;
+        h.view.windowApp.surface.prompt.bold = true;
+    };
+    h.type("old");
+    h.time += 1;
+    settings();
+    h.type("!");
+    auto checkGlow = [&](PrLayoutNode root, const char* text, unsigned start, unsigned end) {
+        auto leaf = h.findText(root, text);
+        CHECK(leaf != kPrLayoutNodeNone);
+        if (leaf == kPrLayoutNodeNone) return;
+        PrLayoutHighlight lit{};
+        const auto count = prLayoutNodeHighlights(h.tree, leaf, &lit, 1);
+        if (count != 1) std::fprintf(stderr, "%s has %u glow ranges (%u..%u)\n", text, count, lit.start, lit.end);
+        CHECK(count == 1);
+        CHECK(lit.start == start && lit.end == end && prColorFromColor16(lit.color).r > 1);
+    };
+    checkGlow(h.view.prompt, "old!", 3, 4);
+    const auto value = prLayoutNodeFirstChild(h.tree, h.view.prompt);
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, value));
+    const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]).font;
+    CHECK(font && prTextFontStyle(font).weight == 700);
+    std::string reply = "abc";
+    h.view.growing = [&](std::size_t) { return &reply; };
+    settings();
+    h.frame();
+    h.time += 1;
+    settings();
+    h.frame();
+    reply += "d";
+    settings();
+    h.frame();
+    checkGlow(h.window(), "abcd", 3, 4);
+    h.time += 1;
+    settings();
+    h.frame();
+    CHECK(prLayoutNodeHighlights(h.tree, h.findText(h.window(), "abcd"), nullptr, 0) == 0);
+}
+
 PrColor borderOf(const Harness& h, PrLayoutNode node, PrRectSide side) {
     PrLayoutStyle record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, node));
     return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).borderColor[side];
@@ -1026,14 +1099,86 @@ void switchNoticeBubble() {
     h.frame();
     h.frame();
     const TranscriptStyle stock;
-    const auto bubble = checkTextPaint(h, prefix, stock.statusInk, stock.fill);
-    CHECK(bubble == checkTextPaint(h, email, stock.switchEmailInk, stock.fill));
-    CHECK(bubble == checkTextPaint(h, suffix, stock.statusInk, stock.fill));
+    const auto bubble = checkTextPaint(h, prefix, stock.statusInk, h.look.tabs.fill);
+    CHECK(bubble == checkTextPaint(h, email, stock.switchEmailInk, h.look.tabs.fill));
+    CHECK(bubble == checkTextPaint(h, suffix, stock.statusInk, h.look.tabs.fill));
     const auto prefixBounds = h.bounds(h.findText(h.window(), prefix));
     const auto emailBounds = h.bounds(h.findText(h.window(), email));
     const auto suffixBounds = h.bounds(h.findText(h.window(), suffix));
     CHECK(near(prefixBounds.top, emailBounds.top) && near(emailBounds.top, suffixBounds.top));
     CHECK(prefixBounds.right <= emailBounds.left + 1 && emailBounds.right <= suffixBounds.left + 1);
+}
+
+void copyMarkdownConversation() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Person, "**Hello**"});
+    h.model.append(0, Entry{EntryKind::Friend, "`world`"});
+    h.frame();
+    h.frame();
+    const auto hello = h.findText(h.window(), "Hello");
+    const auto world = h.findText(h.window(), "world");
+    checkTextPaint(h, "world", TranscriptStyle{}.ink, TranscriptStyle{}.codeFill);
+    CHECK(hello && world);
+    if (!hello || !world) return;
+    const auto span = prLayoutNodeParent(h.tree, world);
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, span));
+    const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]);
+    CHECK(near(prTextFontStyle(font.font).size, style::kToolSize + 2));
+    auto start = h.bounds(hello), end = h.bounds(world);
+    std::string copied;
+    FrameHost host;
+    host.view = &h.view;
+    host.model = &h.model;
+    h.view.copy = [&](const std::string& s) { copied = s; };
+    auto event = [&](PrAppEvent e) { return host.event(e); };
+    CHECK(event(pointerEvent(PrAppEventKind_PointerDown, {start.left + 0.1f, (start.top + start.bottom) / 2})));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerMove, {end.right - 0.1f, (end.top + end.bottom) / 2})));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerUp, {end.right - 0.1f, (end.top + end.bottom) / 2})));
+    h.frame();
+    CHECK(event(keyEvent(PrAppEventKind_KeyDown, 'C', PrAppKeyCode_KeyC, style::kCommand)));
+    CHECK(copied == "Hello\n\nworld");
+    CHECK(prLayoutNodeHighlights(h.tree, hello, nullptr, 0) == 1);
+    CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 1);
+}
+
+void markdownListsAndLinks() {
+    Harness h;
+    const std::string words = "First line wraps onto the next when several more words fill the available width and force it to wrap across the column.";
+    h.model.append(0, {EntryKind::Friend, "9. " + words + "\n10. Second  \n    continuation\n    - Nested [web link](https://example.org/path) "});
+    h.frame();
+    h.frame();
+    auto first = h.findText(h.window(), words);
+    auto second = h.findText(h.window(), "Second\ncontinuation");
+    auto nested = h.findText(h.window(), "web link");
+    CHECK(first && second && nested);
+    if (!first || !second || !nested) return;
+    PrLayoutRect lines[16]{};
+    auto boxes = [&](PrLayoutNode node, size_t size) {
+        return prLayoutNodeTextRangeBoxes(h.tree, node, 0, size, PrLayoutCoordinates_Viewport, lines, 16);
+    };
+    CHECK(boxes(first, words.size()) >= 2);
+    float x = prLayoutUnitToPx(lines[0].left);
+    CHECK(near(x, prLayoutUnitToPx(lines[1].left)));
+    CHECK(boxes(second, 19) >= 2);
+    CHECK(near(x, prLayoutUnitToPx(lines[0].left)) && near(x, prLayoutUnitToPx(lines[1].left)));
+    CHECK(h.bounds(nested).left > x);
+    auto link = h.bounds(nested);
+    const PrVec2 at{(link.left + link.right) / 2, (link.top + link.bottom) / 2};
+    FrameHost host;
+    host.model = &h.model;
+    host.view = &h.view;
+    std::vector<std::string> opened;
+    h.view.openLink = [&](const std::string& url) { opened.push_back(url); };
+    auto pointer = [&](PrAppEventKind kind, PrVec2 where) { return host.event(pointerEvent(kind, where)); };
+    CHECK(pointer(PrAppEventKind_PointerDown, at));
+    h.frame();
+    CHECK(pointer(PrAppEventKind_PointerUp, at));
+    CHECK(opened == std::vector<std::string>{"https://example.org/path"});
+    CHECK(pointer(PrAppEventKind_PointerDown, at));
+    CHECK(pointer(PrAppEventKind_PointerMove, {at.x - 12, at.y}));
+    CHECK(pointer(PrAppEventKind_PointerUp, at));
+    CHECK(opened.size() == 1);
+    checkTextPaint(h, "web link", h.look.tabs.selectedFill, h.look.tabs.fill);
 }
 
 void conversationBubblesAndSignInCard() {
@@ -1049,18 +1194,17 @@ void conversationBubblesAndSignInCard() {
     CHECK(entries.size() == 4);
     if (entries.size() != 4) return;
     const auto bubble = [&](std::size_t i) { return prLayoutNodeFirstChild(h.tree, entries[i]); };
-    for (auto i : {0, 1, 2, 3}) {
-        const auto fill = fillOf(h, bubble(i));
-        CHECK(fill.a == 1 && fill.r < 0.2f && fill.g < 0.2f && fill.b < 0.2f);
-    }
+    CHECK(colorMatches(fillOf(h, bubble(0)), TranscriptStyle{}.fill));
+    CHECK(colorMatches(fillOf(h, h.view.conversation), h.look.tabs.fill));
+    CHECK(fillOf(h, bubble(1)).a == 0 && fillOf(h, bubble(3)).a == 0);
     CHECK(h.bounds(bubble(0)).left > h.bounds(bubble(1)).left);
     CHECK(near(h.bounds(bubble(1)).left, h.bounds(bubble(3)).left));
     // A stored, closed Notice uses the same model entry after hydration. Live status and chat keep distinct colors.
     const TranscriptStyle stock;
     checkTextPaint(h, "Hello", stock.ink, stock.fill);
-    checkTextPaint(h, "A reply.", stock.ink, stock.fill);
-    checkTextPaint(h, "Usage limit reached.", stock.noticeInk, stock.fill);
-    checkTextPaint(h, live, stock.ink, stock.fill);
+    checkTextPaint(h, "A reply.", stock.ink, h.look.tabs.fill);
+    checkTextPaint(h, "Usage limit reached.", stock.noticeInk, h.look.tabs.fill);
+    checkTextPaint(h, live, stock.ink, h.look.tabs.fill);
     CHECK(stock.noticeInk == 0xffb4b4 && stock.ink != stock.noticeInk && stock.statusInk != stock.noticeInk);
 
     const std::string email = "a.long.selected.account.for.the.narrow.overlay@example.test";
@@ -1149,7 +1293,13 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     CHECK(checkTextPaint(h, "queued", stock.statusInk, stock.fill) == queued);
     for (auto tab : h.tabs())
         CHECK(fillOf(h, prLayoutNodeParent(h.tree, tab)).a == 1);
-    CHECK(near(fillOf(h, h.view.tabNodes[h.model.active()]).a * 100, 50.0f));
+    h.time = 1201;
+    h.frame();
+    const float selectedAlpha = fillOf(h, h.view.tabNodes[h.model.active()]).a;
+    CHECK(selectedAlpha > 0 && selectedAlpha < 1);
+    h.time += 2;
+    h.frame();
+    CHECK(std::abs(fillOf(h, h.view.tabNodes[h.model.active()]).a - selectedAlpha) > 0.01f);
     const PrKitPalette& p = h.kit->theme.palette;
     for (PrColor c : {p.text1, p.text2, p.text3, p.text4, p.textSelection})
         CHECK(c.a == 1);
@@ -1239,7 +1389,7 @@ void toolLinesAreOneCompactLine() {
     }
     const TranscriptStyle stock;
     checkTextPaint(h, "Bash: ls src", stock.statusInk, stock.fill);
-    checkTextPaint(h, "Let me look.", stock.ink, stock.fill);
+    checkTextPaint(h, "Let me look.", stock.ink, h.look.tabs.fill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
             n = prLayoutNodeNextSibling(h.tree, n)) {
@@ -1298,43 +1448,46 @@ void stateCursorUnderTheLastText() {
     CursorState state = CursorState::None;
     h.view.cursor = [&](std::size_t) { return state; };
     h.frame();
-    CHECK(h.entries().size() == 1 && !h.view.breathing && !windowWantsFrame(h.view));
+    CHECK(h.entries().size() == 1 && !h.view.breathing && h.view.energyAnimating && windowWantsFrame(h.view));
     h.model.set_draft(0, "later");
     h.model.queue(0);
-    for (CursorState s : {CursorState::Busy, CursorState::Idle, CursorState::Down, CursorState::Lost}) {
-        state = s;
+    unsigned agents = 1;
+    h.view.activeAgents = [&](std::size_t) { return agents; };
+    auto lamps = [&] {
+        std::vector<PrLayoutNode> cells;
+        for (auto n = prLayoutNodeFirstChild(h.tree, h.entries().at(1)); n != kPrLayoutNodeNone;
+             n = prLayoutNodeNextSibling(h.tree, n)) cells.push_back(n);
+        return cells;
+    };
+    state = CursorState::Busy;
+    h.frame();
+    CHECK(lamps().size() == 1 && h.view.breathing);
+    agents = 4;
+    state = CursorState::Working;
+    h.frame();
+    CHECK(lamps().size() == agents);
+    for (int i = 0; i < 20; ++i) h.frame();
+    const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
+    CHECK(near(h.bounds(lamps().front()).left, caret.left));
+    for (auto cell : lamps()) {
+        const auto segment = h.bounds(cell);
+        CHECK(near(segment.right - segment.left, caret.right - caret.left));
+        CHECK(near(segment.bottom - segment.top, caret.bottom - caret.top));
+        const auto color = fillOf(h, cell);
+        CHECK(color.b > color.r);
+    }
+    state = CursorState::Idle;
+    h.frame();
+    CHECK(lamps().size() == agents);
+    for (int i = 0; i < 32; ++i) h.frame();
+    CHECK(lamps().size() == 1 && !h.view.breathing);
+    CHECK(colorMatches(fillOf(h, lamps()[0]), h.look.prompt.fill));
+    for (auto status : {CursorState::Down, CursorState::Lost}) {
+        state = status;
         h.frame();
-        h.frame();
-        std::vector<PrLayoutNode> e = h.entries();
-        CHECK(e.size() == 3);
-        if (e.size() != 3) {
-            continue;
-        }
-        const PrLayoutNode cursor = e[1];
-        CHECK(prLayoutNodeFirstChild(h.tree, cursor) == kPrLayoutNodeNone);     // a block, no text
-        CHECK(near(h.bounds(cursor).top - h.bounds(e[0]).bottom, style::kCursorGap));
-        CHECK(near(h.height(cursor), style::kCursorHeight));
-        CHECK(h.hasText(e[2], "later"));
-        CHECK(h.view.breathing == (s == CursorState::Busy) && windowWantsFrame(h.view) == (s == CursorState::Busy));
-        const PrColor first = fillOf(h, cursor);
-        CHECK(first.a == 1);
-        // A quarter of a breath later.
-        const double later = h.time + kBreathSeconds / 4;
-        while (h.time < later) {
-            h.frame();
-        }
-        const PrColor second = fillOf(h, h.entries()[1]);
-        const bool same = first.r == second.r && first.g == second.g && first.b == second.b;
-        CHECK(same == (s != CursorState::Busy));
-        if (s == CursorState::Lost) {
-            CHECK(near(255 * second.r, 255 * second.g) && near(255 * second.g, 255 * second.b));     // grey
-        }
-        if (s == CursorState::Idle) {
-            CHECK(second.b > second.r && second.b > second.g);      // blue
-        }
-        if (s == CursorState::Down) {
-            CHECK(second.r > second.g && second.r > second.b);      // red
-        }
+        CHECK(lamps().empty());
+        CHECK(near(h.height(h.entries()[1]), style::kCursorHeight));
+        CHECK(h.hasText(h.entries()[2], "later"));
     }
     // The text scale scales it.
     state = CursorState::Idle;
@@ -2407,6 +2560,24 @@ int main(int argc, char** argv) {
         };
         publish("b", 1);
         h.commandDigit(2);
+        const auto beforeChoices = link.sent.size();
+        h.type("/model");
+        h.enter();
+        h.frame();
+        CHECK(h.view.choiceKind == "model" && h.view.accountRows.size() == 2 && link.sent.size() == beforeChoices);
+        h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown);
+        h.frame();
+        CHECK(h.view.choiceValue == "model-b");
+        h.enter();
+        h.frame();
+        CHECK(h.view.choiceKind.empty() && !link.sent.empty() && link.sent.back().text == "/model model-b");
+        h.type("/effort");
+        h.enter();
+        h.frame();
+        CHECK(h.view.choiceKind == "effort" && h.view.accountRows.size() == 2);
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        CHECK(h.view.choiceKind.empty() && h.hides == 0 && prUiFocus(h.ui) == h.view.prompt);
         h.type("/model model-");
         h.key(PrAppKey_Tab, PrAppKeyCode_Tab);
         h.frame();
@@ -2424,6 +2595,29 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(!link.sent.empty() && link.sent.back().text == "/effort high");
+        CHECK(h.look.prompt.width == 98 && h.view.windowApp.centeredAccounts && h.look.transcriptStyle.glyphPeak == 3);
+        link.sent.clear();
+        h.type("first held");
+        h.enter();
+        h.frame();
+        CHECK(link.sent.empty() && h.active().draft.empty() && h.active().held.size() == 1);
+        h.type("current last");
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, style::kCommand);
+        h.frame();
+        CHECK(link.sent.size() == 2 && link.sent[0].text == "first held" && link.sent[1].text == "current last");
+        h.type("another held");
+        h.enter();
+        h.enter();
+        h.frame();
+        CHECK(link.sent.size() == 3 && link.sent.back().text == "another held" && h.active().held.empty());
+        h.type("keep working");
+        h.key(PrAppKey_Enter, PrAppKeyCode_Enter, PrAppModifierFlag_Shift);
+        h.type("second line");
+        prUiTextEditSetSelection(h.ui, h.view.prompt, {3, 3});
+        const auto beforeClear = link.sent.size();
+        h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
+        h.frame();
+        CHECK(h.active().draft.empty() && link.sent.size() == beforeClear && prUiFocus(h.ui) == h.view.prompt);
         h.type("draft");
         link.sent.clear();
         const auto down = [&](PrAppModifierFlags mods) {
@@ -2464,7 +2658,8 @@ int main(int argc, char** argv) {
         h.frame();
         const float lineHeight = h.kit->theme.types[PrKitTextRole_Body].lineHeight;
         CHECK(h.kit->theme.types[PrKitTextRole_Strong].weight == 700);
-        CHECK(near(fillOf(h, h.view.accountRows[2]).a * 100, 50.0f));
+        const float rowOpacity = fillOf(h, h.view.accountRows[2]).a;
+        CHECK(rowOpacity > 0.4f && rowOpacity < 0.85f);  // half-opacity selection plus its SDR pulse and flash
         checkTextPaint(h, "a@example.test", h.look.messageCard.ink, h.look.messageCard.fill);
         const auto card = h.bounds(h.view.accountMenu);
         const auto selectedRow = h.bounds(h.view.accountRows[2]);
@@ -2517,6 +2712,12 @@ int main(int argc, char** argv) {
             CHECK(h.hasText(h.tabs()[h.model.active()], "Session"));
             h.frame();
             CHECK(h.look.tabs.fill == 0x112233 && h.look.tabs.selectedWeight == 500);
+            CHECK(h.look.prompt.caretHeight == 18 && h.look.prompt.caretAspect == 0.75f && h.look.prompt.caretSeconds == 2);
+            CHECK(h.look.prompt.caretCurve.size() == 4);
+            CHECK(h.look.prompt.caretCurve.at(1).second == 0);
+            CHECK(h.look.transcriptStyle.scannerCurve.size() == 3);
+            CHECK(h.look.transcriptStyle.scannerCurve.front().second == 1);
+            CHECK(h.look.transcriptStyle.scannerGap == 8 && h.look.transcriptStyle.scannerOffset == 4);
             CHECK(h.look.prompt.fill == 0x221144 && h.look.prompt.width == 72 && !h.look.prompt.showPlus);
             CHECK(h.look.messageCard.fill == 0x223344 && h.look.messageCard.selectorWidthEm == 19);
             std::string error;
@@ -2691,10 +2892,10 @@ int main(int argc, char** argv) {
             styled.model.set_draft(0, "Fixture queued");
             styled.model.queue(0);
             styled.model.append(0, {EntryKind::Notice, "Fixture notice"});
-            styled.model.append(0, {EntryKind::Tool, "Fixture tool"});
+            styled.model.append(0, {EntryKind::Tool, "Bash: git status"});
             styled.frame();
             styled.frame();
-            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "Fixture tool"));
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "Bash: git status"));
             const std::string styleFile = std::string(argv[1]) + ".styles";
             styled.view.application->watch(styleFile);
             std::filesystem::copy_file(argv[2], styleFile);
@@ -2703,26 +2904,27 @@ int main(int argc, char** argv) {
                 do {
                     styled.frame();
                     const auto& colors = styled.view.windowApp.transcriptStyle;
-                    if (colors.fill == 0x102030 && colors.showNotices == notices && !colors.showTools) break;
+                    if (colors.fill == 0x102030 && colors.showNotices == notices && colors.showTools == notices) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 } while (std::chrono::steady_clock::now() < until);
                 styled.frame();
                 styled.frame();
                 const auto& colors = styled.view.windowApp.transcriptStyle;
-                CHECK(colors.fill == 0x102030 && colors.showNotices == notices && !colors.showTools);
+                CHECK(colors.fill == 0x102030 && colors.showNotices == notices && colors.showTools == notices);
             };
             waitForStyle(false);
             checkTextPaint(styled, "Fixture question", 0x9a9a9a, 0x102030);
             checkTextPaint(styled, "Fixture queued", 0x9a9a9a, 0x102030);
-            checkTextPaint(styled, "Fixture chat", 0xf0e0d0, 0x102030);
+            checkTextPaint(styled, "Fixture chat", 0xf0e0d0, styled.look.tabs.fill);
             CHECK(styled.view.accountAnchor && styled.hasText(styled.view.accountAnchor, "Fixture account"));
             checkTextPaint(styled, "Fixture account", 0xcfdfa0, 0x102030);
-            CHECK(!styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
+            CHECK(!styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Bash: git status"));
             std::filesystem::copy_file(argv[3], styleFile, std::filesystem::copy_options::overwrite_existing);
             waitForStyle(true);
-            CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Fixture tool"));
-            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x102030);
-            CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 4);
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && !styled.hasText(styled.window(), "Bash: git status"));
+            checkTextPaint(styled, "$ git status", 0xdc7334, 0x102030);
+            checkTextPaint(styled, "Fixture notice", 0xffa0a0, 0x182134);
+            CHECK(styled.active().transcript.size() == 4 && styled.entries().size() == 5);
             styled.view.promptOpen = false;
             styled.view.status = "Fixture transport status";
             styled.frame();
@@ -2778,8 +2980,12 @@ int main(int argc, char** argv) {
     dragWithOneTabDoesNothing();
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
+    promptSegmentTracksInsertionAndUsesHeadroom();
+    newGlyphsFadeWithoutRelightingOldText();
     noModelUnderThePrompt();
     switchNoticeBubble();
+    copyMarkdownConversation();
+    markdownListsAndLinks();
     conversationBubblesAndSignInCard();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();

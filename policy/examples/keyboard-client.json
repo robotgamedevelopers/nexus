@@ -19,13 +19,41 @@
   "tab_labels": {
     "sprint": "Sprint"
   },
+  "transcript_style": {
+    "person_bold": true,
+    "glyph_peak": 3,
+    "glyph_seconds": 0.4,
+    "person_flash_peak": 3,
+    "person_flash_seconds": 0.45
+  },
+  "hold_on_enter": true,
+  "sounds": {
+    "dialog": {"from_hz": 465, "to_hz": 620, "duration_ms": 70, "gain": 0.07},
+    "cancel": {"from_hz": 455, "to_hz": 335, "duration_ms": 65, "gain": 0.075},
+    "ready": {"from_hz": 285, "to_hz": 1140, "duration_ms": 320, "gain": 0.12},
+    "open": {"from_hz": 310, "to_hz": 820, "duration_ms": 145, "gain": 0.11},
+    "close": {"from_hz": 680, "to_hz": 245, "duration_ms": 165, "gain": 0.09},
+    "tab": {"from_hz": 710, "to_hz": 510, "duration_ms": 42, "gain": 0.07},
+    "confirm": {"from_hz": 580, "to_hz": 920, "duration_ms": 80, "gain": 0.09}
+  },
   "prompt_style": {
+    "bold": true,
     "fill": "#303030",
     "border": "#3a3a3a",
     "ink": "#f3f3f3",
-    "width": 82,
+    "width": 98,
     "radius": 20.16,
-    "show_plus": true
+    "caret_gap": 2,
+    "caret_height": 28,
+    "caret_aspect": 0.618034,
+    "caret_radius": 3.36,
+    "caret_ink": "#ff801f",
+    "caret_peak": 3,
+    "caret_seconds": 1.5,
+    "caret_hold": 0.1,
+    "caret_bottom_hold": 0.1,
+    "caret_fall_ratio": 0.5,
+    "show_plus": false
   },
   "message_card": {
     "fill": "#303030",

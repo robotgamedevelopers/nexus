@@ -96,7 +96,7 @@ struct ServerFriend {
 // nothing will until the person sends (every queued prompt taken); Down when the friend cannot run (its driver crashed,
 // failed to start too many times in a row, or has no login) until the person's next prompt. In memory only, never in
 // the store: a server that starts again works it out afresh. The window's state cursor shows it (sync/client.h).
-enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2 };
+enum class Activity : std::uint8_t { Idle = 0, Busy = 1, Down = 2, Working = 3 };
 
 struct SessionView {
     SessionId id = 0;
@@ -105,6 +105,7 @@ struct SessionView {
     std::uint64_t first = 0;            // the transcript index (from 0) of entries[0]
     std::vector<EntryRef> entries;      // the transcript's tail, oldest first, through its newest entry
     std::vector<std::string> queue;     // prompts queued for later, oldest first
+    std::uint32_t activeAgents = 0;
     std::uint64_t total() const { return first + entries.size(); }  // the transcript's length
     bool operator==(const SessionView& x) const;
 };

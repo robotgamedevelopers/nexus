@@ -32,6 +32,8 @@ std::string kindOf(const DriverMessage& message) {
             return "text";
         } else if constexpr (std::is_same_v<M, TextEnd>) {
             return "text-end";
+        } else if constexpr (std::is_same_v<M, ChildAgents>) {
+            return "child-agents";
         } else if constexpr (std::is_same_v<M, Tool>) {
             return "tool";
         } else if constexpr (std::is_same_v<M, Done>) {
@@ -283,6 +285,7 @@ sync::Activity Supervisor::activity() const {
     if (held_) {
         return sync::Activity::Down;
     }
+    if (childAgents_) return sync::Activity::Working;
     if (state_.openTurn != 0 || ((!state_.waiting.empty() || !state_.continuationPrompt.empty()) &&
             !state_.modelLimitPending && config_.here && config_.present) ||
         phase_ == Phase::Starting) {
@@ -480,6 +483,8 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
                 endQuietly(now);
             }
         }
+    } else if (const auto* agents = std::get_if<ChildAgents>(&message)) {
+        childAgents_ = agents->count;
     } else if (std::holds_alternative<Unknown>(message) || std::holds_alternative<AskSecret>(message)) {
         // a kind this version does not know: skipped; an ask for a secret is the server's (Drivers), not the turn's
     } else if (open == 0 || turnOf(message) != open) {
@@ -532,6 +537,7 @@ Output Supervisor::closed(const std::string& what, Millis now) {
 }
 
 Output Supervisor::exited(const std::string& how, Millis now) {
+    childAgents_ = 0;
     if (phase_ == Phase::None) {
         return finish();
     }
@@ -683,6 +689,7 @@ void Supervisor::startDriver(Millis now) {
     if (phase_ != Phase::None || (state_.waiting.empty() && state_.continuationPrompt.empty()) || held_ || down_ || !config_.here || !config_.present) {
         return;
     }
+    childAgents_ = 0;
     // A harness resume ID belongs to the account that reported it. A legacy ID with no recorded owner
     // cannot be attributed after an earlier account switch. Seed a fresh session from the Nexus transcript.
     const bool accountChanged = state_.sessionAccount != config_.account;

@@ -233,7 +233,9 @@ stay outside the conversation, logs and fork configuration.
 
 When a Claude account has an `email`, the server starts its trusted `nexus-claude-auth` helper for that account.
 The helper invokes `claude auth login --claudeai --email <expected>` in a fresh home and config directory.
-On macOS the login subprocess cannot access shared Keychain services. Passing the email to the browser flow
+On macOS the sandbox blocks shared Keychain services. During enrollment and renewal, a private
+`security` command reports an empty, read-only Keychain so Claude can use its account-private file store.
+Passing the email to the browser flow
 requests an identity. To verify who actually signed in, the helper runs `claude auth status --json` in the
 same isolated directory and checks the completed first-party Claude login. It requires a matching email
 (ASCII case-insensitive) and a usable subscription grant from that flow. A mismatch or a missing identity

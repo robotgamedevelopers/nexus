@@ -44,7 +44,6 @@ constexpr float kToolPitch = 1.3f * kToolSize;
 constexpr float kToolGap = 0.3f * kU;
 // The state cursor: a block the height of a line of body text and about a character wide, on its own line just under
 // the last text (kCursorGap below it in place of kGap). Not in the reference; chosen by eye.
-constexpr float kCursorWidth = 0.5f * kU;
 constexpr float kCursorHeight = 1.0f * kU;
 constexpr float kCursorRadius = 0.12f * kU;
 constexpr float kCursorGap = 0.5f * kU;

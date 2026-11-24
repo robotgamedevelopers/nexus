@@ -12,6 +12,7 @@ namespace nexus {
 enum class CursorState : std::uint8_t {
     None,   // no cursor: the window shows no server (no --server), or the tab is not a friend's
     Busy,   // a turn is open, starting or stopping: pulsing light blue
+    Working, // the harness is waiting for one or more tools
     Idle,   // waiting for the person: steady dark blue
     Down,   // the friend is down (its driver crashed, keeps failing to start, or has no login): steady red
     Lost,   // the window has lost the server: dim grey, and never blue, since what it holds is stale

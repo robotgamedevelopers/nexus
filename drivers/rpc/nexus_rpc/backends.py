@@ -111,7 +111,7 @@ async def session(call, fresh, resume, session_id, notify):
 
 async def refresh_choices(rpc, provider):
     try:
-        await discover(rpc, provider)
+        return await discover(rpc, provider)
     except (Failure, OSError, ValueError, KeyError, TypeError):
         logging.warning("%s did not provide a new model catalog", provider)
 
@@ -121,12 +121,17 @@ async def codex(rpc, turn):
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
     })
     await rpc.notify("initialized", {})
-    await refresh_choices(rpc, "codex")
+    first = await refresh_choices(rpc, "codex")
+    turn.model = turn.model or first
     auth = (await rpc.call("account/read", {"refreshToken": False}))["account"]
     if auth is None or auth.get("type") == "apiKey":
         raise Failure("Codex requires a ChatGPT subscription login.", "no-credential", revoked=True)
     if auth.get("type") != "chatgpt":
         raise Failure("Codex did not confirm a ChatGPT account.")
+    from .codex_account import matches_personal, personal_email
+    expected = personal_email(turn.account)
+    if expected and not matches_personal(expected, auth.get("email"), auth.get("planType")):
+        raise Failure("Sign in to the Personal workspace for the selected ChatGPT email.", "no-credential", revoked=True)
     turn.credential(subscription("codex", auth.get("planType")))
     cwd = str(Path(turn.cwd).resolve(strict=True))
     options = {
@@ -160,18 +165,34 @@ async def codex(rpc, turn):
     result = await rpc.call("turn/start", opts, quota_provider=turn.harness)
     tid = result["turn"]["id"]
     rpc.interrupt = {"id": -1, "method": "turn/interrupt", "params": {"threadId": sid, "turnId": tid}}
+    children = set()
     failure_notice = None
     while True:
         method, params = await rpc.event()
-        if params.get("threadId") != sid:
+        thread = params.get("threadId")
+        if thread != sid:
+            if thread in children and (method == "turn/completed" or method == "thread/closed"):
+                children.remove(thread)
+                turn.child_agents(len(children))
             continue
         if method == "item/completed" and params.get("turnId") == tid:
             item = params["item"]
+            if item.get("type") == "collabAgentToolCall":
+                before = len(children)
+                for child, state in item.get("agentsStates", {}).items():
+                    if state.get("status") in ("running", "pendingInit"):
+                        children.add(child)
+                    else:
+                        children.discard(child)
+                if len(children) != before:
+                    turn.child_agents(len(children))
             if item.get("type") == "agentMessage":
                 turn.block(item["text"])
         if method == "error" and params.get("turnId") == tid and params.get("willRetry") is False:
             failure_notice = params.get("error")
         if method == "turn/completed" and params["turn"]["id"] == tid:
+            if children:
+                turn.child_agents(0)  # this turn owns the app-server process
             completed = params["turn"]
             if completed["status"] == "failed" and turn_quota("codex", completed.get("error") or failure_notice):
                 raise usage_limit()
@@ -204,7 +225,8 @@ async def acp(rpc, turn):
         turn.missing,
     )
     try:
-        acp_catalog(turn.harness, result)
+        first = acp_catalog(turn.harness, result)
+        turn.model = turn.model or first
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning("%s did not provide a new model catalog", turn.harness)
     # ACP load can replay old transcript updates before the response.
@@ -298,7 +320,8 @@ async def muse(rpc, turn):
         "clientInfo": {"name": "nexus", "version": "1"}, "capabilities": {"experimentalApi": True},
     })
     await rpc.notify("initialized", {})
-    await refresh_choices(rpc, "muse")
+    first = await refresh_choices(rpc, "muse")
+    turn.model = turn.model or first
     turn.credential(await turn.provider.subscription_tier(rpc))
     opts = {"commandId": uuid7(), "workspaceRoot": turn.cwd, "approvalMode": "denyUnmatched"}
     if turn.model:

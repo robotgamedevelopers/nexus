@@ -555,6 +555,10 @@ void testActivity() {
     CHECK(s.phase() == Phase::Starting && s.activity() == Activity::Busy);
     s.message(Hello{1, "h"}, kStart + 1);
     CHECK(s.phase() == Phase::Working && s.activity() == Activity::Busy);
+    s.message(ChildAgents{2}, kStart + 1);
+    CHECK(s.activeAgents() == 3 && s.activity() == Activity::Working);
+    s.message(ChildAgents{0}, kStart + 2);
+    CHECK(s.activeAgents() == 1);
     s.stop(kStart + 2);
     CHECK(s.phase() == Phase::Stopping && s.activity() == Activity::Busy);
     s.message(Done{1, Outcome::Stopped, std::nullopt, std::nullopt}, kStart + 3);

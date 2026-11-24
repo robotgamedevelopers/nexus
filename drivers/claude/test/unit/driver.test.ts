@@ -44,6 +44,17 @@ void test('start: hello first, then the credential and the session, before any p
     assert.equal(host.exitCode, undefined);
 });
 
+void test('child agent counts follow starts and finishes independently of ordinary tools', async () => {
+    const { host } = await started();
+    const base = {type: 'system', uuid: '00000000-0000-0000-0000-000000000000', session_id: S} as const;
+    const start = { ...base, subtype: 'task_started', task_type: 'local_agent', task_id: 'first', description: '' } as const;
+    host.harness.emit(start, start, {...start, task_id: 'second'}, {...start, task_id: 'shell', task_type: 'local_bash'},
+        {...base, subtype: 'task_notification', task_id: 'first', status: 'completed', output_file: '', summary: ''} as const,
+        {...base, subtype: 'task_notification', task_id: 'second', status: 'failed', output_file: '', summary: ''} as const);
+    await settle();
+    assert.deepEqual(host.take(), [1, 2, 1, 0].map(count => ({kind: 'child-agents', count})));
+});
+
 void test('a turn: streamed text, a tool, more text, done with the session cost and usage', async () => {
     const { host, driver } = await started();
     driver.feed(line({ kind: 'send', turn: 7, prompt: 'What is in src?' }));

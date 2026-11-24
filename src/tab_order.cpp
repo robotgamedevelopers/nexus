@@ -102,13 +102,14 @@ TabOrderStore fileTabOrderStore(std::string path) {
         PrFileInfo info{};
         if (!prFileInfo(pr(path), &info))
             return false;           // nothing saved yet
-        PrByteView bytes{};
-        if (!prFileMap(pr(path), &bytes)) {
+        PrBlob* blob = prFileOpen(pr(path));
+        if (!blob) {
             *error = "it cannot be read";
             return false;
         }
+        const auto bytes = prBlobBytes(blob);
         text->assign(reinterpret_cast<const char*>(bytes.data), bytes.size);
-        prFileUnmap(&bytes);
+        prBlobRelease(blob);
         return true;
     };
     store.write = [path](const std::string& text, std::string* error) {

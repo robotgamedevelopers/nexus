@@ -38,7 +38,8 @@ enum Activity
 {
     Idle,
     Busy,
-    Down
+    Down,
+    Working
 }
 
 // What a session is (sync::SessionInfo, store::Info): its friend, harness, account, model and effort, and which of
@@ -86,6 +87,7 @@ table SessionChange
     entries       []EntryChange
     queue_changed bool
     queue         []string
+    active_agents uint32
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file

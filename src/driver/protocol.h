@@ -116,6 +116,11 @@ struct TextEnd {
 };
 
 // The friend used a tool: its name and one line saying what it did.
+struct ChildAgents {
+    std::uint32_t count;
+    bool operator==(const ChildAgents&) const = default;
+};
+
 struct Tool {
     std::uint64_t turn = 0;
     std::string name;
@@ -167,7 +172,7 @@ struct AskSecret {
     bool operator==(const AskSecret&) const = default;
 };
 
-using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, Done, Error, AskSecret, Unknown>;
+using DriverMessage = std::variant<Hello, Credential, Session, Text, TextEnd, Tool, ChildAgents, Done, Error, AskSecret, Unknown>;
 
 // ---- Encoding and decoding ----
 

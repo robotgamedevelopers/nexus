@@ -122,7 +122,7 @@ def save(dfd, account, email, grant):
             os.unlink(name)
 
 
-def cli_command(claude, args, stage, enroll):
+def cli_command(claude, args, stage, enroll, private_tools=None):
     # Never inherit a bearer, an alternate API endpoint, an account profile, shell startup options or a proxy.
     config = stage / "config"
     env = {"HOME": str(stage), "CLAUDE_CONFIG_DIR": str(config), "TMPDIR": str(stage / "tmp"),
@@ -137,6 +137,8 @@ def cli_command(claude, args, stage, enroll):
         for key in ("NEXUS_SIGNIN_SOCKET", "NEXUS_SIGNIN_FLOW"):
             if key in os.environ:
                 env[key] = os.environ[key]
+    if private_tools is not None:
+        env["PATH"] = str(private_tools) + ":" + env["PATH"]
     argv = [str(claude.resolve(strict=True)), *args]
     if sys.platform == "darwin":
         # Claude normally stores a subscription in Keychain. On OS denial it uses the private config directory's
@@ -165,11 +167,24 @@ def cli_command(claude, args, stage, enroll):
 
 
 def run_cli(claude, args, stage, *, enroll=False, input_data=None, capture=False, timeout=45):
-    argv, env = cli_command(claude, args, stage, enroll)
-    return subprocess.run(argv, env=env, cwd=stage, input=input_data,
-                          stdin=(subprocess.DEVNULL if input_data is None and not enroll else None),
-                          stdout=subprocess.PIPE if capture else (None if enroll else subprocess.DEVNULL),
-                          stderr=None if enroll else subprocess.DEVNULL, timeout=timeout, check=False)
+    with contextlib.ExitStack() as cleanup:
+        private_tools = None
+        if sys.platform == "darwin":
+            # An exec denial looks like an unreadable Keychain. Claude then refuses to
+            # overwrite credentials. Present the empty Keychain belonging to this stage:
+            # errSecItemNotFound for lookup/delete, and no writable Keychain. The CLI
+            # can then use its own file backend. The OS still blocks the real Keychain.
+            private_tools = Path(cleanup.enter_context(tempfile.TemporaryDirectory(dir=stage)))
+            security = private_tools / "security"
+            security.write_text('#!/bin/sh\ncase "$1" in\n'
+                                '  find-generic-password|delete-generic-password) exit 44 ;;\n'
+                                '  *) exit 1 ;;\nesac\n', encoding="ascii")
+            security.chmod(0o500)
+        argv, env = cli_command(claude, args, stage, enroll, private_tools)
+        return subprocess.run(argv, env=env, cwd=stage, input=input_data,
+                              stdin=(subprocess.DEVNULL if input_data is None and not enroll else None),
+                              stdout=subprocess.PIPE if capture else (None if enroll else subprocess.DEVNULL),
+                              stderr=None if enroll else subprocess.DEVNULL, timeout=timeout, check=False)
 
 
 def fresh_stage(stage):

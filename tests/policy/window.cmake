@@ -36,6 +36,10 @@ def handle(event, state, config):
 ]=])
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/activated" COMMAND_ERROR_IS_FATAL ANY)
 string(JSON config SET "${config}" transcript_style show_notices true)
+string(JSON config SET "${config}" transcript_style show_tools true)
+string(JSON config SET "${config}" transcript_style command_ink [["#dc7334"]])
+string(JSON config SET "${config}" transcript_style panel_fill [["#182134"]])
+string(JSON config SET "${config}" transcript_style tool_prompts [[{"Bash":"$ "}]])
 file(WRITE "${ROOT}/rules/config.json" "${config}")
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/notices" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy.bundle.json"
@@ -43,7 +47,7 @@ execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy
 
 file(MAKE_DIRECTORY "${ROOT}/centered")
 file(COPY_FILE "${RULES}/client.star" "${ROOT}/rules/client.star")
-file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"nova_friends":{"providers":{"codex":"ChatGPT"}},"message_card":{"side_extension":20},"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
+file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"hold_on_enter":true,"prompt_style":{"width":98},"transcript_style":{"glyph_peak":3,"glyph_seconds":0.4,"glyph_stagger":0.055,"person_bold":true,"person_flash_peak":3,"person_flash_seconds":0.45},"nova_friends":{"providers":{"codex":"ChatGPT"}},"message_card":{"side_extension":20},"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/centered" COMMAND_ERROR_IS_FATAL ANY)
 file(MAKE_DIRECTORY "${ROOT}/alternative")
 file(WRITE "${ROOT}/rules/client.star" [=[
@@ -54,7 +58,8 @@ def handle(event, state, config):
     window = base(event, state, config)
     if event == "window" and state["tab"] == "friend":
         window["tab_style"] = {"fill":"#112233","selected_fill":"#f08050","selected_opacity":0.75,"selected_weight":500,"gap":6}
-        window["prompt_style"] = {"fill":"#221144","width":72,"show_plus":False}
+        window["prompt_style"] = {"fill":"#221144","width":72,"show_plus":False,"caret_height":18,"caret_aspect":0.75,"caret_seconds":2,"caret_curve":[[0,0],[0.2,0],[0.7,1],[1,0]]}
+        window["transcript_style"] = {"scanner_gap":8,"scanner_offset":4,"scanner_curve":[[0,1],[0.3,1],[1,0]]}
         window["message_card"] = {"fill":"#223344","selector_width_em":19,"selected_radius":3}
         window["tab_titles"] = ["Home", "Session"]
         window["panels"] = ["account"]

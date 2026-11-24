@@ -255,6 +255,7 @@ public:
     // said hello since, unless the server is stopping; otherwise Idle, which is only ever with
     // nothing running, nothing waiting and nothing queued that will be taken: the friend is waiting for the person.
     sync::Activity activity() const;
+    std::uint32_t activeAgents() const { return childAgents_ + (state_.openTurn != 0); }
 
 private:
     void effect(Effect::What what, std::string text, std::uint64_t turn = 0);
@@ -287,6 +288,7 @@ private:
     std::optional<Millis> deadline_;
     std::string openPrompt_;            // the open turn's prompt
     std::string gathered_;              // the open turn's text not yet in the session
+    std::uint32_t childAgents_ = 0;
     bool finished_ = false;
     int failed_ = 0;
     bool held_ = false;

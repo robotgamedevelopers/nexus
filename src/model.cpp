@@ -114,6 +114,18 @@ bool Model::queue(std::size_t i) {
     return true;
 }
 
+bool Model::hold_draft(std::size_t i) {
+    if (!sendable(i)) return false;
+    auto& tab = tabs_[i];
+    tab.held.push_back(std::move(tab.draft));
+    tab.draft.clear();
+    return true;
+}
+
+void Model::pop_held(std::size_t i) {
+    if (friend_tab(i) && !tabs_[i].held.empty()) tabs_[i].held.pop_front();
+}
+
 bool Model::take_queued(std::size_t i) {
     if (!friend_tab(i) || tabs_[i].queue.empty()) {
         return false;
@@ -125,6 +137,7 @@ bool Model::take_queued(std::size_t i) {
 void Model::clear_transcript(std::size_t i) {
     if (!friend_tab(i)) return;
     tabs_[i].transcript.clear();
+    tabs_[i].held.clear();
     ++tabs_[i].transcriptGeneration;
 }
 

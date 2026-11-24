@@ -41,6 +41,7 @@ CursorState cursorOf(LinkPhase phase, std::uint64_t heardMsAgo, const Mirror& mi
         return CursorState::Lost;
     }
     switch (*activity) {
+        case Activity::Working: return CursorState::Working;
         case Activity::Busy:
             return CursorState::Busy;
         case Activity::Down:

@@ -1,3 +1,5 @@
+#include "pr/compress_select.h"
+#include "pr/image_select.h"
 #include "board.h"
 
 #include <algorithm>
@@ -143,19 +145,8 @@ private:
 // The window's thread
 
 PraxBoard::PraxBoard(const Desc& desc) : desc_(desc), kit_(desc.kit), app_(desc.app) {
-    if (!desc_.url.empty()) {
-        url_ = desc_.url;
-    } else {
-        std::function<SprintBoardAddress()> find = desc_.find ? desc_.find : [] { return findSprintBoard(); };
-        PrApp* app = app_;
-        finding_ = std::async(std::launch::async, [find, app] {
-            SprintBoardAddress address = find();
-            if (app != nullptr) {
-                prAppWake(app);
-            }
-            return address;
-        });
-    }
+    extent_ = desc.initialExtent;
+    posted_ = extent_.x > 0 && extent_.y > 0 ? 1 : 0;
     const ZoneNames zones = localZoneNames();
     prelude_ = sprintPrelude(zones.standard, zones.daylight);
     thread_ = std::thread([this] { run(); });
@@ -173,26 +164,6 @@ PraxBoard::~PraxBoard() {
     thread_.join();     // the page's thread frees the page as it ends (closePage)
     prDrawListRelease(showing_);
     prDrawListRelease(out_.recorded);
-    if (finding_.valid()) {
-        finding_.wait();
-    }
-}
-
-void PraxBoard::takeAddress() {
-    if (!url_.empty() || !finding_.valid()) {
-        return;
-    }
-    if (finding_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        return;
-    }
-    SprintBoardAddress address = finding_.get();
-    if (!address.url.empty()) {
-        url_ = address.url;
-        problem_.clear();
-        return;
-    }
-    problem_ = address.error;
-    findAgainAt_ = windowTime_ + kRetrySeconds;
 }
 
 void PraxBoard::post(Message message) {
@@ -212,20 +183,6 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     windowTime_ = seconds;
     windowDisplay_ = display;
     const bool onScreen = shown_ && (!desc_.visible || desc_.visible());
-    if (onScreen) {
-        takeAddress();
-        if (url_.empty() && !finding_.valid() && windowTime_ >= findAgainAt_) {
-            std::function<SprintBoardAddress()> find = desc_.find ? desc_.find : [] { return findSprintBoard(); };
-            PrApp* app = app_;
-            finding_ = std::async(std::launch::async, [find, app] {
-                SprintBoardAddress address = find();
-                if (app != nullptr) {
-                    prAppWake(app);
-                }
-                return address;
-            });
-        }
-    }
     // The frame, for the page's thread: while the page is on screen, and once as it leaves.
     std::vector<std::string> opens;
     {
@@ -234,7 +191,7 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
         time_ = seconds;
         display_ = display;
         onScreen_ = onScreen;
-        address_ = url_;
+
         opens.swap(out_.opens);
         if (tick) {
             ++posted_;
@@ -277,14 +234,6 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     PrUi* ui = kit_->ui;
     PrLayoutTree* tree = kit_->tree;
     const bool onScreen = !desc_.visible || desc_.visible();
-    if (url_.empty()) {
-        *problem = problem_.empty() ? "looking up the sprint board's address (nova-config service show sprint-run)"
-                                    : problem_;
-        if (onScreen && !finding_.valid()) {
-            prUiRequestFrameAt(ui, std::max(windowTime_, findAgainAt_));
-        }
-        return false;
-    }
     bool opened = false;
     bool failed = false;
     double retryAt = 0;
@@ -299,6 +248,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
                 prDomAgentWake(waiting_);
             }
         }
+        *problem = lookupError_;
         opened = out_.opened;
         failed = out_.failed;
         if (failed) {
@@ -317,7 +267,6 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     }
     wake_.notify_one();
     if (!opened) {
-        *problem = "opening the sprint board at " + url_;
         if (onScreen) {
             prUiRequestFrame(ui);
         }
@@ -330,7 +279,6 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
         return false;
     }
     if (showing_ == nullptr) {
-        *problem = "loading the sprint board from " + url_;
         if (onScreen) {
             prUiRequestFrame(ui);
         }
@@ -342,7 +290,7 @@ bool PraxBoard::showPage(PrLayoutNode parent, PrVec2 extent, std::string* proble
     place.width = prKitPx(extent.x);
     place.height = prKitPx(extent.y);
     place.flex = PrKitFlex_Fixed;
-    prKitPlace(kit_, pane, &place);
+    prKitPlace(kit_, pane, place);
     PrLayoutContent content{.kind = PrLayoutContentKind_Painter};
     content.painter = PrLayoutPainter{.context = showing_, .paint = paintPage, .measure = nullptr,
         .retain = retainPage, .release = releasePage};
@@ -479,12 +427,32 @@ std::string PraxBoard::documentUrl() {
 
 void PraxBoard::run() {
     std::unique_lock<std::mutex> lock(mutex_);
+    pageUrl_ = desc_.url;
+    while (pageUrl_.empty() && !ending_) {
+        lock.unlock();
+        auto found = desc_.find ? desc_.find() : findSprintBoard();
+        lock.lock();
+        lookupError_ = found.error;
+        pageUrl_ = std::move(found.url);
+        if (app_) prAppWake(app_);
+        if (pageUrl_.empty()) {
+            done_ = posted_;
+            stepped_.notify_all();
+            // Process frame acknowledgments while the service is unavailable.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(int(kRetrySeconds));
+            while (!ending_ && std::chrono::steady_clock::now() < deadline) {
+                wake_.wait_until(lock, deadline);
+                done_ = posted_;
+                stepped_.notify_all();
+            }
+        }
+    }
     for (;;) {
         if (ending_) {
             break;
         }
         if (inbox_.empty() && taken_ == posted_) {
-            if (agent_ != nullptr && onScreen_) {
+            if (agent_ != nullptr && (onScreen_ || (desc_.initialExtent.x > 0 && !out_.settled && !out_.failed))) {
                 // Until a task can run, a message comes, the layout thread finishes, or the window wakes it.
                 waiting_ = agent_;
                 lock.unlock();
@@ -504,8 +472,8 @@ void PraxBoard::run() {
         taken_ = taken;
         frameTime_ = time_;
         pageDisplay_ = display_;
-        visible_ = onScreen_;
-        pageUrl_ = address_;
+        visible_ = onScreen_ || (desc_.initialExtent.x > 0 && !out_.settled && !out_.failed);
+
         pageExtent_ = extent_;
         pageZoom_ = zoom_;
         lock.unlock();
@@ -636,8 +604,8 @@ void PraxBoard::openPage() {
     shaper_ = prTextShaperCreate(PrTextShaperBackend_Default);
     PrTextFontDesc font{.set = fonts_, .style = prFontStyleDefault()};
     font_ = prTextFontCreate(&font);
-    compress_ = prCompressCodecCreate(PrCompressCodecBackend_Default);
-    images_ = compress_ != nullptr ? prImageCodecCreate(PrImageCodecBackend_Default, compress_) : nullptr;
+    compress_ = prCompressCodecSetCreateDefault();
+    images_ = compress_ != nullptr ? prImageCodecSetCreateDefault(compress_) : nullptr;
 
     if (desc_.answer != nullptr) {
         net_ = prNetNullCreate();
@@ -718,8 +686,8 @@ void PraxBoard::closePage() {
     }
     prHtmlStorageProviderDestroy(localStorage_);
     prHtmlStorageProviderDestroy(sessionStorage_);
-    prImageCodecDestroy(images_);
-    prCompressCodecDestroy(compress_);
+    prImageCodecSetDestroy(images_);
+    prCompressCodecSetDestroy(compress_);
     prDrawListRelease(recorded_);
     prTextFontRelease(font_);
     prTextShaperDestroy(shaper_);

@@ -10,8 +10,8 @@ std::string startErrorLog(const std::string&) {
 
 void showLaunchError(const std::string&) {}
 
-bool coverScreen(const PrAppSurface& surface) {
-    if (surface.kind != PrAppSurfaceKind_NsView) {
+bool coverScreen(const PrSurface& surface) {
+    if (surface.kind != PrSurfaceKind_NsView) {
         return false;
     }
     NSWindow* window = ((__bridge NSView*)surface.handle).window;

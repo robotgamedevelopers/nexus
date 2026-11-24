@@ -134,7 +134,9 @@ the selection for this session across reconnects. Other sessions keep their own 
 
 When the selected account needs a login, press **Enter** in the prompt or click **Sign in to**
 above it. The card shows the selected account’s label (or name) and its configured email on a separate line when available. This opens the selected account’s browser flow. An empty prompt works. Any draft
-stays in the composer through sign-in. Press **Enter** again after sign-in to send it.
+stays in the composer through sign-in. If the browser page closes or reports an error, select the same account
+again in the window that opened it to reopen the active sign-in page. After the attempt expires, selecting the
+account starts a fresh attempt. Press **Enter** again after sign-in to send your draft.
 
 When a friend has at least two linked subscription accounts, **auto** is the first menu choice and the
 stock server profile uses it for fresh sessions. It starts on the first signed-in linked subscription. When
@@ -539,3 +541,9 @@ The window's own config, `~/.nexus/client`, will be configured the same way: doc
 each machine: the server never stores, caches or syncs a client's config. When your AI (talking to the server) changes
 a client's config, the server only relays the change to the client that asked, and that client applies it
 (`docs/roadmap.sexp`, the client-config rows).
+
+### Writable project directories
+
+For registry-managed friends, nova-config stores additional read/write directories in the friend’s `startup.writable_dirs` list. Omit the list or use `[]` for the working directory alone. Each extra entry names an existing absolute directory on the server. Changes apply on the next driver launch, including resumed conversations. Claude and Codex enforce the grants. Conversation-only harnesses reject extra directories. Harness state and temporary files retain their existing rules.
+
+The RPC driver accepts `personal_chatgpt_accounts` in the server's `profile/config.json` as a list of named Codex accounts. For each listed account, configure an email in the account registry. Enrollment checks the email and personal subscription before replacing a saved login. Each turn also checks the account reported by the harness.

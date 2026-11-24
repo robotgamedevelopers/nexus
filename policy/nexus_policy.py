@@ -18,6 +18,20 @@ MAX_SOURCE = 64 * 1024
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
+def publish_friend_info(identity, cwd, model, effort):
+    directory = Path.home() / ".nexus/server/friend-info"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data = {"pronouns": identity.get("pronouns", ""), "repository": identity["repository"], "directories": list(dict.fromkeys(
+        path for path in [cwd, *identity["writable_dirs"]] if path)), "model": model, "effort": effort}
+    with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as temp:
+        try:
+            json.dump(data, temp)
+            temp.flush()
+            os.replace(temp.name, directory / (identity["friend"] + ".json"))
+        finally:
+            Path(temp.name).unlink(missing_ok=True)
+
+
 def read_profile_file(directory, name):
     fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
     with os.fdopen(fd, "rb") as stream:
@@ -123,6 +137,11 @@ def cli():
                 defaults.setdefault("model", identity["model"])
             extra = [item for key, value in defaults.items() if not option("--" + key)
                      for item in ("--" + key, value)]
+            if args.harness == "claude" and not option("--limit"):
+                extra.extend(["--limit", "cwd"])
+            for path in identity["writable_dirs"]:
+                extra.extend(["--write-dir", path])
+            publish_friend_info(identity, option("--cwd"), defaults.get("model", ""), defaults.get("effort", ""))
             with tempfile.TemporaryFile() as descriptor:
                 descriptor.write(instructions.encode())
                 descriptor.seek(0)

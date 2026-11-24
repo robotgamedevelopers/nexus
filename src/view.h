@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "pr/font_set.h"
+#include "pr/text_font.h"
 #include "pr/kit.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_theme.h"
@@ -23,6 +24,8 @@
 #include "pr/ui.h"
 
 #include "account_picker.h"
+#include "chat_markdown.h"
+#include "chat_selection.h"
 #include "cursor.h"
 #include "hitch.h"
 #include "model.h"
@@ -130,6 +133,30 @@ struct TranscriptItems {
 };
 
 struct View {
+    std::function<void(const Chirp&)> playChirp;
+    struct GlyphTrail {
+        struct Range { size_t start, end; double birth; };
+        size_t tab = SIZE_MAX, entry = SIZE_MAX;
+        uint64_t generation = 0;
+        size_t bytes = 0;
+        std::vector<Range> ranges;
+    };
+    GlyphTrail promptTrail, replyTrail;
+    struct SentFlash {
+        std::size_t tab, first;
+        uint64_t generation;
+        std::string text;
+        double since;
+    };
+    std::vector<SentFlash> sentFlashes;
+    bool dialogVisible = false, savingPower = false;
+    double lastInput = -100;
+    std::function<void(bool)> setQuiet;
+    ChatMarkdownCache markdown;
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> inlineFont{nullptr, prTextFontRelease};
+    std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> promptFont{nullptr, prTextFontRelease};
+    ChatSelection selection;
+    std::function<void(const std::string&)> copy, openLink;
     Model* model = nullptr;
     Look* look = nullptr;
     Terminals* terminals = nullptr;             // the terminal tabs' shells; unset, Command-T adds none
@@ -161,7 +188,18 @@ struct View {
     std::function<const std::string*(std::size_t id)> growing;
     // With a server: the state cursor of a friend's tab (by Tab::id), under its last text (cursor.h). Unset: none.
     std::function<CursorState(std::size_t id)> cursor;
+    std::function<unsigned(std::size_t)> activeAgents;
+    std::string choiceKind, choiceValue;
+    std::size_t choiceTab = SIZE_MAX;
+    unsigned scannerCount = 1;
+    bool scannerBusy = false;
+    double scannerChanged = 0;
     double time = 0;                            // the frame's time in seconds, for the busy cursor's breathe
+    size_t scannerTab = SIZE_MAX, energyTab = SIZE_MAX;
+    std::string energyAccount;
+    double scannerTime = 0, tabEnergyTime = -100, accountEnergyTime = -100;
+    float scannerSpread = 0;
+    bool energyAnimating = false;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
                                                 // end of the transcript, never beside the prompt
@@ -181,7 +219,7 @@ struct View {
     std::function<void(const std::string&)> chooseAccount;
     std::function<void(const std::string&)> accountCommand;
     std::function<std::string()> accountCaption;
-    std::function<void(std::string&, std::string&)> sessionCapabilities;
+    std::function<void(std::string&, std::string&, std::string&)> sessionCapabilities;
     std::function<SignInAccount()> signInAccount; // selected account while its sign-in is available
     std::function<bool()> activateSignIn;        // true when sign-in consumed Enter or a card click
     // Command-V in the prompt: reads the clipboard, whose text comes back as a Paste event through the host, which cuts
@@ -221,6 +259,7 @@ struct View {
     uint32_t promptRows = 1;                    // lines of text the prompt showed at the last layout
     PrLayoutNode prompt = kPrLayoutNodeNone;    // the prompt's text area, as the last round built it
     PrLayoutNode promptBox = kPrLayoutNodeNone; // the rounded box that holds the plus and the text area
+    PrLayoutNode conversation = kPrLayoutNodeNone;
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
     HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none

@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "pr/kit.h"
-#include "pr/kit_surface.h"
+#include "pr/kit_panel.h"
 #include "pr/kit_text.h"
 #include "pr/layout_tree.h"
 #include "pr/text.h"
@@ -42,11 +42,11 @@ struct Samples {
 
 void buildSamples(void* context, PrUi*, const PrUiRound*) {
     const Samples& s = *static_cast<Samples*>(context);
-    PrKitSurfaceStyle surface{
+    PrKitPanelStyle surface{
         .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100), .height = prKitPercent(100)}},
         .background = PrKitBackground_App,
     };
-    PrLayoutNode root = prKitSurface(s.kit, kPrLayoutNodeNone, {}, surface);
+    PrLayoutNode root = prKitPanel(s.kit, kPrLayoutNodeNone, {}, surface);
     for (std::size_t i = 0; i < s.roleCount; ++i) {
         PrKitTextStyle style{.role = s.roles[i], .tone = PrKitTone_Primary, .wrap = PrKitWrap_Auto,
             .align = PrKitTextAlign_Start, .preserve = true};

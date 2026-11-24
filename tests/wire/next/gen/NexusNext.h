@@ -41,15 +41,16 @@ inline const char * EnumName( EntryKind value )
     }
 }
 
-// enum Activity — None = 0 implicit, variants dense from 1, wire range [0, 4] (SPEC §4.2)
+// enum Activity — None = 0 implicit, variants dense from 1, wire range [0, 5] (SPEC §4.2)
 enum class Activity : uint8_t
 {
     None = 0,
     Idle = 1,
     Busy = 2,
     Down = 3,
-    Waiting = 4,
-    Max = 4, // the exported extent (SPEC §4.2)
+    Working = 4,
+    Waiting = 5,
+    Max = 5, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any Activity value, out-of-set included
@@ -61,6 +62,7 @@ inline const char * EnumName( Activity value )
         case Activity::Idle: return "Idle";
         case Activity::Busy: return "Busy";
         case Activity::Down: return "Down";
+        case Activity::Working: return "Working";
         case Activity::Waiting: return "Waiting";
         default: return "???";
     }

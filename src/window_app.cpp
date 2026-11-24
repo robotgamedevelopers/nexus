@@ -47,6 +47,12 @@ bool chord(std::string_view name, PrAppKey& key, PrAppModifierFlags& modifiers) 
 }
 
 bool accountAction(std::string_view action) {
+    if (action == "picker:model" || action == "picker:effort" || action == "picker:close") return true;
+    if (action.starts_with("point:") || action.starts_with("choose:")) {
+        const auto value = action.substr(action.find(':') + 1);
+        return !value.empty() && value.size() <= 128 &&
+            value.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-") == value.npos;
+    }
     if (action == "dismiss" || action == "reveal") return true;
     const auto colon = action.find(':');
     if (colon == action.npos || colon + 1 == action.size() || action.size() > 80) return false;
@@ -185,6 +191,14 @@ bool readColor(const PrJson* d, Index obj, PrStringView name, unsigned& value) {
     return parsed.ec == std::errc{} && parsed.ptr == end;
 }
 
+bool readOptionalColor(const PrJson* d, Index obj, PrStringView name, std::optional<unsigned>& value) {
+    if (prJsonMember(d, obj, name) == kPrJsonMissing) return true;
+    unsigned color = 0;
+    if (!readColor(d, obj, name, color)) return false;
+    value = color;
+    return true;
+}
+
 bool readPoints(const PrJson* d, Index obj, PrStringView name, float& value, double min, double max) {
     const auto field = prJsonMember(d, obj, name);
     if (field == kPrJsonMissing) return true;
@@ -192,6 +206,25 @@ bool readPoints(const PrJson* d, Index obj, PrStringView name, float& value, dou
     if (prJsonKind(d, field) != PrJsonKind_Number || !(min <= n && n <= max)) return false;
     value = static_cast<float>(n);
     return true;
+}
+
+// Policy supplies normalized time/value pairs, evaluated once when the application changes.
+bool readCurve(const PrJson* doc, Index object, PrStringView key, MotionCurve& curve) {
+    const auto array = prJsonMember(doc, object, key);
+    if (array == kPrJsonMissing) return true;
+    const auto count = prJsonCount(doc, array);
+    if (prJsonKind(doc, array) != PrJsonKind_Array || count < 2 || count > 64) return false;
+    curve.clear();
+    for (unsigned i = 0; i < count; ++i) {
+        const auto pair = prJsonElement(doc, array, i);
+        if (prJsonKind(doc, pair) != PrJsonKind_Array || prJsonCount(doc, pair) != 2) return false;
+        const auto time = prJsonNumber(doc, prJsonElement(doc, pair, 0), -1);
+        const auto value = prJsonNumber(doc, prJsonElement(doc, pair, 1), -1);
+        if (!(time >= 0 && time <= 1 && value >= 0 && value <= 1) ||
+                (!curve.empty() && time <= curve.back().first)) return false;
+        curve.emplace_back(time, value);
+    }
+    return curve.front().first == 0 && curve.back().first == 1;
 }
 
 bool readFlag(const PrJson* d, Index obj, PrStringView name, bool& value) {
@@ -235,18 +268,70 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
-                key != "radius" && key != "show_notices" && key != "show_tools") {
+                key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" &&
+                key != "panel_fill" && key != "link_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
+                key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
+                key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
+                key != "person_bold" && key != "person_flash_peak" && key != "person_flash_seconds" &&
+                key != "scanner_curve" && key != "scanner_pause" && key != "scanner_ease" && key != "scanner_fade" &&
+                key != "scanner_gap" && key != "scanner_offset" && key != "highlight_seconds" && key != "flash_seconds" &&
+                key != "scanner_ink" && key != "scanner_seconds" && key != "scanner_peak" && key != "highlight_energy") {
             why = "unknown transcript_style field: " + std::string(key);
             return false;
         }
     }
+    const auto prompts = prJsonMember(d, obj, {"tool_prompts", 12});
+    if (prompts != kPrJsonMissing) {
+        if (prJsonKind(d, prompts) != PrJsonKind_Object) {
+            why = "tool_prompts must map tool names to prompt strings";
+            return false;
+        }
+        for (auto i = prJsonFirst(d, prompts); i != kPrJsonMissing; i = prJsonAfter(d, prompts, i)) {
+            const auto name = stringAt(d, i);
+            const auto value = prJsonMember(d, prompts, {name.data(), name.size()});
+            if (prJsonKind(d, value) != PrJsonKind_String) {
+                why = "tool_prompts needs a string for " + std::string(name);
+                return false;
+            }
+            style.toolPrompts.emplace(name, stringAt(d, value));
+        }
+    }
     const bool valid =
         readColor(d, obj, {"fill", 4}, style.fill) && readColor(d, obj, {"ink", 3}, style.ink) &&
+        readPoints(d, obj, {"glyph_stagger", 13}, style.glyphStagger, 0, 0.3) &&
+        readPoints(d, obj, {"glyph_peak", 10}, style.glyphPeak, 1, 8) &&
+        readPoints(d, obj, {"glyph_seconds", 13}, style.glyphSeconds, 0.05, 3) &&
+        readFlag(d, obj, {"person_bold", 11}, style.personBold) &&
+        readPoints(d, obj, {"person_flash_peak", 17}, style.personFlashPeak, 1, 8) &&
+        readPoints(d, obj, {"person_flash_seconds", 20}, style.personFlashSeconds, 0.05, 3) &&
+        readCurve(d, obj, {"scanner_curve", 13}, style.scannerCurve) &&
+        readPoints(d, obj, {"scanner_pause", 13}, style.scannerPause, 0, 3) &&
+        readPoints(d, obj, {"scanner_ease", 12}, style.scannerEase, 0.005, 2) &&
+        readPoints(d, obj, {"scanner_fade", 12}, style.scannerFade, 0.005, 3) &&
+        readPoints(d, obj, {"scanner_gap", 11}, style.scannerGap, 0, 128) &&
+        readPoints(d, obj, {"scanner_offset", 14}, style.scannerOffset, -128, 128) &&
+        readPoints(d, obj, {"highlight_seconds", 17}, style.highlightSeconds, 0.4, 10) &&
+        readPoints(d, obj, {"flash_seconds", 13}, style.flashSeconds, 0.04, 2) &&
+        readPoints(d, obj, {"highlight_energy", 16}, style.highlightEnergy, 0, 4) &&
+        readOptionalColor(d, obj, {"scanner_ink", 11}, style.scannerInk) &&
+        readPoints(d, obj, {"scanner_seconds", 15}, style.scannerSeconds, 0.4, 10) &&
+        readPoints(d, obj, {"scanner_peak", 12}, style.scannerPeak, 1, 8) &&
         readColor(d, obj, {"person_ink", 10}, style.personInk) &&
+        readOptionalColor(d, obj, {"command_ink", 11}, style.commandInk) &&
+        readOptionalColor(d, obj, {"code_ink", 8}, style.codeInk) &&
+        readColor(d, obj, {"code_fill", 9}, style.codeFill) &&
+        readFlag(d, obj, {"code_background", 15}, style.codeBackground) &&
+        readPoints(d, obj, {"code_size_offset", 16}, style.codeSizeOffset, -8, 32) &&
+        readPoints(d, obj, {"code_padding", 12}, style.codePadding, 0, 32) &&
+        readPoints(d, obj, {"code_radius", 11}, style.codeRadius, 0, 64) &&
+        readOptionalColor(d, obj, {"panel_fill", 10}, style.panelFill) &&
+        readOptionalColor(d, obj, {"link_ink", 8}, style.linkInk) &&
         readColor(d, obj, {"switch_email_ink", 16}, style.switchEmailInk) &&
         readColor(d, obj, {"notice_ink", 10}, style.noticeInk) && readColor(d, obj, {"status_ink", 10}, style.statusInk) &&
         readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
-        readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools);
+        readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools) &&
+        readPoints(d, obj, {"list_gap_em", 11}, style.listGap, 0, 4) &&
+        readPoints(d, obj, {"reply_width", 11}, style.replyWidth, 1, 100) && readFlag(d, obj, {"markdown", 8}, style.markdown) && readFlag(d, obj, {"conversation_panel", 18}, style.conversationPanel);
     if (prJsonMember(d, obj, {"person_ink", 10}) == kPrJsonMissing)
         style.personInk = style.ink;
     if (!valid)
@@ -257,6 +342,22 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readSurface(const PrJson* doc, AccountSurface& surface) {
     surface = {};
+    const auto sounds = prJsonMember(doc, 0, {"sounds", 6});
+    if (sounds != kPrJsonMissing) {
+        auto cue = [&](PrStringView name, Chirp& chirp) {
+            const auto item = prJsonMember(doc, sounds, name);
+            return item == kPrJsonMissing || (prJsonKind(doc, item) == PrJsonKind_Object &&
+                readPoints(doc, item, {"from_hz", 7}, chirp.startHz, 40, 8000) &&
+                readPoints(doc, item, {"to_hz", 5}, chirp.endHz, 40, 8000) &&
+                readPoints(doc, item, {"duration_ms", 11}, chirp.durationMs, 5, 500) &&
+                readPoints(doc, item, {"gain", 4}, chirp.gain, 0, 1));
+        };
+        if (prJsonKind(doc, sounds) != PrJsonKind_Object || !cue({"tab", 3}, surface.tabChirp) ||
+                !cue({"confirm", 7}, surface.confirmChirp) ||
+                !cue({"open", 4}, surface.openChirp) || !cue({"close", 5}, surface.closeChirp) ||
+                !cue({"dialog", 6}, surface.dialogChirp) || !cue({"cancel", 6}, surface.cancelChirp) ||
+                !cue({"ready", 5}, surface.readyChirp)) return false;
+    }
     auto& tabs = surface.tabs;
     const auto style = prJsonMember(doc, 0, {"tab_style", 9});
     if (style != kPrJsonMissing && (prJsonKind(doc, style) != PrJsonKind_Object ||
@@ -284,6 +385,17 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readPoints(doc, box, {"height", 6}, prompt.height, 1, 256) ||
             !readPoints(doc, box, {"gap", 3}, prompt.gap, 0, 128) ||
             !readPoints(doc, box, {"max_lines", 9}, prompt.maxLines, 1, 64) ||
+            !readColor(doc, box, {"caret_ink", 9}, prompt.caretInk) ||
+            !readPoints(doc, box, {"caret_gap", 9}, prompt.caretGap, 0, 32) ||
+            !readPoints(doc, box, {"caret_height", 12}, prompt.caretHeight, 1, style::kBodySize) ||
+            !readPoints(doc, box, {"caret_radius", 12}, prompt.caretRadius, 0, 32) ||
+            !readCurve(doc, box, {"caret_curve", 11}, prompt.caretCurve) ||
+            !readPoints(doc, box, {"caret_hold", 10}, prompt.caretHold, 0, 0.35) ||
+            !readPoints(doc, box, {"caret_fall_ratio", 16}, prompt.caretFallRatio, 0.1, 4) ||
+            !readPoints(doc, box, {"caret_seconds", 13}, prompt.caretSeconds, 0.4, 10) ||
+            !readPoints(doc, box, {"caret_aspect", 12}, prompt.caretAspect, 0.1f, 4) ||
+            !readPoints(doc, box, {"caret_peak", 10}, prompt.caretPeak, 1, 8) ||
+            !readFlag(doc, box, {"bold", 4}, prompt.bold) ||
             !readFlag(doc, box, {"show_plus", 9}, prompt.showPlus))) return false;
     if (!readFlag(doc, 0, {"prompt_command", 14}, surface.promptCommand) ||
             !readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||

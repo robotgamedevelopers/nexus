@@ -216,6 +216,7 @@ struct DriverEncoder {
     void operator()(const Session& m) { w.str("kind", "session").str("id", m.id); }
     void operator()(const Text& m) { w.str("kind", "text").turn(m.turn).str("delta", m.delta); }
     void operator()(const TextEnd& m) { w.str("kind", "text-end").turn(m.turn); }
+    void operator()(const ChildAgents& m) { w.str("kind", "child-agents").num("count", m.count); }
     void operator()(const Tool& m) { w.str("kind", "tool").turn(m.turn).str("name", m.name).str("summary", m.summary); }
     void operator()(const Done& m) {
         w.str("kind", "done").turn(m.turn).str("outcome", outcomeName(m.outcome));
@@ -578,6 +579,8 @@ Decoded<DriverMessage> decodeDriverMessage(std::string_view line) {
     }
     if (kind == "text-end")
         return result<DriverMessage>(TextEnd{f.turn()}, f);
+    if (kind == "child-agents")
+        return result<DriverMessage>(ChildAgents{static_cast<std::uint32_t>(f.integer("count", true, 0, UINT32_MAX - 1).value_or(0))}, f);
     if (kind == "tool") {
         Tool m;
         m.turn = f.turn();

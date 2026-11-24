@@ -92,15 +92,19 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             toolAliases: { [kSecretToolName]: kSecretMcpToolName },
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
             ...wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data), egressPort,
-                env, { hook: true }, start.limited, start.keepsOut),
+                env, { hook: true }, start.limited, start.keepsOut, start.writeDirs),
         },
     });
-    void stream.supportedModels().then(async (rows) => {
+    const catalogReady = stream.supportedModels().then(async (rows) => {
         const valid = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
-        const models = Object.fromEntries(rows.filter(row => valid.test(row.value))
+        const models = Object.fromEntries(rows.filter(row => row.value !== "default" && valid.test(row.value))
             .map(row => [row.value, row.supportedEffortLevels ?? []]));
         if (Object.keys(models).length === 0) return;
-        const data = JSON.stringify({ default: 'default' in models ? 'default' : '', models });
+        const resolved = Object.fromEntries(rows.flatMap(row => row.resolvedModel && valid.test(row.resolvedModel) && row.value in models
+            ? [[row.value, row.resolvedModel]] : []));
+        const order = Object.keys(models);
+        if (!start.model || start.model === 'default') await stream.setModel(order[0]);
+        const data = JSON.stringify({ order, models, resolved });
         if (data.length > 16384) return;
         const directory = join(homedir(), '.nexus', 'server', 'catalogs');
         await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -112,7 +116,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             await rm(temp, { force: true });
         }
     }).catch(() => process.stderr.write('Claude model discovery did not update the Nexus catalog.\n'));
-    return stream;
+    return Object.assign(stream, {catalogReady});
 }
 
 runProcess(startHarness, removed, undefined, undefined, setup);

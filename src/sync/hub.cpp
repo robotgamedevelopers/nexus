@@ -298,9 +298,15 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
     ActionKind kind = action.kind;
     const std::string* text = &action.text;
     if (kind != ActionKind::Stop && text->size() <= limits_.text) {
-        const policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
+        policy::MessageState state{*text, session.info.friendName, session.info.model, session.queue.size(),
             session.driver.openTurn != 0, session.info.effort, session.info.harness,
             responder_ ? responder_->catalog(session.info) : std::string{}};
+        if (const auto* account = accounts_ ? accounts_->account(session.info.account) : nullptr) {
+            state.accountEmail = account->email;
+            state.loginState = signedIn_.contains(account->name) ? "signed in" :
+                (signsIn(account->name) ? "signed out" : "unconfirmed");
+        }
+        if (responder_ && text->find("/info") != std::string::npos) state.friendInfo = responder_->friendInfo(session.info.friendName);
         if (!policy::messagePlan(application_, bundlePath_(), false, kind == ActionKind::Queue ? "queue" : "send", state, plan, refused)) {
             refused = "Message application: " + refused;
         } else {
@@ -312,7 +318,7 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                 Action setting = action;
                 setting.kind = plan.delivery == policy::Delivery::SetModel ? ActionKind::SetModel : ActionKind::SetEffort;
                 setting.text = *text;
-                return set(setting, why, client, true);
+                return set(setting, why, client, true, plan.effort);
             }
             if (plan.delivery == policy::Delivery::Clear || plan.delivery == policy::Delivery::Compact) {
                 const bool compact = plan.delivery == policy::Delivery::Compact;
@@ -329,8 +335,9 @@ bool Hub::applyMessage(const Action& action, const StoredSession& session, std::
                         SessionChange reset{};
                         reset.clearTranscript = true;
                         changes.push_back(reset);
+                    } else {
+                        changes.push_back({entry(EntryKind::Notice, "Context compacted for the next turn."), {}});
                     }
-                    changes.push_back({entry(EntryKind::Notice, compact ? "Context compacted for the next turn." : "Context cleared."), {}});
                     const bool ok = commit(changes);
                     if (responder_) responder_->sent(action.session, ok);
                     if (ok) refresh(action.session);
@@ -448,13 +455,15 @@ bool Hub::make(const Action& action, const SessionInfo& info, std::string* why, 
 }
 
 // A session's account, model or effort, from its next turn on.
-bool Hub::set(const Action& action, std::string* why, const std::string& client, bool announce) {
+bool Hub::set(const Action& action, std::string* why, const std::string& client, bool announce,
+              const std::optional<std::string>& effort) {
     const StoredSession* session = store_.find(action.session);
     std::string refused;
     if (action.text.size() > limits_.setting || !printable(action.text)) {
         refused = std::string("The ") + settingName(action.kind) + " was not changed: a setting is at most " +
             std::to_string(limits_.setting) + " printable characters.";
     }
+    if (effort && (effort->size() > limits_.setting || !printable(*effort))) refused = "Invalid effort identifier.";
     if (session->driver.modelLimitPending &&
             (action.kind == ActionKind::SetAccount || action.kind == ActionKind::SetModel))
         return counted(action, "Resolve the pending model-limit choice or stop the interrupted work before changing its account or model.", why, client);
@@ -493,6 +502,7 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client,
     } else if (action.kind == ActionKind::SetModel) {
         if (announce && info.model != action.text) info.effort.clear();
         info.model = action.text;
+        if (effort) info.effort = *effort;
     } else {
         info.effort = action.text;
     }
@@ -506,7 +516,7 @@ bool Hub::set(const Action& action, std::string* why, const std::string& client,
         }
     }
     if (announce && refused.empty())
-        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + "."), {}});
+        changes.push_back({entry(EntryKind::Notice, std::string(settingName(action.kind)) + " set to " + action.text + (effort ? " with " + *effort + " effort" : "") + "."), {}});
     std::string failed;
     if ((!changes.empty() || !client.empty()) &&
             !store_.commit(changes.empty() ? 0 : action.session, changes, client, action.num, &failed)) {
@@ -1794,19 +1804,19 @@ bool Hub::accountAction(const Action& action, std::string* why, const std::strin
     return true;
 }
 
-bool Hub::setActivity(SessionId id, Activity activity) {
+bool Hub::setActivity(SessionId id, Activity activity, std::uint32_t agents) {
     if (store_.find(id) == nullptr) {
         return false;
     }
     auto it = activity_.find(id);
-    const Activity was = it == activity_.end() ? Activity::Idle : it->second;
-    if (was == activity) {
+    const auto was = it == activity_.end() ? std::pair{Activity::Idle, std::uint32_t(0)} : it->second;
+    if (was == std::pair{activity, agents}) {
         return false;
     }
     if (activity == Activity::Idle) {
         activity_.erase(it);
     } else {
-        activity_[id] = activity;
+        activity_[id] = {activity, agents};
     }
     refresh(id);
     return true;
@@ -1874,7 +1884,8 @@ void Hub::refresh(SessionId id) {
     if (stored->driver.modelLimitPending)
         offerLimitChoice(id, stored->driver, view.info);
     auto activity = activity_.find(id);
-    view.activity = activity == activity_.end() ? Activity::Idle : activity->second;
+    view.activity = activity == activity_.end() ? Activity::Idle : activity->second.first;
+    view.activeAgents = activity == activity_.end() ? 0 : activity->second.second;
     auto fresh = std::make_shared<const SessionView>(std::move(view));
     std::vector<SessionRef> sessions = state_.sessions();
     auto it = std::lower_bound(sessions.begin(), sessions.end(), id,

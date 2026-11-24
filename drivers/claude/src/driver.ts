@@ -56,7 +56,7 @@ import {
 
 /** What the driver uses of the SDK's Query. */
 export type Harness = Pick<Query, 'interrupt' | 'setModel' | 'applyFlagSettings' | 'accountInfo' | 'close'> &
-    AsyncIterable<SDKMessage>;
+    AsyncIterable<SDKMessage> & {catalogReady?: Promise<unknown>};
 
 /** How a harness is started: a new session (`sessionId`) or a resumed one (`resume`). */
 export interface HarnessStart {
@@ -70,6 +70,7 @@ export interface HarnessStart {
     settingSources: SettingSource[];
     claudePath?: string;
     limited: boolean;                   // the friend is limited to `cwd` (--limit cwd; wall.ts limitOf)
+    writeDirs?: string[];
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
@@ -141,6 +142,7 @@ export interface Arguments {
     settingSources: SettingSource[];
     claudePath?: string;
     limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
+    writeDirs?: string[];
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
@@ -154,7 +156,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -191,6 +193,12 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 }
                 a.limit = value;
                 break;
+            case '--write-dir':
+                if (!isAbsolute(value) || value === '/' || Array.from(value).some(c => c.charCodeAt(0) < 32 || '*?[]'.includes(c))) {
+                    return { error: '--write-dir requires an absolute directory without wildcard characters' };
+                }
+                (a.writeDirs ??= []).push(value);
+                break;
             case '--keep-out':
                 // One more directory a limited friend is kept out of: absolute and not the root, or refused.
                 if (!isAbsolute(value) || value === '/') {
@@ -226,6 +234,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
+    if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
         return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
     }
@@ -383,6 +392,7 @@ export function secretMcpServer(askSecret: HarnessStart['askSecret']): McpSdkSer
 }
 
 export class Driver {
+    private readonly children = new Map<string, string | undefined>();
     private readonly host: Host;
     private readonly args: Arguments;
     private readonly reader = new LineReader();
@@ -539,12 +549,16 @@ export class Driver {
     }
 
     private launch(resume: string | undefined): void {
+        if (this.children.size) {
+            this.children.clear();
+            this.write({kind: 'child-agents', count: 0});
+        }
         const generation = ++this.generation;
         this.ready = false;
         this.prompts = new Prompts((m) => { this.took(m); });
         this.replaced = new Promise<void>((resolve) => { this.replace = resolve; });
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
-            limited: this.args.limit === 'cwd', keepsOut: [...(this.args.keepsOut ?? [])],
+            limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
         if (this.args.startupContext !== undefined) start.startupContext = this.args.startupContext;
         if (resume === undefined) {
@@ -580,6 +594,7 @@ export class Driver {
     private async check(harness: Harness, generation: number, sessionId: string): Promise<void> {
         let info: AccountInfo;
         try {
+            if (harness.catalogReady) await harness.catalogReady;
             info = await harness.accountInfo();
         } catch (e) {
             if (generation !== this.generation || this.ended) {
@@ -1008,7 +1023,14 @@ export class Driver {
             this.reportSession(m.session_id);
         }
         switch (m.type) {
-            case 'system':
+            case 'system': {
+                const before = this.children.size;
+                if (m.subtype === 'task_started' && (m.task_type === 'local_agent' || m.subagent_type || m.spawn_depth)) {
+                    this.children.set(m.task_id, m.run_id);
+                } else if (m.subtype === 'task_notification' && (!m.run_id || this.children.get(m.task_id) === m.run_id)) {
+                    this.children.delete(m.task_id);
+                }
+                if (this.children.size !== before) this.write({kind: 'child-agents', count: this.children.size});
                 if (m.subtype === 'init' && m.apiKeySource !== 'none') {
                     this.write({ kind: 'credential', billing: 'api-key', ...(this.plan === '' ? {} : { plan: this.plan }) });
                     this.refuseCredential(`Claude started a turn billing an API key (apiKeySource ${m.apiKeySource}), not the subscription login; nexus runs Claude only on a subscription`,
@@ -1016,6 +1038,7 @@ export class Driver {
                     this.record('refused');
                 }
                 return;
+            }
             case 'rate_limit_event': {
                 const info = m.rate_limit_info;
                 const turn = this.current();

@@ -187,12 +187,30 @@ void accountCommandsUseTheActiveConversation() {
     CHECK(w.view.activateSignIn());
     CHECK(w.link.sent.size() == 3 && w.link.sent.back().kind == sync::ActionKind::SignInClaim &&
           w.link.sent.back().request == 11 && w.link.sent.back().session == 19 && w.link.sent.back().account == "home");
+    // Explicit selection can reopen a browser page that was closed or rejected.
+    wanted.opener = w.host.signIn.opener.token();
+    wanted.host = "studio";
+    wanted.url = sync::SecretValue("https://claude.com/cai/oauth/authorize?client_id=test"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=fakeStHostXq7wP2");
+    int pages = 0;
+    w.host.signIn.openUrl = [&](const std::string& url) { CHECK(url == wanted.url.bytes()); ++pages; };
+    w.host.signIn.local = "studio";
+    w.link.state.sessions.setOffers({other, wanted});
+    w.link.changed = true;
+    w.host.pollLink();
+    w.host.signIn.step();
+    CHECK(pages == 1);
+    const auto actions = w.link.sent.size();
+    w.view.accountAction("sign_in:home");
+    CHECK(pages == 2 && w.link.sent.size() == actions);
+    w.host.signIn.step();
+    CHECK(pages == 2);
     // An older server advertises friends without choices; no relative command is sent.
     w.link.state.sessions.setFriends({{"Ada"}, {"Bo"}});
     w.link.changed = true;
     w.host.pollLink();
     w.view.accountCommand("next");
-    CHECK(w.link.sent.size() == 3 && w.view.accountCaption().empty());
+    CHECK(w.link.sent.size() == actions && w.view.accountCaption().empty());
 }
 
 void accountPickerRechecksTheServerRoster() {

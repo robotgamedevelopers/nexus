@@ -142,6 +142,9 @@ class Turn:
         self.args.resume = None
         error("session-not-found", "The harness could not find the saved conversation.", turn=self.number)
 
+    def child_agents(self, count):
+        emit("child-agents", count=count)
+
     def delta(self, value):
         if not isinstance(value, str):
             raise Failure("The harness returned non-text output.")
@@ -175,6 +178,8 @@ class Turn:
             options = {}
             if self.harness == "codex":
                 options = {"keep_out": self.keep_out, "limited": bool(self.limit)}
+                if getattr(self, "write_dir", []):
+                    options["write_dirs"] = self.write_dir
             try:
                 command = await asyncio.to_thread(
                     self.provider.chat_command, self.binary, home, self.cwd, **options
@@ -339,6 +344,7 @@ def main():
     parser.add_argument("--account", required=True)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--limit", choices=["cwd"])
+    parser.add_argument("--write-dir", action="append", default=[])
     parser.add_argument("--keep-out", action="append", default=[])
     parser.add_argument("--resume")
     parser.add_argument("--model")
@@ -349,6 +355,8 @@ def main():
         args.provider = provider
         if args.limit and not supports_limit:
             raise Failure("This harness cannot enforce the requested workspace limit.", "other")
+        if args.write_dir and args.harness != "codex":
+            raise Failure("This conversation-only harness has no workspace file tools for additional directories.", "other")
         if args.keep_out and not args.limit:
             raise ValueError("Additional kept-out directories require a workspace limit.")
         for excluded in args.keep_out:

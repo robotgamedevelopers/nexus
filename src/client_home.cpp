@@ -148,16 +148,17 @@ ClientConfig readClientConfig(const std::string& dir) {
         none.path = path;
         return none;
     }
-    PrByteView bytes{};
-    if (!prFileMap(pr(path), &bytes)) {
+    PrBlob* blob = prFileOpen(pr(path));
+    if (!blob) {
         ClientConfig none;
         none.path = path;
         none.problems.push_back(path + " cannot be read, so its settings are not used; make it readable by you, or "
             "remove it");
         return none;
     }
+    const auto bytes = prBlobBytes(blob);
     const std::string text(reinterpret_cast<const char*>(bytes.data), bytes.size);
-    prFileUnmap(&bytes);
+    prBlobRelease(blob);
     return clientConfigFrom(text, path);
 }
 

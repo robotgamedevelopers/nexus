@@ -45,6 +45,7 @@ EntryKind kindIn(wire::EntryKind k) {
 wire::Activity activityOut(Activity a) {
     switch (a) {
         case Activity::Idle: return wire::Activity::Idle;
+        case Activity::Working: return wire::Activity::Working;
         case Activity::Busy: return wire::Activity::Busy;
         case Activity::Down: return wire::Activity::Down;
     }
@@ -56,6 +57,7 @@ wire::Activity activityOut(Activity a) {
 Activity activityIn(wire::Activity a) {
     switch (a) {
         case wire::Activity::Idle: return Activity::Idle;
+        case wire::Activity::Working: return Activity::Working;
         case wire::Activity::Down: return Activity::Down;
         default: return Activity::Busy;
     }
@@ -122,6 +124,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
         x->info.auto_account = s.info.autoAccount;
         x->activity = activityOut(s.activity);
+        x->active_agents = s.activeAgents;
         x->first = s.first;
         x->keep_from = s.keepFrom;
         for (const EntryChange& e : s.entries) {
@@ -233,6 +236,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.limitModel = textOf(x.info.limit_model);
             s.info.autoAccount = x.info.auto_account;
             s.activity = activityIn(x.activity);
+            s.activeAgents = x.active_agents;
             s.first = x.first;
             s.keepFrom = x.keep_from;
             s.entries.reserve(static_cast<std::size_t>(x.entries.size()));

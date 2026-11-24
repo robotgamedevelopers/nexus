@@ -88,6 +88,7 @@ struct Harness {
     // As the app's frame: each terminal's foreground process is read at the frame's start (main.cpp beginFrame).
     void frame() {
         terminals->observe(time);
+        terminals->deliver(ui);
         beginWindowFrame(view, kit, fonts);
         time += 1.0 / 60;
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 60, .extent = PrVec2{1000, 780}, .maxRounds = 8,
@@ -100,7 +101,9 @@ struct Harness {
 
     void push(PrAppEvent e) {
         e.time = time;
-        prUiPushEvent(ui, kPrUiViewportMain, &e);
+        const auto& active = model.tab(model.active());
+        if (active.kind != TabKind::Terminal || !terminals->hold(active.id, e))
+            prUiPushEvent(ui, kPrUiViewportMain, &e);
     }
 
     void key(PrAppKey k, PrAppKeyCode code, PrAppModifierFlags modifiers = 0) {
@@ -188,7 +191,9 @@ void aTerminalComesBackInItsDirectory() {
         CHECK(h.terminals->openIn(id, dir.string()));
         CHECK(h.until([&] { return h.terminals->text(id).find('$') != std::string::npos; }));
         h.typeLine("cd sub && echo moved-$((40+2))");
-        CHECK(h.until([&] { return h.terminals->text(id).find("moved-42") != std::string::npos; }));
+        const bool moved = h.until([&] { return h.terminals->text(id).find("moved-42") != std::string::npos; });
+        if (!moved) std::fprintf(stderr, "  screen after cd: %s\n", h.terminals->text(id).c_str());
+        CHECK(moved);
         const std::string sub = std::filesystem::canonical(dir / "sub").string();
         const bool there = h.until([&] {
             const std::string now = h.terminals->workingDirectory(id);

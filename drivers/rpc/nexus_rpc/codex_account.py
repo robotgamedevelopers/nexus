@@ -1,5 +1,6 @@
 """Codex's ChatGPT device login and named permission profile for Nexus turns."""
 
+import base64
 import errno
 import json
 import os
@@ -23,7 +24,7 @@ def login_command(binary, home):
     return [binary, "login", "--device-auth", *_AUTH]
 
 
-def chat_command(binary, home, cwd, *, keep_out=(), limited=False):
+def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=()):
     if not SUPPORTS_LIMIT:
         raise ValueError("The Codex permission profile requires a verified macOS sandbox.")
     workspace = Path(cwd).resolve(strict=True)
@@ -56,6 +57,13 @@ def chat_command(binary, home, cwd, *, keep_out=(), limited=False):
     if any(any(c in str(path) for c in "*?[]") for path in resolved):
         raise ValueError("Codex cannot represent wildcard characters in a private directory name.")
     access = {":minimal" if limited else ":root": "read", ":workspace_roots": "write"}
+    for item in write_dirs:
+        path = Path(item).resolve(strict=True)
+        if not Path(item).is_absolute() or not path.is_dir() or any(c in str(path) for c in "*?[]") or any(
+            path.is_relative_to(p) or p.is_relative_to(path) for p in resolved
+        ):
+            raise ValueError("Choose a writable directory separate from the protected directories.")
+        access[str(path)] = "write"
     access.update({str(path): "none" for path in sorted(resolved)})
     filesystem = ", ".join(
         f"{json.dumps(path, ensure_ascii=False)}={json.dumps(mode)}" for path, mode in access.items()
@@ -120,7 +128,24 @@ def _file_stamp(info):
     return f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}"
 
 
-def _grant(directory, *, sync=False):
+def personal_email(account):
+    server = Path.home() / ".nexus/server"
+    profile = server / "profile/config.json"
+    if not profile.exists() or account not in json.loads(profile.read_text()).get("personal_chatgpt_accounts", []):
+        return None
+    rows = json.loads((server / "nexus-config/accounts.json").read_text())["accounts"]
+    for row in rows:
+        if row.get("provider") == "codex" and row.get("name") == account and row.get("email"):
+            return row["email"]
+    raise ValueError("Configure an email for this personal ChatGPT account.")
+
+
+def matches_personal(expected, email, plan):
+    return (isinstance(email, str) and email.casefold() == expected.casefold()
+            and isinstance(plan, str) and plan.lower() in {"go", "plus", "pro", "prolite"})
+
+
+def _grant(directory, *, sync=False, expected_email=None):
     fd = os.open("auth.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     try:
         info = os.fstat(fd)
@@ -152,6 +177,19 @@ def _grant(directory, *, sync=False):
             or _file_stamp(os.fstat(fd)) != _file_stamp(info)
         ):
             raise ValueError("Codex did not finish writing the ChatGPT login.")
+        if expected_email:
+            # This is the private grant produced by the device login. The running harness
+            # independently reports its account and workspace before any turn is submitted.
+            try:
+                payload = tokens["id_token"].split(".")[1]
+                claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+                workspace = claims["https://api.openai.com/auth"]
+                if (not matches_personal(expected_email, claims.get("email"), workspace.get("chatgpt_plan_type"))
+                        or not workspace.get("chatgpt_account_id")
+                        or workspace["chatgpt_account_id"] != tokens.get("account_id")):
+                    raise ValueError()
+            except (ValueError, IndexError, AttributeError, KeyError, TypeError):
+                raise ValueError("Choose the Personal workspace for the configured ChatGPT email.") from None
         if sync:
             os.fsync(fd)
         return _file_stamp(info)
@@ -190,7 +228,7 @@ def staged_login(home, *, resume=None):
             nonlocal expected
             with _state_directory(staging) as (src, _), _state_directory(home, create=True) as (dst, parent):
                 try:
-                    staged = _grant(src, sync=True)
+                    staged = _grant(src, sync=True, expected_email=personal_email(home.name))
                 except FileNotFoundError:
                     # A previous attempt may have renamed the file before a directory sync or receipt write failed.
                     if expected is None:

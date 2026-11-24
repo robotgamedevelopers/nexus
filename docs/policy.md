@@ -229,13 +229,32 @@ appearance by tab. The shipped profile uses these defaults:
 }
 ```
 
-`fill` and `ink` set the conversation bubble background and text. Set `person_ink` to give sent and queued
+`fill` colors the sender’s bubble and `ink` colors the reply text. The conversation panel uses the tab strip fill and the prompt width. Set `reply_width` to a percentage from 1 to 100 (default two thirds). Set `conversation_panel` or `markdown` to false to disable the panel or Markdown rendering. Set `person_ink` to give sent and queued
 messages their own text color. Omitting it uses `ink` for both speakers. `notice_ink` sets the notice color and
 `status_ink` sets the status text color, including the words around the address in an account-switch notice.
 `switch_email_ink` sets the address color in that notice. Colors accept six hexadecimal digits after `#`. The corner radius
 accepts 0–64 logical points before keyboard zoom. All fields are optional. Set `show_notices` or `show_tools`
 to `false` to hide those transcript entries in the client. Their history stays available when you enable them
-again. Apply the client policy to see the changes in a running window.
+again. In `transcript_style`, `"tool_prompts": {"Bash": "$ "}` displays Bash activity as a selectable monospace command. Each key matches the tool name exactly. An empty map preserves the original tool labels. Apply the client policy to see the changes in a running window.
+
+The Starlark `window` result accepts these color settings, also available in the client JSON profile:
+
+| Setting | Surface |
+| --- | --- |
+| `transcript_style.ink` | AI reply text |
+| `transcript_style.person_ink` | Sent and queued message text |
+| `transcript_style.fill` | Sent message bubbles and tool blocks |
+| `transcript_style.panel_fill` | Output panel (defaults to the tab strip fill) |
+| `transcript_style.command_ink` | AI tool activity, including shell commands |
+| `transcript_style.link_ink` | HTTP and HTTPS links (defaults to the selected tab fill) |
+| `transcript_style.code_fill` | Rounded background behind inline code |
+| `transcript_style.code_ink` | Inline code text (defaults to the speaker’s color) |
+| `prompt_style.fill` | Prompt input background |
+| `prompt_style.ink` | Typed draft text |
+
+Inline code uses the monospace font. `code_size_offset` adjusts its size in logical points relative to the monospace base size (−8 to 32, default +2). `code_padding` sets horizontal padding in logical points (default 6), `code_radius` sets the corner radius (default 7), and `code_background` toggles the fill. These fields belong to `transcript_style` and scale with keyboard zoom.
+
+Markdown list items share a marker column. Set `transcript_style.list_gap_em` to change the space between the marker and the text at every zoom level (0–4, default 0.4).
 
 When the selected account needs sign-in, the shipped client policy shows a centered sign-in card and the composer.
 A client profile can customize this card by setting `message_card` in
@@ -395,3 +414,54 @@ models resets the effort to the new model's default. Clearing retains the friend
 and model settings. Compaction releases the provider session and starts the next turn with
 Nexus's bounded transcript handoff. Both context operations require an idle conversation.
 When signed out, the stock client clears its own visible messages on `/clear`.
+
+### Conversation commands and the activity indicator
+
+The server handles `/info` and `/model [model [effort]]` in the conversation Starlark module.
+A combined selection returns one `set_model` operation with `text` and an optional `effort`.
+Both settings share a durable commit. Submitting bare `/model` or `/effort` in the window
+opens the centered selector. Arrow keys move the highlight, Enter applies it and Escape restores
+the prompt. The catalog's `order` array preserves harness discovery order across JSON and Starlark.
+The first listed model is the startup choice when the session has no explicit model. Model identifiers remain the harness's own identifiers.
+When the harness supplies a concrete target for a rolling alias, the model list and session info show it.
+The prompt's Tab binding completes effort against the model typed in the draft.
+The `/info` notice includes the selected friend, optional configured pronouns, account email and sign-in state, model,
+effort, home repository and working directories. The friend-driver wrapper publishes public launch
+metadata from nova-config and its launch arguments. An unavailable field is identified in the notice.
+
+The prompt insertion point is a rounded orange segment. Set `prompt_style.caret_ink` for its color and
+`prompt_style.caret_peak` (1–8, default 3) for its HDR peak. Its width is `prompt_style.caret_aspect` times its height (default 0.618034). Set `caret_height` (1–28 points before zoom), `caret_radius` (0–32 points) and `caret_seconds` (0.4–10 seconds per pulse) in the same object.
+The cursor rises for two thirds of the moving part of each cycle, holds at both maximum and minimum brightness for `caret_hold` seconds each (default 0.1, capped at 45% of the cycle per hold), and fades over `caret_fall_ratio` times the rise duration (default 0.5).
+The scanner reads the same height, aspect and corner radius. Both start at the prompt’s typing inset.
+Return these settings in `prompt_style` from the Starlark `window` event, or set them in the client profile and apply it. Reduced motion keeps the cursor steady.
+
+The activity strip uses the tab selection color unless `transcript_style.scanner_ink` supplies another.
+Each segment uses the same dimensions as the prompt cursor. Each active agent gets one lit cell, including the friend during its own turn. Long strips show
+the remaining count numerically. `scanner_gap` sets the space between cells in points before zoom. `scanner_offset` shifts the strip horizontally from the prompt’s starting column (default 0).
+`highlight_seconds` sets the duration of a complete selection pulse (default 4 seconds). `flash_seconds` sets the selection flash’s exponential decay time (default 0.22 seconds). Idle settles to one cell in the prompt fill. Set `scanner_seconds`
+(0.4–10, default 1.5) for a full sweep, `scanner_peak` (1–8, default 3) for peak linear light,
+and `highlight_energy` (0–4, shipped setting 2.5) for the selection flash and pulse on tabs and in selectors. Reduced motion
+disables the sweep and collapse. Both the overlay and opaque windows request HDR. Prax preserves transparency and falls back to SDR on displays without HDR.
+
+### Editing motion in the client profile
+
+The Starlark window policy builds the cursor and scanner curves. Set `prompt_style.caret_bottom_hold` independently to change how long the cursor stays dim. It inherits `caret_hold` when omitted. For a different animation, supply `prompt_style.caret_curve` or `transcript_style.scanner_curve` directly. Each is a list of 2–64 `[time, value]` pairs between 0 and 1. Start at time 0 and end at 1, in increasing order. Equal successive values create a hold. The renderer eases between values. For the cursor the value controls brightness, and for the scanner it controls the position along the row.
+
+```python
+# Pause at both ends of the scanner sweep.
+style["scanner_curve"] = [[0, 0], [0.1, 0], [0.5, 1], [0.6, 1], [1, 0]]
+```
+
+The scanner takes `scanner_pause` seconds before collapsing, uses `scanner_ease` as its expansion and collapse time constant, and fades its last light over `scanner_fade` seconds. Apply the client profile to update a running window.
+
+Set `prompt_style.caret_gap` to the trailing space in points between typed text and the prompt cursor. The keyboard profile uses 2 points.
+
+The window policy can return a `sounds` object with `tab` and `confirm` cues. Each has `from_hz`, `to_hz`, `duration_ms`, and `gain` (0–1). Omit a cue or set its gain to zero to silence it.
+
+The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly typed and streamed text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
+
+The client profile's `clear_draft_keys` lists the keys that empty the active friend's editor. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
+
+Set `hold_on_enter` for client-side message staging. Enter holds the current draft in memory for that tab. Empty Enter releases the batch in order. Command-Enter adds the current draft last and releases the batch. Messages reach the server only on release. Slash commands execute directly.
+
+The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, and `ready` use the same chirp fields. The client remembers /quiet across launches. /quiet off and /loud restore sound.

@@ -223,6 +223,16 @@ void FrameHost::pollLink() {
         return;
     // The friends first, so that a friend's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
+        for (const auto& [name, claim] : pendingClaims_) {
+            const auto needed = [&](const sync::Sessions& state) -> std::optional<bool> {
+                for (const auto& f : state.friends())
+                    for (const auto& choice : f.accounts)
+                        if (choice.name == name) return choice.needsSignIn;
+                return {};
+            };
+            if (needed(accountState_) == true && needed(s.sessions) == false && view->playChirp)
+                view->playChirp(view->windowApp.surface.readyChirp);
+        }
         accountState_ = s.sessions;
         std::erase_if(accountSelections_, [&](const auto& pending) {
             return !s.sessions.nextAction() || !s.sessions.find(pending.first) || s.sessions.nextAction() > pending.second;
@@ -367,7 +377,35 @@ bool FrameHost::activateSignIn() {
         view->problem = "Open Nexus on the server machine to sign in to " + choice->name + ". Your draft is kept.";
         return true;
     }
-    if ((offer && !offer->opener.empty()) || pendingClaims_.contains(choice->name)) return true;
+    if (offer && !offer->opener.empty()) {
+        if (offer->opener != signIn.opener.token()) {
+            view->problem = "This sign-in is open in another nexus window.";
+            return true;
+        }
+        if (offer->url.empty() || !signIn.opener.opened().contains(offer->id)) {
+            view->problem = "Opening the sign-in page…";
+            return true;
+        }
+        sync::SignInTarget target;
+        if (!sync::parseSignInUrl(offer->provider, offer->url.bytes(), &target)) {
+            view->problem = "The sign-in address failed validation.";
+            return true;
+        }
+        if (!onThisMachine(*offer, &signIn) && signIn.opener.gate() != offer->id) {
+            view->problem = "The sign-in callback is no longer waiting. Retry when this attempt ends.";
+            return true;
+        }
+        if (signIn.openUrl) {
+            signIn.openUrl(offer->url.bytes());
+            view->problem.clear();
+        }
+        return true;
+    }
+    if (pendingClaims_.contains(choice->name)) {
+        view->problem = "Waiting for the server to open sign-in…";
+        return true;
+    }
+    view->problem.clear();
     sync::Action action;
     action.kind = sync::ActionKind::SignInClaim;
     action.account = choice->name;
@@ -501,6 +539,7 @@ void FrameHost::wire() {
             picker->highlighted = static_cast<std::size_t>(option - picker->options.begin());
             view->accountPicker = std::move(picker);
         } else if (op == "select" || op == "sign_in") {
+            if (view->playChirp) view->playChirp(view->windowApp.surface.confirmChirp);
             view->accountPicker.reset();
             if (target != picker->current) {
                 setAccount(picker->session, target);
@@ -524,10 +563,11 @@ void FrameHost::wire() {
     };
     view->activateSignIn = [this]() { return activateSignIn(); };
     view->clearOpen = [this](std::size_t tab) { mirror.clearOpen(tab); };
-    view->sessionCapabilities = [this](std::string& modelName, std::string& catalog) {
+    view->sessionCapabilities = [this](std::string& modelName, std::string& effort, std::string& catalog) {
         if (!model->tab_count()) return;
         if (const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id))) {
             modelName = session->info.model;
+            effort = session->info.effort;
             catalog = session->info.catalog;
         }
     };
@@ -559,6 +599,7 @@ void FrameHost::wire() {
         const sync::SessionEntry* open = mirror.open(id);
         return open != nullptr ? &open->text : nullptr;
     };
+    view->activeAgents = [this](std::size_t id) { return mirror.activeAgents(id); };
     view->cursor = [this](std::size_t id) { return sync::cursorOf(phase, heardMsAgo, mirror, id); };
 }
 
@@ -735,6 +776,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
+    if (!view->accountPicker && view->selection.event(e, view->copy, view->openLink)) return true;
     if (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp) {
         for (const auto& binding : view->windowApp.shortcuts) {
             if (binding.key == e.keyboard.key && binding.modifiers == (e.modifiers & ~PrAppModifierFlag_CapsLock))

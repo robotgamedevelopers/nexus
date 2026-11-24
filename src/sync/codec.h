@@ -46,6 +46,7 @@ struct SessionChange {
     std::vector<EntryChange> entries;
     bool queueChanged = false;
     std::vector<std::string> queue;
+    std::uint32_t activeAgents = 0;
 };
 
 // A sessions diff: every session of the state, in id order, then the open secret requests, then the server's friends

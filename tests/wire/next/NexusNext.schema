@@ -38,6 +38,7 @@ enum Activity
     Idle,
     Busy,
     Down,
+    Working,
     Waiting
 }
 
@@ -87,6 +88,7 @@ table SessionChange
     entries       []EntryChange
     queue_changed bool
     queue         []string
+    active_agents uint32
 }
 
 // An open secret request as every window that can take one receives it (sync/secrets.h): its id, its account, the file

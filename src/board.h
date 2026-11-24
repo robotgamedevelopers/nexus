@@ -65,6 +65,7 @@ public:
         PrApp* app = nullptr;                   // woken when the page has work, and when the address is found; may be null
         PrAppWindow* window = nullptr;          // whose clipboard the page's text controls use; may be null
         // The board's address. Empty: `find` on a thread of its own (findSprintBoard if unset).
+        PrVec2 initialExtent{};
         std::string url;
         std::function<SprintBoardAddress()> find;
         // A test's network: every request goes to `answer`, over Prax's null network, whose loop each frame runs. No
@@ -148,7 +149,6 @@ private:
         std::vector<std::string> opens;         // links to open in the system's browser
     };
 
-    void takeAddress();
     bool showPage(PrLayoutNode parent, PrVec2 extent, std::string* problem);
     void post(Message message);
     void openLink(const std::string& url);
@@ -184,10 +184,6 @@ private:
     PrApp* app_;
 
     // The window's thread's.
-    std::future<SprintBoardAddress> finding_;
-    std::string url_;                       // the address, once found (found on a thread, or given)
-    double findAgainAt_ = 0;
-    std::string problem_;                   // why the address lookup failed
     std::string said_;                      // the line show() gave last, or empty if it showed the page
     PrDrawList* showing_ = nullptr;         // the list the pane embeds, one reference held here
     double windowTime_ = 0;
@@ -209,7 +205,7 @@ private:
     double time_ = 0;                       // the window's last frame
     PrAppDisplay display_ = prAppDisplayDefault();
     bool onScreen_ = false;
-    std::string address_;                   // url_, for the page's thread
+    std::string lookupError_;               // protected by mutex_
     PrVec2 extent_{};                       // the pane's, px
     float zoom_ = 1;
     PrDomAgent* waiting_ = nullptr;         // the agent the page's thread waits on, to wake it
@@ -219,8 +215,8 @@ private:
     PrFontSet* fonts_ = nullptr;
     PrTextShaper* shaper_ = nullptr;
     PrTextFont* font_ = nullptr;
-    PrCompressCodec* compress_ = nullptr;
-    PrImageCodec* images_ = nullptr;
+    PrCompressCodecSet* compress_ = nullptr;
+    PrImageCodecSet* images_ = nullptr;
     PrNet* net_ = nullptr;
     bool nullNet_ = false;
     PrTls* tls_ = nullptr;

@@ -77,6 +77,10 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     prJsonWriterBool(w.get(), state.signedOut);
     field("effort", state.effort);
     field("harness", state.harness);
+    if (!client) {
+        field("account_email", state.accountEmail);
+        field("login_state", state.loginState);
+    }
     prJsonWriterKey(w.get(), pr("queued"));
     prJsonWriterNumber(w.get(), static_cast<double>(state.queued));
     prJsonWriterKey(w.get(), pr("busy"));
@@ -87,6 +91,10 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
     if (!client && !state.catalog.empty()) {
         context.pop_back();
         context += ",\"catalog\":" + state.catalog + "}";
+    }
+    if (!client && !state.friendInfo.empty()) {
+        context.pop_back();
+        context += ",\"identity\":" + state.friendInfo + "}";
     }
     const auto answer = host.decide(path, client ? "app.prompt_key" : "app.message", context, why);
     if (!why.empty())
@@ -120,7 +128,15 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
             if (text.data) plan.text.emplace(text.data, text.size);
             continue;
         }
-        if (prJsonKind(d, item) != PrJsonKind_Object || prJsonCount(d, item) != (text.data ? 2u : 1u)) {
+        const auto effort = prJsonMember(d, item, pr("effort"));
+        if (!client && name == "set_model" && effort != kPrJsonMissing) {
+            const auto value = prJsonString(d, effort);
+            if (!text.size || !value.size || prJsonCount(d, item) != 3) {
+                why = "set_model takes a model identifier and an optional effort identifier";
+                return false;
+            }
+            plan.effort.emplace(value.data, value.size);
+        } else if (prJsonKind(d, item) != PrJsonKind_Object || prJsonCount(d, item) != (text.data ? 2u : 1u)) {
             why = "a command takes an op string and an optional text string";
             return false;
         }
@@ -138,6 +154,10 @@ bool messagePlan(Host& host, const std::string& path, bool client, const char* i
         } else if (!client && text.data && (name == "set_model" || name == "set_effort")) {
             plan.delivery = name == "set_model" ? Delivery::SetModel : Delivery::SetEffort;
             plan.text.emplace(text.data, text.size);
+        } else if (client && !text.data && (name == "quiet" || name == "loud")) {
+            plan.delivery = name == "quiet" ? Delivery::Quiet : Delivery::Loud;
+        } else if (client && !text.data && (name == "hold" || name == "release")) {
+            plan.delivery = name == "hold" ? Delivery::Hold : Delivery::Release;
         } else if (name == "send" || name == "queue") {
             plan.delivery = name == "send" ? Delivery::Send : Delivery::Queue;
             if (text.data)

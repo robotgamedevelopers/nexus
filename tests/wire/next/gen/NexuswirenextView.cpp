@@ -44,7 +44,8 @@ const UnitViewInfo * UnitView()
         { 1, "Idle", 0xc92905d14a9421f3ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 2, "Busy", 0x2a02d2a7e41d6700ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
         { 3, "Down", 0x032c13736048bf35ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
-        { 4, "Waiting", 0x123b7254b44dd148ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 4, "Working", 0x2e0c68be1fa79ae8ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
+        { 5, "Waiting", 0x123b7254b44dd148ull, NULL, NULL, NULL, TableDocNone, 0, NULL },
     };
     static const ViewVariant EntryKind_view_variants[] = {
         { 0, "None", 0, NULL, NULL, NULL, TableDocNone, 0, NULL },
@@ -69,7 +70,7 @@ const UnitViewInfo * UnitView()
     };
     static const ViewVocabulary enums[] = {
         { "ActionKind", "NexusNext.schema", 22, 8, 23, ActionKind_view_variants, TableDocNone, 0, NULL },
-        { "Activity", "NexusNext.schema", 4, 8, 5, Activity_view_variants, TableDocNone, 0, NULL },
+        { "Activity", "NexusNext.schema", 5, 8, 6, Activity_view_variants, TableDocNone, 0, NULL },
         { "EntryKind", "NexusNext.schema", 5, 8, 6, EntryKind_view_variants, TableDocNone, 0, NULL },
     };
     static const ViewVocabulary unions[] = {

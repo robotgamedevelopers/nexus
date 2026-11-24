@@ -579,7 +579,21 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
 }
 
 // A stop of an open turn changes nothing in the store: its stop line is written once the hub has counted the action.
-// A stop of a start cancels the turn about to begin: its prompt leaves the waiting prompts, committed with a notice.
+std::string Drivers::friendInfo(const std::string& name) const {
+    if (name.empty() || name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos)
+        return {};
+    const auto file = std::filesystem::path(options_.table).parent_path() / "friend-info" / (name + ".json");
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return {};
+    std::string data(16385, '\0');
+    input.read(data.data(), static_cast<std::streamsize>(data.size()));
+    data.resize(static_cast<size_t>(input.gcount()));
+    std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
+    if (data.size() > 16384 || !prJsonParse(doc.get(), {data.data(), data.size()}, nullptr) ||
+        prJsonKind(doc.get(), 0) != PrJsonKind_Object) return {};
+    return data;
+}
+
 std::string Drivers::catalog(const sync::SessionInfo& info) const {
     if (info.harness.empty() || info.harness.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_-") != std::string::npos)
         return {};
@@ -861,7 +875,7 @@ std::vector<sync::SessionChange> Drivers::changes(const Output& out, const Super
 // cursor): in memory only, never in the store. True when either changed.
 bool Drivers::showOpen(sync::SessionId id, const Slot& t) {
     const bool open = hub_->setOpen(id, t.sup.gathered());
-    const bool activity = hub_->setActivity(id, t.sup.activity());
+    const bool activity = hub_->setActivity(id, t.sup.activity(), t.sup.activeAgents());
     return open || activity;
 }
 

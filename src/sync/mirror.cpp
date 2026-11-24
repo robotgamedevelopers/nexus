@@ -42,6 +42,11 @@ const SessionEntry* Mirror::open(std::size_t id) const {
     return it == seen_.end() ? nullptr : it->second.open.get();
 }
 
+std::uint32_t Mirror::activeAgents(std::size_t id) const {
+    auto it = seen_.find(id);
+    return it == seen_.end() || !it->second.held ? 0 : it->second.agents;
+}
+
 const Activity* Mirror::activity(std::size_t id) const {
     auto it = seen_.find(id);
     return it == seen_.end() || !it->second.held ? nullptr : &it->second.activity;
@@ -92,9 +97,10 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             seen.epoch = view->info.contextEpoch;
             changed = true;
         }
-        if (!seen.held || seen.activity != view->activity) {
+        if (!seen.held || seen.activity != view->activity || seen.agents != view->activeAgents) {
             seen.held = true;
             seen.activity = view->activity;
+            seen.agents = view->activeAgents;
             changed = true;
         }
         if (view->first > seen.next) {

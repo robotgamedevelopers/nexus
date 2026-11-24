@@ -74,7 +74,7 @@ std::vector<DriverMessage> driverMessages() {
         Credential{Billing::None, ""},
         Session{"5f0c2a8e-1d34-4b7e-9a51-3c6f2b0d9e77"},
         Session{std::string(256, '~')},
-        TextEnd{3},
+        ChildAgents{3}, ChildAgents{0}, TextEnd{3},
         Tool{3, "Bash", "ls -la src"},
         Tool{3, "Read", ""},
         Tool{3, "Edit", "caf\xc3\xa9 \xe2\x9c\x93"},

@@ -171,6 +171,7 @@ public:
         fresh.summary = compact;
         return {{nullptr, {}, fresh}};
     }
+    virtual std::string friendInfo(const std::string&) const { return {}; }
     virtual std::string catalog(const SessionInfo&) const { return {}; }
     virtual std::vector<SessionChange> stop(SessionId id) = 0;
     // Whether the store took the step of the send, queue or stop just given. Only once it did may the responder act
@@ -264,7 +265,7 @@ public:
 
     // What the friend of session `id` is doing now (sync/sessions.h Activity), as its Responder works it out: in memory
     // only, Idle until set. A session the store does not hold has none (false). Returns true when the state changed.
-    bool setActivity(SessionId id, Activity activity);
+    bool setActivity(SessionId id, Activity activity, std::uint32_t agents = 0);
 
     // The state every window receives: the sessions, the open secret requests and, once the hub holds a registry
     // (useAccounts(), applyAccounts()), its friends in order (Sessions::friends); with no registry, none known.
@@ -437,7 +438,7 @@ private:
     bool secretAction(const Action& action, std::string* why, const std::string& client);
     bool make(const Action& action, const SessionInfo& info, std::string* why, const std::string& client);
     bool applyMessage(const Action& input, const StoredSession& session, std::string* why, const std::string& client);
-    bool set(const Action& action, std::string* why, const std::string& client, bool announce = false);
+    bool set(const Action& action, std::string* why, const std::string& client, bool announce = false, const std::optional<std::string>& effort = {});
     bool accountAction(const Action& action, std::string* why, const std::string& client);
     bool count(const Action& action, std::string* why, const std::string& client);
     bool counted(const Action& action, const std::string& refused, std::string* why, const std::string& client);
@@ -463,7 +464,7 @@ private:
     Limits limits_;
     Responder* responder_;
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
-    std::map<SessionId, Activity> activity_; // each session's activity, if not Idle
+    std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;

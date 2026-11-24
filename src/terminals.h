@@ -126,7 +126,6 @@ private:
     struct Started {
         std::size_t id;
         PrTerminal* terminal;
-        int shell;
         float scale;
         std::string dir;
         std::string problem;

@@ -29,6 +29,9 @@ if sys.argv[1:3] == ["auth", "login"]:
         result = subprocess.run([os.environ["BROWSER"], "https://example.test/synthetic-login"], check=False)
         assert result.returncode == 0
         if sys.platform == "darwin":
+            for verb, code in [("find-generic-password",44), ("delete-generic-password",44),
+                               ("add-generic-password",1), ("-i",1)]:
+                assert subprocess.run(["security",verb]).returncode == code
             try:
                 (cfg.parents[3] / "other" / "sentinel").read_bytes()
             except PermissionError:

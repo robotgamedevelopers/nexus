@@ -72,6 +72,11 @@ class PersonalPolicy(unittest.TestCase):
             self.assertIn("open the home", prompt)
             self.assertIn('"harness": "codex"', prompt)
             self.assertEqual(flags[flags.index("--model") + 1], "selected")
+        self.assertNotIn("--write-dir", flags)
+        startup["writable_dirs"] = ["/shared/cache", "/shared/build"]
+        publish()
+        flags, _ = json.loads(subprocess.check_output(command, text=True))
+        self.assertEqual([flags[i+1] for i, flag in enumerate(flags) if flag == "--write-dir"], startup["writable_dirs"])
         different = subprocess.run([*self.command, "identity", str(self.profile), "review", "--harness", "claude"],
                                    capture_output=True, text=True)
         self.assertNotEqual(different.returncode, 0)

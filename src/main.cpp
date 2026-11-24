@@ -1,3 +1,9 @@
+#include "pr/app_select.h"
+#include "pr/app_device.h"
+#include "pr/gpu_select.h"
+#include "pr/draw_select.h"
+#include "pr/compress_select.h"
+#include "pr/image_select.h"
 // nexus: one person and several AIs ("friends") in one window. Layer 1 is the window only: tabs, transcripts and the
 // prompt, with nothing connected to any AI yet.
 //
@@ -93,6 +99,7 @@
 #include "terminals.h"
 #include "url_opener.h"
 #include "view.h"
+#include "ui_audio.h"
 
 #if NEXUS_LINK
 #include "link/client_port.h"
@@ -118,6 +125,7 @@ struct FrameStats {
 struct App {
     Model* model = nullptr;
     View view;
+    UiAudio audio;
     Look look;
     PrFontSet* fonts = nullptr;
     bool overlay = true;            // the overlay window; --windowed gives a normal window
@@ -194,13 +202,15 @@ void carryOut(App& a, OverlayAct act) {
     if (act == OverlayAct::Hide) {
         a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
+        if (prAppWindowIsVisible(window)) a.audio.play(a.view.windowApp.surface.closeChirp);
         prAppWindowSetVisible(window, false);
         return;
     }
-    PrAppSurface surface{};
+    PrSurface surface{};
     if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
+    if (!prAppWindowIsVisible(window)) a.audio.play(a.view.windowApp.surface.openChirp);
     prAppWindowFocus(window);
     prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
     // Shown: the window may claim one account's sign-in (frame_host.h LinkSignIn), and opens its page in the browser.
@@ -239,6 +249,8 @@ bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     a.window = window;
     a.opened = true;
+    const auto power = prAppPower(prStudioWindowApp(window));
+    a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
     prKitSetTheme(prStudioWindowKit(window), &theme);
     // The faces of the window's text fonts made in the Studio app's shaper now, before the first frame (font_prefetch.h):
@@ -267,6 +279,11 @@ bool open(void* context, PrStudioWindow* window) {
     board.fonts = a.fonts;
     board.app = prStudioWindowApp(window);
     board.window = prStudioWindowAppWindow(window);
+    board.initialExtent = {1000, 780};
+    PrAppDisplayInfo screen{};
+    if (a.overlay && prAppDisplays(board.app, &screen, 1))
+        board.initialExtent = {float(screen.extent.x), float(screen.extent.y)};
+    board.initialExtent.y -= a.look.tabs.height * style::textScale(a.look.textSteps) + 1;
     board.open = a.urls->handle();
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
@@ -276,6 +293,9 @@ bool open(void* context, PrStudioWindow* window) {
     a.host.board = a.board.get();
     a.host.ui = prStudioWindowUi(window);
     // Command-V in the prompt: the clipboard's text comes back through the host, which cuts it to the prompt's room.
+    a.view.copy = [&a](const std::string& text) {
+        if (a.window) prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, {text.data(),text.size()});
+    };
     a.view.paste = [&a] {
         if (a.window != nullptr) {
             prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
@@ -284,6 +304,8 @@ bool open(void* context, PrStudioWindow* window) {
     // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
     // the system cannot open is the flow's to end at its deadline, and is never printed. A window that is not an overlay
     // shows from the start, so it may claim now.
+    a.view.openLink = a.urls->handle();
+    a.view.playChirp = [&a](const Chirp& cue) { a.audio.play(cue); };
     a.host.signIn.openUrl = a.urls->handle();
     if (!a.overlay) {
         a.host.signIn.shown();
@@ -310,6 +332,7 @@ void closeWindow(void* context, PrStudioWindow*) {
     a.wakeApp = nullptr;
     a.window = nullptr;
     a.view.paste = nullptr;
+    a.view.openLink = nullptr;
     a.host.signIn.openUrl = nullptr;
     a.host.ui = nullptr;
     a.host.board = nullptr;
@@ -354,7 +377,7 @@ bool start(void* context, PrStudioApp* studio) {
     }
     // Sized to the screen now, while hidden, so that the first show (carryOut) finds the window at the size it shows at
     // and its first frame makes the swap chain once, at that size, rather than once and again after a resize.
-    PrAppSurface surface{};
+    PrSurface surface{};
     if (prAppWindowSurface(prStudioWindowAppWindow(a.window), &surface) == PrStatus_Ok) {
         coverScreen(surface);
     }
@@ -390,6 +413,11 @@ void shutdown(void* context, PrStudioApp*) {
 void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
+    if (e->kind == PrAppEventKind_PowerChanged) {
+        const auto power = prAppPower(prStudioAppApp(studio));
+        a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
+        if (a.window && overlayVisible(a)) prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+    }
     if (e->kind == PrAppEventKind_DisplaysChanged && a.window != nullptr)
         setBudget(a, prStudioWindowApp(a.window));
     if (!a.overlay)
@@ -424,7 +452,10 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
 // While the sprint tab shows, its page takes the events it is routed (sprint.h routeBoardEvent); the rest go to the
 // window's tree.
 bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
-    return appOf(context).host.event(*e);
+    auto& a = appOf(context);
+    if (e->kind == PrAppEventKind_KeyDown || e->kind == PrAppEventKind_Text ||
+            e->kind == PrAppEventKind_PointerDown) a.view.lastInput = e->time;
+    return a.host.event(*e);
 }
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
@@ -493,20 +524,20 @@ bool writePng(std::vector<uint8_t>& bytes, PrUVec2 size, const char* path) {
                 bytes[i + c] = uint8_t(std::min(255, bytes[i + c] * 255 / alpha));
         }
     }
-    PrCompressCodec* compress = prCompressCodecCreate(PrCompressCodecBackend_Default);
-    PrImageCodec* codec = compress != nullptr ? prImageCodecCreate(PrImageCodecBackend_Default, compress) : nullptr;
+    PrCompressCodecSet* compress = prCompressCodecSetCreateDefault();
+    PrImageCodecSet* codec = compress != nullptr ? prImageCodecSetCreateDefault(compress) : nullptr;
     if (codec == nullptr) {
         std::fprintf(stderr, "nexus: no image codec in this build\n");
-        prCompressCodecDestroy(compress);
+        prCompressCodecSetDestroy(compress);
         return false;
     }
     PrPixelView view{bytes.data(), size_t(size.x) * 4, size};
     size_t encoded = 0;
-    prImageCodecEncode(codec, "image/png", view, nullptr, 0, &encoded);
+    prImageCodecSetEncode(codec, {"image/png", 9}, view, nullptr, 0, &encoded);
     std::vector<uint8_t> png(encoded);
-    PrStatus status = prImageCodecEncode(codec, "image/png", view, png.data(), png.size(), &encoded);
-    prImageCodecDestroy(codec);
-    prCompressCodecDestroy(compress);
+    PrStatus status = prImageCodecSetEncode(codec, {"image/png", 9}, view, png.data(), png.size(), &encoded);
+    prImageCodecSetDestroy(codec);
+    prCompressCodecSetDestroy(compress);
     if (status != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: encoding the PNG failed (status %d)\n", int(status));
         return false;
@@ -611,9 +642,9 @@ int screenshot(App& a, const char* path, PrVec2 extent, float ratio) {
     prLayoutSceneRelease(scene);
 
     int code = 1;
-    PrGpuDevice* device = nullptr;
+    PrGpuDevice* device = prGpuDeviceCreate(PrGpuBackend_Default, nullptr);
     PrDrawRenderer* renderer = nullptr;
-    if (prGpuDeviceCreate(PrGpuBackend_Default, nullptr, &device) != PrStatus_Ok ||
+    if (!device ||
             prDrawRendererCreate(PrDrawRendererBackend_Default, device, nullptr, &renderer) != PrStatus_Ok) {
         std::fprintf(stderr, "nexus: no GPU device or renderer for the screenshot\n");
     } else {
@@ -905,6 +936,16 @@ int main(int argc, char** argv) {
     a.model = &model;
     a.view.model = &model;
     a.view.look = &a.look;
+    if (live && !home.empty()) {
+        const auto store = fileTabOrderStore(home + "/quiet.txt");
+        std::string saved, error;
+        if (store.read(&saved, &error)) a.audio.setQuiet(saved == "on\n");
+        a.view.setQuiet = [&a, store](bool quiet) {
+            a.audio.setQuiet(quiet);
+            std::string why;
+            if (!store.write(quiet ? "on\n" : "off\n", &why)) a.view.problem = why;
+        };
+    }
     a.host.model = &model;
     a.host.view = &a.view;
     if (live) {
@@ -1074,14 +1115,11 @@ int main(int argc, char** argv) {
             .extent = {1000, 780},
             .role = a.overlay ? PrAppWindowRole(PrAppWindowRole_Overlay) : PrAppWindowRole(PrAppWindowRole_Normal),
             .backdrop = a.overlay ? overlayBackdrop() : PrAppWindowBackdrop(PrAppWindowBackdrop_Opaque),
+            .transparent = a.overlay,
             .hidden = a.overlay,
             .placement = PrAppWindowPlacement_Center,
-            // Frames come from Prax's display link at the display's own rate (120 Hz on a ProMotion or XDR display)
-            // and only when one is asked for, so the idle overlay draws nothing. The swap chain stays SDR: the window,
-            // the board and the terminals draw only sRGB colours at or below SDR white, and Prax's HDR path presents
-            // every pixel opaque (lib/draw/src/draw_display.slang convertPixel), which would cover the screen behind
-            // the see-through overlay. HDR waits on that (docs/roadmap.sexp "hdr").
-            .intent = PrGpuSwapChainIntent_Sdr,
+            // Prax negotiates an extended-range surface on HDR displays and an SDR surface elsewhere.
+            .intent = PrGpuSwapChainIntent_Hdr,
             .open = open,
             .palette = palette,
             .beginFrame = beginFrame,
@@ -1093,6 +1131,7 @@ int main(int argc, char** argv) {
             .context = &a,
         };
         PrAppOptions options = prAppOptionsDefault();
+        options.windowModel = PrAppWindowModel_Desktop;
         if (a.overlay && style::kOverlayAccessory)
             options.presence = PrAppPresence_Accessory;
         // start() creates the overlay's window itself, so that nexus holds it before its first frame.

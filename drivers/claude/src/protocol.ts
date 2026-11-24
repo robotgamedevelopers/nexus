@@ -71,6 +71,7 @@ export type DriverMessage =
     | { kind: 'credential'; billing: Billing; plan?: string }
     | { kind: 'session'; id: string }
     | { kind: 'text'; turn: number; delta: string }
+    | { kind: 'child-agents'; count: number }
     | { kind: 'text-end'; turn: number }
     | { kind: 'tool'; turn: number; name: string; summary: string }
     | { kind: 'done'; turn: number; outcome: Outcome; session_cost_usd?: number; usage?: Usage }
