@@ -43,9 +43,23 @@ execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy
 
 file(MAKE_DIRECTORY "${ROOT}/centered")
 file(COPY_FILE "${RULES}/client.star" "${ROOT}/rules/client.star")
-file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
+file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"nova_friends":{"providers":{"codex":"ChatGPT"}},"message_card":{"side_extension":20},"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
 execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/centered" COMMAND_ERROR_IS_FATAL ANY)
-execute_process(COMMAND "${CHECK}" --centered-accounts "${ROOT}/centered/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
+file(MAKE_DIRECTORY "${ROOT}/alternative")
+file(WRITE "${ROOT}/rules/client.star" [=[
+load("client/window.star", base = "handle")
+def handle(event, state, config):
+    window = base(event, state, config)
+    if event == "window" and state["tab"] == "friend":
+        window["tab_titles"] = ["Home", "Session"]
+        window["panels"] = ["account"]
+        window["account_items"] = [{"text":"Use my work account", "action":"select:b"}]
+        window["shortcuts"] = [["Command+K","account_action","select:b"]]
+    return window
+]=])
+execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/alternative" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${CHECK}" --centered-accounts "${ROOT}/centered/policy.bundle.json"
+    "${ROOT}/alternative/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
 
 file(WRITE "${ROOT}/rules/config.json" "${config}")
 

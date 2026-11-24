@@ -479,6 +479,37 @@ void FrameHost::wire() {
         action.text = choice;
         limitSelections_[shown.session] = {shown.request, link->send(std::move(action))};
     };
+    view->accountAction = [this](const std::string& action) {
+        if (action == "dismiss" || action == "reveal") {
+            const auto account = view->signInAccount();
+            view->accountPicker.reset();
+            view->dismissedSignIn.reset();
+            if (action == "dismiss" && !account.name.empty())
+                view->dismissedSignIn = std::make_pair(model->tab(model->active()).id, account.name);
+            return;
+        }
+        auto picker = previewAccounts(0);
+        if (!picker) return;
+        const auto colon = action.find(':');
+        const auto op = action.substr(0, colon);
+        const auto target = action.substr(colon + 1);
+        const auto option = std::find_if(picker->options.begin(), picker->options.end(),
+            [&](const auto& item) { return item.name == target; });
+        if (option == picker->options.end()) return;
+        view->dismissedSignIn.reset();
+        if (op == "focus") {
+            picker->highlighted = static_cast<std::size_t>(option - picker->options.begin());
+            view->accountPicker = std::move(picker);
+        } else if (op == "select" || op == "sign_in") {
+            view->accountPicker.reset();
+            if (target != picker->current) {
+                setAccount(picker->session, target);
+                if (op == "sign_in") signInSelection_ = std::make_pair(picker->session, target);
+            } else if (op == "sign_in") {
+                activateSignIn();
+            }
+        }
+    };
     view->previewAccounts = [this](int direction) { return previewAccounts(direction); };
     view->pickerCommand = [this](const std::string& command) { pickerCommand(command); };
     view->chooseAccount = [this](const std::string& account) { chooseAccount(account); };
@@ -498,7 +529,8 @@ void FrameHost::wire() {
             accountSelections_.contains(mirror.session(model->tab(model->active()).id))) return {};
         const auto* choice = activeChoice();
         if (!choice || (!choice->needsSignIn && !offerFor(choice->name))) return {};
-        return {choice->name, choice->label, choice->email};
+        const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
+        return {choice->name, choice->label, choice->email, session->info.harness, session->info.friendName};
     };
     view->accountCaption = [this]() -> std::string {
         const auto* roster = activeAccountRoster();

@@ -84,10 +84,56 @@ needs sign-in, a separate Enter or click on the sign-in card starts the provider
 
 With `centered_account_menu` enabled, friend tabs show only the friend’s name. An opening arrow
 highlights the current account in server order. When sign-in is required, the white sign-in card already
-contains the selector. Arrows move immediately and Enter selects the highlighted account. Each row shows the configured email, falling back to
+contains the selector. Arrows move immediately and Enter selects the highlighted account. Escape dismisses
+the reminder and focuses the draft. Pressing Enter on the draft while signed out brings the reminder back
+and keeps the text for later.
+
+The live Nova Tools directory supplies provider display names. On Studio a login service runs
+`nova-config friend watch --output ~/.nexus/client/nova-friends.json` with the fleet’s read-only
+database connection. It publishes the current friends and provider labels on connection and on committed
+registry edits. The client policy receives the snapshot as `config["nova_friends"]`. Set a shared
+label with `nova-config harness set codex --display_name ChatGPT`. The account’s provider identifies
+the service the user will authenticate with. Each row shows the configured email, falling back to
 the account label if the roster has no email. Bind `ArrowUp` and `ArrowDown` in
 `account_picker_shortcuts` to use unmodified arrows from the prompt. Enable `sign_in_on_select`
 to start sign-in when the server acknowledges a different account that needs authentication.
+
+### Editing sign-in and tabs in Starlark
+
+The window calls `app.window` with the active tab, sign-in state, limit offer and `ui`.
+The latter includes ordered `tabs` (kind, label, type and group), linked `accounts` (name and label),
+`current`, `highlighted`, `dismissed` and the local `draft`. `client/accounts.star` uses those facts
+to compose the personal account surface. Returning `account_items` gives the fork control over
+prompt and sign-in gestures. Use an empty list to hide the surface or omit the account panel.
+Order text and buttons freely. A text item has `text`. A button also has an `action` and may
+set `selected`. Both buttons and shortcuts can request the same host operations.
+
+| Operation | Effect |
+| --- | --- |
+| `focus:ID` | Preview a linked account locally. |
+| `select:ID` | Select a linked account for the session. |
+| `sign_in:ID` | Select the account, wait for server confirmation, and request sign-in if needed. |
+| `dismiss` | Clear the preview and remember dismissal for the active tab and account. |
+| `reveal` | Clear dismissal so the policy can show the reminder again. |
+
+For example, a fork can show a single “Continue” button and bind its action to Command-K.
+
+```python
+action = "sign_in:" + state["ui"]["current"]
+window["panels"] = ["account", "prompt"]
+window["account_items"] = [{"text": "Continue", "action": action}]
+window["shortcuts"].append(["Command+K", "account_action", action])
+```
+
+The returned `message_card` controls heading size, card fill, radius, `selected_fill`, `selected_ink`
+and `email_weight`. Set `row_height`, `row_gap` and `heading_gap` in multiples of the active body
+line height. `side_extension` adds a percentage of the content card’s width on each side, from 0 to 50.
+Only the background grows.
+
+Return `tab_titles` in current tab order to label tabs, `show_tabs` to show the strip and
+`reorder_tabs` to allow dragging. The same window description selects tab groups, plugin types,
+panels and shortcuts. Apply the edited rules with `nexus-policy apply client RULES`. The running
+window adopts the new program at a frame boundary.
 
 An existing `account_shortcuts` map still sends its configured `account_command` actions immediately. For example,
 `"account_shortcuts": {"Command+ArrowDown": "advance"}` asks the server’s

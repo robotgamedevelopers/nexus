@@ -275,10 +275,24 @@ fn read_revision(path: &str) -> Result<Option<Vec<u8>>> {
 }
 
 fn compile_revision(bytes: &Option<Vec<u8>>, side: &str) -> Result<Program> {
-    let bundle = match bytes {
+    compile_directory_revision(bytes, side, None)
+}
+
+fn compile_directory_revision(
+    bytes: &Option<Vec<u8>>,
+    side: &str,
+    directory: Option<&[u8]>,
+) -> Result<Program> {
+    let mut bundle = match bytes {
         Some(bytes) => serde_json::from_slice(bytes).context("reading policy bundle")?,
         None => defaults(side)?,
     };
+    if let Some(directory) = directory {
+        let data: Value =
+            serde_json::from_slice(directory).context("reading Nova friend directory")?;
+        ensure!(data.is_object(), "expected a Nova friend directory object");
+        bundle.config["nova_friends"] = data;
+    }
     Program::new(bundle, side)
 }
 
@@ -308,9 +322,27 @@ impl Host {
         }
         let side = self.side.clone();
         let initial = self.active.as_ref().unwrap().0.clone();
+        let directory_path = Path::new(&path).with_file_name("nova-friends.json");
+        let directory_path = directory_path
+            .to_str()
+            .context("invalid directory path")?
+            .to_owned();
+        let mut initial_directory = None;
+        let initial_load = (|| -> Result<()> {
+            if let Some(data) = read_revision(&directory_path)? {
+                let program = compile_directory_revision(&initial, &side, Some(&data))?;
+                self.active = Some((initial.clone(), program));
+                initial_directory = Some(data);
+            }
+            Ok(())
+        })();
+        if let Err(e) = initial_load {
+            eprintln!("nexus: Nova friend directory: {e:#}");
+        }
         let worker = thread::Builder::new()
             .name("nexus-policy".into())
             .spawn(move || {
+                let mut previous_directory = initial_directory;
                 let mut previous = initial;
                 let mut last_error = None;
                 while matches!(
@@ -319,8 +351,11 @@ impl Host {
                 ) {
                     let result = (|| -> Result<()> {
                         let bytes = read_revision(&path)?;
-                        if previous != bytes {
-                            let program = compile_revision(&bytes, &side)?;
+                        let directory = read_revision(&directory_path)?;
+                        if previous != bytes || previous_directory != directory {
+                            let program =
+                                compile_directory_revision(&bytes, &side, directory.as_deref())?;
+                            previous_directory = directory;
                             previous = bytes;
                             *publish.lock().unwrap() = Some(program);
                         }

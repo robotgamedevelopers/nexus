@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "pr/color_space.h"
+#include "pr/json.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_button.h"
 #include "pr/kit_icon.h"
@@ -44,6 +45,8 @@ enum class Part : unsigned char {
     CaptionBubble,
     MessageCard,
     FocusedCard,
+    SelectorCard,
+    SelectorBackground,
     ActionRow,
     ReplyRow,
     Footer,
@@ -96,7 +99,7 @@ struct BoxRecipe {
     Part part;
     signed char steps;
 
-    void make(const Look&, PrLayoutBoxStyle& box) const {
+    void make(const Look& look, PrLayoutBoxStyle& box) const {
         const float k = textScale(steps);
         box.boxSizing = PrLayoutBoxSizing_BorderBox;
         switch (part) {
@@ -139,12 +142,27 @@ struct BoxRecipe {
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
                 break;
+            case Part::SelectorBackground:
+                box.display = PrLayoutDisplay_Block;
+                box.position = PrLayoutPosition_Absolute;
+                box.zIndexed = 1;
+                box.inset[PrRectSide_Top] = box.inset[PrRectSide_Bottom] = px(0);
+                box.inset[PrRectSide_Left] = box.inset[PrRectSide_Right] =
+                    prLayoutLengthPercent(-look.messageCard.sideExtension);
+                break;
+            case Part::SelectorCard:
             case Part::MessageCard:
             case Part::FocusedCard:
                 box.display = PrLayoutDisplay_Flex;
                 box.minWidth = px(0);
                 box.maxWidth = prLayoutLengthPercent(100);
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
+                if (part == Part::SelectorCard) {
+                    box.position = PrLayoutPosition_Relative;
+                    box.zIndexed = 1;
+                    box.padding[PrRectSide_Left] = px(0.18f * kLinePitch * k);
+                    box.padding[PrRectSide_Right] = box.padding[PrRectSide_Left];
+                }
                 break;
             case Part::Bubble:
                 box.display = PrLayoutDisplay_Block;
@@ -215,6 +233,8 @@ struct DecorationRecipe {
             case Part::Window:
                 d.background = prColor16FromColor(look.overlay ? faded(kBackground, look.overlayOpacity) : kBackground);
                 break;
+            case Part::SelectorBackground:
+            case Part::SelectorCard:
             case Part::MessageCard:
             case Part::FocusedCard:
                 d.background = prColor16FromColor(rgb(look.messageCard.fill));
@@ -282,6 +302,7 @@ struct FlexRecipe {
                 flex.alignItems = PrLayoutAlignment_Center;
                 flex.justifyContent = PrLayoutAlignment_Center;
                 break;
+            case Part::SelectorCard:
             case Part::MessageCard:
             case Part::FocusedCard:
                 flex.direction = PrLayoutFlexDirection_Column;
@@ -340,8 +361,15 @@ struct FlexRecipe {
     }
 };
 
+struct BehindContent {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Effect;
+    void make(const Look&, PrLayoutEffectStyle& effect) const { effect.zIndex = -1; }
+};
+
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
     signed char s = static_cast<signed char>(look.textSteps);
+    if (p == Part::SelectorBackground)
+        return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, BehindContent{});
     return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
 }
 
@@ -437,54 +465,59 @@ struct Builder {
         option("model", app.limitOffer.model, app.limitModelLabel);
     }
 
-    void accountSelector(PrLayoutNode parent, const AccountPicker& preview, bool needsSignIn) {
-        const auto card = element(element(parent, Part::ActionRow), Part::MessageCard);
+    void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items) {
+        if (items.empty()) return;
+        const auto card = element(element(parent, Part::ActionRow), Part::SelectorCard);
         view.accountMenu = card;
-        if (needsSignIn)
-            label(card, "Please sign in", textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center));
-        for (std::size_t i = 0; i < preview.options.size(); ++i) {
-            const auto& option = preview.options[i];
-            const auto row = prKitButton(kit, card, {.key = prUiKey(ui, card, sv(option.name))},
+        element(card, Part::SelectorBackground);
+        const float lineHeight = kit->theme.types[PrKitTextRole_Body].lineHeight;
+        bool afterHeading = false;
+        for (const auto& item : items) {
+            if (item.action.empty()) {
+                label(card, item.text, textStyle(PrKitTextRole_Display, PrKitTone_Inverse, PrKitTextAlign_Center));
+                afterHeading = true;
+                continue;
+            }
+            const auto row = prKitButton(kit, card, {.key = prUiKey(ui, card, sv(item.action))},
                                          {.variant = PrKitButtonVariant_Ghost});
-            label(row, option.label, textStyle(PrKitTextRole_Body, PrKitTone_Inverse, PrKitTextAlign_Center));
+            PrKitPlace place{};
+            place.height = prKitPx(lineHeight * look.messageCard.rowHeight);
+            if (afterHeading) place.margin.top = look.messageCard.headingGap * lineHeight;
+            else if (!view.accountRows.empty()) place.margin.top = look.messageCard.rowGap * lineHeight;
+            afterHeading = false;
+            place.align = PrKitAlign_Stretch;
+            prKitPlace(kit, row, &place);
+            const auto email = label(row, item.text, textStyle(PrKitTextRole_Strong, PrKitTone_Inverse, PrKitTextAlign_Center));
             view.accountRows.push_back(row);
-            if (i == preview.highlighted) {
+            if (item.selected) {
                 auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
                 auto& group = record.groups[PrLayoutGroup_Decoration];
                 auto decoration = prLayoutDecorationStyleRecord(tree, group);
-                decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.switchEmailInk));
-                decoration.outlineWidth = prLayoutUnitFromPx(2 * k());
-                decoration.outlineStyle = PrDrawBorderStyle_Solid;
+                decoration.background = prColor16FromColor(rgb(look.messageCard.selectedFill));
+                decoration.outlineWidth = prLayoutUnitFromPx(0);
                 radius(decoration, 8 * k());
                 group = prLayoutDecorationStyleIntern(tree, &decoration);
                 prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
-                if (view.accountPicker && view.lastHighlightedAccount != option.name) {
+                auto emailStyle = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, email));
+                auto& colors = emailStyle.groups[PrLayoutGroup_Color];
+                auto ink = prLayoutColorStyleRecord(tree, colors);
+                ink.color = prColor16FromColor(rgb(look.messageCard.selectedInk));
+                colors = prLayoutColorStyleIntern(tree, &ink);
+                prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &emailStyle));
+                if (view.accountPicker && view.lastHighlightedAccount != item.action) {
                     prUiSetFocus(ui, row);
-                    view.lastHighlightedAccount = option.name;
+                    view.lastHighlightedAccount = item.action;
                 }
             }
-            if (prKitActivated(kit, row) && view.pickerCommand && view.chooseAccount) {
-                if (!view.accountPicker) view.pickerCommand("open");
-                view.chooseAccount(option.name);
-            }
+            if (prKitActivated(kit, row) && view.accountAction) view.accountAction(item.action);
         }
     }
 
     void accountPanel(PrLayoutNode parent) {
         const auto& selected = view.windowApp.signInAccount;
-        if (view.windowApp.centeredAccounts && !asking) {
-            if (view.accountPicker) {
-                // Confirmation can close the picker in this frame.
-                const auto preview = *view.accountPicker;
-                accountSelector(parent, preview, !selected.name.empty());
-                return;
-            }
-            if (!selected.name.empty() && view.previewAccounts) {
-                if (auto preview = view.previewAccounts(0)) {
-                    accountSelector(parent, *preview, true);
-                    return;
-                }
-            }
+        if (view.windowApp.surface.items && !asking) {
+            accountSelector(parent, *view.windowApp.surface.items);
+            return;
         }
         if (selected.name.empty()) return;
         const auto footer = element(parent, Part::ActionRow);
@@ -679,7 +712,7 @@ struct Builder {
             bool exchanges, PrKitFlex flex) {
         syncTabs(tabs, first, end);
         PrLayoutNode row = prKitTabStrip(kit, parent, PrKitTabStrip{.key = prUiKey(ui, parent, sv(group)), .tabs = tabs,
-            .group = exchanges ? 0x4e78546162477270ull : 0, .reorderable = true, .collapsesSingle = false, .disabled = false},
+            .group = exchanges ? 0x4e78546162477270ull : 0, .reorderable = view.windowApp.surface.reorderTabs, .collapsesSingle = false, .disabled = false},
             PrKitChoiceStyle{.size = PrKitControlSize_Lg, .direction = PrKitDirection_Row});
         PrKitPlace rowPlace{};
         rowPlace.height = prKitPx(kStripHeight * k() + 1);
@@ -716,11 +749,13 @@ struct Builder {
             if (i == 0)
                 tabPlace.margin.left = 0.8f * kU * k();
             prKitPlace(kit, tab, &tabPlace);
+            const auto titleText = i < view.windowApp.surface.tabTitles.size() ?
+                view.windowApp.surface.tabTitles[i] : label(model.tab(i));
             if (current.empty()) {
-                prKitTabLabel(kit, tab, {.text = sv(label(model.tab(i)))});
+                prKitTabLabel(kit, tab, {.text = sv(titleText)});
             } else {
                 const auto title = prKitBox(kit, tab, {}, {.direction = PrKitDirection_Column, .align = PrKitAlign_Start});
-                prKitTabLabel(kit, title, {.text = sv(label(model.tab(i)))});
+                prKitTabLabel(kit, title, {.text = sv(titleText)});
                 accountDropdown(title, current);
             }
             view.tabNodes[i] = tab;
@@ -739,6 +774,7 @@ struct Builder {
         view.accountAnchor = kPrLayoutNodeNone;
         view.accountMenu = kPrLayoutNodeNone;
         view.accountRows.clear();
+        if (!view.windowApp.surface.showTabs) return;
         const bool exchanges = std::any_of(view.windowApp.groups.begin(), view.windowApp.groups.end(),
             [](const TabGroup& group) { return !group.acceptsFrom.empty(); });
         if (const PrUiPayload* dragging = prUiDragging(ui)) view.draggingTab = dragging->value;
@@ -788,11 +824,6 @@ struct Builder {
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
     // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
-        if (tab.kind == TabKind::Friend && view.windowApp.centeredAccounts) {
-            auto name = tab.name;
-            if (!name.empty() && name.front() >= 'a' && name.front() <= 'z') name.front() -= 'a' - 'A';
-            return name;
-        }
         if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
             return tab.name;
         if (tab.kind == TabKind::Sprint)
@@ -1226,7 +1257,7 @@ struct Builder {
     void promptKey(std::size_t active, const char* key) {
         const Tab& tab = model.tab(active);
         const bool logout = tab.draft == "/logout";
-        if (!logout && view.activateSignIn && view.activateSignIn())
+        if (!view.windowApp.surface.items && !logout && view.activateSignIn && view.activateSignIn())
             return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         policy::MessagePlan plan;
         std::string why;
@@ -1450,7 +1481,7 @@ struct Builder {
             view.hide();
         strips(window);
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
-        if (view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
+        if (view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
@@ -1470,6 +1501,54 @@ struct Builder {
         secretDialog(window);
     }
 
+    std::string policyUiState(const Tab* active) {
+        std::unique_ptr<PrJsonWriter, decltype(&prJsonWriterDestroy)> json(prJsonWriterCreate(), prJsonWriterDestroy);
+        auto* w = json.get();
+        const auto field = [&](std::string_view name, std::string_view value) {
+            prJsonWriterKey(w, sv(name));
+            prJsonWriterString(w, sv(value));
+        };
+        prJsonWriterBeginObject(w);
+        prJsonWriterKey(w, sv("tabs"));
+        prJsonWriterBeginArray(w);
+        for (std::size_t i = 0; i < model.tab_count(); ++i) {
+            const auto& tab = model.tab(i);
+            prJsonWriterBeginObject(w);
+            field("kind", tab.kind == TabKind::Friend ? "friend" : tab.kind == TabKind::Sprint ? "sprint" :
+                          tab.kind == TabKind::Extension ? "extension" : "terminal");
+            field("label", label(tab));
+            field("group", tab.group);
+            field("type", tab.type);
+            prJsonWriterEndObject(w);
+        }
+        prJsonWriterEndArray(w);
+        prJsonWriterKey(w, sv("dismissed"));
+        prJsonWriterBool(w, view.dismissedSignIn.has_value());
+        field("draft", active ? active->draft : std::string_view{});
+        prJsonWriterKey(w, sv("logout"));
+        prJsonWriterBool(w, active && active->draft == "/logout");
+        if (active && active->kind == TabKind::Friend && view.previewAccounts) {
+            auto picker = view.accountPicker ? view.accountPicker : view.previewAccounts(0);
+            if (picker) {
+                field("current", picker->account);
+                field("highlighted", picker->options[picker->highlighted].name);
+                prJsonWriterKey(w, sv("accounts"));
+                prJsonWriterBeginArray(w);
+                for (const auto& row : picker->options) {
+                    if (row.name == sync::kAutoAccountTarget) continue;
+                    prJsonWriterBeginObject(w);
+                    field("name", row.name);
+                    field("label", row.label);
+                    prJsonWriterEndObject(w);
+                }
+                prJsonWriterEndArray(w);
+            }
+        }
+        prJsonWriterEndObject(w);
+        const auto bytes = prJsonWriterText(w);
+        return std::string(bytes.data, bytes.size);
+    }
+
     void updateApplication() {
         const auto describe = [&] {
             const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
@@ -1478,11 +1557,14 @@ struct Builder {
             if (view.accountPicker && (!active || active->id != view.accountPicker->tab ||
                     (view.secrets && view.secrets->showing())))
                 view.accountPicker.reset();
+            auto account = active && active->kind == TabKind::Friend && view.signInAccount ? view.signInAccount() : SignInAccount{};
+            if (view.dismissedSignIn && (!active || view.dismissedSignIn->first != active->id ||
+                    view.dismissedSignIn->second != account.name)) view.dismissedSignIn.reset();
             view.windowApp.update(*view.application, kind, active ? active->type : std::string(), view.promptOpen,
                 !view.status.empty(), model.active(), model.tab_count(), active ? active->group : std::string(),
-                active && active->kind == TabKind::Friend && view.signInAccount ? view.signInAccount() : SignInAccount{},
+                std::move(account),
                 view.accountPicker.has_value(),
-                active && active->kind == TabKind::Friend && view.limitOffer ? view.limitOffer() : LimitOffer{});
+                active && active->kind == TabKind::Friend && view.limitOffer ? view.limitOffer() : LimitOffer{}, policyUiState(active));
         };
         describe();
         if (view.tabGroupGeneration != view.windowApp.layoutGeneration) {
@@ -1511,6 +1593,10 @@ struct Builder {
             case WindowCommand::ResolveLimit:
                 if (!view.accountPicker && view.displayedLimit == view.windowApp.limitOffer && view.resolveLimit)
                     view.resolveLimit(view.displayedLimit, key.type);
+                break;
+            case WindowCommand::AccountAction:
+                pickerInput = true;
+                if (view.accountAction) view.accountAction(key.type);
                 break;
             case WindowCommand::AccountPicker:
                 if (view.pickerCommand) view.pickerCommand(key.type);
@@ -1685,6 +1771,8 @@ PrKitTheme windowTheme(PrFontSet* fonts, bool overlay, int steps, float opacity,
     };
     type(PrKitTextRole_Display, card.textSize, 1.42f * card.textSize);
     type(PrKitTextRole_Body, kBodySize, kLinePitch);                 // transcript, prompt, tabs
+    type(PrKitTextRole_Strong, kBodySize, kLinePitch);
+    theme.types[PrKitTextRole_Strong].weight = static_cast<int>(card.emailWeight);
     type(PrKitTextRole_BodySmall, kLabelSize, 1.2f * kLabelSize);    // the notice when there are no friends
     type(PrKitTextRole_Meta, kMetaSize, 1.3f * kMetaSize);           // "queued"
     type(PrKitTextRole_Mono, kToolSize, kToolPitch, true);           // a tool line

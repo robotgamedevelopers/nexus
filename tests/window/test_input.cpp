@@ -2371,7 +2371,7 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
 }
 
 int main(int argc, char** argv) {
-    if (argc == 3 && std::string(argv[1]) == "--centered-accounts") {
+    if ((argc == 3 || argc == 4) && std::string(argv[1]) == "--centered-accounts") {
         Harness h = withSprint(1);
         h.view.application->watch(argv[2]);
         test::FakeLink link;
@@ -2428,13 +2428,60 @@ int main(int argc, char** argv) {
         CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
-        CHECK(h.hasText(h.view.accountMenu, "Please sign in"));
+        CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
         CHECK(h.hasText(h.view.accountMenu, "c@example.test"));
+        h.view.askedTextSteps = 3;
+        h.frame();
+        const float lineHeight = h.kit->theme.types[PrKitTextRole_Body].lineHeight;
+        CHECK(h.kit->theme.types[PrKitTextRole_Strong].weight == 700);
+        checkTextPaint(h, "c@example.test", 0xffffff, h.look.transcriptStyle.switchEmailInk);
+        checkTextPaint(h, "a@example.test", h.look.messageCard.ink, h.look.messageCard.fill);
+        const auto card = h.bounds(h.view.accountMenu);
+        const auto selectedRow = h.bounds(h.view.accountRows[2]);
+        CHECK(selectedRow.left - card.left < 0.25f * lineHeight);
+        CHECK(card.right - selectedRow.right < 0.25f * lineHeight);
+        const auto backdrop = h.bounds(prLayoutNodeFirstChild(h.tree, h.view.accountMenu));
+        const float extension = (card.right - card.left) * h.look.messageCard.sideExtension / 100;
+        CHECK(std::abs(card.left - backdrop.left - extension) < 2);
+        CHECK(std::abs(backdrop.right - card.right - extension) < 2);
+
+        auto previous = h.bounds(h.findText(h.view.accountMenu, "Please sign in to ChatGPT"));
+        for (auto row : h.view.accountRows) {
+            const auto bounds = h.bounds(row);
+            CHECK(bounds.bottom - bounds.top >= 1.4f * lineHeight);
+            CHECK(bounds.top - previous.bottom >= 0.1f * lineHeight);
+            previous = bounds;
+        }
+        const auto sent = link.sent.size();
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        CHECK(h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0 && prUiFocus(h.ui) == h.view.prompt);
+        h.type(" again");
+        h.enter();
+        h.frame();
+        CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
+        CHECK(link.sent.size() == sent && h.active().draft == "draft kept again");
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 0);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
-        CHECK(!h.view.accountPicker && h.hasText(h.view.accountMenu, "Please sign in"));
+        CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
+        down(0);
+        CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2);
+        if (argc == 4) {
+            std::filesystem::copy_file(argv[3], argv[2], std::filesystem::copy_options::overwrite_existing);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (!h.hasText(h.tabs()[h.model.active()], "Session") && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                h.frame();
+            }
+            CHECK(h.hasText(h.tabs()[h.model.active()], "Session"));
+            CHECK(h.view.accountRows.size() == 1 && h.hasText(h.view.accountMenu, "Use my work account"));
+            h.key(PrAppKey('K'), PrAppKeyCode_KeyK, style::kCommand);
+            h.frame();
+            CHECK(link.sent.size() == sent + 1 && link.sent.back().kind == sync::ActionKind::SetAccount &&
+                  link.sent.back().text == "b");
+        }
         return failures ? 1 : 0;
     }
     if (argc == 5 && std::string(argv[1]) == "--group-drag") {

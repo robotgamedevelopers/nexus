@@ -1,3 +1,4 @@
+load("client/accounts.star", account_window = "describe")
 """The window application. The platform draws the panels and captures the declared keys."""
 
 def _shortcuts():
@@ -151,12 +152,21 @@ def handle(event, state, config):
                     model_button = "Use " + model_name + "  (" + chord + ")"
                     if not state.get("account_picker_open"):
                         shortcuts = _bind(shortcuts, chord, ["resolve_limit", "model"])
+        if config.get("centered_account_menu", False) and state.get("needs_sign_in") and "account" in panels:
+            shortcuts = _bind(shortcuts, "Escape", ["account_picker", "cancel"])
         if state.get("account_picker_open", False):
             if config.get("centered_account_menu", False):
                 panels = ["account", "prompt"]
             for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
-        return {
+        account = state.get("sign_in_account") or {}
+        provider = account.get("provider", "")
+        directory = config.get("nova_friends", {})
+        friend = directory.get("friends", {}).get(account.get("friend", ""), {})
+        provider = provider or friend.get("harness", "")
+        display = directory.get("providers", {}).get(provider, provider)
+        window = {
+            "sign_in_heading": "Please sign in to " + display if display else "Please sign in",
             "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": config.get("transcript_style", {}),
             "centered_account_menu": config.get("centered_account_menu", False),
@@ -172,6 +182,11 @@ def handle(event, state, config):
             "limit_account_label": account_button,
             "limit_model_label": model_button,
         }
+        if config.get("centered_account_menu", False):
+            tabs = state.get("ui", {}).get("tabs", [])
+            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else t["label"] for t in tabs]
+            window = account_window(window, state, config)
+        return window
     if event == "prompt_key":
         if state["text"] == "/logout":
             if state["key"] == "Enter":

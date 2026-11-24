@@ -46,6 +46,14 @@ bool chord(std::string_view name, PrAppKey& key, PrAppModifierFlags& modifiers) 
     return false;
 }
 
+bool accountAction(std::string_view action) {
+    if (action == "dismiss" || action == "reveal") return true;
+    const auto colon = action.find(':');
+    if (colon == action.npos || colon + 1 == action.size() || action.size() > 80) return false;
+    const auto op = action.substr(0, colon);
+    return op == "focus" || op == "select" || op == "sign_in";
+}
+
 bool shortcut(const PrJson* d, Index row, Shortcut& out) {
     if (prJsonKind(d, row) != PrJsonKind_Array ||
             !chord(stringAt(d, prJsonElement(d, row, 0)), out.key, out.modifiers))
@@ -67,6 +75,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         out.command = WindowCommand::ResolveLimit;
         out.type = stringAt(d, prJsonElement(d, row, 2));
         return prJsonCount(d, row) == 3 && (out.type == "account" || out.type == "model");
+    }
+    if (op == "account_action") {
+        out.command = WindowCommand::AccountAction;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && accountAction(out.type);
     }
     if (op == "account_picker") {
         out.command = WindowCommand::AccountPicker;
@@ -192,6 +205,13 @@ bool readMessageCard(const PrJson* d, Index obj, MessageCardStyle& card) {
         readColor(d, obj, {"fill", 4}, card.fill) && readColor(d, obj, {"ink", 3}, card.ink) &&
         readColor(d, obj, {"email_ink", 9}, card.emailInk) &&
         readPoints(d, obj, {"text_size", 9}, card.textSize, 12, 72) &&
+        readPoints(d, obj, {"side_extension", 14}, card.sideExtension, 0, 50) &&
+        readPoints(d, obj, {"row_height", 10}, card.rowHeight, 1, 4) &&
+        readPoints(d, obj, {"row_gap", 7}, card.rowGap, 0, 4) &&
+        readPoints(d, obj, {"heading_gap", 11}, card.headingGap, 0, 4) &&
+        readPoints(d, obj, {"email_weight", 12}, card.emailWeight, 100, 900) &&
+        readColor(d, obj, {"selected_fill", 13}, card.selectedFill) &&
+        readColor(d, obj, {"selected_ink", 12}, card.selectedInk) &&
         readPoints(d, obj, {"radius", 6}, card.radius, 0, 64);
 }
 
@@ -225,9 +245,38 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     return valid;
 }
 
+bool readSurface(const PrJson* doc, AccountSurface& surface) {
+    surface = {};
+    if (!readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
+            !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs)) return false;
+    const auto titles = prJsonMember(doc, 0, {"tab_titles", 10});
+    if (titles != kPrJsonMissing) {
+        if (prJsonKind(doc, titles) != PrJsonKind_Array || prJsonCount(doc, titles) > 1024) return false;
+        for (uint32_t i = 0; i < prJsonCount(doc, titles); ++i) {
+            auto text = stringAt(doc, prJsonElement(doc, titles, i));
+            if (text.size() > 512) return false;
+            surface.tabTitles.emplace_back(text);
+        }
+    }
+    const auto items = prJsonMember(doc, 0, {"account_items", 13});
+    if (items == kPrJsonMissing) return true;
+    if (prJsonKind(doc, items) != PrJsonKind_Array || prJsonCount(doc, items) > 1024) return false;
+    surface.items.emplace();
+    for (uint32_t i = 0; i < prJsonCount(doc, items); ++i) {
+        const auto row = prJsonElement(doc, items, i);
+        AccountItem item;
+        item.text = stringAt(doc, prJsonMember(doc, row, {"text", 4}));
+        item.action = stringAt(doc, prJsonMember(doc, row, {"action", 6}));
+        if (item.text.empty() || item.text.size() > 1024 || (!item.action.empty() && !accountAction(item.action)) ||
+                !readFlag(doc, row, {"selected", 8}, item.selected)) return false;
+        surface.items->push_back(std::move(item));
+    }
+    return true;
+}
+
 bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
     TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
-    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, std::string& accountLabel, std::string& modelLabel, float& overlayOpacity, bool& centered, bool& signInOnSelect, std::string& why) {
+    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, std::string& heading, AccountSurface& surface, std::string& accountLabel, std::string& modelLabel, float& overlayOpacity, bool& centered, bool& signInOnSelect, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
@@ -236,6 +285,12 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     autoLabel = name == kPrJsonMissing ? "auto" : stringAt(d, name);
     if (!groupName(autoLabel)) {
         why = "account_auto_label must be a nonempty display name of up to 64 bytes";
+        return false;
+    }
+    const auto title = stringAt(d, prJsonMember(d, 0, {"sign_in_heading", 15}));
+    heading = title.empty() ? "Please sign in" : title;
+    if (!readSurface(d, surface)) {
+        why = "invalid account_items or tab_titles";
         return false;
     }
     centered = signInOnSelect = false;
@@ -344,7 +399,7 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
 } // namespace
 
 void WindowApplication::update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen,
-    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen, LimitOffer offer) {
+    bool hasStatus, std::size_t activeTab, std::size_t tabCount, const std::string& group, SignInAccount account, bool pickerOpen, LimitOffer offer, const std::string& ui) {
     std::string escapedGroup;
     for (const char c : group) {
         if (c == '\\' || c == '"') escapedGroup += '\\';
@@ -354,6 +409,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         ",\"has_status\":" + (hasStatus ? "true" : "false") + ",\"active_tab\":" + std::to_string(activeTab) +
         ",\"account_picker_open\":" + (pickerOpen ? "true" : "false") +
         ",\"needs_sign_in\":" + (account.name.empty() ? "false" : "true") + ",\"tab_count\":" + std::to_string(tabCount) + ",\"group\":\"" + escapedGroup + "\"}";
+    context.pop_back();
+    context += ",\"ui\":" + ui + "}";
     const bool sameContext = context == lastContext_ && account == signInAccount && offer == limitOffer;
     const auto generation = host.refresh();
     if (sameContext && generation == generation_) return;
@@ -391,6 +448,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         field({"name", 4}, signInAccount.name);
         field({"label", 5}, signInAccount.label);
         field({"email", 5}, signInAccount.email);
+        field({"provider", 8}, signInAccount.provider);
+        field({"friend", 6}, signInAccount.friendName);
         prJsonWriterEndObject(json.get());
         const auto text = prJsonWriterText(json.get());
         context.append(text.data, text.size);
@@ -404,11 +463,12 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     std::map<std::string, TabType> registrations;
     std::vector<TabGroup> layout;
     std::optional<bool> mayClose;
-    std::string caption, autoLabel, accountLabel, modelLabel;
+    std::string caption, autoLabel, heading, accountLabel, modelLabel;
+    AccountSurface uiSurface;
     bool centered = false, autoSignIn = false;
     float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, heading, uiSurface, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
         if (generation != appliedGeneration_ || groups != layout || types != registrations)
             ++layoutGeneration;
         appliedGeneration_ = generation;
@@ -419,6 +479,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         closable = mayClose;
         label = std::move(caption);
         autoAccountLabel = std::move(autoLabel);
+        signInHeading = std::move(heading);
+        surface = std::move(uiSurface);
         limitAccountLabel = std::move(accountLabel);
         limitModelLabel = std::move(modelLabel);
         centeredAccounts = centered;
@@ -438,7 +500,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, heading, uiSurface, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
             keys.clear();
             parts.clear();
             registrations.clear();
@@ -458,6 +520,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         }
         label = std::move(caption);
         autoAccountLabel = std::move(autoLabel);
+        signInHeading = std::move(heading);
+        surface = std::move(uiSurface);
         limitAccountLabel = std::move(accountLabel);
         limitModelLabel = std::move(modelLabel);
         centeredAccounts = centered;

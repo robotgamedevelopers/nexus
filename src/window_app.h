@@ -12,7 +12,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, ResolveLimit };
+enum class WindowCommand { SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -26,12 +26,27 @@ struct TabType {
     bool operator==(const TabType&) const = default;
 };
 
+struct AccountItem {
+    std::string text, action;
+    bool selected = false;
+};
+
+struct AccountSurface {
+    std::optional<std::vector<AccountItem>> items;
+    std::vector<std::string> tabTitles;
+    bool showTabs = true, reorderTabs = true;
+};
+
 struct MessageCardStyle {
     unsigned fill = 0xffffff;
     unsigned ink = 0;
     unsigned emailInk = 0x477fba;
     float textSize = 34;
     float radius = 20;
+    float sideExtension = 0;
+    float rowHeight = 1.45f, rowGap = 0.15f, headingGap = 0.8f;
+    float emailWeight = 700;
+    unsigned selectedFill = 0x86c5ff, selectedInk = 0xffffff;
     bool operator==(const MessageCardStyle&) const = default;
 };
 
@@ -49,7 +64,7 @@ struct TranscriptStyle {
 };
 
 struct SignInAccount {
-    std::string name, label, email;
+    std::string name, label, email, provider{}, friendName{};
     bool operator==(const SignInAccount&) const = default;
 };
 
@@ -64,7 +79,7 @@ class WindowApplication {
 public:
     void update(policy::Host& host, const char* tab, const std::string& type, bool promptOpen, bool hasStatus,
                 std::size_t activeTab, std::size_t tabCount, const std::string& group = {}, SignInAccount account = {},
-                bool pickerOpen = false, LimitOffer offer = {});
+                bool pickerOpen = false, LimitOffer offer = {}, const std::string& ui = "{}");
     std::vector<Shortcut> shortcuts;
     std::vector<Panel> panels;
     std::map<std::string, TabType> types;
@@ -73,8 +88,10 @@ public:
     uint64_t layoutGeneration = 0;
     std::string label;
     std::string autoAccountLabel = "auto";
+    std::string signInHeading = "Please sign in";
     bool centeredAccounts = false;
     bool signInOnSelect = false;
+    AccountSurface surface;
     SignInAccount signInAccount;
     LimitOffer limitOffer;
     std::string limitAccountLabel, limitModelLabel;
