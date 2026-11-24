@@ -470,12 +470,11 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     PrLayoutTree* tree = kit_->tree;
     const PrLayoutStyleIndex before = prLayoutTreeFrameStyle(tree, parent);
     const bool starting = !prTerminalLaunched(terminal);
-    const auto beforeChildren = starting ? childProcesses() : std::vector<int>{};
     prTerminalFrame(terminal, kit_, parent, PrTerminalBackground_Parent);
     if (starting && prTerminalLaunched(terminal)) {
         if (prTerminalLaunchStatus(terminal) != PrStatus_Ok) {
             failed_.insert(id);
-        } else if (const int pid = startedShell(beforeChildren, childProcesses()); pid > 0) {
+        } else if (const auto pid = static_cast<int>(prTerminalProcessId(terminal)); pid > 0) {
             pids_[id] = pid;
             std::lock_guard lock(mutex_);
             shells_[id] = pid;
