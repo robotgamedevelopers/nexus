@@ -11,4 +11,6 @@
 
 Built for Apple silicon on macOS 26 or newer. Bring a supported subscription and a machine to run the server. The same Mac can do both.
 
-**[Read the setup guide](docs/README.md)** · [Customize your client](docs/policy.md) · [Supported harnesses](drivers/rpc/README.md)
+**To install, give this repo to the AI you already use** and say “Set up nexus on this machine so I can talk with you there.” Your AI follows the [setup instructions](docs/setup.md) and checks the running system with you.
+
+[Using nexus](docs/README.md) · [Customize your client](docs/policy.md) · [Supported harnesses](drivers/rpc/README.md)

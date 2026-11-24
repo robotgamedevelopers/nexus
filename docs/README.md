@@ -2,13 +2,11 @@
 
 nexus is a keyboard-driven macOS client for working with several AI harnesses. Each friend gets a named tab, a conversation and a working directory. The server runs the harnesses and keeps their state. You can close the client and reconnect while a turn continues on the server.
 
-To try it, [build the app and server](#build), [configure a friend and account](accounts.md), and install its driver. For a first conversation, use a Claude or Codex subscription. The [RPC driver guide](../drivers/rpc/README.md) describes the other adapters and their requirements.
+For a first install, point your current AI harness at the repository and ask it to [set up nexus](setup.md). The AI handles the commands. You handle your provider sign-in.
 
 ## Picking a setup
 
-Use the desktop client on Apple silicon with macOS 26 or newer. Start with one friend on the same Mac, then add a second harness when you want a different model for the same project. If work should continue while your laptop sleeps, run the server on an always-on machine you can reach over SSH and UDP.
-
-A friend is the name on a tab. Its harness launches the provider's program, its account determines which subscription it uses, and its working directory determines where a turn starts. Ask your AI to create a friend. You can set one up directly or use Nova Seed to shape a name, memory and working agreement together. A registry-managed installation can also read the friend's home documents and directory grants from nova-config. [Creating a friend](accounts.md#creating-a-friend)
+The client and server can run on the same Apple silicon Mac with macOS 26 or newer. An always-on server can keep working while the laptop sleeps. Start with the harness you already use. You can add named friends or other harnesses later. [Accounts and friends](accounts.md)
 
 Windows has native window code and WSL2 terminal support. The connected Windows client, Wayland, Android and iOS clients are still development work. The proposed heads-down timer and away report are also on the [roadmap](ROADMAP.md).
 

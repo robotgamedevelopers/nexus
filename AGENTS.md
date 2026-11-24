@@ -1,5 +1,7 @@
 # AGENTS.md
 
+When the human asks you to install or set up nexus, follow [the AI setup instructions](docs/setup.md) in this checkout.
+
 The rules for an AI working in this repository. Each one holds on every change.
 
 ## The design principle (check every change against it)
