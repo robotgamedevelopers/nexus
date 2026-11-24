@@ -72,7 +72,6 @@ Content(r) == [parts |-> r.parts, man |-> r.man, mark |-> r.mark]
 NoContent == [parts |-> [i \in Parts |-> 0], man |-> 0, mark |-> FALSE]
 NoAct == [pn |-> NoName, g |-> 0]
 
-Verbs == {"place", "switch", "back", "prune"}
 
 VARIABLES
     pc,       \* each actor's next step
@@ -553,9 +552,16 @@ Step(a) ==
 Done == /\ \A a \in Actors : pc[a] = "idle" /\ ops[a] = MaxOps
         /\ UNCHANGED vars
 
+\* Enumerate only legal verb arguments, and only while the actor can start another operation.
+StartAny(a) ==
+    /\ pc[a] = "idle" /\ ops[a] < MaxOps
+    /\ \/ \E t \in Trees, e \in Tested \cup {0} : Start(a, "place", t, e)
+       \/ \E t \in Trees : Start(a, "switch", t, 0)
+       \/ Start(a, "back", 0, 0)
+       \/ Start(a, "prune", 0, 0)
+
 Next ==
-    \/ \E a \in Actors : \/ \E v \in Verbs, t \in Trees \cup {0}, e \in Tested \cup {0} : Start(a, v, t, e)
-                         \/ Step(a) \/ Die(a)
+    \/ \E a \in Actors : StartAny(a) \/ Step(a) \/ Die(a)
     \/ \E s \in Servers : SResolve(s) \/ SHold(s) \/ SStop(s)
     \/ Crash
     \/ Done
