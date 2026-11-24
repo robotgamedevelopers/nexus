@@ -834,6 +834,15 @@ void PraxBoard::runTasks() {
 
 void PraxBoard::addPageStyle() {
     PrDomDocument* document = prHtmlWindowDocument(prHtmlPageWindow(page_));
+    if (document) {
+        const auto setLabel = [&](const char* id, const char* value) {
+            auto* element = prDomNodeGetElementById(prDomDocumentAsNode(document), sv(id));
+            if (element && taken(prDomNodeTextContent(prDomElementAsNode(element))) != value)
+                prDomNodeSetTextContent(prDomElementAsNode(element), sv(value));
+        };
+        setLabel("wordmark", "nexus");
+        setLabel("ver", NEXUS_DISPLAY_VERSION);
+    }
     PrDomElement* head = document != nullptr ? prDomDocumentHead(document) : nullptr;
     if (head == nullptr || prDomNodeGetElementById(prDomDocumentAsNode(document), sv(kSprintStyleId)) != nullptr) {
         return;

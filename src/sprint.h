@@ -97,8 +97,9 @@ std::string sprintPageStyle(const SpendFit& fit);
 
 // The footer's link to nova-sprint's repository is not shown (the owner 2026-11-10: "remove the link to nova sprint
 // github"), matched by its address, not its place; a footer that holds nothing else is not shown either, so no empty
-// space is left where it was. The board's own header, its logo and its "nova-sprint" title, shows as served.
+// space is left where it was. The embedded header uses the short product name.
 constexpr std::string_view kSprintRepoLinkStyle =
+    ".brand h1 #logo { display: none !important; } .brand h1 #wordmark { display: inline !important; width: auto !important; }\n"
     "a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"], a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"] "
     "{ display: none !important; }\n"
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "

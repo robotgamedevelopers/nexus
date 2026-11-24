@@ -35,7 +35,7 @@ struct TabStyle {
     unsigned fill = 0x1b1b1b, divider = 0x686868, selectedFill = 0x86c5ff, selectedInk = 0xffffff, ink = 0x999999;
     float opacity = 1, selectedOpacity = 0.5f, selectedRadius = 8;
     float weight = 400, selectedWeight = 700, height = style::kStripHeight;
-    float tabHeight = 1.75f * style::kTabSize, gap = 0, leading = 0.8f * style::kU;
+    float tabHeight = 1.75f * style::kTabSize, gap = 8, leading = 0.8f * style::kU;
     bool reserveWidth = true;
     bool operator==(const TabStyle&) const = default;
 };

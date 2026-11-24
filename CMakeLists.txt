@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus LANGUAGES C CXX)
+project(nexus VERSION 0.1.0 LANGUAGES C CXX)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
@@ -319,6 +319,7 @@ if(NEXUS_WINDOW)
     # The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
     # functional test on pages it serves from memory.
     add_library(nexus_board STATIC src/board.cpp)
+    target_compile_definitions(nexus_board PRIVATE NEXUS_DISPLAY_VERSION="v${PROJECT_VERSION}")
     target_include_directories(nexus_board PUBLIC src)
     target_compile_options(nexus_board PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_board PUBLIC nexus_view prax::html prax::html_quickjs prax::svg_quickjs prax::url_quickjs
@@ -395,8 +396,8 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
             MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
             MACOSX_BUNDLE_GUI_IDENTIFIER com.robotgamedevelopers.nexus
             MACOSX_BUNDLE_BUNDLE_NAME nexus
-            MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0
-            MACOSX_BUNDLE_BUNDLE_VERSION 0.1.0)
+            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+            MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     else()
         add_executable(nexus WIN32 src/main.cpp src/platform_win.cpp)
         if(MSVC)

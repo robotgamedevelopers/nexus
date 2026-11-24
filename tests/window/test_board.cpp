@@ -135,7 +135,7 @@ footer { margin-top: 3rem; font-size: 1.5rem; line-height: 2.25rem; text-align: 
 a { display: inline-block; }</style></head>
 <body><header class="top"><div class="brand"><h1><img id="logo" class="logo-tile" width="120" height="120"
 alt="nova-sprint" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span class="wordmark" id="wordmark">nova-sprint</span></h1>
-<div class="meta"><span class="chip">epoch <b>3</b></span></div></div>
+<div class="meta"><span class="chip" id="ver-chip">version <b id="ver">v99.fixture</b></span><span class="chip">epoch <b>3</b></span></div></div>
 <div class="right"><span class="live" id="live">Live</span></div></header>
 <p><a id="other" href="https://github.com/mas-bandwidth/nova-tools">nova-tools</a></p>
 <footer id="foot"><a id="repo" href="https://github.com/mas-bandwidth/nova-sprint">https://github.com/mas-bandwidth/nova-sprint</a></footer>
@@ -678,7 +678,7 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
 }
 
-// The board's header shows as served: its logo and its "nova-sprint" title. The footer's link to nova-sprint's
+// The embedded header uses the short name and hides the logo. The footer's link to nova-sprint's
 // repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
 // Another link still renders, and still opens in the browser.
 void theRepositoryLinkIsHidden() {
@@ -692,13 +692,16 @@ void theRepositoryLinkIsHidden() {
         PrStringView v = prRawStringView(&t);
         word.assign(v.data != nullptr ? v.data : "", v.size);
         prRawStringReset(&t);
+        auto version = prDomNodeTextContent(prDomElementAsNode(Harness::byId(d, "ver")));
+        const auto value = prRawStringView(&version);
+        CHECK(value.size > 1 && value.data[0] == 'v' && std::string_view(value.data, value.size) != "v99.fixture");
+        prRawStringReset(&version);
     });
-    CHECK(word == "nova-sprint");
+    CHECK(word == "nexus");
     const PrDomRect mark = h.rect("wordmark");
     const PrDomRect logo = h.rect("logo");
     CHECK(mark.width > 50 && mark.height > 80);
-    CHECK(logo.width > 90 && logo.height > 90);                     // the 6rem tile
-    CHECK(mark.x > logo.x + logo.width);                            // the title beside it
+    CHECK(logo.width == 0 && logo.height == 0);
     const PrDomRect repo = h.rect("repo");
     CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
     const PrDomRect foot = h.rect("foot");

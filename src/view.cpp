@@ -1057,7 +1057,7 @@ struct Builder {
         if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
             return tab.name;
         if (tab.kind == TabKind::Sprint)
-            return "Sprint";
+            return "Dashboard";
         std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
         return title.empty() ? std::string("terminal") : title;
     }
