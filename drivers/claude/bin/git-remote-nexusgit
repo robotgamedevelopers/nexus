@@ -1,0 +1,13 @@
+#!/bin/sh
+# Git's remote-helper handshake, followed by an opaque Git pack protocol stream.
+[ "$2" = home ] && [ -n "$NEXUS_GIT_SOCKET_DIR" ] || exit 1
+while IFS= read -r request; do
+    case "$request" in
+        capabilities) printf 'connect\n\n' ;;
+        'connect git-upload-pack'|'connect git-receive-pack')
+            printf '\n'
+            exec /usr/bin/nc -U "$NEXUS_GIT_SOCKET_DIR/${request#connect }" ;;
+        '') exit 0 ;;
+        *) exit 1 ;;
+    esac
+done

@@ -1009,6 +1009,7 @@ void newGlyphsFadeWithoutRelightingOldText() {
     auto settings = [&] {
         h.view.windowApp.transcriptStyle.glyphPeak = 3;
         h.view.windowApp.surface.prompt.bold = true;
+        h.view.windowApp.surface.prompt.textPeak = 1.8f;
     };
     h.type("old");
     h.time += 1;
@@ -1024,11 +1025,12 @@ void newGlyphsFadeWithoutRelightingOldText() {
         CHECK(count == 1);
         CHECK(lit.start == start && lit.end == end && prColorFromColor16(lit.color).r > 1);
     };
-    checkGlow(h.view.prompt, "old!", 3, 4);
+    CHECK(prLayoutNodeHighlights(h.tree, h.findText(h.view.prompt, "old!"), nullptr, 0) == 0);
     const auto value = prLayoutNodeFirstChild(h.tree, h.view.prompt);
     const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, value));
     const auto font = prLayoutFontStyleRecord(h.tree, record.groups[PrLayoutGroup_Font]).font;
     CHECK(font && prTextFontStyle(font).weight == 700);
+    CHECK(prColorFromColor16(prLayoutColorStyleRecord(h.tree, record.groups[PrLayoutGroup_Color]).color).r > 1);
     std::string reply = "abc";
     h.view.growing = [&](std::size_t) { return &reply; };
     settings();
@@ -1290,7 +1292,9 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     }
     const TranscriptStyle stock;
     const auto queued = checkTextPaint(h, "held", stock.ink, stock.fill);
-    CHECK(checkTextPaint(h, "queued", stock.statusInk, stock.fill) == queued);
+    CHECK(!h.hasText(queued, "queued"));
+    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, queued));
+    CHECK(prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).outlineStyle == PrDrawBorderStyle_Dashed);
     for (auto tab : h.tabs())
         CHECK(fillOf(h, prLayoutNodeParent(h.tree, tab)).a == 1);
     h.time = 1201;
@@ -1389,6 +1393,7 @@ void toolLinesAreOneCompactLine() {
     }
     const TranscriptStyle stock;
     checkTextPaint(h, "Bash: ls src", stock.statusInk, stock.fill);
+    checkTextPaint(h, std::string(400, 'x'), h.look.tabs.selectedFill, stock.fill);
     checkTextPaint(h, "Let me look.", stock.ink, h.look.tabs.fill);
     std::vector<PrLayoutNode> lines;
     for (PrLayoutNode n = prLayoutNodeFirstChild(h.tree, e[1]); n != kPrLayoutNodeNone;
@@ -1462,20 +1467,29 @@ void stateCursorUnderTheLastText() {
     state = CursorState::Busy;
     h.frame();
     CHECK(lamps().size() == 1 && h.view.breathing);
+    const auto trough = fillOf(h, lamps().front());
+    h.time += h.look.transcriptStyle.scannerSeconds / 2;
+    h.frame();
+    CHECK(fillOf(h, lamps().front()).b > trough.b + 0.2f);
     agents = 4;
     state = CursorState::Working;
     h.frame();
     CHECK(lamps().size() == agents);
     for (int i = 0; i < 20; ++i) h.frame();
-    const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
-    CHECK(near(h.bounds(lamps().front()).left, caret.left));
-    for (auto cell : lamps()) {
-        const auto segment = h.bounds(cell);
-        CHECK(near(segment.right - segment.left, caret.right - caret.left));
-        CHECK(near(segment.bottom - segment.top, caret.bottom - caret.top));
-        const auto color = fillOf(h, cell);
-        CHECK(color.b > color.r);
+    for (int zoom = 0; zoom < 2; ++zoom) {
+        if (zoom) { h.larger(); h.frame(); }
+        const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
+        CHECK(near(h.bounds(lamps().front()).left, caret.left));
+        for (auto cell : lamps()) {
+            const auto segment = h.bounds(cell);
+            CHECK(near(segment.right - segment.left, caret.right - caret.left));
+            CHECK(near(segment.bottom - segment.top, caret.bottom - caret.top));
+            const auto color = fillOf(h, cell);
+            CHECK(color.b > color.r);
+        }
     }
+    h.smaller();
+    h.frame();
     state = CursorState::Idle;
     h.frame();
     CHECK(lamps().size() == agents);
@@ -2610,6 +2624,10 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(link.sent.size() == 3 && link.sent.back().text == "another held" && h.active().held.empty());
+        h.type("first unsent");
+        h.enter();
+        h.type("second unsent");
+        h.enter();
         h.type("keep working");
         h.key(PrAppKey_Enter, PrAppKeyCode_Enter, PrAppModifierFlag_Shift);
         h.type("second line");
@@ -2617,7 +2635,7 @@ int main(int argc, char** argv) {
         const auto beforeClear = link.sent.size();
         h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
         h.frame();
-        CHECK(h.active().draft.empty() && link.sent.size() == beforeClear && prUiFocus(h.ui) == h.view.prompt);
+        CHECK(h.active().draft.empty() && h.active().held.empty() && link.sent.size() == beforeClear && prUiFocus(h.ui) == h.view.prompt);
         h.type("draft");
         link.sent.clear();
         const auto down = [&](PrAppModifierFlags mods) {

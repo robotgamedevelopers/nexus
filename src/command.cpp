@@ -122,11 +122,11 @@ CommandResult runCommand(const Command& command, int timeoutSeconds) {
         return result;
     }
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
-    PrProcessInfo info{};
+    PrProcessState info{};
     for (;;) {
         drain(process, PrProcessStream_Output, result.out);
         drain(process, PrProcessStream_Error, result.err);
-        info = prProcessInfo(process);
+        info = prProcessState(process);
         if (info.exited && info.outputEnded)
             break;
         if (std::chrono::steady_clock::now() > deadline) {

@@ -12,7 +12,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
+enum class WindowCommand { ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -48,11 +48,14 @@ struct PromptStyle {
     float width = style::kPromptPercent, radius = style::kPromptRadius, paddingX = style::kPromptPadX;
     float height = style::kPromptHeight, gap = style::kPromptGap, maxLines = style::kPromptMaxLines;
     unsigned caretInk = 0xff801f;
-    float caretPeak = 3, caretAspect = 0.618034f;
-    float caretGap = 0;
+    float textPeak = 1, caretPeak = 3, caretAspect = 0.618034f;
+    float caretGap = 0, caretOffsetY = 0;
     float caretHeight = style::kCursorHeight, caretRadius = style::kCursorRadius, caretSeconds = 1.5f;
     float caretHold = 0.1f, caretFallRatio = 0.5f;
-    float caretWidth(float height) const { return height * caretAspect; }
+    PrVec2 segmentSize(float scale) const {
+        const float height = caretHeight * scale;
+        return {height * caretAspect, height};
+    }
     bool bold = false, showPlus = false;
     bool operator==(const PromptStyle&) const = default;
 };
@@ -61,10 +64,11 @@ PrAppHotkey overlayBinding(policy::Host& host, std::string& why);
 
 struct Chirp {
     float startHz = 440, endHz = 440, durationMs = 50, gain = 0;
+    bool synth = false;
 };
 
 struct AccountSurface {
-    Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp;
+    Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, sendChirp, stepChirp, startupChirp;
     std::optional<std::vector<AccountItem>> items;
     std::vector<std::string> tabTitles;
     TabStyle tabs;
@@ -89,7 +93,7 @@ struct TranscriptStyle {
     unsigned fill = 0x252525;
     unsigned ink = 0xf3f3f3;
     unsigned personInk = ink;
-    std::optional<unsigned> panelFill, linkInk, commandInk, codeInk;
+    std::optional<unsigned> panelFill, linkInk, readPathInk, commandInk, codeInk;
     unsigned codeFill = 0x303030;
     float codePadding = 6, codeRadius = 7, codeSizeOffset = 2;
     bool codeBackground = true;
@@ -97,6 +101,8 @@ struct TranscriptStyle {
     unsigned noticeInk = 0xffb4b4;
     unsigned statusInk = 0xd8d8d8;
     float radius = style::kBubbleRadius;
+    float pendingOutlineWidth = 3, sentOutlineWidth = 3;
+    unsigned sentOutlineInk = 0xffffff;
     bool showNotices = true;
     bool showTools = true;
     std::map<std::string, std::string, std::less<>> toolPrompts;
@@ -109,7 +115,7 @@ struct TranscriptStyle {
     MotionCurve scannerCurve{{0, 0}, {0.5, 1}, {1, 0}};
     float scannerPause = 0.1f, scannerEase = 1.f / 30, scannerFade = 0.17f;
     float scannerGap = 0.15f * style::kU, scannerOffset = 0;
-    float scannerSeconds = 1.5f, scannerPeak = 3;
+    float scannerSeconds = 1.5f, scannerPeak = 3, scannerPulseFloor = 0.12f;
     float listGap = 0.4f; // em between a list marker and its text
     bool markdown = true;
     bool conversationPanel = true;

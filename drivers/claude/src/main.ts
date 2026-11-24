@@ -23,6 +23,7 @@ import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 import { sandboxHomeFiles, sandboxTools } from './tools.js';
 import { kDriverDir, wallOptions } from './wall.js';
+import { gitGrant } from './git-grant.js';
 import { Egress } from './egress.js';
 
 const { env, removed } = scrub(process.env);
@@ -64,7 +65,15 @@ try {
         fix: 'free a port on 127.0.0.1 for this user (a firewall or a sandbox around nexus-server may forbid listening)' };
 }
 
+let grant: ReturnType<typeof gitGrant> | undefined;
 function startHarness(start: HarnessStart, account: Account): Harness {
+    if (start.gitRemote) grant ??= gitGrant(start.gitRemote, env);
+    const wall = wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data),
+        egressPort, env, {hook: true}, start.limited, start.keepsOut, start.writeDirs, start.readDirs);
+    if (grant && wall.sandbox.network) {
+        Object.assign(wall.sandbox.network, {allowUnixSockets: grant.sockets});
+        wall.sandbox.filesystem?.allowRead?.push(join(kDriverDir, 'bin/git-remote-nexusgit'));
+    }
     const stream = query({
         prompt: start.prompts,
         options: {
@@ -74,7 +83,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             }),
             // The whole environment the harness gets (it replaces, not merges): the scrubbed one, with the account's
             // directory. The token is not in it: the wall's spawn hands it over on a descriptor.
-            env: harnessEnv(env, account),
+            env: harnessEnv(grant?.env ?? env, account),
             ...(start.sessionId === undefined ? {} : { sessionId: start.sessionId }),
             ...(start.resume === undefined ? {} : { resume: start.resume }),
             ...(start.model === undefined ? {} : { model: start.model }),
@@ -91,8 +100,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             mcpServers: { nexus: secretMcpServer(start.askSecret) },
             toolAliases: { [kSecretToolName]: kSecretMcpToolName },
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
-            ...wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data), egressPort,
-                env, { hook: true }, start.limited, start.keepsOut, start.writeDirs),
+            ...wall,
         },
     });
     const catalogReady = stream.supportedModels().then(async (rows) => {

@@ -233,6 +233,16 @@ void FrameHost::pollLink() {
             if (needed(accountState_) == true && needed(s.sessions) == false && view->playChirp)
                 view->playChirp(view->windowApp.surface.readyChirp);
         }
+        if (phase == sync::LinkPhase::Connected && view->playChirp) {
+            for (const auto& session : s.sessions.sessions()) {
+                const auto* previous = accountState_.find(session->id);
+                if (!previous) continue;
+                for (auto index = std::max(previous->total(), session->first); index < session->total(); ++index) {
+                    if (session->entries[index - session->first]->kind == EntryKind::Person)
+                        view->playChirp(view->windowApp.surface.sendChirp);
+                }
+            }
+        }
         accountState_ = s.sessions;
         std::erase_if(accountSelections_, [&](const auto& pending) {
             return !s.sessions.nextAction() || !s.sessions.find(pending.first) || s.sessions.nextAction() > pending.second;

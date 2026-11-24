@@ -547,3 +547,10 @@ a client's config, the server only relays the change to the client that asked, a
 For registry-managed friends, nova-config stores additional read/write directories in the friend’s `startup.writable_dirs` list. Omit the list or use `[]` for the working directory alone. Each extra entry names an existing absolute directory on the server. Changes apply on the next driver launch, including resumed conversations. Claude and Codex enforce the grants. Conversation-only harnesses reject extra directories. Harness state and temporary files retain their existing rules.
 
 The RPC driver accepts `personal_chatgpt_accounts` in the server's `profile/config.json` as a list of named Codex accounts. For each listed account, configure an email in the account registry. Enrollment checks the email and personal subscription before replacing a saved login. Each turn also checks the account reported by the harness.
+
+In nova-config, a Claude friend can also have `startup.readable_dirs` for read-only workshop directories.
+Use the real directory path. On macOS, `startup.github_ssh_alias` grants fetch and push for the friend's
+`startup.repository` GitHub URL. Configure the checkout's origin as
+`git@<alias>:<owner>/<repo>.git`. The driver opens separate Unix sockets for Git's upload-pack and
+receive-pack protocols and runs SSH on the host with the configured alias. The sandbox receives access
+to those two sockets. Host keys must already be trusted. Grants take effect on the next driver launch.

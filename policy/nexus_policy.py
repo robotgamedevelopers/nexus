@@ -141,6 +141,17 @@ def cli():
                 extra.extend(["--limit", "cwd"])
             for path in identity["writable_dirs"]:
                 extra.extend(["--write-dir", path])
+            if identity["readable_dirs"] or identity["github_ssh_alias"]:
+                if args.harness != "claude":
+                    raise ValueError("this harness does not implement read-only directory and GitHub grants")
+                for path in identity["readable_dirs"]:
+                    extra.extend(["--read-dir", path])
+                alias = identity["github_ssh_alias"]
+                if alias:
+                    repo = re.fullmatch(r"https://github[.]com/([A-Za-z0-9_-]+/[A-Za-z0-9_.-]+)", identity["repository"])
+                    if not repo or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", alias):
+                        raise ValueError("invalid GitHub SSH grant")
+                    extra.extend(["--git-remote", f"git@{alias}:{repo[1].removesuffix('.git')}.git"])
             publish_friend_info(identity, option("--cwd"), defaults.get("model", ""), defaults.get("effort", ""))
             with tempfile.TemporaryFile() as descriptor:
                 descriptor.write(instructions.encode())

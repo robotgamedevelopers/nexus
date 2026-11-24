@@ -90,10 +90,15 @@ def resolve(config, name, harness=None):
         pieces.append(f"# {filename}\n\n{contents}")
         if sum(len(piece.encode()) + 2 for piece in pieces) > MAX_CONTEXT:
             raise ValueError(f"{name}'s startup context exceeds {MAX_CONTEXT} bytes")
-    roots = spec.get("writable_dirs", [])
-    if not isinstance(roots, list) or any(not isinstance(d, str) or not os.path.isabs(d) or
-            os.path.normpath(d) != d or d == "/" or any(c in d for c in "\x00\r\n*?[]") for d in roots):
-        raise ValueError(f"{name}: writable_dirs must be a list of absolute directories")
+    def directories(key):
+        roots = spec.get(key, [])
+        if not isinstance(roots, list) or any(not isinstance(d, str) or not os.path.isabs(d) or
+                os.path.normpath(d) != d or d == "/" or any(c in d for c in "\x00\r\n*?[]") for d in roots):
+            raise ValueError(f"{name}: {key} must be a list of absolute directories")
+        return roots
     prompt = "\n\n".join(pieces)
     return prompt, {"friend": name, "harness": route, "model": model, "home": home,
-                    "repository": spec.get("repository", ""), "pronouns": row.get("pronouns", ""), "writable_dirs": roots, "revision": revision, "files": files, "sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+                    "repository": spec.get("repository", ""), "pronouns": row.get("pronouns", ""),
+                    "writable_dirs": directories("writable_dirs"), "readable_dirs": directories("readable_dirs"),
+                    "github_ssh_alias": spec.get("github_ssh_alias", ""), "revision": revision, "files": files,
+                    "sha256": hashlib.sha256(prompt.encode()).hexdigest()}

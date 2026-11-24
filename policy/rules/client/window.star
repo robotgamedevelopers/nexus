@@ -270,7 +270,7 @@ def handle(event, state, config):
                     window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
         if state["tab"] == "friend" and state["prompt_open"] and not window.get("account_items"):
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
-                window["shortcuts"] = _bind(window["shortcuts"], chord, ["replace_draft", ""])
+                window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:

@@ -504,7 +504,7 @@ bool PraxTerminals::ended(std::size_t id) {
     if (terminal == nullptr) {
         return false;
     }
-    PrProcessInfo info = prTerminalProcessInfo(terminal);
+    PrProcessState info = prTerminalProcessState(terminal);
     return info.exited && info.outputEnded;
 }
 

@@ -141,7 +141,7 @@ struct View {
         size_t bytes = 0;
         std::vector<Range> ranges;
     };
-    GlyphTrail promptTrail, replyTrail;
+    GlyphTrail replyTrail;
     struct SentFlash {
         std::size_t tab, first;
         uint64_t generation;

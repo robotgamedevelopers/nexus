@@ -72,6 +72,7 @@ public:
     bool queue(std::size_t i);  // a friend's tab whose draft is not all-whitespace: append the draft to that tab's queue,
                                 // clear that draft, true; else false, no change. Never touches a transcript.
     bool hold_draft(std::size_t i);
+    void clear_composer(std::size_t i);
     void pop_held(std::size_t i);
     bool take_queued(std::size_t i);  // a friend's tab whose queue is not empty: its oldest queued prompt leaves the
                                       // queue (the server delivered it), true; else false, no change. Never touches a

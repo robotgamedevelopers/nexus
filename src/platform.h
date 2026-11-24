@@ -31,6 +31,10 @@ void showLaunchError(const std::string& text);
 // Gives the window behind `surface` (prAppWindowSurface) the whole frame of the screen with the pointer on it, or of
 // the main screen, menu bar or taskbar included. Returns false, changing nothing, if the surface is not this system's
 // kind, the view has no window, or there is no screen.
+#ifdef __APPLE__
+void trackForegroundPriority(const PrSurface& surface);
+#endif
+
 bool coverScreen(const PrSurface& surface);
 
 } // namespace nexus

@@ -122,6 +122,12 @@ bool Model::hold_draft(std::size_t i) {
     return true;
 }
 
+void Model::clear_composer(std::size_t i) {
+    if (!friend_tab(i)) return;
+    tabs_[i].held.clear();
+    tabs_[i].draft.clear();
+}
+
 void Model::pop_held(std::size_t i) {
     if (friend_tab(i) && !tabs_[i].held.empty()) tabs_[i].held.pop_front();
 }

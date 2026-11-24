@@ -732,22 +732,25 @@ export const kDriverDir = resolve(dirname(fileURLToPath(import.meta.url)), '../.
  */
 export function wallOptions(account: Account, home: string, cwd: string, stderr: (data: string) => void,
     egressPort: number, env: Readonly<Record<string, string | undefined>>,
-    layers: { hook: boolean } = { hook: true }, limited = false, keepsOut: readonly string[] = [], writeDirs: readonly string[] = []): WallOptions {
+    layers: { hook: boolean } = { hook: true }, limited = false, keepsOut: readonly string[] = [], writeDirs: readonly string[] = [],
+    readDirs: readonly string[] = []): WallOptions {
     const programs = programsOf(home, process.execPath, kDriverDir, env);
     const wall = wallOf(home, cwd, account.configDir, realpathSync, programs);
     const writable = [...new Set([home, cwd, tmpdir(), '/tmp', '/private/tmp', '/var/folders'])];
     const limit = limited ? limitOf(home, cwd, account.configDir, programs, process.platform, env, process.execPath,
         realpathSync, existsSync, keepsOut) : undefined;
     const directories = [...new Set(writeDirs.map(dir => realpathSync(dir)))];
-    for (const dir of directories) {
+    for (const dir of new Set([...directories, ...readDirs.map(d => realpathSync(d))])) {
         const protectedPaths = [...wall.secrets, ...wall.config, ...keepsOut];
         if (!limit || !statSync(dir).isDirectory() || limitRefusal(dir, home) ||
             protectedPaths.some(p => within(dir, p) || within(p, dir)) || Array.from(dir).some(c => '*?[]'.includes(c))) {
             throw new Error('Configured write directory overlaps a protected path or is not a directory');
         }
-        limit.roots.push(dir);
         limit.allowRead.push(dir);
-        limit.allowWrite.push(dir);
+        if (directories.includes(dir)) {
+            limit.roots.push(dir);
+            limit.allowWrite.push(dir);
+        } else limit.reads.push(dir);
     }
     const permissions = limit === undefined ? {} : {
         blockReadsOutsideWorkingDirectories: true,

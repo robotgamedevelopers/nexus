@@ -110,6 +110,7 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
     else if (op == "close_terminal") out.command = WindowCommand::CloseTerminal;
     else if (op == "close_tab") out.command = WindowCommand::CloseTab;
     else if (op == "invoke_service") out.command = WindowCommand::InvokeService;
+    else if (op == "clear_composer") out.command = WindowCommand::ClearComposer;
     else if (op == "stop") out.command = WindowCommand::Stop;
     else return false;
     return true;
@@ -269,13 +270,13 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
                 key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" &&
-                key != "panel_fill" && key != "link_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
+                key != "panel_fill" && key != "link_ink" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
                 key != "person_bold" && key != "person_flash_peak" && key != "person_flash_seconds" &&
                 key != "scanner_curve" && key != "scanner_pause" && key != "scanner_ease" && key != "scanner_fade" &&
                 key != "scanner_gap" && key != "scanner_offset" && key != "highlight_seconds" && key != "flash_seconds" &&
-                key != "scanner_ink" && key != "scanner_seconds" && key != "scanner_peak" && key != "highlight_energy") {
+                key != "scanner_ink" && key != "scanner_seconds" && key != "scanner_peak" && key != "scanner_pulse_floor" && key != "highlight_energy") {
             why = "unknown transcript_style field: " + std::string(key);
             return false;
         }
@@ -315,8 +316,10 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         readPoints(d, obj, {"highlight_energy", 16}, style.highlightEnergy, 0, 4) &&
         readOptionalColor(d, obj, {"scanner_ink", 11}, style.scannerInk) &&
         readPoints(d, obj, {"scanner_seconds", 15}, style.scannerSeconds, 0.4, 10) &&
+        readPoints(d, obj, {"scanner_pulse_floor", 19}, style.scannerPulseFloor, 0, 1) &&
         readPoints(d, obj, {"scanner_peak", 12}, style.scannerPeak, 1, 8) &&
         readColor(d, obj, {"person_ink", 10}, style.personInk) &&
+        readOptionalColor(d, obj, {"read_path_ink", 13}, style.readPathInk) &&
         readOptionalColor(d, obj, {"command_ink", 11}, style.commandInk) &&
         readOptionalColor(d, obj, {"code_ink", 8}, style.codeInk) &&
         readColor(d, obj, {"code_fill", 9}, style.codeFill) &&
@@ -328,6 +331,9 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         readOptionalColor(d, obj, {"link_ink", 8}, style.linkInk) &&
         readColor(d, obj, {"switch_email_ink", 16}, style.switchEmailInk) &&
         readColor(d, obj, {"notice_ink", 10}, style.noticeInk) && readColor(d, obj, {"status_ink", 10}, style.statusInk) &&
+        readColor(d, obj, {"sent_outline_ink", 16}, style.sentOutlineInk) &&
+        readPoints(d, obj, {"sent_outline_width", 18}, style.sentOutlineWidth, 0, 8) &&
+        readPoints(d, obj, {"pending_outline_width", 21}, style.pendingOutlineWidth, 0, 8) &&
         readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
         readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools) &&
         readPoints(d, obj, {"list_gap_em", 11}, style.listGap, 0, 4) &&
@@ -349,13 +355,15 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             return item == kPrJsonMissing || (prJsonKind(doc, item) == PrJsonKind_Object &&
                 readPoints(doc, item, {"from_hz", 7}, chirp.startHz, 40, 8000) &&
                 readPoints(doc, item, {"to_hz", 5}, chirp.endHz, 40, 8000) &&
-                readPoints(doc, item, {"duration_ms", 11}, chirp.durationMs, 5, 500) &&
+                readPoints(doc, item, {"duration_ms", 11}, chirp.durationMs, 5, 1500) &&
+                readFlag(doc, item, {"synth", 5}, chirp.synth) &&
                 readPoints(doc, item, {"gain", 4}, chirp.gain, 0, 1));
         };
         if (prJsonKind(doc, sounds) != PrJsonKind_Object || !cue({"tab", 3}, surface.tabChirp) ||
                 !cue({"confirm", 7}, surface.confirmChirp) ||
                 !cue({"open", 4}, surface.openChirp) || !cue({"close", 5}, surface.closeChirp) ||
                 !cue({"dialog", 6}, surface.dialogChirp) || !cue({"cancel", 6}, surface.cancelChirp) ||
+                !cue({"startup", 7}, surface.startupChirp) || !cue({"step", 4}, surface.stepChirp) || !cue({"hold", 4}, surface.holdChirp) || !cue({"send", 4}, surface.sendChirp) ||
                 !cue({"ready", 5}, surface.readyChirp)) return false;
     }
     auto& tabs = surface.tabs;
@@ -386,6 +394,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readPoints(doc, box, {"gap", 3}, prompt.gap, 0, 128) ||
             !readPoints(doc, box, {"max_lines", 9}, prompt.maxLines, 1, 64) ||
             !readColor(doc, box, {"caret_ink", 9}, prompt.caretInk) ||
+            !readPoints(doc, box, {"caret_offset_y", 14}, prompt.caretOffsetY, -16, 16) ||
             !readPoints(doc, box, {"caret_gap", 9}, prompt.caretGap, 0, 32) ||
             !readPoints(doc, box, {"caret_height", 12}, prompt.caretHeight, 1, style::kBodySize) ||
             !readPoints(doc, box, {"caret_radius", 12}, prompt.caretRadius, 0, 32) ||
@@ -394,6 +403,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readPoints(doc, box, {"caret_fall_ratio", 16}, prompt.caretFallRatio, 0.1, 4) ||
             !readPoints(doc, box, {"caret_seconds", 13}, prompt.caretSeconds, 0.4, 10) ||
             !readPoints(doc, box, {"caret_aspect", 12}, prompt.caretAspect, 0.1f, 4) ||
+            !readPoints(doc, box, {"text_peak", 9}, prompt.textPeak, 1, 8) ||
             !readPoints(doc, box, {"caret_peak", 10}, prompt.caretPeak, 1, 8) ||
             !readFlag(doc, box, {"bold", 4}, prompt.bold) ||
             !readFlag(doc, box, {"show_plus", 9}, prompt.showPlus))) return false;

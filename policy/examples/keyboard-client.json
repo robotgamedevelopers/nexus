@@ -20,14 +20,20 @@
     "sprint": "Sprint"
   },
   "transcript_style": {
+    "pending_outline_width": 3,
     "person_bold": true,
     "glyph_peak": 3,
-    "glyph_seconds": 0.4,
+    "glyph_seconds": 0.133333,
+    "glyph_stagger": 0.018333,
     "person_flash_peak": 3,
-    "person_flash_seconds": 0.45
+    "person_flash_seconds": 0.15
   },
   "hold_on_enter": true,
   "sounds": {
+    "startup": {"from_hz": 185, "to_hz": 555, "duration_ms": 850, "gain": 0.11, "synth": true},
+    "step": {"from_hz": 1660, "to_hz": 1440, "duration_ms": 24, "gain": 0.012},
+    "hold": {"gain": 0},
+    "send": {"from_hz": 520, "to_hz": 690, "duration_ms": 65, "gain": 0.045},
     "dialog": {"from_hz": 465, "to_hz": 620, "duration_ms": 70, "gain": 0.07},
     "cancel": {"from_hz": 455, "to_hz": 335, "duration_ms": 65, "gain": 0.075},
     "ready": {"from_hz": 285, "to_hz": 1140, "duration_ms": 320, "gain": 0.12},
@@ -36,7 +42,7 @@
     "tab": {"from_hz": 710, "to_hz": 510, "duration_ms": 42, "gain": 0.07},
     "confirm": {"from_hz": 580, "to_hz": 920, "duration_ms": 80, "gain": 0.09}
   },
-  "prompt_style": {
+  "prompt_style": {"text_peak": 1.8,
     "bold": true,
     "fill": "#303030",
     "border": "#3a3a3a",
@@ -45,6 +51,7 @@
     "radius": 20.16,
     "caret_gap": 2,
     "caret_height": 28,
+    "caret_offset_y": 2,
     "caret_aspect": 0.618034,
     "caret_radius": 3.36,
     "caret_ink": "#ff801f",

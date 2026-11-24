@@ -430,7 +430,7 @@ effort, home repository and working directories. The friend-driver wrapper publi
 metadata from nova-config and its launch arguments. An unavailable field is identified in the notice.
 
 The prompt insertion point is a rounded orange segment. Set `prompt_style.caret_ink` for its color and
-`prompt_style.caret_peak` (1–8, default 3) for its HDR peak. Its width is `prompt_style.caret_aspect` times its height (default 0.618034). Set `caret_height` (1–28 points before zoom), `caret_radius` (0–32 points) and `caret_seconds` (0.4–10 seconds per pulse) in the same object.
+`prompt_style.caret_peak` (1–8, default 3) for its HDR peak. Its width is `prompt_style.caret_aspect` times its height (default 0.618034). Positive `caret_offset_y` lowers the cursor in points before zoom. Set `caret_height` (1–28 points before zoom), `caret_radius` (0–32 points) and `caret_seconds` (0.4–10 seconds per pulse) in the same object.
 The cursor rises for two thirds of the moving part of each cycle, holds at both maximum and minimum brightness for `caret_hold` seconds each (default 0.1, capped at 45% of the cycle per hold), and fades over `caret_fall_ratio` times the rise duration (default 0.5).
 The scanner reads the same height, aspect and corner radius. Both start at the prompt’s typing inset.
 Return these settings in `prompt_style` from the Starlark `window` event, or set them in the client profile and apply it. Reduced motion keeps the cursor steady.
@@ -445,6 +445,12 @@ disables the sweep and collapse. Both the overlay and opaque windows request HDR
 
 ### Editing motion in the client profile
 
+Sent bubbles use a solid white 3-point outline, set by `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
+
+Read tool calls display the path alone. `transcript_style.read_path_ink` sets its color and defaults to the link or selection color.
+
+For a single active cell, `transcript_style.scanner_pulse_floor` sets the dimmest part of the pulse (0–1, default 0.12).
+
 The Starlark window policy builds the cursor and scanner curves. Set `prompt_style.caret_bottom_hold` independently to change how long the cursor stays dim. It inherits `caret_hold` when omitted. For a different animation, supply `prompt_style.caret_curve` or `transcript_style.scanner_curve` directly. Each is a list of 2–64 `[time, value]` pairs between 0 and 1. Start at time 0 and end at 1, in increasing order. Equal successive values create a hold. The renderer eases between values. For the cursor the value controls brightness, and for the scanner it controls the position along the row.
 
 ```python
@@ -458,9 +464,9 @@ Set `prompt_style.caret_gap` to the trailing space in points between typed text 
 
 The window policy can return a `sounds` object with `tab` and `confirm` cues. Each has `from_hz`, `to_hz`, `duration_ms`, and `gain` (0–1). Omit a cue or set its gain to zero to silence it.
 
-The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly typed and streamed text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
+`prompt_style.text_peak` sets steady HDR brightness for the entire draft, capped by display headroom. The keyboard profile uses `prompt_style.bold` for the editor and `transcript_style.person_bold` for the person's messages. In `transcript_style`, `person_flash_peak` and `person_flash_seconds` set the initial brightness and fade of a submitted message. `glyph_peak`, `glyph_seconds`, and `glyph_stagger` control the short-lived glow of newly streamed reply text. Peak brightness is a linear-light multiplier capped by the display's available HDR headroom. A peak of 1 disables the corresponding effect. Reduced Motion disables both.
 
-The client profile's `clear_draft_keys` lists the keys that empty the active friend's editor. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
+The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active friend's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
 
 Set `hold_on_enter` for client-side message staging. Enter holds the current draft in memory for that tab. Empty Enter releases the batch in order. Command-Enter adds the current draft last and releases the batch. Messages reach the server only on release. Slash commands execute directly.
 

@@ -249,6 +249,11 @@ bool open(void* context, PrStudioWindow* window) {
     App& a = appOf(context);
     a.window = window;
     a.opened = true;
+#ifdef __APPLE__
+    PrSurface surface{};
+    if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok)
+        trackForegroundPriority(surface);
+#endif
     const auto power = prAppPower(prStudioWindowApp(window));
     a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
     PrKitTheme theme = windowTheme(a.fonts, a.overlay);
@@ -318,7 +323,7 @@ bool open(void* context, PrStudioWindow* window) {
 
 // The terminals and the board end with the window, while its kit still exists. An overlay window that Prax closes
 // before it opened could not draw (its swap chain): the run stops with it, as its last window, and fails.
-void closeWindow(void* context, PrStudioWindow*) {
+void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     App& a = appOf(context);
     if (a.overlay && overlayCloseFailed(a.opened, a.stopping)) {
         std::fprintf(stderr, "nexus: the overlay window could not open (Prax could not make its swap chain)\n");
@@ -396,6 +401,8 @@ bool start(void* context, PrStudioApp* studio) {
         std::fprintf(stderr, "%s\n", line);
         // The one launch failure the person must be told: on Windows nexus has no terminal, so a message box says it.
         showLaunchError(line);
+    } else {
+        a.audio.play(a.view.windowApp.surface.startupChirp);
     }
     // Launch shows nothing and takes no focus (the owner 2026-11-10: "I want nothing visible no change, no input focus
     // change ... until the hotkey"); the link connects meanwhile. Only with no hotkey does launch show it, else never.

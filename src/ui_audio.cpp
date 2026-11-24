@@ -29,7 +29,7 @@ void UiAudio::play(const Chirp& cue) {
     if (quiet_) return;
     auto field = [](float value) { return uint64_t(std::lround(value)); };
     requested_ = field(cue.startHz) | (field(cue.endHz) << 16) |
-        (field(cue.durationMs) << 32) | (field(cue.gain * 65535) << 48);
+        (field(cue.durationMs) << 32) | (uint64_t(cue.synth) << 47) | (field(cue.gain * 65535) << 48);
     if (!worker_.joinable()) worker_ = std::thread([this] { run(); });
     wake_.notify_one();
 }
@@ -81,14 +81,24 @@ void UiAudio::render(void* context, float* samples, uint32_t frames) {
             voice.idle_.store(false);
             voice.start_ = next & 65535;
             voice.delta_ = double((next >> 16) & 65535) - voice.start_;
-            voice.length_ = std::max(1u, uint32_t((next >> 32) & 65535) * voice.rate_ / 1000);
+            voice.synth_ = ((next >> 47) & 1) != 0;
+            voice.length_ = std::max(1u, uint32_t((next >> 32) & 32767) * voice.rate_ / 1000);
             voice.gain_ = double(next >> 48) / 65535;
             voice.position_ = 0;
             voice.phase_ = 0;
         }
         const double t = double(voice.position_++) / voice.length_;
         const double envelope = std::min(1.0, t * 10) * (1 - t) * (1 - t);
-        const float value = float(std::sin(voice.phase_) * envelope * voice.gain_);
+        double wave = std::sin(voice.phase_);
+        double amplitude = envelope;
+        if (voice.synth_) {
+            const auto phase = voice.phase_;
+            wave = 0.55 * wave + 0.25 * std::sin(phase * 1.501) + 0.14 * std::sin(phase * 2.008)
+                + 0.06 * std::sin(phase * 3);
+            const double shape = std::sin(std::numbers::pi * t);
+            amplitude = shape * shape;
+        }
+        const float value = float(wave * amplitude * voice.gain_);
         voice.phase_ += 2 * std::numbers::pi * (voice.start_ + t * voice.delta_) / voice.rate_;
         std::fill_n(samples, voice.channels_, value);
         samples += voice.channels_;

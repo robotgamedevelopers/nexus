@@ -122,13 +122,13 @@ public:
     }
 
     // Reads to the end of the output and waits up to `patience` for the exit.
-    PrProcessInfo end(std::chrono::milliseconds patience = kPatience) {
+    PrProcessState end(std::chrono::milliseconds patience = kPatience) {
         readUntil(SIZE_MAX, patience);
         const auto deadline = std::chrono::steady_clock::now() + patience;
-        PrProcessInfo info = prProcessInfo(process_);
+        PrProcessState info = prProcessState(process_);
         while (!info.exited && std::chrono::steady_clock::now() < deadline) {
             waker_.wait();
-            info = prProcessInfo(process_);
+            info = prProcessState(process_);
         }
         drain();
         return info;
@@ -136,7 +136,7 @@ public:
 
     // The status it exited with, or -1 if it did not exit by itself.
     int exitStatus() {
-        const PrProcessInfo info = end();
+        const PrProcessState info = end();
         return info.exited && !info.signaled ? info.code : -1;
     }
 
@@ -150,7 +150,7 @@ private:
             reader_.feed(std::string_view(reinterpret_cast<const char*>(buffer), got), items_);
         while ((got = prProcessRead(process_, PrProcessStream_Error, buffer, sizeof buffer)) > 0)
             errors_.append(reinterpret_cast<const char*>(buffer), got);
-        if (!ended_ && prProcessInfo(process_).outputEnded) {
+        if (!ended_ && prProcessState(process_).outputEnded) {
             reader_.finish(items_);
             ended_ = true;
         }
@@ -447,7 +447,7 @@ void starts() {
     }
     {
         Driver d("starts.script", "starts.dir");
-        const PrProcessInfo info = d.end();
+        const PrProcessState info = d.end();
         CHECK(info.exited && info.signaled && info.code == 15);
     }
     const std::string once = "cwd=starts.dir\ndir=" + std::filesystem::canonical("starts.dir").string() +
@@ -464,7 +464,7 @@ void ignoreEof() {
         return;
     d.readUntil(1);
     d.closeInput();
-    const PrProcessInfo info = d.end(std::chrono::milliseconds(500));
+    const PrProcessState info = d.end(std::chrono::milliseconds(500));
     CHECK(!info.exited);
 }
 
