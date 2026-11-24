@@ -149,7 +149,8 @@ line height. `selector_width_em` fixes the selector width in body-font units (de
 Only the background grows.
 
 The client Starlark window may return a `tab_style` object. Set `fill`, `opacity`, `ink` and
-`weight` for the strip and its ordinary titles. Set `selected_fill`, `selected_opacity`,
+`weight` for the strip and its ordinary titles. `divider` sets the color of the full-width, two-point
+rule below the tabs (default `#686868`). Set `selected_fill`, `selected_opacity`,
 `selected_radius`, `selected_ink` and `selected_weight` for the active tab. Colors use
 `#RRGGBB`, opacity ranges from 0 to 1, radii from 0 to 64, and font weights from 100 to 900.
 Set `height`, `tab_height`, `leading` and `gap` for strip height, pill height, leading space and space between tabs.

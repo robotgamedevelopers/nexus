@@ -65,6 +65,7 @@ enum class Part : unsigned char {
     Footer,
     Prompt,
     StripRow,
+    TabDivider,
     BoardBox,
     Tools,
     Cursor,
@@ -234,6 +235,9 @@ struct BoxRecipe {
                 for (PrLayoutUnit& b : box.border)
                     b = prLayoutUnitFromPx(1);
                 break;
+            case Part::TabDivider:
+                box.height = px(2);
+                break;
             case Part::StripRow:
                 box.display = PrLayoutDisplay_Flex;
                 box.height = px(look.tabs.height * k + 1);
@@ -290,6 +294,9 @@ struct DecorationRecipe {
             case Part::Conversation:
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.panelFill.value_or(look.tabs.fill)));
                 radius(d, look.transcriptStyle.radius * k);
+                break;
+            case Part::TabDivider:
+                d.background = prColor16FromColor(rgb(look.tabs.divider));
                 break;
             case Part::StripRow:
                 d.background = prColor16FromColor(faded(rgb(look.tabs.fill), look.tabs.opacity));
@@ -394,6 +401,9 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Row;
                 flex.alignItems = PrLayoutAlignment_FlexEnd;
                 flex.columnGap = px(look.prompt.gap * k);
+                flex.shrink = 0;
+                break;
+            case Part::TabDivider:
                 flex.shrink = 0;
                 break;
             case Part::StripRow:
@@ -1021,6 +1031,7 @@ struct Builder {
                 }
             }
         }
+        if (model.tab_count() > 0) element(window, Part::TabDivider);
         if (!prUiDragging(ui)) view.draggingTab = 0;
         keepFocusOnTheActiveTab();
     }

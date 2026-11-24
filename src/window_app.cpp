@@ -384,6 +384,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
     const auto style = prJsonMember(doc, 0, {"tab_style", 9});
     if (style != kPrJsonMissing && (prJsonKind(doc, style) != PrJsonKind_Object ||
             !readColor(doc, style, {"fill", 4}, tabs.fill) || !readColor(doc, style, {"ink", 3}, tabs.ink) ||
+            !readColor(doc, style, {"divider", 7}, tabs.divider) ||
             !readColor(doc, style, {"selected_fill", 13}, tabs.selectedFill) ||
             !readColor(doc, style, {"selected_ink", 12}, tabs.selectedInk) ||
             !readPoints(doc, style, {"opacity", 7}, tabs.opacity, 0, 1) ||
