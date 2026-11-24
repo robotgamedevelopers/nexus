@@ -77,8 +77,13 @@ if [ "$inbox" = offline ]; then
         printf 'nova-bus hook: redis at %s answered with an error; redis: %s; reconnecting\n' \
             "$NOVA_BUS_REDIS" "$NOVA_BUS_PASSWORD" >&2
     done
+    # Publish readiness after the sleeper joins the hook's process group. The shell's
+    # wait builtin then runs the TERM trap even if the signal arrives as it starts waiting.
+    /bin/sleep 30 &
+    sleeper=$!
     : > "$HOME/$inbox.reported"
-    while :; do /bin/sleep 30; done
+    wait "$sleeper"
+    exit 75
 fi
 if /bin/sh -c "$receiver" < "$HOME/$inbox.wire"; then
     : > "$HOME/$inbox.acked"
