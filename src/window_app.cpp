@@ -268,7 +268,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
     }
     for (auto i = prJsonFirst(d, obj); i != kPrJsonMissing; i = prJsonAfter(d, obj, i)) {
         const auto key = stringAt(d, i);
-        if (key != "fill" && key != "ink" && key != "person_ink" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
+        if (key != "fill" && key != "ink" && key != "person_ink" && key != "message_inks" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
                 key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" &&
                 key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
@@ -279,6 +279,16 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
                 key != "scanner_ink" && key != "scanner_seconds" && key != "scanner_peak" && key != "scanner_pulse_floor" && key != "highlight_energy") {
             why = "unknown transcript_style field: " + std::string(key);
             return false;
+        }
+    }
+    const auto messageInks = prJsonMember(d, obj, {"message_inks", 12});
+    if (messageInks != kPrJsonMissing) {
+        if (prJsonKind(d, messageInks) != PrJsonKind_Object) return false;
+        for (auto i = prJsonFirst(d, messageInks); i != kPrJsonMissing; i = prJsonAfter(d, messageInks, i)) {
+            const auto text = stringAt(d, i);
+            unsigned color{};
+            if (!readColor(d, messageInks, {text.data(), text.size()}, color)) return false;
+            style.messageInks.emplace(text, color);
         }
     }
     const auto prompts = prJsonMember(d, obj, {"tool_prompts", 12});

@@ -134,6 +134,9 @@ struct App {
     bool overlay = true;            // the overlay window; --windowed gives a normal window
     PrStudioWindow* window = nullptr;   // from open() to close(); the overlay's from start()
     const PrStudioWindowDesc* overlayWindow = nullptr;  // the overlay's window, which start() creates
+    bool preparingReveal = false;
+    bool revealFrameReady = false;
+    std::optional<uint64_t> boardRevealStep;
     bool opened = false;            // open() ran for the window
     bool stopping = false;          // the run's shutdown has begun
     bool failed = false;            // Prax closed the overlay's window before it opened (overlayCloseFailed)
@@ -206,6 +209,8 @@ void carryOut(App& a, OverlayAct act) {
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
 #endif
     if (act == OverlayAct::Hide) {
+        a.preparingReveal = false;
+        a.boardRevealStep.reset();
         a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
         if (prAppWindowIsVisible(window)) a.audio.play(a.view.windowApp.surface.closeChirp);
@@ -216,11 +221,20 @@ void carryOut(App& a, OverlayAct act) {
     if (prAppWindowSurface(window, &surface) != PrStatus_Ok || !coverScreen(surface))
         std::fprintf(stderr, "nexus: the overlay could not be given the whole screen (no native view, window or "
             "screen), so it covers the screen's work area only, inside the menu bar or the taskbar\n");
-    if (!prAppWindowIsVisible(window)) a.audio.play(a.view.windowApp.surface.openChirp);
-    prAppWindowFocus(window);
-    prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
-    // Shown: the window may claim one account's sign-in (frame_host.h LinkSignIn), and opens its page in the browser.
-    a.host.signIn.shown();
+    if (!prAppWindowIsVisible(window)) {
+        a.preparingReveal = true;
+        a.revealFrameReady = false;
+        a.boardRevealStep.reset();
+        prAppWindowSetOpacity(window, 0);
+        prAppWindowSetVisible(window, true);
+        prAppWindowRequestUnpacedFrame(window);
+        a.host.signIn.shown();
+        return;
+    }
+    if (!a.preparingReveal) {
+        prAppWindowFocus(window);
+        prAppTimerSet(app, kKeyCheckTag, kKeyCheckSeconds, 0);
+    }
 }
 
 bool overlayVisible(const App& a) {
@@ -465,6 +479,11 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     // The frame's work starts here, after the swap chain's wait; it ends in trace(), once the frame is rendered.
     a.hitch.begin();
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
+    if (a.preparingReveal) {
+        const bool sprint = a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint;
+        a.revealFrameReady = !sprint || (a.boardRevealStep && a.board->readyToReveal(*a.boardRevealStep));
+        return;
+    }
     // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.
     if (a.overlay)
         carryOut(a, a.rules.observe(overlayVisible(a), overlayActive(a)));
@@ -535,7 +554,7 @@ void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     if (!a.overlay)
         return;
     if (e->kind == PrAppEventKind_Hotkey && e->tag == kHotkeyTag) {
-        carryOut(a, a.rules.hotkey(overlayVisible(a), overlayActive(a)));
+        carryOut(a, a.preparingReveal ? OverlayAct::Hide : a.rules.hotkey(overlayVisible(a), overlayActive(a)));
     } else if (e->kind == PrAppEventKind_Timer && e->tag == kPolicyCheckTag) {
         const auto generation = a.view.application->refresh();
         if (generation == a.hotkeyGeneration) return;
@@ -591,7 +610,23 @@ bool laidOut(void* context, PrStudioWindow* window) {
 // Prax's wait (the swap chain's) is not work; the rounds are the layout, the scene and its play the draw, and the
 // render the present.
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
-    HitchDetector& hitch = appOf(context).hitch;
+    App& a = appOf(context);
+    if (a.preparingReveal) {
+        auto* window = prStudioWindowAppWindow(a.window);
+        if (a.revealFrameReady && t->extent.x > 0 && t->extent.y > 0) {
+            // Studio submitted the updated frame. Complete it before exposing the surface.
+            prGpuDeviceWaitIdle(prStudioAppDevice(prStudioWindowStudioApp(a.window)));
+            a.preparingReveal = false;
+            prAppWindowFocus(window);
+            prAppWindowSetOpacity(window, 1);
+            a.audio.play(a.view.windowApp.surface.openChirp);
+            prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
+        } else {
+            if (a.board && !a.boardRevealStep) a.boardRevealStep = a.board->postedStep();
+            prAppWindowRequestFrame(window);
+        }
+    }
+    HitchDetector& hitch = a.hitch;
     if (hitch.inFrame()) {
         hitch.add(Phase::Layout, t->build);
         hitch.add(Phase::Draw, t->scene + t->play);

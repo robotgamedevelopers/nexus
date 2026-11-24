@@ -376,6 +376,16 @@ bool PraxBoard::event(const PrAppEvent& e) {
     return route == BoardRoute::Page;
 }
 
+std::uint64_t PraxBoard::postedStep() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return posted_;
+}
+
+bool PraxBoard::readyToReveal(std::uint64_t step) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return done_ >= step && (out_.recorded || out_.failed || !lookupError_.empty());
+}
+
 bool PraxBoard::settled() {
     std::lock_guard<std::mutex> lock(mutex_);
     return out_.settled;

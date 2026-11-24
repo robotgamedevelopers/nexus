@@ -1361,11 +1361,18 @@ struct Builder {
     }
 
     void message(PrLayoutNode parent, std::string_view source, PrKitTone tone, double gain = 1, const View::GlyphTrail* trail = nullptr) {
+        const auto& style = look.transcriptStyle;
+        std::optional<unsigned> sourceInk;
+        if (tone == kPersonTone) {
+            const auto tagged = style.messageInks.find(source);
+            if (tagged != style.messageInks.end()) sourceInk = tagged->second;
+            else if (source.starts_with("nova-bus: ")) sourceInk = style.linkInk.value_or(look.tabs.selectedFill);
+        }
         const bool bold = tone == kPersonTone && look.transcriptStyle.personBold;
         const auto body = textStyle(bold ? PrKitTextRole_Strong : PrKitTextRole_Body, tone);
         const auto plainLabel = [&](PrLayoutNode node) {
             if (trail) textNodes(tree, node, [&](auto leaf) { glyphLight(leaf, 0, *trail, look.transcriptStyle.ink); });
-            if (gain != 1) ink(node, look.transcriptStyle.personInk, false, gain);
+            if (gain != 1 || sourceInk) ink(node, sourceInk.value_or(style.personInk), false, gain);
             return node;
         };
         const auto select = [&](PrLayoutNode p) { view.selection.paragraph(p, prColor16FromColor(faded(rgb(look.prompt.selection), 0.65f))); };
@@ -1396,8 +1403,7 @@ struct Builder {
                 prKitPlace(kit, marker, gutter);
             }
             const auto text = prKitText(kit, row, {}, body);
-            const auto& style = look.transcriptStyle;
-            const auto plain = tone == kPersonTone ? style.personInk : style.ink;
+            const auto plain = sourceInk.value_or(tone == kPersonTone ? style.personInk : style.ink);
             for (const auto& run : paragraph.runs) {
                 auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
                 const auto span = prKitText(kit, text, {}, runStyle);

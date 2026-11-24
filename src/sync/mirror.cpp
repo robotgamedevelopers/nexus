@@ -113,6 +113,11 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             if (!e.closed) {
                 break;
             }
+            // Driver lifecycle diagnostics remain in server history, including on older servers.
+            if (e.kind == EntryKind::Notice && e.text.starts_with(tab.name + "'s driver was ended by signal ")) {
+                ++seen.next;
+                continue;
+            }
             model.append(i, Entry{e.kind, e.text, e.accountEmailEnd});
             ++seen.next;
             changed = true;

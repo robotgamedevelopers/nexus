@@ -77,6 +77,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         wall.sandbox.filesystem?.allowRead?.push(join(kDriverDir, 'bin/git-remote-nexusgit'));
     }
     const childEnv = {...(grant?.env ?? env)};
+    const instructions = [start.startupContext];
     if (start.busListener && wall.sandbox.network) {
         const [friend, address] = start.busListener.split('@');
         if (!friend || !address) throw new Error('Missing message bus grant fields');
@@ -87,11 +88,9 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         wall.sandbox.filesystem?.allowRead?.push(bin);
         Object.assign(childEnv, {PATH: bin + ':' + (childEnv['PATH'] ?? '/usr/bin:/bin'), NEXUS_BUS_FRIEND: friend,
             NEXUS_BUS_LISTENER: busSocket});
+        instructions.push('To listen on the message bus use Monitor with "' + join(bin, 'nova-bus') +
+            '" hook --as ' + friend + '. Keep the full output for delivery.');
     }
-    const instructions = [start.startupContext];
-    if (start.busListener) instructions.push(
-        'To listen on the message bus use Monitor with "' + join(kDriverDir, 'bin/bus/nova-bus') +
-        '" hook --as ' + childEnv['NEXUS_BUS_FRIEND'] + '. Keep the full output for delivery.');
     const startupContext = instructions.filter(Boolean).join('\n');
     const stream = query({
         prompt: start.prompts,

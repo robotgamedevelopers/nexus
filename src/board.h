@@ -107,6 +107,8 @@ public:
 
     // For tests and the screenshot: true once the document has loaded and its first answers have painted, with nothing
     // due now (as of the last step of the page's thread); the line show() gives while there is no page.
+    std::uint64_t postedStep();
+    bool readyToReveal(std::uint64_t step);
     bool settled();
     std::string problem() const { return said_; }
     // The page's canvas colour at the last paint, which the recorded list fills edge to edge.
