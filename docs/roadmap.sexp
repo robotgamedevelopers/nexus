@@ -2,9 +2,9 @@
 ; The layers of nexus, bottom up. Each is secured before the next starts.
 (:schema 1
  :root "goal"
- :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale"))
+ :page (:roadmaps ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi"))
  :nodes
- ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale"))
+ ((:id "goal" :type :work-set :children ("layers" "takeover" "window-features" "configuration" "tab-kinds" "tailscale" "lessons-from-pi"))
   (:id "takeover" :type :roadmap :title "Takeover: a new build replaces the running server, rebuilt bottom up"
    :rows (
      ("takeover-store-lock" "1. Store lock: at most one process ever has the store open for writing, enforced by the operating system (an exclusive flock on the store's directory itself, taken before the store is read, held for the life of the process, released by the OS however it ends; the store reached only through that directory's descriptor after); the server starts in the order probe, lock and replay, socket, drivers restored, waiting a bounded time for a writer that holds the lock without answering; only a start refused by a live server exits 0; readers take the lock shared, change nothing and give up past a limit; the lock checked where it lives, and network filesystems refused")
@@ -163,6 +163,28 @@
      ("ts-expiry" "done" "t-ts-expiry")
      ("ts-own-control" "done" "t-ts-own-control")
      ))
+  ; Lessons from pi (earendil-works/pi, MIT; read at 1.6.0 on 2026-11-23). Native per-harness drivers stay primary; pi is a source of mechanisms and possibly one more driver, never the base.
+  (:id "lessons-from-pi" :type :roadmap :title "Lessons from pi, bottom up"
+   :rows (
+     ("pi-protocol" "1. Driver protocol additions: steer (taken in after the current turn's tool calls, before the next model call) and follow-up (taken in only when the run would otherwise end) as their own kinds beside send; an explicit settled event, since the end of one model run is not done while retries, compaction or queued messages can follow; the full queue sent on each change; each driver says in hello which native features its harness has, so a harness's own features keep working and the server offers only what the driver can do. TLA+ model and fake driver first")
+     ("pi-entries" "2. Transcript entries: entries get an id and a parent, so a tab can fork and branch; a compaction entry (a summary and the first entry kept; the entries before it stay in the store and leave only what the model sees); an edit entry that hides an entry from the model without deleting it (a failed overflow attempt, say); a branch summary when a branch is left; usage entries that count cost and never reach the model. A store format bump with its store model, and a durable cursor (entries after an id) for whoever mirrors a session")
+     ("pi-prompt-sections" "3. The prompt as data, customized by talking with your AI: named sections, changed by the AI on the person's word, checked by the server and appended as a patch (sections set or removed, tools added or removed), never a rewrite of the head, so the prompt cache survives, the prompt now is rebuilt from the transcript, and undo walks the history back. Native drivers apply a patch their own way")
+     ("pi-summary" "4. A structured summary for an account switch or a move the harness cannot resume, in place of today's 16 KiB tail of recent turns: goal, constraints and preferences, progress (done, in progress, blocked), key decisions, next steps, critical context; exact paths, names and errors kept; files read and changed carried across summaries; a new summary updates the last one; the conversation given to the summarizer as flat text, never as a conversation to continue, with tool results cut short")
+     ("pi-driver" "5. A pi driver for one friend who is not on Claude, through pi's RPC mode (pi --mode rpc, strict LF-delimited JSONL, an id on each command, a prompt's acceptance not its end, done at agent_settled): only after that provider's subscription sign-in is checked against its terms (pi's Claude sign-in presents itself as Claude Code, so Claude friends never go through pi); and pi's lists of retryable, non-retryable and context-overflow errors taken into every driver, a usage limit reported as usage-limit")
+     )
+   :columns (("done" "done"))
+   :cells (
+     ("pi-protocol" "done" "t-pi-protocol")
+     ("pi-entries" "done" "t-pi-entries")
+     ("pi-prompt-sections" "done" "t-pi-prompt-sections")
+     ("pi-summary" "done" "t-pi-summary")
+     ("pi-driver" "done" "t-pi-driver")
+     ))
+  (:id "t-pi-protocol" :type :task :title "Pi 1. Driver protocol: steer, follow-up, settled, queue updates, native features named in hello" :state :todo)
+  (:id "t-pi-entries" :type :task :title "Pi 2. Transcript entries with ids and parents: compaction, hidden-from-model edits, branch summaries, usage; a store format bump and a durable cursor" :state :todo)
+  (:id "t-pi-prompt-sections" :type :task :title "Pi 3. The prompt as named sections the AI changes by talking with you, appended as patches so the cache survives" :state :todo)
+  (:id "t-pi-summary" :type :task :title "Pi 4. A structured, updating summary for account switches and moves the harness cannot resume" :state :todo)
+  (:id "t-pi-driver" :type :task :title "Pi 5. A pi driver over its RPC mode for one non-Claude friend, after a terms check; pi's error lists in every driver" :state :todo)
   (:id "t-ts-build" :type :task :title "Tailscale 0. Build: the pinned shim on macOS, Linux and Windows, in CI, sizes and licences stated" :state :doing
    :evidence ("src/tailscale/shim, src/tailscale/nts.h, cmake/tailscale.cmake, cmake/windows10.manifest" "tests/tailscale/tailscale_test.cpp: ctest -L tailscale (tailscale_unit_version, tailscale_functional_state_dir, tailscale_functional_refusals, tailscale_functional_refuses_inherited_key, tailscale_functional_lock, tailscale_functional_lock_two_process, tailscale_functional_panics, tailscale_functional_log_cap, tailscale_functional_quiet)" ".github/workflows/tailscale.yml: tailscale-macos, tailscale-linux, tailscale-windows and the commit statuses tailscale-<os>" "src/tailscale/NOTICES.md: cmake --build <dir> --target nexus_tailscale_notices_check" "docs/tailscale.md"))
   (:id "t-ts-own-control" :type :task :title "Tailscale, later: use your own control server (headscale), set up by the person, by its address" :state :todo)
