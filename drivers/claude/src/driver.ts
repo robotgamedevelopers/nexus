@@ -35,6 +35,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { busSendTool } from './bus-sender.js';
 
 import { isAccountName, kTokenFile } from './account.js';
 import {
@@ -75,6 +76,7 @@ export interface HarnessStart {
     readDirs?: string[];
     gitRemote?: string;
     busListener?: string;
+    busSender?: string;
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
@@ -150,6 +152,7 @@ export interface Arguments {
     readDirs?: string[];
     gitRemote?: string;
     busListener?: string;
+    busSender?: string;
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
@@ -163,7 +166,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--bus-sender', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -200,6 +203,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 }
                 a.limit = value;
                 break;
+            case '--bus-sender': a.busSender = value; break;
             case '--bus-listener': a.busListener = value; break;
             case '--git-remote': a.gitRemote = value; break;
             case '--read-dir':
@@ -244,7 +248,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
-    if ((a.gitRemote || a.busListener || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
+    if ((a.gitRemote || a.busListener || a.busSender || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
     if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
         return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
@@ -376,13 +380,14 @@ export const kSecretMcpToolName = `mcp__nexus__${kSecretToolName}`;
 export const kSecretToolTimeoutMs = 11 * 60 * 1000;
 
 /** The in-process SDK MCP server that gives Claude the nexus_ask_secret(account, what, why) tool (docs/secrets.md). */
-export function secretMcpServer(askSecret: HarnessStart['askSecret']): McpSdkServerConfigWithInstance {
+export function secretMcpServer(askSecret: HarnessStart['askSecret'], busSender?: string): McpSdkServerConfigWithInstance {
     return createSdkMcpServer({
         name: 'nexus',
         version: '0.1.0',
         alwaysLoad: true,
         timeout: kSecretToolTimeoutMs,
         tools: [
+            ...(busSender ? [busSendTool(busSender)] : []),
             tool(
                 kSecretToolName,
                 'Ask the person, in the nexus window\'s secret dialog, to paste a secret for an account this friend is '
@@ -571,6 +576,7 @@ export class Driver {
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
             limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        if (this.args.busSender) start.busSender = this.args.busSender;
         if (this.args.busListener) start.busListener = this.args.busListener;
         if (this.args.gitRemote) start.gitRemote = this.args.gitRemote;
         if (this.args.readDirs) start.readDirs = this.args.readDirs;

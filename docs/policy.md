@@ -476,3 +476,5 @@ Set `hold_on_enter` for client-side message staging. Enter holds the current dra
 Pasting a file, clipboard image, or at least 4096 bytes of text into a friend prompt inserts a compact filename or byte count. The contents are held in client memory until send. Releasing the bubble uploads each attachment over SSH to the server helper `~/.local/bin/nexus-receive` (Python 3 and Git). The helper resolves the friend’s configured instance and stores the bytes under `incoming/<unique directory>/<original basename>` inside its working directory. The friend receives that relative path. Clipboard images use `pasted-image.png` and text uses `pasted.txt`. The client accepts up to 32 MiB per attachment and 128 MiB staged across tabs. An interrupted upload keeps the bubble available to retry during the current run.
 
 The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, and `ready` use the same chirp fields. The client remembers /quiet across launches. /quiet off and /loud restore sound.
+
+Copying selected transcript text clears its highlight and plays `sounds.copy`. All cues pass through the client audio player, where `/quiet` mutes them globally.

@@ -34,6 +34,7 @@
     "startup": {"from_hz": 185, "to_hz": 555, "duration_ms": 850, "gain": 0.11, "synth": true},
     "step": {"from_hz": 1660, "to_hz": 1440, "duration_ms": 24, "gain": 0.012},
     "hold": {"gain": 0},
+    "copy": {"from_hz": 1600, "to_hz": 480, "duration_ms": 32, "gain": 0.04},
     "discard": {"from_hz": 750, "to_hz": 250, "duration_ms": 24, "gain": 0.045},
     "send": {"from_hz": 520, "to_hz": 690, "duration_ms": 65, "gain": 0.045},
     "dialog": {"from_hz": 465, "to_hz": 620, "duration_ms": 70, "gain": 0.07},

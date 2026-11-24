@@ -81,12 +81,17 @@ std::string ChatSelection::linkAt(PrVec2 point, PrLayoutNode leaf) const {
     return {};
 }
 
-bool ChatSelection::event(const PrAppEvent& e, const std::function<void(const std::string&)>& copy,
+bool ChatSelection::event(const PrAppEvent& e, const std::function<bool(const std::string&)>& copy,
                           const std::function<void(const std::string&)>& open) {
     if (paragraphs_.empty()) return false;
+    const auto mods = e.modifiers & ~PrAppModifierFlag_CapsLock;
     if (e.kind == PrAppEventKind_KeyDown && e.keyboard.key == PrAppKey('C') &&
-        (e.modifiers & ~PrAppModifierFlag_CapsLock) == style::kCommand && !text_.empty() && copy) {
-        copy(text_);
+        (mods == PrAppModifierFlag_Control || mods == PrAppModifierFlag_Super || mods == style::kCommand) && !text_.empty() && copy) {
+        if (copy(text_)) {
+            ranges_.clear();
+            text_.clear();
+            dragging_ = false;
+        }
         return true;
     }
     if (e.kind == PrAppEventKind_Text || e.kind == PrAppEventKind_Paste) {

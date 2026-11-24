@@ -152,6 +152,8 @@ def cli():
                 if args.harness != "claude":
                     raise ValueError("a driver-owned bus_listener requires a Claude friend")
                 extra.extend(["--bus-listener", args.friend + "@" + identity["bus_listener"]])
+            if identity["bus_owner"] == "nexus-server" and args.harness == "claude":
+                extra.extend(["--bus-sender", args.friend + "@" + identity["bus_listener"]])
             if identity["readable_dirs"] or identity["github_ssh_alias"]:
                 if args.harness != "claude":
                     raise ValueError("this harness does not implement read-only directory and GitHub grants")

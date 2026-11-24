@@ -23,7 +23,7 @@ public:
     void begin(PrLayoutTree* tree, size_t tab);
     void paragraph(PrLayoutNode root, PrColor16 ink);
     void link(PrLayoutNode leaf, const std::string& url);
-    bool event(const PrAppEvent& event, const std::function<void(const std::string&)>& copy,
+    bool event(const PrAppEvent& event, const std::function<bool(const std::string&)>& copy,
                const std::function<void(const std::string&)>& open = {});
 private:
     struct Link { PrLayoutNode leaf; std::string url; };

@@ -91,6 +91,12 @@ class PersonalPolicy(unittest.TestCase):
         claude[claude.index("codex")] = "claude"
         flags, _ = json.loads(subprocess.check_output(claude, text=True))
         self.assertEqual(flags[flags.index("--bus-listener") + 1], "review@127.0.0.1:6379")
+        startup["bus_owner"] = "nexus-server"
+        publish()
+        flags, _ = json.loads(subprocess.check_output(claude, text=True))
+        self.assertNotIn("--bus-listener", flags)
+        self.assertEqual(flags[flags.index("--bus-sender") + 1], "review@127.0.0.1:6379")
+        startup.pop("bus_owner")
         startup.pop("bus_listener")
         fixture["items"][0]["fields"]["harness"] = "codex"
         publish()

@@ -68,6 +68,7 @@ struct Chirp {
 };
 
 struct AccountSurface {
+    Chirp copyChirp{1600, 480, 32, 0.04f};
     Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, discardChirp, sendChirp, stepChirp, startupChirp;
     std::optional<std::vector<AccountItem>> items;
     std::vector<std::string> tabTitles;

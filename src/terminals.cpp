@@ -250,6 +250,7 @@ void PraxTerminals::take() {
 }
 
 void PraxTerminals::observe(double time) {
+    // Publish launcher results once at frame start so all UI rounds see the same terminals.
     take();
     struct Observed {
         std::size_t id;
@@ -452,7 +453,6 @@ bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
 }
 
 void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
-    take();
     PrTerminal* terminal = find(id);
     if (terminal == nullptr) {
         return;     // starting: the tab shows the window's background until its shell is there; what is typed meanwhile
@@ -496,7 +496,6 @@ void PraxTerminals::update(std::size_t id) {
 }
 
 bool PraxTerminals::ended(std::size_t id) {
-    take();
     if (failed_.count(id) != 0) {
         return true;
     }
@@ -509,7 +508,6 @@ bool PraxTerminals::ended(std::size_t id) {
 }
 
 std::string PraxTerminals::problem(std::size_t id) {
-    take();
     auto it = problems_.find(id);
     return it != problems_.end() ? it->second : std::string();
 }
