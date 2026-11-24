@@ -26,8 +26,8 @@ set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
 FetchContent_Declare(prax
-    GIT_REPOSITORY https://github.com/pdoane/prax.git
-    GIT_TAG e39b205bbba4845077889f4a0fbfb38525d943ff
+    URL https://codeload.github.com/pdoane/prax/tar.gz/e39b205bbba4845077889f4a0fbfb38525d943ff
+    URL_HASH SHA256=a323930502458e28586f85f6bac1e5af8bf17502753f9b26fc2dde141fab9ad5
     # SYSTEM: Prax's headers use Clang nullability, which -Wpedantic rejects in our code otherwise.
     SYSTEM
     EXCLUDE_FROM_ALL)

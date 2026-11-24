@@ -1465,8 +1465,8 @@ jobs:
       - name: Build directory and caches outside the workspace
         run: |
           $ErrorActionPreference = 'Stop'
-          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'pdoane/prax\.git\s+GIT_TAG\s+([0-9a-f]{40})').Groups[1].Value
-          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (FetchContent_Declare(prax ... GIT_TAG <sha>))" }
+          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
+          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
           $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
           $build = "$caches\build-x64"
           New-Item -ItemType Directory -Force -Path $caches | Out-Null
