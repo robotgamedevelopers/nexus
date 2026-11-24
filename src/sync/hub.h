@@ -67,6 +67,8 @@ struct StoredSession {
     std::vector<EntryRef> transcript;
     std::vector<std::string> queue;
     DriverState driver;
+    // Original driver envelope for each bus entry, indexed by its position in transcript. Server-only.
+    std::map<std::size_t, std::string> busPrompts{};
 };
 
 // One change to a session: an entry at the end of its transcript; or (entry null) a prompt at the end of its queue;
@@ -75,7 +77,7 @@ struct StoredSession {
 // hold it and its id is the store's next.
 struct SessionChange {
     EntryRef entry;
-    std::string prompt;
+    std::string prompt; // queued text, or the original driver envelope when appending a Bus entry
     std::optional<DriverState> driver = std::nullopt;
     bool take = false;
     std::optional<SessionInfo> info = std::nullopt;
@@ -109,6 +111,9 @@ public:
 // next id is `next`: refused with why otherwise. Both stores apply this one rule.
 bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std::vector<SessionChange>& changes,
               std::string* why);
+
+// Apply a validated, committed change to either store's in-memory session.
+void applyStoredChange(StoredSession& session, const SessionChange& change);
 
 class MemoryStore : public SessionStore {
 public:

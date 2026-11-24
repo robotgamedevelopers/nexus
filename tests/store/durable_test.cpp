@@ -519,6 +519,7 @@ void test_switch_notice_reconnect() {
 // identical human-authored payload remains a human entry, even when it resembles a bus record.
 void test_bus_reconnect() {
     const std::string payload = "bo\nfirst line\nsecond line";
+    const std::string driverPrompt = "Message from bo on the message bus (id 123-1)\nText attachment: incoming/bus-stored/message.txt";
     for (bool compact : {false, true}) {
         store::MemFs fs;
         {
@@ -529,14 +530,19 @@ void test_bus_reconnect() {
             Hub hub(ds);
             CHECK(hub.apply(ensure(1, "ada"), nullptr, "w"));
             CHECK(hub.commit(1, {{entry(EntryKind::Person, payload), {}},
-                                 {entry(EntryKind::Bus, payload), {}}}, nullptr));
+                                 {entry(EntryKind::Bus, payload), driverPrompt}}, nullptr));
         }
         fs.crash(fs.plan_all(false));
         server::DurableStore recovered;
         CHECK(openOn(fs, recovered));
+        const auto* stored = recovered.find(1);
+        CHECK(stored && stored->busPrompts.size() == 1 && stored->busPrompts.contains(1));
+        if (stored && stored->busPrompts.contains(1)) CHECK(stored->busPrompts.at(1) == driverPrompt);
         Hub server(recovered);
         Sessions window;
-        window.apply_string(server.state().init_diff());
+        const auto firstDiff = server.state().init_diff();
+        CHECK(firstDiff.find("incoming/bus-stored/message.txt") == std::string::npos);
+        window.apply_string(firstDiff);
         Model model({{"ada", ""}});
         Mirror mirror;
         CHECK(mirror.apply(model, window));

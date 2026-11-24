@@ -62,11 +62,10 @@ bool stepFits(SessionId id, const StoredSession* had, SessionId next, const std:
     return true;
 }
 
-namespace {
-
-void applyTo(StoredSession& s, const SessionChange& c) {
+void applyStoredChange(StoredSession& s, const SessionChange& c) {
     if (c.clearTranscript) {
         s.transcript.clear();
+        s.busPrompts.clear();
         ++s.info.contextEpoch;
     } else if (c.take) {
         s.queue.erase(s.queue.begin());
@@ -75,13 +74,12 @@ void applyTo(StoredSession& s, const SessionChange& c) {
     } else if (c.driver) {
         s.driver = *c.driver;
     } else if (c.entry) {
+        if (c.entry->kind == EntryKind::Bus && !c.prompt.empty()) s.busPrompts.emplace(s.transcript.size(), c.prompt);
         s.transcript.push_back(c.entry);
     } else {
         s.queue.push_back(c.prompt);
     }
 }
-
-} // namespace
 
 const StoredSession* MemoryStore::find(SessionId id) const {
     auto it = sessions_.find(id);
@@ -119,7 +117,7 @@ bool MemoryStore::commit(SessionId id, const std::vector<SessionChange>& changes
         }
         StoredSession& s = sessions_[id];
         for (const SessionChange& c : changes) {
-            applyTo(s, c);
+            applyStoredChange(s, c);
         }
     }
     if (!client.empty()) {
@@ -354,7 +352,7 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
         responder_->sent(sessionId, false);
         return refuse(problem);
     }
-    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, sender + "\n" + displayBody), {}});
+    changes.insert(changes.begin(), SessionChange{entry(EntryKind::Bus, sender + "\n" + displayBody), promptBody});
     const bool accepted = store_.commit(sessionId, changes, receipt, 1, &problem);
     responder_->sent(sessionId, accepted);
     if (!accepted) return refuse(problem);

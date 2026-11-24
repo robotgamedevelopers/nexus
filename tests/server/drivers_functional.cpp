@@ -899,6 +899,55 @@ void continuation(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "a2" && s.driver().continuationPrompt.empty());
 }
 
+// A quota handoff replays one attributed bus request. Earlier bus attachments keep their readable
+// paths in the handoff, and messages already waiting keep their own later turns.
+void busContinuation(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string record = "send\nrecord-send " + dir + "/sends\n";
+    const std::string done = "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n";
+    setUpAccounts(s, dir, fake, "count-starts " + dir + "/starts\n" + kHello + record + done + record +
+        "on-start 1 emit {\"kind\":\"error\",\"cause\":\"quota\",\"fix\":\"wait\",\"code\":\"usage-limit\"}\n"
+        "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"error\"}\n"
+        "on-start 2 " + done + "on-start 3 " + done + "exit 0\n");
+    s.hub->reportSignedIn("a1", true);
+    s.hub->reportSignedIn("a2", true);
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
+    const std::string path = "incoming/bus-123/message.txt";
+    const std::string past = "Message from bea on the message bus (id 10-0)\nSubject: reference\n\nText attachment: " + path;
+    const std::string current = "Message from bo on the message bus (id 11-0)\nSubject: editing\n\nedit the reference";
+    const std::string later = "Message from cy on the message bus (id 12-0)\nSubject: publishing\n\npublish afterwards";
+    std::string why;
+    CHECK(s.hub->receiveBus("ada", "10-0", "bea", "[message.txt (4097 bytes)]", past, &why));
+    CHECK(s.serveUntil([&] { return idle(s); }, 10));
+    CHECK(s.hub->receiveBus("ada", "11-0", "bo", "edit the reference", current, &why));
+    CHECK(s.hub->receiveBus("ada", "12-0", "cy", "publish afterwards", later, &why));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 5; }, 10));
+    CHECK(s.store.find(kAda)->info.account == "a2");
+    const std::string sends = readFile(dir + "/sends");
+    const std::string prefix = "send 1:\n" + past + "\nsend 2:\n" + current + "\nsend 3:\n";
+    const std::string suffix = "Do not repeat completed work.]\n\n" + current + "\nsend 4:\n" + later + "\n";
+    CHECK(sends.starts_with(prefix) && sends.ends_with(suffix));
+    if (!sends.starts_with(prefix) || !sends.ends_with(suffix)) return;
+    const std::string history = sends.substr(prefix.size(), sends.size() - prefix.size() - suffix.size());
+    CHECK(has(history, "Message bus: " + past));
+    CHECK(!has(history, "edit the reference") && !has(history, "publish afterwards"));
+
+    // An ordinary fresh context after /compact builds a summary through a separate driver path.
+    CHECK(s.hub->apply(s.action(sync::ActionKind::Send, "/compact")));
+    const std::string fresh = "Message from bo on the message bus (id 13-0)\n\nreview final draft";
+    const std::string queued = "Message from cy on the message bus (id 14-0)\n\nnotify the editor";
+    CHECK(s.hub->receiveBus("ada", "13-0", "bo", "review final draft", fresh, &why));
+    CHECK(s.hub->receiveBus("ada", "14-0", "cy", "notify the editor", queued, &why));
+    CHECK(s.serveUntil([&] { return none(s) && s.driver().nextTurn == 7; }, 10));
+    const std::string all = readFile(dir + "/sends");
+    const std::string start = sends + "send 5:\n";
+    const std::string finish = "\n\n" + fresh + "\nsend 6:\n" + queued + "\n";
+    CHECK(all.starts_with(start) && all.ends_with(finish));
+    if (!all.starts_with(start) || !all.ends_with(finish)) return;
+    const std::string compacted = all.substr(start.size(), all.size() - start.size() - finish.size());
+    CHECK(has(compacted, "Message bus: " + past));
+    CHECK(!has(compacted, "review final draft") && !has(compacted, "notify the editor"));
+}
+
 // Exercise the same decision a window sees across the wire. The first process has already done work;
 // either choice continues it under the explicitly selected account and model in a second process.
 void fableChoice(Server& s, const std::string& dir, const std::string& fake, bool switchAccount) {
@@ -1849,7 +1898,7 @@ int main(int argc, char** argv) {
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
                 {"window", window}, {"bus_admission", busAdmission}, {"bus_default_instance", busDefaultInstance},
                 {"sign_in", signIn}, {"no_credential", noCredential},
-                {"usage_limit", usageLimit}, {"continuation", continuation},
+                {"usage_limit", usageLimit}, {"continuation", continuation}, {"bus_continuation", busContinuation},
                 {"fable_switch_account", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, true); }},
                 {"fable_switch_model", [](Server& s, const std::string& d, const std::string& f) { fableChoice(s, d, f, false); }},
                 {"limit_unsupported", limitUnsupported}, {"no_account", noAccount},

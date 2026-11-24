@@ -72,6 +72,7 @@ struct Entry {
     std::string text;
     bool closed = true;
     std::uint32_t account_email_end = 0;
+    std::string bus_prompt{}; // optional kind-5 frame tail; original server-side input for a fresh harness summary
     bool operator==(const Entry&) const = default;
 };
 

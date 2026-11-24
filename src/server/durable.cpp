@@ -55,8 +55,10 @@ bool DurableStore::open(store::Fs& fs, const std::string& dir, std::string* why,
             if (e.kind == kContextBoundary) {
                 ++t.info.contextEpoch;
                 t.transcript.clear();
+                t.busPrompts.clear();
                 continue;
             }
+            if (!e.bus_prompt.empty()) t.busPrompts.emplace(t.transcript.size(), e.bus_prompt);
             t.transcript.push_back(toRef(e));
         }
         t.queue = session.queue;
@@ -104,7 +106,7 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
         } else if (c.entry) {
             sc.kind = store::Change::Kind::Append;
             sc.entry = store::Entry{static_cast<std::uint8_t>(c.entry->kind), c.entry->text, c.entry->closed,
-                                    c.entry->accountEmailEnd};
+                                    c.entry->accountEmailEnd, c.entry->kind == EntryKind::Bus ? c.prompt : std::string{}};
         } else {
             sc.kind = store::Change::Kind::Enqueue;
             sc.prompt = c.prompt;
@@ -121,20 +123,7 @@ bool DurableStore::commit(sync::SessionId id, const std::vector<sync::SessionCha
     if (!changes.empty()) {
         sync::StoredSession& t = sessions_[id];     // the store refused the step had it not held or made the session
         for (const sync::SessionChange& c : changes) {
-            if (c.clearTranscript) {
-                t.transcript.clear();
-                ++t.info.contextEpoch;
-            } else if (c.take) {
-                t.queue.erase(t.queue.begin());     // the store refused the step had the queue nothing left
-            } else if (c.info) {
-                t.info = *c.info;
-            } else if (c.driver) {
-                t.driver = *c.driver;
-            } else if (c.entry) {
-                t.transcript.push_back(c.entry);
-            } else {
-                t.queue.push_back(c.prompt);
-            }
+            sync::applyStoredChange(t, c);
         }
     }
     return true;

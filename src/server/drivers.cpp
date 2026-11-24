@@ -169,16 +169,32 @@ std::string tailOf(const std::string& text, std::size_t bytes) {
 // oldest first, within kSummaryBytes, each said whose it is. Only the turns before `prompt`: the transcript already
 // ends with it (the person's entry, shown when it left the queue, and what followed it), and the send carries it
 // after.
-std::string summaryOf(const std::string& friendName, const std::vector<sync::EntryRef>& transcript,
+std::string summaryOf(const std::string& friendName, const sync::StoredSession& session,
                       const std::string& prompt, const std::vector<std::string>* waiting = nullptr) {
+    const auto& transcript = session.transcript;
+    using Position = std::vector<sync::EntryRef>::const_reverse_iterator;
+    const auto submitted = [&](Position pos) -> const std::string* {
+        const auto& entry = **pos;
+        if (entry.kind == EntryKind::Person) return &entry.text;
+        if (entry.kind != EntryKind::Bus) return nullptr;
+        const auto index = static_cast<std::size_t>(pos.base() - transcript.begin() - 1);
+        const auto bus = session.busPrompts.find(index);
+        return bus == session.busPrompts.end() ? nullptr : &bus->second;
+    };
+    const auto matches = [&](Position pos, const std::string& text) {
+        const auto* input = submitted(pos);
+        return input && *input == text;
+    };
+    bool busRequest = false;
     auto before = transcript.rbegin();
     if (waiting == nullptr) {
-        while (before != transcript.rend() && !((*before)->kind == EntryKind::Person && (*before)->text == prompt)) {
+        while (before != transcript.rend() && !matches(before, prompt)) {
             ++before;
         }
         if (before == transcript.rend()) {
             before = transcript.rbegin();
         } else {
+            busRequest = (*before)->kind == EntryKind::Bus;
             ++before;
         }
     }
@@ -191,11 +207,11 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
     for (auto it = before; it != transcript.rend() && (textLeft || toolsLeft); ++it) {
         if (waiting != nullptr) {
             // Later submissions are already visible in the transcript and will get their own turns.
-            if ((*it)->kind == EntryKind::Person && later != 0 && (*it)->text == (*waiting)[later - 1]) {
+            if (later != 0 && matches(it, (*waiting)[later - 1])) {
                 --later;
                 continue;
             }
-            if ((*it)->kind == EntryKind::Person && !skippedRequest && (*it)->text == prompt) {
+            if (!skippedRequest && matches(it, prompt)) {
                 skippedRequest = true;   // the continuation always includes the original request in full
                 continue;
             }
@@ -204,14 +220,17 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
             }
         }
         const char* who = (*it)->kind == EntryKind::Person ? "The person" :
-            (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" : "nexus";
+            (*it)->kind == EntryKind::Friend ? "You" : (*it)->kind == EntryKind::Tool ? "Tool activity" :
+            (*it)->kind == EntryKind::Bus ? "Message bus" : "nexus";
         std::size_t& left = waiting != nullptr && (*it)->kind == EntryKind::Tool ? toolsLeft : textLeft;
         std::string part = std::string(who) + ": ";
         if (left <= part.size() + 1) {
             left = 0;
             continue;
         }
-        part += tailOf((*it)->text, left - part.size() - 1) + "\n";
+        // The bus envelope holds the subject and attachment path that the small display body may omit.
+        const auto* envelope = (*it)->kind == EntryKind::Bus ? submitted(it) : nullptr;
+        part += tailOf(envelope ? *envelope : (*it)->text, left - part.size() - 1) + "\n";
         left -= part.size();
         parts.push_back(std::move(part));
     }
@@ -220,7 +239,8 @@ std::string summaryOf(const std::string& friendName, const std::vector<sync::Ent
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         text += *it;
     }
-    return waiting == nullptr ? text + "[nexus: the person's prompt follows.]\n\n" : text;
+    if (waiting != nullptr) return text;
+    return text + (busRequest ? "[nexus: the bus message follows.]\n\n" : "[nexus: the person's prompt follows.]\n\n");
 }
 
 class PosixHost : public Drivers::Host {
@@ -464,12 +484,12 @@ Config Drivers::config(sync::SessionId id, const ResolvedDriver& driver) const {
     c.present = listed(id);
     c.summarize = [this, id, name = c.name](const std::string& prompt) {
         const sync::StoredSession* s = store_.find(id);
-        return s == nullptr ? std::string() : summaryOf(name, s->transcript, prompt);
+        return s == nullptr ? std::string() : summaryOf(name, *s, prompt);
     };
     c.continuationContext = [this, id, name = c.name] {
         const sync::StoredSession* s = store_.find(id);
         return s == nullptr ? std::string() :
-            summaryOf(name, s->transcript, s->driver.continuationPrompt, &s->driver.waiting);
+            summaryOf(name, *s, s->driver.continuationPrompt, &s->driver.waiting);
     };
     c.configured = options_.table;
     c.timing = options_.timing;

@@ -21,11 +21,13 @@ void put_entry(Writer& w, const Entry& e) {
     frame.str(e.text);
     if (e.account_email_end != 0) {
         frame.u32(e.account_email_end);
+    } else if (e.kind == 5 && !e.bus_prompt.empty()) {
+        frame.str(e.bus_prompt);
     }
     w.bytes(frame.out());
 }
 
-// Older entry frames end at the text. Only a Notice owns the optional address span.
+// Older entry frames end at the text. Each kind owns its optional tail.
 bool get_entry(Reader& r, Entry& e, std::uint64_t* skipped) {
     const Bytes frame = r.bytes();
     Reader in(frame);
@@ -35,6 +37,8 @@ bool get_entry(Reader& r, Entry& e, std::uint64_t* skipped) {
     e.closed = closed == 1;
     if (e.kind == 2 && in.ok() && !in.done()) {
         e.account_email_end = in.u32();
+    } else if (e.kind == 5 && in.ok() && !in.done()) {
+        e.bus_prompt = in.str();
     }
     if (in.ok() && !in.done() && skipped != nullptr) {
         ++*skipped;
