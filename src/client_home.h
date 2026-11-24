@@ -31,6 +31,9 @@ bool clientHome(std::string* dir, std::string* why);
 // Makes `dir` and the directory above it (~/.nexus), each mode 0700 on POSIX, if missing. False, with why.
 bool makeClientHome(const std::string& dir, std::string* why);
 
+// Claim this client home until process exit. A duplicate returns false with an empty error.
+bool claimClientHome(const std::string& dir, std::string* why);
+
 // The window's settings, read from its config file.
 struct ClientConfig {
     std::string path;               // the file read, for messages; empty when there is no home

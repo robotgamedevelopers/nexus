@@ -68,6 +68,7 @@ Each rule here has a test or a model behind it. A change that breaks one is a re
 
 Launch and the overlay
 - nexus is an overlay: a borderless panel above other apps, on every Space and beside fullscreen apps. Its dark background defaults to 60% opacity, configurable by client policy. It covers the whole screen including the menu bar, and runs as an Accessory app with no Dock icon. `--windowed` gives an ordinary opaque window instead, in which Escape does nothing.
+- One live client owns each user’s client home. Command-Q hides the macOS overlay and keeps its server connection active.
 - A normal app launch reads the server host from client config, including after macOS relaunches the app for a permission change. Dashboard keeps connection and roster diagnostics out of the overlay.
 - The macOS client starts at GUI login in overlay mode. Keep example plugins, their services, groups and bindings in isolated test fixtures.
 - At launch and relaunch nothing shows: no window, no single frame, and no change of focus. nexus connects to `nexus-server` in the background, and only the hotkey shows it. The one exception is a hotkey that fails to register, because then nothing else could show nexus.

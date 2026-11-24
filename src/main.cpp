@@ -378,7 +378,7 @@ bool open(void* context, PrStudioWindow* window) {
 #ifdef __APPLE__
     PrSurface surface{};
     if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok)
-        trackForegroundPriority(surface);
+        trackForegroundPriority(surface, a.view.hide);
 #endif
     const auto power = prAppPower(prStudioWindowApp(window));
     a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
@@ -925,6 +925,13 @@ int main(int argc, char** argv) {
         std::string homeWhy;
         const bool haveHome = clientHome(&home, &homeWhy);
         const bool madeHome = haveHome && makeClientHome(home, &homeWhy);
+        if (!usage && !shot && !printConfig) {
+            if (!madeHome || !claimClientHome(home, &homeWhy)) {
+                if (homeWhy.empty()) return 0;
+                std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());
+                return 1;
+            }
+        }
         startErrorLog(madeHome ? home : std::string());
         if (haveHome && !madeHome) {
             std::fprintf(stderr, "nexus: %s\n", homeWhy.c_str());

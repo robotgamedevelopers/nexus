@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 
 #include "pr/surface.h"
@@ -36,7 +37,7 @@ void startDesktopBlur(const PrSurface& surface, float sigma);
 void stopDesktopBlur();
 bool desktopBlurReady();
 void prioritizeOverlayTransition();
-void trackForegroundPriority(const PrSurface& surface);
+void trackForegroundPriority(const PrSurface& surface, const std::function<void()>& hide);
 #endif
 
 bool coverScreen(const PrSurface& surface);
