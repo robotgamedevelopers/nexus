@@ -80,6 +80,8 @@ def handle(event, state, config):
                 shortcuts = _bind(shortcuts, chord, ["account_command", command])
             default_picker = {} if "account_shortcuts" in config else {"Command+ArrowUp": "previous", "Command+ArrowDown": "next"}
             for chord, command in config.get("account_picker_shortcuts", default_picker).items():
+                if config.get("centered_account_menu", False) and not state.get("account_picker_open") and command in ["previous", "next"]:
+                    command = "open"
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         types = config.get("tab_types", [])
         groups = _tab_groups(config, types)
@@ -155,6 +157,8 @@ def handle(event, state, config):
         return {
             "message_card": config.get("message_card", {"fill":"#ffffff", "ink":"#000000", "email_ink":"#477fba", "text_size":34, "radius":20}),
             "transcript_style": config.get("transcript_style", {}),
+            "centered_account_menu": config.get("centered_account_menu", False),
+            "sign_in_on_select": config.get("sign_in_on_select", False),
             "account_auto_label": config.get("account_auto_label", "auto"),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,

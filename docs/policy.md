@@ -82,6 +82,12 @@ field `account_picker_open` lets the program scope other shortcuts to the open m
 cancelling are local actions. After confirmation the server reports the selected account. For an account that
 needs sign-in, a separate Enter or click on the sign-in card starts the provider flow.
 
+With `centered_account_menu` enabled, friend tabs show only the friend’s name. An opening arrow
+highlights the current account in server order. Each row shows the configured email, falling back to
+the account label if the roster has no email. Bind `ArrowUp` and `ArrowDown` in
+`account_picker_shortcuts` to use unmodified arrows from the prompt. Enable `sign_in_on_select`
+to start sign-in when the server acknowledges a different account that needs authentication.
+
 An existing `account_shortcuts` map still sends its configured `account_command` actions immediately. For example,
 `"account_shortcuts": {"Command+ArrowDown": "advance"}` asks the server’s
 `decide("account_command", context, config)` to choose an account. Server config

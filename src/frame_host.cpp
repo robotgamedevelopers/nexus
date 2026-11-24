@@ -266,6 +266,17 @@ void FrameHost::pollLink() {
         }
     }
     phase = s.phase;
+    if (signInSelection_) {
+        const auto& [id, account] = *signInSelection_;
+        if (phase != sync::LinkPhase::Connected || !model->tab_count() ||
+                mirror.session(model->tab(model->active()).id) != id) {
+            signInSelection_.reset();
+        } else if (!accountSelections_.contains(id)) {
+            const auto* choice = activeChoice();
+            if (choice && choice->name == account && choice->needsSignIn) activateSignIn();
+            signInSelection_.reset();
+        }
+    }
     refreshPicker();
     heardMsAgo = s.heardMsAgo;
     view->status = sync::linkStatus(s.phase, host, s.heardMsAgo, s.problem);
@@ -378,7 +389,7 @@ void FrameHost::refreshPicker() {
     }
     const auto tab = model->tab(model->active()).id;
     const auto* session = accountState_.find(mirror.session(tab));
-    if (!session || !picker->refresh(tab, *session, *roster))
+    if (!session || !picker->refresh(tab, *session, *roster, view->windowApp.centeredAccounts))
         picker.reset();
 }
 
@@ -400,8 +411,11 @@ void FrameHost::chooseAccount(std::string account) {
     const auto session = picker->session;
     const auto selected = picker->choice(account);
     picker.reset();
-    if (selected && !accountSelections_.contains(session))
+    if (selected && !accountSelections_.contains(session)) {
         setAccount(session, *selected);
+        if (view->windowApp.signInOnSelect)
+            signInSelection_ = std::make_pair(session, *selected);
+    }
 }
 
 void FrameHost::pickerCommand(const std::string& command) {
@@ -429,7 +443,7 @@ void FrameHost::pickerCommand(const std::string& command) {
     const auto tab = model->tab(model->active()).id;
     const auto* session = accountState_.find(mirror.session(tab));
     if (!session || accountSelections_.contains(session->id)) return;
-    picker = AccountPicker::open(tab, *session, *roster, direction);
+    picker = AccountPicker::open(tab, *session, *roster, direction, view->windowApp.centeredAccounts);
 }
 
 LimitOffer FrameHost::currentLimit() const {

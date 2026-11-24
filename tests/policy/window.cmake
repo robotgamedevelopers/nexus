@@ -41,6 +41,14 @@ execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/notices"
 execute_process(COMMAND "${CHECK}" "${ROOT}/live.json" "${ROOT}/activated/policy.bundle.json"
     "${ROOT}/notices/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
 
+file(MAKE_DIRECTORY "${ROOT}/centered")
+file(COPY_FILE "${RULES}/client.star" "${ROOT}/rules/client.star")
+file(WRITE "${ROOT}/rules/config.json" [[{"centered_account_menu":true,"sign_in_on_select":true,"account_picker_shortcuts":{"ArrowDown":"next","Command+ArrowDown":"next"}}]])
+execute_process(COMMAND "${TOOL}" apply client "${ROOT}/rules" "${ROOT}/centered" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${CHECK}" --centered-accounts "${ROOT}/centered/policy.bundle.json" COMMAND_ERROR_IS_FATAL ANY)
+
+file(WRITE "${ROOT}/rules/config.json" "${config}")
+
 # Exercise the fixture's server application with its own config under the test root.
 file(COPY "${RULES}/server" DESTINATION "${ROOT}/rules")
 file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/fixtures/plugins/server.star" "${ROOT}/rules/server.star")

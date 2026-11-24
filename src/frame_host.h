@@ -197,6 +197,7 @@ private:
     struct LimitSelection { uint64_t request, action; };
     std::map<sync::SessionId, LimitSelection> limitSelections_;
     LimitOffer currentLimit() const;
+    std::optional<std::pair<sync::SessionId, std::string>> signInSelection_;
     std::map<std::string, std::uint64_t> pendingClaims_; // until the offer changes or this link ends
     const sync::AccountChoice* activeChoice() const;
     const sync::SignInOffer* offerFor(const std::string& account) const;

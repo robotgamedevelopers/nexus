@@ -73,6 +73,8 @@ public:
     uint64_t layoutGeneration = 0;
     std::string label;
     std::string autoAccountLabel = "auto";
+    bool centeredAccounts = false;
+    bool signInOnSelect = false;
     SignInAccount signInAccount;
     LimitOffer limitOffer;
     std::string limitAccountLabel, limitModelLabel;

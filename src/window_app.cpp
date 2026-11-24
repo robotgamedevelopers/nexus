@@ -227,7 +227,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
 
 bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen, MessageCardStyle& card,
     TranscriptStyle& transcript, std::vector<Shortcut>& keys, std::vector<Panel>& panels, std::map<std::string, TabType>& types,
-    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, std::string& accountLabel, std::string& modelLabel, float& overlayOpacity, std::string& why) {
+    std::vector<TabGroup>& groups, std::optional<bool>& closable, std::string& label, std::string& autoLabel, std::string& accountLabel, std::string& modelLabel, float& overlayOpacity, bool& centered, bool& signInOnSelect, std::string& why) {
     std::unique_ptr<PrJson, decltype(&prJsonDestroy)> doc(prJsonCreate(), prJsonDestroy);
     auto* d = doc.get();
     if (!prJsonParse(d, {answer.data(), answer.size()}, nullptr))
@@ -236,6 +236,12 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
     autoLabel = name == kPrJsonMissing ? "auto" : stringAt(d, name);
     if (!groupName(autoLabel)) {
         why = "account_auto_label must be a nonempty display name of up to 64 bytes";
+        return false;
+    }
+    centered = signInOnSelect = false;
+    if (!readFlag(d, 0, {"centered_account_menu", 21}, centered) ||
+        !readFlag(d, 0, {"sign_in_on_select", 17}, signInOnSelect)) {
+        why = "centered_account_menu and sign_in_on_select must be booleans";
         return false;
     }
     const auto opacity = prJsonMember(d, 0, {"overlay_opacity", 15});
@@ -399,9 +405,10 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
     std::vector<TabGroup> layout;
     std::optional<bool> mayClose;
     std::string caption, autoLabel, accountLabel, modelLabel;
+    bool centered = false, autoSignIn = false;
     float opacity = style::kOverlayOpacity;
     const auto answer = host.decide({}, "app.window", context, why);
-    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, why)) {
+    if (why.empty() && readWindow(answer, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
         if (generation != appliedGeneration_ || groups != layout || types != registrations)
             ++layoutGeneration;
         appliedGeneration_ = generation;
@@ -414,6 +421,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         autoAccountLabel = std::move(autoLabel);
         limitAccountLabel = std::move(accountLabel);
         limitModelLabel = std::move(modelLabel);
+        centeredAccounts = centered;
+        signInOnSelect = autoSignIn;
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;
@@ -429,7 +438,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         caption.clear();
         policy::Host stock("client");
         const auto fallback = stock.decide({}, "app.window", context, why);
-        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, why)) {
+        if (!readWindow(fallback, tab, promptOpen, card, transcript, keys, parts, registrations, layout, mayClose, caption, autoLabel, accountLabel, modelLabel, opacity, centered, autoSignIn, why)) {
             keys.clear();
             parts.clear();
             registrations.clear();
@@ -451,6 +460,8 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         autoAccountLabel = std::move(autoLabel);
         limitAccountLabel = std::move(accountLabel);
         limitModelLabel = std::move(modelLabel);
+        centeredAccounts = centered;
+        signInOnSelect = autoSignIn;
         overlayOpacity = opacity;
         messageCard = card;
         transcriptStyle = transcript;

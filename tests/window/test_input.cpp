@@ -2371,6 +2371,62 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--centered-accounts") {
+        Harness h = withSprint(1);
+        h.view.application->watch(argv[2]);
+        test::FakeLink link;
+        FrameHost host;
+        host.model = &h.model;
+        host.view = &h.view;
+        host.connect(&link, "localhost");
+        const auto publish = [&](const std::string& name, uint64_t ack) {
+            auto session = std::make_shared<sync::SessionView>();
+            session->id = 17;
+            session->info = {"f1", "codex", name, "", ""};
+            link.state.phase = sync::LinkPhase::Connected;
+            link.state.loopback = true;
+            link.state.sessions = sync::Sessions({session});
+            link.state.sessions.setFriends({{"f1", {{"a", "A", false, "a@example.test"},
+                {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}});
+            link.state.sessions.setNextAction(ack);
+            link.changed = true;
+            host.pollLink();
+            h.frame();
+        };
+        publish("b", 1);
+        h.commandDigit(2);
+        h.type("draft");
+        link.sent.clear();
+        const auto down = [&](PrAppModifierFlags mods) {
+            h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, mods);
+            h.frame();
+        };
+        down(0);
+        CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 1);
+        CHECK(h.hasText(h.tabs()[h.model.active()], "F1") && h.view.accountAnchor == kPrLayoutNodeNone);
+        CHECK(h.view.accountRows.size() == 3);
+        if (h.view.accountRows.size() != 3) return 1;
+        for (unsigned i = 0; i < 3; ++i)
+            CHECK(h.hasText(h.view.accountRows[i], std::string(1, 'a' + i) + "@example.test"));
+        const auto menu = h.bounds(h.view.accountMenu);
+        CHECK(std::abs((menu.left + menu.right) / 2 - h.extent.x / 2) < 2);
+        CHECK(std::abs((menu.top + menu.bottom) / 2 - h.extent.y / 2) < 2);
+        down(0);
+        CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 2 && link.sent.empty());
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        h.type(" kept");
+        CHECK(!h.view.accountPicker && h.hides == 0 && h.active().draft == "draft kept" && link.sent.empty());
+        down(style::kCommand);
+        down(style::kCommand);
+        h.enter();
+        h.frame();
+        CHECK(link.sent.size() == 1 && link.sent[0].kind == sync::ActionKind::SetAccount && link.sent[0].text == "c");
+        publish("c", 2);
+        CHECK(link.sent.size() == 2 && link.sent.back().kind == sync::ActionKind::SignInClaim &&
+              link.sent.back().account == "c" && link.sent.back().session == 17);
+        return failures ? 1 : 0;
+    }
     if (argc == 5 && std::string(argv[1]) == "--group-drag") {
         Harness h = withSprint(1);
         h.view.nativeTabs.emplace("text_editor", drawTabTextArea);

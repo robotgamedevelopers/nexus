@@ -596,8 +596,12 @@ struct Builder {
             if (open && view.pickerCommand) view.pickerCommand("cancel");
             return;
         }
+        accountRows(popover);
+    }
+
+    void accountRows(PrLayoutNode parent) {
         // The fork handles arrow keys and Enter. Native focus follows that preview and remains available to mouse input.
-        view.accountMenu = prKitMenu(kit, popover, {}, {.leavesFocus = true});
+        view.accountMenu = prKitMenu(kit, parent, {}, {.leavesFocus = true});
         captureShortcuts(view.accountMenu);
         if (!view.accountPicker) return;
         const auto& picker = *view.accountPicker;
@@ -613,6 +617,17 @@ struct Builder {
             PrKitPlace rowSize{};
             rowSize.height = prKitPx(kit->theme.types[PrKitTextRole_Body].lineHeight + 8 * k());
             prKitPlace(kit, row, &rowSize);
+            if (preview && view.windowApp.centeredAccounts) {
+                auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
+                auto& group = record.groups[PrLayoutGroup_Decoration];
+                auto decoration = prLayoutDecorationStyleRecord(tree, group);
+                decoration.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.switchEmailInk));
+                decoration.outlineWidth = prLayoutUnitFromPx(2 * k());
+                decoration.outlineStyle = PrDrawBorderStyle_Solid;
+                radius(decoration, 8 * k());
+                group = prLayoutDecorationStyleIntern(tree, &decoration);
+                prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
+            }
             view.accountRows.push_back(row);
             if (preview && view.lastHighlightedAccount != option.name) {
                 prUiSetFocus(ui, row);
@@ -659,7 +674,7 @@ struct Builder {
             const bool currentFriend = i == model.active() && model.tab(i).kind == TabKind::Friend;
             const bool offersAccounts = std::find(view.windowApp.panels.begin(), view.windowApp.panels.end(),
                                                   Panel::Account) != view.windowApp.panels.end();
-            const auto current = currentFriend && offersAccounts && view.accountCaption ? view.accountCaption() : std::string();
+            const auto current = !view.windowApp.centeredAccounts && currentFriend && offersAccounts && view.accountCaption ? view.accountCaption() : std::string();
             tabPlace.height = prKitPx((current.empty() ? 1.75f * kTabSize : kStripHeight) * k());
             tabPlace.align = PrKitAlign_Center;
             if (i == 0)
@@ -737,6 +752,11 @@ struct Builder {
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
     // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
+        if (tab.kind == TabKind::Friend && view.windowApp.centeredAccounts) {
+            auto name = tab.name;
+            if (!name.empty() && name.front() >= 'a' && name.front() <= 'z') name.front() -= 'a' - 'A';
+            return name;
+        }
         if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
             return tab.name;
         if (tab.kind == TabKind::Sprint)
@@ -1410,6 +1430,15 @@ struct Builder {
         }
         page(window, composing);
         view.displayedLimit = view.windowApp.limitOffer;
+        if (view.windowApp.centeredAccounts && view.accountPicker && !asking) {
+            const auto trigger = view.tabNodes[model.active()];
+            prKitSetOpen(kit, trigger, true);
+            const auto modal = prKitModal(kit, trigger, {.key = prUiKey(ui, trigger, sv("account-menu"))}, {});
+            if (modal != kPrLayoutNodeNone) accountRows(modal);
+            else if (view.pickerCommand) view.pickerCommand("cancel");
+        } else if (!view.accountPicker) {
+            view.lastHighlightedAccount.clear();
+        }
         secretDialog(window);
     }
 
