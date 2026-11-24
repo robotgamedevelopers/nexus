@@ -1,5 +1,5 @@
-// Server-owned message-bus grants from the registry used by each fork's friend-driver policy.
-// Refresh from the server loop. Registry reads run off that loop and never reach a driver or client.
+// Server-owned message-bus grants and friend identities from each fork's registry.
+// Registry reads run off the serving loop and never reach a driver or client.
 #pragma once
 
 #include "command.h"
@@ -8,11 +8,15 @@
 #include <cstdint>
 #include <future>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace nexus::server {
+
+enum class BusPeer { Pending, Friend, Other };
 
 class BusGrants {
 public:
@@ -20,21 +24,35 @@ public:
     void refresh(const DriverTable& table, std::int64_t nowMs);
     const std::map<std::string, std::string>& addresses() const { return addresses_; }
     const std::string& problem() const { return problem_; }
+    // Each new delivery waits for its own profile's next successful registry query. Friends may have
+    // been added or disabled since a previous delivery, including when a refresh is already in flight.
+    BusPeer sender(const std::string& recipient, const std::string& id, const std::string& name);
+    // Only for projecting history: keep each recipient's most recent complete roster during outages.
+    const std::map<std::string, std::set<std::string>>& knownSenders() const { return knownSenders_; }
 
 private:
-    using Grants = std::map<std::string, std::pair<std::string, std::string>>; // name to harness and endpoint
+    using Program = std::vector<std::string>;
+    using Roster = std::map<std::string, std::pair<std::string, std::string>>; // enabled name to harness and optional endpoint
+    struct Delivery {
+        std::string id, sender;
+        std::uint64_t required = 0;
+    };
     struct Query {
         std::future<CommandResult> pending;
-        Grants grants;
+        std::optional<Roster> roster;
+        std::map<std::string, Delivery> deliveries;
+        std::uint64_t started = 0, completed = 0;
         std::string problem;
         std::int64_t next = 0;
     };
 
-    static bool read(const std::string& text, Grants& grants);
+    static bool read(const std::string& text, Roster& roster);
 
     CommandRunner run_;
-    std::map<std::vector<std::string>, Query> queries_;
+    std::map<Program, Query> queries_;
+    std::map<std::string, Program> owners_;
     std::map<std::string, std::string> addresses_;
+    std::map<std::string, std::set<std::string>> knownSenders_;
     std::string problem_;
 };
 } // namespace nexus::server

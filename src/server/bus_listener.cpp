@@ -2,6 +2,7 @@
 
 #include "driver/protocol.h"
 #include "server/bus_attachment.h"
+#include "sync/bus_peer.h"
 
 #include <algorithm>
 #include <array>
@@ -30,7 +31,7 @@ using namespace std::chrono_literals;
 constexpr auto kRetry = 2s;
 constexpr auto kDeliveryTimeout = 8s; // nova-bus's --exec deadline
 // Any byte can occupy two bytes after TSV escaping; allow four separators and a final newline.
-constexpr std::size_t kMaxFrame = 2 * (kBusAttachmentBytes + driver::kMaxLineBytes + 3 * 64) + 5;
+constexpr std::size_t kMaxFrame = 2 * (kBusAttachmentBytes + 2 * driver::kMaxLineBytes + 2 * 64) + 5;
 
 void closeFd(int& fd) {
     if (fd >= 0) ::close(std::exchange(fd, -1));
@@ -57,8 +58,7 @@ bool loopback(std::string_view address) {
 }
 
 bool busName(std::string_view s) {
-    return !s.empty() && s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-                             == std::string_view::npos;
+    return !s.empty() && s.find_first_not_of(sync::kBusPeerCharacters) == s.npos;
 }
 
 bool streamId(std::string_view s) {
@@ -78,12 +78,14 @@ struct Frame {
 
     bool feed(std::string_view bytes) {
         const std::array fields{&msg.id, &msg.from, &msg.replyTo, &msg.subject, &msg.body};
-        constexpr std::array<std::size_t, 5> limits{64, 64, 64, driver::kMaxLineBytes, kBusAttachmentBytes};
+        // Nova's bus can name non-friend publishers longer than the registry's 128-byte limit.
+        // Preserve their full envelope for the private server inbox.
+        constexpr std::array<std::size_t, 5> limits{64, driver::kMaxLineBytes, 64, driver::kMaxLineBytes, kBusAttachmentBytes};
         while (!bytes.empty()) {
             if (ended) return false;
             auto& out = *fields[field];
             if (escaped) {
-                if (out.size() == limits[field]) return false;
+                if (field == 1 || out.size() == limits[field]) return false; // bus names contain no escaped characters
                 switch (bytes.front()) {
                 case 't': out.push_back('\t'); break;
                 case 'n': out.push_back('\n'); break;

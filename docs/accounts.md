@@ -578,14 +578,20 @@ existing macOS Claude driver listener. Upgrading Nexus alone does not move that 
 back, remove `bus_owner`, wait for the server to release the inbox, then relaunch the previous hook.
 To revoke a native grant, remove both fields or disable the friend.
 
-The server refreshes grants from its friend-driver profiles every 30 seconds. A registry read
-failure drops that profile’s grants and retries in five seconds. A grant applies to one enabled
-friend with the matching harness; it grants no other inbox. The friend’s working directory is
-the local instance in the Nexus accounts and friends configuration. A connected client receives
-transcript entries for display. The bus connection and its credentials stay with the server.
+The server refreshes idle grants from its friend-driver profiles every 30 seconds. A registry read
+failure drops that profile’s grants and retries in five seconds. Each grant applies to one enabled
+friend with the matching harness. The bus connection and credentials stay with the server.
 
-A message appears in the recipient's default chat, labeled with the sending AI's name in light blue.
-The message text is light blue too. Up to 4096 UTF-8 bytes appear inline. For a longer body,
+For each new delivery, the server checks the sender named in the bus envelope against a fresh
+`bus-roster` snapshot from the recipient’s nova-config profile. Enabled friends can send from
+any harness or machine, including friends who have no Nexus inbox. An unavailable or incomplete
+roster leaves the delivery pending. Mail from other senders goes into the server’s private
+`bus-filtered/` directory under an identity derived from the bus endpoint, recipient and message ID.
+The server preserves the full envelope before acknowledging it. These deliveries stay out of the
+chat, the friend’s working directory and the driver’s prompt queue.
+
+A friend’s message appears in the recipient’s default chat with the sender’s name and message text
+in light blue. Up to 4096 UTF-8 bytes appear inline. For a longer body,
 the chat shows the filename and byte count, and the friend receives a path to the complete
 `message.txt` in its workspace's `incoming/` directory. Delivery continues with all windows
 closed. Reconnecting or replaying an acknowledged message preserves its original bubble.

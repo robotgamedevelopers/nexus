@@ -103,11 +103,12 @@ class PersonalPolicy(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(json.loads(refused.stdout.splitlines()[1])["kind"], "error")
 
-    def test_bus_grants_are_explicit_server_subscriptions(self):
+    def test_bus_roster_and_subscription_grants(self):
         root = self.profile.parent
         registry = root / "registry"
         registry.write_text("#!" + sys.executable + "\nimport pathlib,sys\n"
                             "assert sys.argv[1:] == ['friend','list','--json']\n"
+                            "with pathlib.Path(__file__).with_name('reads').open('a') as counter: counter.write('1')\n"
                             "print(pathlib.Path(__file__).with_name('rows.json').read_text())\n")
         registry.chmod(0o700)
         (self.profile / "identities.json").write_text(json.dumps({"nova_config": [str(registry)]}))
@@ -116,21 +117,47 @@ class PersonalPolicy(unittest.TestCase):
             return {"kind": "friend", "fields": {"name": name, "harness": harness,
                     "enabled": enabled, "startup": startup}}
 
-        def query(rows):
+        def query(command, rows):
             (root / "rows.json").write_text(json.dumps({"result": {"status": "ok"}, "items": rows}))
-            return subprocess.run([*self.command, "bus-grants", str(self.profile)], capture_output=True, text=True)
+            reads = root / "reads"
+            reads.write_text("")
+            result = subprocess.run([*self.command, command, str(self.profile)], capture_output=True, text=True)
+            self.assertEqual(reads.read_text(), "1")
+            return result
 
         grant = {"bus_owner": "nexus-server", "bus_listener": "127.0.0.1:6379"}
+        without_startup = row("five", "new-harness", None)
+        del without_startup["fields"]["startup"]
+        remote_name = "external-" + "x" * 119
+        remote_harness = "custom:Runtime/v2.1"
+        remote = row(remote_name, remote_harness, {"bus_owner": "remote-node", "bus_listener": "remote.example:6380"})
         rows = [row("one", "codex", grant), row("two", "claude", {"bus_listener": "127.0.0.1:6379"}),
-                row("three", "claude", grant, False), row("four", "muse", {})]
-        got = query(rows)
-        self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertEqual(got.stdout, "one\tcodex\t127.0.0.1:6379\n")
-        for address in ("::1:6379", "127.0.0.1:65536", "127.0.0.1:0", "db:6379", "", None):
-            with self.subTest(address=address):
-                invalid = query([*rows, row("bad", "claude", dict(grant, bus_listener=address))])
-                self.assertNotEqual(invalid.returncode, 0)
-                self.assertEqual(invalid.stdout, "")
+                row("three", "claude", grant, False), row("four", "muse", {}), without_startup,
+                row("six", "other", grant), remote, row("seven", "other", {"bus_listener": "remote.example:6380"}),
+                {"kind": "machine", "fields": {"name": "elsewhere"}}]
+        marker = "nexus-bus-roster-v1\n"
+        expected = {"bus-grants": "one\tcodex\t127.0.0.1:6379\nsix\tother\t127.0.0.1:6379\n",
+                    "bus-roster": marker + "one\tcodex\t127.0.0.1:6379\ntwo\tclaude\t\nfour\tmuse\t\n"
+                                           "five\tnew-harness\t\nsix\tother\t127.0.0.1:6379\n"
+                                           f"{remote_name}\t{remote_harness}\t\nseven\tother\t\n"}
+        invalid_rows = [row("bad", "claude", dict(grant, bus_listener=address))
+                        for address in ("::1:6379", "127.0.0.1:65536", "127.0.0.1:0", "db:6379", "", None)]
+        invalid_rows += [row("two", "other", {}), row("bad\tname", "codex", {}), row("bad", "bad route", {}),
+                         row("bad", "codex", []), row(remote_name + "x", remote_harness, {}),
+                         row("bad", "codex", {}, enabled="true")]
+        for command, output in expected.items():
+            with self.subTest(command=command):
+                got = query(command, rows)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertEqual(got.stdout, output)
+                empty = query(command, [])
+                self.assertEqual(empty.returncode, 0, empty.stderr)
+                self.assertEqual(empty.stdout, marker if command == "bus-roster" else "")
+                for invalid in invalid_rows:
+                    with self.subTest(row=invalid):
+                        refused = query(command, [*rows, invalid])
+                        self.assertNotEqual(refused.returncode, 0)
+                        self.assertEqual(refused.stdout, "")
 
     def test_refusals(self):
         sources = ['load("other.star", "x")', 'print("unframed output")',

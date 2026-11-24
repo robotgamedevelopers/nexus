@@ -62,37 +62,54 @@ def bus_endpoint(address):
     return address
 
 
+def native_bus_endpoint(startup):
+    address = bus_endpoint(startup.get("bus_listener", ""))
+    if not address:
+        raise ValueError("startup.bus_owner requires startup.bus_listener for that friend")
+    return address
+
+
 def bus_owner(startup):
     owner = startup.get("bus_owner", "")
     if owner not in ("", "nexus-server"):
         raise ValueError("startup.bus_owner must be nexus-server or omitted")
-    if owner and not bus_endpoint(startup.get("bus_listener", "")):
-        raise ValueError("startup.bus_owner requires startup.bus_listener for that friend")
+    if owner:
+        native_bus_endpoint(startup)
     return owner
 
 
-def bus_grants(config):
-    grants = []
+def bus_roster(config):
+    roster = []
+    names = set()
     for item in registry_items(config, "list"):
-        if not isinstance(item, dict) or not isinstance(item.get("fields"), dict):
-            raise ValueError("nova-config returned invalid friend registry fields")
-        row = item["fields"]
-        if item.get("kind") != "friend" or row.get("enabled") is not True:
+        if not isinstance(item, dict) or not isinstance(item.get("kind"), str):
+            raise ValueError("nova-config returned an invalid friend registry item")
+        if item["kind"] != "friend":
             continue
-        startup = row.get("startup") or {}
+        row = item.get("fields")
+        if not isinstance(row, dict) or not isinstance(row.get("enabled"), bool):
+            raise ValueError("nova-config returned invalid friend registry fields")
+        if not row["enabled"]:
+            continue
+        name, harness = row.get("name"), row.get("harness")
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name)
+                or not isinstance(harness, str) or not IDENTIFIER.fullmatch(harness)):
+            raise ValueError("invalid friend name or harness in the message bus roster")
+        if name in names:
+            raise ValueError("nova-config returned duplicate enabled rows for one friend")
+        names.add(name)
+        startup = row.get("startup")
+        if startup is None:
+            startup = {}
         if not isinstance(startup, dict):
             raise ValueError("the friend registry startup field must be an object")
-        if bus_owner(startup) != "nexus-server":
-            continue
-        address = bus_endpoint(startup["bus_listener"])
-        name, harness = row.get("name"), row.get("harness")
-        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name)
-                or not isinstance(harness, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", harness)):
-            raise ValueError("invalid friend name or harness on a message bus grant")
-        grants.append((name, harness, address))
-    if len({name for name, _, _ in grants}) != len(grants):
-        raise ValueError("nova-config returned two message bus grants for one friend")
-    return grants
+        address = native_bus_endpoint(startup) if startup.get("bus_owner") == "nexus-server" else ""
+        roster.append((name, harness, address))
+    return roster
+
+
+def bus_grants(config):
+    return [row for row in bus_roster(config) if row[2]]
 
 
 def resolve(config, name, harness=None):

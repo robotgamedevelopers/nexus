@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from friend_identity import bus_grants, resolve
+from friend_identity import bus_grants, bus_roster, resolve
 
 import starlark
 
@@ -104,6 +104,8 @@ def cli():
     driver.add_argument("arguments", nargs=argparse.REMAINDER)
     bus = commands.add_parser("bus-grants", help="list enabled friend, harness and loopback endpoint grants for nexus-server")
     bus.add_argument("profile", type=Path)
+    roster = commands.add_parser("bus-roster", help="list enabled registry friends and their server-owned inboxes")
+    roster.add_argument("profile", type=Path)
     inspect = commands.add_parser("identity", help="verify the friend definition and home without starting a model")
     inspect.add_argument("profile", type=Path)
     inspect.add_argument("friend")
@@ -116,15 +118,20 @@ def cli():
     launch.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
-        if args.command in ("identity", "friend-driver", "bus-grants"):
+        if args.command in ("identity", "friend-driver", "bus-grants", "bus-roster"):
             directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 config = json.loads(read_profile_file(directory, "identities.json"))
             finally:
                 os.close(directory)
-            if args.command == "bus-grants":
-                for grant in bus_grants(config):
-                    print("\t".join(grant))
+            if args.command in ("bus-grants", "bus-roster"):
+                if args.command == "bus-roster":
+                    rows = bus_roster(config)
+                    print("nexus-bus-roster-v1")
+                else:
+                    rows = bus_grants(config)
+                for row in rows:
+                    print("\t".join(row))
                 return 0
             instructions, identity = resolve(config, args.friend, args.harness)
             if args.command == "identity":

@@ -273,6 +273,9 @@ public:
     bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,
                     const std::string& displayBody, const std::string& promptBody, std::string* why = nullptr);
     // Includes receipts admitted in the current batch. The bus acknowledgement still waits for its flush.
+    // Record an authoritative non-friend delivery as handled; it creates no session, transcript or driver turn.
+    bool ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source);
+    bool hasIgnoredBusReceipt(const std::string& recipient, const std::string& id, const std::string& source) const;
     bool hasBusReceipt(const std::string& recipient, const std::string& id) const;
 
     // Changes that come from the server rather than a client (a friend's reply), in one step of the store, to a session

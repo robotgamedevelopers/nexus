@@ -1,4 +1,5 @@
 #include "sync/hub.h"
+#include "sync/bus_peer.h"
 #include "policy/session.h"
 
 #include <algorithm>
@@ -302,6 +303,21 @@ bool Hub::createSession(const Action& action, std::string* why, const std::strin
     return make(action, info, why, client);
 }
 
+bool Hub::ignoreBus(const std::string& recipient, const std::string& id, std::string* why, const std::string& source) {
+    auto key = busReceiptKey(recipient, id);
+    if (key.empty() || source.empty()) {
+        if (why) *why = "The message bus source, recipient or message ID is invalid.";
+        return false;
+    }
+    key += ":filtered:" + source;
+    return store_.applied(key) || store_.commit(0, {}, key, 1, why);
+}
+
+bool Hub::hasIgnoredBusReceipt(const std::string& recipient, const std::string& id, const std::string& source) const {
+    auto key = busReceiptKey(recipient, id);
+    return !key.empty() && !source.empty() && store_.applied(key + ":filtered:" + source);
+}
+
 bool Hub::hasBusReceipt(const std::string& recipient, const std::string& id) const {
     const auto key = busReceiptKey(recipient, id);
     return !key.empty() && store_.applied(key) != 0;
@@ -317,9 +333,7 @@ bool Hub::receiveBus(const std::string& recipient, const std::string& id, const 
     const auto receipt = busReceiptKey(recipient, id);
     if (receipt.empty()) return refuse("The message bus recipient or message ID is invalid.");
     if (store_.applied(receipt)) return true;
-    if (sender.empty() || sender.size() > 64 ||
-            sender.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos)
-        return refuse("The message bus sender is invalid.");
+    if (!busPeerName(sender)) return refuse("The message bus sender is invalid.");
     if (displayBody.size() > limits_.text || sender.size() + 1 + displayBody.size() > limits_.text ||
             promptBody.size() > limits_.text)
         return refuse("The message exceeds this Nexus server's prompt limit.");
