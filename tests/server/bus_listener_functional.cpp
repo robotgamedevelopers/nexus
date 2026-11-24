@@ -77,12 +77,12 @@ if [ "$inbox" = offline ]; then
         printf 'nova-bus hook: redis at %s answered with an error; redis: %s; reconnecting\n' \
             "$NOVA_BUS_REDIS" "$NOVA_BUS_PASSWORD" >&2
     done
-    # Publish readiness after the sleeper joins the hook's process group. The shell's
-    # wait builtin then runs the TERM trap even if the signal arrives as it starts waiting.
-    /bin/sleep 30 &
-    sleeper=$!
+    # Block in the shell itself. A foreground child's startup can race a group SIGTERM
+    # and leave the shell deferring its trap until the child exits.
+    mkfifo "$HOME/$inbox.wait"
+    exec 3<> "$HOME/$inbox.wait"
     : > "$HOME/$inbox.reported"
-    wait "$sleeper"
+    IFS= read -r unused <&3
     exit 75
 fi
 if /bin/sh -c "$receiver" < "$HOME/$inbox.wire"; then
