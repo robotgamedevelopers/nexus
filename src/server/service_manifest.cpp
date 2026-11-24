@@ -113,17 +113,23 @@ bool parseServiceManifest(std::string_view text, std::vector<ManagedService>& ou
     if (!doc || !prJsonParse(doc, {text.data(), text.size()}, nullptr)) { why = "services.json must be valid JSON"; return false; }
     const auto rows = member(doc, 0, "services");
     const auto version = member(doc, 0, "version");
-    if (!fields(doc, 0, {"version", "services"}) || prJsonKind(doc, version) != PrJsonKind_Number ||
+    if (!fields(doc, 0, {"version", "services", "sprint_enabled"}) || prJsonKind(doc, version) != PrJsonKind_Number ||
         prJsonNumber(doc, version, -1) != 1 ||
         prJsonKind(doc, rows) != PrJsonKind_Array) {
         why = "services.json requires version 1 and one services array";
         return false;
     }
+    const Index sprint = member(doc, 0, "sprint_enabled");
+    if (sprint != kPrJsonMissing && prJsonKind(doc, sprint) != PrJsonKind_True && prJsonKind(doc, sprint) != PrJsonKind_False) {
+        why = "sprint_enabled must be true or false";
+        return false;
+    }
+    const bool sprintEnabled = sprint == kPrJsonMissing || prJsonKind(doc, sprint) == PrJsonKind_True;
     std::vector<ManagedService> selected;
     std::set<std::string> names;
     for (auto row = prJsonFirst(doc, rows); row != kPrJsonMissing; row = prJsonAfter(doc, rows, row)) {
         ManagedService service;
-        if (names.size() == kMaxServices || !fields(doc, row, {"name", "owner", "argv", "env", "cwd", "log", "enabled", "every"}) ||
+        if (names.size() == kMaxServices || !fields(doc, row, {"name", "owner", "argv", "env", "cwd", "log", "enabled", "every", "feature"}) ||
             !stringAt(doc, member(doc, row, "name"), service.name) || !accounts::isName(service.name) ||
             !names.insert(service.name).second) {
             why = "services.json allows 256 distinct named service objects; check the names and fields";
@@ -145,6 +151,12 @@ bool parseServiceManifest(std::string_view text, std::vector<ManagedService>& ou
         }
         const std::string problem = readCommand(doc, row, service);
         if (!problem.empty()) { why = "service " + service.name + ": " + problem; return false; }
+        const auto feature = member(doc, row, "feature");
+        if (feature != kPrJsonMissing) {
+            std::string tag;
+            if (!stringAt(doc, feature, tag) || tag != "sprint") { why = "service feature must be sprint or omitted"; return false; }
+            if (!sprintEnabled) continue;
+        }
         selected.push_back(std::move(service));
     }
     out = std::move(selected);

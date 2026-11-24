@@ -410,7 +410,7 @@ bool open(void* context, PrStudioWindow* window) {
     board.open = a.urls->handle();
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
-    a.board = std::make_unique<PraxBoard>(board);
+    if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);
     a.view.board = a.board.get();
     a.host.terminals = a.terminals.get();
     a.host.board = a.board.get();
@@ -1043,7 +1043,7 @@ int main(int argc, char** argv) {
         }
     }
     // The sprint tab first, and no friends yet.
-    static Model model({}, true);
+    static Model model({}, fromState || clientConfig().sprintEnabled);
 #if NEXUS_LINK
     if (fromState) {
         sync::applyFriends(model, sync::friendsOf(held), held.friendsKnown(), {});

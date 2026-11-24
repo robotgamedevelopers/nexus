@@ -36,5 +36,9 @@ int main() {
         }
     }
     if (!parseServiceManifest(manifest(""), services, why) || !services.empty()) return 1;
+    const auto sprint = row(",\"feature\":\"sprint\"");
+    if (!parseServiceManifest(manifest(sprint), services, why) || services.size() != 1) return 1;
+    if (!parseServiceManifest("{\"version\":1,\"sprint_enabled\":false,\"services\":[" + sprint + "]}", services, why)
+        || !services.empty()) return 1;
     return 0;
 }

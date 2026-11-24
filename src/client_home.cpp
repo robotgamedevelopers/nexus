@@ -136,6 +136,10 @@ ClientConfig clientConfigFrom(std::string_view text, const std::string& path) {
         out.sprintUrl = at->second;
     }
     out.problems = c.errors;
+    if (const auto entry = c.values.find("sprint"); entry != c.values.end()) {
+        if (entry->second == "off") out.sprintEnabled = false;
+        else if (entry->second != "on") out.problems.push_back(path + ": sprint must be on or off");
+    }
     out.problems.insert(out.problems.end(), c.warnings.begin(), c.warnings.end());
     return out;
 }

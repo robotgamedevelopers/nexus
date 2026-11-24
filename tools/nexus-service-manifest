@@ -50,6 +50,7 @@ def project(row, opts, system):
     if not argv[0] or ("/" in argv[0] and not posixpath.isabs(argv[0])):
         raise ValueError(f"{name} needs an absolute executable path or a program name")
     bindir = absolute(opts.bin_dir or posixpath.join(opts.home, ".local/bin"))
+    sprint = posixpath.basename(argv[0]) == "nova-sprint" or name in opts.sprint_service
     if argv[0] in NOVA_TOOLS:
         argv[0] = posixpath.join(bindir, argv[0])
 
@@ -84,7 +85,8 @@ def project(row, opts, system):
                 "--key", posixpath.join(keydir, seat + ".key"), "--sops", sops, "--only", ",".join(keys), "--"] + argv
     if len(argv) > 256 or len(env) > 256:
         raise ValueError(f"{name} exceeds the server limit of 256 arguments or environment variables")
-    return {"name": name, "owner": "nexus-server", "enabled": True, "every": every,
+    return {**({"feature": "sprint"} if sprint else {}),
+            "name": name, "owner": "nexus-server", "enabled": True, "every": every,
             "argv": argv, "cwd": opts.home, "log": log, "env": env}
 
 
@@ -93,6 +95,7 @@ def main():
     p.add_argument("--host", required=True, help="inventory host name")
     p.add_argument("--home", required=True, help="target service login's absolute home")
     p.add_argument("--take", action="append", required=True, help="exact name of a retired host service; repeat for each")
+    p.add_argument("--sprint-service", action="append", default=[], help="tag a selected Sprint service launched by a wrapper")
     p.add_argument("--bin-dir", help="target nova_bin_dir")
     p.add_argument("--path", help="target nova_service_path")
     p.add_argument("--store", help="target nova_secrets_store")
@@ -101,6 +104,8 @@ def main():
     opts = p.parse_args()
     try:
         absolute(opts.home)
+        if set(opts.sprint_service) - set(opts.take):
+            raise ValueError("each --sprint-service must also be selected with --take")
         if len(opts.take) > 256 or len(set(opts.take)) != len(opts.take) or any(not NAME.fullmatch(n) for n in opts.take):
             raise ValueError("select up to 256 distinct service names")
         inventory = json.load(sys.stdin, object_pairs_hook=distinct)
