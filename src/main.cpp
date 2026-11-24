@@ -209,6 +209,9 @@ void carryOut(App& a, OverlayAct act) {
     if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
 #endif
     if (act == OverlayAct::Hide) {
+#ifdef __APPLE__
+        stopDesktopBlur();
+#endif
         a.preparingReveal = false;
         if (a.board) a.board->cancelPreparation();
         a.boardRevealStep.reset();
@@ -229,6 +232,9 @@ void carryOut(App& a, OverlayAct act) {
         a.revealFrameReady = false;
         a.boardRevealStep.reset();
         prAppWindowSetOpacity(window, 0);
+#ifdef __APPLE__
+        startDesktopBlur(surface, a.view.windowApp.surface.overlayBlurSigma);
+#endif
         prAppWindowSetVisible(window, true);
         prAppWindowRequestUnpacedFrame(window);
         a.host.signIn.shown();
@@ -489,6 +495,9 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     if (a.preparingReveal) {
         const bool sprint = a.board && a.model->tab_count() && a.model->tab(a.model->active()).kind == TabKind::Sprint;
         a.revealFrameReady = !sprint || (a.boardRevealStep && a.board->readyToReveal(*a.boardRevealStep));
+#ifdef __APPLE__
+        a.revealFrameReady = a.revealFrameReady && desktopBlurReady();
+#endif
         return;
     }
     // A change of the window's visibility or keyboard asks for a frame, so each one is seen here.

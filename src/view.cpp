@@ -2469,6 +2469,7 @@ struct Builder {
             switch (panel) {
                 case Panel::Board: sprint(window); break;
                 case Panel::Terminal: terminal(window, model.tab(model.active())); break;
+                case Panel::Spacer: prKitPlace(kit, prKitBox(kit, window, {}, {}), {.flex = PrKitFlex_Fill}); break;
                 case Panel::Transcript: transcript(window); break;
                 case Panel::Prompt: prompt(element(window, Part::Footer), composing); break;
                 case Panel::LimitChoice: limitPanel(window); break;

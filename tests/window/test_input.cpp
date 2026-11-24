@@ -2874,6 +2874,7 @@ int main(int argc, char** argv) {
               link.sent.back().account == "c" && link.sent.back().session == 17);
         CHECK(!h.view.accountPicker && h.view.accountRows.size() == 3);
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
+        CHECK(h.view.transcript == kPrLayoutNodeNone);
         CHECK(h.hasText(h.view.accountMenu, "c@example.test"));
         h.view.askedTextSteps = 3;
         h.frame();
@@ -2908,6 +2909,7 @@ int main(int argc, char** argv) {
         h.enter();
         h.frame();
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
+        CHECK(h.view.transcript == kPrLayoutNodeNone);
         CHECK(link.sent.size() == sent && h.active().draft == "draft kept again");
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 0);

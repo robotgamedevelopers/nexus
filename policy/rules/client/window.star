@@ -216,6 +216,7 @@ def handle(event, state, config):
             "prompt_command": False,
             "prompt_style": _prompt_style(config),
             "tab_style": config.get("tab_style", {}),
+            "overlay_blur_sigma": config.get("overlay_blur_sigma", 24),
             "overlay_opacity": config.get("overlay_opacity", 0.60),
             "tab_groups": groups,
             "closable": closable,
@@ -289,6 +290,8 @@ def handle(event, state, config):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
+        if state["tab"] == "friend" and state.get("needs_sign_in"):
+            window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":

@@ -20,7 +20,7 @@ struct Shortcut {
     int argument;
     std::string type{};
 };
-enum class Panel { Board, Terminal, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply };
+enum class Panel { Board, Terminal, Spacer, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply };
 struct TabType {
     std::string title, group, native, service;
     bool operator==(const TabType&) const = default;
@@ -68,6 +68,7 @@ struct Chirp {
 };
 
 struct AccountSurface {
+    float overlayBlurSigma = 24;
     Chirp copyChirp{1600, 480, 32, 0.04f};
     Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, discardChirp, sendChirp, stepChirp, startupChirp;
     std::optional<std::vector<AccountItem>> items;

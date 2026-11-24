@@ -381,15 +381,15 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
     # The app: on macOS a real bundle, nexus.app; on Windows a GUI program (no console window opens at launch, so
     # launch shows nothing), which still starts at main(). The system's part of the overlay is src/platform.h.
     if(APPLE)
-        add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm)
+        add_executable(nexus MACOSX_BUNDLE src/main.cpp src/platform_mac.mm src/desktop_blur_mac.mm)
         set(NEXUS_MAC_SIGN_IDENTITY "" CACHE STRING "Signing identity for local nexus.app builds")
         if(NEXUS_MAC_SIGN_IDENTITY)
             add_custom_command(TARGET nexus POST_BUILD
                 COMMAND /usr/bin/codesign --force --sign "${NEXUS_MAC_SIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:nexus>"
                 VERBATIM)
         endif()
-        set_source_files_properties(src/platform_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(nexus PRIVATE "-framework AppKit")
+        set_source_files_properties(src/platform_mac.mm src/desktop_blur_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(nexus PRIVATE "-framework AppKit" "-framework ScreenCaptureKit" "-framework CoreMedia" "-framework CoreVideo" "-framework Metal" "-framework QuartzCore")
         # The app's name is nexus: the bundle's name and display name (cmake/Info.plist.in, CMake's
         # template with CFBundleDisplayName added), the executable (the process's name in Activity Monitor and the app
         # menu's About, Hide and Quit) and the window's title (main.cpp).

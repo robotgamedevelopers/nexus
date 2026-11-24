@@ -71,6 +71,8 @@
      ))
   (:id "window-features" :type :roadmap :title "Window features"
    :rows (
+     ("screen-observation" "Let a friend see a display or window the human chooses with Screen Recording permission" :later t)
+     ("desktop-input" "Let a friend click and type in other apps with separate Accessibility permission and a human stop control" :later t)
      ("terminal-tabs" "Terminal tabs: a shell per tab, after the friends; added with Cmd-T, closed with Cmd-W")
      ("sprint-tab" "Sprint tab: nova-sprint's board, always first and always Cmd-1; never moved, closed or typed into; the page opaque, as nova-sprint serves it")
      ("upload" "The plus button uploads a picked file to the server, into the selected AI's incoming/ directory; an image is also posted to the chat (needs layers 2 and 3)" :later t)
@@ -82,6 +84,8 @@
      )
    :columns (("done" "done"))
    :cells (
+     ("screen-observation" "done" "t-screen-observation")
+     ("desktop-input" "done" "t-desktop-input")
      ("terminal-tabs" "done" "t-terminal-tabs")
      ("sprint-tab" "done" "t-sprint-tab")
      ("upload" "done" "t-upload")
@@ -286,6 +290,8 @@
    :note "Waits on a gemini driver. Sources: geminicli.com/docs/get-started/authentication; google-gemini/gemini-cli packages/core/src/code_assist/oauth2.ts (access tokens about an hour).")
   (:id "login-life-api-keys" :type :task :title "API keys (Anthropic Console, OpenAI, Gemini, xAI) last until revoked: stored once, never asked again but on a 401 the provider gives, saying so; an xAI key's optional expiry is read once and noticed 30, 7 and 1 days ahead as a claude login's year is" :state :todo
    :note "Waits on a provider of nexus that stores a key. Source for the optional expiry: docs.x.ai.")
+  (:id "t-screen-observation" :type :task :title "Human-authorized screen observation for a friend" :state :todo)
+  (:id "t-desktop-input" :type :task :title "Human-authorized desktop pointer and keyboard input" :state :todo)
   (:id "t-heads-down" :type :task :title "Heads-down: server-side timer and queue, stop always gets through, one away-report" :state :todo)
   (:id "t-fleet" :type :task :title "Fleet: the machines and what runs on each" :state :todo)
   (:id "t-machines-from-server" :type :task :title "The fleet's machine list from the server, as the friends are: the server sends the machines it knows in its state (nova-config an optional source on the server's side), and the window stops reading nova-config for the terminal tabs' machine labels (src/remote.cpp, the client config's nova-config key), its last outside tool" :state :todo)
