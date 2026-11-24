@@ -23,7 +23,8 @@ std::string contents(const char* path) {
     return std::string(std::istreambuf_iterator<char>{file}, {});
 }
 
-void checkChat(const std::string& recipient, const std::vector<std::string>& expected) {
+void checkChat(const std::string& recipient, const std::vector<std::string>& expected,
+               const std::string& forbidden) {
     using namespace nexus;
     std::string line;
     link::Connect connect;
@@ -54,6 +55,8 @@ void checkChat(const std::string& recipient, const std::vector<std::string>& exp
         std::vector<std::string> actual;
         for (const auto& entry : model.tab(0).transcript) {
             if (entry.kind == EntryKind::Person) throw std::runtime_error("bus delivery appeared as a human prompt");
+            if (!forbidden.empty() && entry.text.find(forbidden) != std::string::npos)
+                throw std::runtime_error("an unregistered sender's message reached the transcript");
             if (entry.kind == EntryKind::Bus) actual.push_back(entry.text);
         }
         if (actual == expected) return;
@@ -65,9 +68,9 @@ void checkChat(const std::string& recipient, const std::vector<std::string>& exp
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) return 2;
+    if (argc != 4 && argc != 5) return 2;
     try {
-        checkChat(argv[1], {contents(argv[2]), contents(argv[3])});
+        checkChat(argv[1], {contents(argv[2]), contents(argv[3])}, argc == 5 ? contents(argv[4]) : "");
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "bus_chat_probe: " << e.what() << '\n';
