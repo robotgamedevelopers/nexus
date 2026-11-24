@@ -170,7 +170,7 @@ endif()
 
 # Each case in a directory of its own under the build tree.
 if(NOT WIN32)
-    foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume restart
+    foreach(case normal stop silent exit_mid_turn malformed ignores_stop kill flood fails_first_start resume primary_route restart
                  orphan escaped_output queue queue_unconfigured restart_unconfigured
                  stop_hammered account window unconfigured bus_admission bus_default_instance sign_in no_credential usage_limit continuation bus_continuation fable_switch_account fable_switch_model limit_unsupported no_account
                  friend_removed friend_back_limited friend_removed_starting friend_back_before_stop

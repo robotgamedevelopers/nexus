@@ -621,6 +621,17 @@ bool Server::restoreAll(std::string* why) {
     }
     // In-app sign-in, once the accounts are held: each claude account with no login is offered for a browser sign-in.
     openSignIn(host);
+    if (std::ifstream in{dirNow("drivers")}) {
+        std::ostringstream text;
+        text << in.rdbuf();
+        const auto table = parseDriverTable(text.str(), paths_.home);
+        if (table.primary && table.errors.empty() && table.primaryDrivers.contains(table.primary->harness)) {
+            const auto& binding = *table.primary;
+            std::string problem;
+            if (!hub_->ensurePrimary({kPrimaryChat, binding.harness, binding.account, {}, {}, binding.instance()}, &problem))
+                std::fprintf(stderr, "nexus-server: primary chat: %s\n", problem.c_str());
+        }
+    }
     if (!drivers_->start(nowMs())) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;

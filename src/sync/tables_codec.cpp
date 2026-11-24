@@ -125,6 +125,14 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         putText(b.main, x->info.catalog, s.info.catalog, scratch);
         putText(b.main, x->info.limit_model, s.info.limitModel, scratch);
         x->info.auto_account = s.info.autoAccount;
+        if (s.info.primaryAccount) {
+            auto* choice = added(wire::AccountChoiceEmplace(b.main, x->primary_account));
+            const auto& account = *s.info.primaryAccount;
+            putText(b.main, choice->name, account.name, scratch);
+            putText(b.main, choice->label, account.label, scratch);
+            choice->needs_sign_in = account.needsSignIn;
+            putText(b.main, choice->email, account.email, scratch);
+        }
         x->activity = activityOut(s.activity);
         x->active_agents = s.activeAgents;
         if (s.busSenders) {
@@ -244,6 +252,9 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
             s.info.catalog = textOf(x.info.catalog);
             s.info.limitModel = textOf(x.info.limit_model);
             s.info.autoAccount = x.info.auto_account;
+            if (const auto* choice = wire::AccountChoiceAt(x.primary_account))
+                s.info.primaryAccount = AccountChoice{textOf(choice->name), textOf(choice->label), choice->needs_sign_in,
+                                                      textOf(choice->email)};
             s.activity = activityIn(x.activity);
             s.activeAgents = x.active_agents;
             if (x.bus_senders_known) {

@@ -313,7 +313,7 @@ std::string Drivers::friendOf(sync::SessionId id) const {
 // none is listed: the deny direction, as limitedFor reads no registry as limited (models/Supervisor.tla NoSendUnknown).
 bool Drivers::listed(sync::SessionId id) const {
     const accounts::Registry* registry = hub_ != nullptr ? hub_->accounts() : nullptr;
-    return registry != nullptr && registry->friendNamed(friendOf(id)) != nullptr;
+    return (hub_ && hub_->isPrimary(id)) || (registry && registry->friendNamed(friendOf(id)));
 }
 
 // The session's driver: its friend's line of the drivers file. The supervisor binds any `--account` argument at
@@ -325,6 +325,17 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     DriverTable table;
     ResolvedDriver r = resolveFriend(friendName, &table);
     const sync::StoredSession* stored = store_.find(id);
+    const bool primary = hub_ && hub_->isPrimary(id);
+    if (primary && stored) {
+        if (!table.errors.empty() || !table.primary || !table.primary->matches(stored->info) ||
+                !table.primaryDrivers.contains(table.primary->harness))
+            return {{}, {}, "The primary harness configuration changed. Reconnect to the current workspace."};
+        r = {table.primaryDrivers.at(table.primary->harness), table.primary->cwd, {}};
+        if (std::find(r.command.begin(), r.command.end(), "--account") == r.command.end())
+            r.command.insert(r.command.end(), {"--account", stored->info.account});
+        if (!table.primary->resume.empty() && stored->driver.nextTurn == 1 && stored->driver.session.empty())
+            r.command.insert(r.command.end(), {"--resume", table.primary->resume});
+    }
     if (!r.problem.empty() || stored == nullptr) {
         return r;
     }
@@ -363,7 +374,7 @@ ResolvedDriver Drivers::resolve(sync::SessionId id) const {
     const accounts::Account* held = hub_ != nullptr && hub_->accounts() != nullptr ?
         hub_->accounts()->account(info.account) : nullptr;
     auto line = table.friends.find(friendName);
-    const std::string harness = line == table.friends.end() ? std::string() : line->second.harness;
+    const std::string harness = primary ? info.harness : line == table.friends.end() ? std::string() : line->second.harness;
     if (held != nullptr && held->provider != harness) {
         return refuse("Session " + std::to_string(id) + " runs on the account " + info.account + ", whose provider is " +
             held->provider + ", but " + friendName + "'s driver in " + options_.table + " is " + harness + "'s, and "

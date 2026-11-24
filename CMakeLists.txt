@@ -229,6 +229,7 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_builds PUBLIC src)
     target_compile_options(nexus_builds PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_builds PUBLIC nexus_store)
+    target_link_libraries(nexus_supervisor PRIVATE nexus_builds)
 
     # Handover (src/server/handover.h, src/server/drain.h, docs/builds.md): durable, resumable handover state machine
     # under an OS lock, draining the old server and rolling back to previous when a target build fails to serve.
