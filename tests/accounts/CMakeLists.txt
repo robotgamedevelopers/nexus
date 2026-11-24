@@ -31,13 +31,9 @@ foreach(group layout refusals versions consistency picks hub_actions hub_reload_
 endforeach()
 
 # TLC (tlc_test is tests/model's): Accounts.tla, all properties (states and times on two workers on a Linux bench).
-# MCAccounts.cfg is two accounts of two providers, two friends, two sessions, every action, reload and report (162,128
-# distinct states since a dropped friend's sessions are kept as they were; 14 s on eight workers on an M-series Mac).
-# Nightly: MCAccountsThree.cfg, three accounts (two of one provider), one session (1,640,352
-# distinct states, 6 min 41 s on two workers; capped at 15 min on eight).
-# Per commit on eight workers: 17-23 s, timed two at a time on a loaded tlc runner host (16 cores); alone on an idle
-# one (amd-2, 2026-11-15) 16.2 s / 124 CPU s, against 26.3 s / 106 on four. In a CI shard of its own (SHARD: capped at
-# the shard's budget, 80 s).
+# MCAccounts.cfg covers two providers, two accounts, two friends and two sessions. Permuting the two friend names
+# leaves each safety property unchanged (150,704 distinct states, 22 s on eight workers on an M-series Mac).
+# It runs alone in its CI shard, capped at 80 s. The nightly three-account instance is capped at 15 min.
 tlc_test(tlc_accounts       MCAccounts MCAccounts.cfg      pass WORKERS 8 SHARD)
 tlc_test(tlc_accounts_policy MCAccounts MCAccountsPolicy.cfg pass WORKERS 2)
 tlc_test(tlc_accounts_three MCAccounts MCAccountsThree.cfg pass WORKERS 8 NIGHTLY CAP 900)

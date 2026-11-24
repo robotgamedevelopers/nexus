@@ -68,6 +68,7 @@ export class Trace {
             ask: args.ask ?? 0,
             changes: settings(args.changes ?? {}, 'none'),
             kind: args.kind ?? 'none',
+            rejectedLimit: args.rejectedLimit ?? 'none',
             code: args.code ?? 'none',
             phase: state.phase,
             resume: state.resume,

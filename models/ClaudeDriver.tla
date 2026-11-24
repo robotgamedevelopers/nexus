@@ -56,12 +56,13 @@ Turns == 1..MaxTurn
 Asks == 1..MaxAsk
 Ids == (0..MaxTurn) \cup (0..MaxAsk)
 Stages == {"none", "waiting", "applying", "pushed", "taken"}
-Failures == {None, "harness", "no-credential"}
+Failures == {None, "harness", "no-credential", "rate-limit", "usage-limit", "model-limit"}
+Windows == {None, "harness", "usage-limit", "model-limit"}
 NoChanges == [f \in Fields |-> None]
 Changes == [Fields -> Values \cup {None}]
 Settled == [Fields -> Values \cup {Start}]
 Kinds == {"text", "text-end", "tool", "ask-secret", "done-ok", "done-stopped", "done-error",
-          "error-harness", "error-no-credential", "error-session-not-found"}
+          "error-harness", "error-no-credential", "error-session-not-found", "error-usage-limit", "error-model-limit"}
 
 VARIABLES phase, resume, open, stage, stopping, textOpen, failure, intFor, pending, carry, inUse, last,
           secrets, asking, asks, sent, dones, wrote, want, turnWant, act
@@ -407,14 +408,25 @@ AssistantError(code) ==
 \* The query's result: "ok", "error", or "lost" (an error saying Claude does not know the session). While an ask is
 \* open in the driver, the query waits on the tool call and emits no result until the ask settles (by its secret line
 \* or a stop).
-ResultWith(kind, refuse, lost) ==
+\* window is the latest rejected subscription window observed by the time the SDK result arrives.
+ResultError(window) ==
+    IF failure = "model-limit" THEN "error-model-limit"
+    ELSE IF window # None /\ failure \in {None, "rate-limit", "usage-limit"}
+         THEN CASE window = "model-limit" -> "error-model-limit"
+                [] window = "usage-limit" -> "error-usage-limit"
+                [] OTHER -> "error-harness"
+    ELSE IF failure = "usage-limit" THEN "error-usage-limit" ELSE "error-harness"
+
+ResultWindow(kind, window, refuse, lost) ==
     /\ Running
     /\ asking = 0
     /\ IF stopping THEN Finish("stopped")
        ELSE IF kind = "ok" /\ failure = None THEN Finish("ok")
        ELSE IF failure = "no-credential" THEN refuse
        ELSE IF failure = None /\ kind = "lost" /\ resume = "given" THEN lost
-       ELSE FinishWith("error", CloseText \o <<W("error-harness", open)>>)
+       ELSE FinishWith("error", CloseText \o <<W(ResultError(window), open)>>)
+
+ResultWith(kind, refuse, lost) == \E window \in Windows : ResultWindow(kind, window, refuse, lost)
 
 Result(kind) == ResultWith(kind, Refuse, NotFound)
 
@@ -446,7 +458,7 @@ NextSecretsWith(StopOp(_), ApplyOp, ResultOp(_), RefuseOp, NotFoundOp, AskOp, Se
     \/ S(BlockText)
     \/ S(Tool)
     \/ S(AskOp)
-    \/ \E code \in {"harness", "no-credential"} : S(AssistantError(code))
+    \/ \E code \in Failures \ {None} : S(AssistantError(code))
     \/ \E k \in ResultKinds : S(ResultOp(k))
     \/ S(RefuseOp)
     \/ S(Fail)

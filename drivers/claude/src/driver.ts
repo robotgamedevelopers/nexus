@@ -88,7 +88,7 @@ export interface DriverState {
     stage: 'none' | 'waiting' | 'applying' | 'pushed' | 'taken';
     stopping: boolean;
     textOpen: boolean;
-    failure: 'none' | 'harness' | 'no-credential';
+    failure: 'none' | 'harness' | 'no-credential' | 'rate-limit' | 'usage-limit' | 'model-limit';
     interrupting: number;               // the turn whose interrupt has not answered yet, 0 for none
     pending: Changes;                   // settings for the next send
     carry: Changes;                     // the open turn's settings, not yet applied
@@ -105,7 +105,8 @@ export interface StepArgs {
     ask?: number;
     changes?: Changes;
     kind?: 'ok' | 'error' | 'lost';
-    code?: 'harness' | 'no-credential';
+    code?: DriverState['failure'];
+    rejectedLimit?: Turn['rejectedLimit'];
 }
 
 /** The world outside the driver. */
@@ -462,10 +463,6 @@ export class Driver {
 
     private state(): DriverState {
         const t = this.open;
-        let failure: DriverState['failure'] = 'none';
-        if (t?.failure !== undefined) {
-            failure = t.failure.code === 'no-credential' ? 'no-credential' : 'harness';
-        }
         let stage: DriverState['stage'] = 'none';
         if (t !== undefined) {
             stage = t.taken ? 'taken' : t.pushed ? 'pushed' : t.applying ? 'applying' : 'waiting';
@@ -477,7 +474,7 @@ export class Driver {
             stage,
             stopping: t?.stopping ?? false,
             textOpen: t?.textOpen ?? false,
-            failure,
+            failure: traceFailure(t?.failure),
             interrupting: this.interrupting,
             pending: { ...this.pending },
             carry: { ...(t?.changes ?? {}) },
@@ -1088,7 +1085,7 @@ export class Driver {
         if (m.error !== undefined) {
             const said = m.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
             t.failure = failure(m.error, said, this.args);
-            this.record('assistant-error', { code: t.failure.code === 'no-credential' ? 'no-credential' : 'harness' });
+            this.record('assistant-error', { code: traceFailure(t.failure) });
             return;
         }
         for (const b of m.message.content) {
@@ -1154,7 +1151,8 @@ export class Driver {
         const ok = r.subtype === 'success' && !r.is_error;
         const said = (r.subtype === 'success' ? [r.result] : r.errors).join('; ');
         this.resultOf(t, r, ok, said);
-        this.record('result', { kind: ok ? 'ok' : isSessionNotFound(said) ? 'lost' : 'error' });
+        this.record('result', { kind: ok ? 'ok' : isSessionNotFound(said) ? 'lost' : 'error',
+            rejectedLimit: t.rejectedLimit });
     }
 
     private resultOf(t: Turn, r: SDKResultMessage, ok: boolean, said: string): void {
@@ -1277,6 +1275,12 @@ function tokenFix(args: Arguments): string {
     const dir = `~/.nexus/server/accounts/${account}`;
     return `make a new token with \`CLAUDE_CONFIG_DIR=${dir} claude setup-token\` on the subscription account, and save it, `
         + `alone on one line, to ${dir}/${kTokenFile} with mode 0600`;
+}
+
+function traceFailure(f: Failure | undefined): DriverState['failure'] {
+    if (!f) return 'none';
+    if (f.code === 'usage-limit' || f.code === 'model-limit' || f.code === 'no-credential') return f.code;
+    return f.rateLimited ? 'rate-limit' : 'harness';
 }
 
 /** The failure an assistant message's error code names. */
