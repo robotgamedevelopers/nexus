@@ -2374,7 +2374,7 @@ void dragsStayInTheirZone() {
 // terminals follow them. Its page shows, below the strip, and no prompt.
 void sprintTabIsFirstAndCommandOne() {
     Harness h = withSprint();
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f1", "f2"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f1", "f2"}));
     CHECK(h.active().kind == TabKind::Sprint);
     CHECK(h.board.shows > 0 && h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.board.extent.x == 1000 && h.board.extent.y > 600 && h.board.extent.y < 780);
@@ -2423,10 +2423,13 @@ void choosingTheSprintTabGoesHome() {
 // the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
 void commandDigitsWorkFromTheSprintTab() {
     Harness h = withSprint(3);
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f1", "f2", "f3"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f1", "f2", "f3"}));
     const auto positions = [&] {
         std::vector<float> left;
         const auto names = h.labels();
+        const auto tabs = h.tabs();
+        const auto gap = [&](std::size_t i) { return h.bounds(tabs[i]).left - h.bounds(tabs[i-1]).right; };
+        CHECK(near(gap(1), gap(2)) && near(gap(2), gap(3)));
         for (std::size_t i = 0; i < names.size(); ++i)
             left.push_back(h.bounds(h.findText(h.tabs()[i], names[i])).left);
         return left;
@@ -2515,7 +2518,7 @@ void sprintTabNeverMoves() {
     CHECK(h.model.tab(0).kind == TabKind::Sprint && h.saves == 0);
     h.dragTab(1, 3);
     CHECK(h.ids() == "3 1 2 0" && h.saves == 1);
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f2", "f3", "f1"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f2", "f3", "f1"}));
 }
 
 // The owner's report: alex dragged to the end of the friends, the overlay hidden on the sprint tab and shown again
@@ -2531,7 +2534,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.pointer(PrAppEventKind_PointerMove, PrVec2{start.x + 10, start.y});
     h.pointer(PrAppEventKind_PointerMove, end);
     h.pointer(PrAppEventKind_PointerUp, end);
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "emma", "f3", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "emma", "f3", "alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);             // hide
     CHECK(h.hides == 1);
@@ -2547,7 +2550,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.commandDigit(2);
     CHECK(h.active().name == "emma");
     h.dragTab(1, 3);                                         // emma to the end, past alex
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "f3", "alex", "emma"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f3", "alex", "emma"}));
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     h.frame();
     CHECK(h.active().name == "emma" && prUiFocus(h.ui) == h.view.prompt);
@@ -2557,7 +2560,7 @@ void hideAndShowKeepTheSelectedTab() {
 void launchWithAlexLastShowsTheSprintTab() {
     std::vector<FriendInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
     Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
-    CHECK((h.labels() == std::vector<std::string>{"Sprint", "rowan", "emma", "alex"}));
+    CHECK((h.labels() == std::vector<std::string>{"Dashboard", "rowan", "emma", "alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
     CHECK(h.active().kind == TabKind::Sprint && prUiFocus(h.ui) != h.tabs()[3]);
