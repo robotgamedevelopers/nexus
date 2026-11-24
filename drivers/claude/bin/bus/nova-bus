@@ -1,5 +1,11 @@
 #!/bin/sh
-if [ "$#" = 3 ] && [ "$1" = hook ] && [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_FRIEND" ]; then
-    exec /usr/bin/nc -dU "$NEXUS_BUS_LISTENER"
+if [ "$1" = hook ]; then
+    if [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_FRIEND" ]; then
+        if [ "$#" = 3 ] || { [ "$#" = 5 ] && [ "$4" = --harness ] && [ "$5" = claude ]; }; then
+            exec /usr/bin/nc -dU "$NEXUS_BUS_LISTENER"
+        fi
+    fi
+    echo "Use hook --as $NEXUS_BUS_FRIEND with the granted listener." >&2
+    exit 2
 fi
 exec "$HOME/.local/bin/nova-bus" "$@"

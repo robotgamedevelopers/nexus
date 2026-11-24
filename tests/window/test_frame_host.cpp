@@ -334,12 +334,11 @@ void logoutUsesTheConfirmedAccountAndReturnsToSignIn() {
     CHECK(w.view.signInAccount().name == "work");
     CHECK(w.view.signOut() && w.link.sent.size() == 3);
     snapshot("muse", "work", false, 11);
-    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
+    CHECK(w.view.signOut() && w.link.sent.size() == 4);
     snapshot("claude", "work", false, 12, true);
-    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
-    CHECK(w.view.problem.find("named account") != std::string::npos);
+    CHECK(w.view.signOut() && w.link.sent.back().account == "work");
     snapshot("claude", "unlinked", false, 13);
-    CHECK(!w.view.signOut() && w.link.sent.size() == 3);
+    CHECK(!w.view.signOut() && w.link.sent.size() == 5);
 }
 
 void enterDuringAccountSwitchWaitsForServerState() {

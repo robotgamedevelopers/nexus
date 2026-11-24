@@ -247,7 +247,8 @@ prompt. The helper checks the stored email against the configured email and uses
 an expiring access token from that grant. A slot with a configured email cannot be authorized by pasting
 a token or using a legacy `oauth-token` file. Use a window with browser sign-in support to enroll it.
 
-A local `/logout` on a named Claude account removes its verified grant, legacy token and renewal files
+For Codex, Grok, Muse and Antigravity, `/logout` removes the named harness login and enrollment receipt.
+A local `/logout` on a Claude account removes its verified grant, legacy token and renewal files
 and retires idle drivers using that login. The command requires the account's active work and sign-in to
 finish or be cancelled. It leaves other slots and the browser's Claude session independent.
 See [account selection and sign-in](accounts.md#signing-in-to-the-right-claude-account).

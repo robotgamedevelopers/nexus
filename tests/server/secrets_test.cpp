@@ -1148,6 +1148,17 @@ void enrollment_files(const std::filesystem::path& home) {
             write(bad);
             CHECK(!enrolled());
         }
+        const fs::path vendor = std::string(provider) == "codex" ? ".codex/auth.json" :
+            std::string(provider) == "grok" ? ".grok/auth.json" :
+            std::string(provider) == "muse" ? ".config/muse/auth.json" : ".gemini/antigravity-cli/antigravity-oauth-token";
+        fs::create_directories((dir / vendor).parent_path());
+        fs::copy_file(receipt, dir / vendor);
+        fs::copy_file(receipt, dir / ".nexus-enrollment-pending");
+        CHECK(!server::forgetEnrollment(home.string(), provider, "alias").empty());
+        CHECK(fs::exists(dir / vendor));
+        CHECK(server::forgetEnrollment(home.string(), provider, account).empty());
+        CHECK(!fs::exists(receipt) && !fs::exists(dir / vendor) && !fs::exists(dir / ".nexus-enrollment-pending"));
+        CHECK(fs::exists(dir / "elsewhere"));
     }
 }
 

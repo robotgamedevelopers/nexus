@@ -125,6 +125,7 @@ const char* activityName(sync::Activity a) {
         case sync::Activity::Idle: return "idle";
         case sync::Activity::Busy: return "busy";
         case sync::Activity::Down: return "down";
+        case sync::Activity::Working: return "working";
     }
     return "?";
 }

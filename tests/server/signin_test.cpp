@@ -935,11 +935,11 @@ void signOut() {
     select.text = sync::kAutoAccountTarget;
     CHECK(s.hub->apply(select));
     a.account = s.store.find(1)->info.account;
-    CHECK(!logout() && holds(why, "named account") && removed.size() == 1);
+    CHECK(logout() && removed.size() == 2 && removed.back() == a.account);
     select.text = "a3";
     CHECK(s.hub->apply(select));
     a.account = "a3";
-    CHECK(!logout() && holds(why, "Claude") && removed.size() == 1);
+    CHECK(!logout() && holds(why, "provider") && removed.size() == 2);
 }
 
 void hub() {

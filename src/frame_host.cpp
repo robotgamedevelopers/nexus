@@ -689,14 +689,6 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             view->problem = "Finish selecting the account before signing out.";
             return false;
         }
-        if (accountState_.find(session)->info.autoAccount) {
-            view->problem = "Select a named account before signing out.";
-            return false;
-        }
-        if (accountState_.find(session)->info.harness != "claude") {
-            view->problem = "Sign-out is currently available for Claude accounts.";
-            return false;
-        }
         sync::Action action;
         action.kind = sync::ActionKind::SignOut;
         action.session = session;

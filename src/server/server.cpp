@@ -516,7 +516,9 @@ bool Server::restoreAll(std::string* why) {
         if (!store_.flush(&why)) return "Could not persist the sign-out command: " + why;
         store_.beginBatch();
         auto error = drivers_->retireForSignOut(account.name);
-        return error.empty() ? secretFiles_->forgetClaude(account.name) : error;
+        if (!error.empty()) return error;
+        if (account.provider == "claude") return secretFiles_->forgetClaude(account.name);
+        return forgetEnrollment(paths_.home, account.provider, account.name);
     });
     // An account is taken as signed in from the start when its login is there, usable, and not past its end, until
     // its driver says otherwise (a no-credential or authentication error): for a claude account, its oauth-token,

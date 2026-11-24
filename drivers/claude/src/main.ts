@@ -86,14 +86,19 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         const bin = join(kDriverDir, 'bin/bus');
         wall.sandbox.filesystem?.allowRead?.push(bin);
         Object.assign(childEnv, {PATH: bin + ':' + (childEnv['PATH'] ?? '/usr/bin:/bin'), NEXUS_BUS_FRIEND: friend,
-            NEXUS_BUS_LISTENER: busSocket, NOVA_BUS_REDIS: address});
+            NEXUS_BUS_LISTENER: busSocket});
     }
+    const instructions = [start.startupContext];
+    if (start.busListener) instructions.push(
+        'To listen on the message bus use Monitor with "' + join(kDriverDir, 'bin/bus/nova-bus') +
+        '" hook --as ' + childEnv['NEXUS_BUS_FRIEND'] + '. Keep the full output for delivery.');
+    const startupContext = instructions.filter(Boolean).join('\n');
     const stream = query({
         prompt: start.prompts,
         options: {
             cwd: start.cwd,
-            ...(start.startupContext === undefined ? {} : {
-                systemPrompt: { type: 'preset', preset: 'claude_code', append: start.startupContext },
+            ...(!startupContext ? {} : {
+                systemPrompt: { type: 'preset', preset: 'claude_code', append: startupContext },
             }),
             // The whole environment the harness gets (it replaces, not merges): the scrubbed one, with the account's
             // directory. The token is not in it: the wall's spawn hands it over on a descriptor.

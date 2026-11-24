@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
 
@@ -157,32 +158,77 @@ bool hasVerifiedClaude(const std::string& accountDir, const std::string& expecte
     return valid;
 }
 
-bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account) {
+static int enrollmentDirectory(const std::string& home, const std::string& provider, const std::string& account) {
     if (!sync::usesLocalSignInPage(provider) || !accounts::isName(account) || home.empty() ||
         home.find('\0') != std::string::npos) {
-        return false;
+        errno = EINVAL;
+        return -1;
     }
-    const std::string expected = provider + "\n";
-    std::string bytes(expected.size() + 1, '\0');   // one extra byte detects trailing data
     int dir = ::open(home.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dir < 0) {
-        return false;
+        return -1;
     }
     const char* parts[] = {".nexus", "server", "harness", provider.c_str(), account.c_str()};
     for (size_t i = 0; i < std::size(parts); ++i) {
         const int child = openExactAt(dir, parts[i], O_DIRECTORY);
         ::close(dir);
         if (child < 0) {
-            return false;
+            return -1;
         }
         dir = child;
         struct stat info {};
         const mode_t mask = i + 1 == std::size(parts) ? 0077 : 0022;
         if (::fstat(dir, &info) != 0 || info.st_uid != ::getuid() || (info.st_mode & mask) != 0) {
             ::close(dir);
-            return false;
+            errno = EACCES;
+            return -1;
         }
     }
+    return dir;
+}
+
+std::string forgetEnrollment(const std::string& home, const std::string& provider, const std::string& account) {
+    int dir = enrollmentDirectory(home, provider, account);
+    if (dir < 0) return errno == ENOENT ? "" : std::strerror(errno);
+    if (::flock(dir, LOCK_EX | LOCK_NB) != 0) {
+        ::close(dir);
+        return "The account login is in use.";
+    }
+    const auto removeFile = [](int parent, const char* name) -> std::string {
+        if (::unlinkat(parent, name, 0) != 0 && errno != ENOENT) return std::strerror(errno);
+        return ::fsync(parent) == 0 ? "" : std::strerror(errno);
+    };
+    auto error = removeFile(dir, ".nexus-enrollment-pending");
+    if (error.empty()) error = removeFile(dir, ".nexus-enrolled");
+    const char* file = provider == "antigravity" ? "antigravity-oauth-token" : "auth.json";
+    std::vector<const char*> parts;
+    if (provider == "codex") parts = {".codex"};
+    if (provider == "grok") parts = {".grok"};
+    if (provider == "muse") parts = {".config", "muse"};
+    if (provider == "antigravity") parts = {".gemini", "antigravity-cli"};
+    int parent = ::dup(dir);
+    if (parent < 0) error = std::strerror(errno);
+    for (const auto part : parts) {
+        if (!error.empty()) break;
+        const int child = openExactAt(parent, part, O_DIRECTORY);
+        if (child < 0 && errno != ENOENT) error = std::strerror(errno);
+        ::close(parent);
+        parent = child;
+        if (parent < 0) break;
+    }
+    if (parent >= 0) {
+        if (error.empty()) error = removeFile(parent, file);
+        ::close(parent);
+    }
+    ::close(dir);
+    return error;
+}
+
+bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account) {
+    const int dir = enrollmentDirectory(home, provider, account);
+    if (dir < 0) return false;
+    const std::string expected = provider + "\n";
+    std::string bytes(expected.size() + 1, '\0');
     const int marker = openExactAt(dir, ".nexus-enrolled", O_NONBLOCK);
     ::close(dir);
     if (marker < 0) {

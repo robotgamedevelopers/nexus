@@ -1280,12 +1280,10 @@ bool Hub::signOutAction(const Action& action, std::string* why, const std::strin
     const auto& name = action.account;
     const auto* account = accounts_ ? accounts_->account(name) : nullptr;
     const auto flow = signIns_.flowOf(name);
-    if (session->info.autoAccount) {
-        error = "Select a named account before signing out.";
-    } else if (!account || session->info.account != name || !accounts_->linked(session->info.friendName, name)) {
+    if (!account || session->info.account != name || !accounts_->linked(session->info.friendName, name)) {
         error = "The account selection changed. Select the account to sign out and try again.";
-    } else if (account->provider != "claude" || !signOut_) {
-        error = "This server supports sign-out only for a configured Claude login.";
+    } else if ((!usesLocalSignInPage(account->provider) && account->provider != "claude") || !signOut_) {
+        error = "This server cannot sign out this provider.";
     } else if (desk_.busy(name) || (flow && flow->second != SignInState::Needed)) {
         error = "Finish or cancel the open sign-in for this account, then retry /logout.";
     } else {

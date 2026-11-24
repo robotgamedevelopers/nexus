@@ -55,6 +55,7 @@ int openAccountDirectory(const std::string& dir, std::string& problem);
 LoginSeen inspectLogin(const std::string& path);
 bool hasVerifiedClaude(const std::string& accountDir, const std::string& expectedEmail);
 // Checks the named harness account's enrollment receipt under HOME. The receipt holds only the provider name.
+std::string forgetEnrollment(const std::string& home, const std::string& provider, const std::string& account);
 bool hasEnrollment(const std::string& home, const std::string& provider, const std::string& account);
 #endif
 

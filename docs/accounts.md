@@ -181,7 +181,7 @@ or sign out of Claude in that browser and sign in with the displayed email. Nexu
 only when Claude reports that email for the login just completed. A mismatch or missing identity
 leaves the selected slot awaiting sign-in.
 
-To clear an existing Nexus login, select the **named** Claude account in the menu, type `/logout`
+To clear an existing Nexus login, open the friend tab, type `/logout`
 in the friend's prompt, and press **Enter**. Finish or stop active work using that login and finish
 or cancel an in-progress sign-in first. This removes the Nexus credential for that account across
 the friends that share it. Other account slots and the sign-in session in your browser are independent.
