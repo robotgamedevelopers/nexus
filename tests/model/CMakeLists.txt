@@ -106,7 +106,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -168,6 +168,9 @@ function(tlc_test name module cfg expect)
     set(driver_dist "${PROJECT_SOURCE_DIR}/drivers/claude/dist/test")
     if(T_BUSDELIVERYTRACE)
         list(APPEND defs -DBUSDELIVERYWALK=$<TARGET_FILE:bus_delivery_trace>)
+    endif()
+    if(T_SERVICETRACE)
+        list(APPEND defs -DSERVICEWALK=$<TARGET_FILE:service_process_functional>)
     elseif(T_PICKERTRACE)
         list(APPEND defs -DPICKERWALK=$<TARGET_FILE:account_picker_trace>)
     elseif(T_PLUGINTRACE)
@@ -594,3 +597,10 @@ tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeep
 tlc_test(tlc_window_account_picker_spec AccountPicker AccountPicker.cfg pass)
 tlc_test(tlc_window_account_picker_preview_rejected AccountPicker witnesses/WPickerPreviewSends.cfg invariant PROPERTY OnlyConfirmationSends)
 tlc_test(tlc_window_account_picker_stale_rejected AccountPicker witnesses/WPickerStaleSession.cfg invariant PROPERTY LiveBinding)
+
+# The supervised service name is shared by an old server's draining group and its replacement.
+tlc_test(tlc_managed_service_spec ManagedService ManagedService.cfg pass)
+tlc_test(tlc_managed_service_overlap_rejected ManagedService witnesses/WManagedServiceOverlap.cfg invariant PROPERTY OneProcessGroup)
+tlc_test(tlc_managed_service_early_rejected ManagedService witnesses/WManagedServiceEarly.cfg action PROPERTY OnlyWhenDue)
+tlc_test(tlc_managed_service_lost_schedule_rejected ManagedService witnesses/WManagedServiceForget.cfg invariant PROPERTY OneRunPerInterval)
+tlc_test(tlc_managed_service_trace ManagedServiceTrace ManagedServiceTrace.cfg pass SERVICETRACE)

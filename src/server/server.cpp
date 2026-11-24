@@ -39,6 +39,8 @@
 #include "server/login_life.h"
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
+#include "server/service_manifest.h"
+#include "server/service_process.h"
 #include "server/signin_runner.h"
 #include "server/start_order.h"
 #include "server/supervise_state.h"
@@ -401,7 +403,10 @@ private:
     bool endDrivers();
     std::size_t shutDownLinks();
     void configApply(int fd, const std::string& request);
+    bool reloadServices();
     Paths paths_;
+    std::unique_ptr<ServiceProcesses> services_;
+    std::string serviceProblem_;
     std::string verifiedHelper_;
     std::string authClaude_;
     std::unique_ptr<store::Fs> fs_;
@@ -618,6 +623,19 @@ bool Server::restoreAll(std::string* why) {
         *why = "the store failed while the friends' drivers were restored; restart the server";
         return false;
     }
+    services_ = std::make_unique<ServiceProcesses>(paths_.self, [this] { return dirNow("service-leases"); });
+    reloadServices();
+    return true;
+}
+
+bool Server::reloadServices() {
+    std::vector<ManagedService> next;
+    if (!readServiceManifest(dirNow("services.json"), next, serviceProblem_)) {
+        std::fprintf(stderr, "nexus-server: services: %s\n", serviceProblem_.c_str());
+        return false;
+    }
+    services_->configure(next, nowMs());
+    serviceProblem_.clear();
     return true;
 }
 
@@ -849,6 +867,18 @@ void Server::control(int fd) {
                          statusBuildLine(paths_.build, drain_.draining()) + "\n");
         return;
     }
+    if (request == "services reload" || request == "services status") {
+        if (request == "services reload" && drain_.draining()) {
+            writeAll(fd, "ERROR server is draining; reload services on its replacement\n");
+            return;
+        }
+        if (request == "services reload")
+            reloadServices();
+        else
+            writeAll(fd, services_->status());
+        writeAll(fd, serviceProblem_.empty() ? "OK\n" : "ERROR " + serviceProblem_ + "\n");
+        return;
+    }
     if (request == "config reload" || request.rfind("config restore ", 0) == 0) {
         configApply(fd, request);
         return;
@@ -862,7 +892,7 @@ void Server::control(int fd) {
         // The reply's start is what a `new` that states a format reads as a server from before formats: keep it.
         writeAll(fd, "ERROR unknown request; the requests are `new`, `new <client> <next>`, either with "
             "` format <n>` and then ` hello <hello>`, `status`, `drain`, `stop`, `config reload`, "
-            "`config restore <commit>` and `config sign-in <account>`\n");
+            "`config restore <commit>`, `config sign-in <account>`, `services reload` and `services status`\n");
         return;
     }
     // The window's Hello against the server's (sync/formats.h): a window below the server's min_peer, or a server
@@ -1067,6 +1097,7 @@ void Server::checkLogins() {
 }
 
 void Server::tick() {
+    services_->tick(nowMs());
     link::freezeClock();
     std::string why;
     for (Link& s : links_) {
@@ -1113,6 +1144,7 @@ PassOrder::Outcome Server::wait(std::string* why) {
     pass_.fds = {pollfd{listen_, POLLIN, 0}};
     pass_.owner = {0};
     int waitMs = std::min(kMaxWaitMs, drivers_->waitMs(nowMs()));
+    waitMs = std::min(waitMs, services_->waitMs(nowMs()));
     if (const std::optional<std::uint64_t> due = drain_.untilDeadline(static_cast<std::uint64_t>(nowMs()))) {
         waitMs = std::min(waitMs, static_cast<int>(std::min<std::uint64_t>(*due, static_cast<std::uint64_t>(kMaxWaitMs))));
     }
@@ -1463,6 +1495,7 @@ int Server::run() {
             "the server next starts\n");
         status = 1;
     }
+    services_->stop();
     // On a clean stop or drain, each window is told the session ended (mosh's shutdown), so it makes a session with
     // the next server at once rather than after kQuietMs of silence (sync/redial.h). Skipped when the store failed: a
     // failed pass broke out before ticking its links so unflushed actions stay unacknowledged. Bounded: a window that
@@ -1522,6 +1555,31 @@ bool askOnce(const Paths& p, const std::string& request, std::string* reply, std
         return false;
     }
     return true;
+}
+
+// A service status response lists the children before the terminal OK or ERROR.
+int printControlReport(const Paths& p, const std::string& request) {
+    const int fd = connectControl(p.socket);
+    if (fd < 0) {
+        std::fprintf(stderr, "nexus-server: %s; start the server before requesting %s\n",
+            errnoText("no server answers on " + p.socket).c_str(), request.c_str());
+        return 1;
+    }
+    std::string line;
+    bool complete = false;
+    if (writeAll(fd, request + "\n")) {
+        while (readLine(fd, &line, 30000)) {
+            if (line == "OK" || line.starts_with("ERROR")) {
+                complete = true;
+                break;
+            }
+            std::puts(line.c_str());
+        }
+    }
+    close(fd);
+    if (complete && line == "OK") return 0;
+    std::fprintf(stderr, "nexus-server: %s\n", complete ? line.c_str() : "the server did not finish its reply");
+    return 1;
 }
 
 // The request's reply line from the running server, starting one (`self` serve) when none answers: for `new`. It waits
@@ -1624,6 +1682,25 @@ int serve(const Paths& p) {
     sigaction(SIGINT, &sa, nullptr);
     Server server(p);
     return server.run();
+}
+
+int servicesCommand(const Paths& p, const std::vector<std::string>& args) {
+    if (args.size() == 1 && args[0] == "check") {
+        std::vector<ManagedService> rows;
+        std::string why;
+        if (!readServiceManifest(p.dir + "/services.json", rows, why)) {
+            std::fprintf(stderr, "nexus-server: services: %s\n", why.c_str());
+            return 1;
+        }
+        std::printf("%zu managed service%s\n", rows.size(), rows.size() == 1 ? "" : "s");
+        return 0;
+    }
+    if (args.size() == 1 && (args[0] == "status" || args[0] == "reload")) {
+        signal(SIGPIPE, SIG_IGN);
+        return printControlReport(p, "services " + args[0]);
+    }
+    std::fprintf(stderr, "usage: nexus-server services check|reload|status [--dir DIR]\n");
+    return 2;
 }
 
 bool validClientId(const std::string& id) {

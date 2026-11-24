@@ -1187,7 +1187,7 @@ jobs:
           # new family adds its prefix there.
           - shard: window
             run: ''
-            build: trace_walk
+            build: trace_walk service_process_functional
             skip: '^tlc_(supervisor|link|accounts|journal|store_lock|placement|handover|supervision|migration|takeover|claude|witness|secrets|glide|overlay|watch|tailscale|strip_|spec_strip|spec_friends$|signin|reconnect|loop_pass|bus_delivery)'
     name: model (${{ matrix.shard }})
     env:

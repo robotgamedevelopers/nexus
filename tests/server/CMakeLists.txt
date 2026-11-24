@@ -46,13 +46,34 @@ add_executable(driver_table_test driver_table_test.cpp)
 target_link_libraries(driver_table_test PRIVATE nexus_supervisor)
 target_compile_options(driver_table_test PRIVATE ${warnings})
 
+add_executable(service_manifest_test service_manifest_test.cpp)
+target_link_libraries(service_manifest_test PRIVATE nexus_services)
+target_compile_options(service_manifest_test PRIVATE ${warnings})
+add_test(NAME service_manifest_test COMMAND service_manifest_test)
+set_tests_properties(service_manifest_test PROPERTIES LABELS unit TIMEOUT 30)
+
+add_executable(service_process_functional service_process_functional.cpp)
+target_link_libraries(service_process_functional PRIVATE nexus_services)
+target_compile_options(service_process_functional PRIVATE ${warnings})
+add_test(NAME service_process_functional COMMAND service_process_functional)
+set_tests_properties(service_process_functional PROPERTIES LABELS functional TIMEOUT 30)
+add_dependencies(model_checks service_process_functional)
+
 # The friends layer's real processes: POSIX, like nexus-server (not built natively on Windows, where nexus-server runs inside WSL2: CMakeLists.txt NEXUS_LINK).
 if(NOT WIN32)
     find_package(Python3 3.9 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME service_manifest_projection COMMAND ${Python3_EXECUTABLE} -I
+            ${CMAKE_CURRENT_SOURCE_DIR}/service_projection.py ${PROJECT_SOURCE_DIR}/tools/nexus-service-manifest)
+        set_tests_properties(service_manifest_projection PROPERTIES LABELS functional TIMEOUT 30)
         add_test(NAME claude_auth_verified COMMAND ${Python3_EXECUTABLE} -I
                  ${CMAKE_CURRENT_SOURCE_DIR}/claude_auth_helper_test.py ${CMAKE_BINARY_DIR}/nexus-claude-auth)
         set_tests_properties(claude_auth_verified PROPERTIES LABELS functional TIMEOUT 120)
+        if(NEXUS_LINK)
+            add_test(NAME managed_services_functional COMMAND ${Python3_EXECUTABLE} -I
+                ${CMAKE_CURRENT_SOURCE_DIR}/managed_services_functional.py $<TARGET_FILE:nexus-server>)
+            set_tests_properties(managed_services_functional PROPERTIES LABELS functional TIMEOUT 45)
+        endif()
     endif()
 
     add_executable(drivers_functional drivers_functional.cpp)

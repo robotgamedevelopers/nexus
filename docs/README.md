@@ -150,6 +150,10 @@ Replace `main` with the account linked to the friend. Follow the sign-in in Nexu
 a message and use the send shortcut for your profile. The server reports the result of sign-in to the command.
 See [accounts and friends](accounts.md) for configuration.
 
+If this machine also hosts Nova services, Nexus can run its Sprint scheduler, workers and other configured
+programs while every client is closed. Check the server's children with `nexus-server services status`.
+[Select services and transfer an existing installation](service-migration.md).
+
 Edit `policy/rules/client.star`, `server.star` and their JSON config in your Nexus fork. Both hosts run their own
 rules. Preview a change with `build/nexus-policy preview`, then use `apply` to pick it up at the next decision
 without rebuilding or restarting. The window application defines shortcuts, panels and tab registrations. The server application creates sessions, handles messages and selects accounts after a usage limit. See [wiring plugins in a fork](plugins.md) for the native and Starlark registration APIs.
