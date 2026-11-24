@@ -143,6 +143,7 @@ class NativeGrok(unittest.IsolatedAsyncioTestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()
+        self.enterContext(patch.dict(os.environ, {"HOME": str(self.root)}))
         self.binary = shutil.which("grok")
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), FixtureProvider)
         self.http.turns = []
