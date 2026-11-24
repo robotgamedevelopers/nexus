@@ -699,6 +699,19 @@ void theRepositoryLinkIsHidden() {
     });
     CHECK(word == "nexus");
     const PrDomRect mark = h.rect("wordmark");
+    const PrDomRect badge = h.rect("ver-chip");
+    CHECK(badge.width > 0);
+    h.board->onPage([&](PrHtmlPage* page) {
+        CHECK(prHtmlPageNavigate(page, {kUrl, std::strlen(kUrl)}) == PrStatus_Ok);
+    });
+    for (int i = 0; i < 10; ++i) {
+        h.frame();
+        const auto title = h.rect("wordmark");
+        const auto version = h.rect("ver-chip");
+        CHECK(title.x == mark.x && title.y == mark.y && title.width == mark.width && title.height == mark.height);
+        CHECK(version.x == badge.x && version.y == badge.y);
+    }
+    CHECK(h.server.pages == 2);
     const PrDomRect logo = h.rect("logo");
     CHECK(mark.width > 50 && mark.height > 80);
     CHECK(logo.width == 0 && logo.height == 0);

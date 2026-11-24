@@ -2161,9 +2161,11 @@ void commandTAddsAndShowsATerminal() {
     h.frame();
     std::vector<std::string> l = h.labels();
     CHECK(l.size() == 3 && l[2] == "terminal");
-    // The window holds only the strip: the fake draws nothing, and nothing else is declared.
+    // The fake terminal draws nothing below the strip and its divider.
     PrLayoutNode window = h.window();
-    CHECK(prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, window)) == kPrLayoutNodeNone);
+    const auto divider = prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, window));
+    CHECK(divider != kPrLayoutNodeNone);
+    CHECK(prLayoutNodeNextSibling(h.tree, divider) == kPrLayoutNodeNone);
     h.terminals.titles[2] = "~/src";
     h.frame();
     l = h.labels();

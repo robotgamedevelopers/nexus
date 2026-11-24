@@ -99,7 +99,9 @@ std::string sprintPageStyle(const SpendFit& fit);
 // github"), matched by its address, not its place; a footer that holds nothing else is not shown either, so no empty
 // space is left where it was. The embedded header uses the short product name.
 constexpr std::string_view kSprintRepoLinkStyle =
-    ".brand h1 #logo { display: none !important; } .brand h1 #wordmark { display: inline !important; width: auto !important; }\n"
+    ".brand h1 #logo { display: none !important; }\n"
+    // Center the lowercase ink against the badge. The font's line box includes room for descenders.
+    ".brand h1 #wordmark { display: inline !important; width: auto !important; position: relative; top: -.03em; }\n"
     "a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"], a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"] "
     "{ display: none !important; }\n"
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "
