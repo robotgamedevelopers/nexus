@@ -152,6 +152,20 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, fleet, macOS, ARM64]
     timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+            targets: >-
+              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+          - part: walks
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -176,6 +190,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
+            export CMAKE_GENERATOR=Ninja
+          fi
           launcher=()
           if command -v ccache >/dev/null; then
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -185,16 +202,10 @@ jobs:
             "${launcher[@]}" \
             "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
             "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the unit and walk programs
-        run: >-
-          cmake --build build --parallel "$JOBS" --target
-          model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-          store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-          nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-          journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-          migration_walk takeover_walk
-      - name: Unit tests and trace walks under the sanitizers
+      - name: Build the programs for this shard
+        run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      - name: Unit tests under the sanitizers
+        if: matrix.part == 'units'
         shell: bash
         run: |
           set -euo pipefail
@@ -217,6 +228,11 @@ jobs:
           build/tests/server/takeover_test
           build/tests/wire/wire_test
           build/tests/wire/nexus_versions_test
+      - name: Trace walks under the sanitizers
+        if: matrix.part == 'walks'
+        shell: bash
+        run: |
+          set -euo pipefail
           # Bash 3.2-compatible parallel walk runner (macOS /bin/bash has no `wait -n`, and `set -u` rejects empty
           # `${arr[@]}`): runs up to TEST_JOBS walks concurrently in isolated directories under $RUNNER_TEMP/nexus-walks
           # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
@@ -617,6 +633,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
+            export CMAKE_GENERATOR=Ninja
+          fi
           launcher=()
           if command -v ccache >/dev/null; then
             launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
