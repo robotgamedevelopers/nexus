@@ -730,6 +730,102 @@ void hub_send_and_queue() {
     CHECK(hub.state().find(sid("bo")) == nullptr);
 }
 
+void hub_primary_requires_an_installer_binding() {
+    MemoryStore store;
+    Hub hub(store);
+    std::string why;
+    const SessionInfo binding{"@primary", "claude", "work", {}, {}, std::string(32, 'a')};
+    CHECK(!hub.ensurePrimary(binding, &why));  // no authoritative registry yet
+
+    accounts::Registry registry;
+    registry.accounts = {{"work", "claude"}, {"metered", "claude", accounts::Billing::Api}};
+    CHECK(hub.useAccounts(registry, nullptr).empty());
+    CHECK(!hub.apply(create(1, "@primary", 0), &why, "window"));
+    CHECK(!hub.apply(ensure(2, "@primary"), &why, "window"));
+    CHECK(store.applied("window") == 2);
+    const std::vector<SessionInfo> invalid = {
+        {"named", "claude", "work", {}, {}, binding.instance},
+        {"@primary", "claude", "missing", {}, {}, binding.instance},
+        {"@primary", "codex", "work", {}, {}, binding.instance},
+        {"@primary", "claude", "metered", {}, {}, binding.instance},
+        {"@primary", "claude", "work", {}, {}, "invalid-key"},
+    };
+    for (const auto& rejected : invalid) {
+        why.clear();
+        CHECK(!hub.ensurePrimary(rejected, &why));
+        CHECK(!why.empty());
+    }
+    CHECK(!hub.primarySession() && store.size() == 0);
+    CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+}
+
+void hub_primary_session() {
+    MemoryStore store;
+    accounts::Registry registry;
+    registry.accounts = {{"work", "claude"}, {"other", "claude"}};
+    const SessionInfo work{"@primary", "claude", "work", {}, {}, std::string(32, 'a')};
+    std::string why;
+    SessionId original = 0;
+    {
+        Hub hub(store);
+        CHECK(hub.useAccounts(registry, nullptr).empty());
+        CHECK(!hub.signedIn().contains("work"));
+        CHECK(hub.ensurePrimary(work, &why)); // opening the chat does not require a completed sign-in
+        original = hub.primarySession().value_or(0);
+        CHECK(original != 0 && hub.isPrimary(original));
+        CHECK(hub.ensurePrimary(work, &why));
+        CHECK(store.size() == 1 && hub.primarySession() == original);
+        CHECK(hub.state().friendsKnown() && hub.state().friends().empty());
+        hub.reportSignedIn("work", true);
+        CHECK(hub.apply(numbered(1, act(ActionKind::Send, original, "before restart")), &why, "window"));
+    }
+
+    Hub restarted(store);
+    restarted.useAccounts(registry, nullptr);
+    CHECK(!restarted.primarySession() && !restarted.isPrimary(original));
+    CHECK(!restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(2, act(ActionKind::Send, original, "still dormant")), &why, "window"));
+    CHECK(restarted.ensurePrimary(work, &why) && restarted.primarySession() == original);
+    const auto* restored = store.find(original);
+    CHECK(restored && restored->info.account == "work" && restored->info.instance == work.instance);
+    CHECK(restored && !restored->transcript.empty() && restored->transcript.front()->text == "before restart");
+    if (!restored) return;
+    const auto transcript = restored->transcript;
+
+    auto other = work;
+    other.account = "other";
+    CHECK(restarted.ensurePrimary(other, &why));
+    const auto second = restarted.primarySession().value_or(0);
+    CHECK(second != 0 && second != original && restarted.isPrimary(second));
+    CHECK(!restarted.isPrimary(original) && !restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(3, act(ActionKind::Send, original, "wrong account")), &why, "window"));
+    CHECK(store.find(original)->transcript == transcript);
+    CHECK(store.find(second) && store.find(second)->transcript.empty());
+    CHECK(restarted.state().friends().empty());
+
+    other.instance = std::string(32, 'b');
+    CHECK(restarted.ensurePrimary(other, &why));
+    const auto third = restarted.primarySession().value_or(0);
+    CHECK(third != 0 && third != second && !restarted.state().find(second));
+    restarted.clearPrimary();
+    CHECK(!restarted.primarySession() && !restarted.isPrimary(third) && !restarted.state().find(third));
+    CHECK(!restarted.apply(numbered(4, act(ActionKind::Queue, third, "cleared")), &why, "window"));
+    CHECK(store.find(third) && store.find(third)->queue.empty());
+
+    CHECK(restarted.ensurePrimary(work, &why) && restarted.primarySession() == original);
+    CHECK(store.size() == 3 && store.find(original)->transcript == transcript);
+
+    std::vector<std::string> report;
+    registry.accounts.front().label = "Renamed subscription";
+    CHECK(restarted.applyAccounts(registry, "account label changed", &report));
+    CHECK(restarted.primarySession() == original && store.find(original)->info.account == "work");
+    registry.accounts.erase(registry.accounts.begin());
+    CHECK(restarted.applyAccounts(registry, "subscription removed", &report));
+    CHECK(!restarted.isPrimary(original) && !restarted.state().find(original));
+    CHECK(!restarted.apply(numbered(5, act(ActionKind::Send, original, "removed account")), &why, "window"));
+    CHECK(store.find(original)->transcript == transcript);
+}
+
 void hub_limits() {
     MemoryStore store;
     Limits limits;
@@ -2592,6 +2688,114 @@ void strip_takes_only_a_change() {
     CHECK(!strip.take(m, grown).ran);
 }
 
+void primary_chat_follows_its_session() {
+    Model model({});
+    FriendStrip strip;
+    Mirror mirror;
+    std::vector<Action> sent;
+    Sessions received;
+    const auto deliver = [&](const Sessions& server) {
+        received.apply_string(server.diff_from(received));
+        takeFriends(strip, model, mirror, received, [&](Action a) { sent.push_back(std::move(a)); });
+        mirror.apply(model, received);
+    };
+    const Sessions empty = listState({});
+    deliver(empty);
+    const auto roster = received.friendsList();
+    CHECK(model.tab_count() == 0 && sent.empty());
+
+    const std::string primary(kPrimaryChat);
+    const auto hostSession = std::make_shared<const SessionView>(
+        tailOf(7, infoOf(primary), {entry(EntryKind::Person, "Hello")}, {}, Tail{}));
+    Sessions bound({hostSession});
+    bound.shareFriends(empty);
+    deliver(bound);
+    CHECK(received.friendsKnown() && received.friends().empty() && received.friendsList() == roster);
+    CHECK(sent.empty() && friendsToEnsure(model).empty());
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto tabId = model.tab(0).id;
+    CHECK(model.tab(0).name == primary && model.tab(0).displayName() == "Chat");
+    CHECK(sessionOf(model, 0, mirror) == 7 && model.tab(0).transcript.size() == 1 &&
+          model.tab(0).transcript.front().text == "Hello");
+
+    const auto namedSession = std::make_shared<const SessionView>(
+        tailOf(8, infoOf("fern"), {entry(EntryKind::Friend, "Named reply")}, {}, Tail{}));
+    Sessions both({hostSession, namedSession});
+    both.setFriends({{"fern"}});
+    deliver(both);
+    CHECK(model.tab_count() == 2);
+    if (model.tab_count() != 2) return;
+    const std::size_t chat = model.tab(0).name == primary ? 0 : 1;
+    const std::size_t named = 1 - chat;
+    CHECK(model.tab(chat).id == tabId && sessionOf(model, chat, mirror) == 7);
+    CHECK(model.tab(named).name == "fern" && sessionOf(model, named, mirror) == 8);
+    CHECK(model.tab(named).transcript.size() == 1 && model.tab(named).transcript.front().text == "Named reply");
+    CHECK(sent.size() == 1 && sent.front().kind == ActionKind::Ensure && sent.front().friendName == "fern");
+
+    Model restored({}, true);
+    FriendStrip saved({}, "fern", {});
+    saved.take(restored, received);
+    CHECK(restored.tab(restored.active()).name == "fern" && !saved.pending());
+
+    Sessions unbound({namedSession});
+    unbound.shareFriends(both);
+    deliver(unbound);
+    CHECK(model.tab_count() == 1 && model.tab(0).name == "fern" && sessionOf(model, 0, mirror) == 8);
+    CHECK(mirror.session(tabId) == 0 && sent.size() == 1);
+
+    Model fresh({}, true);
+    FriendStrip defaultStrip;
+    defaultStrip.take(fresh, unbound);
+    defaultStrip.take(fresh, both);
+    CHECK(fresh.tab(fresh.active()).name == primary);
+
+    Model chosen({}, true);
+    FriendStrip explicitStrip;
+    explicitStrip.take(chosen, unbound);
+    CHECK(chosen.tab_count() == 2);
+    if (chosen.tab_count() != 2) return;
+    CHECK(chosen.select_tab(chosen.tab(0).name == "fern" ? 0 : 1));
+    explicitStrip.personSelected();
+    explicitStrip.take(chosen, both);
+    CHECK(chosen.tab(chosen.active()).name == "fern");
+}
+
+void replacement_primary_starts_with_its_own_transcript() {
+    const std::string primary(kPrimaryChat);
+    const auto first = std::make_shared<const SessionView>(tailOf(14, infoOf(primary),
+        {entry(EntryKind::Person, "Old question"), entry(EntryKind::Friend, "Old reply")},
+        {"Old queue"}, Tail{}, entry(EntryKind::Friend, "Old stream", false)));
+    Sessions before({first});
+    before.setFriends({});
+    Model model({});
+    FriendStrip strip;
+    Mirror mirror;
+    takeFriends(strip, model, mirror, before, {});
+    mirror.apply(model, before);
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto original = model.tab(0).id;
+    CHECK(model.set_draft(0, "For the old session"));
+    CHECK(mirror.seen(original).next == 2 && mirror.open(original) != nullptr);
+    CHECK(model.tab(0).queue.size() == 1);
+
+    const auto second = std::make_shared<const SessionView>(tailOf(15, infoOf(primary),
+        {entry(EntryKind::Friend, "New reply")}, {}, Tail{}));
+    Sessions after({second});
+    after.shareFriends(before);
+    before.apply_string(after.diff_from(before));
+    takeFriends(strip, model, mirror, before, {});
+    mirror.apply(model, before);
+    CHECK(model.tab_count() == 1);
+    if (model.tab_count() != 1) return;
+    const auto& chat = model.tab(0);
+    CHECK(chat.displayName() == "Chat" && mirror.session(chat.id) == 15);
+    CHECK(chat.transcript.size() == 1 && chat.transcript.front().text == "New reply");
+    CHECK(chat.draft.empty() && chat.queue.empty());
+    CHECK(mirror.seen(chat.id).next == 1 && mirror.open(chat.id) == nullptr);
+}
+
 // The tab saved as selected waits for its friend: selected when the friend's tab arrives, unless the person chose a
 // tab first; a list from the server that does not name it ends the wait, the selection as it was.
 void saved_tab_waits_for_its_friend() {
@@ -2788,6 +2992,8 @@ const Case kCases[] = {
     {"friends_cross_the_wire", friends_cross_the_wire},
     {"friends_sent_only_when_changed", friends_sent_only_when_changed},
     {"hub_keeps_one_friends_list", hub_keeps_one_friends_list},
+    {"hub_primary_requires_an_installer_binding", hub_primary_requires_an_installer_binding},
+    {"hub_primary_session", hub_primary_session},
     {"friends_within_the_caps", friends_within_the_caps},
     {"friends_not_in_older_formats", friends_not_in_older_formats},
     {"friends_of_a_state", friends_of_a_state},
@@ -2797,6 +3003,8 @@ const Case kCases[] = {
     {"friend_names_are_checked", friend_names_are_checked},
     {"drafts_outlive_their_tabs", drafts_outlive_their_tabs},
     {"strip_takes_only_a_change", strip_takes_only_a_change},
+    {"primary_chat_follows_its_session", primary_chat_follows_its_session},
+    {"replacement_primary_starts_with_its_own_transcript", replacement_primary_starts_with_its_own_transcript},
     {"saved_tab_waits_for_its_friend", saved_tab_waits_for_its_friend},
     {"tab_given_waits_for_the_friends", tab_given_waits_for_the_friends},
     {"mirror_forgets_a_removed_tab", mirror_forgets_a_removed_tab},

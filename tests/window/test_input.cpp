@@ -1436,6 +1436,59 @@ void noFriendsShowsTheNotice() {
     CHECK(h.model.tab_count() == 0);
 }
 
+// A binding creates the primary chat on a window whose server has no configured friends. Exercise
+// the same keyboard composer and streaming transcript as a named conversation.
+void primaryChatUsesTheOrdinaryComposer() {
+    Harness h(std::vector<FriendInfo>{});
+    test::FakeLink link;
+    FrameHost host;
+    host.model = &h.model;
+    host.view = &h.view;
+    host.connect(&link, "test");
+    link.friends({});
+    host.pollLink();
+    h.frame();
+    CHECK(h.tabs().empty());
+    CHECK(h.view.prompt == kPrLayoutNodeNone);
+    CHECK(link.sent.empty());
+
+    const auto publish = [&](std::vector<sync::EntryRef> entries) {
+        auto session = std::make_shared<sync::SessionView>();
+        session->id = 41;
+        session->info.friendName = kPrimaryChat;
+        session->info.harness = "codex";
+        session->entries = std::move(entries);
+        sync::Sessions state({session});
+        state.setFriends({});
+        host.showState(state, false);
+        h.frame();
+        h.frame();
+    };
+    publish({});
+    CHECK(h.labels() == std::vector<std::string>({"Chat"}));
+    if (h.model.tab_count() != 1) return;
+    CHECK(h.view.prompt != kPrLayoutNodeNone && prUiFocus(h.ui) == h.view.prompt);
+    h.view.windowApp.surface.prompt.showPlus = true;
+    h.frame();
+    CHECK(prLayoutNodeFirstChild(h.tree, h.view.promptBox) == h.view.prompt);
+    CHECK(link.sent.empty());
+    h.type("Where shall we start?");
+    h.enter();
+    CHECK(link.sent.size() == 1);
+    if (link.sent.size() != 1) return;
+    CHECK(link.sent.front().kind == sync::ActionKind::Send && link.sent.front().session == 41 &&
+        link.sent.front().text == "Where shall we start?");
+
+    auto question = std::make_shared<const sync::SessionEntry>(
+        sync::SessionEntry{EntryKind::Person, "Where shall we start?", true});
+    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "Right", false})});
+    CHECK(h.hasText(h.window(), "Where shall we start?") && h.hasText(h.window(), "Right"));
+    CHECK(h.active().transcript.size() == 1);
+    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "Right here.", true})});
+    CHECK(h.active().transcript.size() == 2 && h.hasText(h.window(), "Right here."));
+    CHECK(!h.hasText(h.window(), "Right") && link.sent.size() == 1);
+}
+
 // A long URL or token with no break opportunity wraps inside the column, the bubble and the prompt.
 void longUnbrokenTextWraps() {
     Harness h;
@@ -3117,6 +3170,7 @@ int main(int argc, char** argv) {
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
     noFriendsShowsTheNotice();
+    primaryChatUsesTheOrdinaryComposer();
     longTranscriptDeclaresWhatIsInSight();
     promptCutKeepsWholeCharacters();
     promptRoomCountsTheSelection();

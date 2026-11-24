@@ -349,7 +349,9 @@ def main():
     parser.add_argument("--resume")
     parser.add_argument("--model")
     parser.add_argument("--effort")
-    parser.add_argument("--startup-context-fd", type=int, required=True)
+    context = parser.add_mutually_exclusive_group(required=True)
+    context.add_argument("--startup-context-fd", type=int)
+    context.add_argument("--primary-context-fd", type=int)
     try:
         args = parser.parse_args()
         args.provider = provider
@@ -368,12 +370,17 @@ def main():
             raise ValueError("Invalid driver settings.")
         if args.resume and not SESSION_ID.fullmatch(args.resume):
             raise ValueError("Invalid resume ID.")
-        with os.fdopen(args.startup_context_fd, "rb") as f:
+        fd = args.primary_context_fd if args.primary_context_fd is not None else args.startup_context_fd
+        if fd < 3:
+            raise ValueError("Startup context must use a private file descriptor.")
+        with os.fdopen(fd, "rb") as f:
             data = f.read(262145)
         if not data or len(data) > 262144:
             raise ValueError("Invalid friend context.")
-        setup_guide = Path(__file__).with_name("friend-setup.txt").read_text(encoding="utf-8").strip()
-        args.instructions = data.decode() + "\n\n" + setup_guide
+        args.instructions = data.decode()
+        if args.primary_context_fd is None:
+            setup_guide = Path(__file__).with_name("friend-setup.txt").read_text(encoding="utf-8").strip()
+            args.instructions += "\n\n" + setup_guide
         try:
             args.account_home = home_for(args.harness, args.account)
             ready = enrolled(args.account_home, args.harness)

@@ -93,6 +93,8 @@ struct Registry {
 // driver's rule for an account, drivers/claude/src/account.ts). A provider's: 1 to 32 lowercase letters, digits or '-'.
 bool isName(std::string_view name);
 bool isProvider(std::string_view provider);
+// Optional display labels and email addresses are single lines of up to 254 bytes.
+bool isAccountText(std::string_view value);
 // A machine's name: 1 to 253 letters, digits, '-' or '.', not starting with '-' or '.' (a host name, never an address with a
 // user or a port). A directory: an absolute path, of printable characters, at most 4096 bytes.
 bool isMachine(std::string_view machine);

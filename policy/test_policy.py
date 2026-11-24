@@ -1,5 +1,6 @@
 """Exercise the installed host through its CLI. Uses only a temporary profile."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,6 +23,29 @@ class PersonalPolicy(unittest.TestCase):
 
     def write(self, source):
         (self.profile / "policy.star").write_text(source)
+
+    def test_primary_driver_starts_without_identity(self):
+        home = self.profile.parent / "empty-home"
+        home.mkdir()
+        probe = self.profile.parent / "driver.py"
+        probe.write_text("import json, os, sys\n"
+                         "fd = int(sys.argv[-1])\n"
+                         "with os.fdopen(fd, 'r') as context:\n"
+                         "    print(json.dumps([sys.argv[1:-2], sys.argv[-2], context.read()]))\n")
+        for harness in ("claude", "codex", "antigravity", "grok", "muse"):
+            with self.subTest(harness=harness):
+                command = [*self.command, "primary-driver", harness, sys.executable, str(probe)]
+                args = ["--cwd", str(home), "--account", "selected", "--resume", "previous-session"]
+                got = subprocess.check_output([*command, *args], cwd=home, env={**os.environ, "HOME": str(home)}, text=True)
+                flags, mode, instructions = json.loads(got)
+                self.assertEqual(flags, args + (["--limit", "cwd"] if harness in ("claude", "codex") else []))
+                self.assertEqual(mode, "--primary-context-fd")
+                self.assertIn("chatting with the user in Nexus", instructions)
+                self.assertNotRegex(instructions.lower(), "seed|github|friend|repository")
+                self.assertEqual(list(home.iterdir()), [])
+        rejected = subprocess.run([*command, "--startup-context-fd", "0"], capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("launcher supplies", json.loads(rejected.stdout.splitlines()[1])["cause"])
 
     def test_live_changes_and_explicit_settings(self):
         capture = self.profile.parent / "capture.py"

@@ -252,7 +252,8 @@ struct BusListeners::Hook {
         }
     }
 
-    std::string start(const std::string& home, const std::string& self, const std::string& name) {
+    std::string start(const std::string& home, const std::string& self, const std::string& name,
+                      const std::string& launcher) {
         if (!home.starts_with('/') || !self.starts_with('/')) return "the home and server executable must be absolute paths";
         char temp[] = "/tmp/nexus-bus-XXXXXX";
         if (!::mkdtemp(temp)) return "cannot create a private directory for delivery";
@@ -275,10 +276,14 @@ struct BusListeners::Hook {
             return "cannot configure the hook's pipe";
         }
 
-        const std::string broker = home + "/.local/bin/nova-secrets", bus = home + "/.local/bin/nova-bus";
-        std::string command = "exec " + quote(self) + " bus-deliver " + quote(path);
-        std::vector<std::string> args{broker, "exec", "--only", "NOVA_BUS_PASSWORD", "--", bus,
-                                     "hook", "--as", name, "--exec", std::move(command)};
+        std::vector<std::string> args;
+        if (launcher.empty()) {
+            args = {home + "/.local/bin/nova-secrets", "exec", "--only", "NOVA_BUS_PASSWORD", "--",
+                    home + "/.local/bin/nova-bus"};
+        } else {
+            args = {launcher};
+        }
+        args.insert(args.end(), {"hook", "--as", name, "--exec", "exec " + quote(self) + " bus-deliver " + quote(path)});
         std::array<std::string, 4> env{"HOME=" + home, "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                                        "NOVA_BUS_REDIS=" + address, "NOVA_BUS_USER=bus"};
         std::vector<char*> argv, envp;
@@ -311,7 +316,7 @@ struct BusListeners::Hook {
                 if (!rc) rc = posix_spawnattr_setsigmask(&attr, &empty);
                 if (!rc) rc = posix_spawnattr_setsigdefault(&attr, &defaults);
                 pid_t child = -1;
-                if (!rc) rc = ::posix_spawn(&child, broker.c_str(), &files, &attr, argv.data(), envp.data());
+                if (!rc) rc = ::posix_spawn(&child, args.front().c_str(), &files, &attr, argv.data(), envp.data());
                 if (rc == 0) pid = child;
                 posix_spawnattr_destroy(&attr);
             }
@@ -440,7 +445,7 @@ bool BusListeners::serve(const Accept& accept) {
             hook->drainStatus(name, report_);
             if (!hook->started()) failure = "hook exited; check the Redis endpoint, bus credentials and inbox ownership";
         } else if (Clock::now() >= hook->retryAt) {
-            failure = hook->start(home_, self_, name);
+            failure = hook->start(home_, self_, name, launcher_);
         }
         if (!failure.empty()) {
             if (report_ && failure != hook->lastFailure) report_("message bus for " + name + ": " + failure + "; retrying");

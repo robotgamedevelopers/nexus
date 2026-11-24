@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -611,6 +612,70 @@ void failsFirstStart(Server& s, const std::string& dir, const std::string& fake)
     }
     CHECK(s.sup().failedStarts() == 0);     // reset by the answered turn
     CHECK(s.pids.size() == 2);
+}
+
+// The primary conversation uses the installation's neutral driver, account and workspace.
+void primaryRoute(Server& s, const std::string& dir, const std::string& fake) {
+    const std::string workspace = dir + "/installer workspace";
+    std::filesystem::create_directory(workspace);
+    const std::string script = dir + "/primary.script";
+    writeFile(script, "count-starts " + dir + "/starts\nrecord " + dir + "/starts.log\n" + kHello +
+        "send\non-start 1 emit {\"kind\":\"session\",\"id\":\"reported-1\"}\n"
+        "on-start 1 emit {\"kind\":\"child-agents\",\"count\":2}\non-start 1 await-stop\n"
+        "on-start 1 emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
+        "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\nexit 0\n");
+    std::ostringstream driver;
+    driver << "driver codex /unconfigured-named-friend-driver\nprimary-driver codex ["
+           << std::quoted(fake) << ",\"--script\"," << std::quoted(script) << "]\n";
+    const auto route = [&](const std::string& cwd) { return driver.str() + "primary codex personal " + cwd + "\n"; };
+    writeFile(dir + "/drivers", route(workspace));
+    const DriverTable table = parseDriverTable(route(workspace), dir);
+    CHECK(table.errors.empty() && table.primary.has_value());
+    if (!table.primary) return;
+
+    auto registry = adaRegistry();
+    registry.accounts.push_back({"personal", "codex"});
+    CHECK(s.hub->useAccounts(registry, nullptr).empty());
+    s.hub->reportSignedIn("personal", true);
+    const sync::SessionInfo binding{std::string(kPrimaryChat), "codex", "personal", {}, {}, table.primary->instance()};
+    std::string why;
+    CHECK(s.hub->ensurePrimary(binding, &why));
+    const auto id = s.hub->primarySession();
+    CHECK(id.has_value());
+    if (!id) return;
+    const auto act = [&](sync::ActionKind kind, const std::string& text) {
+        sync::Action a = s.action(kind, text);
+        a.session = *id;
+        CHECK(s.hub->apply(a));
+    };
+    act(sync::ActionKind::Send, "first");
+    CHECK(s.serveUntil([&] {
+        const auto* view = s.hub->state().find(*id);
+        return view && view->activeAgents == 3;
+    }, 10));
+    act(sync::ActionKind::Stop, {});
+    CHECK(s.serveUntil([&] {
+        return s.drivers->pid(*id) < 0 && s.store.find(*id)->driver.session == "reported-1";
+    }, 10));
+    act(sync::ActionKind::Send, "second");
+    CHECK(s.serveUntil([&] {
+        return s.drivers->pid(*id) < 0 && s.store.find(*id)->driver.nextTurn == 3;
+    }, 10));
+    const std::string starts = readFile(dir + "/starts.log");
+    CHECK(has(starts, "cwd=" + workspace + "\n"));
+    CHECK(has(starts, "resume=\naccount=personal\nlimit=cwd\n"));
+    CHECK(has(starts, "resume=reported-1\naccount=personal\nlimit=cwd\n"));
+    CHECK(readFile(dir + "/starts") == "2\n");
+    CHECK(s.hub->accounts()->friendNamed(kPrimaryChat) == nullptr);
+
+    // A session still held by a window cannot move to the next installation's workspace.
+    writeFile(dir + "/drivers", route(dir));
+    act(sync::ActionKind::Send, "from the old workspace");
+    CHECK(s.drivers->pid(*id) < 0);
+    CHECK(readFile(dir + "/starts") == "2\n");
+    const auto* retained = s.store.find(*id);
+    CHECK(retained && retained->driver.nextTurn == 3 && !retained->transcript.empty() &&
+          retained->transcript.back()->kind == EntryKind::Notice);
 }
 
 // The session id a driver reports is the next start's --resume, and the directory is its --cwd.
@@ -1893,7 +1958,7 @@ int main(int argc, char** argv) {
             const std::vector<std::pair<std::string, Case>> cases = {{"normal", normal}, {"stop", stop},
                 {"silent", silent}, {"exit_mid_turn", exitMidTurn}, {"malformed", malformed},
                 {"ignores_stop", ignoresStop}, {"kill", kill}, {"flood", flood},
-                {"fails_first_start", failsFirstStart}, {"resume", resume}, {"orphan", orphan},
+                {"fails_first_start", failsFirstStart}, {"resume", resume}, {"primary_route", primaryRoute}, {"orphan", orphan},
                 {"escaped_output", escapedOutput}, {"queue", queue}, {"queue_unconfigured", queueUnconfigured},
                 {"unconfigured", unconfigured}, {"stop_hammered", stopHammered}, {"account", account},
                 {"window", window}, {"bus_admission", busAdmission}, {"bus_default_instance", busDefaultInstance},

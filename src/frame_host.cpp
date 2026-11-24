@@ -243,6 +243,9 @@ void FrameHost::pollLink() {
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
             const auto needed = [&](const sync::Sessions& state) -> std::optional<bool> {
+                const auto* primary = state.first(kPrimaryChat);
+                if (primary && primary->info.primaryAccount && primary->info.primaryAccount->name == name)
+                    return primary->info.primaryAccount->needsSignIn;
                 for (const auto& f : state.friends())
                     for (const auto& choice : f.accounts)
                         if (choice.name == name) return choice.needsSignIn;
@@ -360,10 +363,16 @@ const sync::ServerFriend* FrameHost::activeAccountRoster() const {
 }
 
 const sync::AccountChoice* FrameHost::activeChoice() const {
+    if (!model->tab_count()) return nullptr;
+    const auto& tab = model->tab(model->active());
+    const auto* session = accountState_.find(mirror.session(tab.id));
+    if (!session) return nullptr;
+    if (tab.primaryChat()) {
+        const auto& choice = session->info.primaryAccount;
+        return choice && choice->name == session->info.account ? &*choice : nullptr;
+    }
     const auto* roster = activeAccountRoster();
     if (!roster) return nullptr;
-    const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
-    if (!session) return nullptr;
     const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
                                  [&](const auto& a) { return a.name == session->info.account; });
     return it == roster->accounts.end() ? nullptr : &*it;
@@ -378,7 +387,8 @@ const sync::SignInOffer* FrameHost::offerFor(const std::string& account) const {
 void FrameHost::selectSignInAccount() {
     // Servers from before the account roster used a show of the overlay to claim a flow.
     const auto& friends = accountState_.friends();
-    if (!std::any_of(friends.begin(), friends.end(), [](const auto& f) { return !f.accounts.empty(); })) {
+    if (!accountState_.first(kPrimaryChat) &&
+        !std::any_of(friends.begin(), friends.end(), [](const auto& f) { return !f.accounts.empty(); })) {
         signIn.activeAccount.reset();
         return;
     }
@@ -609,9 +619,15 @@ void FrameHost::wire() {
         const auto* choice = activeChoice();
         if (!choice || (!choice->needsSignIn && !offerFor(choice->name))) return {};
         const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
-        return {choice->name, choice->label, choice->email, session->info.harness, session->info.friendName};
+        return {choice->name, choice->label, choice->email, session->info.harness,
+            std::string(model->tab(model->active()).displayName())};
     };
     view->accountCaption = [this]() -> std::string {
+        if (model->tab_count() && model->tab(model->active()).primaryChat()) {
+            const auto* choice = activeChoice();
+            if (!choice) return {};
+            return "Account · " + (choice->label.empty() ? choice->name : choice->label);
+        }
         const auto* roster = activeAccountRoster();
         if (!roster) return {};
         const auto* session = accountState_.find(mirror.session(model->tab(model->active()).id));
@@ -717,7 +733,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         // (the window ensured one as the tab was added), and until then the draft stays.
         const sync::SessionId session = sync::sessionOf(*model, i, mirror);
         if (session == 0 && i < model->tab_count() && model->tab(i).kind == TabKind::Friend) {
-            why = "No session with " + model->tab(i).name + " yet: the prompt is kept.";
+            why = "No session with " + std::string(model->tab(i).displayName()) + " yet: the prompt is kept.";
         } else if (sync::takePrompt(*model, i, sync::Limits{}.text, &text, &why)) {
             view->problem.clear();
             sync::Action action;

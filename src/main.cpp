@@ -1046,7 +1046,8 @@ int main(int argc, char** argv) {
     static Model model({}, fromState || clientConfig().sprintEnabled);
 #if NEXUS_LINK
     if (fromState) {
-        sync::applyFriends(model, sync::friendsOf(held), held.friendsKnown(), {});
+        sync::FriendStrip{}.take(model, held);
+        if (!tabGiven) tab = model.active() + 1;
     }
 #endif
     const bool live = shot == nullptr;
@@ -1118,11 +1119,12 @@ int main(int argc, char** argv) {
     // or, for a terminal, by its place among the terminals (tab_order.h), or the sprint tab. A saved friend's tab is
     // selected once the server's friends arrive (sync/friend_strip.h). A --tab past the tabs there at launch, with a
     // server, is judged once the server's friends have arrived (below, after the link starts). A screenshot without
-    // --tab shows the sprint tab, whatever was saved.
+    // --tab uses the state file's primary chat when present, or the sprint tab.
     SavedTab savedTab;
+    bool savedSelection = haveLayout && !a.host.layout.saved().selected.empty();
     if (!tabGiven && live && !haveLayout) {
         std::string selectionWarning;
-        savedTab = loadSavedTab(selection, &selectionWarning);
+        savedTab = loadSavedTab(selection, &selectionWarning, &savedSelection);
         if (!selectionWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", selectionWarning.c_str());
         tab = savedTabPosition(model, savedTab) + 1;
@@ -1170,6 +1172,7 @@ int main(int argc, char** argv) {
     const bool waitForSaved = live && server != nullptr && savedTab.kind == TabKind::Friend;
     a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(),
         std::move(kept));
+    if (tabGiven || (savedSelection && !waitForSaved)) a.host.strip.personSelected();
     if (live) {
         a.host.keep = true;
         a.host.terminalStore = &terminalStore;

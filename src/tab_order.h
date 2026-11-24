@@ -125,8 +125,9 @@ TabOrderStore fileSelectedTabStore();
 
 // The tab the store saved: the sprint tab's SavedTab{} if nothing is saved, and on an unreadable or malformed file,
 // with `warning` one line naming the file, what was wrong and that deleting it resets the selection. A saved friend is
-// selected once the server's friends have arrived (frame_host.h).
-SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning);
+// selected once the server's friends have arrived (frame_host.h). When requested, loaded distinguishes a real saved
+// choice (including the sprint tab) from the default.
+SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded = nullptr);
 
 // The position to select at launch: savedTabPosition of loadSavedTab.
 std::size_t loadSelectedTab(const TabOrderStore& store, const Model& model, std::string* warning);

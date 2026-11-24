@@ -1,7 +1,7 @@
 // The driver as a process: its arguments, standard input and output, and its exit, around a way to start the harness.
 // main.ts gives it the Claude Agent SDK; the conformance test's fake-main.ts a scripted query.
 
-import { closeSync, fstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, readSync, realpathSync, statSync } from 'node:fs';
 
 import { isAccount, openConfigDir, readAccount, type Account, type AccountRefusal } from './account.js';
 import { Driver, newSessionId, parseArguments, type Arguments, type Harness, type HarnessStart, type Host } from './driver.js';
@@ -85,14 +85,24 @@ export function prepare(argv: readonly string[], isDir: (path: string) => boolea
             try {
                 const file = fstatSync(fd);
                 if (!file.isFile() || file.size < 1 || file.size > 256 * 1024) throw new Error();
-                args.startupContext = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(fd));
+                const bytes = Buffer.alloc(file.size + 1);
+                let length = 0;
+                while (length < bytes.length) {
+                    const n = readSync(fd, bytes, length, bytes.length - length, null);
+                    if (n === 0) break;
+                    length += n;
+                }
+                if (length > file.size) throw new Error();
+                args.startupContext = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
                 if (!args.startupContext.trim()) throw new Error();
             } finally {
                 closeSync(fd);
             }
         } catch {
-            return { refusal: [hello, { kind: 'error', code: 'other', cause: 'Could not read the friend startup context',
-                fix: 'Check the friend definition and its configured home files on the Nexus server.' }] };
+            return { refusal: [hello, { kind: 'error', code: 'other',
+                cause: args.primarySession ? 'Could not read the initial session context' : 'Could not read the friend startup context',
+                fix: args.primarySession ? 'Check the initial session launcher on the Nexus server.'
+                    : 'Check the friend definition and its configured home files on the Nexus server.' }] };
         }
     }
     if (!isDir(args.cwd)) {

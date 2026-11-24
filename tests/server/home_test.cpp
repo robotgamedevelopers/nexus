@@ -49,7 +49,13 @@ void serverConfig() {
     ServerSettings s;
     // None is fine, an unknown key a warning, a malformed line an error.
     CHECK(readServerConfig("# nothing yet\n", "/s/config", &s, &warnings, &why) && warnings.empty() && why.empty());
-    CHECK(s.machine.empty());
+    CHECK(s.machine.empty() && s.busLauncher.empty());
+    CHECK(readServerConfig("bus-launcher /opt/nexus local/bin/bus\n", "/s/config", &s, &warnings, &why));
+    CHECK(s.busLauncher == "/opt/nexus local/bin/bus");
+    for (const auto* invalid : {"bus", "~/bus", "/", "/bin/", "/apps/../bin/bus", "/bin/./bus", "/bin/\tbus"}) {
+        CHECK(!readServerConfig("bus-launcher " + std::string(invalid) + "\n", "/s/config", &s, &warnings, &why));
+        CHECK(s.busLauncher.empty() && has(why, "absolute executable path"));
+    }
     CHECK(readServerConfig("port 9\n", "/s/config", &s, &warnings, &why));
     CHECK(warnings.size() == 1 && has(warnings[0], "/s/config line 1:"));
     CHECK(!readServerConfig("\nport\n", "/s/config", &s, &warnings, &why));   // malformed, whatever the key: an error

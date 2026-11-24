@@ -264,6 +264,20 @@ void test('fresh and resumed harnesses receive their standing instructions and o
     }
 });
 
+void test('fresh and resumed primary sessions use only the initial session context', async () => {
+    for (const resume of [undefined, 'existing']) {
+        const args = parseArguments(['--account', 'main', '--cwd', '/work', '--primary-context-fd', '3']);
+        assert.ok(!('error' in args));
+        assert.equal(args.startupContextFd, 3);
+        const host = new TestHost();
+        const context = 'Help with the current workspace.';
+        const driver = new Driver(host, { ...args, startupContext: context, ...(resume ? { resume } : {}) });
+        driver.start();
+        await settle();
+        assert.equal(host.harness.start.startupContext, context);
+    }
+});
+
 void test('a --resume id Claude does not know: a notice, a new session, and the turn goes on', async () => {
     const host = new TestHost();
     host.prepare = (h) => {
@@ -741,6 +755,11 @@ void test('a --resume id lost while settings are applied: the prompt waits for t
 
 void test('parseArguments', () => {
     assert.deepEqual(parseArguments(['--account', 'a', '--cwd', '/w']), { account: 'a', cwd: '/w', settingSources: [] });
+    for (const first of ['--startup-context-fd', '--primary-context-fd']) {
+        for (const second of ['--startup-context-fd', '--primary-context-fd']) {
+            assert.ok('error' in parseArguments(['--account', 'a', '--cwd', '/w', first, '3', second, '4']));
+        }
+    }
     assert.deepEqual(parseArguments(['--cwd', '/w', '--account', 'a', '--resume', 'abc', '--effort', 'max', '--setting-sources', 'user,local']),
         { account: 'a', cwd: '/w', resume: 'abc', effort: 'max', settingSources: ['user', 'local'] });
     // The server's --limit cwd: the one limit there is.

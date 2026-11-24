@@ -35,7 +35,7 @@ def run_fixture():
 
 class Protocol(unittest.TestCase):
     @contextlib.contextmanager
-    def driver(self, harness, *args, rejected=False, receipt=True, root=None, name="sample"):
+    def driver(self, harness, *args, rejected=False, receipt=True, root=None, name="sample", primary=False):
         directory = contextlib.nullcontext(root) if root else tempfile.TemporaryDirectory()
         with directory as root:
             account = Path(root) / ".nexus/server/harness" / harness / name
@@ -50,7 +50,10 @@ class Protocol(unittest.TestCase):
             fake.write_text("#!" + sys.executable + "\n" + (HERE / "fake_harness.py").read_text())
             fake.chmod(0o700)
             with tempfile.TemporaryFile() as instructions:
-                instructions.write(b"Standing instructions from a synthetic home.")
+                content = b"Primary session context." if primary else b"Standing instructions from a synthetic home."
+                instructions.write(content)
+                if primary:
+                    (account / "primary-instructions").write_bytes(content)
                 instructions.seek(0)
                 cmd = [
                     sys.executable,
@@ -63,7 +66,7 @@ class Protocol(unittest.TestCase):
                     str(workspace),
                     "--account",
                     name,
-                    "--startup-context-fd",
+                    "--primary-context-fd" if primary else "--startup-context-fd",
                     str(instructions.fileno()),
                     *args,
                 ]
@@ -129,6 +132,19 @@ class Protocol(unittest.TestCase):
                             [e["code"] for e in events if e["kind"] == "error"],
                             ["session-not-found"] if n == 10 and "missing" in args else [],
                         )
+
+    def test_primary_conversation_and_driver_restart(self):
+        for harness in HARNESSES:
+            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as home:
+                with self.driver(harness, root=home, primary=True) as (p, _):
+                    events = self.reply(p, 1)
+                    self.assertEqual(events[-1]["outcome"], "ok", events)
+                    sid, = [e["id"] for e in events if e["kind"] == "session"]
+                with self.driver(harness, "--resume", sid, root=home, primary=True) as (p, _):
+                    events = self.reply(p, 2)
+                    self.assertEqual(events[-1]["outcome"], "ok", events)
+                    self.assertFalse(any(e["kind"] == "error" for e in events))
+                    self.assertEqual([e["id"] for e in events if e["kind"] == "session"], [sid])
 
     def test_reject_credentials(self):
         for h in HARNESSES:

@@ -324,6 +324,14 @@ public:
     void keepWith(AccountsKeeper* keeper) { keeper_ = keeper; }
     const accounts::Registry* accounts() const { return accounts_ ? &*accounts_ : nullptr; }
 
+    // Called by the server with its validated installer route. The workspace key in instance is the
+    // 32-character lowercase hexadecimal fingerprint of that route's workspace. The conversation has no roster row.
+    bool ensurePrimary(const SessionInfo& binding, std::string* why);
+    bool clearPrimary();
+    std::optional<SessionId> primarySession() const { return primary_; }
+    bool isPrimary(SessionId id) const { return primary_ && *primary_ == id; }
+    std::optional<AccountChoice> primaryChoice() const;
+
     // After accounts.json was first made from the drivers file (the accounts its lines passed with --account): each
     // session on no account whose friend now has a default takes it, told, so that it runs on the account it ran on
     // before. Returns what it did, a line per session. Idempotent: a session on an account is left as it is, so after a
@@ -485,6 +493,7 @@ private:
     void offerLimitChoice(SessionId id, const DriverState& driver, SessionInfo& info);
     bool resolveLimit(const Action& action, std::string* why, const std::string& client);
     void refresh(SessionId id);
+    void publishSessions(std::vector<SessionRef> sessions);
     SessionStore& store_;
     Limits limits_;
     Responder* responder_;
@@ -499,6 +508,7 @@ private:
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
     std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;
+    std::optional<SessionId> primary_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;
     std::map<std::string, NativeService> services_;

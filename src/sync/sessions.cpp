@@ -250,6 +250,7 @@ Sessions::Sessions(std::vector<SessionRef> sessions)
             throw std::logic_error("Sessions: sessions out of id order or with one id twice: " +
                 std::to_string(sessions[i - 1]->id) + ", " + std::to_string(sessions[i]->id));
         }
+        if (sessions[i]->info.friendName == kPrimaryChat && primaryChat_ == 0) primaryChat_ = sessions[i]->id;
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
 }
@@ -323,6 +324,7 @@ void Sessions::apply_string(const std::string& diff) {
     }
     std::vector<SessionRef> sessions;
     sessions.reserve(change.sessions.size());
+    SessionId primary = 0;
     for (codec::SessionChange& c : change.sessions) {
         const SessionId id = c.id;
         if (id == 0) {
@@ -341,6 +343,7 @@ void Sessions::apply_string(const std::string& diff) {
         } else {
             sessions.push_back(applySession(std::move(c), a));
         }
+        if (sessions.back()->info.friendName == kPrimaryChat && primary == 0) primary = id;
     }
     for (std::size_t i = 0; i < change.requests.size(); ++i) {
         const SecretRequest& q = change.requests[i];
@@ -355,6 +358,7 @@ void Sessions::apply_string(const std::string& diff) {
         }
     }
     sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(sessions));
+    primaryChat_ = primary;
     setRequests(std::move(change.requests));
     if (change.friendsSent && change.friendsKnown) {
         setFriends(std::move(change.friends));

@@ -733,6 +733,10 @@ struct Builder {
             view.activateSignIn();
     }
 
+    bool showsPromptPlus(const Tab& tab) const {
+        return look.prompt.showPlus && !tab.primaryChat();
+    }
+
     // The kit's plus, centred on the prompt's last line, where the box aligns its items at the bottom.
     void plus(PrLayoutNode box) {
         const float side = kPlusSide * k();
@@ -1055,7 +1059,7 @@ struct Builder {
     // machine its ssh reaches, or the title its shell set), or "terminal".
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
-            return tab.name;
+            return std::string(tab.displayName());
         if (tab.kind == TabKind::Sprint)
             return "Dashboard";
         std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
@@ -1689,7 +1693,7 @@ struct Builder {
             PrKitBoxStyle strip{.direction = PrKitDirection_Row};
             strip.place.align = PrKitAlign_Start;
             // The prompt border and its configurable inset locate the first typing column.
-            const float iconSpace = look.prompt.showPlus ? kPlusSide + look.prompt.gap : 0;
+            const float iconSpace = showsPromptPlus(tab) ? kPlusSide + look.prompt.gap : 0;
             const float panelInset = view.conversation == column ? kBubblePadX : 0;
             strip.place.margin.left = 1 + (look.prompt.paddingX + iconSpace - panelInset + look.transcriptStyle.scannerOffset) * k();
             strip.place.margin.top = -(kGap - kCursorGap) * k();
@@ -1805,7 +1809,8 @@ struct Builder {
         const bool logout = tab.draft == "/logout";
         policy::MessagePlan plan;
         std::string why;
-        const policy::MessageState state{tab.draft, tab.name, tab.model, tab.queue.size(),
+        const std::string friendName(tab.displayName());
+        const policy::MessageState state{tab.draft, friendName, tab.model, tab.queue.size(),
             view.cursor && (view.cursor(tab.id) == CursorState::Busy || view.cursor(tab.id) == CursorState::Working), {}, {}, {}, !view.windowApp.signInAccount.name.empty()};
         if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
@@ -1964,8 +1969,7 @@ struct Builder {
         }
         view.promptRows = promptRows();
 
-        if (look.prompt.showPlus) plus(box);
-        // No placeholder: the empty prompt shows the plus and the caret only.
+        if (showsPromptPlus(model.tab(active))) plus(box);
         PrKitTextArea area{};
         area.key = prHashString(PrStringView{"prompt", 6}, 0);
         area.text = sv(model.tab(active).draft);
@@ -2339,6 +2343,7 @@ struct Builder {
             case WindowCommand::CloseTab: {
                 if (!model.tab_count()) break;
                 const auto& tab = model.tab(model.active());
+                if (tab.primaryChat()) break;
                 const bool terminal = tab.kind == TabKind::Terminal;
                 // Older window descriptions used separate primitives for terminals and extensions.
                 const bool legacy = key.command == WindowCommand::CloseTerminal;

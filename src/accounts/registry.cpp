@@ -241,12 +241,6 @@ const char* const kFriendsExample =
     "{ \"version\": 2, \"friends\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
     "\"work\" } ] }";
 
-bool isAccountText(std::string_view value) {
-    return value.size() <= 254 && std::none_of(value.begin(), value.end(), [](unsigned char c) {
-        return c < 0x20 || c == 0x7f;
-    });
-}
-
 bool contains(const std::vector<std::string>& v, std::string_view x) {
     return std::find(v.begin(), v.end(), x) != v.end();
 }
@@ -299,6 +293,12 @@ const Instance* Friend::instance(std::string_view instanceName) const {
 bool Registry::linked(std::string_view friendName, std::string_view account) const {
     const Friend* f = friendNamed(friendName);
     return f != nullptr && contains(f->accounts, account);
+}
+
+bool isAccountText(std::string_view value) {
+    return value.size() <= 254 && std::none_of(value.begin(), value.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+    });
 }
 
 bool isName(std::string_view name) {

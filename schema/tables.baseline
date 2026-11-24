@@ -84,6 +84,7 @@ table SessionChange
     field active_agents id=0xbfeb08aad574e406 kind=8
     field bus_senders_known id=0x3cd29b5c25941ab8 kind=1
     field bus_senders id=0xcb68e7f0012df3cc kind=14 elem=12 type=SessionChangeBusSendersText array=unbounded
+    field primary_account id=0x8fd6d804ece1e65d kind=17 type=AccountChoice
 
 table SessionInfo
     field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
@@ -209,4 +210,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-24 (UTC) — Publish the allowed bus senders for a session
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-24 (UTC) — Expose the primary chat's bound account to windows
 - no compatibility-affecting edits; the wire absorbs the rest

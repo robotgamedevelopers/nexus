@@ -235,7 +235,8 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
                 number.find_first_not_of("0123456789") != number.npos ||
                 (key.starts_with("extension:") && row.detail.empty()))
                 return false;
-        } else if (!(key == "sprint" || (key.starts_with("friend:") && accounts::isName(key.substr(7)))) ||
+        } else if (!(key == "sprint" || key == "primary" ||
+                     (key.starts_with("friend:") && accounts::isName(key.substr(7)))) ||
                    !row.detail.empty()) {
             return false;
         }
@@ -250,6 +251,7 @@ TabLayout::TabLayout(SavedLayout saved) : saved_(std::move(saved)), pending_(sav
 
 std::string TabLayout::keyOf(const Tab& tab) {
     if (tab.kind == TabKind::Sprint) return "sprint";
+    if (tab.primaryChat()) return "primary";
     if (tab.kind == TabKind::Friend) return "friend:" + tab.name;
     auto& key = localKeys_[tab.id];
     if (key.empty()) {
@@ -329,7 +331,8 @@ void TabLayout::capture(const Model& model, const std::vector<std::string>& dire
     for (const auto& old : saved_.tabs) {
         if (live.contains(old.key)) {
             if (!waiting.empty()) preceding[old.key].swap(waiting);
-        } else if ((!friendsKnown && old.key.starts_with("friend:")) ||
+        } else if ((old.key == "primary" && (!friendsKnown || pending_ == old.key)) ||
+                   (!friendsKnown && old.key.starts_with("friend:")) ||
                    (!opened.contains(old.key) && old.key.starts_with("extension:"))) {
             waiting.push_back(old);
         }
@@ -478,8 +481,9 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     return sprint;
 }
 
-SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning) {
+SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded) {
     warning->clear();
+    if (loaded) *loaded = false;
     std::string text;
     std::string error;
     SavedTab saved;
@@ -495,6 +499,7 @@ SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning) {
             "; deleting it resets the selection to the first tab";
         return SavedTab{};
     }
+    if (loaded) *loaded = true;
     return saved;
 }
 

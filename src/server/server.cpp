@@ -503,6 +503,7 @@ bool Server::restoreAll(std::string* why) {
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
     bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
+    bus_->listeners.setLauncher(settings_.busLauncher);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
     // "stored" (server/secret_files.h); a request is offered to every window whose link reads requests.
     secretFs_ = store::make_posix_fs();
@@ -866,6 +867,26 @@ void Server::control(int fd) {
     if (request == kStatusRequest) {
         writeAll(fd, std::string(stopping_ ? "STOPPING" : kServingReply) + "\n" +
                          statusBuildLine(paths_.build, drain_.draining()) + "\n");
+        return;
+    }
+    constexpr std::string_view workspaceRequest = "primary-workspace ";
+    if (request.starts_with(workspaceRequest)) {
+        const auto primary = hub_->primarySession();
+        const auto* session = primary ? store_.find(*primary) : nullptr;
+        const auto* registry = hub_->accounts();
+        const auto* account = registry && session ? registry->account(session->info.account) : nullptr;
+        if (session && account && account->billing == accounts::Billing::Subscription &&
+                account->provider == session->info.harness && request.substr(workspaceRequest.size()) == session->info.instance) {
+            std::ifstream in(dirNow("drivers"));
+            std::ostringstream content;
+            content << in.rdbuf();
+            const auto table = parseDriverTable(content.str(), paths_.home);
+            if (table.primary && table.primary->matches(session->info)) {
+                writeAll(fd, "OK " + table.primary->cwd + "\n");
+                return;
+            }
+        }
+        writeAll(fd, "ERROR the selected primary workspace is no longer active; reconnect and try again\n");
         return;
     }
     if (request == "services reload" || request == "services status") {

@@ -27,6 +27,9 @@ bad = (home / "signed-out").exists()
 
 
 def check_context(instructions):
+    if (home / "primary-instructions").exists():
+        assert instructions.rstrip("\n") == (home / "primary-instructions").read_text()
+        return
     assert instructions.startswith("Standing instructions from a synthetic home.\n\n")
     assert "If they choose Nova Seed" in instructions
     assert "https://github.com/mas-bandwidth/nova and its docs/SEED-CORE.md" in instructions

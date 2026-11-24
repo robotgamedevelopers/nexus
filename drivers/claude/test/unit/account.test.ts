@@ -3,7 +3,7 @@
 // prepare), and Claude's environment: the account's login and no inherited one (src/env.ts).
 
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
@@ -151,6 +151,25 @@ void test('the start is refused with no-credential before any harness when the a
     assert.ok('account' in ok);
     assert.equal(ok.account.token, 'sk-ready-secret');
     assert.equal(ok.args.account, 'ready');
+});
+
+void test('both inherited context descriptors are bounded, decoded and closed', () => {
+    const path = join(home, 'inherited-context');
+    const find = (name: string) => ({ name, dir: '/h/a', configDir: '/h/c', token: 'test' });
+    for (const flag of ['--startup-context-fd', '--primary-context-fd']) {
+        for (const data of ['workspace instructions', ' ', 'x'.repeat(256 * 1024 + 1)]) {
+            writeFileSync(path, data);
+            const fd = openSync(path, 'r');
+            const result = prepare(['--account', 'main', '--cwd', '/work', flag, String(fd)], () => true, find);
+            assert.throws(() => fstatSync(fd), { code: 'EBADF' });
+            if (data === 'workspace instructions') {
+                assert.ok('args' in result);
+                assert.equal(result.args.startupContext, data);
+            } else {
+                assert.ok('refusal' in result);
+            }
+        }
+    }
 });
 
 void test('the start is refused before any account is read when the AI\'s sandbox cannot be set up', () => {

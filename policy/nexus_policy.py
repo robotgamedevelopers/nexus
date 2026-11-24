@@ -16,6 +16,17 @@ import starlark
 
 MAX_SOURCE = 64 * 1024
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+PRIMARY_CONTEXT = "You are chatting with the user in Nexus. Help with the requests they make in this conversation."
+
+
+def exec_with_context(program, arguments, flag, instructions):
+    if any(arg.partition("=")[0] in ("--primary-context-fd", "--startup-context-fd") for arg in arguments):
+        raise ValueError("the Nexus launcher supplies the startup descriptor")
+    with tempfile.TemporaryFile() as descriptor:
+        descriptor.write(instructions.encode("utf-8"))
+        descriptor.seek(0)
+        os.set_inheritable(descriptor.fileno(), True)
+        os.execv(program, [program, *arguments, flag, str(descriptor.fileno())])
 
 
 def publish_friend_info(identity, cwd, model, effort):
@@ -116,8 +127,18 @@ def cli():
     launch.add_argument("harness")
     launch.add_argument("program")
     launch.add_argument("arguments", nargs=argparse.REMAINDER)
+    primary = commands.add_parser("primary-driver", help="start the initial harness conversation")
+    primary.add_argument("harness", choices=("claude", "codex", "antigravity", "grok", "muse"))
+    primary.add_argument("program")
+    primary.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
+        if args.command == "primary-driver":
+            if not os.path.isabs(args.program):
+                raise ValueError("the primary driver program must have an absolute path")
+            if args.harness in ("claude", "codex") and "--limit" not in args.arguments:
+                args.arguments.extend(["--limit", "cwd"])
+            exec_with_context(args.program, args.arguments, "--primary-context-fd", PRIMARY_CONTEXT)
         if args.command in ("identity", "friend-driver", "bus-grants", "bus-roster"):
             directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
@@ -173,12 +194,7 @@ def cli():
                         raise ValueError("invalid GitHub SSH grant")
                     extra.extend(["--git-remote", f"git@{alias}:{repo[1].removesuffix('.git')}.git"])
             publish_friend_info(identity, option("--cwd"), defaults.get("model", ""), defaults.get("effort", ""))
-            with tempfile.TemporaryFile() as descriptor:
-                descriptor.write(instructions.encode())
-                descriptor.seek(0)
-                os.set_inheritable(descriptor.fileno(), True)
-                os.execv(args.program, [args.program, *args.arguments, *extra,
-                                        "--startup-context-fd", str(descriptor.fileno())])
+            exec_with_context(args.program, [*args.arguments, *extra], "--startup-context-fd", instructions)
         if args.command == "check":
             context = {"friend": args.friend, "provider": "claude", "account": args.account, "resuming": args.resuming}
             print(json.dumps(decision(args.profile.absolute(), context), sort_keys=True))
@@ -193,12 +209,13 @@ def cli():
         os.execv(args.node, [args.node, args.entry, *defaults, *args.arguments])
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
         cause = "Nexus driver policy: " + " ".join(str(error).splitlines())[:500]
-        if args.command in ("driver", "friend-driver"):
+        if args.command in ("driver", "friend-driver", "primary-driver"):
             harness = getattr(args, "harness", "claude")
             print(json.dumps({"kind": "hello", "protocol": 1, "harness": harness,
                               "features": ["limit"] if harness == "claude" else []}))
-            print(json.dumps({"kind": "error", "code": "other", "cause": cause,
-                              "fix": "Check the server profile with nexus_policy check and retry."}))
+            fix = ("Check the primary driver command in the server configuration and retry." if args.command == "primary-driver"
+                   else "Check the server profile with nexus_policy check and retry.")
+            print(json.dumps({"kind": "error", "code": "other", "cause": cause, "fix": fix}))
         else:
             print(cause, file=sys.stderr)
         return 1

@@ -10,6 +10,9 @@
 
 namespace nexus {
 
+// A conversation supplied by the server's harness binding, outside the registered friends' name space.
+inline constexpr char kPrimaryChat[] = "@primary";
+
 struct FriendInfo { std::string name; std::string model; };
 
 // Person: the person's prompt; Friend: the friend's text; Notice: a line from nexus; Tool: the friend used a tool, one
@@ -62,6 +65,9 @@ struct Tab {
     std::string declaredGroup{};  // the plugin default when an older fork provides no tab_groups
     std::uint64_t transcriptGeneration = 0;
     std::string held{};  // one multiline message staged locally until release
+
+    bool primaryChat() const { return kind == TabKind::Friend && name == kPrimaryChat; }
+    std::string_view displayName() const { return primaryChat() ? std::string_view("Chat") : std::string_view(name); }
 };
 
 class Model {

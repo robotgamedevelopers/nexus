@@ -25,6 +25,8 @@ public:
     BusListeners(const BusListeners&) = delete;
     BusListeners& operator=(const BusListeners&) = delete;
 
+    // Set at server startup, before the first hook. Empty uses the installed nova-secrets and nova-bus.
+    void setLauncher(const std::string& path) { launcher_ = path; }
     // The registry grants each enabled inbox access to one loopback Redis address.
     void configure(const std::map<std::string, std::string>& inboxAddresses);
     std::vector<pollfd> fds() const;
@@ -37,7 +39,7 @@ public:
 
 private:
     struct Hook;
-    std::string home_, self_;
+    std::string home_, self_, launcher_;
     std::function<void(const std::string&)> report_;
     std::map<std::string, std::unique_ptr<Hook>> hooks_;
     std::vector<std::unique_ptr<Hook>> stopping_;

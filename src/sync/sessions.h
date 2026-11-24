@@ -40,6 +40,14 @@ namespace nexus::sync {
 // A session's id: minted by the server from 1, never reused, the one name a session has on the wire and in the store.
 using SessionId = std::uint64_t;
 
+struct AccountChoice {
+    std::string name;
+    std::string label{};
+    bool needsSignIn = false;    // the server can sign this linked account in and has no login for it
+    std::string email{};         // configured sign-in address; empty when omitted or sent by an older server
+    bool operator==(const AccountChoice&) const = default;
+};
+
 // What a session is, apart from its transcript and queue: the friend it is with (an attribute, so that a window can
 // group sessions by friend; it names no tab), the harness its driver runs (Claude, for now), the account the driver
 // runs under, the model and effort each turn is sent with, and the friend's instance it belongs to (the machine and
@@ -60,6 +68,7 @@ struct SessionInfo {
     std::string limitModel{};
     std::uint64_t contextEpoch = 0;
     std::string catalog{}; // server-advertised harness model and effort choices in JSON
+    std::optional<AccountChoice> primaryAccount{}; // current bound account status, projected for windows only
     bool operator==(const SessionInfo&) const = default;
 };
 
@@ -72,14 +81,6 @@ struct SessionEntry {
 };
 
 using EntryRef = std::shared_ptr<const SessionEntry>;
-
-struct AccountChoice {
-    std::string name;
-    std::string label{};
-    bool needsSignIn = false;    // the server can sign this linked account in and has no login for it
-    std::string email{};         // configured sign-in address; empty when omitted or sent by an older server
-    bool operator==(const AccountChoice&) const = default;
-};
 
 inline constexpr char kAutoAccountTarget[] = "!auto";  // reserved SetAccount intent, invalid as a registry name
 
@@ -139,6 +140,8 @@ public:
     explicit Sessions(std::vector<SessionRef> sessions);
 
     const std::vector<SessionRef>& sessions() const { return *sessions_; }
+    // The session supplied by the server's primary harness binding, or zero when none is present.
+    SessionId primaryChat() const { return primaryChat_; }
     // The open secret requests (sync/secrets.h), oldest first, after the sessions: from format 3 on the wire, never a
     // value. A window of an older format receives none.
     const std::vector<SecretRequest>& requests() const { return *requests_; }
@@ -197,6 +200,7 @@ public:
 
 private:
     std::shared_ptr<const std::vector<SessionRef>> sessions_;
+    SessionId primaryChat_ = 0;
     std::shared_ptr<const std::vector<SecretRequest>> requests_;
     std::shared_ptr<const std::vector<ServerFriend>> friends_;
     bool friendsKnown_ = false;

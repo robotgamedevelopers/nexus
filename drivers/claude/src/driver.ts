@@ -145,6 +145,7 @@ export interface Arguments {
     verified?: VerifiedLogin;
     startupContextFd?: number;
     startupContext?: string;
+    primarySession?: boolean;
     settingSources: SettingSource[];
     claudePath?: string;
     limit?: 'cwd';                      // from the server: the friend may read and write only in --cwd
@@ -166,16 +167,18 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--bus-sender', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--bus-sender', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--primary-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
         switch (name) {
-            case '--startup-context-fd': {
+            case '--startup-context-fd':
+            case '--primary-context-fd': {
                 const fd = Number(value);
                 if (!/^\d+$/.test(value) || !Number.isSafeInteger(fd) || fd < 3 || a.startupContextFd !== undefined)
                     return { error: 'expected one inherited startup context descriptor (3 or greater)' };
                 a.startupContextFd = fd;
+                if (name === '--primary-context-fd') a.primarySession = true;
                 break;
             }
             case '--account-email':
@@ -599,8 +602,8 @@ export class Driver {
         }
         let harness: Harness;
         try {
-            const setupGuide = readFileSync(new URL('friend-setup.txt', import.meta.url), 'utf8').trim();
-            start.startupContext = this.args.startupContext ? this.args.startupContext + '\n\n' + setupGuide : setupGuide;
+            const setupGuide = this.args.primarySession ? '' : readFileSync(new URL('friend-setup.txt', import.meta.url), 'utf8').trim();
+            start.startupContext = [this.args.startupContext, setupGuide].filter(Boolean).join('\n\n');
             harness = this.host.startHarness(start);
         } catch (e) {
             this.fail(`the Claude harness did not start: ${message(e)}`);
