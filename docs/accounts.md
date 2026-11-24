@@ -554,3 +554,9 @@ Use the real directory path. On macOS, `startup.github_ssh_alias` grants fetch a
 `git@<alias>:<owner>/<repo>.git`. The driver opens separate Unix sockets for Git's upload-pack and
 receive-pack protocols and runs SSH on the host with the configured alias. The sandbox receives access
 to those two sockets. Host keys must already be trusted. Grants take effect on the next driver launch.
+
+
+A Claude friend on macOS can also receive its own nova-bus notifications. Set that friend’s
+`startup.bus_listener` to the local bus address, such as `127.0.0.1:6379`. On the next driver
+launch, `nova-bus hook --as <friend>` connects to a private Unix socket that streams the output of
+the host’s nova-bus listener for that name. The grant authorizes listening for that friend only.

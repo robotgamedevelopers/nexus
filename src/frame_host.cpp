@@ -217,7 +217,25 @@ void LinkSignIn::step() {
     }
 }
 
+void FrameHost::finishUpload() {
+    if (!upload_.valid() || upload_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    auto result = upload_.get();
+    auto bubble = std::find_if(view->outgoing.begin(), view->outgoing.end(),
+        [&](const auto& b) { return b.tab == result.tab && b.action == 0; });
+    if (result.error.empty()) {
+        view->attachmentLabels[{result.tab, result.action.text}] = result.original;
+        const auto number = link->send(std::move(result.action));
+        if (bubble != view->outgoing.end()) bubble->action = number;
+        return;
+    }
+    if (bubble != view->outgoing.end()) view->outgoing.erase(bubble);
+    for (size_t i = 0; i < model->tab_count(); ++i)
+        if (model->tab(i).id == result.tab) model->restore_held(i, std::move(result.original));
+    view->problem = std::move(result.error);
+}
+
 void FrameHost::pollLink() {
+    finishUpload();
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
@@ -243,6 +261,9 @@ void FrameHost::pollLink() {
                 }
             }
         }
+        std::erase_if(view->outgoing, [&](const auto& b) {
+            return b.action && (!s.sessions.nextAction() || b.action < s.sessions.nextAction());
+        });
         accountState_ = s.sessions;
         std::erase_if(accountSelections_, [&](const auto& pending) {
             return !s.sessions.nextAction() || !s.sessions.find(pending.first) || s.sessions.nextAction() > pending.second;
@@ -694,6 +715,10 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
         const bool command = i == model->active() && view->windowApp.surface.promptCommand;
         if (!command && current && current->info.limitRequest) return;
         if (!command && i == model->active() && activateSignIn()) return;
+        if (upload_.valid()) {
+            view->problem = "An attachment is uploading. Send this bubble when it finishes.";
+            return;
+        }
         std::string text;
         std::string why;
         // The session the tab shows, the window's own choice; none until the server's state has one of the friend's
@@ -707,7 +732,49 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
             action.kind = queue ? sync::ActionKind::Queue : sync::ActionKind::Send;
             action.session = session;
             action.text = std::move(text);
-            link->send(std::move(action));
+            std::vector<StagedFile> files;
+            const auto tabId = model->tab(i).id;
+            for (const auto& file : stagedFiles_)
+                if (file.tab == tabId && action.text.find(file.marker) != std::string::npos) files.push_back(file);
+            if (files.empty()) {
+                if (!command && accountState_.nextAction()) {
+                    auto shown = action.text;
+                    const auto number = link->send(std::move(action));
+                    view->outgoing.push_back({tabId, number, std::move(shown)});
+                } else link->send(std::move(action));
+                return;
+            }
+            const auto friendName = model->tab(i).name;
+            const auto instance = current ? current->info.instance : "";
+            view->outgoing.push_back({tabId, 0, action.text});
+            std::promise<UploadResult> ready;
+            upload_ = ready.get_future();
+            uploadWorker_ = std::async(std::launch::async, [action = std::move(action), files = std::move(files),
+                    target = host, tabId, friendName, instance, wake = uploadWake, ready = std::move(ready)]() mutable {
+                UploadResult result{std::move(action), tabId, {}, {}};
+                result.original = result.action.text;
+                for (const auto& file : files) {
+                    const std::string header = friendName + "\n" + instance + "\n" + file.name + "\n" +
+                        std::to_string(file.bytes->size()) + "\n";
+                    Command command{"ssh", {"-T", "-o", "BatchMode=yes", "--", target, "exec \"$HOME/.local/bin/nexus-receive\""}, "attachment upload"};
+                    auto reply = runCommandWithInput(command, 120, header + *file.bytes);
+                    if (!reply.out.empty() && reply.out.back() == '\n') reply.out.pop_back();
+                    if (reply.end != CommandResult::End::Exited || reply.code || !reply.out.starts_with("incoming/") ||
+                        !reply.out.ends_with("/" + file.name) || reply.out.find('\n') != std::string::npos) {
+                        result.error = "Attachment upload failed for " + file.name + ". " +
+                            (reply.err.empty() ? "Check the server connection and nexus-receive installation." : reply.err);
+                        break;
+                    }
+                    // Replace only the original composer markers. The remote path preserves the basename.
+                    for (size_t pos = 0; (pos = result.action.text.find(file.marker, pos)) != std::string::npos;) {
+                        result.action.text.replace(pos, file.marker.size(), reply.out);
+                        pos += reply.out.size();
+                    }
+                }
+                if (result.action.text.size() > kPromptBytes) result.error = "Attachment paths exceed the prompt limit.";
+                ready.set_value(std::move(result));
+                if (wake) wake();
+            });
             return;
         }
         if (!why.empty())
@@ -741,6 +808,16 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
 }
 
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
+    ++pasteFrame_;
+    if (!upload_.valid()) std::erase_if(stagedFiles_, [&](const StagedFile& file) {
+        if (pasteFrame_ - file.frame < 3) return false;
+        for (size_t i = 0; i < model->tab_count(); ++i) {
+            const auto& tab = model->tab(i);
+            if (tab.id == file.tab && (tab.draft.find(file.marker) != std::string::npos ||
+                tab.held.find(file.marker) != std::string::npos)) return false;
+        }
+        return true;
+    });
     view->hitch = hitch;
     if (terminals != nullptr) {
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
@@ -779,6 +856,36 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
     }
 }
 
+bool FrameHost::stageFile(std::string name, std::string bytes) {
+    if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
+        (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
+    if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
+        name.find_first_of("/\\") != std::string::npos || std::any_of(name.begin(), name.end(),
+            [](unsigned char c) { return c < 32 || c == 127; })) {
+        view->problem = "Cannot attach a file with this filename.";
+        return false;
+    }
+    size_t total = bytes.size();
+    for (const auto& file : stagedFiles_) total += file.bytes->size();
+    if (bytes.size() > kMaxAttachmentBytes || total > 4 * kMaxAttachmentBytes) {
+        view->problem = "Attachments support 32 MiB per file and 128 MiB staged at once.";
+        return false;
+    }
+    const auto marker = "[" + (name == "pasted.txt" ? "Pasted" : name) + " (" +
+        std::to_string(bytes.size()) + " bytes) #" + std::to_string(++stagedCount_) + "]";
+    if (marker.size() > promptRoom(*view, ui)) {
+        view->problem = "The prompt has no room for another attachment.";
+        return false;
+    }
+    stagedFiles_.push_back({model->tab(model->active()).id, pasteFrame_, marker, std::move(name),
+        std::make_shared<const std::string>(std::move(bytes))});
+    PrAppEvent event{};
+    event.kind = PrAppEventKind_Paste;
+    event.input.text = {marker.data(), marker.size()};
+    prUiPushEvent(ui, kPrUiViewportMain, &event);
+    return true;
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
@@ -808,6 +915,11 @@ bool FrameHost::event(const PrAppEvent& e) {
         return false;
     }
     // Text that fits the room left (the selection it replaces counted) goes on as it came.
+    if (e.kind == PrAppEventKind_Paste && e.input.text.size >= pastePreviewBytes) {
+        if (e.input.text.size > kMaxAttachmentBytes) view->problem = "The paste exceeds the 32 MiB attachment limit.";
+        else stageFile("pasted.txt", std::string(e.input.text.data, e.input.text.size));
+        return true;
+    }
     const std::size_t room = promptRoom(*view, ui);
     if (e.input.text.size <= room) {
         return false;

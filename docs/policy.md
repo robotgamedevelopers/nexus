@@ -164,6 +164,8 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
+Type `/help` in a friend tab to print the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
+
 The fork can return `prompt_command` for a draft that should bypass the account reminder.
 The prompt handler receives `signed_out` and can return `clear_local` to clear the active
 friend's visible history and draft. The window can bind a key to `["replace_draft", text]`.
@@ -445,7 +447,7 @@ disables the sweep and collapse. Both the overlay and opaque windows request HDR
 
 ### Editing motion in the client profile
 
-Sent bubbles use a solid white 3-point outline, set by `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
+Sent bubbles have no outline by default. To add one, set `transcript_style.sent_outline_width` and `transcript_style.sent_outline_ink`. Pending bubbles use a dashed selection-color outline. Set `transcript_style.pending_dash_seconds` to the time for one dash and gap to travel (default 2 seconds, 0 for stationary). Reduced Motion holds the dashes and text still. The unsent text gently dims and brightens over `pending_text_seconds` (2.8 by default). Set `pending_text_pulse` to zero to disable it. The default is 0.10. Set `sounds.discard` to tune the click when Command-Delete clears the composer. Set `transcript_style.pending_outline_width` from 0 to 8 points before text scaling (default 3). `sounds.startup` plays once the overlay hotkey registers. Set `synth` to true for a layered tone that swells and fades. `sounds.step` is the quiet tick when the selected menu row changes. `sounds.hold` plays on staging (silent by default), and `sounds.send` plays when a new outgoing message appears in the live server transcript.
 
 Read tool calls display the path alone. `transcript_style.read_path_ink` sets its color and defaults to the link or selection color.
 
@@ -468,6 +470,8 @@ The window policy can return a `sounds` object with `tab` and `confirm` cues. Ea
 
 The client profile's `clear_draft_keys` binds the `clear_composer` action, which clears the active friend's draft and all its locally staged bubbles in one press. The defaults cover Command with either the Mac Delete key (Backspace) or forward Delete.
 
-Set `hold_on_enter` for client-side message staging. Enter holds the current draft in memory for that tab. Empty Enter releases the batch in order. Command-Enter adds the current draft last and releases the batch. Messages reach the server only on release. Slash commands execute directly.
+Set `hold_on_enter` for client-side message staging. Enter holds the current draft in memory for that tab. Each additional Enter appends a line to the same bubble. Empty Enter sends the combined message. Command-Enter appends the current draft and sends it. Messages reach the server only on release. Slash commands execute directly.
+
+Pasting a file, clipboard image, or at least 4096 bytes of text into a friend prompt inserts a compact filename or byte count. The contents are held in client memory until send. Releasing the bubble uploads each attachment over SSH to the server helper `~/.local/bin/nexus-receive` (Python 3 and Git). The helper resolves the friend’s configured instance and stores the bytes under `incoming/<unique directory>/<original basename>` inside its working directory. The friend receives that relative path. Clipboard images use `pasted-image.png` and text uses `pasted.txt`. The client accepts up to 32 MiB per attachment and 128 MiB staged across tabs. An interrupted upload keeps the bubble available to retry during the current run.
 
 The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, and `ready` use the same chirp fields. The client remembers /quiet across launches. /quiet off and /loud restore sound.

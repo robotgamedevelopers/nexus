@@ -270,7 +270,7 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         const auto key = stringAt(d, i);
         if (key != "fill" && key != "ink" && key != "person_ink" && key != "notice_ink" && key != "status_ink" && key != "switch_email_ink" &&
                 key != "radius" && key != "show_notices" && key != "show_tools" && key != "reply_width" && key != "markdown" && key != "conversation_panel" && key != "tool_prompts" && key != "list_gap_em" &&
-                key != "panel_fill" && key != "link_ink" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
+                key != "panel_fill" && key != "link_ink" && key != "pending_text_pulse" && key != "pending_text_seconds" && key != "pending_dash_seconds" && key != "pending_outline_width" && key != "sent_outline_width" && key != "sent_outline_ink" && key != "read_path_ink" && key != "command_ink" && key != "code_ink" && key != "code_fill" &&
                 key != "code_background" && key != "code_padding" && key != "code_radius" && key != "code_size_offset" &&
                 key != "glyph_peak" && key != "glyph_seconds" && key != "glyph_stagger" &&
                 key != "person_bold" && key != "person_flash_peak" && key != "person_flash_seconds" &&
@@ -333,6 +333,9 @@ bool readTranscriptStyle(const PrJson* d, Index obj, TranscriptStyle& style, std
         readColor(d, obj, {"notice_ink", 10}, style.noticeInk) && readColor(d, obj, {"status_ink", 10}, style.statusInk) &&
         readColor(d, obj, {"sent_outline_ink", 16}, style.sentOutlineInk) &&
         readPoints(d, obj, {"sent_outline_width", 18}, style.sentOutlineWidth, 0, 8) &&
+        readPoints(d, obj, {"pending_text_pulse", 18}, style.pendingTextPulse, 0, 0.5f) &&
+        readPoints(d, obj, {"pending_text_seconds", 20}, style.pendingTextSeconds, 0.2f, 30) &&
+        readPoints(d, obj, {"pending_dash_seconds", 20}, style.pendingDashSeconds, 0, 60) &&
         readPoints(d, obj, {"pending_outline_width", 21}, style.pendingOutlineWidth, 0, 8) &&
         readPoints(d, obj, {"radius", 6}, style.radius, 0, 64) &&
         readFlag(d, obj, {"show_notices", 12}, style.showNotices) && readFlag(d, obj, {"show_tools", 10}, style.showTools) &&
@@ -363,7 +366,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
                 !cue({"confirm", 7}, surface.confirmChirp) ||
                 !cue({"open", 4}, surface.openChirp) || !cue({"close", 5}, surface.closeChirp) ||
                 !cue({"dialog", 6}, surface.dialogChirp) || !cue({"cancel", 6}, surface.cancelChirp) ||
-                !cue({"startup", 7}, surface.startupChirp) || !cue({"step", 4}, surface.stepChirp) || !cue({"hold", 4}, surface.holdChirp) || !cue({"send", 4}, surface.sendChirp) ||
+                !cue({"startup", 7}, surface.startupChirp) || !cue({"step", 4}, surface.stepChirp) || !cue({"discard", 7}, surface.discardChirp) || !cue({"hold", 4}, surface.holdChirp) || !cue({"send", 4}, surface.sendChirp) ||
                 !cue({"ready", 5}, surface.readyChirp)) return false;
     }
     auto& tabs = surface.tabs;

@@ -68,7 +68,7 @@ struct Chirp {
 };
 
 struct AccountSurface {
-    Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, sendChirp, stepChirp, startupChirp;
+    Chirp tabChirp, confirmChirp, openChirp, closeChirp, dialogChirp, cancelChirp, readyChirp, holdChirp, discardChirp, sendChirp, stepChirp, startupChirp;
     std::optional<std::vector<AccountItem>> items;
     std::vector<std::string> tabTitles;
     TabStyle tabs;
@@ -101,7 +101,8 @@ struct TranscriptStyle {
     unsigned noticeInk = 0xffb4b4;
     unsigned statusInk = 0xd8d8d8;
     float radius = style::kBubbleRadius;
-    float pendingOutlineWidth = 3, sentOutlineWidth = 3;
+    float pendingOutlineWidth = 3, sentOutlineWidth = 0, pendingDashSeconds = 2;
+    float pendingTextPulse = 0.10f, pendingTextSeconds = 2.8f;
     unsigned sentOutlineInk = 0xffffff;
     bool showNotices = true;
     bool showTools = true;

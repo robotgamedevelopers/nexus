@@ -1,5 +1,4 @@
 #pragma once
-#include <deque>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -51,7 +50,7 @@ struct Tab {
     std::string group{};
     std::string declaredGroup{};  // the plugin default when an older fork provides no tab_groups
     std::uint64_t transcriptGeneration = 0;
-    std::deque<std::string> held{};  // local until the person releases the batch
+    std::string held{};  // one multiline message staged locally until release
 };
 
 class Model {
@@ -73,6 +72,7 @@ public:
                                 // clear that draft, true; else false, no change. Never touches a transcript.
     bool hold_draft(std::size_t i);
     void clear_composer(std::size_t i);
+    void restore_held(std::size_t i, std::string text);
     void pop_held(std::size_t i);
     bool take_queued(std::size_t i);  // a friend's tab whose queue is not empty: its oldest queued prompt leaves the
                                       // queue (the server delivered it), true; else false, no change. Never touches a

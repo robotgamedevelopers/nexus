@@ -706,68 +706,27 @@ void streamingReply(Window& w) {
     }
 }
 
-// The person pastes 1 MB into the prompt with Command-V, edits the full prompt, switches tabs, selects it all and types
-// over it, pastes 40 KB and sends it. The frames that set or edit a full prompt's text are the known hitch; every other
-// frame keeps the budget.
+// Large pastes stay compact through edits and tab switches; ordinary pastes remain editable text.
 void bigPaste(Window& w) {
     history(w.model, 1, 50);
     w.link.set(connected(stateOf(w.model, sync::Activity::Idle)));
     w.frames(5);
-    std::string big;
-    while (big.size() < 1024 * 1024) {
-        big += "a pasted line of a log, long enough to wrap, with numbers 0123456789 and words in it\n";
-    }
-    const std::size_t alex = w.model.tab(1).id;
-    w.commandV(big, true);
-    // Emma's tab the next frame: the paste went into alex's prompt whole, in its frame, and none of it follows to emma.
+    const std::string big(1024 * 1024, 'a');
+    w.commandV(big, false);
+    const auto marker = w.model.tab(1).draft;
+    CHECK(marker.starts_with("[Pasted (1048576 bytes)") && marker.size() < 64);
+    CHECK(w.link.sent.empty() || w.link.sent.back().text != big);
     w.commandDigit(3);
-    CHECK(w.model.tab(1).draft == big.substr(0, kPromptBytes));
     CHECK(w.model.tab(2).draft.empty());
-    CHECK(w.view.cut == cutLine(big.size(), kPromptBytes) && w.view.cutTab == alex);
-    w.known();          // alex's full prompt set in the area again
-    w.commandDigit(2);
-    w.frames(10);
-    // The end of alex's transcript says how much was left out, in sight.
-    CHECK(w.showsLine(w.view.cut));
-    // Edits at the end of a full prompt: four characters taken back and typed again, each a known hitch. The line
-    // about the cut goes with the first edit.
-    for (int i = 0; i < 4; ++i) {
-        w.known();
-        w.key(PrAppKey_Backspace, PrAppKeyCode_Backspace);
-    }
-    CHECK(w.view.cut.empty());
-    for (const char c : std::string("more")) {
-        const char s[2] = {c, 0};
-        w.known();
-        w.key(PrAppKey(c), 0, 0, s);
-    }
-    CHECK(w.model.tab(1).draft.size() == kPromptBytes);
-    // Typed at the limit: nothing goes in, and the line says the byte was left out.
-    w.type("z");
-    CHECK(w.model.tab(1).draft.size() == kPromptBytes && w.view.cut == cutLine(1, 0));
-    // The line is alex's: emma's tab shows none, and her prompt took nothing of alex's text; back on alex it shows.
-    w.commandDigit(3);
-    w.frames(3);
-    CHECK(w.model.tab(2).draft.empty());
-    CHECK(w.findText(w.view.transcript, w.view.cut) == kPrLayoutNodeNone);
-    w.known();          // alex's full prompt set in the area again
     w.commandDigit(2);
     w.frames(3);
-    CHECK(w.showsLine(w.view.cut));
-    // At the limit, the whole prompt selected and typed over: the selection is room.
+    CHECK(w.model.tab(1).draft == marker);
     w.command('A', PrAppKeyCode_KeyA);
     w.type("x");
-    CHECK(w.model.tab(1).draft == "x");
-    CHECK(w.view.cut.empty());
-    // 40 KB pasted after the "x", then sent: the whole 32 KB goes, the paste in one piece.
-    const std::string forty = big.substr(0, 40 * 1024);
-    w.commandV(forty, true);
-    CHECK(w.model.tab(1).draft == "x" + forty.substr(0, kPromptBytes - 1));
-    const std::size_t sent = w.link.sent.size();
+    w.commandV("small paste", false);
+    CHECK(w.model.tab(1).draft == "xsmall paste");
     w.key(PrAppKey_Enter, PrAppKeyCode_Enter);
-    CHECK(w.link.sent.size() == sent + 1 && w.link.sent.back().text == "x" + forty.substr(0, kPromptBytes - 1));
-    CHECK(w.model.tab(1).draft.empty() && w.view.cut.empty());
-    w.frames(30);
+    CHECK(!w.link.sent.empty() && w.link.sent.back().text == "xsmall paste");
 }
 
 // Switching between friends with long histories, and to the sprint tab and back.
@@ -1107,9 +1066,7 @@ const Case kCases[] = {
     {"typing_over_a_long_history", typingOverALongHistory},
     {"stalled_link_then_a_long_transcript", stalledLinkThenALongTranscript},
     {"streaming_reply", streamingReply},
-    {"big_paste", bigPaste, "the frame that sets 32 KB in the prompt, and each edit of a full prompt, shapes the whole "
-        "prompt (Prax's text area lays its text out whole at each change: 11 ms at 32 KB); nexus cuts a paste to the "
-        "32 KB the server takes", 15},
+    {"big_paste", bigPaste},
     {"switching_tabs", switchingTabs},
     {"sprint_tab", sprintTab},
     {"terminals", terminals},

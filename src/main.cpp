@@ -49,6 +49,8 @@
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
 //              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
 
+#include "pr/png.h"
+#include "pr/compress_select.h"
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -57,6 +59,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -67,7 +70,7 @@
 
 #include "pr/app_data.h"
 #include "pr/app_shell.h"
-#include "pr/compress.h"
+#include "pr/compress_select.h"
 #include "pr/draw_list.h"
 #include "pr/draw_renderer.h"
 #include "pr/file.h"
@@ -199,6 +202,9 @@ void carryOut(App& a, OverlayAct act) {
         return;
     PrAppWindow* window = prStudioWindowAppWindow(a.window);
     PrApp* app = prStudioWindowApp(a.window);
+#ifdef __APPLE__
+    if ((act == OverlayAct::Hide) == bool(prAppWindowIsVisible(window))) prioritizeOverlayTransition();
+#endif
     if (act == OverlayAct::Hide) {
         a.view.accountPicker.reset();
         prAppTimerCancel(app, kKeyCheckTag);
@@ -240,6 +246,103 @@ void pasted(void* context, PrStatus status, PrStringView text) {
     }
     if (a.window != nullptr) {
         prAppWindowRequestFrame(prStudioWindowAppWindow(a.window));
+    }
+}
+
+// Pin each asynchronous clipboard read to the tab and the focused composer that requested it.
+struct ComposerPaste {
+    App& app;
+    size_t tab;
+    struct File { std::string name, path; size_t size; };
+    std::vector<File> files;
+    uint32_t index = 0;
+    bool active() const {
+        return app.window && app.model->tab_count() && app.model->tab(app.model->active()).id == tab &&
+            app.view.prompt != kPrLayoutNodeNone && prUiFocus(app.host.ui) == app.view.prompt;
+    }
+    void redraw() const { if (app.window) prAppWindowRequestFrame(prStudioWindowAppWindow(app.window)); }
+};
+
+void readClipboardFile(ComposerPaste* request);
+void clipboardBytes(void* context, PrStatus status, PrByteView bytes) {
+    std::unique_ptr<ComposerPaste> request(static_cast<ComposerPaste*>(context));
+    if (!request->active()) return;
+    const auto& file = request->files[request->index];
+    // AppKit supplies clipboard file URLs but only supports indexed byte reads on retained drop sources.
+    std::string local;
+    if (status == PrStatus_NotFound && !file.path.empty()) {
+        std::error_code error;
+        const auto path = std::filesystem::path(std::u8string(file.path.begin(), file.path.end()));
+        if (std::filesystem::is_regular_file(path, error)) {
+            std::ifstream input(path, std::ios::binary);
+            local.resize(file.size);
+            if (input && input.read(local.data(), std::streamsize(local.size())) && input.peek() == EOF) {
+                bytes = {reinterpret_cast<const uint8_t*>(local.data()), local.size()};
+                status = PrStatus_Ok;
+            }
+        }
+    }
+    if (status != PrStatus_Ok || bytes.size != file.size)
+        request->app.view.problem = "Could not read " + file.name + " from the clipboard.";
+    else
+        request->app.host.stageFile(file.name, bytes.size ? std::string(reinterpret_cast<const char*>(bytes.data), bytes.size) : std::string());
+    request->redraw();
+    if (++request->index < request->files.size()) readClipboardFile(request.release());
+}
+
+void readClipboardFile(ComposerPaste* request) {
+    prAppDataReadFile(prStudioWindowApp(request->app.window), kPrAppDataSourceClipboard, request->index, 0,
+        request->files[request->index].size, clipboardBytes, request);
+}
+
+void clipboardForms(void* context, PrStatus status, PrAppDataFormFlags forms) {
+    std::unique_ptr<ComposerPaste> request(static_cast<ComposerPaste*>(context));
+    if (!request->active()) return;
+    auto* app = prStudioWindowApp(request->app.window);
+    if (status != PrStatus_Ok) {
+        request->app.view.problem = "Could not read the clipboard.";
+        request->redraw();
+    } else if (forms & PrAppDataFormFlag_Files) {
+        prAppDataReadFiles(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, const PrAppDataFile* files, uint32_t count) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (!r->active()) return;
+            if (read != PrStatus_Ok || !count) {
+                r->app.view.problem = "No files could be read from the clipboard.";
+                r->redraw();
+                return;
+            }
+            for (uint32_t i = 0; i < count; ++i) {
+                if (files[i].directory || files[i].size > kMaxAttachmentBytes) {
+                    r->app.view.problem = "Paste individual files up to 32 MiB each.";
+                    r->redraw();
+                    return;
+                }
+                r->files.push_back({std::string(files[i].name.data, files[i].name.size),
+                    files[i].path.size ? std::string(files[i].path.data, files[i].path.size) : std::string(), size_t(files[i].size)});
+            }
+            readClipboardFile(r.release());
+        }, request.release());
+    } else if (forms & PrAppDataFormFlag_Image) {
+        prAppDataReadImage(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, PrPixelView pixels) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (!r->active()) return;
+            std::unique_ptr<PrCompressCodecSet, decltype(&prCompressCodecSetDestroy)> codecs(
+                prCompressCodecSetCreateDefault(), prCompressCodecSetDestroy);
+            size_t size = 0;
+            if (read == PrStatus_Ok && codecs && uint64_t(pixels.extent.x) * pixels.extent.y <= 32 * 1024 * 1024)
+                size = prPngEncode(pixels, 0, codecs.get(), nullptr, 0);
+            if (size && size <= kMaxAttachmentBytes) {
+                std::string png(size, '\0');
+                prPngEncode(pixels, 0, codecs.get(), reinterpret_cast<uint8_t*>(png.data()), size);
+                r->app.host.stageFile("pasted-image.png", std::move(png));
+            } else r->app.view.problem = "The clipboard image could not be read within the 32 MiB limit.";
+            r->redraw();
+        }, request.release());
+    } else if (forms & PrAppDataFormFlag_Text) {
+        prAppDataReadText(app, kPrAppDataSourceClipboard, [](void* ctx, PrStatus read, PrStringView text) {
+            std::unique_ptr<ComposerPaste> r(static_cast<ComposerPaste*>(ctx));
+            if (r->active()) pasted(&r->app, read, text);
+        }, request.release());
     }
 }
 
@@ -303,7 +406,8 @@ bool open(void* context, PrStudioWindow* window) {
     };
     a.view.paste = [&a] {
         if (a.window != nullptr) {
-            prAppDataReadText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, pasted, &a);
+            prAppDataReadForms(prStudioWindowApp(a.window), kPrAppDataSourceClipboard, clipboardForms,
+                new ComposerPaste{a, a.model->tab(a.model->active()).id, {}});
         }
     };
     // In-app sign-in's URL, in the default browser off the frame thread (frame_host.h LinkSignIn, url_opener.h); a URL
@@ -420,6 +524,7 @@ void shutdown(void* context, PrStudioApp*) {
 void appEvent(void* context, PrStudioApp* studio, const PrAppEvent* e) {
     App& a = appOf(context);
     HitchScope scope(&a.hitch, Phase::Input);
+    if (e->kind == PrAppEventKind_Wake) a.host.finishUpload();
     if (e->kind == PrAppEventKind_PowerChanged) {
         const auto power = prAppPower(prStudioAppApp(studio));
         a.view.savingPower = power.lowPower || power.source == PrAppPowerSource_Battery;
@@ -1056,6 +1161,7 @@ int main(int argc, char** argv) {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
         };
+        a.host.uploadWake = options.wake;
         a.link = std::make_unique<link::ClientPort>(std::move(options));
         a.host.connect(a.link.get(), server);
         // A --tab past the tabs at launch names a friend's tab, perhaps, that the server's friends bring: the window

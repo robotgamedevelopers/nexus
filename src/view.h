@@ -149,6 +149,9 @@ struct View {
         double since;
     };
     std::vector<SentFlash> sentFlashes;
+    struct OutgoingBubble { size_t tab; uint64_t action; std::string text; };
+    std::vector<OutgoingBubble> outgoing;
+    std::map<std::pair<size_t, std::string>, std::string> attachmentLabels;
     bool dialogVisible = false, savingPower = false;
     double lastInput = -100;
     std::function<void(bool)> setQuiet;
@@ -200,6 +203,7 @@ struct View {
     double scannerTime = 0, tabEnergyTime = -100, accountEnergyTime = -100;
     float scannerSpread = 0;
     bool energyAnimating = false;
+    unsigned pendingDashStep = 0;
     bool breathing = false;                     // the last round drew a busy cursor: frames go on while it shows
     std::string problem;                        // why the last prompt was not sent, until one is: a dim line at the
                                                 // end of the transcript, never beside the prompt

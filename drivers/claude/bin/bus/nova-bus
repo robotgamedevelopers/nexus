@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ "$#" = 3 ] && [ "$1" = hook ] && [ "$2" = --as ] && [ "$3" = "$NEXUS_BUS_FRIEND" ]; then
+    exec /usr/bin/nc -dU "$NEXUS_BUS_LISTENER"
+fi
+exec "$HOME/.local/bin/nova-bus" "$@"

@@ -141,6 +141,12 @@ def cli():
                 extra.extend(["--limit", "cwd"])
             for path in identity["writable_dirs"]:
                 extra.extend(["--write-dir", path])
+            if identity["bus_listener"]:
+                address = identity["bus_listener"]
+                if (args.harness != "claude" or not isinstance(address, str) or not re.fullmatch(r"127[.]0[.]0[.]1:[1-9][0-9]{0,4}", address)
+                        or int(address.split(":")[1]) > 65535):
+                    raise ValueError("bus_listener requires a Claude friend and a loopback Redis endpoint")
+                extra.extend(["--bus-listener", args.friend + "@" + address])
             if identity["readable_dirs"] or identity["github_ssh_alias"]:
                 if args.harness != "claude":
                     raise ValueError("this harness does not implement read-only directory and GitHub grants")

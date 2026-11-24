@@ -23,6 +23,7 @@ import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 import { sandboxHomeFiles, sandboxTools } from './tools.js';
 import { kDriverDir, wallOptions } from './wall.js';
+import { busListener } from './bus-listener.js';
 import { gitGrant } from './git-grant.js';
 import { Egress } from './egress.js';
 
@@ -66,6 +67,7 @@ try {
 }
 
 let grant: ReturnType<typeof gitGrant> | undefined;
+let busSocket: string | undefined;
 function startHarness(start: HarnessStart, account: Account): Harness {
     if (start.gitRemote) grant ??= gitGrant(start.gitRemote, env);
     const wall = wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data),
@@ -73,6 +75,18 @@ function startHarness(start: HarnessStart, account: Account): Harness {
     if (grant && wall.sandbox.network) {
         Object.assign(wall.sandbox.network, {allowUnixSockets: grant.sockets});
         wall.sandbox.filesystem?.allowRead?.push(join(kDriverDir, 'bin/git-remote-nexusgit'));
+    }
+    const childEnv = {...(grant?.env ?? env)};
+    if (start.busListener && wall.sandbox.network) {
+        const [friend, address] = start.busListener.split('@');
+        if (!friend || !address) throw new Error('Missing message bus grant fields');
+        busSocket ??= busListener(friend, address);
+        const sockets = wall.sandbox.network.allowUnixSockets ?? [];
+        wall.sandbox.network.allowUnixSockets = [...sockets, busSocket];
+        const bin = join(kDriverDir, 'bin/bus');
+        wall.sandbox.filesystem?.allowRead?.push(bin);
+        Object.assign(childEnv, {PATH: bin + ':' + (childEnv['PATH'] ?? '/usr/bin:/bin'), NEXUS_BUS_FRIEND: friend,
+            NEXUS_BUS_LISTENER: busSocket, NOVA_BUS_REDIS: address});
     }
     const stream = query({
         prompt: start.prompts,
@@ -83,7 +97,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             }),
             // The whole environment the harness gets (it replaces, not merges): the scrubbed one, with the account's
             // directory. The token is not in it: the wall's spawn hands it over on a descriptor.
-            env: harnessEnv(grant?.env ?? env, account),
+            env: harnessEnv(childEnv, account),
             ...(start.sessionId === undefined ? {} : { sessionId: start.sessionId }),
             ...(start.resume === undefined ? {} : { resume: start.resume }),
             ...(start.model === undefined ? {} : { model: start.model }),

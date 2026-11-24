@@ -32,6 +32,7 @@ void showLaunchError(const std::string& text);
 // the main screen, menu bar or taskbar included. Returns false, changing nothing, if the surface is not this system's
 // kind, the view has no window, or there is no screen.
 #ifdef __APPLE__
+void prioritizeOverlayTransition();
 void trackForegroundPriority(const PrSurface& surface);
 #endif
 

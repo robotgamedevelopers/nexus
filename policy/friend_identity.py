@@ -100,5 +100,6 @@ def resolve(config, name, harness=None):
     return prompt, {"friend": name, "harness": route, "model": model, "home": home,
                     "repository": spec.get("repository", ""), "pronouns": row.get("pronouns", ""),
                     "writable_dirs": directories("writable_dirs"), "readable_dirs": directories("readable_dirs"),
+                    "bus_listener": spec.get("bus_listener", ""),
                     "github_ssh_alias": spec.get("github_ssh_alias", ""), "revision": revision, "files": files,
                     "sha256": hashlib.sha256(prompt.encode()).hexdigest()}

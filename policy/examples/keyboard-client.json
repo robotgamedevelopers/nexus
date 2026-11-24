@@ -21,11 +21,12 @@
   },
   "transcript_style": {
     "pending_outline_width": 3,
+    "sent_outline_width": 0,
     "person_bold": true,
     "glyph_peak": 3,
     "glyph_seconds": 0.133333,
     "glyph_stagger": 0.018333,
-    "person_flash_peak": 3,
+    "person_flash_peak": 1,
     "person_flash_seconds": 0.15
   },
   "hold_on_enter": true,
@@ -33,6 +34,7 @@
     "startup": {"from_hz": 185, "to_hz": 555, "duration_ms": 850, "gain": 0.11, "synth": true},
     "step": {"from_hz": 1660, "to_hz": 1440, "duration_ms": 24, "gain": 0.012},
     "hold": {"gain": 0},
+    "discard": {"from_hz": 750, "to_hz": 250, "duration_ms": 24, "gain": 0.045},
     "send": {"from_hz": 520, "to_hz": 690, "duration_ms": 65, "gain": 0.045},
     "dialog": {"from_hz": 465, "to_hz": 620, "duration_ms": 70, "gain": 0.07},
     "cancel": {"from_hz": 455, "to_hz": 335, "duration_ms": 65, "gain": 0.075},
@@ -58,7 +60,7 @@
     "caret_peak": 3,
     "caret_seconds": 1.5,
     "caret_hold": 0.1,
-    "caret_bottom_hold": 0.1,
+    "caret_bottom_hold": 0.2,
     "caret_fall_ratio": 0.5,
     "show_plus": false
   },

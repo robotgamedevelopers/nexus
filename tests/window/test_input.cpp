@@ -1273,7 +1273,8 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     h.type("sent");
     h.enter();
     h.type("held");
-    h.enter(style::kCommand);
+    h.model.hold_draft(h.model.active());
+    h.time = 1008; // crest of the 2.8-second unsent-text pulse
     h.frame();
     PrLayoutNode window = prLayoutNodeParent(h.tree, h.view.transcript);
     CHECK(near(fillOf(h, window).a * 100, 60.0f));
@@ -1293,8 +1294,12 @@ void overlayKeepsAllButTheBackgroundOpaque() {
     const TranscriptStyle stock;
     const auto queued = checkTextPaint(h, "held", stock.ink, stock.fill);
     CHECK(!h.hasText(queued, "queued"));
-    const auto record = prLayoutStyleRecord(h.tree, prLayoutNodeStyle(h.tree, queued));
-    CHECK(prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).outlineStyle == PrDrawBorderStyle_Dashed);
+    const auto border = prLayoutNodeLastChild(h.tree, queued);
+    const auto before = prLayoutNodeContent(h.tree, border);
+    CHECK(before.kind == PrLayoutContentKind_Painter);
+    h.time += 0.25;
+    h.frame();
+    CHECK(prLayoutNodeContent(h.tree, border).revision != before.revision);
     for (auto tab : h.tabs())
         CHECK(fillOf(h, prLayoutNodeParent(h.tree, tab)).a == 1);
     h.time = 1201;
@@ -1516,6 +1521,24 @@ void stateCursorUnderTheLastText() {
     h.view.cursor = nullptr;
     h.frame();
     CHECK(h.entries().size() == 2 && !h.view.breathing);
+}
+
+void sendingKeepsBubbleOnScannerRow() {
+    Harness h;
+    h.view.cursor = [](std::size_t) { return CursorState::Busy; };
+    h.model.set_draft(0, "Same place");
+    h.model.hold_draft(0);
+    h.frame();
+    h.frame();
+    const auto held = h.bounds(h.findText(h.window(), "Same place"));
+    const auto scanner = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().front()));
+    CHECK(scanner.top < held.bottom + style::kBubblePadY && scanner.bottom > held.top);
+    h.model.pop_held(0);
+    h.model.append(0, Entry{EntryKind::Person, "Same place"});
+    h.frame();
+    h.frame();
+    const auto sent = h.bounds(h.findText(h.window(), "Same place"));
+    CHECK(near(held.top, sent.top) && near(held.left, sent.left));
 }
 
 // Nothing stands under or around an open prompt but its box: the link's line shows only in the prompt's place before
@@ -2614,16 +2637,20 @@ int main(int argc, char** argv) {
         h.type("first held");
         h.enter();
         h.frame();
-        CHECK(link.sent.empty() && h.active().draft.empty() && h.active().held.size() == 1);
+        CHECK(link.sent.empty() && h.active().draft.empty() && h.active().held == "first held");
+        h.type("second held");
+        h.enter();
+        h.frame();
+        CHECK(h.active().held == "first held\nsecond held" && link.sent.empty());
         h.type("current last");
         h.key(PrAppKey_Enter, PrAppKeyCode_Enter, style::kCommand);
         h.frame();
-        CHECK(link.sent.size() == 2 && link.sent[0].text == "first held" && link.sent[1].text == "current last");
+        CHECK(link.sent.size() == 1 && link.sent[0].text == "first held\nsecond held\ncurrent last");
         h.type("another held");
         h.enter();
         h.enter();
         h.frame();
-        CHECK(link.sent.size() == 3 && link.sent.back().text == "another held" && h.active().held.empty());
+        CHECK(link.sent.size() == 2 && link.sent.back().text == "another held" && h.active().held.empty());
         h.type("first unsent");
         h.enter();
         h.type("second unsent");
@@ -3019,6 +3046,7 @@ int main(int argc, char** argv) {
     toolLinesAreOneCompactLine();
     growingTextShowsAfterTheTranscript();
     stateCursorUnderTheLastText();
+    sendingKeepsBubbleOnScannerRow();
     nothingAroundTheOpenPrompt();
     commandTAddsAndShowsATerminal();
     commandWOnAFriendDoesNothing();

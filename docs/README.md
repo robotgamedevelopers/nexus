@@ -173,6 +173,7 @@ reachable from yours (over the tailnet they are):
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j "$(sysctl -n hw.ncpu)" --target nexus-server
 mkdir -p ~/.local/bin && install -m 755 build/nexus-server ~/.local/bin/nexus-server
+install -m 755 tools/nexus-receive ~/.local/bin/nexus-receive
 
 # on your machine: build nexus and open it on the server
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

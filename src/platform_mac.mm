@@ -1,4 +1,5 @@
 #include "platform.h"
+#include <algorithm>
 
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
@@ -34,6 +35,18 @@ std::string startErrorLog(const std::string&) {
 }
 
 void showLaunchError(const std::string&) {}
+
+void prioritizeOverlayTransition() {
+    NSProcessInfo* process = NSProcessInfo.processInfo;
+    id token = [process beginActivityWithOptions:(NSActivityUserInteractive & ~NSActivityIdleSystemSleepDisabled)
+                                         reason:@"Showing or hiding the nexus overlay"];
+    // AppKit orders the window asynchronously. Keep the activity across the ordering animation,
+    // including when the key window notification arrives before the compositor finishes.
+    const double duration = std::max(0.35, NSAnimationContext.currentContext.duration);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [process endActivity:token];
+    });
+}
 
 void trackForegroundPriority(const PrSurface& surface) {
     if (surface.kind != PrSurfaceKind_NsView) return;

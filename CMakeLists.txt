@@ -395,7 +395,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
         endif()
     endif()
     target_sources(nexus PRIVATE src/ui_audio.cpp)
-    target_link_libraries(nexus PRIVATE prax::audio)
+    target_link_libraries(nexus PRIVATE prax::audio prax::png)
     target_compile_options(nexus PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus PRIVATE nexus_policy nexus_frame nexus_view nexus_terminals nexus_board
         prax::studio_app prax::app_select prax::gpu_select prax::draw_select prax::image_select prax::compress_select)

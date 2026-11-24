@@ -26,9 +26,9 @@ using ChatMarkdown = std::vector<ChatParagraph>;
 // Cache only recently displayed source. Queued messages and growing replies can change between frames.
 class ChatMarkdownCache {
 public:
-    const ChatMarkdown& get(std::string_view source);
+    const ChatMarkdown& get(std::string_view source, bool preserveBreaks = false);
 private:
-    struct Message { std::string source; ChatMarkdown paragraphs; };
+    struct Message { std::string source; ChatMarkdown paragraphs; bool preserveBreaks; };
     std::list<Message> messages_;
 };
 

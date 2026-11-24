@@ -117,7 +117,8 @@ bool Model::queue(std::size_t i) {
 bool Model::hold_draft(std::size_t i) {
     if (!sendable(i)) return false;
     auto& tab = tabs_[i];
-    tab.held.push_back(std::move(tab.draft));
+    if (!tab.held.empty()) tab.held += '\n';
+    tab.held += tab.draft;
     tab.draft.clear();
     return true;
 }
@@ -128,8 +129,14 @@ void Model::clear_composer(std::size_t i) {
     tabs_[i].draft.clear();
 }
 
+void Model::restore_held(std::size_t i, std::string text) {
+    if (!friend_tab(i)) return;
+    auto& held = tabs_[i].held;
+    held = held.empty() ? std::move(text) : text + "\n" + held;
+}
+
 void Model::pop_held(std::size_t i) {
-    if (friend_tab(i) && !tabs_[i].held.empty()) tabs_[i].held.pop_front();
+    if (friend_tab(i)) tabs_[i].held.clear();
 }
 
 bool Model::take_queued(std::size_t i) {

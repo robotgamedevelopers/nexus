@@ -15,6 +15,7 @@ struct Writer {
     std::string marker, href;
     int strong = 0, emphasis = 0, code = 0, codeBlock = 0, quote = 0;
     unsigned heading = 0;
+    bool preserveBreaks = false;
     bool newParagraph = true;
     unsigned cells = 0;
 
@@ -88,7 +89,7 @@ struct Writer {
             if (enter && cells++) put("   │   ");
             if (s.header) strong += delta;
             break;
-        case PrMarkdownNodeKind_SoftBreak: if (enter) put(" "); break;
+        case PrMarkdownNodeKind_SoftBreak: if (enter) put(preserveBreaks ? "\n" : " "); break;
         case PrMarkdownNodeKind_HardBreak: if (enter) put("\n"); break;
         case PrMarkdownNodeKind_Link: {
             href.clear();
@@ -110,9 +111,9 @@ struct Writer {
 
 } // namespace
 
-const ChatMarkdown& ChatMarkdownCache::get(std::string_view source) {
+const ChatMarkdown& ChatMarkdownCache::get(std::string_view source, bool preserveBreaks) {
     const auto found = std::find_if(messages_.begin(), messages_.end(),
-        [&](const Message& message) { return message.source == source; });
+        [&](const Message& message) { return message.source == source && message.preserveBreaks == preserveBreaks; });
     if (found != messages_.end()) {
         messages_.splice(messages_.begin(), messages_, found);
         return messages_.front().paragraphs;
@@ -124,9 +125,10 @@ const ChatMarkdown& ChatMarkdownCache::get(std::string_view source) {
     std::unique_ptr<PrMarkdown, decltype(&prMarkdownDestroy)> doc(prMarkdownCreate(&options), prMarkdownDestroy);
     prMarkdownParse(doc.get(), {source.data(), source.size()});
     Writer writer;
+    writer.preserveBreaks = preserveBreaks;
     prMarkdownWalk(doc.get(), 0, prMarkdownBlockCount(doc.get()),
         [](void* out, const PrMarkdownStep* step) { static_cast<Writer*>(out)->visit(*step); }, &writer);
-    messages_.push_front({std::string(source), std::move(writer.paragraphs)});
+    messages_.push_front({std::string(source), std::move(writer.paragraphs), preserveBreaks});
     if (messages_.size() > 32) messages_.pop_back();
     return messages_.front().paragraphs;
 }

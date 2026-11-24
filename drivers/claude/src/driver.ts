@@ -73,6 +73,7 @@ export interface HarnessStart {
     writeDirs?: string[];
     readDirs?: string[];
     gitRemote?: string;
+    busListener?: string;
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
@@ -147,6 +148,7 @@ export interface Arguments {
     writeDirs?: string[];
     readDirs?: string[];
     gitRemote?: string;
+    busListener?: string;
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
@@ -160,7 +162,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
         const value = argv[i + 1];
-        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
+        if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
         }
         i++;
@@ -197,6 +199,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
                 }
                 a.limit = value;
                 break;
+            case '--bus-listener': a.busListener = value; break;
             case '--git-remote': a.gitRemote = value; break;
             case '--read-dir':
             case '--write-dir':
@@ -240,7 +243,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
-    if ((a.gitRemote || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
+    if ((a.gitRemote || a.busListener || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
     if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
         return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
@@ -567,6 +570,7 @@ export class Driver {
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
             limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        if (this.args.busListener) start.busListener = this.args.busListener;
         if (this.args.gitRemote) start.gitRemote = this.args.gitRemote;
         if (this.args.readDirs) start.readDirs = this.args.readDirs;
         if (this.args.startupContext !== undefined) start.startupContext = this.args.startupContext;

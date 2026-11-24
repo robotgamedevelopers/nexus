@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "pr/color_space.h"
+#include "pr/draw_list.h"
 #include "pr/json.h"
 #include "pr/kit_choice.h"
 #include "pr/kit_button.h"
@@ -152,6 +153,7 @@ struct BoxRecipe {
                     part == Part::TranscriptAtEnd ? PrLayoutOverflowAnchor_None : PrLayoutOverflowAnchor_Auto;
                 break;
             case Part::Column:
+                box.position = PrLayoutPosition_Relative;
                 box.display = PrLayoutDisplay_Flex;
                 box.width = prLayoutLengthPercent(look.prompt.width);
                 box.minHeight = prLayoutLengthPercent(100);
@@ -164,6 +166,7 @@ struct BoxRecipe {
                 box.width = prLayoutLengthPercent(look.transcriptStyle.replyWidth);
                 break;
             case Part::Conversation:
+                box.position = PrLayoutPosition_Relative;
                 box.display = PrLayoutDisplay_Flex;
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
                 break;
@@ -208,6 +211,8 @@ struct BoxRecipe {
                 break;
             case Part::PendingBubble:
             case Part::Bubble:
+                box.position = PrLayoutPosition_Relative;
+                box.zIndexed = 1;
                 box.display = PrLayoutDisplay_Block;
                 box.maxWidth = prLayoutLengthPercent(kBubbleMaxPercent);
                 padding(box, kBubblePadY * k, kBubblePadX * k, kBubblePadY * k, kBubblePadX * k);
@@ -308,11 +313,10 @@ struct DecorationRecipe {
             case Part::Tools:
                 d.background = prColor16FromColor(rgb(look.transcriptStyle.fill));
                 radius(d, look.transcriptStyle.radius * k);
-                if (part == Part::PendingBubble || part == Part::Bubble) {
-                    const bool pending = part == Part::PendingBubble;
-                    d.outlineStyle = pending ? PrDrawBorderStyle_Dashed : PrDrawBorderStyle_Solid;
-                    d.outlineColor = prColor16FromColor(rgb(pending ? look.tabs.selectedFill : look.transcriptStyle.sentOutlineInk));
-                    d.outlineWidth = prLayoutUnitFromPx((pending ? look.transcriptStyle.pendingOutlineWidth : look.transcriptStyle.sentOutlineWidth) * k);
+                if (part == Part::Bubble && look.transcriptStyle.sentOutlineWidth > 0) {
+                    d.outlineStyle = PrDrawBorderStyle_Solid;
+                    d.outlineColor = prColor16FromColor(rgb(look.transcriptStyle.sentOutlineInk));
+                    d.outlineWidth = prLayoutUnitFromPx(look.transcriptStyle.sentOutlineWidth * k);
                     d.outlineOffset = -d.outlineWidth;
                 }
                 break;
@@ -426,15 +430,18 @@ struct FlexRecipe {
     }
 };
 
-struct BehindContent {
+struct StackLevel {
+    int level;
     static constexpr PrLayoutGroup kKind = PrLayoutGroup_Effect;
-    void make(const Look&, PrLayoutEffectStyle& effect) const { effect.zIndex = -1; }
+    void make(const Look&, PrLayoutEffectStyle& effect) const { effect.zIndex = level; }
 };
 
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
     signed char s = static_cast<signed char>(look.textSteps);
     if (p == Part::SelectorBackground)
-        return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, BehindContent{});
+        return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{-1});
+    if (p == Part::PendingBubble || p == Part::Bubble)
+        return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{1});
     return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, FlexRecipe{p, s});
 }
 
@@ -507,6 +514,26 @@ constexpr auto kChatTone = PrKitTone_AxisX;
 constexpr auto kPersonTone = PrKitTone_AxisW;
 constexpr auto kNoticeTone = PrKitTone_AxisY;
 constexpr auto kStatusTone = PrKitTone_AxisZ;
+
+void paintPendingOutline(void* context, PrVec2 size, PrDrawList* list) {
+    const auto& view = *static_cast<View*>(context);
+    const auto& look = *view.look;
+    const float scale = textScale(look.textSteps);
+    const float width = look.transcriptStyle.pendingOutlineWidth * scale;
+    const float inset = width * 0.5f;
+    if (size.x <= width || size.y <= width || width <= 0) return;
+    const float pattern[] = {3 * width, 2 * width};
+    auto stroke = prDrawStrokeDefault();
+    stroke.shape.width = width;
+    stroke.shape.dashes = pattern;
+    stroke.shape.dashCount = 2;
+    stroke.shape.dashOffset = -5 * width * view.pendingDashStep / 64;
+    PrDrawPaint paint{};
+    paint.color = prColor16FromColor(rgb(look.tabs.selectedFill));
+    paint.stroke = &stroke;
+    prDrawListCornerRect(list, prCornerRectRound({inset, inset, size.x - inset, size.y - inset},
+        std::max(0.f, look.transcriptStyle.radius * scale - inset)), paint);
+}
 
 struct Builder {
     View& view;
@@ -1346,7 +1373,7 @@ struct Builder {
             select(plainLabel(label(parent, source, body)));
             return;
         }
-        const auto& paragraphs = view.markdown.get(source);
+        const auto& paragraphs = view.markdown.get(source, tone == kPersonTone);
         if (paragraphs.size() == 1 && paragraphs.front().runs.size() == 1 && paragraphs.front().runs.front().href.empty() && !paragraphs.front().depth &&
                 paragraphs.front().runs.front().role == PrKitTextRole_Body && paragraphs.front().runs.front().text == source) {
             select(plainLabel(label(parent, source, body)));
@@ -1372,7 +1399,8 @@ struct Builder {
             const auto& style = look.transcriptStyle;
             const auto plain = tone == kPersonTone ? style.personInk : style.ink;
             for (const auto& run : paragraph.runs) {
-                const auto span = prKitText(kit, text, {}, textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone));
+                auto runStyle = textStyle(bold && run.role == PrKitTextRole_Body ? PrKitTextRole_Strong : run.role, tone);
+                const auto span = prKitText(kit, text, {}, runStyle);
                 const auto ordinary = run.inlineCode ? style.codeInk.value_or(plain) : plain;
                 ink(span, run.href.empty() ? ordinary : style.linkInk.value_or(look.tabs.selectedFill), true, gain);
                 if (run.inlineCode) {
@@ -1479,7 +1507,8 @@ struct Builder {
                     const auto& reply = view.replyTrail;
                     const bool justClosed = e.kind == EntryKind::Friend && reply.tab == tab.id &&
                         reply.generation == tab.transcriptGeneration && items.first[i] == reply.entry && !reply.ranges.empty();
-                    message(bubble, e.text, conversationTone, gain, justClosed ? &reply : nullptr);
+                    const auto compact = e.kind == EntryKind::Person ? view.attachmentLabels.find({tab.id, e.text}) : view.attachmentLabels.end();
+                    message(bubble, compact == view.attachmentLabels.end() ? e.text : compact->second, conversationTone, gain, justClosed ? &reply : nullptr);
                 }
                 return entry;
             }
@@ -1519,7 +1548,8 @@ struct Builder {
         }
         const Tab& tab = model.tab(model.active());
         const std::string* growing = view.growing ? view.growing(tab.id) : nullptr;
-        if (look.transcriptStyle.conversationPanel && (!tab.transcript.empty() || !tab.held.empty() || !tab.queue.empty() || (growing && !growing->empty())))
+        const bool sending = std::any_of(view.outgoing.begin(), view.outgoing.end(), [&](const auto& bubble) { return bubble.tab == tab.id; });
+        if (look.transcriptStyle.conversationPanel && (sending || !tab.transcript.empty() || !tab.held.empty() || !tab.queue.empty() || (growing && !growing->empty())))
             view.conversation = column = element(column, Part::Conversation);
         const bool switched = view.shown != tab.id;
         // Text was just cut to fit this tab's prompt: the transcript goes to its end, where the line saying so shows.
@@ -1626,13 +1656,30 @@ struct Builder {
             strip.place.margin.left = 1 + (look.prompt.paddingX + iconSpace - panelInset + look.transcriptStyle.scannerOffset) * k();
             strip.place.margin.top = -(kGap - kCursorGap) * k();
             const auto row = prKitBox(kit, column, {}, strip);
+            // Pending and sent bubbles share the scanner's row. Its absolute box leaves the
+            // transcript height alone, and the bubble's stacking order keeps text in front.
+            const bool pending = sending || !tab.queue.empty() || !tab.held.empty();
+            const bool lastIsPerson = !tab.transcript.empty() && tab.transcript.back().kind == EntryKind::Person &&
+                (!growing || growing->empty()) && view.problem.empty() && (view.cut.empty() || view.cutTab != tab.id);
+            if (pending || lastIsPerson) {
+                auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, row));
+                auto& group = record.groups[PrLayoutGroup_Box];
+                auto box = prLayoutBoxStyleRecord(tree, group);
+                box.position = PrLayoutPosition_Absolute;
+                box.inset[PrRectSide_Left] = px(panelInset * k());
+                box.inset[PrRectSide_Right] = px(panelInset * k());
+                box.inset[PrRectSide_Bottom] = px((view.conversation == column ? kBubblePadY : 0) * k());
+                box.overflowX = PrLayoutOverflow_Hidden;
+                group = prLayoutBoxStyleIntern(tree, &box);
+                prLayoutTreeFrameSetStyle(tree, row, prLayoutStyleIntern(tree, &record));
+            }
             const auto& settings = look.transcriptStyle;
             const float gain = std::clamp(prUiDisplay(ui).headroom, 1.0f, settings.scannerPeak);
             const double cycle = reduced ? 0.25 : elapsed / settings.scannerSeconds;
             const double phase = cycle - std::floor(cycle);
             // Bound layout work for large fleets. The overflow label preserves the exact count.
             const float cellWidth = look.prompt.segmentSize(1).x;
-            const unsigned lamps = std::min(view.scannerCount, std::max(1u, unsigned(std::max(0.f, view.extent.x) /
+            const unsigned lamps = std::min(view.scannerCount, std::max(1u, unsigned(std::max(0.f, view.extent.x * look.prompt.width / 100 - 2 * panelInset * k() - std::max(0.f, strip.place.margin.left)) /
                 ((cellWidth + settings.scannerGap) * k() + 1))) / 2 + 1);
             const double sweep = sampleMotion(settings.scannerCurve, phase);
             const double head = (lamps - 1) * sweep;
@@ -1659,10 +1706,45 @@ struct Builder {
         }
         const auto pendingBubble = [&](const std::string& text) {
             const auto row = element(column, Part::Entry);
-            message(element(row, Part::PendingBubble), text, kPersonTone);
+            const auto bubble = element(row, Part::PendingBubble);
+            const auto& settings = look.transcriptStyle;
+            const bool animate = !prUiUserPreferences(ui).reducedMotion && (!view.savingPower || view.time - view.lastInput < 2);
+            const double wave = 0.5 - 0.5 * std::cos(view.time * 6.283185307179586 / settings.pendingTextSeconds);
+            const double gain = animate ? 1 - settings.pendingTextPulse * wave : 1;
+            view.energyAnimating |= animate && settings.pendingTextPulse > 0;
+            message(bubble, text, kPersonTone, gain);
+
+            if (settings.pendingOutlineWidth <= 0) return;
+            const bool moving = settings.pendingDashSeconds > 0 && !prUiUserPreferences(ui).reducedMotion &&
+                (!view.savingPower || view.time - view.lastInput < 2);
+            view.energyAnimating |= moving;
+            view.pendingDashStep = moving ? unsigned(64 * std::fmod(view.time, settings.pendingDashSeconds) / settings.pendingDashSeconds) : 0;
+            auto box = prLayoutBoxStyleDefault();
+            box.position = PrLayoutPosition_Absolute;
+            box.inset[PrRectSide_Left] = box.inset[PrRectSide_Top] = px(0);
+            box.width = box.height = prLayoutLengthPercent(100);
+            auto hit = prLayoutColorStyleDefault();
+            hit.pointerEvents = PrLayoutPointerEvents_None;
+            auto record = prLayoutStyleDefault();
+            record.groups[PrLayoutGroup_Box] = prLayoutBoxStyleIntern(tree, &box);
+            record.groups[PrLayoutGroup_Color] = prLayoutColorStyleIntern(tree, &hit);
+            const auto border = prLayoutTreeFrameReplaced(tree, bubble, 0, prLayoutStyleIntern(tree, &record));
+            PrLayoutContent content{};
+            content.kind = PrLayoutContentKind_Painter;
+            content.painter.context = &view;
+            content.painter.paint = paintPendingOutline;
+            content.revision = prHashMixKeys(prHashMixKeys(look.tabs.selectedFill, view.pendingDashStep),
+                prHashMixKeys(std::hash<float>{}(settings.pendingOutlineWidth * k()), std::hash<float>{}(settings.radius * k())));
+            prLayoutTreeFrameSetContent(tree, border, &content);
         };
-        for (const auto& text : tab.queue) pendingBubble(text);
-        for (const auto& text : tab.held) pendingBubble(text);
+        for (const auto& text : tab.queue) {
+            const auto compact = view.attachmentLabels.find({tab.id, text});
+            message(element(element(column, Part::Entry), Part::Bubble),
+                compact == view.attachmentLabels.end() ? text : compact->second, kPersonTone);
+        }
+        for (const auto& sendingBubble : view.outgoing)
+            if (sendingBubble.tab == tab.id) message(element(element(column, Part::Entry), Part::Bubble), sendingBubble.text, kPersonTone);
+        if (!tab.held.empty()) pendingBubble(tab.held);
     }
 
     // The kit's text area has a fixed number of rows; the prompt grows with its text up to kPromptMaxLines, so the rows
@@ -1721,6 +1803,11 @@ struct Builder {
             return; // Keep the exact draft, even if the fork rewrites or drops empty prompts.
         if (plan.text)
             model.set_draft(active, std::move(*plan.text));
+        if ((plan.delivery == policy::Delivery::Hold || plan.delivery == policy::Delivery::Release) &&
+            !tab.draft.empty() && !tab.held.empty() && tab.held.size() + 1 + tab.draft.size() > kPromptBytes) {
+            view.problem = "The combined message exceeds 32 KB. Shorten the current line before adding it.";
+            return;
+        }
         if (plan.delivery == policy::Delivery::Hold) {
             if (model.hold_draft(active) && view.playChirp) view.playChirp(view.windowApp.surface.holdChirp);
             return;
@@ -1728,14 +1815,15 @@ struct Builder {
         if (plan.delivery == policy::Delivery::Release) {
             model.hold_draft(active); // Command+Enter puts the current draft last.
             const auto draft = tab.draft;
-            while (!tab.held.empty()) {
-                model.set_draft(active, tab.held.front());
+            if (!tab.held.empty()) {
+                model.set_draft(active, tab.held);
                 if (view.submit) view.submit(active, true);
                 else model.send(active);
-                if (!tab.draft.empty()) break;
-                if (look.transcriptStyle.personFlashPeak > 1)
-                    view.sentFlashes.push_back({tab.id, tab.transcript.size(), tab.transcriptGeneration, tab.held.front(), view.time});
-                model.pop_held(active);
+                if (tab.draft.empty()) {
+                    if (look.transcriptStyle.personFlashPeak > 1)
+                        view.sentFlashes.push_back({tab.id, tab.transcript.size(), tab.transcriptGeneration, tab.held, view.time});
+                    model.pop_held(active);
+                }
             }
             model.set_draft(active, draft);
             return;
@@ -2151,6 +2239,8 @@ struct Builder {
     void shortcut(const Shortcut& key) {
         switch (key.command) {
             case WindowCommand::ClearComposer:
+                if (model.tab_count() && view.playChirp && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
+                    view.playChirp(view.windowApp.surface.discardChirp);
                 model.clear_composer(model.active());
                 view.prompted = ~std::size_t(0);
                 break;

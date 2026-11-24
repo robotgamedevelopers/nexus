@@ -23,6 +23,20 @@ def _transcript_style(config):
         style["scanner_curve"] = [[0, 0], [0.5, 1], [1, 0]]
     return style
 
+# Forks can extend this ordered command reference in their client config.
+_COMMAND_HELP = {
+    "/help": "Show this command list.",
+    "/model": "Open the model selector. Use /model <model> [effort] to switch directly.",
+    "/effort": "Open the effort selector. Use /effort <level> to switch directly.",
+    "/info": "Show the friend, account, model, effort, repository and working directories.",
+    "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
+    "/compact": "Compact the current conversation context.",
+    "/logout": "Sign out of the selected account.",
+    "/quiet": "Mute nexus sounds.",
+    "/quiet off": "Turn sounds back on.",
+    "/loud": "Turn sounds back on (same as /quiet off).",
+}
+
 def _shortcuts():
     keys = [["Command+" + digit, "select_tab", pos] for pos, digit in enumerate("1234567890".elems())]
     keys.extend([
@@ -213,7 +227,7 @@ def handle(event, state, config):
             "limit_model_label": model_button,
         }
         words = state.get("ui", {}).get("draft", "").split()
-        window["prompt_command"] = bool(words) and words[0] in config.get("prompt_commands", ["/clear", "/compact", "/model", "/effort", "/info", "/logout"])
+        window["prompt_command"] = bool(words) and (words[0] == "/help" or words[0] in config.get("prompt_commands", _COMMAND_HELP.keys()))
         tabs = state.get("ui", {}).get("tabs", [])
         if config.get("centered_account_menu", False) or config.get("tab_labels"):
             window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
@@ -273,6 +287,12 @@ def handle(event, state, config):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         return window
     if event == "prompt_key":
+        if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":
+            commands = dict(_COMMAND_HELP)
+            commands.update(config.get("command_help", {}))
+            return [{"op": "draft", "text": ""}] + [
+                {"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()
+            ]
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:
             return [{"op": "quiet" if state["text"].strip() == "/quiet" else "loud"}]
         if state["key"] == "Enter" and state.get("signed_out") and state["text"].strip() == "/clear":
