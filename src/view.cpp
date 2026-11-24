@@ -59,6 +59,7 @@ enum class Part : unsigned char {
     MessageCard,
     FocusedCard,
     SelectorCard,
+    SelectorLayer,
     SelectorBackground,
     ActionRow,
     ReplyRow,
@@ -185,6 +186,12 @@ struct BoxRecipe {
                 box.width = prLayoutLengthPercent(kColumnPercent);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
+                break;
+            case Part::SelectorLayer:
+                box.display = PrLayoutDisplay_Flex;
+                box.position = PrLayoutPosition_Absolute;
+                box.zIndexed = 1;
+                for (auto& edge : box.inset) edge = px(0);
                 break;
             case Part::SelectorBackground:
                 box.display = PrLayoutDisplay_Block;
@@ -371,6 +378,7 @@ struct FlexRecipe {
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.alignItems = PrLayoutAlignment_Center;
                 break;
+            case Part::SelectorLayer:
             case Part::ActionRow:
                 flex.direction = PrLayoutFlexDirection_Column;
                 flex.grow = 1;
@@ -448,6 +456,8 @@ struct StackLevel {
 
 PrLayoutStyleIndex style(PrUi* ui, const Look& look, Part p) {
     signed char s = static_cast<signed char>(look.textSteps);
+    if (p == Part::SelectorLayer)
+        return pr::uiStyle(ui, look, BoxRecipe{p, s}, FlexRecipe{p, s}, StackLevel{2});
     if (p == Part::SelectorBackground)
         return pr::uiStyle(ui, look, BoxRecipe{p, s}, DecorationRecipe{p, s}, StackLevel{-1});
     if (p == Part::PendingBubble || p == Part::Bubble)
@@ -652,7 +662,7 @@ struct Builder {
 
     void accountSelector(PrLayoutNode parent, const std::vector<AccountItem>& items) {
         if (items.empty()) return;
-        const auto card = element(element(parent, Part::ActionRow), Part::SelectorCard);
+        const auto card = element(element(parent, Part::SelectorLayer), Part::SelectorCard);
         view.accountMenu = card;
         element(card, Part::SelectorBackground);
         const float lineHeight = kit->theme.types[PrKitTextRole_Body].lineHeight;
@@ -1503,6 +1513,22 @@ struct Builder {
         prLayoutTreeFrameText(tree, paragraph, 0, sv(text.substr(end)));
     }
 
+    float scannerMargin(const Tab& tab, float panelInset) const {
+        const float iconSpace = showsPromptPlus(tab) ? kPlusSide + look.prompt.gap : 0;
+        return 1 + (look.prompt.paddingX + iconSpace - panelInset + look.transcriptStyle.scannerOffset) * k();
+    }
+
+    PrLayoutNode assistantMessage(PrLayoutNode row, const Tab& tab) {
+        const auto message = element(row, Part::AssistantMessage);
+        auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, message));
+        auto& group = record.groups[PrLayoutGroup_Box];
+        auto box = prLayoutBoxStyleRecord(tree, group);
+        box.margin[PrRectSide_Left] = px(scannerMargin(tab, view.conversation ? kBubblePadX : 0));
+        group = prLayoutBoxStyleIntern(tree, &box);
+        prLayoutTreeFrameSetStyle(tree, message, prLayoutStyleIntern(tree, &record));
+        return message;
+    }
+
     // One item, keyed by its tab and place, so that it keeps its node and its set text as the items in sight change.
     PrLayoutNode declareItem(PrLayoutNode column, const Tab& tab, const TranscriptItems& items, std::size_t i,
             uint64_t base) {
@@ -1527,7 +1553,7 @@ struct Builder {
             case EntryKind::Friend:
             case EntryKind::Notice: {
                 PrLayoutNode entry = element(column, e.kind == EntryKind::Person ? Part::Entry : Part::ReplyRow, 0, key);
-                PrLayoutNode bubble = e.kind == EntryKind::Friend ? element(entry, Part::AssistantMessage) :
+                PrLayoutNode bubble = e.kind == EntryKind::Friend ? assistantMessage(entry, tab) :
                     e.kind == EntryKind::Person ? element(entry, Part::Bubble) : entry;
                 if (e.kind == EntryKind::Notice && e.accountEmailEnd) {
                     switchLabel(bubble, e);
@@ -1648,7 +1674,7 @@ struct Builder {
                 lightNewText(reply, *growing, reply.bytes, growing->size());
                 reply.bytes = growing->size();
             }
-            message(element(element(column, Part::ReplyRow), Part::AssistantMessage), *growing, EntryKind::Friend, 1, &reply);
+            message(assistantMessage(element(column, Part::ReplyRow), tab), *growing, EntryKind::Friend, 1, &reply);
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
         if (!view.problem.empty()) {
@@ -1693,9 +1719,8 @@ struct Builder {
             PrKitBoxStyle strip{.direction = PrKitDirection_Row};
             strip.place.align = PrKitAlign_Start;
             // The prompt border and its configurable inset locate the first typing column.
-            const float iconSpace = showsPromptPlus(tab) ? kPlusSide + look.prompt.gap : 0;
             const float panelInset = view.conversation == column ? kBubblePadX : 0;
-            strip.place.margin.left = 1 + (look.prompt.paddingX + iconSpace - panelInset + look.transcriptStyle.scannerOffset) * k();
+            strip.place.margin.left = scannerMargin(tab, panelInset);
             strip.place.margin.top = -(kGap - kCursorGap) * k();
             const auto row = prKitBox(kit, column, {}, strip);
             // Pending and sent bubbles share the scanner's row. Its absolute box leaves the
@@ -2280,6 +2305,20 @@ struct Builder {
 
     void shortcut(const Shortcut& key) {
         switch (key.command) {
+            case WindowCommand::ScrollTranscript: {
+                PrLayoutScrollInfo info{};
+                if (!view.transcript || !prLayoutNodeScrollInfo(tree, view.transcript, &info)) break;
+                auto target = info.offset;
+                if (key.type == "top") target.y = info.range.top;
+                else if (key.type == "bottom") target.y = info.range.bottom;
+                else {
+                    const int64_t delta = key.type == "page_up" ? -int64_t(info.portExtent.y.raw) : info.portExtent.y.raw;
+                    target.y.raw = static_cast<int32_t>(std::clamp<int64_t>(info.offset.y.raw + delta,
+                        info.range.top.raw, info.range.bottom.raw));
+                }
+                prLayoutNodeSetScroll(tree, view.transcript, target);
+                break;
+            }
             case WindowCommand::ClearComposer:
                 if (model.tab_count() && view.playChirp && (!model.tab(model.active()).draft.empty() || !model.tab(model.active()).held.empty()))
                     view.playChirp(view.windowApp.surface.discardChirp);

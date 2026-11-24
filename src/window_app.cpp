@@ -77,6 +77,12 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         out.argument = static_cast<int>(value);
         return true;
     }
+    if (op == "scroll_transcript") {
+        out.command = WindowCommand::ScrollTranscript;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "top" || out.type == "bottom" ||
+               out.type == "page_up" || out.type == "page_down");
+    }
     if (op == "replace_draft") {
         out.command = WindowCommand::ReplaceDraft;
         out.type = stringAt(d, prJsonElement(d, row, 2));

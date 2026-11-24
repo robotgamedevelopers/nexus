@@ -858,6 +858,19 @@ void draftAndScrollStayWithTheirFriend() {
     CHECK(back > scrolled - 0.5f && back < scrolled + 0.5f);
     h.type("!");                             // the prompt edits f1's draft, at its end
     CHECK(h.active().draft == "for f1!");
+    const auto position = [&] {
+        PrLayoutScrollInfo result{};
+        CHECK(prLayoutNodeScrollInfo(h.tree, h.view.transcript, &result));
+        return result;
+    };
+    h.key(PrAppKey_Up, PrAppKeyCode_ArrowUp, PrAppModifierFlag_Control);
+    CHECK(position().offset.y.raw == position().range.top.raw);
+    h.key(PrAppKey_PageDown, PrAppKeyCode_PageDown, 0);
+    CHECK(position().offset.y.raw > position().range.top.raw);
+    h.key(PrAppKey_PageUp, PrAppKeyCode_PageUp, 0);
+    CHECK(position().offset.y.raw == position().range.top.raw);
+    h.key(PrAppKey_Down, PrAppKeyCode_ArrowDown, PrAppModifierFlag_Control);
+    CHECK(position().offset.y.raw == position().range.bottom.raw);
     CHECK(h.model.tab(0).draft == "for f2");
 }
 
@@ -1142,6 +1155,18 @@ void copyMarkdownConversation() {
     h.frame();
     CHECK(prLayoutNodeHighlights(h.tree, hello, nullptr, 0) == 0);
     CHECK(prLayoutNodeHighlights(h.tree, world, nullptr, 0) == 0);
+
+    // Start in the right margin beside the final word, then drag up across both speakers.
+    const auto port = h.bounds(h.view.transcript);
+    const PrVec2 blank{port.right - 8, (end.top + end.bottom) / 2};
+    CHECK(blank.x > end.right);
+    CHECK(event(pointerEvent(PrAppEventKind_PointerDown, blank)));
+    const PrVec2 first{start.left, (start.top + start.bottom) / 2};
+    CHECK(event(pointerEvent(PrAppEventKind_PointerMove, first)));
+    CHECK(event(pointerEvent(PrAppEventKind_PointerUp, first)));
+    copied.clear();
+    CHECK(event(keyEvent(PrAppEventKind_KeyDown, 'C', PrAppKeyCode_KeyC, style::kCommand)));
+    CHECK(copied == "Hello\n\nworld");
 }
 
 void namedBusBubbles() {
@@ -1613,6 +1638,7 @@ void stateCursorUnderTheLastText() {
         if (zoom) { h.larger(); h.frame(); }
         const auto caret = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
         CHECK(near(h.bounds(lamps().front()).left, caret.left));
+        CHECK(near(h.bounds(h.findText(h.window(), "Hello.")).left, caret.left));
         for (auto cell : lamps()) {
             const auto segment = h.bounds(cell);
             CHECK(near(segment.right - segment.left, caret.right - caret.left));

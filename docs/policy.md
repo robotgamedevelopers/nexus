@@ -479,3 +479,5 @@ Pasting a file, clipboard image, or at least 4096 bytes of text into a friend pr
 The optional `sounds` entries `open`, `close`, `dialog`, `confirm`, `cancel`, and `ready` use the same chirp fields. The client remembers /quiet across launches. /quiet off and /loud restore sound.
 
 Copying selected transcript text clears its highlight and plays `sounds.copy`. All cues pass through the client audio player, where `/quiet` mutes them globally.
+
+In a friend chat, `transcript_scroll_keys` maps key chords to `top`, `bottom`, `page_up` or `page_down`. Control-Up and Control-Down snap to the oldest and newest displayed output. Page Up and Page Down move one viewport. The prompt retains focus.

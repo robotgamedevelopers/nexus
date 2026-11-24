@@ -901,7 +901,8 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
-    if (!view->accountPicker && view->selection.event(e, view->copy, view->openLink)) return true;
+    if (!view->accountPicker && view->choiceKind.empty() &&
+        (!view->windowApp.surface.items || view->windowApp.surface.items->empty()) && view->selection.event(e, view->transcript, view->copy, view->openLink)) return true;
     if (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_KeyUp) {
         for (const auto& binding : view->windowApp.shortcuts) {
             if (binding.key == e.keyboard.key && binding.modifiers == (e.modifiers & ~PrAppModifierFlag_CapsLock))

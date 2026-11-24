@@ -715,6 +715,7 @@ void theRepositoryLinkIsHidden() {
     const PrDomRect logo = h.rect("logo");
     CHECK(mark.width > 50 && mark.height > 80);
     CHECK(logo.width == 0 && logo.height == 0);
+    CHECK(logo.y >= badge.y && logo.y <= badge.y + badge.height);
     const PrDomRect repo = h.rect("repo");
     CHECK(repo.width == 0 && repo.height == 0);                     // not rendered
     const PrDomRect foot = h.rect("foot");

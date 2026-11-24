@@ -81,7 +81,7 @@ std::string ChatSelection::linkAt(PrVec2 point, PrLayoutNode leaf) const {
     return {};
 }
 
-bool ChatSelection::event(const PrAppEvent& e, const std::function<bool(const std::string&)>& copy,
+bool ChatSelection::event(const PrAppEvent& e, PrLayoutNode viewport, const std::function<bool(const std::string&)>& copy,
                           const std::function<void(const std::string&)>& open) {
     if (paragraphs_.empty()) return false;
     const auto mods = e.modifiers & ~PrAppModifierFlag_CapsLock;
@@ -104,26 +104,31 @@ bool ChatSelection::event(const PrAppEvent& e, const std::function<bool(const st
     if (!down && !(dragging_ && (e.kind == PrAppEventKind_PointerMove || e.kind == PrAppEventKind_PointerUp))) return false;
     if (down) { dragging_ = false; ranges_.clear(); text_.clear(); }
     const auto pos = e.pointer.position;
-    float best = std::numeric_limits<float>::max();
+    if (down) {
+        if (!prLayoutNodeIsValid(tree_, viewport)) return false;
+        const auto area = prLayoutRectToPx(prLayoutNodeBounds(tree_, viewport, PrLayoutCoordinates_Viewport));
+        if (pos.x < area.left || pos.x >= area.right || pos.y < area.top || pos.y >= area.bottom) return false;
+    }
+    float nearestLine = std::numeric_limits<float>::infinity();
+    float nearestColumn = std::numeric_limits<float>::infinity();
     PrLayoutTextPosition hit{};
     for (auto p : paragraphs_) {
         const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree_, p, PrLayoutCoordinates_Viewport));
         const float dx = std::max({r.left-pos.x, pos.x-r.right, 0.0f});
         const float dy = std::max({r.top-pos.y, pos.y-r.bottom, 0.0f});
-        const float distance = dx*dx + dy*dy;
-        if ((down && distance > 0) || distance >= best) continue;
+        if (dy > nearestLine || (dy == nearestLine && dx >= nearestColumn)) continue;
         PrLayoutTextPosition candidate{};
         if (prLayoutTextPositionFromPoint(tree_, p, {prLayoutUnitFromPx(pos.x),prLayoutUnitFromPx(pos.y)}, &candidate)) {
-            best = distance; hit = candidate;
+            nearestLine = dy; nearestColumn = dx; hit = candidate;
         }
     }
-    if (down && best == std::numeric_limits<float>::max()) return false;
+    if (down && !hit.node) return false;
     if (down) {
         anchor_ = hit;
         dragging_ = true;
         pressedAt_ = pos;
         pressedLink_ = linkAt(pos, hit.node);
-        if (e.pointer.clicks == 2 && hit.node) {
+        if (e.pointer.clicks == 2 && nearestLine == 0 && nearestColumn == 0 && hit.node) {
             const auto raw = prLayoutNodeText(tree_, hit.node);
             std::string_view word(raw.data, raw.size);
             auto end = hit;
@@ -137,7 +142,7 @@ bool ChatSelection::event(const PrAppEvent& e, const std::function<bool(const st
         }
     }
     if (std::abs(pos.x - pressedAt_.x) > 3 || std::abs(pos.y - pressedAt_.y) > 3) pressedLink_.clear();
-    if (best != std::numeric_limits<float>::max()) select(hit);
+    if (hit.node) select(hit);
     if (e.kind == PrAppEventKind_PointerUp) {
         dragging_ = false;
         if (open && !pressedLink_.empty() && text_.empty() && linkAt(pos, hit.node) == pressedLink_)

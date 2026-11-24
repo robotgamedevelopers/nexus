@@ -36,7 +36,7 @@ def describe(window, state, config):
             name = account["name"]
             action = "sign_in:" if signed_out and name == current else submit
             items.append({"text": account["label"], "action": action + name, "selected": name == highlighted})
-        window["panels"] = ["account", "prompt"] if state["prompt_open"] else ["account"]
+        window["panels"] = ["transcript", "account", "prompt"] if state["prompt_open"] else ["transcript", "account"]
     elif signed_out and dismissed and state["prompt_open"]:
         window["panels"] = ["transcript", "prompt"]
     window["account_items"] = items

@@ -18,7 +18,7 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure -R '^(window_input|sync_unit)$'
 ```
 
-Install the server and `tools/nexus-receive` on the server login's PATH. Use the [server build and supervision guide](builds.md) to place the build, select it and register its launchd or systemd unit. Keep the client app at a stable path. Stage the driver for the harness you are using. Claude needs the compiled Node driver. Codex, Antigravity, Grok and Muse use the Python RPC adapters. Use the provider's actual entry point and account requirements. [Claude driver](../drivers/claude/README.md) · [RPC drivers](../drivers/rpc/README.md)
+Install the server and `tools/nexus-receive` on the server login's PATH. Use the [server build and supervision guide](builds.md) to place the build, select it and register its launchd or systemd unit. Keep the client app at a stable path. Stage the driver for the harness you are using. Claude needs the compiled Node driver. Codex, Antigravity, Grok and Muse use the Python RPC adapters. Use the provider's actual entry point and account requirements. [Claude driver](../drivers/claude/drivers.example) · [RPC drivers](../drivers/rpc/README.md)
 
 ## 3. Provision local Nova services
 
@@ -38,3 +38,13 @@ Apply the [keyboard client profile](policy.md#start-with-the-keyboard-driven-cli
 ## 5. Report what works
 
 Tell the human the app location, overlay shortcut, selected harness and workspace. Report the observed server, bus, dashboard and conversation results. If something failed, identify the failed check and continue from it after fixing the cause. A successful compile alone leaves the installation unverified.
+
+## Changing the Sprint coordinator
+
+Read the current coordinator before acting. Taking another AI's seat requires **explicit permission from the human for that handoff**. An AI's request, an unavailable coordinator and a reason string do not grant permission. Once approved, the incoming coordinator runs the command from its own authenticated Sprint session:
+
+```sh
+nova-sprint up --as <incoming-name> --take-over --reason "<human-approved reason>"
+```
+
+The previous coordinator may be offline. Sprint records the change, returns any cards in that coordinator's hand to the queue and sends the former coordinator a notice with the reason when possible. Confirm the new coordinator on the Dashboard. If the intended recipient already owns the seat, the handoff is complete.

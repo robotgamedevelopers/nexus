@@ -194,7 +194,7 @@ def handle(event, state, config):
             shortcuts = _bind(shortcuts, "Escape", ["account_picker", "cancel"])
         if state.get("account_picker_open", False):
             if config.get("centered_account_menu", False):
-                panels = ["account", "prompt"]
+                panels = ["transcript", "account", "prompt"]
             for chord, command in config.get("account_picker_keys", {"ArrowUp": "previous", "ArrowDown": "next", "Enter": "confirm", "Escape": "cancel"}).items():
                 shortcuts = _bind(shortcuts, chord, ["account_picker", command])
         account = state.get("sign_in_account") or {}
@@ -261,7 +261,7 @@ def handle(event, state, config):
                     items.append({"text": value + (" → " + target if target and target != value else ""),
                                   "action": "choose:" + value, "selected": i == index})
                 window["account_items"] = items
-                window["panels"] = ["account", "prompt"]
+                window["panels"] = ["transcript", "account", "prompt"]
                 keys = {"Escape": "picker:close"}
                 if values:
                     keys.update({"ArrowUp": "point:" + values[(index-1) % len(values)],
@@ -283,6 +283,10 @@ def handle(event, state, config):
                         continue
                     window["shortcuts"] = _bind(window["shortcuts"], "Tab", ["replace_draft", command + next_value])
         if state["tab"] == "friend" and state["prompt_open"] and not window.get("account_items"):
+            for chord, direction in config.get("transcript_scroll_keys", {
+                    "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
+                    "PageUp": "page_up", "PageDown": "page_down"}).items():
+                window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         return window
