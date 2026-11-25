@@ -219,7 +219,7 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         paint(*t);
     }
     PrLayoutNode row = prKitBox(kit_, column, {.key = prHashString(sv("remote-terminal-keys"), id)},
-        {.direction = PrKitDirection_Row, .gap = 6, .padding = {6, 6, 6, 6}});
+        {.direction = PrKitDirection_Row, .gap = 6, .padding = {6, 6, 6, 6}, .place = {.flex = PrKitFlex_Fixed}});
     struct KeyCap { const char* label; PrAppKey key; };
     static constexpr KeyCap kKeys[] = {{"esc", PrAppKey_Escape}, {"tab", PrAppKey_Tab}, {"ctrl", PrAppKey(0)},
         {"\xe2\x86\x90", PrAppKey_Left}, {"\xe2\x86\x93", PrAppKey_Down}, {"\xe2\x86\x91", PrAppKey_Up},
@@ -278,7 +278,9 @@ std::string RemoteTerminals::problem(std::size_t id) {
 
 std::string RemoteTerminals::title(std::size_t id) {
     const Tab* t = find(id);
-    return t != nullptr && t->now ? t->now->title : std::string();
+    if (t == nullptr) return {};
+    // The title its program set; until one does, "Terminal", so that the tab and the phone's list have a name to show.
+    return t->now && !t->now->title.empty() ? t->now->title : std::string("Terminal");
 }
 
 void RemoteTerminals::setTextScale(float k) {

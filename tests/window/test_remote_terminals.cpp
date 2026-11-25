@@ -90,7 +90,7 @@ void opensAndTakesItsTerminal() {
     CHECK(t.open(tab));
     CHECK(port.sent.size() == 1 && port.sent[0].kind == sync::ActionKind::TerminalCreate);
     CHECK(port.sent[0].text == "tok/" + std::to_string(tab));
-    CHECK(t.problem(tab).empty() && t.title(tab).empty() && !t.ended(tab));
+    CHECK(t.problem(tab).empty() && t.title(tab) == "Terminal" && !t.ended(tab));
     // The state holds it: taken by its tab, not given another.
     t.received(state({term(idOf(kEpoch, 1), "tok/" + std::to_string(tab), "vim")}, 2), true, model);
     CHECK(terminalTabs(model) == 1);
