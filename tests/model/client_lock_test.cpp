@@ -164,6 +164,32 @@ void messagesSayWhyAndWhatToDo() {
           std::string::npos);
 }
 
+// The instruction is the platform's word: a key or a click on the Mac and Windows, a tap on a phone. Every refusal and
+// relock says it the same way, and never the other platform's.
+void instructionIsThePlatformsWord() {
+    const std::string method = "Face ID";
+    for (const auto why : {LockReason::Launch, LockReason::Sleep, LockReason::Background, LockReason::Idle,
+                           LockReason::Failed, LockReason::Cancelled, LockReason::Unavailable}) {
+        const auto desk = lockMessage(LockState::Locked, why, method, "", LockInput::KeyOrClick);
+        CHECK(desk.find("ress Return or click here") != std::string::npos);
+        CHECK(desk.find("tap") == std::string::npos && desk.find("Tap") == std::string::npos);
+        const auto phone = lockMessage(LockState::Locked, why, method, "", LockInput::Tap);
+        CHECK(phone.find("Tap to unlock with Face ID.") != std::string::npos ||
+              phone.find("tap here.") != std::string::npos);
+        CHECK(phone.find("Return") == std::string::npos && phone.find("click") == std::string::npos);
+    }
+    CHECK(lockMessage(LockState::Locked, LockReason::Launch, method, "", LockInput::Tap) ==
+          "Tap to unlock with Face ID.");
+    CHECK(lockMessage(LockState::Locked, LockReason::Launch, method, "", LockInput::KeyOrClick) ==
+          "Press Return or click here to unlock with Face ID.");
+    // This build (a desktop one in CI) picks the key-or-click words.
+#if !(defined(__APPLE__) && TARGET_OS_IPHONE)
+    CHECK(kLockInput == LockInput::KeyOrClick);
+#else
+    CHECK(kLockInput == LockInput::Tap);
+#endif
+}
+
 // Notices from other threads apply in order: a relock then the stale grant leaves it locked; the detail is the last
 // counted refusal's, and a grant clears it.
 void mailboxAppliesInOrder() {
@@ -232,6 +258,7 @@ int main() {
     idleTimeoutLocks();
     timeoutHasAFloor();
     messagesSayWhyAndWhatToDo();
+    instructionIsThePlatformsWord();
     mailboxAppliesInOrder();
     if (failures != 0) {
         std::fprintf(stderr, "client_lock_test: %d check(s) failed\n", failures);
