@@ -456,6 +456,86 @@ void starts() {
     CHECK(readFile("starts.dir/starts.count") == "3\n");
 }
 
+// stream and pause, the mock's replies (tests/mock): a block written a word a delta, its text-end, then the done; a stop
+// of another turn mid-stream changes nothing; the stop of the streaming turn ends it at once with the text-end and done
+// outcome stopped, and nothing more of the block is written; a stop during a pause ends the turn with done alone.
+void stream() {
+    writeFile("stream.script", std::string(kHello) +
+        "send\nstream 0 \"One two\\nthree.\"\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nstream 200 \"Slow words that a stop cuts short\"\nemit {\"kind\":\"tool\",\"name\":\"Bash\","
+        "\"summary\":\"never run\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\npause 5000\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    Driver d("stream.script");
+    if (!d.started())
+        return;
+    d.send(Send{1, "fast"});
+    const std::vector<DriverReader::Item>& items = d.readUntil(6);
+    CHECK(items.size() == 6);
+    if (items.size() != 6)
+        return;
+    CHECK(is(items[1], Text{1, "One "}));
+    CHECK(is(items[2], Text{1, "two\n"}));
+    CHECK(is(items[3], Text{1, "three."}));
+    CHECK(is(items[4], TextEnd{1}));
+    CHECK(is(items[5], Done{1, Outcome::Ok, std::nullopt, std::nullopt}));
+
+    d.send(Send{2, "slow"});
+    d.readUntil(7);
+    CHECK(items.size() == 7 && is(items[6], Text{2, "Slow "}));
+    d.send(Stop{1});
+    d.send(Stop{2});
+    d.readUntil(10, std::chrono::milliseconds(3000));
+    // At most one more word got out before the stop was read; then the text-end and the stopped done, and no tool.
+    CHECK(items.size() == 9 || items.size() == 10);
+    if (items.size() < 9)
+        return;
+    CHECK(is(items[items.size() - 2], TextEnd{2}));
+    CHECK(is(items.back(), Done{2, Outcome::Stopped, std::nullopt, std::nullopt}));
+    const std::size_t afterStop = items.size();
+
+    d.send(Send{3, "pause"});
+    d.send(Stop{3});
+    d.readUntil(afterStop + 2, std::chrono::milliseconds(1000));
+    CHECK(items.size() == afterStop + 1);
+    if (items.size() == afterStop + 1)
+        CHECK(is(items.back(), Done{3, Outcome::Stopped, std::nullopt, std::nullopt}));
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+}
+
+// prompt blocks answer their prompt every time it comes, without using up a send block; cycle answers any number of
+// other prompts by going round the send blocks.
+void prompts() {
+    writeFile("prompts.script", std::string(kHello) + "option cycle\n"
+        "prompt hello there\nemit {\"kind\":\"text\",\"delta\":\"keyed\"}\nemit {\"kind\":\"text-end\"}\n"
+        "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"
+        "send\nemit {\"kind\":\"tool\",\"name\":\"Read\",\"summary\":\"b\"}\nemit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    // Without cycle, the third unkeyed send has no block left (the no_block case says what that is).
+    Driver d("prompts.script");
+    if (!d.started())
+        return;
+    d.send(Send{1, "hello there"});
+    d.send(Send{2, "first"});
+    d.send(Send{3, "hello there"});
+    d.send(Send{4, "second"});
+    d.send(Send{5, "third"});
+    d.closeInput();
+    CHECK(d.exitStatus() == 0);
+    const std::vector<DriverReader::Item>& items = d.readUntil(12);
+    CHECK(items.size() == 11);
+    if (items.size() != 11)
+        return;
+    CHECK(is(items[1], Text{1, "keyed"}));
+    CHECK(is(items[3], Done{1, Outcome::Ok, std::nullopt, std::nullopt}));
+    CHECK(is(items[4], Done{2, Outcome::Ok, std::nullopt, std::nullopt}));
+    CHECK(is(items[5], Text{3, "keyed"}));
+    CHECK(is(items[7], Done{3, Outcome::Ok, std::nullopt, std::nullopt}));
+    CHECK(is(items[8], Tool{4, "Read", "b"}));
+    CHECK(is(items[9], Done{4, Outcome::Ok, std::nullopt, std::nullopt}));
+    CHECK(is(items[10], Done{5, Outcome::Ok, std::nullopt, std::nullopt}));
+}
+
 // ignore-eof: the end of input does not end it; only a kill does.
 void ignoreEof() {
     writeFile("eof.script", std::string(kHello) + "option ignore-eof\n");
@@ -485,6 +565,8 @@ const Case kCases[] = {
     {"options", options},
     {"starts", starts},
     {"ignore_eof", ignoreEof},
+    {"stream", stream},
+    {"prompts", prompts},
 };
 
 } // namespace

@@ -156,6 +156,22 @@ void bootstrap_command_shape() {
 
 // A link making its session again names its client and its first action, and asks only a running server: the variable
 // after the format's and Hello's, and the client after the command.
+// A client's server command (the mock's): its words in place of nexus-server new, the client's own after them.
+void server_command_words() {
+    std::vector<std::string> words;
+    std::string why;
+    CHECK(serverCommandWords("/usr/bin/env HOME=/m/home  /b/nexus-server\tnew --dir /m/server ", &words, &why));
+    CHECK((words == std::vector<std::string>{"/usr/bin/env", "HOME=/m/home", "/b/nexus-server", "new", "--dir", "/m/server"}));
+    CHECK(!serverCommandWords(" \t ", &words, &why) && words.empty() && why.find("empty") != std::string::npos);
+    Bootstrap b;
+    b.host = "h";
+    b.stateFormat = 0;
+    CHECK(serverCommandWords("/usr/bin/env HOME=/m/home /b/nexus-server new --dir /m/server", &b.command, &why));
+    b.client = "c1";
+    CHECK(bootstrapCommand(b).arguments.back() == remoteLine({"/usr/bin/env", "HOME=/m/home", "/b/nexus-server", "new",
+        "--dir", "/m/server", "--client", "c1", "--next", "1"}));
+}
+
 void bootstrap_command_reconnect() {
     Bootstrap b;
     b.host = "studio";
@@ -270,6 +286,7 @@ const Case kCases[] = {
     {"connect_line_refusals", connect_line_refusals},
     {"remote_line_quotes_each_word", remote_line_quotes_each_word},
     {"bootstrap_command_shape", bootstrap_command_shape},
+    {"server_command_words", server_command_words},
     {"bootstrap_command_reconnect", bootstrap_command_reconnect},
     {"bootstrap_reads_connect_line", bootstrap_reads_connect_line},
     {"bootstrap_failures_say_why_without_key", bootstrap_failures_say_why_without_key},

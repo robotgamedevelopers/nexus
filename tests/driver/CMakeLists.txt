@@ -127,7 +127,8 @@ if(NEXUS_WINDOW_LOGIC AND NOT WIN32)
     set(functional_dir "${CMAKE_CURRENT_BINARY_DIR}/functional")
     file(MAKE_DIRECTORY "${functional_dir}")
     # One entry per case, so they run in parallel; each case uses files of its own names.
-    foreach(case exchange refused raw no_block ignore_sigterm order send_while_open hang options starts ignore_eof)
+    foreach(case exchange refused raw no_block ignore_sigterm order send_while_open hang options starts ignore_eof stream
+            prompts)
         add_test(NAME driver_fake_${case} COMMAND driver_fake_test $<TARGET_FILE:nexus_fake_driver> ${case}
             WORKING_DIRECTORY "${functional_dir}")
         set_tests_properties(driver_fake_${case} PROPERTIES LABELS functional TIMEOUT 60)

@@ -39,6 +39,8 @@
 // nothing is drawn around the prompt, and the state cursor under the last text says what the server's state is
 // (cursor.h, client.h cursorOf): busy, idle, down, or grey while the window has lost the server. The friend's open
 // entry is drawn as it grows, tool calls as one compact line each, and Command-Escape sends a stop the server decides.
+// --server-command WORDS (or the config's server-command) is what the window runs there in place of `nexus-server new`:
+// the mock's command, which reaches a server of fake AIs (docs/mock.md).
 //
 // --state FILE draws the screenshot's friend tabs from a server's state file (sync/sessions.h stateFile; the friends
 // layer's functional test writes them from the fake driver: tests/server/drivers_functional.cpp, case window), as the
@@ -48,6 +50,7 @@
 //
 // Usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png [--backdrop]
 //              [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]
+//              [--server-command WORDS]
 
 #include "pr/png.h"
 #include "pr/compress_select.h"
@@ -106,6 +109,7 @@
 #include "ui_audio.h"
 
 #if NEXUS_LINK
+#include "link/bootstrap.h"
 #include "link/client_port.h"
 #include "policy/stale.h"
 #include "sync/client.h"
@@ -882,12 +886,15 @@ int main(int argc, char** argv) {
     bool printConfig = false;
     unsigned bench = 0;
     const char* server = nullptr;
+    const char* serverCommand = nullptr;
     const char* state = nullptr;
     bool lost = false;
     bool usage = false;
     for (int i = 1; i < argc && !usage; ++i) {
         if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
             server = argv[++i];
+        } else if (std::strcmp(argv[i], "--server-command") == 0 && i + 1 < argc) {
+            serverCommand = argv[++i];
         } else if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
             state = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
@@ -938,7 +945,8 @@ int main(int argc, char** argv) {
     }
     if (usage) {
         std::fprintf(stderr, "usage: nexus [--windowed] [--tab N] [--demo] [--demo-terminal] [--screenshot PATH.png "
-            "[--backdrop] [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]\n");
+            "[--backdrop] [--state FILE [--lost]]] [--bench FRAMES] [--print-window-config] [--server HOST]\n"
+            "             [--server-command WORDS]\n");
         return 2;
     }
     if ((state != nullptr && (shot == nullptr || server != nullptr)) || (lost && state == nullptr)) {
@@ -1221,6 +1229,15 @@ int main(int argc, char** argv) {
     if (server != nullptr) {
         link::ClientLink::Options options;
         options.bootstrap.host = server;
+        // --server-command, else the config's server-command: run in place of nexus-server new (the mock, docs/mock.md).
+        const std::string command = serverCommand != nullptr ? serverCommand : clientConfig().serverCommand;
+        if (!command.empty()) {
+            std::string why;
+            if (!link::serverCommandWords(command, &options.bootstrap.command, &why)) {
+                std::fprintf(stderr, "nexus: --server-command: %s\n", why.c_str());
+                return 2;
+            }
+        }
         options.wake = [&a] {
             if (PrApp* app = a.wakeApp.load())
                 prAppWake(app);
