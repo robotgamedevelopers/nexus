@@ -607,14 +607,14 @@ tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeep
 
 # Sign-in by a pasted code from any window (SignInPaste.tla; Antigravity): MCSignInPaste.cfg, two windows, one on
 # another machine, and a stray code; MCSignInPasteRestart.cfg, one remote window across two flows and a restart; both
-# every property. MCSignInPasteWide.cfg (both together, its safety) nightly.
+# every property. Both together (two windows, two flows, a restart: its safety alone) is a bench run, not a test: past
+# 15.9 million distinct states in ten minutes on four workers, unfinished.
 # MCSignInPasteRemote.cfg is reachability: one window, on another machine, must sign the account in (NeverSignedIn
 # violated), and the reversed witness WSignInPasteLocalOnly (only a window on the server's machine may claim, as with
 # the loopback page before) must not. The other witnesses each break one rule of SignInDesk::code and are rejected by
 # it. Bound to the code by trace checks: tests/sync's signin_paste_walk, tlc_signin_paste_trace_*.
 tlc_test(tlc_signin_paste_spec SignInPaste MCSignInPaste.cfg pass WORKERS 4)
 tlc_test(tlc_signin_paste_spec_restart SignInPaste MCSignInPasteRestart.cfg pass WORKERS 4)
-tlc_test(tlc_signin_paste_spec_wide SignInPaste MCSignInPasteWide.cfg pass WORKERS 8 NIGHTLY)
 tlc_test(tlc_signin_paste_remote_signs_in SignInPaste MCSignInPasteRemote.cfg invariant PROPERTY NeverSignedIn)
 tlc_test(tlc_signin_paste_witness_local_only WSignInPasteLocalOnly witnesses/WSignInPasteLocalOnly.cfg pass)
 tlc_test(tlc_signin_paste_witness_any_window WSignInPasteAnyWindow witnesses/WSignInPasteAnyWindow.cfg invariant

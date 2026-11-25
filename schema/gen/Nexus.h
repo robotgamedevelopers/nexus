@@ -66,7 +66,7 @@ inline const char * EnumName( Activity value )
     }
 }
 
-// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 21] (SPEC §4.2)
+// enum ActionKind — None = 0 implicit, variants dense from 1, wire range [0, 22] (SPEC §4.2)
 enum class ActionKind : uint8_t
 {
     None = 0,
@@ -91,7 +91,8 @@ enum class ActionKind : uint8_t
     SignInCallback = 19,
     SignOut = 20,
     ResolveLimit = 21,
-    Max = 21, // the exported extent (SPEC §4.2)
+    SignInCode = 22,
+    Max = 22, // the exported extent (SPEC §4.2)
 };
 
 // EnumName: debug/log name for any ActionKind value, out-of-set included
@@ -121,6 +122,7 @@ inline const char * EnumName( ActionKind value )
         case ActionKind::SignInCallback: return "SignInCallback";
         case ActionKind::SignOut: return "SignOut";
         case ActionKind::ResolveLimit: return "ResolveLimit";
+        case ActionKind::SignInCode: return "SignInCode";
         default: return "???";
     }
 }
