@@ -94,6 +94,7 @@ public:
     bool take_queued(std::size_t i);  // a friend's tab whose queue is not empty: its oldest queued prompt leaves the
                                       // queue (the server delivered it), true; else false, no change. Never touches a
                                       // transcript or a draft.
+    void clear_output(std::size_t i);
     void clear_transcript(std::size_t i);
     bool append(std::size_t i, Entry e);         // false and no change unless i is a friend's tab
     // Edits are ordered by original index. Multiple insertions before one entry retain their order.
