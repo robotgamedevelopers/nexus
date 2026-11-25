@@ -181,6 +181,8 @@ automatic selections get this choice. Forks can set `fable_fallback_model` in se
 
 ### Signing in to the right Claude account
 
+Type `/login` in a friend’s prompt and press Enter to open the account picker. Choose the address you want to use. If the browser completes sign-in with a different email, Nexus shows the verification failure in the sign-in window.
+
 Use the email on the centered sign-in card to choose the matching identity in Claude's browser page.
 Your browser may already be signed in to a different Claude account. Select the intended account,
 or sign out of Claude in that browser and sign in with the displayed email. Nexus accepts the grant

@@ -756,10 +756,30 @@ struct Builder {
         }
     }
 
+    void signInFailure(PrLayoutNode parent, const SignInAccount& account) {
+        if (account.email.empty() || !model.tab_count()) return;
+        const auto& entries = model.tab(model.active()).transcript;
+        const auto needed = account.name + " needs signing in:";
+        const auto failure = "Could not sign in to " + account.email + ". ";
+        // A failed browser return queues a fresh offer immediately after its failure notice.
+        for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+            if (it->kind != EntryKind::Notice) break;
+            if (it->text.starts_with(needed)) continue;
+            if (it->text.starts_with(failure)) {
+                auto appearance = textStyle(PrKitTextRole_BodySmall, kNoticeTone, PrKitTextAlign_Center);
+                appearance.wrap = PrKitWrap_Wrap;
+                caption(parent, it->text, appearance);
+            }
+            break;
+        }
+    }
+
     void accountPanel(PrLayoutNode parent) {
         const auto& selected = view.windowApp.signInAccount;
         if (view.windowApp.surface.items && !asking) {
             accountSelector(parent, *view.windowApp.surface.items);
+            if (view.accountMenu != kPrLayoutNodeNone && view.choiceKind.empty())
+                signInFailure(view.accountMenu, selected);
             return;
         }
         if (selected.name.empty()) return;
@@ -780,6 +800,7 @@ struct Builder {
             record.groups[PrLayoutGroup_Color] = prLayoutColorStyleIntern(tree, &ink);
             prLayoutTreeFrameSetStyle(tree, email, prLayoutStyleIntern(tree, &record));
         }
+        signInFailure(button, selected);
         label(button, "Press Enter or click to sign in.", textStyle(PrKitTextRole_BodySmall, PrKitTone_Inverse, PrKitTextAlign_Center));
         if (prKitActivated(kit, button) && view.activateSignIn)
             view.activateSignIn();
@@ -1254,7 +1275,8 @@ struct Builder {
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
             if ((e.kind == EntryKind::Tool && (!look.transcriptStyle.showTools ||
-                    e.text.starts_with("SendMessage:") || e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
+                    e.text.starts_with("Agent:") || e.text.starts_with("SendMessage:") ||
+                    e.text.starts_with("mcp__nexus__nexus_bus_send:") ||
                     e.text.starts_with("nexus_bus_send:"))) ||
                     (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
                 continue;
@@ -2455,6 +2477,11 @@ struct Builder {
                 break;
             case WindowCommand::AccountPicker:
                 if (view.pickerCommand) view.pickerCommand(key.type);
+                if (key.type == "open" && model.tab_count() && model.tab(model.active()).draft == "/login") {
+                    if (view.accountPicker) model.set_draft(model.active(), {});
+                    else view.problem = "Connect to a friend with a configured account to sign in.";
+                    pickerInput = true;
+                }
                 break;
             case WindowCommand::AccountCommand:
                 if (view.accountCommand) view.accountCommand(key.type);

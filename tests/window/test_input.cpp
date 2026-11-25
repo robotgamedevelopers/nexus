@@ -1771,9 +1771,11 @@ void nativeBusSendIsPrivateInHistory() {
     h.model.append(0, Entry{EntryKind::Tool, "Read: before"});
     h.model.append(0, Entry{EntryKind::Tool, "mcp__nexus__nexus_bus_send: private body"});
     h.model.append(0, Entry{EntryKind::Tool, "SendMessage: private child message"});
+    h.model.append(0, Entry{EntryKind::Tool, "Agent: child launch description"});
     h.model.append(0, Entry{EntryKind::Tool, "Read: after"});
     h.frame();
     CHECK(h.entries().size() == 2);
+    CHECK(!h.hasText(h.window(), "Agent: child launch description"));
     CHECK(!h.hasText(h.window(), "SendMessage: private child message"));
     CHECK(!h.hasText(h.window(), "mcp__nexus__nexus_bus_send: private body"));
 }
@@ -3045,6 +3047,23 @@ int main(int argc, char** argv) {
         CHECK(h.hasText(h.view.accountMenu, "Please sign in to ChatGPT"));
         CHECK(h.view.transcript == kPrLayoutNodeNone);
         CHECK(link.sent.size() == sent && h.active().draft == "draft kept again");
+        const std::string failure = "Could not sign in to c@example.test. The signed-in email differs.";
+        h.model.append(h.model.active(), {EntryKind::Notice, failure});
+        h.model.append(h.model.active(), {EntryKind::Notice, "c needs signing in: try again"});
+        h.frame();
+        CHECK(h.hasText(h.view.accountMenu, failure));
+        h.key(PrAppKey_Backspace, PrAppKeyCode_Backspace, style::kCommand);
+        h.frame();
+        CHECK(h.active().draft.empty() && h.view.accountMenu != kPrLayoutNodeNone);
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
+        h.type("/login");
+        h.enter();
+        h.frame();
+        CHECK(h.active().draft.empty() && h.view.accountPicker && h.view.accountMenu != kPrLayoutNodeNone);
+        CHECK(link.sent.size() == sent);
+        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.frame();
         down(0);
         CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 0);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);

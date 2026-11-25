@@ -31,6 +31,7 @@ _COMMAND_HELP = {
     "/info": "Show the friend, account, model, effort, repository and working directories.",
     "/clear": "Clear the conversation and its context. When signed out, clear the local conversation.",
     "/compact": "Compact the current conversation context.",
+    "/login": "Open the account sign-in window.",
     "/logout": "Sign out of the selected account.",
     "/quiet": "Mute nexus sounds.",
     "/quiet off": "Turn sounds back on.",
@@ -289,6 +290,10 @@ def handle(event, state, config):
                     "Control+ArrowUp": "top", "Control+ArrowDown": "bottom",
                     "PageUp": "page_up", "PageDown": "page_down"}).items():
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["scroll_transcript", direction])
+        if state["tab"] == "friend" and state["prompt_open"] and not state.get("account_picker_open") and not state.get("ui", {}).get("choice_kind"):
+            if state.get("ui", {}).get("draft") == "/login":
+                for chord in ["Enter", "Command+Enter"]:
+                    window["shortcuts"] = _bind(window["shortcuts"], chord, ["account_picker", "open"])
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         if state["tab"] == "friend" and state.get("needs_sign_in"):
