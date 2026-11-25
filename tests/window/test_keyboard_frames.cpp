@@ -107,6 +107,10 @@ struct Window {
     bool editing = false;       // the last frame edited text: the backend's keyboard is up
     int rose = -1;              // the frame after the one that first edited text, while editing; -1: down
     bool wantsFrame = false;    // the last frame asked for another
+    // The window opens on the Dashboard, as one whose last selection was the Dashboard does: the first frame that has
+    // the server's tabs selects it before anything is drawn. Without it the window opens on the first AI's tab, which
+    // the server's state names first.
+    bool opensOnDashboard = true;
 
     explicit Window(const Device& d, bool turned = false)
         : extent(turned ? PrVec2{d.size.y, d.size.x} : d.size), device(d), safe(turned ? d.turned : d.upright) {
@@ -161,6 +165,14 @@ struct Window {
         rect = keyboardRect(a, switching);
         const float room = roomAboveKeyboard(extent, safe, rect);
         host.beginFrame(kit, fonts, time, prAppDisplayDefault());
+        if (opensOnDashboard) {
+            for (std::size_t i = 0; i < model.tab_count(); ++i) {
+                if (model.tab(i).kind != TabKind::Dashboard) continue;
+                model.select_tab(i);
+                opensOnDashboard = false;
+                break;
+            }
+        }
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 120, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         struct Round { Window* w; PrVec2 box; } round{this, contentBox(extent, safe, room)};
