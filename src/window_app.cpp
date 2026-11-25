@@ -419,6 +419,7 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
                 !readPoints(doc, drop, {"radius", 6}, menu.radius, 0, 64) ||
                 !readPoints(doc, drop, {"max_width_em", 12}, menu.maxWidthEm, 4, 80) ||
                 !readPoints(doc, drop, {"tab_move_threshold", 18}, menu.tabMoveThreshold, 4, 128) ||
+                !readPoints(doc, drop, {"dialog_text_em", 14}, menu.dialogTextEm, 4, 80) ||
                 !readPoints(doc, drop, {"hover_opacity", 13}, menu.hoverOpacity, 0, 1) ||
                 !readColor(doc, drop, {"fill", 4}, menu.fill) || !readColor(doc, drop, {"ink", 3}, menu.ink) ||
                 !readColor(doc, drop, {"hover_fill", 10}, menu.hoverFill) ||

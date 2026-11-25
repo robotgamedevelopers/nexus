@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -495,6 +496,21 @@ void accountCommandOpensTheSelector() {
     const auto& rows = w.view.accounts.dialogRows;
     CHECK(rows.size() == 3 && rows[0].account == "a1" && rows[0].current && rows[1].account == "a2" && rows[2].signIn);
     CHECK(w.model.tab(w.model.active()).draft.empty());
+    // The long email is cut with "…" inside the dialog, never run out of it. Plant: no cut in accountDialog.
+    w.frame();
+    bool cut = false;
+    const std::function<void(PrLayoutNode)> walk = [&](PrLayoutNode n) {
+        if (prLayoutNodeKind(w.tree, n) == PrLayoutNodeKind_Text) {
+            const auto t = prLayoutNodeText(w.tree, n);
+            const std::string text(t.data, t.size);
+            if (text.ends_with("\xE2\x80\xA6") && kLong.starts_with(text.substr(0, text.size() - 3))) cut = true;
+            CHECK(text != kLong);
+        }
+        for (PrLayoutNode c = prLayoutNodeFirstChild(w.tree, n); c != kPrLayoutNodeNone; c = prLayoutNodeNextSibling(w.tree, c))
+            walk(c);
+    };
+    walk(prLayoutTreeRoot(w.tree));
+    CHECK(cut);
     CHECK(w.switches().empty());
 }
 

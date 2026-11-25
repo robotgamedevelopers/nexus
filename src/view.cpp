@@ -37,6 +37,10 @@ using namespace style;
 constexpr PrKitTextRole kSelectedTabRole = PrKitTextRole_MonoStrong;
 constexpr PrKitTextRole kTabRole = PrKitTextRole_MonoNum;
 constexpr PrKitTextRole kAccountRole = PrKitTextRole_Caption;
+// The text of a menu item in the kit's dialogs (the /account and /login rows), and the room kept either side of a dialog
+// whose rows are cut to fit (accountDialog).
+constexpr PrKitTextRole kDialogRowRole = PrKitTextRole_Body;
+constexpr float kDialogMargin = 60;
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Records for what no kit part draws: the window's frame and background, the transcript's scroller and column, the chat
@@ -2373,13 +2377,13 @@ struct Builder {
     }
 
     // The width of `text` in the tab label's unselected face (kTabRole), the face the account menu's rows are set in.
-    float menuTextWidth(std::string_view text) {
+    float menuTextWidth(std::string_view text, PrKitTextRole role = kTabRole) {
         if (!view.windowShaper && !fallbackTabShaper)
             fallbackTabShaper.reset(prTextShaperCreate(PrTextShaperBackend_Default));
         auto* shaper = view.windowShaper ? view.windowShaper : fallbackTabShaper.get();
         if (!tabLayout) tabLayout.reset(prTextLayoutCreate());
-        if (!shaper || !kit->fonts[kTabRole]) return float(text.size()) * kit->theme.types[kTabRole].size * 0.6f;
-        const PrTextLayoutDesc desc{.text = sv(text), .font = kit->fonts[kTabRole], .shaper = shaper};
+        if (!shaper || !kit->fonts[role]) return float(text.size()) * kit->theme.types[role].size * 0.6f;
+        const PrTextLayoutDesc desc{.text = sv(text), .font = kit->fonts[role], .shaper = shaper};
         prTextLayoutSet(tabLayout.get(), &desc);
         return std::ceil(prTextLayoutExtent(tabLayout.get()).x);
     }
@@ -2534,9 +2538,16 @@ struct Builder {
         }
         const auto list = prKitMenu(kit, body, {}, {});
         std::optional<AccountMenuRow> chosen;
+        // A row's text is cut with "…" to the dialog's room (account_menu.dialog_text_em of the menu item's text), and
+        // never past the window less a margin: a long email never runs out of the dialog.
+        const auto& s = view.windowApp.surface.accountMenu;
+        const float room = std::max(0.0f, std::min(s.dialogTextEm * kit->theme.types[kDialogRowRole].size,
+                                                   view.extent.x - 2 * kDialogMargin));
         for (const auto& row : menu.dialogRows) {
+            const std::string shown = ellipsize(row.text, room,
+                                                [&](std::string_view t) { return menuTextWidth(t, kDialogRowRole); });
             const auto item = prKitMenuItem(kit, list,
-                {.key = prHashString(sv(row.signIn ? std::string("+sign-in") : row.account), 0), .text = sv(row.text),
+                {.key = prHashString(sv(row.signIn ? std::string("+sign-in") : row.account), 0), .text = sv(shown),
                  .icon = PrStudioIconKind_None, .checked = row.current}, {});
             PrKitPlace size{};
             size.height = prKitPx(std::max(view.windowApp.surface.accountMenu.rowHeight, kMinRowHeight));
