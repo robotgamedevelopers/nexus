@@ -24,6 +24,7 @@ table Action
     field account id=0xa23fd2965dc429bc kind=17 type=string
     field request id=0x6f4743b8bc5b4eb2 kind=9
     field secret id=0xab23f0eec020c951 kind=17 type=bytes
+    field pastes_code id=0xe24950f987c59117 kind=1
 
 table ActionsDiff
     field start id=0xee5d97ad45ad251f kind=9
@@ -218,4 +219,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-25 (UTC) — sign-in offer says a code is wanted; actions gain sign-in-code
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-25 (UTC) — Action.pastes_code: a claim says its window takes a pasted code
 - no compatibility-affecting edits; the wire absorbs the rest

@@ -324,6 +324,29 @@ CodeOnlyFromHolder == badfrom = {}
 \* A code reaches a flow's process only while that process waits for one: never with no flow waiting.
 CodeOnlyWhenAsked == unasked = {}
 \* No code in server.log, and none in any window's state (the dialog's field and the action up are the window's own).
+\* These two cannot fail: no action of this spec ever puts a code into log or view, so they hold by construction and
+\* TLC checking them proves nothing. They state the rule; the real guard is in the code. The trace walk
+\* (tests/sync/signin_paste_walk.cpp, clean()) scans every log line and every notice the real hub and desk write, on
+\* every step of every walk, for each code's bytes, the URL and the tokens, and fails the walk on a hit; and the leak
+\* scans in tests/server/signin_test.cpp (leaks()) do the same for the hub's log, its notices and the runner.
+\*
+\* What lies outside the binding (the walk drives the desk and the hub; these are bound by unit tests instead,
+\* tests/server/signin_test.cpp unless named, each red when its bug is planted):
+\*   - the runner's side of a code (sync::CodeHandoff, src/sync/signin.h): parsing "<id>-<nonce> ?code", a code before
+\*     it is asked for, a second code, a wrong id, a code for an ending flow, partial writes, EAGAIN, EINTR and a gone
+\*     terminal (paste_runner). The model's Deliver is one atomic step; the code's is a drained buffer, wiped after.
+\*   - the server's rewrite of a window's token onto its link (sync::Hub::fromLink, called at src/server/server.cpp):
+\*     a window can never act as another (paste_link). The model takes each action's client as given.
+\*   - malformed codes. The model's Paste sends a well-formed code once; the window checks isSignInCode before it sends
+\*     and never sends a malformed one, and when the server refuses a code (the flow still asked after the action was
+\*     applied) the window lets the person paste again (tests/window/test_signin_host.cpp pastedCodeAnywhere). Each
+\*     resend is one more Stray-shaped code here, which the server refuses unless the flow is asked and unsent.
+\*   - mixed versions: a window from before (its claim without pastes_code) is refused an Antigravity flow with a plain
+\*     line (paste_hub), and a window facing a server from before, which offers its loopback page, opens it only on the
+\*     server's machine and otherwise says the server is too old (oldServerSaysSo; tests/wire nexus_versions_test
+\*     paste for the bytes).
+\*   - where the refusal's line is written: only into a session of the flow's account (paste_hub). The model has no
+\*     sessions.
 NoCodeIn(r) == \A f \in DOMAIN r : r[f] \notin Codes
 NoCodeInLog == \A r \in log : NoCodeIn(r)
 NoCodeToWindows == \A c \in Clients : \A o \in view[c] : NoCodeIn(o)

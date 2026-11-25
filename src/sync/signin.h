@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -91,6 +92,11 @@ std::string_view urlHost(std::string_view url);
 // Accept a provider authorization URL with its redirect and state, or the exact local broker URL for a provider
 // using a private page. The latter clears the target because the browser never needs a callback relay.
 bool parseSignInUrl(std::string_view provider, std::string_view url, SignInTarget* out);
+// Whether `url` is the exact private page an enrollment helper serves on the server's loopback
+// (http://127.0.0.1:<port>/nexus-signin/<64 hex>). For a provider that signs in by a pasted code, only a server from
+// before that sends one: SignInOpener opens it from a window on the server's machine, and says the server is too old
+// from any other (Step::Kind::OldServer).
+bool isLocalSignInPage(std::string_view url);
 // Whether `a` and `b` hold the same bytes, in a time that depends on their lengths alone: for a state and a nonce.
 bool sameBytes(std::string_view a, std::string_view b);
 // Whether `query` holds only bytes a request line carries as they are: no space, CR, LF or other control byte.
@@ -287,7 +293,10 @@ public:
 
     struct Step {
         // Refused: the offer's URL is not a sign-in page of its provider's (parseSignInUrl); nothing is opened.
-        enum class Kind : std::uint8_t { None, Claim, Open, Refused } kind = Kind::None;
+        // OldServer: a flow that ends in a pasted code, whose server is from before that and serves its private page
+        // on its own loopback, held by a window on another machine: nothing can be opened from here, and the window
+        // says the server is too old.
+        enum class Kind : std::uint8_t { None, Claim, Open, Refused, OldServer } kind = Kind::None;
         std::uint64_t id = 0;
         std::string account;
         SecretValue url;            // with Open
@@ -313,6 +322,50 @@ private:
     std::uint64_t gate_ = 0;
     bool armed_ = false;
     std::string wantedAccount_;
+};
+
+// One message from an enrollment helper on the runner's socket: "<flow>-<word> <payload>\n". False for any other
+// bytes (no line end, no space before it). Views into `bytes`.
+bool parseHelperMessage(std::string_view bytes, std::string_view* word, std::string_view* payload);
+
+// The runner's part of one sign-in process's pasted code (src/server/signin_runner.cpp), as pure logic: what its helper
+// says (its URL, once; then that its vendor's CLI asks for the code, once, after the URL, for a provider that signs in
+// by a pasted code), and the one code written to its terminal, possibly in pieces. models/SignInPaste.tla Url, Ask and
+// CodeWith's process side; the server's side is SignInDesk::code. Never logs; the code's bytes are wiped as they go.
+class CodeHandoff {
+public:
+    enum class Said : std::uint8_t { None, Url, CodeWanted };
+    // The payload of one helper message for this process (its word already matched). `pastedCode`: the process signs
+    // in by a pasted code (and is no `claude setup-token`). Url: the payload is its URL, the first time; CodeWanted:
+    // "?code", once, after the URL, for a pastedCode process; None: anything else, dropped.
+    Said heard(std::string_view payload, bool pastedCode);
+    // A pasted code for flow `id`, this process's flow `flow`: taken (to write) only when it is this flow's, the process
+    // is not ending, its helper asked, no code was taken before, and it is a code (isSignInCode). False: dropped.
+    bool take(std::uint64_t id, std::uint64_t flow, bool ending, const SecretValue& code);
+    // Writes what is left of the code's line with `write` (returns bytes written, or -1 with errno set), without
+    // waiting: EAGAIN leaves the rest for a later call; EINTR tries again; any other failure (the terminal gone) drops
+    // the rest, wiped.
+    void drain(const std::function<long(const char* bytes, std::size_t size)>& write);
+    bool pending() const { return !out_.empty(); }
+    bool urlSent() const { return urlSent_; }
+    // The URL taken from elsewhere (`claude setup-token`'s terminal): true the first time; after it, a helper's URL is
+    // dropped.
+    bool takeUrl();
+    bool asked() const { return asked_; }
+    bool taken() const { return taken_; }
+    void wipe();
+    ~CodeHandoff() { wipe(); }
+    CodeHandoff() = default;
+    CodeHandoff(const CodeHandoff&) = delete;
+    CodeHandoff& operator=(const CodeHandoff&) = delete;
+    CodeHandoff(CodeHandoff&& o) noexcept;
+    CodeHandoff& operator=(CodeHandoff&&) = delete;
+
+private:
+    bool urlSent_ = false;
+    bool asked_ = false;
+    bool taken_ = false;
+    std::string out_;       // what of the code's line is still to write
 };
 
 // The window's one-shot gate, as pure logic over one connection's bytes: a GET on the target's path whose state

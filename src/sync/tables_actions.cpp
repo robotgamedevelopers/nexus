@@ -105,6 +105,7 @@ std::string writeActionsTables(std::uint64_t start, const std::vector<Action>& h
         putText(b.main, x->account, a.account, scratch);
         x->request = a.request;
         putBytes(b.main, x->secret, a.secret.bytes());
+        x->pastes_code = a.pastesCode;
     }
     return saved(b, [](const wire::ActionsDiffBuilder& x) { return wire::ActionsDiffMeasure(x); },
         [](const wire::ActionsDiffBuilder& x, std::uint8_t* to, int64_t n) { return wire::ActionsDiffSave(x, to, n); },
@@ -155,6 +156,7 @@ std::vector<Action> readActionsTables(const std::string& diff, std::uint32_t for
             a.account = textOf(x.account);
             a.request = x.request;
             a.secret = bytesOf(x.secret);
+            a.pastesCode = x.pastes_code;
         }
         out.push_back(std::move(a));
     }

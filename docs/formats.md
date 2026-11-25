@@ -72,10 +72,23 @@ later field goes after them.
   binds the session, interrupted request, current payer, choice kind, and offered target. An earlier table reader
   skips the fields and refuses the unknown action. The legacy codecs never offer this choice.
 - A sign-in by a pasted code (Antigravity) adds `SignInOffer.code_wanted` (bool, default false: no code is asked for),
-  set only in the state of the window holding the flow, and the action kind `SignInCode`, whose `secret` carries the
-  code and whose `text` the window's claim token. An earlier window skips the field and never asks; an earlier server
-  reads the kind as unknown and refuses it alone. Neither raises the format: a window that does not ask simply leaves
-  the flow to its deadline. The legacy codecs carry neither.
+  set only in the state of the window holding the flow; the action kind `SignInCode`, whose `secret` carries the code
+  and whose `text` the window's claim token; and `Action.pastes_code` (bool, default false: the window cannot take a
+  code), which a window that takes a pasted code sets on its `SignInClaim`. None raises the format (rules 1 and 2): the
+  server learns what it needs from the claim itself, when it matters, so a flag on the claim is enough where format 5
+  needed a new number (that server had to know, before any claim, which windows read flows at all). Each mix of
+  versions ends in a plain line, never a silent wait for the flow's deadline:
+  - An earlier window on this server: its claim of an Antigravity flow reads `pastes_code` false, and the server
+    refuses it with a line in that session ("... signs in with a code pasted into Nexus, which this window cannot
+    take. Update this Nexus window, ..."); the flow stays needed, for an updated window to claim.
+  - This window on an earlier server: that server still offers its private loopback page for an Antigravity flow. A
+    window on the server's machine opens it as before; one on another machine opens nothing and says "nexus-server is
+    too old to sign in to <account> from another machine".
+  - An earlier server would read `SignInCode` as unknown and refuse it alone; the window never sends one there, since
+    it asks for a code only when `code_wanted` is set.
+
+  The legacy codecs carry none of it. `nexus_versions_test` `paste` reads this build's bytes with main's format 5
+  reader (`tests/wire/main5`, the schema as it shipped before these fields) and main's bytes with this build's.
 - Absent instance (a server from before instances, or a format 1 link): **none**, empty. The window groups the session
   by its friend alone; the server, which holds the friend's instances, settles an empty instance to the friend's
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.

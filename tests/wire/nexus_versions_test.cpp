@@ -406,6 +406,71 @@ void test_bus() {
     }
 }
 
+// Sign-in by a pasted code against main's format 5 (before it), both ways: main's window and server skip the added
+// field and the added claim flag (counted), and read the added kind as None; this build reads main's offers and claims
+// with both false, which its server answers with a plain refusal (Hub, SignInClaim) and its window with OldServer
+// (SignInOpener), never a silent wait.
+void test_paste() {
+    using Names = std::vector<std::string>;
+    // This build's state, with a flow that wants the code, read by main's window: the flow whole but code_wanted,
+    // skipped and counted once.
+    Sessions server;
+    server.setFormat(kSignInFormat);
+    server.setOffers({SignInOffer{6, "g1", "antigravity", "w1", "studio",
+                                  SecretValue("https://accounts.google.com/o/oauth2/auth?x=1"), true}});
+    const wiretest::Read flows = wiretest::mainReadSessions(bytes(server.init_diff()));
+    CHECK(flows.loaded && !flows.damaged && !flows.refused && flows.unknown == 1);
+    CHECK((flows.signins == std::vector<std::uint64_t>{6}) &&
+          (flows.urls == Names{"https://accounts.google.com/o/oauth2/auth?x=1"}));
+    // The same flow not wanting the code: nothing for main's window to skip (a false bool is not written).
+    server.setOffers({SignInOffer{6, "g1", "antigravity", "w1", "studio", SecretValue(), false}});
+    const wiretest::Read quiet = wiretest::mainReadSessions(bytes(server.init_diff()));
+    CHECK(quiet.loaded && quiet.unknown == 0 && (quiet.signins == std::vector<std::uint64_t>{6}));
+
+    // This build's window's actions, read by main's server: the claim whole, its pastes_code skipped and counted; the
+    // code's kind None (which such a server refuses alone), its secret as written, the numbers unbroken.
+    Actions window(5);
+    Action claim;
+    claim.kind = ActionKind::SignInClaim;
+    claim.request = 6;
+    claim.session = 2;
+    claim.text = "w1";
+    claim.account = "g1";
+    claim.pastesCode = true;
+    window.add(claim);
+    Action code;
+    code.kind = ActionKind::SignInCode;
+    code.request = 6;
+    code.session = 2;
+    code.text = "w1";
+    code.secret = SecretValue("4/0test-code");
+    window.add(code);
+    window.setFormat(kSignInFormat);
+    const wiretest::ReadActions up = wiretest::mainReadActions(bytes(window.diff_from(Actions(5))));
+    CHECK(up.loaded && !up.damaged && !up.refused && up.unknown == 2);
+    CHECK(up.start == 5 && (up.kinds == Names{"SignInClaim", "None"}) && (up.accounts == Names{"g1", ""}));
+    CHECK((up.texts == Names{"w1", "w1"}) && (up.requests == std::vector<std::uint64_t>{6, 6}));
+
+    // Main's server's state, read by this build's window: the flow, its URL main's private loopback page, no code
+    // wanted, nothing unknown.
+    Sessions newer;
+    newer.setFormat(kSignInFormat);
+    newer.apply_string(text(wiretest::mainSessions()));
+    CHECK(newer.unknown() == 0 && newer.offers().size() == 1);
+    if (newer.offers().size() == 1) {
+        const SignInOffer& o = newer.offers()[0];
+        CHECK(o.id == 6 && o.provider == "antigravity" && !o.codeWanted && o.url.bytes().starts_with("http://127.0.0.1"));
+    }
+    // Main's window's claim, read by this build's server: whole, pastes_code false.
+    int unknown = -1;
+    const std::vector<Action> claims = Actions::parse(text(wiretest::mainClaim()), kSignInFormat, &unknown);
+    CHECK(unknown == 0 && claims.size() == 1);
+    if (claims.size() == 1) {
+        CHECK(claims[0].kind == ActionKind::SignInClaim && claims[0].request == 6 && claims[0].account == "g1" &&
+              claims[0].text == "w1" && claims[0].session == 2 && !claims[0].pastesCode);
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -417,6 +482,7 @@ const Group groups[] = {
     {"actions", test_actions},
     {"hello", test_hello},
     {"signin", test_signin},
+    {"paste", test_paste},
 };
 
 } // namespace

@@ -117,10 +117,7 @@ private:
         sync::UrlScanner url{"claude"};     // the runner runs `claude setup-token`: its hosts
         std::string provider;
         bool setupToken = false;
-        bool urlSent = false;
-        bool codeAsked = false;     // its helper said `?code`
-        bool codeTaken = false;     // a code was written, or is being: no other
-        std::string codeOut;        // what of the code's line is still to write; wiped as it goes
+        sync::CodeHandoff code;     // its URL once, and its pasted code: asked once, written once (sync/signin.h)
         std::uint64_t killAt = 0;   // when SIGKILL follows the SIGTERM; 0: not ending
     };
     struct Helper {

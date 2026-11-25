@@ -1518,6 +1518,19 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 }
                 id = flow->first;
             }
+            // A flow that ends in a pasted code goes only to a window that takes one (Action::pastesCode): a window
+            // from before is told so plainly, rather than holding the flow to its deadline with nowhere to paste.
+            if (const auto [account, provider] = signInFlowAccount(id); !action.pastesCode && signsInByPastedCode(provider)) {
+                const std::string refusal = account + " signs in with a code pasted into Nexus, which this window "
+                    "cannot take. Update this Nexus window, or press Sign in in an updated one.";
+                if (secretEvents_ != nullptr) {
+                    secretEvents_->signInLogged("sign-in " + std::to_string(id) + ": " + account +
+                                                ": a claim from a window that cannot take a pasted code, refused");
+                }
+                signInRefusal(action.session, account, refusal);
+                if (why) *why = refusal;
+                return false;
+            }
             signInEffects(signIns_.claim(id, action.text, clock_ ? clock_() : 0));
             break;
         }
@@ -1528,15 +1541,14 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
             // models/SignInPaste.tla CodeWith: the desk takes it from the flow's holder alone, once, while its process
             // waits; any other is refused with a plain line in the tab it came from. The code is in no line.
             std::string refusal;
+            // The account the code is for: its flow's, while there is one; else the one the window's tab names.
+            std::string account = signInFlowAccount(action.request).first;
+            if (account.empty()) {
+                account = action.account;
+            }
             signInEffects(signIns_.code(action.request, action.text, action.secret, &refusal));
             if (!refusal.empty()) {
-                if (store_.find(action.session) != nullptr) {
-                    std::string failed;
-                    if (store_.commit(action.session, {SessionChange{entry(EntryKind::Notice, refusal), {}}}, {}, 0,
-                                      &failed)) {
-                        refresh(action.session);
-                    }
-                }
+                signInRefusal(action.session, account, refusal);
                 if (why != nullptr) *why = refusal;
                 return false;
             }
@@ -1547,6 +1559,43 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
             break;
     }
     return true;
+}
+
+Hub::LinkAction Hub::fromLink(const Action& a, const std::string& link) {
+    LinkAction out{a, link, false};
+    if (a.kind == ActionKind::SignInClaim && isClaimToken(a.text) && a.text != link) {
+        out.token = a.text;
+        out.renamed = true;
+    }
+    if ((a.kind == ActionKind::SignInOpened || a.kind == ActionKind::SignInCallback ||
+            a.kind == ActionKind::SignInCode) && a.text != link) {
+        out.action.text = link;
+    }
+    return out;
+}
+
+void Hub::signInRefusal(SessionId session, const std::string& account, const std::string& text) {
+    const StoredSession* s = store_.find(session);
+    if (s == nullptr || account.empty() || s->info.account != account) {
+        if (secretEvents_ != nullptr) {
+            secretEvents_->signInLogged("sign-in: a refusal for session " + std::to_string(session) +
+                                        ", which is not on the account the sign-in is for: no notice written");
+        }
+        return;
+    }
+    std::string failed;
+    if (store_.commit(session, {SessionChange{entry(EntryKind::Notice, text), {}}}, {}, 0, &failed)) {
+        refresh(session);
+    }
+}
+
+std::pair<std::string, std::string> Hub::signInFlowAccount(std::uint64_t id) const {
+    for (const SignInOffer& o : signIns_.offers()) {
+        if (o.id == id) {
+            return {o.account, o.provider};
+        }
+    }
+    return {};
 }
 
 void Hub::noteAccount(const std::string& account, const std::string& text) {

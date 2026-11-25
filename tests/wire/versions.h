@@ -46,6 +46,7 @@ struct ReadActions {
     std::vector<std::string> texts;
     std::vector<std::uint64_t> requests;
     std::vector<std::string> secrets;
+    std::vector<std::string> accounts;  // each action's account (main's reader alone fills it)
 };
 
 // What a reader of the later version made of a Hello.
@@ -88,5 +89,16 @@ Bytes prevActions();
 Bytes prevHello();
 Read prevReadSessions(const Bytes& bytes);
 ReadActions prevReadActions(const Bytes& bytes);
+
+// Main as it shipped at 7999478, state format 5 before sign-in by a pasted code (tests/wire/main5/NexusMain.schema,
+// wire_main.cpp), which knows neither SignInOffer.code_wanted, Action.pastes_code nor the kind SignInCode.
+//   mainSessions   its server's diff, from an empty state: Antigravity flow 6 (account g1), held by window w1, its URL
+//                  its private loopback page
+//   mainClaim      its window's actions, from action 5: a claim of flow 6 by w1, account g1, session 2
+// and its readers, which say what that window or server makes of this build's bytes.
+Bytes mainSessions();
+Bytes mainClaim();
+Read mainReadSessions(const Bytes& bytes);
+ReadActions mainReadActions(const Bytes& bytes);
 
 } // namespace wiretest

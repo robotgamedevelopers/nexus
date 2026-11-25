@@ -226,7 +226,15 @@ window's link, and the field is wiped. The server hands it to the waiting `agy`
 only when the flow is running, its process asked, no code went yet, and the
 window sending it holds the flow (`SignInDesk::code`); the runner writes it to the
 `agy` terminal once. Every other code is refused with a plain line in the session
-and reaches no process. The code is never logged, never in a transcript, a state
+the sending window names, its tab's, only when that session is on the flow's
+account (`Hub::signInRefusal`; a refusal naming any other session writes nothing
+there, and a log line says so, without the code) and reaches no process. The window checks the paste is
+a code (`isSignInCode`) before sending it, and once the server has applied a code
+and the flow still asks, it asks again, so a refused paste can be retried. A
+window from before this claims without `Action.pastes_code` and is refused the
+flow with a plain line; a server from before this offers its loopback page, which
+a window on another machine does not open, saying the server is too old
+(`docs/formats.md`). The code is never logged, never in a transcript, a state
 or a file; only `agy` keeps the login it makes, in the account's harness home
 (`models/SignInPaste.tla`, bound to `SignInDesk` by `tlc_signin_paste_trace_*`).
 

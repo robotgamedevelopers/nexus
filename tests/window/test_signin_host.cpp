@@ -242,7 +242,43 @@ void pastedCodeAnywhere() {
     CHECK(f.signIn.typedCode().empty() && secrets.showing() == nullptr);
     // The flow still says a code is wanted (the server has not answered yet): this window sends no second.
     secrets.submit();
-    CHECK(f.port.sent.size() == 3 && secrets.showing() == nullptr);
+    CHECK(f.port.sent.size() == 3 && secrets.showing() == nullptr && sent.account == "antigravity-main");
+    CHECK(f.port.sent.front().pastesCode);      // its claim says it takes a pasted code
+    // A state from before the server applied it (action 3 not yet acknowledged) still wanting a code: no ask.
+    sync::Sessions pending = offering("tokWindowA1", google, "studio", "antigravity", true);
+    pending.setNextAction(3);
+    f.signIn.received(pending);
+    CHECK(secrets.showing() == nullptr && f.signIn.codeSent(3));
+    // The server applied it and the flow still wants a code: it was refused (the refusal's line is in the tab), and
+    // the ask opens again, so the person can paste the right one.
+    sync::Sessions refused = offering("tokWindowA1", google, "studio", "antigravity", true);
+    refused.setNextAction(4);
+    f.signIn.received(refused);
+    CHECK(!f.signIn.codeSent(3) && secrets.showing() != nullptr);
+    // A paste that is no code (two words, a line break inside) is never sent; the window says why, the ask stays.
+    secrets.type("Paste this code\ninto your application");
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3 && f.signIn.typedCode().empty() && secrets.showing() != nullptr);
+    CHECK(f.signIn.problem.find("not a sign-in code") != std::string::npos);
+    f.signIn.problem.clear();
+    secrets.type(code);
+    secrets.submit();
+    CHECK(f.port.sent.size() == 4 && f.port.sent.back().secret.bytes() == code && f.signIn.codeSent(3));
+    // Taken: the state that acknowledges it no longer wants a code, and nothing asks again.
+    sync::Sessions taken = offering("tokWindowA1", google, "studio", "antigravity", false);
+    taken.setNextAction(5);
+    f.signIn.received(taken);
+    CHECK(f.signIn.codeSent(3) && secrets.showing() == nullptr);
+    // A server that reports nothing applied (nextAction 0): a code sent stays sent.
+    Fixture silent("studio.local", "ipad");
+    silent.signIn.activeTab = [&] { return tab; };
+    silent.signIn.opener.showAccount("antigravity-main");
+    silent.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    silent.signIn.step();
+    silent.signIn.typeCode(code);
+    silent.signIn.submitCode();
+    silent.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    CHECK(silent.port.sent.size() == 2 && silent.signIn.codeSent(3) && silent.signIn.codeAsk() == nullptr);
     // A flow another window holds never asks here.
     Fixture other("studio.local", "laptop");
     other.signIn.activeTab = [&] { return tab; };
@@ -269,6 +305,28 @@ void pastedCodeAnywhere() {
     CHECK(desk.callback(1, "w1", sync::SecretValue("code=dummy&state=fakeStHostXq7wP2")).replays.empty());
 }
 
+// A server from before sign-in by a pasted code sends its private loopback page for an Antigravity flow: a window on
+// another machine opens nothing and says the server is too old; one on the server's machine opens the page as before.
+void oldServerSaysSo() {
+    const std::string page = "http://127.0.0.1:5000/nexus-signin/" + std::string(64, 'b');
+    std::pair<sync::SessionId, std::string> tab{9, "antigravity-main"};
+    Fixture remote("studio.local", "ipad");
+    remote.signIn.activeTab = [&] { return tab; };
+    remote.signIn.received(offering("tokWindowA1", page, "studio", "antigravity"));
+    remote.signIn.step();
+    CHECK(remote.opened.empty() && remote.gates.empty() && remote.port.sent.empty());
+    CHECK(remote.signIn.problem.find("too old") != std::string::npos &&
+          remote.signIn.problem.find("antigravity-main") != std::string::npos &&
+          remote.signIn.problem.find("127.0.0.1") == std::string::npos);
+    Fixture near("127.0.0.1", "studio");
+    near.signIn.loopback = true;
+    near.signIn.activeTab = [&] { return tab; };
+    near.signIn.received(offering("tokWindowA1", page, "studio", "antigravity"));
+    near.signIn.step();
+    CHECK(near.opened.size() == 1 && near.opened.front() == page && near.gates.empty() && near.signIn.problem.empty());
+    CHECK(near.port.sent.size() == 1 && near.port.sent.back().kind == sync::ActionKind::SignInOpened);
+}
+
 } // namespace
 
 int main() {
@@ -280,6 +338,7 @@ int main() {
     refusesALookalike();
     privateSignInPages();
     pastedCodeAnywhere();
+    oldServerSaysSo();
     if (failures != 0) {
         std::fprintf(stderr, "signin host: %d check(s) failed\n", failures);
         return 1;

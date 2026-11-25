@@ -201,14 +201,41 @@ void LinkSignIn::submitCode() {
         return;
     }
     sync::Action action;
+    action.secret = sync::SecretValue(v);
+    // The server's own check, made here first: a paste that is no code (a sentence, a line break inside, a control
+    // byte) is never sent, and the ask stays open for the right one.
+    if (!sync::isSignInCode(action.secret)) {
+        wipeCode();
+        problem = "That is not a sign-in code. Paste the code the sign-in page shows, on one line.";
+        return;
+    }
     action.kind = sync::ActionKind::SignInCode;
     action.request = ask->id;
     action.text = opener.token();
-    action.session = activeTab().first;
-    action.secret = sync::SecretValue(v);
-    codeSent_.insert(ask->id);
+    const auto [session, account] = activeTab();
+    action.session = session;
+    action.account = account;
+    const std::uint64_t id = ask->id;
     wipeCode();
-    port->send(std::move(action));
+    codeSent_[id] = port->send(std::move(action));
+}
+
+void LinkSignIn::received(const sync::Sessions& state) {
+    opener.received(state.offers());
+    if (state.nextAction() == 0) {
+        return;     // a server that says nothing of what it applied: a code sent stays sent
+    }
+    for (auto it = codeSent_.begin(); it != codeSent_.end();) {
+        bool wanted = false;
+        for (const sync::SignInOffer& o : state.offers()) {
+            wanted = wanted || (o.id == it->first && o.codeWanted);
+        }
+        if (it->second != 0 && state.nextAction() > it->second && wanted) {
+            it = codeSent_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void LinkSignIn::dismissCode() {
@@ -227,7 +254,9 @@ namespace {
 bool onThisMachine(const sync::SignInOffer& offer, const void* context) {
     const LinkSignIn* s = static_cast<const LinkSignIn*>(context);
     if (sync::signsInByPastedCode(offer.provider)) {
-        return true;    // its browser goes to the vendor's own pages: nothing to bind, wherever the window runs
+        // Its browser goes to the vendor's own pages: nothing to bind, wherever the window runs. A server from before
+        // that sends its private loopback page instead, which only a window on its machine can open.
+        return !sync::isLocalSignInPage(offer.url.bytes()) || s->loopback;
     }
     if (sync::usesLocalSignInPage(offer.provider)) {
         return s->loopback;
@@ -271,11 +300,16 @@ void LinkSignIn::step() {
         action.kind = sync::ActionKind::SignInClaim;
         action.request = next.id;
         action.text = opener.token();
+        action.pastesCode = true;
         port->send(std::move(action));
     } else if (next.kind == sync::SignInOpener::Step::Kind::Refused) {
         // The window's own check of the page's host (sync::parseSignInUrl): nothing is opened, and the flow ends at its
         // deadline. The URL is never shown.
         problem = next.account + "'s sign-in address failed validation. Restart sign-in on the server.";
+    } else if (next.kind == sync::SignInOpener::Step::Kind::OldServer) {
+        // A server from before sign-in by a pasted code: its page is on its own machine alone.
+        problem = "nexus-server is too old to sign in to " + next.account + " from another machine. Update "
+                  "nexus-server, or press Sign in in a Nexus window on the server's machine.";
     } else if (next.kind == sync::SignInOpener::Step::Kind::Open) {
         if (next.gate) {
             gate_ = openGate ? openGate(next.target) : std::make_unique<SignInGate>(next.target);
@@ -569,6 +603,7 @@ bool FrameHost::activateSignIn() {
     action.session = session;
     action.request = offer ? offer->id : 0;
     action.text = signIn.opener.token();
+    action.pastesCode = true;   // this window takes a vendor's pasted code (LinkSignIn::codeAsk)
     pendingClaims_.emplace(choice->name, action.request);
     link->send(std::move(action));
     return true;
