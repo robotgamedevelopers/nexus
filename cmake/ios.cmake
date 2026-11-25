@@ -104,7 +104,7 @@ function(nexus_ios_targets)
         src/native_tabs.cpp src/font_prefetch.cpp)
     target_include_directories(nexus_ios_view PUBLIC src)
     target_compile_options(nexus_ios_view PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_ios_view PUBLIC nexus_policy nexus_ios_logic nexus_sync nexus_hitch
+    target_link_libraries(nexus_ios_view PUBLIC nexus_policy nexus_ios_logic nexus_sync nexus_hitch nexus_scroll
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app
         prax::core_cpp)
 

@@ -34,6 +34,9 @@ private:
     std::size_t aiIndex(const std::string& name) const; // the AI's tab, or tab_count() for none
     void send(const std::string& name, const std::string& text);
     void draft(const std::string& name, const std::string& text);
+    void beginDictation();
+    void endDictation(const std::string& said);
+    std::size_t tabOf(std::size_t id) const; // the tab's index by Tab::id, or tab_count()
 
     Model& model_;
     View& view_;
@@ -42,8 +45,11 @@ private:
     std::unique_ptr<voice::Speech> speech_;
     std::map<std::size_t, std::size_t> seen_;  // by Tab::id: the transcript entries already seen
     std::map<std::size_t, bool> busy_;         // by Tab::id: its turn was open at the last frame
-    bool replyChosen_ = false;                 // the person chose text, voice or both: the policy's first choice no longer applies
     double now_ = 0;
+    // A tab's dictation under way: the tab (by Tab::id) and what its prompt held before.
+    bool dictating_ = false;
+    std::size_t dictTab_ = 0;
+    std::string dictBase_;
 };
 
 } // namespace nexus

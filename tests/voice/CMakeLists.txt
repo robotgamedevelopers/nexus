@@ -41,6 +41,7 @@ tlc_test(tlc_voice_witness_speaks_anything WVoiceSpeaksAnything witnesses/WVoice
 tlc_test(tlc_voice_witness_fail_loses WVoiceFailLoses witnesses/WVoiceFailLoses.cfg action PROPERTY NothingLost)
 tlc_test(tlc_voice_witness_waits_forever WVoiceWaitsForever witnesses/WVoiceWaitsForever.cfg liveness)
 tlc_test(tlc_voice_witness_text_speaks WVoiceTextSpeaks witnesses/WVoiceTextSpeaks.cfg invariant PROPERTY TextIsSilent)
+tlc_test(tlc_voice_witness_no_default WVoiceNoDefault witnesses/WVoiceNoDefault.cfg action PROPERTY DefaultIsFirst)
 tlc_test(tlc_voice_witness_denied_listens WVoiceDeniedListens witnesses/WVoiceDeniedListens.cfg invariant
          PROPERTY DeniedNeverListens)
 foreach(seed 1 2 3 4)

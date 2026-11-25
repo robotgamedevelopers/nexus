@@ -48,6 +48,7 @@ std::vector<Act> VoiceTurn::listen(double now) {
     phase_ = Phase::Listening;
     heard_.clear();
     line_.clear();
+    trouble_ = false;
     listenStart_ = now;
     return acts;
 }
@@ -91,6 +92,7 @@ std::vector<Act> VoiceTurn::permission(bool granted, std::string_view why) {
     }
     permission_ = Permission::Refused;
     phase_ = Phase::Denied;
+    trouble_ = true;
     line_ = why.empty() ? std::string("The microphone or speech recognition is not allowed for nexus. Allow both in "
         "Settings > Privacy & Security, then tap the microphone again.") : std::string(why);
     std::vector<Act> acts;
@@ -129,18 +131,21 @@ std::vector<Act> VoiceTurn::finish() {
             line_ = names + "? Nothing was sent: say the name again, or edit the draft and send it.";
             break;
         }
-        case Route::Current:
+        case Route::Current: {
+            // No name: the AI showing, or with none showing (the phone's list) the default AI, the first.
+            const std::string to = !current_.empty() ? current_ : ais_.empty() ? std::string() : ais_.front().name;
             if (where.prompt.empty()) {
                 line_ = "Heard nothing; nothing was sent.";
-            } else if (current_.empty()) {
+            } else if (to.empty()) {
                 acts.push_back({Act::Kind::Draft, "", heard_});
-                line_ = "No AI is showing: say an AI's name first, or open one and send the draft.";
+                line_ = "No AI to send it to yet: the server sends them once it is reached. It is in the draft.";
             } else {
-                acts.push_back({Act::Kind::Send, current_, where.prompt});
-                awaiting_.insert(current_);
-                line_ = "To " + titled(current_);
+                acts.push_back({Act::Kind::Send, to, where.prompt});
+                awaiting_.insert(to);
+                line_ = "To " + titled(to);
             }
             break;
+        }
     }
     speakNext(acts);
     return acts;
@@ -151,6 +156,7 @@ std::vector<Act> VoiceTurn::failed(std::string_view why) {
     std::vector<Act> acts;
     if (phase_ == Phase::Listening) acts.push_back({Act::Kind::StopListening});
     phase_ = Phase::Idle;
+    trouble_ = true;
     line_ = why.empty() ? std::string("Speech recognition stopped without saying why.") : std::string(why);
     if (!heard_.empty()) {
         acts.push_back({Act::Kind::Draft, current_, heard_});

@@ -26,9 +26,11 @@
 (***************************************************************************)
 EXTENDS Naturals, Sequences, TLC
 
-CONSTANTS AIs, None
+CONSTANTS AIs, None, First
 
 ASSUME None \notin AIs
+\* The default AI: a prompt naming no one, with no AI showing (the phone's list), goes to the first in the list.
+ASSUME First \in AIs
 
 Phases == {"idle", "asking", "listening", "finishing", "denied"}
 Replies == {"text", "voice", "both"}
@@ -128,17 +130,18 @@ Partial(h) ==
 Silence(out) == out.route = "current" /\ ~out.prompt
 Consistent(out, h) == (h = ~Silence(out)) /\ (out.route = "ambiguous" => out.prompt)
 
-\* VoiceTurn::finish, with the routing of what was heard and the AI showing (cur, None for none)
+\* VoiceTurn::finish, with the routing of what was heard and the AI showing (cur, None for none: then the default AI,
+\* First). The step's record keeps cur as its ai.
 Finish(out, cur, op) ==
     LET a0 == [NoActs EXCEPT !.stopListen = (phase = "listening")]
         a == CASE out.route = "named" /\ out.prompt -> [a0 EXCEPT !.open = out.ai, !.send = out.ai]
                [] out.route = "named"              -> [a0 EXCEPT !.open = out.ai]
                [] out.route = "ambiguous"          -> [a0 EXCEPT !.draft = TRUE]
                [] ~out.prompt                      -> a0
-               [] cur = None                       -> [a0 EXCEPT !.draft = TRUE]
+               [] cur = None                       -> [a0 EXCEPT !.send = First]
                [] OTHER                            -> [a0 EXCEPT !.send = cur]
     IN /\ awaiting' = IF a.send # None THEN awaiting \cup {a.send} ELSE awaiting
-       /\ Ends("idle", speaking, queue, a, op, None)
+       /\ Ends("idle", speaking, queue, a, op, cur)
 
 \* VoiceTurn::heard(text, true)
 Final(out, cur) ==
@@ -248,6 +251,11 @@ NothingLost == [][(last'.op = "fail" /\ MicBusy /\ heard) => last'.acts.draft]_v
 
 \* A refusal leaves the turn denied, never listening.
 DeniedIsDenied == [][(last'.op = "permission" /\ phase = "asking" /\ permission' = "refused") => phase' = "denied"]_vars
+
+\* A prompt naming no one goes to the AI showing, and with none showing to the default AI, the first.
+DefaultIsFirst ==
+    [][(last'.op \in {"final", "tick"} /\ last'.acts.send # None /\ last'.acts.open = None) =>
+        last'.acts.send = IF last'.ai = None THEN First ELSE last'.ai]_vars
 
 \* Every listen ends.
 ListenEnds == Listening ~> phase = "idle"

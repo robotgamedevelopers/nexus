@@ -84,6 +84,8 @@ public:
     const std::string& heardText() const { return heard_; }
     // One plain line for the person: who the last prompt went to, or why nothing was sent or heard.
     const std::string& line() const { return line_; }
+    // The line says what went wrong (permission refused, recognition failed) rather than where a prompt went.
+    bool trouble() const { return trouble_; }
 
 private:
     std::vector<Act> listen(double now);
@@ -94,6 +96,7 @@ private:
     Permission permission_ = Permission::Unknown;
     Reply reply_ = Reply::Both;
     bool speaking_ = false;
+    bool trouble_ = false;
     std::deque<Queued> queue_;
     std::set<std::string, std::less<>> awaiting_;
     std::string heard_, line_, current_;

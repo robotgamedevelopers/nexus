@@ -119,13 +119,49 @@ void ambiguityGoesToTheDraft() {
     CHECK(!has(acts, K::Send));
 }
 
-void noAIShowingGoesToTheDraft() {
+// The phone's list shows no AI: a prompt naming no one goes to the default AI, the first in the list.
+void noNameAndNoAIShowingGoesToTheFirst() {
     VoiceTurn t;
-    t.context("", {{"emma", {}}});
+    t.context("", {{"rowan", {}}, {"emma", {}}});
+    t.press(0);
+    t.permission(true, "");
+    const auto acts = t.heard("what's left?", true);
+    CHECK((acts == std::vector<Act>{{K::StopListening}, {K::Send, "rowan", "what's left?"}}));
+    CHECK(t.line() == "To Rowan");
+    CHECK(t.awaiting().count("rowan") == 1);
+    // A name still picks its AI.
+    t.press(1);
+    CHECK((t.heard("Emma, and you?", true) ==
+           std::vector<Act>{{K::StopListening}, {K::Open, "emma"}, {K::Send, "emma", "and you?"}}));
+}
+
+// No AI at all yet (the server not reached): nothing to send to, so the words go to the draft, and the line says so.
+void noAIsAtAllGoesToTheDraft() {
+    VoiceTurn t;
+    t.context("", {});
     t.press(0);
     t.permission(true, "");
     const auto acts = t.heard("what's left?", true);
     CHECK((acts == std::vector<Act>{{K::StopListening}, {K::Draft, "", "what's left?"}}));
+    CHECK(t.line().find("draft") != std::string::npos);
+}
+
+// A refusal and a failure mark the line as trouble (the prompt's dictation shows only those); a listen clears it.
+void troubleIsMarked() {
+    VoiceTurn t;
+    t.context("emma", {});
+    t.press(0);
+    t.permission(false, "");
+    CHECK(t.trouble());
+    t.press(1);
+    t.permission(true, "");
+    CHECK(!t.trouble());
+    t.failed("The audio session was interrupted.");
+    CHECK(t.trouble());
+    t.press(2);
+    CHECK(!t.trouble());
+    t.heard("status", true);
+    CHECK(!t.trouble());
 }
 
 void pressingAgainEndsTheListen() {
@@ -237,7 +273,9 @@ int main() {
     justANameOpensTheTabAndSendsNothing();
     silenceSendsNothing();
     ambiguityGoesToTheDraft();
-    noAIShowingGoesToTheDraft();
+    noNameAndNoAIShowingGoesToTheFirst();
+    noAIsAtAllGoesToTheDraft();
+    troubleIsMarked();
     pressingAgainEndsTheListen();
     aListenAlwaysEnds();
     aFailureKeepsWhatWasHeard();

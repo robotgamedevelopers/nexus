@@ -111,30 +111,36 @@ def _titles(tabs, config):
     return [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
 
 # The iPhone's form (docs/voice.md), chosen by the device's idiom (ui.idiom: "phone", "pad" or "desktop"). The app opens
-# on a vertical menu with one row per tab in the strip's order (ui.menu); a tab opens full screen with a way back, its
-# transcript, the microphone and the prompt. Replies come back as text, voice or both (ui.voice.reply, the person's
-# choice); with voice alone the transcript gives way to the microphone. A fork turns voice off with
-# "phone": {"voice": false}, sets the first reply mode with "phone": {"reply": "voice"}, and adds spoken forms of a
-# AI's name with "phone": {"voice_names": {"zhi": ["zhi ya wen"]}}.
+# on the list of AIs (ui.menu), centred, with a microphone at the bottom: say an AI's name and what to ask, and the
+# reply comes back on the list, spoken (phone.menu_reply). An AI's tab opens full screen with the way back, its
+# transcript and the prompt, whose microphone is plain dictation into the prompt; its replies are text. A fork turns
+# both microphones off with "phone": {"voice": false}, sets how the list's replies come back with "phone":
+# {"menu_reply": "text"} ("text", "voice" or "both"), and adds spoken forms of an AI's name with
+# "phone": {"voice_names": {"zhi": ["zhi ya wen"]}}.
+# The list's rows, by tab index: by kind in phone.menu_kinds' order (the dashboard, the AIs, then terminals), each kind
+# in the strip's order; tabs of a kind not listed come last.
+def _menu_tabs(tabs, phone):
+    kinds = phone.get("menu_kinds", ["sprint", "friend", "terminal"])
+    rank = {kind: i for i, kind in enumerate(kinds)}
+    order = sorted(range(len(tabs)), key = lambda i: (rank.get(tabs[i]["kind"], len(kinds)), i))
+    return order
+
 def _phone(window, state, config):
     ui = state.get("ui", {})
     phone = config.get("phone", {})
+    menu = ui.get("menu", True)
     window["show_tabs"] = False
     window["reorder_tabs"] = False
     window["focus_prompt"] = False
+    window["voice_mic"] = phone.get("voice", True)
     window["tab_titles"] = window.get("tab_titles") or _titles(ui.get("tabs", []), config)
-    window["voice_reply"] = phone.get("reply", "both")
+    window["voice_reply"] = phone.get("menu_reply", "voice") if menu else "text"
     window["voice_names"] = phone.get("voice_names", {})
-    if ui.get("menu", True):
+    window["menu_tabs"] = _menu_tabs(ui.get("tabs", []), phone)
+    if menu:
         window["panels"] = ["menu"]
         return window
     panels = [p for p in window["panels"] if p != "status"]
-    if state["tab"] == "friend" and phone.get("voice", True):
-        reply = ui.get("voice", {}).get("reply", window["voice_reply"])
-        if reply == "voice":
-            panels = ["spacer" if p == "transcript" else p for p in panels]
-        at = panels.index("prompt") if "prompt" in panels else len(panels)
-        panels = panels[:at] + ["voice"] + panels[at:]
     if state["tab"] == "friend" and state["has_status"]:
         panels.append("status")
     window["panels"] = (["back"] + panels)[:6]

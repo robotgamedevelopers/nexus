@@ -209,6 +209,7 @@ int walk(uint64_t seed, int steps, const char* path) {
     file << "\\* Written by tests/voice/voice_walk (seed " << seed << ", " << steps << " steps): one trace of the real "
             "nexus::voice::VoiceTurn.\n";
     file << "TraceAIs == {\"emma\", \"rowan\"}\n";
+    file << "TraceFirst == \"emma\"\n";
     file << "Trace == <<\n";
     for (std::size_t i = 0; i < records.size(); ++i) file << "  " << records[i] << (i + 1 < records.size() ? ",\n" : "\n");
     file << ">>\n====\n";

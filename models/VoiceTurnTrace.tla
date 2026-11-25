@@ -5,7 +5,7 @@
 (*                                                                         *)
 (* tests/voice/voice_walk.cpp drives the code with a seeded random walk    *)
 (* and writes VoiceTurnTraceData.tla beside this module. It defines        *)
-(*   TraceAIs: the AIs it walks, and                               *)
+(*   TraceAIs: the AIs it walks, TraceFirst: the first of them, and   *)
 (*   Trace: one record per step: its operation and arguments (the AI,  *)
 (*     the OS's answer, whether the forming transcript is empty, the       *)
 (*     routing of a final one by the real matcher and the AI showing,  *)
@@ -20,7 +20,7 @@ EXTENDS Naturals, Sequences, TLC, VoiceTurnTraceData
 
 VARIABLES phase, permission, reply, speaking, queue, awaiting, heard, last, l
 
-V == INSTANCE VoiceTurn WITH AIs <- TraceAIs, None <- "none"
+V == INSTANCE VoiceTurn WITH AIs <- TraceAIs, None <- "none", First <- TraceFirst
 
 \* the spec's state, and the acts of the step that reached it, equal what the code recorded at step k
 Matches(k) ==

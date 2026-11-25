@@ -928,8 +928,50 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     return true;
 }
 
+// The phone's list under the finger (finger_scroll.h): a press in it starts the scroll's tracking and goes on to the
+// rows (a tap is theirs); once it moves past the slop it is a drag, the rows' press is cancelled, and the drag's events
+// are the scroll's alone.
+bool FrameHost::menuFinger(const PrAppEvent& e) {
+    auto& scroll = view->menuScroll;
+    const bool pointer = e.kind == PrAppEventKind_PointerDown || e.kind == PrAppEventKind_PointerMove ||
+                         e.kind == PrAppEventKind_PointerUp || e.kind == PrAppEventKind_PointerCancel;
+    if (!pointer) return false;
+    if (e.kind == PrAppEventKind_PointerDown) {
+        menuPress_ = false;
+        if (!view->phoneMenu || !ui || e.pointer.button != 0) return false;
+        auto* tree = prUiTree(ui);
+        if (view->menuViewport == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, view->menuViewport)) return false;
+        const auto r = prLayoutRectToPx(prLayoutNodeBounds(tree, view->menuViewport, PrLayoutCoordinates_Viewport));
+        const auto p = e.pointer.position;
+        if (p.x < r.left || p.x >= r.right || p.y < r.top || p.y >= r.bottom) return false;
+        menuPress_ = true;
+        scroll.down(p.y, e.time, view->time);
+        return false;
+    }
+    if (!menuPress_) return false;
+    if (e.kind == PrAppEventKind_PointerMove) {
+        const bool was = scroll.dragging();
+        scroll.move(e.pointer.position.y, e.time);
+        if (!was && scroll.dragging() && ui) {
+            PrAppEvent cancel = e;
+            cancel.kind = PrAppEventKind_PointerCancel;
+            prUiPushEvent(ui, kPrUiViewportMain, &cancel);
+        }
+        return scroll.dragging();
+    }
+    menuPress_ = false;
+    if (e.kind == PrAppEventKind_PointerCancel) {
+        scroll.cancel(view->time);
+        return false;
+    }
+    const bool dragged = scroll.dragging();
+    scroll.up(e.time, view->time);
+    return dragged;
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    if (menuFinger(e)) return true;
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {

@@ -432,7 +432,8 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
     if (!readFlag(doc, 0, {"prompt_command", 14}, surface.promptCommand) ||
             !readFlag(doc, 0, {"show_tabs", 9}, surface.showTabs) ||
             !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs) ||
-            !readFlag(doc, 0, {"focus_prompt", 12}, surface.focusPrompt)) return false;
+            !readFlag(doc, 0, {"focus_prompt", 12}, surface.focusPrompt) ||
+            !readFlag(doc, 0, {"voice_mic", 9}, surface.voiceMic)) return false;
     const auto reply = prJsonMember(doc, 0, {"voice_reply", 11});
     if (reply != kPrJsonMissing) {
         surface.voiceReply = std::string(stringAt(doc, reply));
@@ -461,6 +462,17 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             auto text = stringAt(doc, prJsonElement(doc, titles, i));
             if (text.size() > 512) return false;
             surface.tabTitles.emplace_back(text);
+        }
+    }
+    // The phone's list (docs/voice.md): which tabs it shows, by index, in its order.
+    const auto rows = prJsonMember(doc, 0, {"menu_tabs", 9});
+    if (rows != kPrJsonMissing) {
+        if (prJsonKind(doc, rows) != PrJsonKind_Array || prJsonCount(doc, rows) > 1024) return false;
+        surface.menuTabs.emplace();
+        for (uint32_t i = 0; i < prJsonCount(doc, rows); ++i) {
+            const double at = prJsonNumber(doc, prJsonElement(doc, rows, i), -1);
+            if (at < 0 || at >= 1024 || at != double(std::size_t(at))) return false;
+            surface.menuTabs->push_back(std::size_t(at));
         }
     }
     const auto items = prJsonMember(doc, 0, {"account_items", 13});
@@ -588,7 +600,6 @@ bool readWindow(const std::string& answer, std::string_view tab, bool promptOpen
         else if (name == "status") panel = Panel::Status;
         else if (name == "menu") panel = Panel::Menu;
         else if (name == "back" && tab != "empty") panel = Panel::Back;
-        else if (name == "voice" && tab == "friend") panel = Panel::Voice;
         else if (name == "service_reply" && tab == "extension") panel = Panel::ServiceReply;
         else if (name == "native" && tab == "extension") panel = Panel::Native;
         else if (name == "text_area" && tab == "extension") panel = Panel::TextArea;

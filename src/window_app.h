@@ -20,10 +20,10 @@ struct Shortcut {
     int argument;
     std::string type{};
 };
-// Menu, Back and Voice are the phone's form (docs/voice.md): the vertical menu of tabs, the way back to it from a tab,
-// and the microphone with what it heard and who it went to.
+// Menu and Back are the phone's form (docs/voice.md): the list of AIs with its microphone, and the way back to it from
+// a tab.
 enum class Panel { Board, Terminal, Spacer, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply,
-                   Menu, Back, Voice };
+                   Menu, Back };
 struct TabType {
     std::string title, group, native, service;
     bool operator==(const TabType&) const = default;
@@ -81,10 +81,15 @@ struct AccountSurface {
     // The prompt takes the focus on every frame (the desktop and the iPad). Off on the phone, where the focus brings up the
     // on-screen keyboard over the microphone: a tap on the prompt focuses it there.
     bool focusPrompt = true;
+    // The phone's microphones (docs/voice.md): the list's, and the prompt's dictation. Off unless the policy turns them on.
+    bool voiceMic = false;
     // The phone's voice (docs/voice.md): how replies come back at first ("text", "voice" or "both"), and more spoken
     // forms of AIs' names, by AI (voice_names).
     std::string voiceReply = "both";
     std::map<std::string, std::vector<std::string>> voiceNames;
+    // The phone's list: the tabs it shows, by index, in its order (the dashboard, the AIs, then terminals); unset, all
+    // of them in the strip's order.
+    std::optional<std::vector<std::size_t>> menuTabs;
 };
 
 struct MessageCardStyle {

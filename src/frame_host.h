@@ -207,6 +207,8 @@ struct FrameHost {
     void pollLink();
 
 private:
+    bool menuFinger(const PrAppEvent& e);
+    bool menuPress_ = false; // a press began in the phone's list (menuFinger)
     std::vector<StagedFile> stagedFiles_;
     unsigned stagedCount_ = 0, pasteFrame_ = 0;
     std::future<void> uploadWorker_;

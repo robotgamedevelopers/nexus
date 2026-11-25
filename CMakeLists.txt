@@ -275,9 +275,9 @@ add_library(nexus_hitch STATIC src/hitch.cpp)
 target_include_directories(nexus_hitch PUBLIC src)
 target_compile_options(nexus_hitch PRIVATE ${NEXUS_WARNINGS})
 
-# The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
-# Prax, so that the model job builds its trace walk alone.
-add_library(nexus_scroll STATIC src/scroll_glide.cpp)
+# The sprint board's scrolling (src/scroll_glide.h), and the phone list's under the finger (src/finger_scroll.h): the
+# curves and the scrollers. No OS, no time, no Prax, so that the model job builds their trace walks alone.
+add_library(nexus_scroll STATIC src/scroll_glide.cpp src/finger_scroll.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 

@@ -27,6 +27,7 @@
 #include "chat_markdown.h"
 #include "chat_selection.h"
 #include "cursor.h"
+#include "finger_scroll.h"
 #include "hitch.h"
 #include "model.h"
 #include "window_app.h"
@@ -159,9 +160,13 @@ struct VoicePanel {
     bool speaking = false;      // a reply is being spoken
     std::string heard;          // the transcript as it forms
     std::string line;           // who the last prompt went to, or why nothing was heard, sent or allowed
-    std::string reply = "both"; // "text", "voice" or "both"
-    std::function<void()> press;                     // the microphone button
-    std::function<void(const std::string&)> setReply; // the person chose "text", "voice" or "both"
+    bool trouble = false;       // the line says what went wrong (the prompt's dictation shows only that)
+    // On the menu: the AI the last prompt from the menu went to, its reply so far, and the way into its tab.
+    std::string to;
+    std::string toTitle;
+    std::string replyText;
+    std::function<void()> press;   // the microphone button
+    std::function<void()> openTo;  // opens `to`'s tab
 };
 
 struct View {
@@ -282,6 +287,12 @@ struct View {
     std::string idiom = "desktop";
     bool phoneMenu = true;
     VoicePanel* voice = nullptr;
+    // The phone's list of AIs: its scroll under the finger, and its viewport and content from the last layout (their
+    // heights give the scroll's range; the viewport's bounds which presses it takes).
+    FingerScroll menuScroll;
+    PrLayoutNode menuViewport = kPrLayoutNodeNone;
+    PrLayoutNode menuContent = kPrLayoutNodeNone;
+    PrLayoutNode promptMic = kPrLayoutNodeNone;  // the phone prompt's microphone, inside the prompt's box
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none
