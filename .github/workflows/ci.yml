@@ -594,7 +594,9 @@ jobs:
           else
             echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
           fi
-          npm run test:functional
+          # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
+          # Serialize just this test on each Linux host, including across workflow runs.
+          flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
 
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,

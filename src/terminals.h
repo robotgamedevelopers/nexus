@@ -10,7 +10,7 @@
 // background role that survives palette changes, or a screen opacity apart from the ink.
 //
 // Nothing here waits on the frame thread (AGENTS.md, the frame budget). A thread of the terminals' own starts each
-// shell (prTerminalCreate waits for the fork and exec, and the directory is checked there too) and ends it
+// shell (the first measured terminal frame waits for fork and exec, and the directory is checked there too) and ends it
 // (prTerminalDestroy kills the shell, joins its reader and waits for it), and four times a second reads each shell's
 // foreground process group for its tab's label (sysctl, foreground.h), reading the arguments of a new one. The label
 // must see the foreground as of each new title (remote.h TabLabel: a title ssh's remote side sets is the session's),
@@ -120,6 +120,8 @@ private:
         std::string program;
         std::string dir;
         float scale;
+        PrVec2 extent{};
+        float ratio = 1;
     };
     // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
     // line its tab shows if no shell can run here at all (problem).
@@ -147,6 +149,7 @@ private:
     PrProcessLauncher* launcher_ = nullptr;     // used on the start thread only
 
     // The frame thread's.
+    std::map<std::size_t, Start> awaitingSize_;
     std::map<std::size_t, PrTerminal*> terminals_;
     std::map<std::size_t, TabLabel> labels_;
     std::map<std::size_t, int> pids_;           // each terminal's shell, by process id; absent if not found

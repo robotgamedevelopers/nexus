@@ -193,8 +193,10 @@ bool SessionView::operator==(const SessionView& x) const {
 
 bool visibleBus(std::string_view text, const SessionView& view) {
     if (text.empty()) return false;  // a redacted slot, still counted in raw transcript indexes
-    if (!view.busSenders) return true;
     const auto separator = text.find('\n');
+    // A broadcast can arrive back in its sender's own inbox, including in saved history.
+    if (separator != text.npos && text.substr(0, separator) == view.info.friendName) return false;
+    if (!view.busSenders) return true;
     return separator != text.npos && std::binary_search(view.busSenders->begin(), view.busSenders->end(),
                                                         text.substr(0, separator));
 }

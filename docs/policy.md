@@ -69,8 +69,8 @@ On macOS, `overlay_blur_sigma` sets the Gaussian blur width in display points (d
 ## Tab and account navigation
 
 The client window event supplies `active_tab` (zero-based) and `tab_count` in current strip order. Stock
-`client/window.star` binds Command-Left and Command-Right to the previous and next positions, wrapping at both
-ends. Numbered shortcuts still select positions directly. In client `config.json`, `tab_navigation` maps chords
+`client/window.star` binds Command-Left and Command-Right to the previous and next positions, stopping at each
+end by default. Set `tab_navigation_wrap` to `true` in client `config.json` to wrap around. Numbered shortcuts still select positions directly. In client `config.json`, `tab_navigation` maps chords
 to signed offsets.
 
 On a friend tab, Command-Up and Command-Down open the linked-account picker and highlight the previous or next

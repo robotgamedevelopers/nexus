@@ -2273,14 +2273,17 @@ void arrowsFollowTheActiveTab() {
     const auto plugin = h.model.active();
     const auto count = h.model.tab_count();
     right();
-    CHECK(h.model.active() == (plugin + 1) % count);
+    const auto next = std::min(plugin + 1, count - 1);
+    CHECK(h.model.active() == next);
     left();
-    CHECK(h.model.active() == plugin);
+    CHECK(h.model.active() == next - 1);
     h.commandDigit(1);
     left();
-    CHECK(h.model.active() == count - 1);
-    right();
     CHECK(h.active().kind == TabKind::Sprint);
+    h.model.select_tab(count - 1);
+    h.frame();
+    right();
+    CHECK(h.model.active() == count - 1);
 }
 
 // ---- Terminal tabs ----

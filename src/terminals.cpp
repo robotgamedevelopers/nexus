@@ -74,6 +74,7 @@ void PraxTerminals::closeAll() {
     seen_.clear();
     titles_.clear();
     asked_.clear();
+    awaitingSize_.clear();
     failed_.clear();
     problems_.clear();
     dirs_.clear();
@@ -199,6 +200,34 @@ PraxTerminals::Started PraxTerminals::start(const Start& s) {
     desc.scrollback = kPrTerminalScrollbackDefault;
     desc.notificationTag = s.id + 1;
     done.terminal = prTerminalCreate(&desc);
+    if (done.terminal) {
+        // Prax launches the PTY on its first measured frame. Give it the real tab size
+        // here on the worker, then transfer the terminal to the visible kit.
+        auto* shaper = prTextShaperCreate(PrTextShaperBackend_Default);
+        PrLayoutTreeDesc treeDesc{.shaper = shaper, .targetPixelRatio = s.ratio};
+        auto* tree = prLayoutTreeCreate(&treeDesc);
+        auto* ui = prUiCreate(tree);
+        auto theme = prKitThemeStudio(PrKitThemeVariant_Dark, fonts_);
+        auto* kit = prKitCreate(ui, &theme);
+        struct LaunchFrame { PrKit* kit; PrTerminal* terminal; } frame{kit, done.terminal};
+        PrUiFrameDesc frameDesc{.extent = s.extent, .maxRounds = 4, .display = prAppDisplayDefault()};
+        frameDesc.display.pixelRatio = s.ratio;
+        prUiFrame(ui, &frameDesc, [](void* data, PrUi*, const PrUiRound*) {
+            auto& f = *static_cast<LaunchFrame*>(data);
+            const auto root = prKitBox(f.kit, kPrLayoutNodeNone, {}, {.place = {
+                .width = prKitPercent(100), .height = prKitPercent(100)}});
+            prTerminalFrame(f.terminal, f.kit, root, PrTerminalBackground_Parent);
+        }, &frame);
+        prKitDestroy(kit);
+        prUiDestroy(ui);
+        prLayoutTreeDestroy(tree);
+        prTextShaperDestroy(shaper);
+        if (!prTerminalLaunched(done.terminal)) {
+            prTerminalDestroy(done.terminal);
+            done.terminal = nullptr;
+            done.problem = "Could not measure the terminal to start its shell. Close the tab and open it again.";
+        }
+    }
     prRawStringReset(&home);
     return done;
 }
@@ -237,10 +266,17 @@ void PraxTerminals::take() {
             held_.erase(s.id);
             continue;
         }
+        if (prTerminalLaunchStatus(s.terminal) != PrStatus_Ok) failed_.insert(s.id);
         terminals_[s.id] = s.terminal;
         labels_[s.id] = TabLabel();
         dirs_[s.id] = s.dir;
         scales_[s.id] = s.scale;
+        if (const auto pid = static_cast<int>(prTerminalProcessId(s.terminal)); pid > 0) {
+            pids_[s.id] = pid;
+            std::lock_guard lock(mutex_);
+            shells_[s.id] = pid;
+            watch_[s.id] = ForegroundSeen{};
+        }
         applyBackground(s.terminal);
         prTerminalFocus(s.terminal);
     }
@@ -403,15 +439,12 @@ bool PraxTerminals::openIn(std::size_t id, const std::string& dir) {
         return false;
     }
     asked_[id] = dir;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        starts_.push_back(Start{id, program, dir, scale_});
-    }
-    wake_.notify_one();
+    awaitingSize_.insert_or_assign(id, Start{id, program, dir, scale_});
     return true;
 }
 
 void PraxTerminals::close(std::size_t id) {
+    awaitingSize_.erase(id);
     asked_.erase(id);
     failed_.erase(id);
     problems_.erase(id);
@@ -453,6 +486,21 @@ bool PraxTerminals::applyBackground(PrTerminal* terminal) const {
 }
 
 void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
+    if (auto pending = awaitingSize_.find(id); pending != awaitingSize_.end()) {
+        auto node = prKitBox(kit_, parent, {}, {.place = {.flex = PrKitFlex_Fill}});
+        if (prUiExtent(kit_->ui, node, PrUiAxisFlag_Both, &pending->second.extent) &&
+                pending->second.extent.x > 0 && pending->second.extent.y > 0) {
+            pending->second.scale = scale_;
+            pending->second.ratio = prLayoutTreeTargetPixelRatio(kit_->tree);
+            {
+                std::lock_guard lock(mutex_);
+                starts_.push_back(std::move(pending->second));
+            }
+            awaitingSize_.erase(pending);
+            wake_.notify_one();
+        }
+        return;
+    }
     PrTerminal* terminal = find(id);
     if (terminal == nullptr) {
         return;     // starting: the tab shows the window's background until its shell is there; what is typed meanwhile
@@ -469,18 +517,7 @@ void PraxTerminals::show(std::size_t id, PrLayoutNode parent) {
     applyBackground(terminal);
     PrLayoutTree* tree = kit_->tree;
     const PrLayoutStyleIndex before = prLayoutTreeFrameStyle(tree, parent);
-    const bool starting = !prTerminalLaunched(terminal);
     prTerminalFrame(terminal, kit_, parent, PrTerminalBackground_Parent);
-    if (starting && prTerminalLaunched(terminal)) {
-        if (prTerminalLaunchStatus(terminal) != PrStatus_Ok) {
-            failed_.insert(id);
-        } else if (const auto pid = static_cast<int>(prTerminalProcessId(terminal)); pid > 0) {
-            pids_[id] = pid;
-            std::lock_guard lock(mutex_);
-            shells_[id] = pid;
-            watch_[id] = ForegroundSeen{};
-        }
-    }
     // A frame in which Prax reset the colour drew with the theme's opaque one: the window keeps its own background
     // this frame, and the next frame draws with the window's colour.
     if (applyBackground(terminal)) {

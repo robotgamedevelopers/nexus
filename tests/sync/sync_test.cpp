@@ -2127,6 +2127,12 @@ void mirror_bus_grants_reconcile_cached_history() {
     Model m(friends2());
     Mirror mirror;
     const auto id = m.tab(0).id;
+    auto inbox = tailFor("ada", {}, {}, {});
+    CHECK(!visibleBus("ada\nbroadcast", inbox));
+    CHECK(visibleBus("peer\nbroadcast", inbox));
+    inbox.busSenders = std::vector<std::string>{"ada", "peer"};
+    CHECK(!visibleBus("ada\nbroadcast", inbox));
+    CHECK(visibleBus("peer\nbroadcast", inbox));
     const auto hidden = entry(EntryKind::Bus, "");
     const auto old = entry(EntryKind::Bus, "old\noutside the newest tail");
     const auto first = entry(EntryKind::Bus, "peer\nfirst");

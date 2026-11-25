@@ -111,7 +111,9 @@ def handle(event, state, config):
         count = state.get("tab_count", 0)
         if count:
             for chord, direction in config.get("tab_navigation", {"Command+ArrowLeft": -1, "Command+ArrowRight": 1}).items():
-                shortcuts = _bind(shortcuts, chord, ["select_tab", (state["active_tab"] + direction) % count])
+                target = state["active_tab"] + direction
+                target = target % count if config.get("tab_navigation_wrap", False) else max(0, min(target, count - 1))
+                shortcuts = _bind(shortcuts, chord, ["select_tab", target])
             for chord, direction in config.get("tab_reorder", {"Command+Shift+ArrowLeft": -1, "Command+Shift+ArrowRight": 1}).items():
                 shortcuts = _bind(shortcuts, chord, ["move_tab", direction])
         if state["tab"] == "friend":
