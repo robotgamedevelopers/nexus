@@ -2,11 +2,20 @@
 # Linux), then restores the newest cache of this name for Prax's pin (read from CMakeLists.txt): the build directory
 # (build/, so Prax is not recompiled: tar keeps its sources' times, and the checkout makes only nexus's own files
 # newer) and ~/nexus-ci (ccache, the linker's ThinLTO cache, Prax's downloads, cargo's target directory), and cargo's
-# registry. Sets what the jobs' steps read: NEXUS_CACHES, PR_DOWNLOAD_DIR, CCACHE_*, NEXUS_CARGO_TARGET_DIR
-# (cmake/policy.cmake), JOBS and TEST_JOBS.
+# registry, and the pinned Rust toolchain. Sets what the jobs' steps read: NEXUS_CACHES, PR_DOWNLOAD_DIR, CCACHE_*,
+# NEXUS_CARGO_TARGET_DIR (cmake/policy.cmake), RUSTUP_TOOLCHAIN, JOBS and TEST_JOBS.
 #
-# The caches are made only by .github/workflows/cache-warm.yml, on main (daily, and by hand after a pin changes), so
-# every pull request can restore them. A per-commit job (require: true) fails at once when there is none for this
+# Rust is pinned (1.98.1, as windows-build pins it), not the image's: the hosted images roll out a new Rust every few
+# days, and a cargo target directory built by another rustc rebuilds every crate (67 s on 4 cores, PR #89's run).
+# The toolchain lives in ~/nexus-ci/rustup (RUSTUP_HOME), so it is restored with the rest of ~/nexus-ci.
+#
+# Tools. ccache is ccache's own release build (4.14.3, checked against its sha256), kept in ~/nexus-ci/tools and so
+# restored with the cache: Homebrew's ccache pours four dependencies first, and apt's needs an index update, each about
+# 25 s of a 2-minute job. On Linux, ld.lld and ninja come from the image's own LLVM 18 and ninja where it has them, at
+# the paths the cached CMakeCache.txt names (/usr/bin/ld.lld, /usr/bin/ninja); apt only for what is still missing.
+#
+# The caches are made only by .github/workflows/cache-warm.yml, on main (on every push to main, daily, and by hand), so
+# every pull request can restore them, built from main as it is now. A per-commit job (require: true) fails at once when there is none for this
 # pin, saying to run cache-warm; it never builds Prax cold inside its 2 minutes.
 name: hosted-caches
 description: Tools and restored caches for a GitHub-hosted macOS or Linux job
@@ -50,7 +59,13 @@ runs:
               HOMEBREW_NO_ENV_HINTS=1 brew install --quiet "${need[@]}"
           fi
         fi
-        if [ "$RUNNER_OS" = Linux ] && [ -n "$APT" ]; then
+        if [ "$RUNNER_OS" = Linux ]; then
+          if [ ! -e /usr/bin/ld.lld ] && [ -x /usr/bin/ld.lld-18 ]; then sudo ln -s ld.lld-18 /usr/bin/ld.lld; fi
+          if [ ! -e /usr/bin/ninja ] && command -v ninja >/dev/null 2>&1; then sudo ln -s "$(command -v ninja)" /usr/bin/ninja; fi
+          if [ ! -e /usr/bin/ld.lld ]; then APT="$APT lld"; fi
+          if [ ! -e /usr/bin/ninja ]; then APT="$APT ninja-build"; fi
+        fi
+        if [ "$RUNNER_OS" = Linux ] && [ -n "${APT// /}" ]; then
           need=()
           for package in $APT; do
             dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' || need+=("$package")
@@ -106,6 +121,35 @@ runs:
         caches="$HOME/nexus-ci"
         mkdir -p "$caches/ccache" "$caches/lto" "$caches/prax-downloads" "$caches/cargo-target"
         if [ "$RUNNER_OS" = macOS ]; then cores=$(sysctl -n hw.ncpu); else cores=$(nproc); fi
+        # ccache's release build, from the cache or downloaded once and checked.
+        ccache_version=4.14.3
+        if [ "$RUNNER_OS" = macOS ]; then
+          ccache_asset=ccache-$ccache_version-darwin
+          ccache_sha=764dd2a8100ff83e6bbd7b9a1e2016cc401be34bee8a70ea99698186622c34d5
+        else
+          ccache_asset=ccache-$ccache_version-linux-x86_64-glibc
+          ccache_sha=9ac91421d7372565118cb421e4dc2d03f273a11ab81ab9e051fd1cb4577222d7
+        fi
+        tools="$caches/tools"
+        if [ ! -x "$tools/$ccache_asset/ccache" ]; then
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/$ccache_asset.tar.gz" \
+            "https://github.com/ccache/ccache/releases/download/v$ccache_version/$ccache_asset.tar.gz"
+          echo "$ccache_sha  $tools/$ccache_asset.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$tools/$ccache_asset.tar.gz" -C "$tools"
+          rm -f "$tools/$ccache_asset.tar.gz"
+        fi
+        "$tools/$ccache_asset/ccache" --version | head -n 1
+        echo "$tools/$ccache_asset" >> "$GITHUB_PATH"
+        toolchain=1.98.1
+        export RUSTUP_HOME="$caches/rustup"
+        if ! ls -d "$RUSTUP_HOME/toolchains/$toolchain-"*/bin/cargo >/dev/null 2>&1; then
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "::error::no rustup on $(hostname -s), so Rust $toolchain cannot be installed"
+            exit 1
+          fi
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+        fi
         {
           echo "NEXUS_CACHES=$caches"
           echo "PR_DOWNLOAD_DIR=$caches/prax-downloads"
@@ -114,6 +158,8 @@ runs:
           echo "CCACHE_MAXSIZE=2G"
           echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
           echo "NEXUS_CARGO_TARGET_DIR=$caches/cargo-target"
+          echo "RUSTUP_HOME=$RUSTUP_HOME"
+          echo "RUSTUP_TOOLCHAIN=$toolchain"
           echo "JOBS=$cores"
           echo "CARGO_BUILD_JOBS=$cores"
           echo "TEST_JOBS=$cores"

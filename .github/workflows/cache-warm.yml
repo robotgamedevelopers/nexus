@@ -3,18 +3,27 @@
 # (.github/actions/hosted-caches, nexus-build, windows-build; tailscale.yml with prime) and saves the result under a new
 # key; ci.yml's jobs then restore the newest. It is not a per-commit check and has no 2-minute limit: a cold build of
 # Prax (a new pin) or of the Tailscale shim's Go dependencies does not fit one, and per-commit jobs never build them
-# cold. Daily, so ccache holds main's newest objects; and by hand after a Prax or Tailscale pin changes
-# (gh workflow run cache-warm.yml --ref main), before the pull requests that need the new pin run.
+# cold. On every push to main, so a pull request's build starts from main as it is now and rebuilds only what the
+# pull request changed (with a cache from an older main, every file main changed since is rebuilt too, and the hosted
+# per-commit jobs went past 2 minutes on 2026-11-25); daily; and by hand after a Prax or Tailscale pin changes
+# (gh workflow run cache-warm.yml --ref main), before the pull requests that need the new pin run. The Tailscale shim's
+# cache is keyed by its pins alone, so it is made daily and by hand, not on every push.
+#
+# Each build cache is about 0.5 GB and the repository's caches share one quota, so after saving, a job deletes the
+# older caches of its own name (the one it restored and any before it); a pull request restores the newest.
 
 name: cache-warm
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "41 7 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: cache-warm
@@ -33,12 +42,12 @@ jobs:
           - cache: mac-release
             os: macos-26
             config: mac-release
-            brew: ccache ninja protobuf
+            brew: ninja protobuf
             targets: ""
           - cache: mac-asan-units
             os: macos-26
             config: mac-asan
-            brew: ccache ninja
+            brew: ninja
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
@@ -46,7 +55,7 @@ jobs:
           - cache: mac-asan-walks
             os: macos-26
             config: mac-asan
-            brew: ccache ninja
+            brew: ninja
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
@@ -54,12 +63,12 @@ jobs:
           - cache: linux-release
             os: ubuntu-24.04
             config: linux-release
-            apt: ccache ninja-build lld
+            apt: ""
             targets: ""
           - cache: linux-asan-units
             os: ubuntu-24.04
             config: linux-asan
-            apt: ccache ninja-build lld
+            apt: ""
             targets: >-
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
@@ -67,7 +76,7 @@ jobs:
           - cache: linux-asan-walks
             os: ubuntu-24.04
             config: linux-asan
-            apt: ccache ninja-build lld
+            apt: ""
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
@@ -105,6 +114,13 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: ${{ steps.caches.outputs.key }}
+      - name: Delete this name's older caches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ matrix.cache }}
+          KEY: ${{ steps.caches.outputs.key }}
+        run: bash .github/cache-prune.sh "$NAME" "$KEY"
 
   windows-release:
     if: github.ref == 'refs/heads/main'
@@ -134,10 +150,16 @@ jobs:
             ~\.cargo\registry\index
             ~\.cargo\registry\cache
           key: ${{ steps.build.outputs.key }}
+      - name: Delete this name's older caches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ steps.build.outputs.key }}
+        run: bash .github/cache-prune.sh windows-release "$KEY"
 
   # The Tailscale shim's primed key directory on each OS, built and tested with no time limit, saved for its pins.
   tailscale:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'push'
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
