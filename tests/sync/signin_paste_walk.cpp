@@ -345,14 +345,14 @@ int main(int argc, char** argv) {
         std::vector<Choice> choices;
         // The server and the process.
         if (!w.signedin && !w.anyLive() && w.next <= kMaxFlows) {
-            choices.push_back({4, [&] {
+            choices.push_back({16, [&] {
                 w.take(w.desk->need(w.next, kAccount, kProvider));
                 ++w.next;
                 return std::string();
             }, "need"});
         }
         for (const Msg& m : w.up) {
-            choices.push_back({6, [&, m] {
+            choices.push_back({24, [&, m] {
                 w.up.erase(m);
                 const std::string& token = kTokens.at(m.c);
                 if (m.kind == "claim") {
@@ -392,21 +392,21 @@ int main(int argc, char** argv) {
             }, "receive"});
         }
         if (w.proc.st == "running" && w.flow.at(w.proc.id).st == "started") {
-            choices.push_back({4, [&] {
+            choices.push_back({16, [&] {
                 w.take(w.desk->url(kAccount, w.proc.id, SecretValue(kUrl)));
                 w.proc.st = "url";
                 return std::string();
             }, "url"});
         }
         if (w.proc.st == "url" && w.running(w.proc.id)) {
-            choices.push_back({4, [&] {
+            choices.push_back({16, [&] {
                 w.take(w.desk->codeWanted(kAccount, w.proc.id));
                 w.proc.st = "asking";
                 return std::string();
             }, "ask"});
         }
         if (w.proc.st == "got-code" && w.running(w.proc.id)) {
-            choices.push_back({2, [&] {
+            choices.push_back({1, [&] {
                 SignInEffects e;
                 if (w.desk->printed(kAccount, &e) != w.proc.id) {
                     fail("the enrollment saved was not its flow's");
@@ -418,14 +418,14 @@ int main(int argc, char** argv) {
             }, "enroll"});
         }
         if (w.proc.st != kNone) {
-            choices.push_back({1, [&] {
+            choices.push_back({2, [&] {
                 w.take(w.desk->exited(kAccount, w.proc.id, "the walk's process ended"));
                 w.proc = Proc{};
                 return std::string();
             }, "exit"});
         }
         if (const auto due = w.desk->deadline()) {
-            choices.push_back({1, [&, due] {
+            choices.push_back({2, [&, due] {
                 std::uint64_t id = 0;
                 for (const auto& [i, f] : w.flow) {
                     if (w.running(i)) {
@@ -450,7 +450,7 @@ int main(int argc, char** argv) {
         // The windows and the person.
         for (const std::string& c : kClients) {
             if (w.conn[c] && w.view[c] != w.pubFor(c)) {
-                choices.push_back({8, [&, c] {
+                choices.push_back({30, [&, c] {
                     w.view[c] = w.pubFor(c);
                     return ", c |-> " + q(c);
                 }, "sync"});
@@ -458,14 +458,14 @@ int main(int argc, char** argv) {
             if (w.conn[c]) {
                 for (const Offer& o : w.view[c]) {
                     if (o.opener == kNone && w.claimed[c].count(o.id) == 0) {
-                        choices.push_back({4, [&, c, o] {
+                        choices.push_back({16, [&, c, o] {
                             w.up.insert({"claim", o.id, c, kNone});
                             w.claimed[c].insert(o.id);
                             return ", c |-> " + q(c) + ", i |-> " + std::to_string(o.id);
                         }, "claim"});
                     }
                     if (o.opener == c && o.url && w.opened[c].count(o.id) == 0) {
-                        choices.push_back({4, [&, c, o] {
+                        choices.push_back({16, [&, c, o] {
                             w.opened[c].insert(o.id);
                             w.up.insert({"opened", o.id, c, kNone});
                             return ", c |-> " + q(c) + ", i |-> " + std::to_string(o.id);
@@ -473,7 +473,7 @@ int main(int argc, char** argv) {
                     }
                     if (o.opener == c && o.ask && w.opened[c].count(o.id) != 0 && w.pasted[c].count(o.id) == 0) {
                         const std::string v = kCodes[pick(kCodes.size())];
-                        choices.push_back({6, [&, c, o, v] {
+                        choices.push_back({24, [&, c, o, v] {
                             w.pasted[c].insert(o.id);
                             w.up.insert({"code", o.id, c, v});
                             return ", c |-> " + q(c) + ", v |-> " + v + ", i |-> " + std::to_string(o.id);
@@ -485,7 +485,10 @@ int main(int argc, char** argv) {
                     const std::uint64_t i = pick(3) != 0 && w.next > 1 ? std::min<std::uint64_t>(w.next - 1, kMaxFlows)
                                                                        : 1 + pick(kMaxFlows);
                     const std::string v = kCodes[pick(kCodes.size())];
-                    choices.push_back({faulty ? 4u : 2u, [&, c, i, v] {
+                    // The faulty run aims its strays where the fault shows: a flow asking for a code that another window holds.
+                    const bool aimed = w.next > 1 && i == std::min<std::uint64_t>(w.next - 1, kMaxFlows) &&
+                                       w.flow.at(i).asked && w.flow.at(i).opener != c && w.flow.at(i).opener != kNone;
+                    choices.push_back({faulty ? (aimed ? 200u : 2u) : 4u, [&, c, i, v] {
                         ++w.strays;
                         w.up.insert({"code", i, c, v});
                         return ", c |-> " + q(c) + ", i |-> " + std::to_string(i) + ", v |-> " + v;
@@ -498,11 +501,20 @@ int main(int argc, char** argv) {
                     return ", c |-> " + q(c);
                 }, "disconnect"});
             } else {
-                choices.push_back({3, [&, c] {
+                choices.push_back({4, [&, c] {
                     w.conn[c] = true;
                     return ", c |-> " + q(c);
                 }, "connect"});
             }
+        }
+        // Signed in, nothing in flight and every linked window up to date: only links coming and going are left, and
+        // the trace ends there.
+        bool quiet = w.signedin && w.up.empty();
+        for (const std::string& c : kClients) {
+            quiet = quiet && (!w.conn[c] || w.view[c] == w.pubFor(c));
+        }
+        if (quiet) {
+            break;
         }
         std::uint64_t total = 0;
         for (const Choice& ch : choices) {
