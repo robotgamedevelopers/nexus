@@ -36,6 +36,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -65,6 +66,7 @@ public:
     // What a new terminal runs, and where: empty runs the platform's shell (terminal_launch.h) in the home directory.
     std::string program;
     std::string directory;
+    bool keepShellReady = false;
     // The fleet's machines, which name a terminal's tab while its shell runs ssh to one of them (remote.h).
     std::vector<Machine> machines;
 
@@ -123,6 +125,7 @@ private:
         float scale;
         PrVec2 extent{};
         float ratio = 1;
+        PrKitPalette palette{};
     };
     // A shell the start thread started (`terminal` null: it could not), with its process id (-1: not found), and the
     // line its tab shows if no shell can run here at all (problem).
@@ -137,6 +140,7 @@ private:
     PrTerminal* find(std::size_t id);
     bool applyBackground(PrTerminal* terminal) const;
     PrTextFontDesc font(float scale) const;
+    void attach(const Started& s);
     void take();                                // the frame thread takes the terminals started since
     void run();                                 // the start thread
     Started start(const Start& s);              // on the start thread
@@ -150,6 +154,8 @@ private:
     PrProcessLauncher* launcher_ = nullptr;     // used on the start thread only
 
     // The frame thread's.
+    bool spareRequested_ = false;
+    std::optional<Started> spare_;
     std::map<std::size_t, Start> awaitingSize_;
     std::map<std::size_t, PrTerminal*> terminals_;
     std::map<std::size_t, TabLabel> labels_;
@@ -170,6 +176,7 @@ private:
     std::condition_variable wake_;
     bool ending_ = false;
     bool recheck_ = false;
+    uint64_t notificationTag_ = 0; // launch thread only, including prestarted shells
     std::deque<Start> starts_;
     std::vector<PrTerminal*> ends_;
     std::vector<Started> started_;

@@ -100,6 +100,7 @@
 #include "style.h"
 #include "tab_order.h"
 #include "terminals.h"
+#include "terminal_launch.h"
 #include "url_opener.h"
 #include "view.h"
 #include "ui_audio.h"
@@ -384,6 +385,7 @@ bool open(void* context, PrStudioWindow* window) {
     warmShaper(a.view.windowShaper, a.fonts, a.overlay);
     a.terminals = std::make_unique<PraxTerminals>(prStudioWindowKit(window), a.fonts, prStudioWindowApp(window),
         prStudioWindowAppWindow(window));
+    a.terminals->keepShellReady = kShellHost == ShellHost::Posix;
     a.terminals->machines = a.machines;
     a.view.terminals = a.terminals.get();
     // The terminal tabs kept from the last launch, each a new shell in its directory; a tab whose shell cannot start
