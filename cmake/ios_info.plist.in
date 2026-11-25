@@ -55,6 +55,8 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>NexusCommit</key>
+    <string>${NEXUS_IOS_COMMIT}</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>nexus reaches your nexus-server over ssh and mosh when the server is on your local network.</string>
 </dict>

@@ -82,6 +82,15 @@ endif()
 include(${CMAKE_CURRENT_LIST_DIR}/ios_link.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/mosh.cmake)
 
+# The commit the app is built from, in its Info.plist (NexusCommit), so that what a device runs can be read off it
+# (plutil -extract NexusCommit raw nexus.app/Info.plist). Read at configure: configure again after a new commit.
+execute_process(COMMAND git -C "${PROJECT_SOURCE_DIR}" rev-parse HEAD OUTPUT_VARIABLE NEXUS_IOS_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE nexus_git_result ERROR_QUIET)
+if(NOT nexus_git_result EQUAL 0 OR NOT NEXUS_IOS_COMMIT)
+    message(FATAL_ERROR "nexus: the iOS build names the commit it is built from, and git rev-parse HEAD failed in "
+        "${PROJECT_SOURCE_DIR}")
+endif()
+
 function(nexus_ios_targets)
     # The window's logic that starts no process: its home and config (client_home.h) and the preferences it keeps
     # (tab_order.h). The same sources as the desktop's nexus_window_logic, less command.cpp, remote.cpp and sprint.cpp.

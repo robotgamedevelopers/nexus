@@ -43,6 +43,8 @@
 #include "model.h"
 #include "platform.h"
 #include "state_window.h"
+#include "style.h"
+#include "tab_order.h"
 #include "url_opener.h"
 #include "view.h"
 
@@ -141,6 +143,72 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
     }
 }
 
+// The client home's files, as the desktop window reads and keeps them (main.cpp): the applied client policy
+// (policy.bundle.json, docs/policy.md), the friends' saved order, the tab layout, the selected tab and the text scale.
+void keepHome(App& a, const std::string& home) {
+    static StoreWriter writer;
+    static TabOrderStore order;
+    static TabOrderStore selection;
+    static TabOrderStore scale;
+    static TabOrderStore layoutStore;
+    if (home.empty()) return;
+    a.view.application->watch(home + "/policy.bundle.json");
+    order = writer.wrap(fileTabOrderStore());
+    selection = writer.wrap(fileSelectedTabStore());
+    scale = writer.wrap(fileTextScaleStore());
+    layoutStore = writer.wrap(fileLayoutStore());
+    std::string warning;
+    std::vector<std::string> savedOrder = loadTabOrderNames(order, &warning);
+    if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
+
+    SavedLayout savedLayout;
+    bool haveLayout = false;
+    bool layoutReadable = true;
+    std::string text, error;
+    if (layoutStore.read(&text, &error)) {
+        haveLayout = parseLayout(text, &savedLayout);
+        if (!haveLayout) error = "unrecognized or malformed layout";
+    }
+    if (!error.empty()) {
+        layoutReadable = false;
+        std::fprintf(stderr, "nexus: %s could not be restored (%s); leaving the file in place\n",
+            layoutStore.where.c_str(), error.c_str());
+    }
+    a.host.layout = TabLayout(std::move(savedLayout));
+    a.host.layoutStore = layoutReadable ? &layoutStore : nullptr;
+    a.view.restoreTabLayout = [&a] {
+        if (!a.view.windowApp.layoutGeneration) return;
+        a.host.groupPolicyReady = true;
+        a.host.restoreLayout();
+    };
+
+    SavedTab savedTab;
+    bool savedSelection = haveLayout && !a.host.layout.saved().selected.empty();
+    if (!haveLayout) {
+        warning.clear();
+        savedTab = loadSavedTab(selection, &warning, &savedSelection);
+        if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
+    }
+    const bool waitForSaved = savedTab.kind == TabKind::Friend;
+    a.host.strip = sync::FriendStrip(std::move(savedOrder), waitForSaved ? savedTab.name : std::string(), {});
+    if (savedSelection && !waitForSaved) a.host.strip.personSelected();
+    a.view.moved = [&a] {
+        if (!a.host.strip.taken()) return;
+        std::string why;
+        if (!saveTabOrder(order, *a.model, &why)) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+    };
+    a.host.keep = true;
+    a.host.selectionStore = &selection;
+    a.view.selected = [&a] { a.host.personSelected(); };
+    warning.clear();
+    a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &warning);
+    if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
+    a.view.scaled = [&a] {
+        std::string why;
+        if (!saveTextScale(scale, a.look.textSteps, &why)) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+    };
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -200,6 +268,7 @@ int main(int argc, char** argv) {
         };
         a.link = std::make_unique<link::ClientPort>(std::move(options));
         a.host.connect(a.link.get(), serverHost);
+        keepHome(a, home);
     }
 
     a.fonts = prFontSetCreate(nullptr);
