@@ -98,6 +98,7 @@ struct Trace {
         sync::ServerAI one{"one", roster}, two{"two", roster};
         one.canAutoAccount = two.canAutoAccount = capable;
         link.state.sessions.setAIs({one, two});
+        link.state.sessions.setDashboards({{"sprint", "http://dashboard.test/"}});   // the model's, from the server
         link.state.sessions.setNextAction(link.sent.size() + 1);
         if (modal) {
             sync::SecretRequest ask;

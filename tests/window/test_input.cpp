@@ -1476,6 +1476,7 @@ void signInCardInTheShippedMenu() {
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setDashboards({{"Dashboard", "http://dashboard.test/"}});   // the harness's, from the server
         link.state.sessions.setAIs({{"f1", {{"work", "Work", signedOut, email}, {"home", "Home", false, "home@example.test"}}},
                                       {"f2"}});
         link.changed = true;
@@ -2237,6 +2238,7 @@ void accountPickerIsAnExplicitChoice() {
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setDashboards({{"Dashboard", "http://dashboard.test/"}});   // the harness's, from the server
         link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
                                       {"f2"}});
         link.changed = true;
@@ -2348,6 +2350,7 @@ void fableLimitOffersKeyboardAndMouseChoices() {
         session->info.limitModel = std::move(model);
         link.state.phase = sync::LinkPhase::Connected;
         link.state.sessions = sync::Sessions({session});
+        link.state.sessions.setDashboards({{"Dashboard", "http://dashboard.test/"}});   // the harness's, from the server
         link.state.sessions.setAIs({{"f1", {{"first"}, {"second"}}}, {"f2"}});
         link.changed = true;
         host.pollLink();
@@ -2953,7 +2956,7 @@ void sprintTabSaysWhyThereIsNoPage() {
     h.view.board = nullptr;
     h.frame();
     h.frame();
-    CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no sprint board"));
+    CHECK(h.hasText(prLayoutTreeRoot(h.tree), "this build has no dashboard"));
 }
 
 // The text scale's keys zoom the page.
@@ -3101,6 +3104,7 @@ int main(int argc, char** argv) {
             link.state.phase = sync::LinkPhase::Connected;
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
+            link.state.sessions.setDashboards({{"Dashboard", "http://dashboard.test/"}});   // the harness's, from the server
             link.state.sessions.setAIs({{"f1", {{"a", "A", false, "a@example.test"},
                 {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
             link.state.sessions.setNextAction(ack);
