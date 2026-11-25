@@ -210,6 +210,14 @@ bool Hub::count(const Action& action, std::string* why, const std::string& clien
     return true;
 }
 
+bool Hub::countAction(const Action& action, std::string* why, const std::string& client) {
+    return count(action, why, client);
+}
+
+void Hub::setTerminals(bool served, std::uint64_t epoch, std::vector<TerminalRef> terminals) {
+    state_.setTerminals(served, epoch, std::move(terminals));
+}
+
 // Refused, changing no session, and counted.
 bool Hub::counted(const Action& action, const std::string& refused, std::string* why, const std::string& client) {
     if (count(action, why, client) && why != nullptr) {
@@ -235,6 +243,11 @@ bool Hub::apply(const Action& action, std::string* why, const std::string& clien
     if (action.kind == ActionKind::Unknown) {
         return counted(action, describe(action) + " is of a kind this server does not know: counted, not applied", why,
             client);
+    }
+    if (isTerminal(action.kind)) {
+        // A terminal's action goes to the server's terminals (server/terminal_host.h), which then counts it (count);
+        // a hub alone runs none.
+        return counted(action, describe(action) + ": this server runs no terminals", why, client);
     }
     if (action.kind == ActionKind::ResolveLimit)
         return resolveLimit(action, why, client);
@@ -2145,6 +2158,7 @@ void Hub::publishSessions(std::vector<SessionRef> sessions) {
     next.setRequests(desk_.open());
     next.shareFriends(state_);
     next.setOffers(publicOffers());
+    next.setTerminals(state_.terminalsServed(), state_.terminalEpoch(), state_.terminals());
     state_ = std::move(next);
 }
 

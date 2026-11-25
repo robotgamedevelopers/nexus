@@ -268,6 +268,13 @@ public:
     // false when refused, or when the store did not take the step (failed() then says whether it can take any more).
     bool apply(const Action& action, std::string* why = nullptr, const std::string& client = std::string());
 
+    // An action applied outside the hub (a terminal's, server/terminal_host.h): only `client`'s counter moves to its
+    // number, in the store's step, so that it is applied once across a reconnect. False, with why, when the store did
+    // not take it.
+    bool countAction(const Action& action, std::string* why, const std::string& client);
+    // The server's terminals in the state every window receives (sync/terminal_state.h).
+    void setTerminals(bool served, std::uint64_t epoch, std::vector<TerminalRef> terminals);
+
     // Admit this bus envelope once into the recipient's first session on its default instance. Its transcript
     // entry, pending turn and receipt commit together. The caller acknowledges the bus only after the batch flush.
     bool receiveBus(const std::string& recipient, const std::string& id, const std::string& sender,

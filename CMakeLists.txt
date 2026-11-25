@@ -160,7 +160,7 @@ target_link_libraries(nexus_accounts PUBLIC prax::json prax::core nexus_policy)
 add_library(nexus_sync STATIC src/sync/wire.cpp src/sync/formats.cpp src/sync/actions.cpp src/sync/sessions.cpp
     src/sync/legacy_codec.cpp src/sync/tables_codec.cpp src/sync/tables_actions.cpp
     src/sync/hub.cpp src/sync/mirror.cpp src/sync/client.cpp src/sync/friend_strip.cpp src/sync/secrets.cpp
-    src/sync/signin.cpp src/sync/redial.cpp src/sync/sprint_board.cpp)
+    src/sync/signin.cpp src/sync/redial.cpp src/sync/sprint_board.cpp src/sync/terminal_state.cpp)
 target_include_directories(nexus_sync PUBLIC src)
 target_compile_options(nexus_sync PRIVATE ${NEXUS_WARNINGS})
 target_link_libraries(nexus_sync PUBLIC nexus_model nexus_accounts nexus_wire nexus_policy)
@@ -204,6 +204,22 @@ if(NEXUS_SERVER_PARTS)
     target_include_directories(nexus_drivers PUBLIC src)
     target_compile_options(nexus_drivers PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_drivers PUBLIC nexus_supervisor)
+
+    # The server's terminals (docs/terminals.md): what each terminal action does (src/server/terminal_book.h, pure, the
+    # code models/ServerTerminals.tla's trace check drives), the screens' rows and input modes over Prax's lib/vterm
+    # (src/server/terminal_screen.h), and the shells on pseudoterminals in the server's poll loop
+    # (src/server/terminal_host.h).
+    add_library(nexus_terminal_book STATIC src/server/terminal_book.cpp)
+    target_include_directories(nexus_terminal_book PUBLIC src)
+    target_compile_options(nexus_terminal_book PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_terminal_book PUBLIC nexus_sync)
+    add_library(nexus_terminal_host STATIC src/server/terminal_screen.cpp src/server/terminal_host.cpp)
+    target_include_directories(nexus_terminal_host PUBLIC src)
+    target_compile_options(nexus_terminal_host PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_terminal_host PUBLIC nexus_terminal_book prax::vterm)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(nexus_terminal_host PRIVATE util)     # forkpty
+    endif()
 
     add_library(nexus_services STATIC src/server/service_process.cpp src/server/service_manifest.cpp)
     target_include_directories(nexus_services PUBLIC src)
@@ -359,7 +375,7 @@ if(NEXUS_LINK)
     add_library(nexus_server STATIC src/server/server.cpp src/server/flush_gate.cpp)
     target_compile_options(nexus_server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_server PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo nexus_builds
-        nexus_signin_runner nexus_handover nexus_supervision nexus_services)
+        nexus_signin_runner nexus_handover nexus_supervision nexus_services nexus_terminal_host)
     add_executable(nexus-server src/server/main.cpp)
     target_compile_options(nexus-server PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server PRIVATE nexus_server)
@@ -375,7 +391,7 @@ if(NEXUS_LINK)
     target_compile_options(nexus_server_leaky PRIVATE ${NEXUS_WARNINGS})
     target_compile_definitions(nexus_server_leaky PRIVATE NEXUS_LEAKY_SIGNIN_WITNESS=1)
     target_link_libraries(nexus_server_leaky PUBLIC nexus_bus nexus_policy nexus_link nexus_durable nexus_drivers nexus_config_repo
-        nexus_builds nexus_signin_runner nexus_handover nexus_supervision nexus_services)
+        nexus_builds nexus_signin_runner nexus_handover nexus_supervision nexus_services nexus_terminal_host)
     add_executable(nexus-server-leaky EXCLUDE_FROM_ALL src/server/main.cpp)
     target_compile_options(nexus-server-leaky PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus-server-leaky PRIVATE nexus_server_leaky)

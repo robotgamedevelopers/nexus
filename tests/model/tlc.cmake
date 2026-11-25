@@ -26,6 +26,8 @@
 #               mirror, tail, close or ensure
 #   STRIPWALK   optional, in place of WALK: strip_walk; it is run first and writes FriendStripTraceData.tla into WORK,
 #               with SEED, STEPS and FRIENDS (2 or 3), and FAULTY one of forget, wait
+#   TERMWALK    optional, in place of WALK: terminals_walk; it is run first and writes ServerTerminalsTraceData.tla
+#               into WORK, with SEED and STEPS, and FAULTY one of replay, fate, epoch
 #   GLIDEWALK   optional, in place of WALK: glide_walk; it is run first and writes GlideTraceData.tla into WORK, with
 #               SEED and STEPS, and FAULTY keyup for the scroller that loses an arrow's release
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
@@ -377,6 +379,19 @@ elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED TERMWALK AND NOT "${TERMWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "replay" OR FAULTY STREQUAL "fate" OR FAULTY STREQUAL "epoch")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not replay, fate or epoch")
+    endif()
+    execute_process(COMMAND "${TERMWALK}" ${walk_args} "${WORK}/ServerTerminalsTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "terminals_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

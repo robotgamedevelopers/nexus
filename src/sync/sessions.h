@@ -34,6 +34,7 @@
 #include "sync/formats.h"
 #include "sync/secrets.h"
 #include "sync/signin.h"
+#include "sync/terminal_state.h"
 
 namespace nexus::sync {
 
@@ -177,6 +178,15 @@ public:
     // carries none, and a window then reads empty.
     const std::string& sprintUrl() const { return sprintUrl_; }
     void setSprintUrl(std::string url) { sprintUrl_ = std::move(url); }
+    // The server's terminals (sync/terminal_state.h, docs/terminals.md), after the sign-in flows: from format 4 on the
+    // wire (schema's SessionsDiff.terminals). terminalsServed() is false in a state from a server before them, which
+    // runs none and offers none to make; terminalEpoch() names the run of the server whose terminals these are.
+    const std::vector<TerminalRef>& terminals() const { return *terminals_; }
+    bool terminalsServed() const { return terminalsServed_; }
+    std::uint64_t terminalEpoch() const { return terminalEpoch_; }
+    // In id order, no two with one id and none with id 0; throws std::logic_error otherwise.
+    void setTerminals(bool served, std::uint64_t epoch, std::vector<TerminalRef> terminals);
+    const TerminalView* findTerminal(TerminalId id) const;
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -213,6 +223,9 @@ private:
     std::shared_ptr<const std::vector<ServerFriend>> friends_;
     bool friendsKnown_ = false;
     std::shared_ptr<const std::vector<SignInOffer>> offers_;
+    std::shared_ptr<const std::vector<TerminalRef>> terminals_;
+    bool terminalsServed_ = false;
+    std::uint64_t terminalEpoch_ = 0;
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
     std::uint64_t nextAction_ = 0;

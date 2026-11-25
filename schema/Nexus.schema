@@ -139,6 +139,37 @@ table SignInOffer
     url      *bytes
 }
 
+// One row of a terminal's screen (sync/terminal_state.h): its index from the top, and its cells as text with the
+// SGR sequences that set their colours and attributes (\x1b[...m), starting from the default pen. Trailing blank
+// cells are left out. The window paints it into its own terminal (sync/terminal_paint.h).
+table TerminalLine
+{
+    row  uint32
+    text *string
+}
+
+// One of the server's terminals (server/terminal_host.h, docs/terminals.md), as a sessions diff carries it. Unchanged
+// (`changed` false): the state diffed from holds it as it is, and nothing else is set. Changed: the opener's token from
+// its TerminalCreate (so that window binds its tab to it), its title, the screen's columns and rows, the cursor, the
+// input modes the program set (DEC private mode numbers, comma-separated, as the window's keys must follow them), the
+// one line saying how its shell ended (absent: it runs), and the rows that differ from the state diffed from (each
+// other row is kept from it).
+table TerminalChange
+{
+    id            uint64
+    changed       bool
+    opener        *string
+    title         *string
+    columns       uint32
+    rows          uint32
+    cursor_column uint32
+    cursor_row    uint32
+    cursor_hidden bool
+    modes         *string
+    ended         *string
+    lines         []TerminalLine
+}
+
 // A sessions diff (Sessions::diff_from): every session in the state, in id order. A session the state diffed from
 // holds and this one lacks is not named, which removes it. Then every open secret request, oldest first, whole in
 // every diff (a few short lines). Then the server's friends, only in a diff where they changed from the state diffed
@@ -147,7 +178,10 @@ table SignInOffer
 // friends the list, whole, in its friends.json's order. Absent friends_sent (no change, or a server from before the
 // list) reads false: the reader keeps the friends it held. Then, from format 5 and only on a link of 5 or later, the
 // live sign-in flows in id order, whole in every diff. Then the address of the sprint board the server serves (an
-// http:// or https:// URL; empty: none known), which a window opens in its sprint tab.
+// http:// or https:// URL; empty: none known), which a window opens in its sprint tab. Then the server's terminals
+// (docs/terminals.md): terminals_served says this server runs them (absent: a server from before them, and the window
+// offers none), terminal_epoch names this run of the server (a terminal the window held under another epoch ended
+// with the server's restart), and every terminal in id order, unchanged or changed as a session is.
 table SessionsDiff
 {
     sessions      []SessionChange
@@ -158,6 +192,9 @@ table SessionsDiff
     signins       []SignInOffer
     next_action   uint64
     sprint_url    *string
+    terminals_served bool
+    terminal_epoch   uint64
+    terminals     []TerminalChange
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----
@@ -184,13 +221,19 @@ enum ActionKind
     SignInOpened,
     SignInCallback,
     SignOut,
-    ResolveLimit
+    ResolveLimit,
+    TerminalCreate,
+    TerminalInput,
+    TerminalResize,
+    TerminalClose
 }
 
 // One action: its kind, the session it names (a create's to copy from; 0: none), a create's or an ensure's friend,
 // its text, an account action's account, and a secret answer's or cancel's request and an answer's value (bytes as
 // the person pasted them, never text). The sign-in's (format 5 on, sync/signin.h): `request` is the flow's id, `text`
-// the window's claim token, and a callback's query rides in `secret`, as bytes. Its number is the diff's `start` plus
+// the window's claim token, and a callback's query rides in `secret`, as bytes. The terminals' (docs/terminals.md):
+// `terminal` names one, `text` is a create's opener token (and `account` its directory, empty for home), `columns` and
+// `rows` a create's or resize's screen, and input's bytes ride in `secret`, wiped once acknowledged as a secret is. Its number is the diff's `start` plus
 // its place in the list.
 table Action
 {
@@ -201,6 +244,9 @@ table Action
     account     *string
     request     uint64
     secret      *bytes
+    terminal    uint64
+    columns     uint32
+    rows        uint32
 }
 
 // An actions diff (Actions::diff_from): the number of its first action, and the actions from there, one unbroken run.

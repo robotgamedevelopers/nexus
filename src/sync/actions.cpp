@@ -50,6 +50,10 @@ const char* kindName(ActionKind kind) {
         case ActionKind::SignOut: return "sign-out";
         case ActionKind::SignInCallback: return "sign-in-callback";
         case ActionKind::ResolveLimit: return "resolve-limit";
+        case ActionKind::TerminalCreate: return "terminal-create";
+        case ActionKind::TerminalInput: return "terminal-input";
+        case ActionKind::TerminalResize: return "terminal-resize";
+        case ActionKind::TerminalClose: return "terminal-close";
     }
     return "unknown";
 }
@@ -62,6 +66,8 @@ std::string describe(const Action& action) {
         out += " for secret request " + std::to_string(action.request);
     } else if (isSignIn(action.kind)) {
         out += " for sign-in " + std::to_string(action.request);
+    } else if (isTerminal(action.kind) && action.kind != ActionKind::TerminalCreate) {
+        out += " for terminal " + std::to_string(action.terminal);  // never its input
     }
     return out + ")";
 }

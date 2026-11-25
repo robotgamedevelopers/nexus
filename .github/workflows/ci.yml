@@ -162,7 +162,7 @@ jobs:
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk terminals_walk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -269,6 +269,12 @@ jobs:
           done
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/model/terminals_walk "$seed" 600
+          done
+          for fault in --faulty-replay --faulty-fate --faulty-epoch; do
+            walk build/tests/model/terminals_walk 1 600 "$fault"
           done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do
@@ -724,7 +730,7 @@ jobs:
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
+              migration_walk takeover_walk terminals_walk
     name: sanitizers-linux (${{ matrix.part }})
     env:
       CC: clang
@@ -859,6 +865,12 @@ jobs:
           done
           for fault in --faulty-aba --faulty-stale; do
             walk build/tests/model/watch_walk 1 1000 "$fault"
+          done
+          for seed in 1 2 3; do
+            walk build/tests/model/terminals_walk "$seed" 600
+          done
+          for fault in --faulty-replay --faulty-fate --faulty-epoch; do
+            walk build/tests/model/terminals_walk 1 600 "$fault"
           done
           for friends in 0 1 2 3; do
             for seed in 1 2 3 4 5 6 7 8; do

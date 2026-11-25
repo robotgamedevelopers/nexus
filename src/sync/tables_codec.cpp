@@ -199,6 +199,30 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             putBytes(b.main, x->url, o.url.bytes());
         }
     }
+    d->terminals_served = change.terminalsServed;
+    d->terminal_epoch = change.terminalEpoch;
+    for (const TerminalChange& t : change.terminals) {
+        wire::TerminalChange* x = added(wire::SessionsDiffTerminalsAdd(b.main, d->terminals));
+        x->id = t.id;
+        if (!t.changed) {
+            continue;
+        }
+        x->changed = true;
+        putText(b.main, x->opener, t.opener, scratch);
+        putText(b.main, x->title, t.title, scratch);
+        x->columns = t.columns;
+        x->rows = t.rows;
+        x->cursor_column = t.cursorColumn;
+        x->cursor_row = t.cursorRow;
+        x->cursor_hidden = t.cursorHidden;
+        putText(b.main, x->modes, t.modes, scratch);
+        putText(b.main, x->ended, t.ended, scratch);
+        for (const auto& [row, text] : t.lines) {
+            wire::TerminalLine* y = added(wire::TerminalChangeLinesAdd(b.main, x->lines));
+            y->row = row;
+            putText(b.main, y->text, text, scratch);
+        }
+    }
     return saved(b, [](const wire::SessionsDiffBuilder& x) { return wire::SessionsDiffMeasure(x); },
         [](const wire::SessionsDiffBuilder& x, std::uint8_t* out, int64_t n) { return wire::SessionsDiffSave(x, out, n); },
         "sessions diff");
@@ -319,6 +343,29 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
         o.host = textOf(x.host);
         o.url = bytesOf(x.url);
         out.offers.push_back(std::move(o));
+    }
+    out.terminalsServed = d->terminals_served;
+    out.terminalEpoch = d->terminal_epoch;
+    for (const wire::TerminalChange& x : d->terminals) {
+        TerminalChange t;
+        t.id = x.id;
+        t.changed = x.changed;
+        if (t.changed) {
+            t.opener = textOf(x.opener);
+            t.title = textOf(x.title);
+            t.columns = x.columns;
+            t.rows = x.rows;
+            t.cursorColumn = x.cursor_column;
+            t.cursorRow = x.cursor_row;
+            t.cursorHidden = x.cursor_hidden;
+            t.modes = textOf(x.modes);
+            t.ended = textOf(x.ended);
+            t.lines.reserve(static_cast<std::size_t>(x.lines.size()));
+            for (const wire::TerminalLine& y : x.lines) {
+                t.lines.emplace_back(y.row, textOf(y.text));
+            }
+        }
+        out.terminals.push_back(std::move(t));
     }
     return out;
 }

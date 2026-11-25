@@ -61,10 +61,23 @@ enum class ActionKind : std::uint8_t {
     SignInCallback = 19,// the window's gate took flow `request`'s callback: its query (`secret`), from `text`'s window
     SignOut = 20,       // Claude logout, only when session still selects the exact named account
     ResolveLimit = 21, // accept a paused turn's offered target (friendName) for account, request and choice kind (text)
+    // The server's terminals (sync/terminal_state.h, docs/terminals.md), on schema's tables only (format 4 on; a link of
+    // 1 to 3 writes each as a stop naming session 0 and nothing else). A server from before them reads each as Unknown,
+    // counts it and applies nothing; the window offers none to a server whose state does not say it serves them.
+    TerminalCreate = 22,    // a new terminal: `text` the window's opener token, `account` its directory (empty: home),
+                            // `columns` and `rows` its screen
+    TerminalInput = 23,     // bytes typed into terminal `terminal`, in `secret` (wiped once acknowledged)
+    TerminalResize = 24,    // terminal `terminal`'s screen becomes `columns` by `rows`
+    TerminalClose = 25,     // terminal `terminal` closes: its shell is ended
 };
 
 // The last kind this build knows.
-constexpr ActionKind kLastActionKind = ActionKind::ResolveLimit;
+constexpr ActionKind kLastActionKind = ActionKind::TerminalClose;
+
+// Whether `kind` is one of the terminals' four.
+constexpr bool isTerminal(ActionKind kind) {
+    return kind >= ActionKind::TerminalCreate && kind <= ActionKind::TerminalClose;
+}
 
 struct Action {
     std::uint64_t num = 0;  // its place in the list, from 1, never reused
@@ -74,8 +87,11 @@ struct Action {
     std::string text;
     std::string account;    // the account an account action names; empty for the rest (and not on the wire for them)
     std::uint64_t request = 0;  // a secret answer's or cancel's request id; 0 for the rest
-    SecretValue secret{};   // a secret answer's value; empty for the rest. Wiped when the action is freed, which is
-                            // when mosh's acknowledgement subtracts it (Actions::subtract)
+    SecretValue secret{};   // a secret answer's value, or a terminal's input; empty for the rest. Wiped when the action
+                            // is freed, which is when mosh's acknowledgement subtracts it (Actions::subtract)
+    std::uint64_t terminal = 0;     // the terminal a terminal action names; 0 for the rest
+    std::uint32_t columns = 0;      // a terminal create's or resize's screen; 0 for the rest
+    std::uint32_t rows = 0;
     bool operator==(const Action&) const = default;
 };
 
