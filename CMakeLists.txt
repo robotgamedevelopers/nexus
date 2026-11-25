@@ -112,7 +112,8 @@ endif()
 # The window: the app and the libraries and tests that draw or set text (the view, the terminal tabs, the sprint tab).
 # On by default on macOS only: Prax's lib/app has backends for Cocoa, Win32 and the web, none for Linux, and its
 # lib/font finds the system's fonts through CoreText and DirectWrite only. On Windows, ON builds the app against Prax's
-# Win32 backend, which does not compile at this pin (lib/app/backends/win32/src/app_win32.cpp), so it is off there too. Off, everything else still builds and tests:
+# Win32 backend, which compiles at this pin (captain, 2026-11-25), but the window's own code still has MSVC /W4 warnings (view.cpp,
+# window_app, chat_selection.cpp, client_home.cpp, terminals.cpp), which /WX makes errors, so it is off there too. Off, everything else still builds and tests:
 # the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
 option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
 # The window's logic (src/command.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
@@ -514,7 +515,7 @@ if(NEXUS_WINDOW AND (APPLE OR WIN32))
 endif()
 
 if(WIN32 AND NOT NEXUS_WINDOW)
-    # The app does not build on Windows until Prax's Win32 backend does (NEXUS_WINDOW above); its Windows part,
+    # The app is not built on Windows until the window's code is clean at /W4 (NEXUS_WINDOW above); its Windows part,
     # src/platform_win.cpp, is still compiled (never linked) so CI holds it to the same warnings.
     add_library(nexus_platform_win_check OBJECT src/platform_win.cpp src/lock_win.cpp)
     target_compile_options(nexus_platform_win_check PRIVATE ${NEXUS_WARNINGS})

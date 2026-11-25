@@ -110,9 +110,13 @@ in for the other:
 - macOS: the app built with the stand-in authenticator, run as the overlay against a test server, and screenshotted
   locked and unlocked. Touch ID and the password prompt themselves cannot be driven by a test: no test touches the
   sensor or types the owner's password.
-- Windows: the Windows code compiles in CI (`nexus_platform_win_check`, MSVC at `/W4 /WX`). The Windows window does
-  not build at Prax's current pin (`CMakeLists.txt`), so Windows Hello and the session events are verified only
-  through the seam (the mapping functions and the rules), not on a desktop.
+- Windows: the Windows code compiles in CI (`nexus_platform_win_check`, MSVC at `/W4 /WX`). On captain (2026-11-25)
+  the Windows window, `lock_win.cpp` with it, builds and links at Prax's current pin, and the lock's unit tests pass
+  there (`client_lock_unit`, `window_lock_unit`, `window_unit_signin`, `nexus_no_test_authenticator`), but only with
+  MSVC's warnings not made errors: the window's older code (`view.cpp`, `window_app`, `chat_selection.cpp`,
+  `client_home.cpp`, `terminals.cpp`) has `/W4` warnings, so `NEXUS_WINDOW` stays off on Windows. Captain has no
+  interactive desktop, so Windows Hello and the session events are verified only through the seam (the mapping
+  functions and the rules), not on a desktop.
 
 ## Requests for Prax's author
 
