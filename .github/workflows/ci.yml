@@ -1,12 +1,6 @@
-# CI for nexus: the build with its unit and functional tests, the model under the sanitizers, the Claude driver
-# (drivers/claude) and the tab label's trace checks, on prebuilt macOS runners for the native build and standard GitHub runners for driver checks;
-# and the build without the window, its unit and functional tests and the sanitizers' programs, the
-# TLA+ models with their trace checks (in parallel shards), and the code generated from
-# schema/Nexus.schema regenerated at schema's pin, on the fleet's Linux runners; the functional tests inside WSL2 on
-# captain (wsl2-functional), where nexus runs everything but the overlay on Windows; the Windows build with its unit
-# tests (windows), whose WSL2 terminal test then runs from inside captain's WSL2 (wsl2-terminal); and the Tailscale shim
-# built and tested alone on macOS, Linux and Windows (tailscale, .github/workflows/tailscale.yml). Every pull
-# request runs it, whatever its base, and so does every push to main.
+# Standard GitHub runners run policy, native driver checks, schema generation, and model shards that fit a cold VM.
+# The fleet provides WSL2 and prebuilt toolchains and caches for the native builds, sanitizers and heavier model shards.
+# The Tailscale shim is built and tested separately on macOS, Linux and Windows (.github/workflows/tailscale.yml).
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
 # enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
@@ -1012,11 +1006,8 @@ jobs:
   # not build on Linux at Prax's pin (build-and-unit-linux says why), so they run on macOS (model-label).
   model:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # Every shard on the fleet's runners labelled tlc (two per machine, so a machine runs at most two shards, sixteen TLC
-    # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
-    # past their 60 s. Which machines carry the label is the fleet record's (the busiest is kept off it). A shard
-    # waiting for a runner is not counted in its 2 minutes.
-    runs-on: ${{ matrix.build && fromJSON('["self-hosted","fleet","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
+    # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
+    runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","fleet","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
     timeout-minutes: 2
     strategy:
       fail-fast: false
@@ -1054,6 +1045,7 @@ jobs:
             build: supervisor_walk
             skip: '^tlc_supervisor_(switch_|place_|signin_|friend_)?temporal_[0-9]+$'
           - shard: link-ensure
+            prebuilt: true
             run: '^tlc_link_ensure$'
           - shard: link-one-window
             run: '^tlc_link_one_window$'
