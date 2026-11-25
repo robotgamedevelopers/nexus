@@ -462,7 +462,7 @@ private:
     }
 
     static std::string target(const Action& a) {
-        return "[kind |-> " + str(kindName(a.kind)) + ", sid |-> " + std::to_string(a.session) + ", AI |-> " +
+        return "[kind |-> " + str(kindName(a.kind)) + ", sid |-> " + std::to_string(a.session) + ", ai |-> " +
             str(a.aiName) + "]";
     }
 
