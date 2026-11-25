@@ -186,8 +186,9 @@ void relocksFromAppEvents() {
 // Only deliberate input starts the idle time again: a key, text, a press, a scroll, a paste, a drop. A pointer or a
 // drag passing over, a gesture or a trackpad touch does not, and after the timeout it locks before it is delivered.
 void onlyDeliberateInputKeepsItUnlocked() {
-    for (const auto kind : {PrAppEventKind_KeyDown, PrAppEventKind_Text, PrAppEventKind_PointerDown,
-                            PrAppEventKind_Scroll, PrAppEventKind_Paste, PrAppEventKind_Drop}) {
+    const PrAppEventKind deliberate[] = {PrAppEventKind_KeyDown, PrAppEventKind_Text, PrAppEventKind_PointerDown,
+                                         PrAppEventKind_Scroll, PrAppEventKind_Paste, PrAppEventKind_Drop};
+    for (const PrAppEventKind kind : deliberate) {
         Window w(true);
         w.unlock(0);
         w.lock->input(event(kind), kIdle - 1);
@@ -195,9 +196,11 @@ void onlyDeliberateInputKeepsItUnlocked() {
         CHECK(w.lock->drawsContent());
         CHECK(resetsIdle(event(kind)));
     }
-    for (const auto kind : {PrAppEventKind_PointerMove, PrAppEventKind_PointerEnter, PrAppEventKind_PointerLeave,
-                            PrAppEventKind_DragEnter, PrAppEventKind_DragOver, PrAppEventKind_Gesture,
-                            PrAppEventKind_TrackpadTouches, PrAppEventKind_KeyUp, PrAppEventKind_PointerUp}) {
+    const PrAppEventKind passing[] = {PrAppEventKind_PointerMove, PrAppEventKind_PointerEnter,
+                                      PrAppEventKind_PointerLeave, PrAppEventKind_DragEnter, PrAppEventKind_DragOver,
+                                      PrAppEventKind_Gesture, PrAppEventKind_TrackpadTouches, PrAppEventKind_KeyUp,
+                                      PrAppEventKind_PointerUp};
+    for (const PrAppEventKind kind : passing) {
         Window w(true);
         w.unlock(0);
         w.lock->input(event(kind), kIdle - 1);
