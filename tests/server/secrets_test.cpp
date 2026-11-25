@@ -471,7 +471,7 @@ void hub() {
         }
         CHECK(sync::isSecretWhy("the login expired \xe2\x80\x94 caf\xc3\xa9 \xf0\x9f\x94\x91"));
         CHECK(sync::isSecretWhy(std::string(sync::kSecretWhyBytes, 'w')) && sync::isSecretWhy(""));
-        // An AI's AI asks only for an account its AI is linked to; nexus itself for any.
+        // An AI asks only for an account it is linked to; nexus itself for any.
         why.clear();
         CHECK(!s.hub->askSecret(asker(1, 1), "a4", kToken, "", &why) && holds(why, "is not linked"));
         CHECK(s.store.applied(sync::kSecretIdsClient) == 0 && s.events.replies.empty());
@@ -604,7 +604,7 @@ void hub() {
         CHECK(s.hub->apply(numbered(4, answer(third, "x y")), &why, "c1"));
         CHECK(s.hub->askSecret(asker(0, 0), "a2", kToken, "", &why));
         CHECK(!s.hub->reaskSecrets() && s.store.applied(sync::kSecretIdsClient) == third + 1);
-        // An AI's AI is not asked again by nexus: it hears malformed, and asks again itself.
+        // An AI is not asked again by nexus: it hears malformed, and asks again itself.
         CHECK(s.hub->askSecret(asker(1, 2), "a1", kToken, "", &why));
         CHECK(s.hub->apply(numbered(5, answer(third + 2, "x y")), &why, "c1"));
         CHECK(s.events.replies.back().reason == sync::reason::kMalformed && !s.hub->reaskPending());

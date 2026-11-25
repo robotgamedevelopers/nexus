@@ -936,7 +936,7 @@ int main(int argc, char** argv) {
             }
             const std::vector<sync::SessionId> askers{0, 1, 2};
             const sync::SessionId asker = askers[pick(askers.size())];
-            // An AI's AI with an ask not yet answered (open, or its value held) is refused before any request is
+            // An AI with an ask not yet answered (open, or its value held) is refused before any request is
             // made (Hub::askSecret, SecretDesk::waiting), which the model leaves out: the walk asks only from an
             // asker with none waiting.
             if (asker != 0 && w.hub->secrets().waiting(asker)) {
