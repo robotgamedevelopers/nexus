@@ -164,8 +164,11 @@ struct Window {
         time += 1.0 / 120;
         rect = keyboardRect(a, switching);
         const float room = roomAboveKeyboard(extent, safe, rect);
-        host.beginFrame(kit, fonts, time, prAppDisplayDefault());
+        // The server's tabs are taken first, and the Dashboard chosen, as a tap on it before the frame would: before the
+        // frame host starts the window's frame (beginWindowFrame), which reads the active tab. Chosen after it, the
+        // round built a tab the frame did not start, and Prax's debug build stops on a node of another frame.
         if (opensOnDashboard) {
+            host.pollLink();
             for (std::size_t i = 0; i < model.tab_count(); ++i) {
                 if (model.tab(i).kind != TabKind::Dashboard) continue;
                 model.select_tab(i);
@@ -173,6 +176,7 @@ struct Window {
                 break;
             }
         }
+        host.beginFrame(kit, fonts, time, prAppDisplayDefault());
         PrUiFrameDesc desc{.time = time, .delta = 1.0 / 120, .extent = extent, .maxRounds = 4,
             .display = prAppDisplayDefault(), .preferences = {}};
         struct Round { Window* w; PrVec2 box; } round{this, contentBox(extent, safe, room)};
