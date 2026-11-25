@@ -468,13 +468,15 @@ tlc_test(tlc_glide_trace_faulty_keyup_rejected GlideTrace GlideTrace.cfg deadloc
 # The account menu's one gesture (src/account_menu.h): AccountMenu.tla on two rows, every property.
 tlc_test(tlc_account_menu_spec AccountMenu AccountMenu.cfg pass)
 # Its reversed witnesses: a lift that leaves the menu open, a sideways move that keeps it, a press on any tab that
-# opens it.
+# opens it, a slide across a row after the press went down that moves the tab.
 tlc_test(tlc_account_menu_witness_lift_keeps_open WAccountMenuLiftKeepsOpen WAccountMenuLiftKeepsOpen.cfg invariant
          PROPERTY LiftCloses)
 tlc_test(tlc_account_menu_witness_sideways_keeps WAccountMenuSidewaysKeeps WAccountMenuSidewaysKeeps.cfg invariant
          PROPERTY SidewaysIsTheTabsMove)
 tlc_test(tlc_account_menu_witness_any_tab_opens WAccountMenuAnyTabOpens WAccountMenuAnyTabOpens.cfg invariant
          PROPERTY OpensOnlyOnTheActiveTab)
+tlc_test(tlc_account_menu_witness_decided_moves WAccountMenuDecidedMoves WAccountMenuDecidedMoves.cfg invariant
+         PROPERTY DecidedStaysTheMenu)
 # Its code traces, each a behaviour of AccountMenu.tla; and a gesture that keeps the menu on a sideways move,
 # rejected (no step of the spec reaches its next state: a deadlock).
 foreach(seed 1 2 3 4 5)
