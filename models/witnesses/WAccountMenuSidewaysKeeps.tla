@@ -6,7 +6,7 @@ EXTENDS AccountMenu
 BrokenMove == \E at \in Places, way \in Ways :
     /\ chosen' = None
     /\ IF phase = "open"
-         THEN /\ phase' = "open" /\ hovered' = IF at \in Rows THEN at ELSE None /\ UNCHANGED moving
+         THEN /\ phase' = "open" /\ hovered' = (IF at \in Rows THEN at ELSE None) /\ UNCHANGED moving
               /\ decided' = (decided \/ way = "down")
          ELSE UNCHANGED <<phase, hovered, moving, decided>>
     /\ Did(IF way = "sideways" THEN "side" ELSE "move", at)
