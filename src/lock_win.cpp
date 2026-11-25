@@ -38,10 +38,10 @@ static_assert(kConsentDisabledByPolicy == int(ui::UserConsentVerificationResult:
 static_assert(kConsentDeviceBusy == int(ui::UserConsentVerificationResult::DeviceBusy));
 static_assert(kConsentRetriesExhausted == int(ui::UserConsentVerificationResult::RetriesExhausted));
 static_assert(kConsentCanceled == int(ui::UserConsentVerificationResult::Canceled));
-static_assert(kWtsConsoleDisconnect == WTS_CONSOLE_DISCONNECT);
-static_assert(kWtsRemoteDisconnect == WTS_REMOTE_DISCONNECT);
-static_assert(kWtsSessionLogoff == WTS_SESSION_LOGOFF);
-static_assert(kWtsSessionLock == WTS_SESSION_LOCK);
+static_assert(kWtsConsoleDisconnect == static_cast<unsigned long>(WTS_CONSOLE_DISCONNECT));
+static_assert(kWtsRemoteDisconnect == static_cast<unsigned long>(WTS_REMOTE_DISCONNECT));
+static_assert(kWtsSessionLogoff == static_cast<unsigned long>(WTS_SESSION_LOGOFF));
+static_assert(kWtsSessionLock == static_cast<unsigned long>(WTS_SESSION_LOCK));
 
 std::string narrow(const std::wstring& text) {
     const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0, nullptr, nullptr);
@@ -87,8 +87,10 @@ public:
                 } else if (status == AsyncStatus::Canceled) {
                     post({LockNotice::Kind::Answer, attempt, LockAnswer::Cancelled, LockReason::None, {}});
                 } else {
+                    char code[16];
+                    std::snprintf(code, sizeof code, "0x%08x", static_cast<unsigned>(int32_t(done.ErrorCode())));
                     post({LockNotice::Kind::Answer, attempt, LockAnswer::Failed, LockReason::None,
-                          "error 0x" + std::to_string(unsigned(done.ErrorCode()))});
+                          std::string("error ") + code});
                 }
             });
         } catch (const winrt::hresult_error& e) {
