@@ -60,7 +60,12 @@ void theTitleIsCentredOnTheWindow(PrFontSet* fonts, const std::string& name, boo
     const PrRect title = boundsOf(off, page.view.phoneTitle);
     const PrRect back = boundsOf(off, page.view.phoneBackButton);
     const float centre = (title.left + title.right) / 2;
+    const PrRect room = boundsOf(off, page.view.phoneTitleRoom);
+    if (std::fabs((title.left + title.right) / 2 - kWidth / 2) > 1 || title.left < back.right)
+        std::fprintf(stderr, "  %s -> '%s': title %.1f..%.1f, back %.1f..%.1f, room %.1f..%.1f\n", name.c_str(),
+                 page.view.phoneTitleShown.c_str(), title.left, title.right, back.left, back.right, room.left, room.right);
     if (std::fabs(centre - kWidth / 2) > 1)
+        if (std::fabs((title.left + title.right) / 2 - kWidth / 2) > 1 || title.left < back.right)
         std::fprintf(stderr, "  %s: the title's centre is %.1f, the window's %.1f\n", name.c_str(), centre, kWidth / 2);
     CHECK(std::fabs(centre - kWidth / 2) <= 1);
     CHECK(title.left >= back.right);  // the chevron never covers the title

@@ -766,12 +766,13 @@ struct Builder {
         room.overflow = PrKitOverflow_Clip;
         const auto titleRoom = prKitBox(kit, stack, {.key = prHashString(sv("phone-title-room"), 0)}, room);
         view.phoneTitleRoom = titleRoom;
+        const PrLayoutNode lastTitle = view.phoneTitle;  // the last layout's, which fitPhoneTitle measures
         view.phoneTitle = kPrLayoutNodeNone;
         if (model.tab_count()) {
             const auto& tab = model.tab(model.active());
             const auto& titles = view.windowApp.surface.tabTitles;
             const std::string title = model.active() < titles.size() ? titles[model.active()] : std::string(label(tab));
-            fitPhoneTitle(title);
+            fitPhoneTitle(title, lastTitle);
             auto style = textStyle(PrKitTextRole_Heading, kChatTone, PrKitTextAlign_Center);
             style.wrap = PrKitWrap_Nowrap;
             view.phoneTitle = label(titleRoom, view.phoneTitleShown, style);
@@ -794,7 +795,7 @@ struct Builder {
 
     // The title as shown: the whole title while it fits the room the last layout gave it; else as many of its
     // characters as fit, then an ellipsis, measured from the last layout (the next one checks it again).
-    void fitPhoneTitle(const std::string& title) {
+    void fitPhoneTitle(const std::string& title, PrLayoutNode shownNode) {
         view.phoneTitleFitting = false;
         if (title != view.phoneTitleFull) {
             view.phoneTitleFull = title;
@@ -806,7 +807,7 @@ struct Builder {
             const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Layout));
             return std::max(0.f, r.right - r.left);
         };
-        const float shown = width(view.phoneTitle);
+        const float shown = width(shownNode);
         float room = width(view.phoneTitleRoom);
         if (room <= 0 || shown <= 0) return;
         room -= 2 * (0.5f * kLinePitch * k() + 2.2f * kLinePitch * k());
