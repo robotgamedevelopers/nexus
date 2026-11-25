@@ -24,7 +24,7 @@ def login_command(binary, home):
     return [binary, "login", "--device-auth", *_AUTH]
 
 
-def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=()):
+def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=(), bus_sender=None):
     if not SUPPORTS_LIMIT:
         raise ValueError("The Codex permission profile requires a verified macOS sandbox.")
     workspace = Path(cwd).resolve(strict=True)
@@ -87,6 +87,17 @@ def chat_command(binary, home, cwd, *, keep_out=(), limited=False, write_dirs=()
         "features.multi_agent=false",
         "features.skill_mcp_dependency_install=false",
     ]
+    if bus_sender:
+        import sys
+        from .bus_tool import validate
+        validate(bus_sender)
+        args = ["-I", "-B", str(Path(__file__).with_name("bus_tool.py")), bus_sender]
+        settings.extend([
+            "mcp_servers.nexus.command=" + json.dumps(sys.executable),
+            "mcp_servers.nexus.args=" + json.dumps(args),
+            "mcp_servers.nexus.env.HOME=" + json.dumps(str(operator)),
+            'mcp_servers.nexus.tools.nexus_bus_send.approval_mode="approve"',
+        ])
     return [
         binary,
         "app-server",

@@ -728,6 +728,19 @@ void hub_send_and_queue() {
     CHECK(t->queue == std::vector<std::string>{"later"});
     CHECK(t->info == infoOf("ada"));
     CHECK(hub.state().find(sid("bo")) == nullptr);
+    const auto epoch = t->info.contextEpoch;
+    for (unsigned i = 0; i < 300; ++i)
+        CHECK(hub.apply(Action{i + 3, ActionKind::Send, sid("ada"), "", std::to_string(i), {}}));
+    std::uint64_t offset = 0;
+    while (offset < hub.state().find(sid("ada"))->total()) {
+        Sessions decoded;
+        decoded.apply_string(hub.historyPage(sid("ada"), epoch, offset).init_diff());
+        const auto* page = decoded.find(sid("ada"));
+        CHECK(page && page->first == offset && !page->entries.empty() && page->entries.size() <= 256);
+        if (!page || page->entries.empty()) break;
+        for (const auto& entry : page->entries) CHECK(*entry == *store.find(sid("ada"))->transcript[offset++]);
+    }
+    CHECK(hub.historyPage(sid("ada"), epoch + 1, 0).sessions().empty());
 }
 
 void hub_primary_requires_an_installer_binding() {
@@ -2105,6 +2118,9 @@ void mirror_marks_entries_not_received() {
     CHECK(tr[0].kind == EntryKind::Notice && tr[0].text == notShownNotice(7));
     CHECK(tr[1].text == "7" && tr[3].text == "9");
     CHECK(notShownNotice(1) == "1 earlier entry not shown");
+    CHECK(mirror.apply(m, stateOf("bo", t, {})));
+    CHECK(!mirror.missingHistory(m.tab(1).id) && tr.size() == 10);
+    for (unsigned i = 0; i < 10; ++i) CHECK(tr[i].text == std::to_string(i));
 }
 
 void mirror_bus_grants_reconcile_cached_history() {

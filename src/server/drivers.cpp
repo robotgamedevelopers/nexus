@@ -787,6 +787,21 @@ void Drivers::made(sync::SessionId id) {
     showResolved(id, resolve(id));
 }
 
+bool Drivers::refreshSandbox(const std::set<std::string>& unsandboxed) {
+    if (unsandboxed == unsandboxed_) return true;
+    const auto now = options_.clock();
+    for (auto& [id, slot] : slots_) {
+        const auto* session = store_.find(id);
+        if (!session) continue;
+        const auto& name = session->info.friendName;
+        const bool enabled = unsandboxed.contains(name);
+        if (enabled != unsandboxed_.contains(name) &&
+            !run(id, slot.sup.refreshSandbox(!enabled, now), now, false)) return false;
+    }
+    unsandboxed_ = unsandboxed;
+    return true;
+}
+
 std::string Drivers::retireForSignOut(const std::string& account) {
     for (const auto& [id, slot] : slots_) {
         (void)id;

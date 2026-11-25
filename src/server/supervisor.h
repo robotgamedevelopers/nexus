@@ -162,6 +162,7 @@ public:
     // Nothing when starting is not held back.
     Output signedIn(Millis now);
     Output resetContext(bool compact, Millis now);
+    Output refreshSandbox(bool tightened, Millis now);
     Output retireIdleLogin(Millis now);
     // The person stopped the friend's work: a stop for the open turn, if one is open and no stop is out; while the
     // driver starts, the turn about to begin is cancelled. Otherwise nothing: no stop is kept for a later turn.
@@ -305,6 +306,7 @@ private:
     std::vector<std::string> driverKeepsOut_;   // and, limited, the directories it was told to keep out
     std::string driverModel_;           // the model and effort it was told (empty: the harness's default)
     std::string driverEffort_;
+    bool sandboxChanged_ = false;
     bool retiring_ = false;             // it is being ended for a change of account or place (or a setting put back)
     Output out_;                        // the output of the event in progress
 };

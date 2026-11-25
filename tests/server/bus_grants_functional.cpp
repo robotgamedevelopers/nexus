@@ -29,6 +29,8 @@ int main() {
                               "{friend}", "{harness}", "/driver"};
     table.friends["review"] = {"codex", "/working"};
     table.friends["author"] = {"codex", "/work"};  // its registry harness does not match this driver
+    table.drivers["claude"] = table.drivers["codex"];
+    table.friends["admin"] = {"claude", "/admin"};
     table.drivers["muse"] = table.drivers["codex"];
     table.drivers["muse"][5] = "/other";
     table.friends["writer"] = {"muse", "/other-work"};
@@ -40,7 +42,7 @@ int main() {
     const auto gate = releaseOld.get_future().share();
     BusGrants subscriptions([&](const Command& command, int timeout) {
         const auto& args = command.arguments;
-        if (command.program != "/policy" || args.size() != 5 || args[0] != "-I" || args[1] != "-m" ||
+        if (command.program != "/policy" || args.size() != 6 || args[5] != "--startup-policy" || args[0] != "-I" || args[1] != "-m" ||
                 args[2] != "nexus_policy" || args[3] != "bus-roster" || timeout <= 0)
             return CommandResult{};
         if (args[4] == "/other") return success(header + "writer\tmuse\t127.0.0.1:6380\nlocal-only\tmuse\t\n");
@@ -51,7 +53,7 @@ int main() {
                 if (gate.wait_for(3s) != std::future_status::ready) return CommandResult{};
                 [[fallthrough]];
             case Initial: return success(header + owners + "former\tmuse\t\n");
-            case Updated: return success(header + owners + "new-peer\tclaude\t\n");
+            case Updated: return success(header + owners + "admin\tclaude\t\tno-sandbox\nnew-peer\tclaude\t\n");
             case Legacy: return success(owners);
             case Invalid: return success(header + owners + "extra\tclaude\t192.0.2.1:6379\n");
         }
@@ -94,6 +96,7 @@ int main() {
     revision = Updated;
     releaseOld.set_value();
     CHECK(decision(31001, "review", "200-0", "new-peer", BusPeer::Friend));
+    CHECK(subscriptions.unsandboxed().contains("admin"));
     CHECK(!subscriptions.addresses().contains("new-peer"));  // enabled in nova-config, no local inbox or driver
     CHECK(subscriptions.knownSenders().at("review").contains("new-peer"));
     CHECK(!subscriptions.knownSenders().at("review").contains("former"));
@@ -128,6 +131,8 @@ int main() {
     revision = Initial;
     CHECK(subscriptions.sender("review", "204-0", "new-peer") == BusPeer::Pending);
     CHECK(decision(43001, "review", "204-0", "new-peer", BusPeer::Other));
+
+    CHECK(subscriptions.unsandboxed().empty());
 
     // Changing a fork's launcher must release inboxes that the fixed launcher arguments no longer cover.
     table.drivers.at("codex")[6] = "author";

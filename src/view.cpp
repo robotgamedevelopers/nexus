@@ -60,6 +60,7 @@ enum class Part : unsigned char {
     FocusedCard,
     SelectorCard,
     SelectorLayer,
+    FriendPanels,
     SelectorBackground,
     ActionRow,
     ReplyRow,
@@ -191,6 +192,12 @@ struct BoxRecipe {
                 box.width = prLayoutLengthPercent(kColumnPercent);
                 box.margin[PrRectSide_Left] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Right] = prLayoutLengthAuto();
+                break;
+            case Part::FriendPanels:
+                box.display = PrLayoutDisplay_Flex;
+                box.position = PrLayoutPosition_Relative;
+                box.minHeight = px(0);
+                box.overflowX = box.overflowY = PrLayoutOverflow_Hidden;
                 break;
             case Part::SelectorLayer:
                 box.display = PrLayoutDisplay_Flex;
@@ -364,6 +371,7 @@ struct FlexRecipe {
             case Part::Window:
                 flex.direction = PrLayoutFlexDirection_Column;
                 break;
+            case Part::FriendPanels:
             case Part::Transcript:
             case Part::TranscriptAtEnd:
                 // It starts at the newest entry and stays there as entries arrive (prUiFollowEnd, in transcript()), and
@@ -1217,14 +1225,15 @@ struct Builder {
         const std::vector<Entry>& entries = tab.transcript;
         for (std::size_t i = items.entries; i < entries.size(); ++i) {
             const Entry& e = entries[i];
-            if ((e.kind == EntryKind::Tool && !look.transcriptStyle.showTools) ||
+            if ((e.kind == EntryKind::Tool && (!look.transcriptStyle.showTools ||
+                    e.text.starts_with("mcp__nexus__nexus_bus_send:") || e.text.starts_with("nexus_bus_send:"))) ||
                     (e.kind == EntryKind::Notice && !look.transcriptStyle.showNotices))
                 continue;
             uint32_t lines = 1;
             for (char c : e.text)
                 lines += c == '\n' ? 1 : 0;
             const bool joins = e.kind == EntryKind::Tool && i != 0 && entries[i - 1].kind == EntryKind::Tool &&
-                !items.first.empty();
+                !items.first.empty() && items.first.back() + items.count.back() == i;
             if (joins) {
                 items.lines.back() += 1;
                 items.chars.back() += uint32_t(e.text.size());
@@ -2471,6 +2480,7 @@ struct Builder {
             view.prompt = kPrLayoutNodeNone;
             view.promptBox = kPrLayoutNodeNone;
         }
+        if (view.windowApp.surface.items && !asking) window = element(window, Part::FriendPanels);
         for (const auto panel : panels) {
             switch (panel) {
                 case Panel::Board: sprint(window); break;

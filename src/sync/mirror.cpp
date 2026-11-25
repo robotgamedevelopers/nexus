@@ -56,6 +56,7 @@ void Mirror::clearOpen(std::size_t tabId) {
     auto it = seen_.find(tabId);
     if (it != seen_.end()) {
         // The window just cleared this transcript locally. A future roster change must not bring it back.
+        it->second.missingHistory = false;
         it->second.bus.clear();
         it->second.visibleBus = 0;
         if (it->second.open) {
@@ -131,7 +132,7 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             continue;
         }
         Shown& seen = seen_[tab.id];
-        if (seen.epoch != view->info.contextEpoch) {
+        if (seen.epoch != view->info.contextEpoch || (seen.missingHistory && view->first == 0)) {
             model.clear_transcript(i);
             seen = {};
             seen.epoch = view->info.contextEpoch;
@@ -151,6 +152,7 @@ bool Mirror::apply(Model& model, const Sessions& state) {
             changed = true;
         }
         if (view->first > seen.next) {
+            seen.missingHistory = true;
             model.append(i, Entry{EntryKind::Notice, notShownNotice(view->first - seen.next)});
             seen.next = view->first;
             changed = true;

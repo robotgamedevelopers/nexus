@@ -140,6 +140,9 @@ public:
     explicit Sessions(std::vector<SessionRef> sessions);
 
     const std::vector<SessionRef>& sessions() const { return *sessions_; }
+    void replaceSessions(std::vector<SessionRef> entries) {
+        sessions_ = std::make_shared<const std::vector<SessionRef>>(std::move(entries));
+    }
     // The session supplied by the server's primary harness binding, or zero when none is present.
     SessionId primaryChat() const { return primaryChat_; }
     // The open secret requests (sync/secrets.h), oldest first, after the sessions: from format 3 on the wire, never a

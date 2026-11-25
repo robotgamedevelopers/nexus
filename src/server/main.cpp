@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
             if (end == argv[i] || *end != 0 || client.next == 0)
                 return usage();
         } else if (command == "config" || command == "store" || command == "builds" || command == "handover" ||
-                   command == "supervise" || command == "services") {
+                   command == "supervise" || command == "services" || command == "history-page") {
             configArgs.push_back(argv[i]);
         } else {
             return usage();
@@ -164,6 +164,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus-server: %s\n", why.c_str());
         return 1;
     }
+    if (command == "history-page") return nexus::server::historyCommand(paths, configArgs);
     if (command == "services")
         return nexus::server::servicesCommand(paths, configArgs);
     if (command == "new") {

@@ -77,6 +77,7 @@ export interface HarnessStart {
     gitRemote?: string;
     busListener?: string;
     busSender?: string;
+    noSandbox?: boolean;
     keepsOut: string[];                 // and kept out of these too (--keep-out <dir>; wall.ts limitOf)
     askSecret: (account: string, what: string, why: string) => Promise<string>;
 }
@@ -154,6 +155,7 @@ export interface Arguments {
     gitRemote?: string;
     busListener?: string;
     busSender?: string;
+    noSandbox?: boolean;
     keepsOut?: string[];                // from the server, with --limit: more directories it is kept out of (--keep-out)
 }
 
@@ -166,6 +168,7 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     let email, helper, claude;
     for (let i = 0; i < argv.length; i++) {
         const name = argv[i];
+        if (name === "--no-sandbox") { a.noSandbox = true; continue; }
         const value = argv[i + 1];
         if (value === undefined || !['--account', '--cwd', '--resume', '--limit', '--write-dir', '--git-remote', '--bus-listener', '--bus-sender', '--read-dir', '--keep-out', '--model', '--effort', '--setting-sources', '--claude', '--startup-context-fd', '--primary-context-fd', '--account-email', '--verified-helper', '--auth-claude'].includes(name ?? '')) {
             return { error: `unknown or incomplete argument ${name ?? ''}; ${kUsage}` };
@@ -251,7 +254,9 @@ export function parseArguments(argv: readonly string[]): Arguments | { error: st
     if (a.account === undefined || a.account === '') {
         return { error: `--account <name> is required: the account's login is ~/.nexus/server/accounts/<name>; ${kUsage}` };
     }
-    if ((a.gitRemote || a.busListener || a.busSender || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
+    if (a.noSandbox && (a.limit || a.keepsOut.length || a.gitRemote || a.writeDirs?.length || a.readDirs?.length))
+        return {error: '--no-sandbox conflicts with workspace restrictions'};
+    if ((a.gitRemote || a.busListener || (a.busSender && !a.noSandbox) || a.readDirs?.length) && a.limit !== 'cwd') return {error: 'workspace grants require --limit cwd'};
     if (a.writeDirs?.length && a.limit !== 'cwd') return { error: '--write-dir requires --limit cwd' };
     if (a.keepsOut.length > 0 && a.limit !== 'cwd') {
         return { error: `--keep-out is for a limited friend, and comes with --limit cwd; ${kUsage}` };
@@ -579,6 +584,7 @@ export class Driver {
         const start: HarnessStart = { prompts: this.prompts, cwd: this.args.cwd, settingSources: this.args.settingSources,
             limited: this.args.limit === 'cwd', ...(this.args.writeDirs ? {writeDirs: this.args.writeDirs} : {}), keepsOut: [...(this.args.keepsOut ?? [])],
             askSecret: (account, what, why) => this.askSecret(generation, account, what, why) };
+        if (this.args.noSandbox) start.noSandbox = true;
         if (this.args.busSender) start.busSender = this.args.busSender;
         if (this.args.busListener) start.busListener = this.args.busListener;
         if (this.args.gitRemote) start.gitRemote = this.args.gitRemote;
@@ -1141,6 +1147,7 @@ export class Driver {
                 this.closeText(t);
                 this.record('block-text');
             } else if (b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
+                if (b.name === 'mcp__nexus__nexus_bus_send' || b.name === 'nexus_bus_send') continue;
                 this.closeText(t);
                 const name = cut(oneLine(b.name), 200) || 'tool';
                 this.write({ kind: 'tool', turn: t.turn, name, summary: toolSummary(b.name, b.input) });

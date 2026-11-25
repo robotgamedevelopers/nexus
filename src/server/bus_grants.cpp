@@ -51,12 +51,15 @@ bool BusGrants::read(const std::string& text, Roster& roster) {
         if (second == line.npos) return false;
         const auto name = line.substr(0, first);
         const auto harness = line.substr(first + 1, second - first - 1);
-        const auto address = line.substr(second + 1);
+        const auto third = line.find('\t', second + 1);
+        const auto address = line.substr(second + 1, third == line.npos ? line.npos : third - second - 1);
+        const auto mode = third == line.npos ? std::string_view("sandbox") : line.substr(third + 1);
+        if (mode != "sandbox" && !(mode == "no-sandbox" && harness == "claude")) return false;
         // External peers can use a harness with no local driver. It only has to be a registry identifier.
         constexpr std::string_view identifiers = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:/-";
         if (!sync::busPeerName(name) || harness.empty() || harness.size() > 128 ||
             harness.find_first_not_of(identifiers) != harness.npos || (!address.empty() && !endpoint(address)) ||
-            !parsed.try_emplace(std::string(name), harness, address).second) return false;
+            !parsed.try_emplace(std::string(name), Friend{std::string(harness), std::string(address), mode == "no-sandbox"}).second) return false;
     }
     roster = std::move(parsed);
     return true;
@@ -126,9 +129,16 @@ void BusGrants::refresh(const DriverTable& table, std::int64_t nowMs) {
             const bool requested = std::any_of(state.deliveries.begin(), state.deliveries.end(),
                 [&](const auto& pending) { return pending.second.required > state.started; });
             if (!state.pending.valid() && (nowMs >= state.next || (requested && state.problem.empty()))) {
-                const Command lookup{command[0], {command.begin() + 1, command.end()}, "nexus_policy bus-roster"};
+                Command lookup{command[0], {command.begin() + 1, command.end()}, "nexus_policy bus-roster"};
                 try {
-                    state.pending = std::async(std::launch::async, run_, lookup, 6);
+                    state.pending = std::async(std::launch::async, [run = run_, lookup]() mutable {
+                        auto extended = lookup;
+                        extended.arguments.push_back("--startup-policy");
+                        auto result = run(extended, 6);
+                        // Older profile launchers reject the added option with argparse's usage status.
+                        if (result.code == 2) return run(lookup, 6);
+                        return result;
+                    });
                     ++state.started;
                 } catch (const std::system_error&) {
                     state.problem = "Cannot start the registry reader for message bus profile " + command.back() +
@@ -143,8 +153,8 @@ void BusGrants::refresh(const DriverTable& table, std::int64_t nowMs) {
             if (state.problem.empty() && state.roster) {
                 for (const auto& [name, harness] : owners->second) {
                     auto grant = state.roster->find(name);
-                    if (grant != state.roster->end() && grant->second.first == harness && !grant->second.second.empty())
-                        addresses_.emplace(name, grant->second.second);
+                    if (grant != state.roster->end() && grant->second.harness == harness && !grant->second.address.empty())
+                        addresses_.emplace(name, grant->second.address);
                 }
             }
         }
@@ -152,9 +162,13 @@ void BusGrants::refresh(const DriverTable& table, std::int64_t nowMs) {
     }
     if (rosterChanged) {
         knownSenders_.clear();
+        unsandboxed_.clear();
         for (const auto& [recipient, program] : owners_) {
             const auto& roster = queries_.at(program).roster;
             if (!roster) continue;
+            auto own = roster->find(recipient);
+            if (own != roster->end() && own->second.noSandbox &&
+                wanted.at(program).at(recipient) == own->second.harness) unsandboxed_.insert(recipient);
             auto& names = knownSenders_[recipient];
             for (const auto& row : *roster) names.insert(row.first);
         }

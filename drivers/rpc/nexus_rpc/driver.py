@@ -178,6 +178,8 @@ class Turn:
             options = {}
             if self.harness == "codex":
                 options = {"keep_out": self.keep_out, "limited": bool(self.limit)}
+                if getattr(self, "bus_sender", None):
+                    options["bus_sender"] = self.bus_sender
                 if getattr(self, "write_dir", []):
                     options["write_dirs"] = self.write_dir
             try:
@@ -346,6 +348,7 @@ def main():
     parser.add_argument("--limit", choices=["cwd"])
     parser.add_argument("--write-dir", action="append", default=[])
     parser.add_argument("--keep-out", action="append", default=[])
+    parser.add_argument("--bus-sender")
     parser.add_argument("--resume")
     parser.add_argument("--model")
     parser.add_argument("--effort")
@@ -378,6 +381,10 @@ def main():
         if not data or len(data) > 262144:
             raise ValueError("Invalid friend context.")
         args.instructions = data.decode()
+        if args.bus_sender:
+            from .bus_tool import validate
+            validate(args.bus_sender)
+            args.instructions += "\nUse nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks."
         if args.primary_context_fd is None:
             setup_guide = Path(__file__).with_name("friend-setup.txt").read_text(encoding="utf-8").strip()
             args.instructions += "\n\n" + setup_guide

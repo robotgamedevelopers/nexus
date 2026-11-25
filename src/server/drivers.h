@@ -135,6 +135,7 @@ public:
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
+    bool refreshSandbox(const std::set<std::string>& unsandboxed);
     std::string retireForSignOut(const std::string& account);
     // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
     // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
@@ -229,6 +230,7 @@ private:
     Options options_;
     Host* host_ = nullptr;
     sync::Hub* hub_ = nullptr;
+    std::set<std::string> unsandboxed_;
     std::map<sync::SessionId, Slot> slots_;
     // A send between send() and sent().
     std::optional<Supervisor> pendingSup_;

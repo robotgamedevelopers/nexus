@@ -18,11 +18,11 @@ import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Account } from './account.js';
-import { kSecretMcpToolName, kSecretToolName, secretMcpServer, type Harness, type HarnessStart } from './driver.js';
+import { parseArguments, kSecretMcpToolName, kSecretToolName, secretMcpServer, type Harness, type HarnessStart } from './driver.js';
 import { harnessEnv, scrub } from './env.js';
 import { runProcess } from './run.js';
 import { sandboxHomeFiles, sandboxTools } from './tools.js';
-import { kDriverDir, wallOptions } from './wall.js';
+import { kDriverDir, wallOptions, spawnWithToken } from './wall.js';
 import { sendName } from './bus-sender.js';
 import { busListener } from './bus-listener.js';
 import { workRoutes } from './work-routes.js';
@@ -38,34 +38,39 @@ env['CLAUDE_AGENT_SDK_CLIENT_APP'] = 'nexus-claude-driver/0.1.0';
 // On Linux and WSL2 the sandbox's bwrap and socat are nexus's own, put first on Claude's PATH (tools.ts), with the
 // AppArmor profile nexus's bwrap needs on Ubuntu 24.04 and later loaded once through passwordless sudo; when they
 // cannot run here the driver refuses to start rather than run the AI without its sandbox.
-const tools = sandboxTools(process.platform, env);
-if ('path' in tools && tools.path !== undefined) {
-    env['PATH'] = tools.path;
-}
-if ('did' in tools) {
-    process.stderr.write(`nexus-claude-driver: ${tools.did}\n`);
-}
-// Why the AI's sandbox cannot be set up here, if it cannot: the start is refused with it (run.ts prepare), in the
-// protocol's lines, never with a stack trace and never with the AI run unwalled.
-let setup: { cause: string; fix: string } | undefined = 'cause' in tools ? tools : undefined;
-// On Linux every bash and git command in the sandbox fails without ~/.bashrc and ~/.gitconfig: made empty if missing.
-const home = sandboxHomeFiles(process.platform, process.env['HOME'] ?? '');
-if ('cause' in home) {
-    setup ??= home;
-} else {
-    for (const made of home.made) {
-        process.stderr.write(`nexus-claude-driver: made ${made}, empty: the sandbox's shell and git need it to exist\n`);
-    }
-}
-// ssh on Claude's PATH goes through the sandbox's proxy, so `ssh host` reaches the fleet (bin/ssh).
-env['PATH'] = `${kDriverDir}/bin:${env['PATH'] ?? '/usr/bin:/bin'}`;
-// The AI's commands reach the network only through this proxy, which refuses this machine's own addresses (egress.ts).
 let egressPort = 0;
-try {
-    egressPort = await new Egress().listen();
-} catch (e) {
-    setup ??= { cause: `the proxy for the AI's commands cannot listen on 127.0.0.1 (${e instanceof Error ? e.message : String(e)})`,
-        fix: 'free a port on 127.0.0.1 for this user (a firewall or a sandbox around nexus-server may forbid listening)' };
+let setup: {cause: string; fix: string} | undefined;
+const startupArgs = parseArguments(process.argv.slice(2));
+if (!('noSandbox' in startupArgs && startupArgs.noSandbox)) {
+    const tools = sandboxTools(process.platform, env);
+    if ('path' in tools && tools.path !== undefined) {
+        env['PATH'] = tools.path;
+    }
+    if ('did' in tools) {
+        process.stderr.write(`nexus-claude-driver: ${tools.did}\n`);
+    }
+    // Why the AI's sandbox cannot be set up here, if it cannot: the start is refused with it (run.ts prepare), in the
+    // protocol's lines, never with a stack trace and never with the AI run unwalled.
+    setup = 'cause' in tools ? tools : undefined;
+    // On Linux every bash and git command in the sandbox fails without ~/.bashrc and ~/.gitconfig: made empty if missing.
+    const home = sandboxHomeFiles(process.platform, process.env['HOME'] ?? '');
+    if ('cause' in home) {
+        setup ??= home;
+    } else {
+        for (const made of home.made) {
+            process.stderr.write(`nexus-claude-driver: made ${made}, empty: the sandbox's shell and git need it to exist\n`);
+        }
+    }
+    // ssh on Claude's PATH goes through the sandbox's proxy, so `ssh host` reaches the fleet (bin/ssh).
+    env['PATH'] = `${kDriverDir}/bin:${env['PATH'] ?? '/usr/bin:/bin'}`;
+    // The AI's commands reach the network only through this proxy, which refuses this machine's own addresses (egress.ts).
+
+    try {
+        egressPort = await new Egress().listen();
+    } catch (e) {
+        setup ??= { cause: `the proxy for the AI's commands cannot listen on 127.0.0.1 (${e instanceof Error ? e.message : String(e)})`,
+            fix: 'free a port on 127.0.0.1 for this user (a firewall or a sandbox around nexus-server may forbid listening)' };
+    }
 }
 
 let grant: ReturnType<typeof gitGrant> | undefined;
@@ -75,21 +80,28 @@ let work: ReturnType<typeof workRoutes> | undefined;
 let busSocket: string | undefined;
 function startHarness(start: HarnessStart, account: Account): Harness {
     if (start.gitRemote) grant ??= gitGrant(start.gitRemote, env);
-    const wall = wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data),
+    const wall = start.noSandbox ? undefined : wallOptions(account, process.env['HOME'] ?? '', start.cwd, (data) => process.stderr.write(data),
         egressPort, env, {hook: true}, start.limited, start.keepsOut, start.writeDirs, start.readDirs);
-    if (grant && wall.sandbox.network) {
+    if (grant && wall?.sandbox.network) {
         Object.assign(wall.sandbox.network, {allowUnixSockets: grant.sockets});
         wall.sandbox.filesystem?.allowRead?.push(join(kDriverDir, 'bin/git-remote-nexusgit'));
     }
     let childEnv = {...(grant?.env ?? env)};
-    if (configuredRoutes && start.limited && wall.sandbox.network) {
+    if (configuredRoutes && start.limited && wall?.sandbox.network) {
         work ??= workRoutes(configuredRoutes, childEnv, start.busSender, kDriverDir);
         childEnv = {...work.env};
         wall.sandbox.network.allowUnixSockets = [...(wall.sandbox.network.allowUnixSockets ?? []), ...work.sockets];
         wall.sandbox.filesystem?.allowRead?.push(work.bin, join(kDriverDir, 'bin/git-remote-nexusgit'));
     }
+    if (start.noSandbox && configuredRoutes) {
+        const routes = JSON.parse(configuredRoutes) as {ghConfig: string; githubAlias: string; repository: string};
+        childEnv['GH_CONFIG_DIR'] = routes.ghConfig;
+        childEnv['GIT_CONFIG_COUNT'] = '1';
+        childEnv['GIT_CONFIG_KEY_0'] = 'url.git@' + routes.githubAlias + ':' + routes.repository + '.git.insteadOf';
+        childEnv['GIT_CONFIG_VALUE_0'] = 'git@github.com:' + routes.repository + '.git';
+    }
     const instructions = [start.startupContext];
-    if (start.busListener && wall.sandbox.network) {
+    if (start.busListener && wall?.sandbox.network) {
         const [friend, address] = start.busListener.split('@');
         if (!friend || !address) throw new Error('Missing message bus grant fields');
         busSocket ??= busListener(friend, address);
@@ -102,7 +114,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
         instructions.push('To listen on the message bus use Monitor with "' + join(bin, 'nova-bus') +
             '" hook --as ' + friend + '. Keep the full output for delivery.');
     }
-    if (start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself.');
+    if (start.busSender) instructions.push('Peer messages arrive in chat. Use nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks.');
     const startupContext = instructions.filter(Boolean).join('\n');
     const stream = query({
         prompt: start.prompts,
@@ -130,7 +142,7 @@ function startHarness(start: HarnessStart, account: Account): Harness {
             mcpServers: { nexus: secretMcpServer(start.askSecret, start.busSender) },
             toolAliases: { [kSecretToolName]: kSecretMcpToolName, ...(start.busSender ? {[sendName]: `mcp__nexus__${sendName}`} : {}) },
             // A limited friend (--limit cwd) reads and writes only its directory (wall.ts limitOf).
-            ...wall,
+            ...(wall ?? {sandbox: {enabled: false}, spawnClaudeCodeProcess: spawnWithToken(account.token, data => process.stderr.write(data))}),
         },
     });
     const catalogReady = stream.supportedModels().then(async (rows) => {

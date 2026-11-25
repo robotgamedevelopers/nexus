@@ -1690,6 +1690,16 @@ void stateCursorUnderTheLastText() {
     CHECK(h.entries().size() == 2 && !h.view.breathing);
 }
 
+void nativeBusSendIsPrivateInHistory() {
+    Harness h;
+    h.model.append(0, Entry{EntryKind::Tool, "Read: before"});
+    h.model.append(0, Entry{EntryKind::Tool, "mcp__nexus__nexus_bus_send: private body"});
+    h.model.append(0, Entry{EntryKind::Tool, "Read: after"});
+    h.frame();
+    CHECK(h.entries().size() == 2);
+    CHECK(!h.hasText(h.window(), "private body"));
+}
+
 void scannerHasPromptPadding() {
     Harness h;
     h.model.append(0, Entry{EntryKind::Friend, "Finished."});
@@ -2799,7 +2809,7 @@ int main(int argc, char** argv) {
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
             link.state.sessions.setFriends({{"f1", {{"a", "A", false, "a@example.test"},
-                {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}});
+                {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
             link.state.sessions.setNextAction(ack);
             link.changed = true;
             host.pollLink();
@@ -2928,6 +2938,15 @@ int main(int argc, char** argv) {
         CHECK(std::abs(card.left - backdrop.left - extension) < 2);
         CHECK(std::abs(backdrop.right - card.right - extension) < 2);
 
+        const auto otherFriend = h.centre(h.tabs()[2]);
+        const auto layer = h.bounds(prLayoutNodeParent(h.tree, h.view.accountMenu));
+        CHECK(layer.top >= h.bounds(h.tabs()[2]).bottom);
+        h.pointer(PrAppEventKind_PointerDown, otherFriend);
+        h.pointer(PrAppEventKind_PointerUp, otherFriend);
+        h.frame();
+        CHECK(h.active().name == "f2" && h.view.accountMenu == kPrLayoutNodeNone);
+        h.commandDigit(2);
+        h.frame();
         auto previous = h.bounds(h.findText(h.view.accountMenu, "Please sign in to ChatGPT"));
         for (auto row : h.view.accountRows) {
             const auto bounds = h.bounds(row);
@@ -3261,6 +3280,7 @@ int main(int argc, char** argv) {
     toolLinesAreOneCompactLine();
     growingTextShowsAfterTheTranscript();
     stateCursorUnderTheLastText();
+    nativeBusSendIsPrivateInHistory();
     scannerHasPromptPadding();
     sendingKeepsBubbleOnScannerRow();
     nothingAroundTheOpenPrompt();

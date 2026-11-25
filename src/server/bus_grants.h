@@ -30,9 +30,17 @@ public:
     // Only for projecting history: keep each recipient's most recent complete roster during outages.
     const std::map<std::string, std::set<std::string>>& knownSenders() const { return knownSenders_; }
 
+    const std::set<std::string>& unsandboxed() const { return unsandboxed_; }
+
 private:
+    std::set<std::string> unsandboxed_;
+    struct Friend {
+        std::string harness, address;
+        bool noSandbox;
+        bool operator==(const Friend&) const = default;
+    };
     using Program = std::vector<std::string>;
-    using Roster = std::map<std::string, std::pair<std::string, std::string>>; // enabled name to harness and optional endpoint
+    using Roster = std::map<std::string, Friend>; // enabled name to harness and optional endpoint
     struct Delivery {
         std::string id, sender;
         std::uint64_t required = 0;

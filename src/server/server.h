@@ -88,6 +88,7 @@ int servicesCommand(const Paths& p, const std::vector<std::string>& args);
 // `nexus-server store check`: reads the store without changing it (store::Store::inspect, under its lock, shared) and
 // prints one line of what it holds and what a server's open would do. Refused, in one line and exit 1, while a server
 // has the store (it holds the lock): the store is not read under a writer.
+int historyCommand(const Paths& p, const std::vector<std::string>& args);
 int storeCommand(const Paths& p, const std::vector<std::string>& args);
 // Asks the running server for a session, starting one (`self` serve) if none answers; prints its CONNECT line.
 int newSession(const Paths& p, const std::string& self, const Client& client = {});

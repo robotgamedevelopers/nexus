@@ -279,6 +279,14 @@ void FrameHost::pollLink() {
         takeFriends(s.sessions);
     }
     mirror.apply(*model, s.sessions);
+    if (s.phase == sync::LinkPhase::Connected) {
+        for (std::size_t i = 0; i < model->tab_count(); ++i) {
+            const auto id = model->tab(i).id;
+            if (!mirror.missingHistory(id)) continue;
+            const auto* session = s.sessions.find(mirror.session(id));
+            if (session && session->first) link->requestHistory(session->id, session->info.contextEpoch, session->first);
+        }
+    }
     if (signIn.port != nullptr) {
         if (s.phase == sync::LinkPhase::Connected) {
             signIn.loopback = s.loopback;

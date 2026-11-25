@@ -261,6 +261,19 @@ Output Supervisor::resetContext(bool compact, Millis now) {
     return finish();
 }
 
+Output Supervisor::refreshSandbox(bool tightened, Millis now) {
+    if (phase_ == Phase::None || phase_ == Phase::Ending) return finish();
+    sandboxChanged_ = true;
+    if (phase_ == Phase::Starting) {
+        retiring_ = true;
+        endQuietly(now);
+    } else if (tightened && phase_ == Phase::Working) {
+        stopOpen(now);
+    }
+    advance(now);
+    return finish();
+}
+
 Output Supervisor::retireIdleLogin(Millis now) {
     if (phase_ == Phase::Idle) {
         retiring_ = true;
@@ -747,6 +760,7 @@ void Supervisor::startDriver(Millis now) {
     driverAccount_ = config_.account;
     driverEmail_ = expectedEmail(config_.command);
     driverCwd_ = config_.cwd;
+    sandboxChanged_ = false;
     driverLimited_ = config_.limited;
     driverKeepsOut_ = config_.limited ? config_.keepsOut : std::vector<std::string>{};
     driverModel_.clear();
@@ -832,7 +846,7 @@ void Supervisor::retire(Millis now) {
     }
     const bool cleared = (!driverModel_.empty() && config_.model.empty()) ||
         (!driverEffort_.empty() && config_.effort.empty());
-    if (phase_ == Phase::Idle && (changedIdentity || driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
+    if (phase_ == Phase::Idle && (sandboxChanged_ || changedIdentity || driverAccount_ != config_.account || driverCwd_ != config_.cwd || !config_.here ||
                                   driverLimited_ != config_.limited ||
                                   (driverLimited_ && driverKeepsOut_ != config_.keepsOut) || !config_.present ||
                                   cleared)) {

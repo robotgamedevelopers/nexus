@@ -15,6 +15,7 @@ public:
     void refresh(const std::string& driversFile, const accounts::Registry* registry, std::int64_t now);
     BusAccept receive(sync::Hub& hub, const std::string& recipient, const BusMessage& message);
     const std::map<std::string, std::set<std::string>>& knownSenders() const { return grants_.knownSenders(); }
+    const std::set<std::string>& unsandboxed() const { return grants_.unsandboxed(); }
     BusListeners listeners;
 
 private:

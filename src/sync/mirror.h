@@ -41,6 +41,10 @@ public:
         std::uint64_t next = 0;
     };
     Seen seen(std::size_t id) const;
+    bool missingHistory(std::size_t id) const {
+        const auto it = seen_.find(id);
+        return it != seen_.end() && it->second.missingHistory;
+    }
 
     // The friend's entry still growing in the session behind a friend's tab (by Tab::id), as the last state applied
     // holds it: the entry at seen(id).next, still open. Null when there is none.
@@ -69,6 +73,7 @@ private:
         std::uint64_t epoch = 0;
         EntryRef open;
         std::uint32_t agents = 0;
+        bool missingHistory = false;
         bool held = false;              // the last state applied held the session
         Activity activity = Activity::Idle;
         std::optional<std::vector<std::string>> busSenders;

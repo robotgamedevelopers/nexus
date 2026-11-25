@@ -854,6 +854,16 @@ void testLimit() {
     o = s.prompt("three", kStart + 11);
     CHECK(hasArgs(o, {"--limit", "cwd"}) && s.driverLimited() && s.failedStarts() == 0);
 
+    for (bool tighten : {false, true}) {
+        Supervisor running = make();
+        running.prompt("one", kStart);
+        running.message(Hello{1, "h"}, kStart + 1);
+        running.refreshSandbox(tighten, kStart + 2);
+        CHECK(running.phase() == (tighten ? Phase::Stopping : Phase::Working));
+        auto done = running.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
+        CHECK(ended(running, done) && running.retiring());
+    }
+
     // A Config is limited unless the server says otherwise.
     CHECK(Config{}.limited);
 

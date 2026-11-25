@@ -1423,6 +1423,27 @@ std::vector<SignInOffer> Hub::publicOffers() const {
     return offers;
 }
 
+Sessions Hub::historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const {
+    const auto* live = state_.find(id);
+    const auto* stored = store_.find(id);
+    if (!live || !stored || live->info.contextEpoch != epoch || first >= stored->transcript.size()) return {};
+    auto page = std::make_shared<SessionView>();
+    page->id = id;
+    page->info = live->info;
+    page->first = first;
+    page->busSenders = live->busSenders;
+    std::size_t bytes = 0;
+    for (auto index = first; index < stored->transcript.size() && page->entries.size() < 256; ++index) {
+        auto entry = stored->transcript[index];
+        if (entry->kind == EntryKind::Bus && !visibleBus(entry->text, *live))
+            entry = std::make_shared<const SessionEntry>(SessionEntry{EntryKind::Bus, {}, true});
+        if (!page->entries.empty() && bytes + entry->text.size() > 65536) break;
+        bytes += entry->text.size();
+        page->entries.push_back(std::move(entry));
+    }
+    return Sessions({page});
+}
+
 Sessions Hub::stateFor(const std::string& opener, const std::string& client) const {
     Sessions s = state_;
     if (!client.empty()) s.setNextAction(store_.applied(client) + 1);

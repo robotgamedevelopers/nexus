@@ -293,6 +293,7 @@ public:
 
     // The state every window receives: the sessions, the open secret requests and, once the hub holds a registry
     // (useAccounts(), applyAccounts()), its friends in order (Sessions::friends); with no registry, none known.
+    Sessions historyPage(SessionId id, std::uint64_t epoch, std::uint64_t first) const;
     const Sessions& state() const { return state_; }
     const Limits& limits() const { return limits_; }
     bool failed() const { return store_.failed(); }

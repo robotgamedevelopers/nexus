@@ -859,6 +859,15 @@ void Server::control(int fd) {
         writeAll(fd, "ERROR no request within 2 s\n");
         return;
     }
+    if (request.starts_with("history-page ")) {
+        std::istringstream fields(request.substr(13));
+        std::uint64_t id, epoch, first;
+        std::string extra;
+        if (!(fields >> id >> epoch >> first) || fields >> extra) return;
+        auto page = hub_->historyPage(id, epoch, first);
+        if (page.find(id)) writeAll(fd, page.init_diff());
+        return;
+    }
     if (request == "stop") {
         supervision::noteIntentionalStopAt(dirNow(supervision::kSuperviseDir));
         writeAll(fd, "OK\n");
@@ -1251,7 +1260,8 @@ PassOrder::Outcome Server::hold(bool holdDrivers, std::string* why) {
 
 PassOrder::Outcome Server::apply(std::string* why) {
     bool changed = pass_.busRosterRefreshed && hub_->setBusSenders(bus_->knownSenders());
-    if (!drivers_->serve(nowMs(), &changed)) {
+    if ((pass_.busRosterRefreshed && !drivers_->refreshSandbox(bus_->unsandboxed())) ||
+        !drivers_->serve(nowMs(), &changed)) {
         *why = "the store failed; stopping without acknowledging the actions since";
         return PassOrder::Outcome::Failed;
     }
@@ -1882,6 +1892,24 @@ int config(const Paths& p, const std::vector<std::string>& args) {
                          "The accounts and friends are DIR/nexus-config/accounts.json and friends.json\n"
                          "(docs/accounts.md)\n");
     return 2;
+}
+
+int historyCommand(const Paths& p, const std::vector<std::string>& args) {
+    if (args.size() != 3 || std::any_of(args.begin(), args.end(), [](const auto& arg) {
+            return arg.empty() || arg.size() > 20 || arg.find_first_not_of("0123456789") != arg.npos;
+        })) return 1;
+    const int fd = connectControl(p.socket);
+    if (fd < 0) return 1;
+    bool ok = writeAll(fd, "history-page " + args[0] + " " + args[1] + " " + args[2] + "\n");
+    char buf[8192];
+    ssize_t n = 0;
+    std::size_t bytes = 0;
+    while (ok && (n = read(fd, buf, sizeof buf)) > 0) {
+        bytes += static_cast<std::size_t>(n);
+        ok = bytes <= 1024 * 1024 && std::fwrite(buf, 1, static_cast<std::size_t>(n), stdout) == static_cast<std::size_t>(n);
+    }
+    close(fd);
+    return ok && n == 0 && bytes ? 0 : 1;
 }
 
 int storeCommand(const Paths& p, const std::vector<std::string>& args) {

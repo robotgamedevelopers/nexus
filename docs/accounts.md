@@ -613,3 +613,7 @@ launch, Git automatically routes the repository's ordinary GitHub SSH origin. Th
 and noninteractive bench commands. The API accepts a method, literal string fields and simple field
 selection. For a server-owned bus sender, `nova-bus who` also works for CLI callers such as Sprint.
 Remove the entry and relaunch the driver to revoke the routes.
+
+A Claude friend with `startup.no_sandbox: true` in nova-config runs commands with the operating-system access of the Nexus server login. This takes effect at driver launch. Omit the field or set it to false to use the sandbox. Claude and Codex friends with a server-owned bus inbox can send directly with `nexus_bus_send` and supply `reply_to` to reply. The receiving friend sees the message in chat.
+
+Nexus checks the friend registry in the background (normally every 30 seconds). Changing a Claude friend’s startup.no_sandbox setting recycles that friend’s driver. Granting access lets the current turn finish. Revoking access stops the active turn. The next driver reads the current registry row and resumes the session.

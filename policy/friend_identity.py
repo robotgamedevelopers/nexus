@@ -78,7 +78,7 @@ def bus_owner(startup):
     return owner
 
 
-def bus_roster(config):
+def bus_roster(config, include_policy=False):
     roster = []
     names = set()
     for item in registry_items(config, "list"):
@@ -104,7 +104,13 @@ def bus_roster(config):
         if not isinstance(startup, dict):
             raise ValueError("the friend registry startup field must be an object")
         address = native_bus_endpoint(startup) if startup.get("bus_owner") == "nexus-server" else ""
-        roster.append((name, harness, address))
+        row = (name, harness, address)
+        if include_policy:
+            mode = startup.get("no_sandbox", False)
+            if type(mode) is not bool or (mode and harness != "claude"):
+                raise ValueError("invalid no_sandbox registry setting")
+            row += ("no-sandbox" if mode else "sandbox",)
+        roster.append(row)
     return roster
 
 
@@ -130,6 +136,9 @@ def resolve(config, name, harness=None):
     spec = row.get("startup")
     if not isinstance(spec, dict) or not spec:
         raise ValueError(f"no startup definition for {name} in nova-config")
+    no_sandbox = spec.get("no_sandbox", False)
+    if type(no_sandbox) is not bool or (no_sandbox and route != "claude"):
+        raise ValueError("no_sandbox must be boolean and requires a supported Claude driver when enabled")
     home = spec.get("home")
     files = spec.get("files")
     prefix = spec.get("prefix")
@@ -163,7 +172,7 @@ def resolve(config, name, harness=None):
             raise ValueError(f"{name}: {key} must be a list of absolute directories")
         return roots
     prompt = "\n\n".join(pieces)
-    return prompt, {"friend": name, "harness": route, "model": model, "home": home,
+    return prompt, {"no_sandbox": no_sandbox, "friend": name, "harness": route, "model": model, "home": home,
                     "repository": spec.get("repository", ""), "pronouns": row.get("pronouns", ""),
                     "writable_dirs": directories("writable_dirs"), "readable_dirs": directories("readable_dirs"),
                     "bus_listener": bus_endpoint(spec.get("bus_listener", "")), "bus_owner": bus_owner(spec),

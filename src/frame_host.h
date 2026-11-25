@@ -65,6 +65,7 @@ struct LinkPort {
     virtual ~LinkPort() = default;
     // The latest state; true if it changed since the last call that returned true. Never waits.
     virtual bool poll(LinkState* out) = 0;
+    virtual void requestHistory(sync::SessionId, std::uint64_t, std::uint64_t) {}
     // An action for the server, in order. Never waits.
     virtual std::uint64_t send(sync::Action action) = 0;
 };

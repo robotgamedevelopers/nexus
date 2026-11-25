@@ -107,6 +107,7 @@ class PersonalPolicy(unittest.TestCase):
         flags, _ = json.loads(subprocess.check_output(command, text=True))
         self.assertNotIn("--bus-listener", flags)
         self.assertNotIn("127.0.0.1:6379", flags)
+        self.assertIn("review@127.0.0.1:6379", flags)
         # Existing Claude listener grants remain driver-owned until explicitly transferred.
         startup.pop("bus_owner")
         fixture["items"][0]["fields"]["harness"] = "claude"
@@ -120,6 +121,13 @@ class PersonalPolicy(unittest.TestCase):
         flags, _ = json.loads(subprocess.check_output(claude, text=True))
         self.assertNotIn("--bus-listener", flags)
         self.assertEqual(flags[flags.index("--bus-sender") + 1], "review@127.0.0.1:6379")
+        startup["no_sandbox"] = True
+        publish()
+        flags, _ = json.loads(subprocess.check_output(claude, text=True))
+        self.assertIn("--no-sandbox", flags)
+        self.assertNotIn("--limit", flags)
+        self.assertNotIn("--write-dir", flags)
+        startup.pop("no_sandbox")
         startup.pop("bus_owner")
         startup.pop("bus_listener")
         fixture["items"][0]["fields"]["harness"] = "codex"

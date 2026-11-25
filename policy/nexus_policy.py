@@ -117,6 +117,7 @@ def cli():
     bus.add_argument("profile", type=Path)
     roster = commands.add_parser("bus-roster", help="list enabled registry friends and their server-owned inboxes")
     roster.add_argument("profile", type=Path)
+    roster.add_argument("--startup-policy", action="store_true")
     inspect = commands.add_parser("identity", help="verify the friend definition and home without starting a model")
     inspect.add_argument("profile", type=Path)
     inspect.add_argument("friend")
@@ -155,7 +156,7 @@ def cli():
                 os.close(directory)
             if args.command in ("bus-grants", "bus-roster"):
                 if args.command == "bus-roster":
-                    rows = bus_roster(config)
+                    rows = bus_roster(config, args.startup_policy)
                     print("nexus-bus-roster-v1")
                 else:
                     rows = bus_grants(config)
@@ -179,18 +180,22 @@ def cli():
                 defaults.setdefault("model", identity["model"])
             extra = [item for key, value in defaults.items() if not option("--" + key)
                      for item in ("--" + key, value)]
-            if args.harness == "claude" and not option("--limit"):
+            if identity["no_sandbox"]:
+                if option("--limit"):
+                    raise ValueError("no_sandbox conflicts with the instance directory limit")
+                extra.append("--no-sandbox")
+            elif args.harness == "claude" and not option("--limit"):
                 extra.extend(["--limit", "cwd"])
-            for path in identity["writable_dirs"]:
+            for path in ([] if identity["no_sandbox"] else identity["writable_dirs"]):
                 extra.extend(["--write-dir", path])
             # Existing registry rows keep their driver listener until the inbox owner transfers it.
             if identity["bus_listener"] and not identity["bus_owner"]:
                 if args.harness != "claude":
                     raise ValueError("a driver-owned bus_listener requires a Claude friend")
                 extra.extend(["--bus-listener", args.friend + "@" + identity["bus_listener"]])
-            if identity["bus_owner"] == "nexus-server" and args.harness == "claude":
+            if identity["bus_owner"] == "nexus-server" and args.harness in ("claude", "codex"):
                 extra.extend(["--bus-sender", args.friend + "@" + identity["bus_listener"]])
-            if identity["readable_dirs"] or identity["github_ssh_alias"]:
+            if not identity["no_sandbox"] and (identity["readable_dirs"] or identity["github_ssh_alias"]):
                 if args.harness != "claude":
                     raise ValueError("this harness does not implement read-only directory and GitHub grants")
                 for path in identity["readable_dirs"]:
