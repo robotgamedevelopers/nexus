@@ -80,9 +80,12 @@ MCIdxF2 == 0 .. 4           \* two dashboards, no AI at the start, up to two tab
 \* MCBoards1 and MCBoards2, so refused while it stands and back as a new tab after a remove), d3 (new) and the empty
 \* name (refused).
 MCBoardArrivals == {"d1", "d3", ""}
-MCSpecBoards == SpecBoardsWith(MCBoardArrivals)
-MCSpecAll == SpecAllWith(MCArrivals, MCBoardArrivals)
+\* (Window.tla's SpecBoardsWith and SpecAllWith, written out: TLC reads a specification's Init and next-state relation only
+\* through definitions without arguments.)
 MCNextBoards == NextAllWith({}, MCBoardArrivals)
+MCSpecBoards == Init /\ [][MCNextBoards]_vars
+MCNextAll == NextAllWith(MCArrivals, MCBoardArrivals)
+MCSpecAll == Init /\ [][MCNextAll]_vars
 
 \* the state constraint that keeps the instance finite (each AI or dashboard added takes an id, as a terminal does:
 \* MaxTerms bounds all three)
