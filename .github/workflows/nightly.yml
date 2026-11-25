@@ -14,9 +14,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The largest instances, on the fleet Mac. On the hosted macos-26 image (3 cores, Prax built cold each night) it ran
+  # past its 30 minutes on 2026-11-25 (run 45683088547) and was cut off. A nightly has no time limit; GitHub's default
+  # for a job (6 hours) is the only one.
   model-large:
-    runs-on: macos-26
-    timeout-minutes: 30
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
