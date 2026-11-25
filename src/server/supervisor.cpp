@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <numeric>
 #include <type_traits>
 #include <utility>
@@ -42,6 +43,10 @@ std::string kindOf(const DriverMessage& message) {
             return "error";
         } else if constexpr (std::is_same_v<M, AskSecret>) {
             return "ask-secret";
+        } else if constexpr (std::is_same_v<M, Queue>) {
+            return "queue";
+        } else if constexpr (std::is_same_v<M, Settled>) {
+            return "settled";
         } else {
             return m.kind;
         }
@@ -53,7 +58,7 @@ std::uint64_t turnOf(const DriverMessage& message) {
     return std::visit([](const auto& m) -> std::uint64_t {
         using M = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<M, Text> || std::is_same_v<M, TextEnd> || std::is_same_v<M, Tool> ||
-                      std::is_same_v<M, Done>) {
+                      std::is_same_v<M, Done> || std::is_same_v<M, Queue> || std::is_same_v<M, Settled>) {
             return m.turn;
         } else {
             return 0;
@@ -93,6 +98,14 @@ std::string sentence(std::string s) {
         s.pop_back();
     }
     return s + ".";
+}
+
+bool names(const Hello& hello, std::string_view feature) {
+    return std::find(hello.features.begin(), hello.features.end(), feature) != hello.features.end();
+}
+
+std::string plural(std::size_t n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
 }
 
 std::string quoted(const std::vector<std::string>& command) {
@@ -251,6 +264,7 @@ Output Supervisor::resetContext(bool compact, Millis now) {
     state_ = {};
     state_.nextTurn = next;
     state_.summary = compact;
+    clearSteering();     // the conversation starts over: nothing written into its old turn goes on
     gathered_.clear();
     openPrompt_.clear();
     if (phase_ != Phase::None && phase_ != Phase::Ending) {
@@ -402,7 +416,19 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
             end(config_.name + "'s driver does not support the limit to its directory (its hello lists no \"limit\" "
                 "feature), and " + config_.name + " is limited, so it was ended. Install a driver that supports it ("
                 + config_.configured + "), or set the AI's \"limit\" to false (docs/accounts.md).", now);
+        } else if (hello != nullptr && hello->protocol == kProtocolVersion &&
+                   (names(*hello, kFeatureSteer) || names(*hello, kFeatureFollowUp)) && !names(*hello, kFeatureSettled)) {
+            // Without settled the server cannot tell a turn's end from one model run's, nor what the driver never took.
+            end(config_.name + "'s driver names \"" + std::string(names(*hello, kFeatureSteer) ? kFeatureSteer :
+                kFeatureFollowUp) + "\" in its hello without \"settled\", which a driver that takes steers or "
+                "follow-ups must also name, so it was ended. Fix the driver (docs/driver-protocol.md, \"Steering a "
+                "turn\"), or install one that goes with this nexus-server (" + config_.configured + ").", now);
         } else if (hello != nullptr && hello->protocol == kProtocolVersion) {
+            // Only what it named is ever written to it (models/Steering.tla NamedOnly); a feature this server does
+            // not know is skipped.
+            driverSteers_ = names(*hello, kFeatureSteer);
+            driverFollowsUp_ = names(*hello, kFeatureFollowUp);
+            driverSettles_ = names(*hello, kFeatureSettled);
             phase_ = Phase::Idle;
             crashed_ = false;
             deadline_.reset();
@@ -423,6 +449,9 @@ Output Supervisor::message(const DriverMessage& message, Millis now) {
 // A message from a driver past its hello.
 void Supervisor::receive(const DriverMessage& message, Millis now) {
     const std::uint64_t open = state_.openTurn;
+    if (steering(message, open, now)) {
+        return;
+    }
     if (std::holds_alternative<Hello>(message)) {
         end(brokeProtocol("wrote a second hello"), now);
     } else if (const Credential* c = std::get_if<Credential>(&message)) {
@@ -475,6 +504,7 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
                 state_.exhaustedAccounts.push_back(driverAccount_);
             }
             state_.modelLimitPending = modelLimit && !replacementSelected;
+            cutWritten();
             state_.openTurn = 0;
             openPrompt_.clear();
             out_.durable = true;
@@ -531,6 +561,165 @@ void Supervisor::receive(const DriverMessage& message, Millis now) {
     }
 }
 
+// The steering lines (queue, settled), and the rules they put on the rest of a turn: nothing of the turn after its
+// settled but its done, and no done before settled from a driver that named it. True when the message was handled
+// here. Models: models/Steering.tla Receive (SoundQueue, ServerKeptRules).
+bool Supervisor::steering(const DriverMessage& message, std::uint64_t open, Millis now) {
+    const std::string turnText = open == 0 ? std::string(" with no turn open") : " while turn " +
+        std::to_string(open) + " is open";
+    if (const Queue* q = std::get_if<Queue>(&message)) {
+        if (!driverSteers_ && !driverFollowsUp_) {
+            end(brokeProtocol("wrote queue, though its hello named neither steer nor follow-up"), now);
+        } else if (open == 0 || q->turn != open) {
+            end(brokeProtocol("wrote queue for turn " + std::to_string(q->turn) + turnText), now);
+        } else if (settled_) {
+            end(brokeProtocol("wrote queue for turn " + std::to_string(open) + " after its settled"), now);
+        } else {
+            // Each id one written into this turn as that kind, and not one the harness already took in: an id leaves
+            // the queue only when it is taken in.
+            auto sound = [this](const std::vector<std::uint64_t>& ids, bool followUp) -> std::string {
+                for (const std::uint64_t id : ids) {
+                    const auto w = std::find_if(written_.begin(), written_.end(), [&](const Written& x) {
+                        return x.id == id && x.followUp == followUp;
+                    });
+                    if (w == written_.end()) {
+                        return "reported " + std::string(followUp ? "follow-up " : "steer ") + std::to_string(id) +
+                            ", which the server did not write into turn " + std::to_string(state_.openTurn) +
+                            " as one";
+                    }
+                    if (taken(id)) {
+                        return "reported " + std::string(followUp ? "follow-up " : "steer ") + std::to_string(id) +
+                            " again after its harness took it in";
+                    }
+                }
+                return {};
+            };
+            std::string bad = sound(q->steer, false);
+            if (bad.empty()) {
+                bad = sound(q->followUp, true);
+            }
+            if (!bad.empty()) {
+                end(brokeProtocol(bad), now);
+            } else {
+                reported_ = *q;
+                everReported_.insert(q->steer.begin(), q->steer.end());
+                everReported_.insert(q->followUp.begin(), q->followUp.end());
+            }
+        }
+        return true;
+    }
+    if (const Settled* st = std::get_if<Settled>(&message)) {
+        if (!driverSettles_) {
+            end(brokeProtocol("wrote settled, though its hello did not name settled"), now);
+        } else if (open == 0 || st->turn != open) {
+            end(brokeProtocol("wrote settled for turn " + std::to_string(st->turn) + turnText), now);
+        } else if (settled_) {
+            end(brokeProtocol("wrote a second settled for turn " + std::to_string(open)), now);
+        } else {
+            settled_ = true;
+        }
+        return true;
+    }
+    const Error* error = std::get_if<Error>(&message);
+    const std::uint64_t turn = error != nullptr ? error->turn.value_or(0) : turnOf(message);
+    if (open == 0 || turn != open) {
+        return false;
+    }
+    if (settled_ && !std::holds_alternative<Done>(message)) {
+        end(brokeProtocol("wrote " + kindOf(message) + " for turn " + std::to_string(open) + " after its settled, "
+            "where only its done may follow"), now);
+        return true;
+    }
+    if (std::holds_alternative<Done>(message) && driverSettles_ && !settled_) {
+        end(brokeProtocol("wrote done for turn " + std::to_string(open) + " before its settled"), now);
+        return true;
+    }
+    return false;
+}
+
+bool Supervisor::taken(std::uint64_t id) const {
+    return everReported_.contains(id) &&
+        std::find(reported_.steer.begin(), reported_.steer.end(), id) == reported_.steer.end() &&
+        std::find(reported_.followUp.begin(), reported_.followUp.end(), id) == reported_.followUp.end();
+}
+
+// At the turn's done: each written into it that the harness never took in waits again, first, in the order written
+// (models/Steering.tla Close, NeverLost).
+void Supervisor::giveBack() {
+    std::vector<std::string> back;
+    for (const Written& w : written_) {
+        if (!taken(w.id)) {
+            back.push_back(w.text);
+        }
+    }
+    if (!back.empty()) {
+        effect(Effect::What::Notice, plural(back.size(), "message", "messages") + " written into the turn " +
+            (back.size() == 1 ? "was" : "were") + " not taken in by " + config_.name + " before it ended, so " +
+            (back.size() == 1 ? "it goes" : "they go, in order,") + " as the next prompt.");
+        state_.waiting.insert(state_.waiting.begin(), std::make_move_iterator(back.begin()),
+            std::make_move_iterator(back.end()));
+        out_.durable = true;
+    }
+    clearSteering();
+}
+
+// The turn is cut: what was written into it and not known taken in is cut with it, never written again
+// (models/Steering.tla Exited, CutOnlyOnExit).
+void Supervisor::cutWritten() {
+    std::size_t lost = 0;
+    for (const Written& w : written_) {
+        lost += taken(w.id) ? 0 : 1;
+    }
+    if (lost != 0) {
+        effect(Effect::What::Cut, plural(lost, "message", "messages") + " written into the turn may not have reached " +
+            config_.name + "; send again what you still want it to have.", state_.openTurn);
+    }
+    clearSteering();
+}
+
+void Supervisor::clearSteering() {
+    written_.clear();
+    reported_ = Queue{};
+    everReported_.clear();
+    settled_ = false;
+}
+
+Output Supervisor::steer(const std::string& text, Millis now) {
+    return into(text, false, now);
+}
+
+Output Supervisor::followUp(const std::string& text, Millis now) {
+    return into(text, true, now);
+}
+
+// Into the open turn when the driver takes that kind and the turn is open, not stopping and not settled (models/
+// Steering.tla Steer, CanSteer); otherwise a prompt for the next turn.
+Output Supervisor::into(const std::string& text, bool followUp, Millis now) {
+    const bool takes = followUp ? driverFollowsUp_ : driverSteers_;
+    if (phase_ == Phase::Working && takes && !settled_ && written_.size() < kMaxQueued) {
+        const std::uint64_t id = nextWritten_;
+        const Encoded line = followUp ? encode(FollowUp{state_.openTurn, id, text})
+                                      : encode(driver::Steer{state_.openTurn, id, text});
+        if (!line.error.empty()) {
+            effect(Effect::What::Notice, "A message to " + config_.name + " was not sent: " + sentence(line.error));
+            return finish();
+        }
+        ++nextWritten_;
+        effect(Effect::What::Prompt, text, state_.openTurn);
+        written_.push_back(Written{id, followUp, text});
+        command(Command::Kind::Write, {}, line.line);
+        return finish();
+    }
+    if (!followUp && phase_ == Phase::Working && !driverSteers_) {
+        effect(Effect::What::Notice, config_.name + "'s driver does not take a message into a turn that runs (its "
+            "hello names no \"steer\"), so this one waits for the next turn.");
+    } else if (phase_ == Phase::Working && takes && !settled_) {
+        effect(Effect::What::Notice, std::to_string(kMaxQueued) + " messages were already written into this turn, "
+            "the most one turn takes, so this one waits for the next turn.");
+    }
+    return prompt(text, now);
+}
+
 Output Supervisor::refused(const std::string& cause, Millis now) {
     if (phase_ != Phase::None && phase_ != Phase::Ending) {
         end(config_.name + "'s driver wrote a line the server refused (" + cause + "), so it was ended. Fix the "
@@ -572,6 +761,9 @@ Output Supervisor::exited(const std::string& how, Millis now) {
     driverKeepsOut_.clear();
     driverModel_.clear();
     driverEffort_.clear();
+    driverSteers_ = false;
+    driverFollowsUp_ = false;
+    driverSettles_ = false;
     retiring_ = false;
     deadline_.reset();
     if (counted && failed_ >= config_.maxFailedStarts) {
@@ -651,6 +843,7 @@ void Supervisor::flush() {
 
 // The open turn ends without its done. Its prompt is never written again.
 void Supervisor::cutOpen() {
+    cutWritten();
     effect(Effect::What::Cut, "The reply was cut short. Whether " + config_.name + " got the prompt is unknown; send "
         "it again if you still want an answer.", state_.openTurn);
     state_.openTurn = 0;
@@ -685,6 +878,7 @@ void Supervisor::endQuietly(Millis now) {
 
 // The open turn's done. A driver with no credential exits next, so it is ended rather than given a prompt.
 void Supervisor::close(Millis now) {
+    giveBack();
     state_.openTurn = 0;
     openPrompt_.clear();
     clearContinuation();
@@ -765,6 +959,9 @@ void Supervisor::startDriver(Millis now) {
     driverKeepsOut_ = config_.limited ? config_.keepsOut : std::vector<std::string>{};
     driverModel_.clear();
     driverEffort_.clear();
+    driverSteers_ = false;
+    driverFollowsUp_ = false;
+    driverSettles_ = false;
     retiring_ = false;
 }
 

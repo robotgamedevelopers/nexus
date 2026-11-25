@@ -1614,6 +1614,189 @@ struct Group {
     void (*run)();
 };
 
+// ---- steering (docs/driver-protocol.md, "Steering a turn"; models/Steering.tla) ----
+
+const std::vector<std::string> kSteering = {"steer", "follow-up", "settled"};
+
+// A supervisor whose driver named `features` and holds turn 1 of "hi" open.
+Supervisor steered(const std::vector<std::string>& features = kSteering) {
+    Supervisor s = make();
+    s.prompt("hi", kStart);
+    s.message(Hello{1, "h", features}, kStart + 1);
+    CHECK(s.phase() == Phase::Working && s.state().openTurn == 1);
+    return s;
+}
+
+Done doneOf(std::uint64_t turn, Outcome outcome = Outcome::Ok) {
+    return Done{turn, outcome, std::nullopt, std::nullopt};
+}
+
+bool noticeHas(const Output& o, const std::string& part) {
+    return std::any_of(o.effects.begin(), o.effects.end(), [&](const Effect& e) {
+        return (e.what == What::Notice || e.what == What::Cut) && contains(e.text, part);
+    });
+}
+
+// One refusal: the message ends the driver, with a notice that names what broke the protocol.
+void refusesSteering(Supervisor s, const DriverMessage& m, const std::string& part) {
+    const Output o = s.message(m, kStart + 50);
+    CHECK(ended(s, o));
+    CHECK(noticeHas(o, part));
+    if (!noticeHas(o, part)) {
+        for (const Effect& e : o.effects) {
+            std::fprintf(stderr, "  effect: %s\n", e.text.c_str());
+        }
+    }
+}
+
+void testSteering() {
+    // Into the open turn, each kind once, with ids from 1; shown as the person's entries of the turn.
+    {
+        Supervisor s = steered();
+        CHECK(s.driverSteers() && s.driverFollowsUp() && s.driverSettles());
+        Output o = s.steer("go left", kStart + 2);
+        CHECK((written(o) == std::vector<ServerMessage>{driver::Steer{1, 1, "go left"}}));
+        CHECK(whats(o) == std::vector<What>{What::Prompt} && o.effects[0].turn == 1 && !o.durable);
+        o = s.followUp("then run the tests", kStart + 3);
+        CHECK((written(o) == std::vector<ServerMessage>{FollowUp{1, 2, "then run the tests"}}));
+        CHECK(s.written().size() == 2 && s.state().waiting.empty());
+        // The driver's whole queue on each change; an id that leaves it was taken in.
+        o = s.message(driver::Queue{1, {1}, {2}}, kStart + 4);
+        CHECK(o.commands.empty() && (s.reported() == driver::Queue{1, {1}, {2}}));
+        CHECK(!s.taken(1) && !s.taken(2));
+        s.message(driver::Queue{1, {}, {2}}, kStart + 5);
+        CHECK(s.taken(1) && !s.taken(2));
+        s.message(driver::Queue{1, {}, {}}, kStart + 6);
+        CHECK(s.taken(2));
+        o = s.message(Settled{1, false}, kStart + 7);
+        CHECK(s.settledTurn() && o.commands.empty() && s.phase() == Phase::Working);
+        // Settled: nothing more goes into the turn; a message now waits for the next, and the next send waits for
+        // the done (sequence rule 3).
+        o = s.steer("late", kStart + 8);
+        CHECK(written(o).empty() && s.state().waiting == std::vector<std::string>{"late"});
+        o = s.message(doneOf(1), kStart + 9);
+        CHECK(sends(o, 2, "late"));
+        CHECK(s.written().empty() && !s.settledTurn() && s.reported().steer.empty() && s.everReported().empty());
+        // The ids go on across turns: never reused while the server runs.
+        o = s.steer("again", kStart + 10);
+        CHECK((written(o) == std::vector<ServerMessage>{driver::Steer{2, 3, "again"}}));
+    }
+    // What the driver never took in waits again at the done, first, in the order written: a steer still in its queue
+    // when a stop settled the turn, and a follow-up that crossed the turn's end and was never queued.
+    {
+        Supervisor s = steered();
+        s.steer("a", kStart + 2);
+        s.followUp("b", kStart + 3);
+        s.message(driver::Queue{1, {1}, {}}, kStart + 4);
+        Output o = s.stop(kStart + 5);
+        CHECK((written(o) == std::vector<ServerMessage>{Stop{1}}));
+        o = s.steer("while stopping", kStart + 6);     // the turn is stopping: it waits
+        CHECK(written(o).empty());
+        s.message(Settled{1, true}, kStart + 7);
+        o = s.message(doneOf(1, Outcome::Stopped), kStart + 8);
+        CHECK(noticeHas(o, "2 messages written into the turn were not taken in"));
+        CHECK(sends(o, 2, "a"));
+        CHECK((s.state().waiting == std::vector<std::string>{"b", "while stopping"}));
+        CHECK(o.durable);
+    }
+    // A driver that names neither kind is never written one: the message waits as the next prompt, a steer with a
+    // notice that says why. A steer-only driver gets steers and no follow-ups; an unknown feature is skipped.
+    {
+        Supervisor s = steered({});
+        CHECK(!s.driverSteers() && !s.driverFollowsUp() && !s.driverSettles());
+        Output o = s.steer("x", kStart + 2);
+        CHECK(written(o).empty() && noticeHas(o, "names no \"steer\""));
+        CHECK(s.state().waiting == std::vector<std::string>{"x"});
+        o = s.followUp("y", kStart + 3);
+        CHECK(written(o).empty() && (s.state().waiting == std::vector<std::string>{"x", "y"}));
+        o = s.message(doneOf(1), kStart + 4);
+        CHECK(sends(o, 2, "x"));
+    }
+    {
+        Supervisor s = steered({"steer", "settled", "a-feature-from-the-future"});
+        CHECK(written(s.followUp("f", kStart + 2)).empty());
+        CHECK(written(s.steer("s", kStart + 3)).size() == 1);
+    }
+    // With no turn open a steer is a prompt: it opens the next turn.
+    {
+        Supervisor s = steered();
+        s.message(Settled{1, false}, kStart + 2);
+        s.message(doneOf(1), kStart + 3);
+        CHECK(sends(s.steer("next", kStart + 4), 2, "next"));
+    }
+    // A hello that names steer or follow-up without settled: ended, with the cause and the fix.
+    {
+        Supervisor s = make();
+        s.prompt("hi", kStart);
+        const Output o = s.message(Hello{1, "h", {"steer"}}, kStart + 1);
+        CHECK(ended(s, o) && noticeHas(o, "without \"settled\"") && noticeHas(o, "Fix the driver"));
+        CHECK(!s.driverSteers());
+    }
+    {
+        Supervisor s = make();
+        s.prompt("hi", kStart);
+        CHECK(ended(s, s.message(Hello{1, "h", {"follow-up"}}, kStart + 1)));
+    }
+    // Every steering line that breaks the protocol ends the driver, and the open turn is cut.
+    refusesSteering(steered({}), driver::Queue{1, {}, {}}, "named neither steer nor follow-up");
+    refusesSteering(steered(), driver::Queue{2, {}, {}}, "queue for turn 2 while turn 1 is open");
+    refusesSteering(steered(), driver::Queue{1, {7}, {}}, "reported steer 7, which the server did not write");
+    {
+        Supervisor s = steered();
+        s.steer("a", kStart + 2);
+        refusesSteering(s, driver::Queue{1, {}, {1}}, "reported follow-up 1, which the server did not write");
+    }
+    {
+        Supervisor s = steered();
+        s.steer("a", kStart + 2);
+        s.message(driver::Queue{1, {1}, {}}, kStart + 3);
+        s.message(driver::Queue{1, {}, {}}, kStart + 4);
+        refusesSteering(s, driver::Queue{1, {1}, {}}, "again after its harness took it in");
+    }
+    refusesSteering(steered({}), Settled{1, false}, "did not name settled");
+    refusesSteering(steered(), Settled{3, false}, "settled for turn 3 while turn 1 is open");
+    refusesSteering(steered(), doneOf(1), "done for turn 1 before its settled");
+    {
+        Supervisor s = steered();
+        s.message(Settled{1, false}, kStart + 2);
+        refusesSteering(s, Settled{1, false}, "a second settled");
+    }
+    {
+        Supervisor s = steered();
+        s.message(Settled{1, false}, kStart + 2);
+        refusesSteering(s, driver::Queue{1, {}, {}}, "after its settled");
+    }
+    {
+        Supervisor s = steered();
+        s.message(Settled{1, false}, kStart + 2);
+        refusesSteering(s, Text{1, "more"}, "wrote text for turn 1 after its settled");
+    }
+    {
+        Supervisor s = steered();
+        s.message(Settled{1, false}, kStart + 2);
+        refusesSteering(s, driver::Error{"c", "f", 1, ErrorCode::Harness}, "wrote error for turn 1 after its settled");
+    }
+    // A driver that exits: what it never took in is cut with the turn, with a notice, and never written again.
+    {
+        Supervisor s = steered();
+        s.steer("a", kStart + 2);
+        s.followUp("b", kStart + 3);
+        s.message(driver::Queue{1, {1}, {2}}, kStart + 4);
+        s.message(driver::Queue{1, {}, {2}}, kStart + 5);   // a taken in; b still queued
+        const Output o = s.exited("exited with status 1", kStart + 6);
+        CHECK(noticeHas(o, "1 message written into the turn may not have reached ada"));
+        CHECK(s.written().empty() && s.state().waiting.empty() && s.state().openTurn == 0);
+        CHECK(written(o).empty());
+    }
+    // A driver that names nothing keeps working as before: done closes the turn with no settled.
+    {
+        Supervisor s = steered({});
+        CHECK(written(s.prompt("two", kStart + 2)).empty());
+        const Output o = s.message(doneOf(1), kStart + 3);
+        CHECK(sends(o, 2, "two"));
+    }
+}
+
 const Group kGroups[] = {
     {"start", testStart},
     {"turns", testTurns},
@@ -1637,6 +1820,7 @@ const Group kGroups[] = {
     {"limit", testLimit},
     {"activity", testActivity},
     {"signin", testSignIn},
+    {"steering", testSteering},
 };
 
 } // namespace

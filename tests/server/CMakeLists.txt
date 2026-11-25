@@ -18,6 +18,8 @@ add_executable(supervisor_walk supervisor_walk.cpp)
 target_link_libraries(supervisor_walk PRIVATE nexus_supervisor)
 target_include_directories(supervisor_walk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sync)
 target_compile_options(supervisor_walk PRIVATE ${warnings})
+# The steering walk (tests/driver) goes with it: the nightly shard supervisor-rest builds supervisor_walk only.
+add_dependencies(supervisor_walk steering_walk)
 
 add_executable(supervisor_test supervisor_test.cpp)
 target_link_libraries(supervisor_test PRIVATE nexus_supervisor)
@@ -86,7 +88,7 @@ endif()
 add_dependencies(model_checks supervisor_walk supervisor_test secrets_test signin_test server_pass_test pass_walk)
 
 foreach(group start turns waiting protocol deadlines text failed_starts credential stop stop_hammered ai_removed
-              hub_ai_removed queue shutdown restart continuation settings account place limit activity signin)
+              hub_ai_removed queue shutdown restart continuation settings account place limit activity signin steering)
     add_test(NAME supervisor_unit_${group} COMMAND supervisor_test ${group})
     set_tests_properties(supervisor_unit_${group} PROPERTIES LABELS unit TIMEOUT 30)
 endforeach()

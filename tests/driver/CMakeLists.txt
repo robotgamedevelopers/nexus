@@ -43,6 +43,13 @@ if(NOT WIN32)
     file(MAKE_DIRECTORY "${conformance_dir}")
     set(conformance_cases exchange refused not_json order send_while_open eof_while_open
         secret_ask secret_without_server)
+    # Steering a turn: only the fake names steer, follow-up and settled (the Claude driver's hello names none yet).
+    foreach(case steer_exchange steer_stopped steer_crossed steer_unnamed steer_unopened_turn steer_id_order)
+        add_test(NAME driver_conformance_fake_${case}
+            COMMAND driver_conformance_test ${case} fake $<TARGET_FILE:nexus_fake_driver>
+            WORKING_DIRECTORY "${conformance_dir}")
+        set_tests_properties(driver_conformance_fake_${case} PROPERTIES LABELS functional TIMEOUT 60)
+    endforeach()
     foreach(case ${conformance_cases})
         add_test(NAME driver_conformance_fake_${case}
             COMMAND driver_conformance_test ${case} fake $<TARGET_FILE:nexus_fake_driver>
@@ -108,10 +115,64 @@ tlc_test(tlc_claude_driver_trace_faulty_latch_rejected ClaudeDriverTrace ClaudeD
 tlc_test(tlc_claude_driver_trace_faulty_secret_rejected ClaudeDriverTrace ClaudeDriverTrace.cfg invariant
          PROPERTY TraceMatches DRIVERWALK SEED 1 STEPS 600 FAULTY secret)
 
+# Steering a turn (models/Steering.tla, docs/driver-protocol.md "Steering a turn"), label model: the spec on its
+# per-commit instance (a driver naming nothing, and one naming all three features) and, nightly, on every set of
+# features; a reversed witness per property, each a planted bug TLC must reject; and the traces of steering_walk (the
+# server's real supervisor and the driver's real side, src/driver/steering.h, over encoded lines) over several seeds,
+# each a behaviour of the spec, with two faulty driver sides rejected. Named tlc_supervisor_steering_* so the nightly
+# model shard supervisor-rest runs them (tests/server builds steering_walk with supervisor_walk).
+if(NEXUS_SERVER_PARTS)
+    add_executable(steering_walk steering_walk.cpp)
+    target_link_libraries(steering_walk PRIVATE nexus_supervisor)
+    target_compile_options(steering_walk PRIVATE ${warnings})
+    add_dependencies(model_checks steering_walk)
+endif()
+tlc_test(tlc_supervisor_steering Steering Steering.cfg pass WORKERS 4)
+tlc_test(tlc_supervisor_steering_three Steering SteeringThree.cfg pass WORKERS 4)
+tlc_test(tlc_supervisor_steering_wide Steering SteeringWide.cfg pass WORKERS 8 NIGHTLY)
+foreach(witness Twice:invariant:AtMostOnce Drop:invariant:NeverLost EarlyFollow:action:FollowAtRunEnd
+                Silent:invariant:ViewMatches Unnamed:invariant:NamedOnly Stale:invariant:AtMostOnce
+                SettleEarly:action:SettleEmpty SendAtSettled:invariant:DriverKeptRules Loop:liveness:)
+    string(REPLACE ":" ";" parts "${witness}")
+    list(GET parts 0 fault)
+    list(GET parts 1 expect)
+    list(GET parts 2 property)
+    string(TOLOWER "${fault}" lower)
+    if(property)
+        tlc_test(tlc_supervisor_steering_witness_${lower} Steering witnesses/WSteer${fault}.cfg ${expect}
+                 PROPERTY ${property})
+    else()
+        tlc_test(tlc_supervisor_steering_witness_${lower} Steering witnesses/WSteer${fault}.cfg ${expect})
+    endif()
+endforeach()
+# The trace checks run tests/model/tlc.cmake with steering_walk as its WALK (its arguments: SEED, STEPS, and the mode
+# in FRIENDS's place), as tlc_test does for the walks it names.
+function(steering_trace_test name seed steps mode expect)
+    if(NOT NEXUS_SERVER_PARTS)
+        return()
+    endif()
+    set(defs -DWORK=${CMAKE_CURRENT_BINARY_DIR}/tlc/${name} -DMODELS=${PROJECT_SOURCE_DIR}/models
+             -DMODULE=SteeringTrace -DCFG=SteeringTrace.cfg -DEXPECT=${expect} -DWORKERS=2 -DCAP=60
+             -DWALK=$<TARGET_FILE:steering_walk> -DDATA=SteeringTraceData -DSEED=${seed} -DSTEPS=${steps}
+             -DFRIENDS=${mode})
+    if(ARGN)
+        list(APPEND defs -DPROPERTY=${ARGN})
+    endif()
+    add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${PROJECT_SOURCE_DIR}/tests/model/tlc.cmake)
+    set_tests_properties(${name} PROPERTIES LABELS model TIMEOUT 90 PROCESSORS 2)
+endfunction()
+foreach(seed RANGE 1 20)
+    steering_trace_test(tlc_supervisor_steering_trace_seed_${seed} ${seed} 600 ok pass)
+endforeach()
+steering_trace_test(tlc_supervisor_steering_trace_faulty_silent_rejected 4 600 silent invariant TraceMatches)
+steering_trace_test(tlc_supervisor_steering_trace_faulty_early_follow_rejected 4 600 early-follow invariant
+                    TraceMatches)
+
 # The unit test runs under the sanitizers with the model's programs (cmake --build <dir> --target model_checks).
 add_dependencies(model_checks driver_protocol_test)
 
-foreach(group roundtrip encode_refusals property chunking refusals strings numbers forward secrets limit)
+foreach(group roundtrip encode_refusals property chunking refusals strings numbers forward secrets limit steering
+              steering_driver)
     add_test(NAME driver_unit_${group} COMMAND driver_protocol_test ${group})
     set_tests_properties(driver_unit_${group} PROPERTIES LABELS unit TIMEOUT 60)
 endforeach()

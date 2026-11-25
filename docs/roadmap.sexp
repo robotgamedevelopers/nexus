@@ -261,7 +261,9 @@
      ("pi-summary" "done" "t-pi-summary")
      ("pi-driver" "done" "t-pi-driver")
      ))
-  (:id "t-pi-protocol" :type :task :title "Pi 1. Driver protocol: steer, follow-up, settled, queue updates, native features named in hello" :state :todo)
+  (:id "t-pi-protocol" :type :task :title "Pi 1. Driver protocol: steer, follow-up, settled, queue updates, native features named in hello" :state :done
+   :evidence ("models/Steering.tla: ctest -L model tlc_supervisor_steering tlc_supervisor_steering_three tlc_supervisor_steering_witness_* (nightly: ctest -L model_nightly tlc_supervisor_steering_wide)" "tests/driver/steering_walk.cpp: ctest -L model tlc_supervisor_steering_trace_*" "tests/driver/protocol_test.cpp: ctest -L unit driver_unit_steering driver_unit_steering_driver" "tests/server/supervisor_test.cpp: ctest -L unit supervisor_unit_steering" "tests/driver/conformance_test.cpp: ctest -L functional driver_conformance_fake_steer_*" "docs/driver-protocol.md: Steering a turn")
+   :note "The protocol, the server's supervisor and the driver's side (src/driver/steering.h, played by the fake driver) are done. Later pieces: drivers/claude names steer, follow-up and settled in its hello and feeds Claude Code's own queue (its hello names none today, so the server sends it prompts as before); the window shows a tab's queue and offers steer and follow-up; nexus-server's link and the window call Supervisor::steer and followUp.")
   (:id "t-pi-entries" :type :task :title "Pi 2. Transcript entries with ids and parents: compaction, hidden-from-model edits, branch summaries, usage; a store format bump and a durable cursor" :state :todo)
   (:id "t-pi-prompt-sections" :type :task :title "Pi 3. The prompt as named sections the AI changes by talking with you, appended as patches so the cache survives" :state :todo)
   (:id "t-pi-summary" :type :task :title "Pi 4. A structured, updating summary for account switches and moves the harness cannot resume" :state :todo)

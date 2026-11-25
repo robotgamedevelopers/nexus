@@ -14,9 +14,12 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <optional>
+#include <type_traits>
 #include <vector>
 
 #include "driver/protocol.h"
+#include "driver/steering.h"
 
 namespace {
 
@@ -657,6 +660,186 @@ void limit() {
     CHECK(out.size() == 2 && out[1].error.empty() && out[1].text == "ok" && out[1].number == 2);
 }
 
+// ---- steering a turn (docs/driver-protocol.md, "Steering a turn") ----
+
+template <class Message>
+bool roundTrips(const Message& m) {
+    const Encoded e = encode(m);
+    if (!e.error.empty() || e.line.empty()) {
+        return false;
+    }
+    std::string_view line(e.line);
+    line.remove_suffix(1);
+    if constexpr (std::is_same_v<Message, ServerMessage>) {
+        const Decoded<ServerMessage> d = decodeServerMessage(line);
+        return d.message && *d.message == m;
+    } else {
+        const Decoded<DriverMessage> d = decodeDriverMessage(line);
+        return d.message && *d.message == m;
+    }
+}
+
+void steering() {
+    // The four kinds, as the document writes them, and their round trips.
+    CHECK(encode(ServerMessage{Steer{3, 1, "go left"}}).line ==
+        "{\"kind\":\"steer\",\"turn\":3,\"id\":1,\"text\":\"go left\"}\n");
+    CHECK(encode(ServerMessage{FollowUp{3, 2, "then test"}}).line ==
+        "{\"kind\":\"follow-up\",\"turn\":3,\"id\":2,\"text\":\"then test\"}\n");
+    CHECK(encode(DriverMessage{Queue{3, {1}, {2}}}).line ==
+        "{\"kind\":\"queue\",\"turn\":3,\"steer\":[1],\"follow_up\":[2]}\n");
+    CHECK(encode(DriverMessage{Queue{3, {}, {}}}).line == "{\"kind\":\"queue\",\"turn\":3,\"steer\":[],\"follow_up\":[]}\n");
+    CHECK(encode(DriverMessage{Settled{3, false}}).line == "{\"kind\":\"settled\",\"turn\":3,\"aborted\":false}\n");
+    CHECK(encode(DriverMessage{Settled{3, true}}).line == "{\"kind\":\"settled\",\"turn\":3,\"aborted\":true}\n");
+    for (const std::string& t : kTexts) {
+        CHECK(roundTrips(ServerMessage{Steer{1, kMaxInteger, t}}));
+        CHECK(roundTrips(ServerMessage{FollowUp{kMaxTurn, 1, t}}));
+    }
+    std::vector<std::uint64_t> full;
+    for (std::uint64_t i = 1; i <= kMaxQueued; ++i) {
+        full.push_back(i * 1000);
+    }
+    CHECK(roundTrips(DriverMessage{Queue{1, full, {kMaxInteger}}}));
+    CHECK(roundTrips(DriverMessage{Settled{kMaxTurn, true}}));
+
+    // Refusals, each with its cause: what the decoder refuses, the encoder will not write.
+    CHECK(contains(serverError("{\"kind\":\"steer\",\"turn\":1,\"text\":\"x\"}"), "no \"id\""));
+    CHECK(contains(serverError("{\"kind\":\"steer\",\"turn\":1,\"id\":0,\"text\":\"x\"}"), "\"id\""));
+    CHECK(contains(serverError("{\"kind\":\"follow-up\",\"id\":1,\"text\":\"x\"}"), "no \"turn\""));
+    CHECK(contains(serverError("{\"kind\":\"follow-up\",\"turn\":1,\"id\":1}"), "no \"text\""));
+    CHECK(contains(serverError("{\"kind\":\"steer\",\"turn\":1,\"id\":1.5,\"text\":\"x\"}"), "\"id\""));
+    CHECK(contains(encode(ServerMessage{Steer{0, 1, "x"}}).error, "\"turn\""));
+    CHECK(contains(encode(ServerMessage{FollowUp{1, 0, "x"}}).error, "\"id\""));
+    CHECK(!encode(ServerMessage{Steer{1, 1, "bad\xff"}}).error.empty());
+    // A malformed queue: a list missing, not an array, an id not a whole number from 1, out of order, repeated, or
+    // more than a turn holds.
+    CHECK(contains(driverError("{\"kind\":\"queue\",\"turn\":1,\"steer\":[]}"), "no \"follow_up\""));
+    CHECK(contains(driverError("{\"kind\":\"queue\",\"turn\":1,\"follow_up\":[]}"), "no \"steer\""));
+    CHECK(contains(driverError("{\"kind\":\"queue\",\"steer\":[],\"follow_up\":[]}"), "no \"turn\""));
+    for (std::string_view bad : {"1", "\"1\"", "[0]", "[1.5]", "[\"1\"]", "[2,1]", "[1,1]", "[null]", "[9007199254740992]"}) {
+        const std::string line = "{\"kind\":\"queue\",\"turn\":1,\"steer\":" + std::string(bad) + ",\"follow_up\":[]}";
+        CHECK(contains(driverError(line), "not an array of ids"));
+    }
+    std::string tooMany = "{\"kind\":\"queue\",\"turn\":1,\"steer\":[],\"follow_up\":[";
+    for (std::size_t i = 1; i <= kMaxQueued + 1; ++i) {
+        tooMany += (i > 1 ? "," : "") + std::to_string(i);
+    }
+    CHECK(contains(driverError(tooMany + "]}"), "at most " + std::to_string(kMaxQueued)));
+    full.push_back(kMaxInteger);
+    CHECK(contains(encodeError(Queue{1, full, {}}), "not an array of ids"));
+    CHECK(contains(encodeError(Queue{1, {2, 1}, {}}), "not an array of ids"));
+    CHECK(contains(encodeError(Queue{0, {}, {}}), "\"turn\""));
+    CHECK(contains(driverError("{\"kind\":\"settled\",\"turn\":1}"), "no \"aborted\""));
+    CHECK(contains(driverError("{\"kind\":\"settled\",\"turn\":1,\"aborted\":1}"), "not true or false"));
+    CHECK(contains(driverError("{\"kind\":\"settled\",\"aborted\":false}"), "no \"turn\""));
+    // Unknown fields are skipped, as everywhere.
+    const Decoded<DriverMessage> later =
+        decodeDriverMessage("{\"kind\":\"settled\",\"turn\":2,\"aborted\":false,\"reason\":\"compacted\"}");
+    CHECK(later.message && *later.message == DriverMessage(Settled{2, false}));
+    // The hello's features: named, or not; a feature this version does not know is kept and skipped by the reader.
+    CHECK(roundTrips(DriverMessage{Hello{1, "fake", {"steer", "follow-up", "settled", "limit", "later"}}}));
+}
+
+// The driver's side (src/driver/steering.h), by rule.
+void steeringDriver() {
+    using Took = Steering::Took;
+    const std::vector<std::string> all = {"steer", "follow-up", "settled"};
+    // Taken into the open turn, the whole queue reported each time; steers in at a boundary, follow-ups one per run
+    // end and only with no steer pending; settled only with nothing pending.
+    {
+        Steering st(all);
+        CHECK(st.steers() && st.followsUp() && st.settles());
+        CHECK(st.send(Send{4, "p"}).what == Took::What::Taken && st.turn() == 4);
+        Took t = st.take(Steer{4, 1, "s1"});
+        CHECK(t.what == Took::What::Taken && t.report && (*t.report == Queue{4, {1}, {}}));
+        t = st.take(FollowUp{4, 2, "f2"});
+        CHECK(t.report && (*t.report == Queue{4, {1}, {2}}));
+        t = st.take(FollowUp{4, 3, "f3"});
+        t = st.take(Steer{4, 4, "s4"});
+        CHECK(t.report && (*t.report == Queue{4, {1, 4}, {2, 3}}));
+        CHECK(!st.settle() && !st.settling());       // pending: no settle
+        Steering::Given g = st.boundary();
+        CHECK(g.items.size() == 2 && g.items[0].id == 1 && g.items[1].id == 4 && !g.items[0].followUp);
+        CHECK(g.report && (*g.report == Queue{4, {}, {2, 3}}));
+        CHECK(st.boundary().items.empty() && !st.boundary().report);    // nothing changed: nothing reported
+        g = st.runEnd();
+        CHECK(g.items.size() == 1 && g.items[0].id == 2 && g.items[0].followUp && g.items[0].text == "f2");
+        CHECK(g.report && (*g.report == Queue{4, {}, {3}}));
+        st.take(Steer{4, 5, "s5"});
+        g = st.runEnd();    // a steer pending goes before the next follow-up
+        CHECK(g.items.size() == 1 && g.items[0].id == 5);
+        g = st.runEnd();
+        CHECK(g.items.size() == 1 && g.items[0].id == 3 && (*g.report == Queue{4, {}, {}}));
+        CHECK(st.runEnd().items.empty() && !st.pending());
+        const std::optional<Settled> settled = st.settle();
+        CHECK(settled && (*settled == Settled{4, false}) && st.settling() && !st.aborted());
+        // Settled: a steer that arrives now crossed the end, and is ignored (the server gives it back).
+        t = st.take(Steer{4, 6, "late"});
+        CHECK(t.what == Took::What::Ignored && !t.report);
+        CHECK(st.send(Send{5, "x"}).what == Took::What::Refused);   // no send before the done
+        st.done();
+        CHECK(st.phase() == Steering::Phase::Idle && st.turn() == 0);
+        // One of a turn ended, after it: ignored too, its id still counted.
+        t = st.take(Steer{4, 7, "later"});
+        CHECK(t.what == Took::What::Ignored && st.lastId() == 7);
+    }
+    // A stop of the open turn settles it, aborted, leaving the queue untaken; a stop of another turn is ignored.
+    {
+        Steering st(all);
+        st.send(Send{1, "p"});
+        st.take(Steer{1, 1, "s"});
+        CHECK(st.stop(Stop{2}).what == Took::What::Ignored);
+        const Took t = st.stop(Stop{1});
+        CHECK(t.what == Took::What::Taken && t.settled && (*t.settled == Settled{1, true}) && st.aborted());
+        CHECK(st.steerIds() == std::vector<std::uint64_t>{1} && st.boundary().items.empty());
+        CHECK(st.stop(Stop{1}).what == Took::What::Ignored);
+        st.done();
+        CHECK(st.send(Send{2, "q"}).what == Took::What::Taken && !st.aborted() && st.steerIds().empty());
+    }
+    // Refusals, each the server's bug: a kind the hello did not name, a turn never opened, an id that does not go up,
+    // a send out of order or while a turn is open, and more than a turn holds.
+    {
+        Steering st({"settled"});
+        st.send(Send{1, "p"});
+        const Took t = st.take(Steer{1, 1, "s"});
+        CHECK(t.what == Took::What::Refused && contains(t.why, "did not name"));
+        CHECK(st.take(FollowUp{1, 2, "f"}).what == Took::What::Refused);
+        CHECK(st.settle().has_value());     // nothing was taken: it settles, and says so
+    }
+    {
+        Steering st({"steer", "settled"});
+        CHECK(st.take(FollowUp{1, 1, "f"}).what == Took::What::Refused);
+        st.send(Send{3, "p"});
+        Took t = st.take(Steer{4, 1, "s"});
+        CHECK(t.what == Took::What::Refused && contains(t.why, "has not opened"));
+        CHECK(st.take(Steer{3, 2, "s"}).what == Took::What::Taken);
+        t = st.take(Steer{3, 2, "again"});
+        CHECK(t.what == Took::What::Refused && contains(t.why, "not above the last"));
+        CHECK(st.take(Steer{3, 1, "back"}).what == Took::What::Refused);
+        CHECK(contains(st.send(Send{4, "q"}).why, "while turn 3 is open"));
+        for (std::uint64_t id = 3; id < 3 + kMaxQueued - 1; ++id) {
+            CHECK(st.take(Steer{3, id, "s"}).what == Took::What::Taken);
+        }
+        t = st.take(Steer{3, 1000, "past"});
+        CHECK(t.what == Took::What::Refused && contains(t.why, "past the"));
+    }
+    {
+        Steering st(all);
+        st.send(Send{5, "p"});
+        st.settle();
+        st.done();
+        CHECK(contains(st.send(Send{5, "again"}).why, "does not follow turn 5"));
+    }
+    // A driver that names settled alone writes settled; one that names nothing settles silently.
+    {
+        Steering st;
+        st.send(Send{1, "p"});
+        CHECK(!st.settle() && st.settling());
+        Steering named({"settled"});
+        named.send(Send{1, "p"});
+        CHECK(named.settle() == std::optional<Settled>(Settled{1, false}));
+    }
+}
+
 struct Group {
     const char* name;
     void (*run)();
@@ -673,6 +856,8 @@ const Group kGroups[] = {
     {"forward", forward},
     {"secrets", secrets},
     {"limit", limit},
+    {"steering", steering},
+    {"steering_driver", steeringDriver},
 };
 
 } // namespace
