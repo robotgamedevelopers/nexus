@@ -1575,11 +1575,11 @@ jobs:
           # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
           # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short would
           # start again from nothing on the next run.
-          $deps = Get-Content -Raw "$prax\cmake\dependencies.cmake"
+          $deps = Get-Content -Raw "$prax\cmake\slang.cmake"
           $asset = 'windows-x86_64.zip'
-          $hash = [regex]::Match($deps, 'PR_SLANG_ASSET ' + [regex]::Escape($asset) + '\)\s+set\(PR_SLANG_HASH ([0-9a-f]{64})').Groups[1].Value
-          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{PR_SLANG_ASSET\}').Groups[1].Value
-          if (-not $hash -or -not $url) { throw "Prax's cmake/dependencies.cmake no longer names Slang's $asset as this step reads it" }
+          $hash = [regex]::Match($deps, '_pr_slang_asset ' + [regex]::Escape($asset) + '\)\s+set\(_pr_slang_hash ([0-9a-f]{64})').Groups[1].Value
+          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{_pr_slang_asset\}').Groups[1].Value
+          if (-not $hash -or -not $url) { throw "Prax's cmake/slang.cmake no longer names Slang's $asset as this step reads it" }
           $file = ($url -split '/')[-1] + $asset
           $slang = "$env:PR_DOWNLOAD_DIR\slang"
           New-Item -ItemType Directory -Force -Path $slang | Out-Null
