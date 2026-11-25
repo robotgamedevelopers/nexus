@@ -540,15 +540,16 @@ jobs:
           # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
           # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
           # limit on long runner names).
-          own="/tmp/$RUNNER_NAME"
+          runner_dir=${RUNNER_NAME// /_}
+          own="/tmp/$runner_dir"
           mkdir -p "$own"
           echo "TMPDIR=$own" >> "$GITHUB_ENV"
           caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$caches/$runner_dir/prax-downloads"
           {
-            echo "SANDBOX_BUILD=$caches/$RUNNER_NAME/sandbox-build"
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "NEXUS_SANDBOX_BIN=$caches/$RUNNER_NAME/sandbox-build/sandbox"
+            echo "SANDBOX_BUILD=$caches/$runner_dir/sandbox-build"
+            echo "PR_DOWNLOAD_DIR=$caches/$runner_dir/prax-downloads"
+            echo "NEXUS_SANDBOX_BIN=$caches/$runner_dir/sandbox-build/sandbox"
           } >> "$GITHUB_ENV"
       - name: Build bubblewrap and socat
         shell: bash
@@ -679,7 +680,7 @@ jobs:
   # runner, and kept outside the workspace under ~/.cache/nexus-ci/<runner>/schema.
   schema-generated:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1002,7 +1003,7 @@ jobs:
     # workers), away from hulk, whose general Linux runners share one machine with other repositories' CI and ran these
     # past their 60 s. Which machines carry the label is the fleet record's (the busiest is kept off it). A shard
     # waiting for a runner is not counted in its 2 minutes.
-    runs-on: [self-hosted, fleet, Linux, X64, tlc]
+    runs-on: ${{ matrix.build && fromJSON('["self-hosted","fleet","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
     timeout-minutes: 2
     strategy:
       fail-fast: false
@@ -1200,6 +1201,11 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Fetch the pinned TLC jar for hosted runners
+        if: runner.environment == 'github-hosted'
+        run: |
+          mkdir -p "$HOME/sdk/tla"
+          curl -fsSL --retry 3 https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o "$HOME/sdk/tla/tla2tools.jar"
       - name: Java and the pinned TLC jar from the runner's machine
         shell: bash
         run: |
