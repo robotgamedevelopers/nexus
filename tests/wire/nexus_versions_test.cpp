@@ -265,8 +265,8 @@ void test_signin() {
     // make of it.)
     Sessions server({session(7, "rowan", Activity::Busy, {entry(nexus::EntryKind::Person, "hi")})});
     server.setRequests({SecretRequest{3, "a1", "oauth-token", 0, "nexus", "a1 has no login"}});
-    server.setOffers({SignInOffer{4, "a1", "claude", "w1", "studio", SecretValue("https://claude.com/?state=test")},
-                      SignInOffer{5, "a2", "claude", "*", "studio", SecretValue()}});
+    server.setOffers({SignInOffer{4, "a1", "claude", "w1", "studio", SecretValue("https://claude.com/?state=test"), false},
+                      SignInOffer{5, "a2", "claude", "*", "studio", SecretValue(), false}});
     const wiretest::Read skipped = wiretest::prevReadSessions(bytes(server.init_diff()));
     CHECK(skipped.loaded && !skipped.damaged && !skipped.refused);
     CHECK(skipped.unknown == 2);    // the skipped field counts once for each flow it holds (measured: 1 for one flow)

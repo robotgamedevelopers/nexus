@@ -44,6 +44,8 @@
 #               format; 3 unless given), and FAULTY one of store-late, echo, driver, driver-echo
 #   SIGNWALK    optional, in place of WALK: tests/sync's signin_walk; it is run first and writes
 #               SignInTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of claim, callback, stray
+#   PASTEWALK   optional, in place of WALK: tests/sync's signin_paste_walk; it is run first and writes
+#               SignInPasteTraceData.tla into WORK, with SEED and STEPS, and FAULTY code
 #   ACCWALK     optional, in place of WALK: tests/accounts' accounts_walk; it is run first and writes
 #               AccountsTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stay, harness, instance, limit
 #   RECONNECTWALK optional, in place of WALK: tests/sync's reconnect_walk; it is run first and writes
@@ -291,6 +293,19 @@ elseif(DEFINED SIGNWALK AND NOT "${SIGNWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "signin_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED PASTEWALK AND NOT "${PASTEWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "code")
+        list(APPEND walk_args "--faulty-code")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not code")
+    endif()
+    execute_process(COMMAND "${PASTEWALK}" ${walk_args} "${WORK}/SignInPasteTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "signin_paste_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED SUPWALK AND NOT "${SUPWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")

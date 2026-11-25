@@ -10,6 +10,7 @@ import os
 import pty
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -46,6 +47,13 @@ ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
 URL = re.compile(r"https://[^\s<>\"'\x00-\x1f\x7f]+")
 DEVICE_CODE = re.compile(r"(?<![A-Za-z0-9-])[A-Z0-9]{4}-[A-Z0-9]{4}(?![A-Za-z0-9-])")
 MAX_FORM = 8192
+# These vendors end their browser sign-in on a page that shows a code to paste back into the application. Their
+# enrollment needs no page on the server: the window holding the flow opens the vendor's own URL wherever it runs, and
+# the code the person pastes there comes back over the server's link (src/sync/signin.h signsInByPastedCode,
+# models/SignInPaste.tla). The server writes it to this process's terminal, once, as one line.
+PASTE_CODE = {"antigravity"}
+MAX_CODE = 2048
+CODE_ASK = "?code"
 
 
 def notify_runner(url):
@@ -663,6 +671,80 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(204 if app.login.input(fields["code"][0]) else 400)
 
 
+def quiet_input(fd):
+    """Echo and line editing off on the runner's terminal: a pasted code is never echoed, and any length is taken."""
+    if os.isatty(fd):
+        attrs = termios.tcgetattr(fd)
+        attrs[3] &= ~(termios.ECHO | termios.ICANON)
+        attrs[6][termios.VMIN] = 1
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    os.set_blocking(fd, False)
+
+
+def _wipe(buffer):
+    buffer[:] = b"\0" * len(buffer)
+    del buffer[:]
+
+
+def run_paste(login, stdin=0, *, notify=None, deadline_s=600, clock=time.monotonic, wait=None):
+    """Enroll a provider whose sign-in ends in a pasted code (PASTE_CODE), with no page on the server.
+
+    The vendor's URL goes to the runner as soon as its CLI prints it; once the CLI asks for the code, `?code` follows.
+    The one line the runner then writes to `stdin` is handed to the CLI, once. A second request for a code (the CLI
+    refused the first) ends the enrollment: the person starts again from the window. Nothing read here is logged.
+    """
+    notify = notify or notify_runner
+    wait = wait or (lambda: select.select([stdin], [], [], 0.1))
+    quiet_input(stdin)
+    login.start()
+    url_sent = asked = code_sent = False
+    line = bytearray()
+    deadline = clock() + deadline_s
+    try:
+        while clock() < deadline:
+            login.poll()
+            if login.finished is not None:
+                return login.result
+            if login.url and not url_sent:
+                notify(login.url)
+                url_sent = True
+            if login.prompt and code_sent:
+                return 1
+            if url_sent and login.prompt and not asked:
+                notify(CODE_ASK)
+                asked = True
+            try:
+                chunk = os.read(stdin, 4096)
+            except BlockingIOError:
+                chunk = None
+            if chunk == b"":
+                return 1
+            if chunk and asked and not code_sent:
+                line.extend(chunk)
+                end = line.find(b"\n")
+                if end < 0 and len(line) > MAX_CODE:
+                    return 1
+                if end >= 0:
+                    raw = bytes(line[:end]).rstrip(b"\r")
+                    _wipe(line)
+                    try:
+                        value = raw.decode("ascii")
+                    except UnicodeDecodeError:
+                        return 1
+                    if not login.input(value):
+                        return 1
+                    code_sent = True
+            elif chunk:
+                # Nothing is asked for: whatever came is dropped unread.
+                chunk = None
+            if chunk is None:
+                wait()
+        return 1
+    finally:
+        _wipe(line)
+
+
 def run(login):
     with Portal(login) as portal:
         notify_runner("http://" + portal.authority + portal.route)
@@ -731,7 +813,7 @@ def main():
                 prior=prior,
             )
             try:
-                result = run(login)
+                result = run_paste(login) if args.provider in PASTE_CODE else run(login)
                 if result == 0:
                     from .refresh_catalog import after_login
                     after_login(args.provider, args.binary, home)

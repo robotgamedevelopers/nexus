@@ -34,7 +34,7 @@ struct Recorder : LinkPort {
 };
 
 sync::Sessions offering(const std::string& opener, const std::string& url, const std::string& host,
-                        const std::string& provider = "claude") {
+                        const std::string& provider = "claude", bool codeWanted = false) {
     sync::SignInOffer o;
     o.id = 3;
     o.account = provider + "-main";
@@ -42,6 +42,7 @@ sync::Sessions offering(const std::string& opener, const std::string& url, const
     o.opener = opener;
     o.host = host;
     o.url = sync::SecretValue(url);
+    o.codeWanted = codeWanted;
     sync::Sessions s;
     s.setOffers({o});
     return s;
@@ -142,7 +143,7 @@ void privateSignInPages() {
     const std::string nonce(64, 'a');
     const std::string path = "/nexus-signin/" + nonce;
     const std::string url = "http://127.0.0.1:54321" + path;
-    for (const char* provider : {"codex", "antigravity", "grok", "muse"}) {
+    for (const char* provider : {"codex", "grok", "muse"}) {
         CHECK(sync::hasSignIn(provider));
         Fixture f("tester@studio-alias", "studio");
         f.signIn.loopback = true;
@@ -192,6 +193,82 @@ void privateSignInPages() {
     }
 }
 
+// Antigravity (sync/signin.h signsInByPastedCode): a window anywhere, here one on another machine with no loopback
+// link (an iPad), claims, opens Google's own URL with no gate, and once the flow wants the code shows the masked ask
+// in the account's tab; Enter sends the code once, with the tab's session, and wipes the field (models/SignInPaste.tla
+// Open, Paste).
+void pastedCodeAnywhere() {
+    const std::string google = "https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=fakeStHostXq7wP2";
+    const std::string code = "4/0AfakeHostCodeQx7wP2mZ";
+    Fixture f("studio.local", "ipad");
+    std::pair<sync::SessionId, std::string> tab{9, "antigravity-main"};
+    f.signIn.activeTab = [&] { return tab; };
+    LinkSecrets secrets;
+    secrets.port = &f.port;
+    secrets.signIn = &f.signIn;
+    f.signIn.opener.showAccount("antigravity-main");
+    f.signIn.received(offering("", "", "studio", "antigravity"));
+    f.signIn.step();
+    CHECK(f.port.sent.size() == 1 && f.port.sent.back().kind == sync::ActionKind::SignInClaim);
+    f.signIn.received(offering("tokWindowA1", google, "studio", "antigravity"));
+    f.signIn.step();
+    CHECK(f.opened.size() == 1 && f.opened.front() == google && f.gates.empty());
+    CHECK(f.port.sent.size() == 2 && f.port.sent.back().kind == sync::ActionKind::SignInOpened);
+    // No code wanted yet: no ask.
+    CHECK(secrets.showing() == nullptr && f.signIn.codeAsk() == nullptr);
+    f.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    // Another tab's account: no ask there.
+    tab = {4, "claude-main"};
+    CHECK(secrets.showing() == nullptr);
+    tab = {9, "antigravity-main"};
+    const SecretAsk* ask = secrets.showing();
+    CHECK(ask != nullptr && (ask->id & LinkSecrets::kCodeAsk) != 0 && ask->what == "sign-in code" &&
+          ask->account == "antigravity-main");
+    if (ask == nullptr) return;
+    // Escape puts it away; Sign in in the tab asks again; what was typed is wiped.
+    secrets.type("partial");
+    secrets.cancel();
+    CHECK(secrets.showing() == nullptr && f.signIn.typedCode().empty() && f.port.sent.size() == 2);
+    f.signIn.askCodeAgain(3);
+    CHECK(secrets.showing() != nullptr && secrets.typed().empty());
+    // Pasted with the line break and spaces a paste brings: sent trimmed, once, and the field wiped.
+    secrets.type("  " + code + "\r\n");
+    CHECK(secrets.typed() == "  " + code + "\r\n");
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3);
+    const sync::Action& sent = f.port.sent.back();
+    CHECK(sent.kind == sync::ActionKind::SignInCode && sent.request == 3 && sent.text == "tokWindowA1" &&
+          sent.session == 9 && sent.secret.bytes() == code);
+    CHECK(f.signIn.typedCode().empty() && secrets.showing() == nullptr);
+    // The flow still says a code is wanted (the server has not answered yet): this window sends no second.
+    secrets.submit();
+    CHECK(f.port.sent.size() == 3 && secrets.showing() == nullptr);
+    // A flow another window holds never asks here.
+    Fixture other("studio.local", "laptop");
+    other.signIn.activeTab = [&] { return tab; };
+    other.signIn.opener.showAccount("antigravity-main");
+    other.signIn.received(offering(sync::kSignInHeldBy, "", "studio", "antigravity", true));
+    other.signIn.step();
+    CHECK(other.signIn.codeAsk() == nullptr && other.port.sent.empty());
+    // Its link lost: the field is wiped.
+    Fixture lost("studio.local", "ipad");
+    lost.signIn.activeTab = [&] { return tab; };
+    lost.signIn.opener.showAccount("antigravity-main");
+    lost.signIn.received(offering("tokWindowA1", google, "studio", "antigravity", true));
+    lost.signIn.step();
+    lost.signIn.typeCode(code);
+    CHECK(lost.signIn.typedCode().bytes() == code);
+    lost.signIn.lost();
+    CHECK(lost.signIn.typedCode().empty() && lost.signIn.codeAsk() == nullptr);
+    // The desk never replays a callback for it.
+    sync::SignInDesk desk;
+    desk.need(1, "antigravity-main", "antigravity");
+    desk.claim(1, "w1", 1000);
+    CHECK(desk.url("antigravity-main", 1, sync::SecretValue(google)).changed);
+    CHECK(desk.opened(1, "w1").changed);
+    CHECK(desk.callback(1, "w1", sync::SecretValue("code=dummy&state=fakeStHostXq7wP2")).replays.empty());
+}
+
 } // namespace
 
 int main() {
@@ -202,6 +279,7 @@ int main() {
     lostForgetsTheView();
     refusesALookalike();
     privateSignInPages();
+    pastedCodeAnywhere();
     if (failures != 0) {
         std::fprintf(stderr, "signin host: %d check(s) failed\n", failures);
         return 1;

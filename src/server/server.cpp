@@ -538,7 +538,7 @@ bool Server::restoreAll(std::string* why) {
     // where the driver reads it (server/home.h accountsDir, under HOME whatever --dir says; server/login_life.h).
     hub_->probeSignInWith([logins = paths_.accounts, home = paths_.home](const accounts::Account& a) {
         if (a.requiresVerifiedEmail()) return hasVerifiedClaude(logins + "/" + a.name, a.email);
-        if (sync::usesLocalSignInPage(a.provider)) {
+        if (sync::enrollsByHelper(a.provider)) {
             return hasEnrollment(home, a.provider, a.name);
         }
         const std::string file = sync::loginFile(a.provider);
@@ -728,6 +728,7 @@ void Server::openSignIn(const std::string& host) {
     e.url = [this](const std::string& account, std::uint64_t id, const sync::SecretValue& url) {
         hub_->signInUrl(account, id, url);
     };
+    e.codeWanted = [this](const std::string& account, std::uint64_t id) { hub_->signInCodeWanted(account, id); };
     e.printed = [this](const std::string& account, const sync::SecretValue& token) {
         hub_->signInPrinted(account, token);
     };
@@ -783,6 +784,9 @@ void Server::openSignIn(const std::string& host) {
     hooks.stop = [this](const std::string& account) { signIns_->stop(account); };
     hooks.replay = [this](std::uint64_t id, const std::string& account, const sync::SignInTarget& target,
                           const sync::SecretValue& query) { signIns_->replay(id, account, target, query); };
+    hooks.code = [this](std::uint64_t id, const std::string& account, const sync::SecretValue& code) {
+        signIns_->code(id, account, code);
+    };
     // A window acts on a sign-in when its link is of format 5 or later, the older of the two Hellos' protos
     // (sync/formats.h takesSignIn): that alone.
     hooks.takers = [this] {
@@ -1330,10 +1334,11 @@ PassOrder::Outcome Server::apply(std::string* why) {
                 hub_->signInWindowGone(s.signIn);
                 s.signIn = a.text;
             }
-            // An opened or a callback counts only from the link that claimed by its token: no other window speaks
-            // for a flow (the state never shows one window's token to another, sync/signin.h kSignInHeldBy).
-            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback) &&
-                    a.text != s.signIn) {
+            // An opened, a callback or a pasted code counts only from the link that claimed by its token: no other
+            // window speaks for a flow (the state never shows one window's token to another, sync/signin.h
+            // kSignInHeldBy; models/SignInPaste.tla CodeOnlyFromHolder).
+            if ((a.kind == sync::ActionKind::SignInOpened || a.kind == sync::ActionKind::SignInCallback ||
+                    a.kind == sync::ActionKind::SignInCode) && a.text != s.signIn) {
                 sync::Action named = a;
                 named.text = s.signIn;
                 hub_->apply(named, &refused, s.client);
