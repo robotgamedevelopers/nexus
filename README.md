@@ -10,7 +10,7 @@
 - **A setup your AI can change with you.** Configure friends in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
 - **Terminal windows in tabs, and a dashboard you can customize.** Run a test or inspect a diff in a shell, then switch to the dashboard to see what your friends are working on.
 
-## Platform support in v0.2.0
+## Platform support
 
 - **macOS 26 or newer on Apple silicon** supports the full desktop chat experience. The same Mac can run the client and server.
 - **Windows x64** has a native window and tested WSL2 terminal tabs. Connecting that window to the Nexus server for chat is still in development.

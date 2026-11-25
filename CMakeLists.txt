@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28)
 # Prax runs on macOS 26 or newer; set before project(), which reads it.
 set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0 CACHE STRING "Oldest macOS the build runs on")
 
-project(nexus VERSION 0.2.0 LANGUAGES C CXX)
+project(nexus VERSION 0.2.1 LANGUAGES C CXX)
 # The app's platform layer (src/platform_mac.mm) is Objective-C++.
 if(APPLE)
     enable_language(OBJCXX)
