@@ -1023,11 +1023,6 @@ struct AboveKeyboard {
 
 void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float cover) {
     cover = std::clamp(cover, 0.0f, extent.y);
-    if (cover <= 0) {
-        view->extent = extent;
-        build(kit, root);
-        return;
-    }
     view->extent = PrVec2{extent.x, extent.y - cover};
     const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
         pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
