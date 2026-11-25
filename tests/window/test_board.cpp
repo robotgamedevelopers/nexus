@@ -125,6 +125,17 @@ constexpr const char* kLinksPage = R"HTML(<!doctype html>
 <script>document.getElementById("kept").addEventListener("click", function (e) { e.preventDefault(); });</script>
 </body></html>)HTML";
 
+// Links that leave the board by scheme: only the http, https and mailto ones open outside the window.
+constexpr const char* kSchemesPage = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>schemes</title>
+<style>html, body { margin: 0; } a { display: block; height: 40px; }</style></head>
+<body><a id="file" href="file:///etc/hosts">a file</a>
+<a id="data" href="data:text/html,%3Cp%3Ehi%3C%2Fp%3E">a data page</a>
+<a id="app" href="x-nexus-test:open">an app's scheme</a>
+<a id="mail" href="mailto:someone@example.test">mail</a>
+<a id="secure" href="HTTPS://other.test/x">another site</a>
+</body></html>)HTML";
+
 // The served board's header and footer in their shape (nova-sprint's index.html): the logo tile and the wordmark in the
 // brand's h1, the live clock on the right, the footer's link to the repository; and a link to another repository.
 // Its "friends" section ids and labels are nova-sprint's own, so the word stays in this page only.
@@ -727,6 +738,24 @@ void linksThatLeaveTheBoardOpenInTheBrowser() {
     CHECK(h.server.pages == 2 && h.board->documentUrl() == kUrl && h.board->settled());
 }
 
+// A link that leaves the board goes to the system only when it is http, https or mailto (sprint.h linkOpensOutside):
+// a file:, data: or other app's link is refused (stderr says so), opens nothing, and the page stays on the board.
+void onlyWebAndMailLinksOpenOutside() {
+    Harness h;
+    h.server.page = kSchemesPage;
+    h.frames(10);
+    CHECK(h.board->settled());
+    for (const char* id : {"file", "data", "app"}) {
+        h.click(id);
+        CHECK(h.opened.empty() && h.board->documentUrl() == kUrl);
+    }
+    h.click("mail");
+    CHECK((h.opened == std::vector<std::string>{"mailto:someone@example.test"}));
+    h.click("secure");
+    CHECK(h.opened.size() == 2 && h.opened.back().find("other.test/x") != std::string::npos);
+    CHECK(h.board->documentUrl() == kUrl && h.server.pages == 1);
+}
+
 // The embedded header uses the short name and hides the logo. The footer's link to nova-sprint's
 // repository is not rendered, and a footer that held only it is not either; in a footer with more, the rest stays.
 // Another link still renders, and still opens in the browser.
@@ -893,6 +922,7 @@ int main() {
     theCostBreakdownFillsTheFirstScreen();
     keysAndTheWheelScrollSmoothly();
     linksThatLeaveTheBoardOpenInTheBrowser();
+    onlyWebAndMailLinksOpenOutside();
     theRepositoryLinkIsHidden();
     if (failures != 0) {
         std::fprintf(stderr, "%d checks failed\n", failures);

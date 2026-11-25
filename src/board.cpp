@@ -63,6 +63,21 @@ PrStringView sv(std::string_view s) {
     return PrStringView{s.data(), s.size()};
 }
 
+// A link's address as one line of stderr: at most 200 bytes, each control or non-ASCII byte as \xNN.
+std::string loggableLink(std::string_view url) {
+    std::string out;
+    for (const unsigned char c : url.substr(0, 200)) {
+        if (c < 0x20 || c >= 0x7f) {
+            char hex[5];
+            std::snprintf(hex, sizeof hex, "\\x%02x", c);
+            out += hex;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return url.size() > 200 ? out + "..." : out;
+}
+
 std::string taken(PrRawString s) {
     PrStringView v = prRawStringView(&s);
     std::string copy = v.data != nullptr ? std::string(v.data, v.size) : std::string();
@@ -234,6 +249,11 @@ void PraxBoard::offer(const std::string& url) {
 }
 
 void PraxBoard::openLink(const std::string& url) {
+    if (!linkOpensOutside(url)) {
+        std::fprintf(stderr, "nexus: a dashboard's link to %s is not opened: only http, https and mailto links open "
+            "outside the window\n", loggableLink(url).c_str());
+        return;
+    }
     if (desc_.open) {
         desc_.open(url);
         return;

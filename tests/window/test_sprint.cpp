@@ -128,10 +128,23 @@ void linksLeaveForAnotherDocument() {
     CHECK(!linkLeavesBoard("http://studio.local:7300/#a", "http://studio.local:7300/#b", "_top"));
 }
 
+// Only an http, https or mailto link is given to the system to open, the scheme in any case; a file, data, script or
+// other app's link is not.
+void onlyWebAndMailOpenOutside() {
+    for (const char* url : {"http://board.test/", "https://board.test/x", "HTTPS://board.test/", "Http://a",
+             "mailto:someone@example.test", "MAILTO:a@b"})
+        CHECK(linkOpensOutside(url));
+    for (const char* url : {"", "file:///etc/hosts", "FILE:///etc/hosts", "data:text/html,hi", "javascript:void(0)",
+             "x-nexus-test:open", "ftp://board.test/", "http:/board.test", "https:board.test", "mailto",
+             " http://board.test/", "about:blank", "blob:http://board.test/1"})
+        CHECK(!linkOpensOutside(url));
+}
+
 } // namespace
 
 int main() {
     eventsAreRouted();
+    onlyWebAndMailOpenOutside();
     preludeCarriesTheZonesAndEscapesThem();
     styleLeavesThePageBackgroundAlone();
     styleStretchesTheOpenCostBreakdown();

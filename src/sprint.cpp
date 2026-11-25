@@ -239,6 +239,10 @@ bool linkLeavesBoard(std::string_view href, std::string_view document, std::stri
     return withoutFragment(href) != withoutFragment(document);
 }
 
+bool linkOpensOutside(std::string_view url) {
+    return startsWithFold(url, "http://") || startsWithFold(url, "https://") || startsWithFold(url, "mailto:");
+}
+
 std::string sprintPrelude(std::string_view standardZone, std::string_view daylightZone) {
     std::string text(kPrelude);
     replace(text, "@STD@", literal(standardZone));

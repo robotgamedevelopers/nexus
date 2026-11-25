@@ -14,14 +14,14 @@
 
 namespace nexus {
 
-// Where an event goes while the sprint tab shows.
+// Where an event goes while a dashboard tab shows.
 enum class BoardRoute {
     Window,     // the window's own tree: the tab strip, and the keys nexus binds
     Page,       // the page only
     Both,       // a pointer move: the page and the strip each track the pointer
 };
 
-// The route of `event` while the sprint tab shows. `inPage` is true if the pointer is over the page's rectangle;
+// The route of `event` while a dashboard tab shows. `inPage` is true if the pointer is over the page's rectangle;
 // `pressInPage` is true if the button now held was pressed over the page. Every Command chord (Command-1 to Command-0,
 // Command-T, Command-W, the text scale's keys) and Escape (which hides the overlay) stay with the window, but for
 // Command-Up and Command-Down, which scroll the page to its top and its bottom as on macOS; other keys,
@@ -81,13 +81,18 @@ constexpr std::string_view kSprintRepoLinkStyle =
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint\"]:only-child), "
     "footer:has(> a[href^=\"https://github.com/\"][href$=\"/nova-sprint/\"]:only-child) { display: none !important; }\n";
 
-// Whether a click on a link would take the sprint tab off the board, so that board.h opens the link in the system's
+// Whether a click on a link would take a dashboard tab off the board, so that board.h opens the link in the system's
 // browser instead and the tab stays on the board. `href` is the link's URL as the page resolves it, `document` the
 // board's document's URL, and `target` the link's target attribute. A link to another document leaves, wherever it
 // is (another site, or another page of the board's server); so does a link with target _blank, which a browser opens
 // in a new tab. A link to a place in the board's own document (the same URL but for its fragment) stays, as does a
 // link with no URL or a javascript: one, which runs in the page.
 bool linkLeavesBoard(std::string_view href, std::string_view document, std::string_view target);
+
+// Whether board.h gives a link that leaves a dashboard's page to the system to open: only an http://, https:// or
+// mailto: one (the scheme in any case). Any other (file:, data:, javascript:, a custom app's scheme) is refused, so
+// that a page cannot have the system open a file or start an app; board.h says so on stderr and opens nothing.
+bool linkOpensOutside(std::string_view url);
 constexpr std::string_view kSprintStyleId = "nexus-sprint-style";
 // The Cost breakdown panel in nova-sprint's index.html: <section class="panel spend">.
 constexpr std::string_view kSpendSelector = ".panel.spend";
