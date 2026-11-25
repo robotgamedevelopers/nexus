@@ -12,7 +12,11 @@
 // Launched with `--state FILE`, the window shows a server's state file as the desktop's `--screenshot --state` draws
 // it (state_window.h), live; `--lost` with it shows it as once the server is lost.
 //
-// Usage (as the simulator or devicectl passes a launch's arguments): nexus [--server USER@HOST | --state FILE [--lost]]
+// `--ssh-port N` reaches the server's sshd on port N in place of 22: for an sshd of a test's own beside the simulator
+// (the server's machine's port 22 is its own sshd). It is a launch argument only: no URL or other app gives one.
+//
+// Usage (as the simulator or devicectl passes a launch's arguments):
+//   nexus [--server USER@HOST [--ssh-port N] | --state FILE [--lost]]
 
 #include <algorithm>
 #include <atomic>
@@ -354,6 +358,7 @@ int main(int argc, char** argv) {
     const char* state = nullptr;
     const char* server = nullptr;
     bool lost = false;
+    int sshPort = 22;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
             state = argv[++i];
@@ -361,8 +366,16 @@ int main(int argc, char** argv) {
             server = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
+        } else if (std::strcmp(argv[i], "--ssh-port") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            const long n = std::strtol(argv[++i], &end, 10);
+            if (end == argv[i] || *end != '\0' || n < 1 || n > 65535) {
+                std::fprintf(stderr, "nexus: --ssh-port takes a port, 1 to 65535\n");
+                return 2;
+            }
+            sshPort = int(n);
         } else {
-            std::fprintf(stderr, "usage: nexus [--server USER@HOST | --state FILE [--lost]]\n");
+            std::fprintf(stderr, "usage: nexus [--server USER@HOST [--ssh-port N] | --state FILE [--lost]]\n");
             return 2;
         }
     }
@@ -394,9 +407,10 @@ int main(int argc, char** argv) {
         std::string why;
         if (!clientHome(&home, &why) || !makeClientHome(home, &why))
             std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        auto startLink = [&a, home](const std::string& serverHost) {
+        auto startLink = [&a, home, sshPort](const std::string& serverHost) {
             link::InAppSshOptions ssh;
             ssh.dir = home;
+            ssh.port = sshPort;
             if (const char* h = std::getenv("HOME"))
                 ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
             link::ClientLink::Options options;

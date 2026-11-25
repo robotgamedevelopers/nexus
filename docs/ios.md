@@ -32,7 +32,8 @@ simulator device through Prax's runner (ctest's emulator), which boots an availa
 
 To see the app in the simulator: `xcrun simctl install booted build-ios-sim/nexus.app`, then
 `xcrun simctl launch booted com.robotgamedevelopers.nexus`. With `--state FILE` after the identifier it shows a server's
-state file, as `nexus --screenshot --state FILE` draws it on the desktop.
+state file, as `nexus --screenshot --state FILE` draws it on the desktop. `--server USER@HOST --ssh-port N` links to a
+server whose sshd answers on port N in place of 22: an sshd of a test's own, beside the simulator.
 
 ## Reaching the server
 
