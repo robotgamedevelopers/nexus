@@ -35,7 +35,7 @@
 #include "pr/app.h"
 #include "pr/font_set.h"
 #include "pr/kit.h"
-#include "pr/layout.h"
+#include "pr/layout_tree.h"
 
 #include "model.h"
 #include "sync/actions.h"
