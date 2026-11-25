@@ -160,7 +160,7 @@ struct Window {
                 .box = {.overflow = PrKitOverflow_Clip, .place = {.width = prKitPercent(100),
                     .height = prKitPercent(100)}},
                 .background = PrKitBackground(PrKitBackground_App)});
-            w.host.buildAbove(w.kit, root, w.extent, 0);
+            w.host.buildAbove(w.kit, root, w.extent);
         }, this);
         const PrAppOutput out = prUiOutput(ui);
         editing = out.hasTextInput;
