@@ -50,6 +50,7 @@
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
+#include "keyboard_room.h"
 #include "link/bootstrap.h"
 #include "link/client_port.h"
 #include "link/inapp_ssh.h"
@@ -83,7 +84,7 @@ struct App {
     bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
     std::string home;                       // the client home, for the board's storage
     std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
-    float keyboardCover = 0;                // px of the viewport's foot that the on-screen keyboard covers, this frame
+    float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 };
@@ -204,16 +205,10 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 // How much of the viewport's foot the on-screen keyboard covers: the viewport is the frame less its safe area
 // (studio_window.h PrStudioWindowBuildFn), and the keyboard's rect is in the frame's coordinates, empty when it is
 // hidden.
-float keyboardCover(const PrAppFrame& f) {
-    if (f.keyboard.bottom <= f.keyboard.top || f.keyboard.right <= f.keyboard.left) return 0;
-    const float foot = f.extent.y - f.safeArea.bottom;
-    return f.keyboard.top < foot ? foot - f.keyboard.top : 0;
-}
-
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
-    a.keyboardCover = keyboardCover(*f);
+    a.keyboardRoom = roomAboveKeyboard(f->extent, f->safeArea, f->keyboard);
     // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn); an
     // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
     PrSurface surface{};
@@ -247,13 +242,14 @@ struct AboveKeyboard {
 
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
-    const float cover = std::min(a.keyboardCover, extent.y);
-    if (cover <= 0) {
+    // The content starts at the safe area's top (Prax's Studio window pads its panel to it), so while the keyboard
+    // shows, the content is the room from there to the keyboard's top, never the safe area's insets more.
+    if (a.keyboardRoom <= 0) {
         a.view.extent = extent;
         a.host.build(prStudioWindowKit(window), root);
         return;
     }
-    a.view.extent = PrVec2{extent.x, extent.y - cover};
+    a.view.extent = PrVec2{extent.x, std::min(a.keyboardRoom, extent.y)};
     PrUi* ui = prStudioWindowUi(window);
     const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
         pr::uiStyle(ui, a, AboveKeyboard{a.view.extent.x, a.view.extent.y}), 0);

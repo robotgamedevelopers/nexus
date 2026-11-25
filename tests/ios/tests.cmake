@@ -83,6 +83,14 @@ target_link_libraries(ios_stock_window PRIVATE nexus_ios_view)
 add_test(NAME ios_stock_window COMMAND ios_stock_window)
 set_tests_properties(ios_stock_window PROPERTIES LABELS "unit;ios" TIMEOUT 30)
 
+# ios_keyboard_unit: the room above the on-screen keyboard (src/keyboard_room.h), with neither safe-area inset counted
+# twice.
+add_executable(ios_keyboard_unit ${PROJECT_SOURCE_DIR}/tests/ios/keyboard_unit.cpp)
+target_compile_options(ios_keyboard_unit PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(ios_keyboard_unit PRIVATE nexus_ios_view)
+add_test(NAME ios_keyboard_unit COMMAND ios_keyboard_unit)
+set_tests_properties(ios_keyboard_unit PROPERTIES LABELS "unit;ios" TIMEOUT 30)
+
 # ios_ssh_unit: the in-app ssh's parts that need no connection (tests/ios/ssh_unit.cpp), in a directory of its own.
 add_executable(ios_ssh_unit ${PROJECT_SOURCE_DIR}/tests/ios/ssh_unit.cpp)
 target_compile_options(ios_ssh_unit PRIVATE ${NEXUS_WARNINGS})
