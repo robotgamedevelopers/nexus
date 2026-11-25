@@ -165,9 +165,6 @@ struct View {
     ChatSelection selection;
     bool promptPointerDown = false;
     std::optional<uint32_t> marginAnchor;
-    bool caretInserting = false;
-    float caretExpansion = 1;
-    double caretSampleTime = 0;
     std::function<bool(const std::string&)> copy;
     std::function<void(const std::string&)> openLink;
     Model* model = nullptr;

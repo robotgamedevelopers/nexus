@@ -2033,23 +2033,13 @@ struct Builder {
         const auto& draft = model.tab(model.active()).draft;
         const bool afterText = !draft.empty() && selection.caret == draft.size() && draft.back() != '\n';
         const bool inserting = selection.caret < draft.size();
-        if (inserting != view.caretInserting) {
-            view.caretInserting = inserting;
-            view.caretSampleTime = view.time;
-        }
-        const float target = inserting ? 0.f : 1.f;
-        const float step = float(std::clamp((view.time - view.caretSampleTime) / 0.09, 0.0, 1.0));
-        view.caretSampleTime = view.time;
-        view.caretExpansion = prUiUserPreferences(ui).reducedMotion ? target :
-            std::clamp(target, view.caretExpansion - step, view.caretExpansion + step);
-        view.energyAnimating |= view.caretExpansion != target;
-        const float t = view.caretExpansion;
-        const float eased = t * t * (3 - 2 * t);
-        const float thin = std::min(width, std::max(2.f, 2.5f * k()));
-        const float drawnWidth = thin + (width - thin) * eased;
+        const float ratio = std::max(1.f, prUiDisplay(ui).pixelRatio);
+        const float thin = std::round(std::max(2.f, 2.5f * k()) * ratio) / ratio;
+        const float drawnWidth = inserting ? std::min(width, thin) : width;
         box.width = px(drawnWidth);
-        const float offset = afterText ? look.prompt.caretGap * k() * eased : inserting ? -drawnWidth / 2 : 0;
-        box.inset[PrRectSide_Left] = px(std::clamp(at.left + offset, field.left,
+        const float left = inserting ? std::round((at.left - drawnWidth / 2) * ratio) / ratio :
+            at.left + (afterText ? look.prompt.caretGap * k() : 0);
+        box.inset[PrRectSide_Left] = px(std::clamp(left, field.left,
             std::max(field.left, field.right - drawnWidth)) - origin.left - 1);
         const float alignedTop = std::clamp(top + look.prompt.caretOffsetY * k(), field.top, field.bottom - height);
         box.inset[PrRectSide_Top] = px(alignedTop - origin.top - 1);

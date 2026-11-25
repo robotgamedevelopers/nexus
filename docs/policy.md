@@ -159,6 +159,7 @@ With `reserve_width` enabled, the renderer measures both weights and reserves th
 
 Return `prompt_style` from the window event to set `fill`, `border`, `ink`, `selection`, `width`
 (percent), `radius`, `height`, `padding_x`, `gap`, `max_lines` and `show_plus`.
+The prompt selection follows the caret color and pulse. The `selection` color applies to transcript selection and other text controls. Inside the draft the caret has a fixed, pixel-aligned width at each zoom level. At the end it uses the configured block width.
 Point sizes follow the user's zoom. The stock client reads these objects from its config.
 For the global overlay shortcut, the client handles an independent `overlay` event even
 while hidden. Return a physical key code and modifiers, for example

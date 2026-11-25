@@ -926,12 +926,18 @@ void insertionCaretAndPromptMargins() {
     const auto block = width();
     h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft);
     h.frame();
-    const auto moving = width();
-    for (int i = 0; i < 8; ++i) h.frame();
-    CHECK(width() < moving && moving < block);
-    h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight);
-    for (int i = 0; i < 8; ++i) h.frame();
-    CHECK(std::abs(width() - block) < 0.1f);
+    const auto thin = width();
+    CHECK(thin >= 2 && thin < block);
+    for (int i = 0; i < 7; ++i) {
+        h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft);
+        h.frame();
+        CHECK(std::abs(width() - thin) < 0.1f);
+    }
+    for (int i = 0; i < 8; ++i) {
+        h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight);
+        h.frame();
+        CHECK(std::abs(width() - (i == 7 ? block : thin)) < 0.1f);
+    }
     const auto panel = h.bounds(h.view.promptBox);
     const auto from = PrVec2{panel.right - 4, panel.top + 1};
     const auto to = PrVec2{panel.left + 4, panel.bottom - 1};
