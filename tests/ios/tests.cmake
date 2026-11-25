@@ -110,3 +110,11 @@ add_test(NAME ios_ssh_functional COMMAND ios_ssh_functional ${sshd_dir})
 set_tests_properties(ios_sshd_start PROPERTIES LABELS "functional;ios" TIMEOUT 30 FIXTURES_SETUP ios_sshd)
 set_tests_properties(ios_sshd_stop PROPERTIES LABELS "functional;ios" TIMEOUT 30 FIXTURES_CLEANUP ios_sshd)
 set_tests_properties(ios_ssh_functional PROPERTIES LABELS "functional;ios" TIMEOUT 60 FIXTURES_REQUIRED ios_sshd)
+
+# ios_lock_unit: the client lock's iOS part (src/ios_lock.h) over the real ClientLock: the app's lifecycle, the screen
+# lock, the lock screen's tap, the authenticator's answers, time and input (tests/ios/lock_unit.cpp), on a simulator.
+add_executable(ios_lock_unit ${PROJECT_SOURCE_DIR}/tests/ios/lock_unit.cpp)
+target_compile_options(ios_lock_unit PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(ios_lock_unit PRIVATE nexus_ios_lock)
+add_test(NAME ios_lock_unit COMMAND ios_lock_unit)
+set_tests_properties(ios_lock_unit PROPERTIES LABELS "unit;ios" TIMEOUT 30)

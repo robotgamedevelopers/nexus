@@ -99,6 +99,13 @@ function(nexus_ios_targets)
     target_compile_options(nexus_ios_logic PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_ios_logic PUBLIC nexus_config nexus_model nexus_accounts prax::json prax::core_cpp)
 
+    # The client lock's iOS part (src/ios_lock.h): what the app's lifecycle, the screen lock, input and time mean to
+    # nexus::ClientLock. Apart from the app, for its unit test.
+    add_library(nexus_ios_lock STATIC src/ios_lock.cpp)
+    target_include_directories(nexus_ios_lock PUBLIC src)
+    target_compile_options(nexus_ios_lock PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_ios_lock PUBLIC nexus_model prax::surface)
+
     # The window's tree: the same sources as the desktop's nexus_view.
     add_library(nexus_ios_view STATIC src/view.cpp src/chat_markdown.cpp src/chat_selection.cpp src/window_app.cpp
         src/native_tabs.cpp src/font_prefetch.cpp)
@@ -137,11 +144,12 @@ function(nexus_ios_targets)
 
     # The app: one window filling its scene, on iPhone and iPad (cmake/ios_info.plist.in), signed ad hoc as the
     # simulator requires. A device needs the developer's signature (NEXUS_IOS_TEAM below, docs/ios.md).
-    add_executable(nexus_ios MACOSX_BUNDLE src/main_ios.cpp src/platform_ios.mm)
-    set_source_files_properties(src/platform_ios.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    add_executable(nexus_ios MACOSX_BUNDLE src/main_ios.cpp src/platform_ios.mm src/lock_ios.mm)
+    set_source_files_properties(src/platform_ios.mm src/lock_ios.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_compile_options(nexus_ios PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_ios PRIVATE nexus_ios_frame nexus_ios_view nexus_ios_link prax::studio_app prax::app_select
-        prax::gpu_select prax::draw_select prax::image_select prax::compress_select "-framework UIKit")
+    target_link_libraries(nexus_ios PRIVATE nexus_ios_frame nexus_ios_view nexus_ios_link nexus_ios_lock prax::studio_app
+        prax::app_select prax::gpu_select prax::draw_select prax::image_select prax::compress_select "-framework UIKit"
+        "-framework LocalAuthentication")
     set_target_properties(nexus_ios PROPERTIES
         OUTPUT_NAME nexus
         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/ios_info.plist.in

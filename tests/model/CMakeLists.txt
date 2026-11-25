@@ -58,6 +58,12 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(lock_walk PRIVATE nexus_model)
     target_compile_options(lock_walk PRIVATE ${warnings})
 
+    # The client lock's iOS part (src/ios_lock.h) walked over the real lock, for ClientLockTrace.tla too: the glue is
+    # plain C++, built here on the host so that its traces are checked where TLC runs.
+    add_executable(ios_lock_walk ios_lock_walk.cpp ${PROJECT_SOURCE_DIR}/src/ios_lock.cpp)
+    target_link_libraries(ios_lock_walk PRIVATE nexus_model prax::surface)
+    target_compile_options(ios_lock_walk PRIVATE ${warnings})
+
     # The friend strip's walk (src/sync/friend_strip.h), for FriendStripTrace.tla.
     add_executable(strip_walk strip_walk.cpp)
     target_link_libraries(strip_walk PRIVATE nexus_sync)
@@ -67,7 +73,7 @@ if(NEXUS_SERVER_PARTS)
     target_link_libraries(watch_walk PRIVATE nexus_terminal_watch)
     target_compile_options(watch_walk PRIVATE ${warnings})
 
-    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk strip_walk watch_walk)
+    add_dependencies(model_checks trace_walk glide_walk overlay_walk lock_walk ios_lock_walk strip_walk watch_walk)
 endif()
 
 add_test(NAME model_unit COMMAND model_test)
@@ -119,7 +125,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY LOCKWALK IOSLOCKWALK WATCHWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -222,6 +228,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DOVERLAYWALK=$<TARGET_FILE:overlay_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LOCKWALK)
         list(APPEND defs -DLOCKWALK=$<TARGET_FILE:lock_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(DEFINED T_SEED AND T_IOSLOCKWALK)
+        list(APPEND defs -DLOCKWALK=$<TARGET_FILE:ios_lock_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_WATCHWALK)
         list(APPEND defs -DWATCHWALK=$<TARGET_FILE:watch_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(DEFINED T_SEED AND T_LABEL)
@@ -516,6 +524,14 @@ endforeach()
 foreach(fault stale draw idle)
     tlc_test(tlc_client_lock_trace_faulty_${fault}_rejected ClientLockTrace ClientLockTrace.cfg invariant
              PROPERTY TraceMatches LOCKWALK SEED 1 STEPS 1000 FAULTY ${fault})
+endforeach()
+# The iOS glue over the lock (src/ios_lock.h, tests/model/ios_lock_walk.cpp): its traces, and its faulty ones rejected.
+foreach(seed 1 2 3)
+    tlc_test(tlc_ios_lock_trace_seed_${seed} ClientLockTrace ClientLockTrace.cfg pass IOSLOCKWALK SEED ${seed} STEPS 1000)
+endforeach()
+foreach(fault stale draw idle)
+    tlc_test(tlc_ios_lock_trace_faulty_${fault}_rejected ClientLockTrace ClientLockTrace.cfg invariant
+             PROPERTY TraceMatches IOSLOCKWALK SEED 1 STEPS 1000 FAULTY ${fault})
 endforeach()
 
 # Foreground-group synchronization between the background poll thread and the frame thread (src/terminal_watch.h,
