@@ -196,6 +196,16 @@ if(NEXUS_WINDOW)
     add_test(NAME keyboard_frames_unit COMMAND nexus_keyboard_frames_tests)
     set_tests_properties(keyboard_frames_unit PROPERTIES LABELS unit TIMEOUT 30)
 
+    # Switching an AI's account (src/account_menu.h): the menu a press on the active AI's tab opens under its highlight,
+    # its gesture, layout and still frames, and the /account, /login and /logout commands, over the real frame code, a
+    # kit with no window and a fake link. The system's fonts, made-up time.
+    add_executable(nexus_account_menu_tests test_account_menu.cpp)
+    target_compile_options(nexus_account_menu_tests PRIVATE ${NEXUS_WARNINGS})
+    target_include_directories(nexus_account_menu_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(nexus_account_menu_tests PRIVATE nexus_frame)
+    add_test(NAME account_menu_unit COMMAND nexus_account_menu_tests)
+    set_tests_properties(account_menu_unit PROPERTIES LABELS unit TIMEOUT 30)
+
     if(NEXUS_SERVER_PARTS)
         add_executable(account_picker_trace account_picker_trace.cpp)
         target_compile_options(account_picker_trace PRIVATE ${NEXUS_WARNINGS})
