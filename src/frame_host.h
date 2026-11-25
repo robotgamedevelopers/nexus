@@ -3,8 +3,8 @@
 // the app runs.
 //
 // At a frame's start: the terminals' labels from what their poller last read, the window's kept preferences handed to
-// their writer when they changed, the server's latest state into the model, a new text scale, and the sprint tab's
-// page. Then the rounds build the view (view.h). Events go to the sprint tab's page when it shows. Each of these is a
+// their writer when they changed, the server's latest state into the model, a new text scale, and a dashboard tab's
+// page. Then the rounds build the view (view.h). Events go to a dashboard tab's page when it shows. Each of these is a
 // phase of the frame for the hitch detector (hitch.h).
 //
 // Nothing here waits: the link has a thread of its own (link/client.h), the terminals start, stop and are read on
@@ -188,7 +188,7 @@ struct FrameHost {
 
     // The frame's start, before its rounds.
     void beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display);
-    // An event before the window's tree sees it: true if the host took it. The sprint tab's page takes the events it is
+    // An event before the window's tree sees it: true if the host took it. A dashboard tab's page takes the events it is
     // routed. Text typed or pasted into the prompt past its room (view.h promptRoom: kPromptBytes less the draft, plus
     // the selection it replaces) is cut to fit and pushed to `ui` in one event in its place, the transcript saying how
     // much was left out (View::cut).

@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus_ios_shot: %s\n", why.c_str());
         return 2;
     }
-    // No sprint tab on iOS (platform.h NEXUS_PROCESSES).
+    // No tab yet: the state's AIs and dashboards come with it (state_window.h showHeldState, frame_host.h takeDashboards).
     nexus::Model model({});
     nexus::Look look;
     nexus::View view;

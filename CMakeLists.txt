@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_LINK_LIBRARIES_STRATEGY REORDER_FREELY)
 
-# Prax options: leave out what this window does not use. The sprint tab's page runs its scripts in QuickJS (PR_JS).
+# Prax options: leave out what this window does not use. A dashboard tab's page runs its scripts in QuickJS (PR_JS).
 set(PR_JS ON CACHE BOOL "" FORCE)
 set(PR_CHARSET_LEGACY OFF CACHE BOOL "" FORCE)
 
@@ -51,12 +51,12 @@ else()
     set(NEXUS_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-# The window: the app and the libraries and tests that draw or set text (the view, the terminal tabs, the sprint tab).
+# The window: the app and the libraries and tests that draw or set text (the view, the terminal tabs, the dashboard tabs).
 # On by default on macOS only: Prax's lib/app has backends for Cocoa, Win32 and the web, none for Linux, and its
 # lib/font finds the system's fonts through CoreText and DirectWrite only. On Windows, ON builds the app against Prax's
 # Win32 backend, which does not compile at this pin (lib/app/backends/win32/src/app_win32.cpp), so it is off there too. Off, everything else still builds and tests:
 # the model, the link's states, the store, the driver protocol and supervisor, nexus-server, and the window's logic.
-option(NEXUS_WINDOW "Build the window (the app, its view, terminals and sprint tab, and their tests)" ${APPLE})
+option(NEXUS_WINDOW "Build the window (the app, its view, terminals and dashboard tabs, and their tests)" ${APPLE})
 # The window's logic (src/command.h runCommand, and what uses it: the remote and sprint logic, the link, nexus-server and
 # their tests) starts processes through Prax's lib/process. On by default on macOS only: at this Prax pin, lib/process's
 # POSIX backend does not link on Linux (process_posix.cpp declares `environ` inside its own namespace, so the symbol is
@@ -299,7 +299,7 @@ include(cmake/schema.cmake)
 if(NEXUS_WINDOW_LOGIC)
     # The window's logic that runs without a window: the AI and machine lists' parsing (and the command that prints
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
-    # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
+    # and the dashboard tabs' (where the page is served, which events go to it, the script nexus adds to it).
     add_library(nexus_window_logic STATIC src/command.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
         src/client_home.cpp src/server_choice.cpp)
     target_include_directories(nexus_window_logic PUBLIC src)
@@ -322,7 +322,7 @@ if(NEXUS_WINDOW)
     target_link_libraries(nexus_terminals PUBLIC nexus_view nexus_terminal_launch nexus_terminal_watch
         prax::studio_terminal prax::process prax::vterm prax::core prax::core_cpp)
 
-    # The sprint tab's page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
+    # The dashboard tabs' page over Prax's HTML view, scripts and network (view.h Board): built by the app, and run by the
     # functional test on pages it serves from memory.
     add_library(nexus_board STATIC src/board.cpp)
     target_compile_definitions(nexus_board PRIVATE NEXUS_DISPLAY_VERSION="v${PROJECT_VERSION}")

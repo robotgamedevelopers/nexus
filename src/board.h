@@ -25,7 +25,7 @@
 // prHtmlWindowSetLocation with no host hook), so the board listens for click on each window the page opens, and cancels
 // it after the page's own listeners, before the link's activation follows it. A page's script that opens a window asks
 // the host (PrHtmlHost::openWindow), which goes to the browser too. Whatever else moves the page off the board, choosing
-// the sprint tab brings it back (home).
+// a dashboard tab brings it back (home).
 //
 // Off screen (another tab shows, or the overlay is hidden) the page runs nothing: no tasks, no timers, no fetches, no
 // frames asked for. Its visibility is hidden (visibilitychange fires), and the board's 1 s poll waits. When it shows
@@ -95,7 +95,7 @@ public:
     // is found, and, while the board shows and the window is on screen, runs the page's due tasks.
     void frame(double seconds, const PrAppDisplay& display);
 
-    // An event while the sprint tab shows (sprint.h routeBoardEvent). Returns true if the page took it and the window
+    // An event while a dashboard tab shows (sprint.h routeBoardEvent). Returns true if the page took it and the window
     // should not see it. Keys and the wheel move the page's scroll over the next frames, with momentum, a held arrow
     // scrolls while it is held, and the page bounces at its ends (scroll_glide.h); a trackpad's pixels scroll it at
     // once.
@@ -201,7 +201,7 @@ private:
     PrAppDisplay windowDisplay_ = prAppDisplayDefault();
     PrRect pane_{};                         // the page's rectangle in the window, px, at the last layout
     bool pressInPage_ = false;
-    bool shown_ = false;                    // the sprint tab showed at the last round
+    bool shown_ = false;                    // a dashboard tab showed at the last round
     float windowZoom_ = 1;
 
     // Between the threads, under `mutex_`: the inbox, the frame's state for the page's thread, and what it shows.

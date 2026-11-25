@@ -1153,7 +1153,7 @@ struct Builder {
         keepFocusOnTheActiveTab();
     }
 
-    // A press focuses the tab it lands on (ui.cpp PointerDown), a drag included, and the sprint tab has no prompt to
+    // A press focuses the tab it lands on (ui.cpp PointerDown), a drag included, and a dashboard tab has no prompt to
     // take the focus back: left there, the focus ring stood on the dragged tab once a key made the focus visible (an
     // Escape that hid the overlay), and Enter or Space reaching the tree selected it. So the keyboard focus never rests
     // on a tab other than the active one: it goes to the active tab, and the prompt or a terminal takes it from there
@@ -1227,7 +1227,7 @@ struct Builder {
             prUiSetFocus(ui, kPrLayoutNodeNone);
         }
         // A shell that cannot run here at all (on Windows, no WSL2): the line that says what is missing, centred as the
-        // sprint tab's is.
+        // a dashboard tab's is.
         const std::string problem = view.terminals->problem(tab.id);
         if (!problem.empty()) {
             PrLayoutNode box = element(window, Part::BoardBox);
@@ -1239,7 +1239,7 @@ struct Builder {
         view.terminals->show(tab.id, window);
     }
 
-    // The sprint tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
+    // A dashboard tab: its page fills the window's width and the height below the strip, with no prompt; or, while there
     // is no page to show, the line that says why. With no AIs, a caption beneath the board gives the reason.
     // Like a terminal tab, it leaves the AI shown before with its scroll and its draft.
     void sprint(PrLayoutNode window) {
@@ -2330,7 +2330,7 @@ struct Builder {
         view.energyAnimating = false;
         view.breathing = false;     // until an AI's transcript draws a busy cursor this round
         // The window's keys are claimed on the outermost node of the round: the parent the host builds under (the
-        // studio window's surface, the tree's root), else the window. With no focus, as on the sprint tab, which has no
+        // studio window's surface, the tree's root), else the window. With no focus, as on a dashboard tab, which has no
         // prompt, Prax routes a key from the tree's root up (ui.cpp routeKey), so a claim on the window, below the root,
         // would never be reached; with focus, the node is still an ancestor of the focused prompt or terminal.
         const PrLayoutNode keys = parent != kPrLayoutNodeNone ? parent : window;
@@ -2344,7 +2344,7 @@ struct Builder {
         pickerInput = pickerInput || view.accountPicker.has_value() || !view.choiceKind.empty();
         serviceTerminals();
         // On a terminal tab Escape is not claimed: the terminal claims it for its shell. Command-Escape does nothing
-        // there or on the sprint tab (it is captured below all the same). On the sprint tab Escape hides.
+        // there or on a dashboard tab (it is captured below all the same). On a dashboard tab Escape hides.
         const TabKind activeKind = model.tab_count() == 0 ? TabKind::AI : model.tab(model.active()).kind;
         const bool hides = activeKind != TabKind::Terminal;
         // While an input method composes, its Enter commits the composition and its Escape cancels it (the KeyDown comes
@@ -2369,7 +2369,7 @@ struct Builder {
                 content.y -= look.tabs.height * k() + 1 + 2; // strip and divider
             view.terminals->startPending(content);
         }
-        // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
+        // A click on a dashboard tab, selected already or not, takes its page back to the board (Board::home).
         if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Dashboard &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();

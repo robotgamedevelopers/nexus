@@ -29,7 +29,7 @@ enum class Phase : std::uint8_t {
     Terminals,      // reading each terminal's label and directory at the frame's start
     Keep,           // handing the window's saved preferences to their writer
     SyncApply,      // the server's latest state into the model (sync/mirror.h)
-    Board,          // the sprint tab's page at the frame's start (board.h frame)
+    Board,          // a dashboard tab's page at the frame's start (board.h frame)
     Layout,         // the rounds: the window's build and Prax's layout
     Draw,           // taking the tree's scene and playing it into the draw list
     Present,        // rendering the list into the swap chain
