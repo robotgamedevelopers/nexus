@@ -726,7 +726,9 @@ void bigPaste(Window& w) {
     w.type("x");
     w.commandV("small paste", false);
     CHECK(w.model.tab(1).draft == "xsmall paste");
-    w.key(PrAppKey_Enter, PrAppKeyCode_Enter);
+    w.key(PrAppKey_Enter, PrAppKeyCode_Enter);     // held in the window (the shipped hold_on_enter)
+    CHECK(w.model.tab(1).held == "xsmall paste" && (w.link.sent.empty() || w.link.sent.back().text != "xsmall paste"));
+    w.key(PrAppKey_Enter, PrAppKeyCode_Enter);     // released
     CHECK(!w.link.sent.empty() && w.link.sent.back().text == "xsmall paste");
 }
 
@@ -786,7 +788,7 @@ void terminals(Window& w) {
         return prLayoutDecorationStyleRecord(w.tree, style.groups[PrLayoutGroup_Decoration]).background;
     };
     CHECK(background(root).a == 0);
-    CHECK(background(pane).a > 0.595f && background(pane).a < 0.605f);
+    CHECK(background(pane).a > 0.695f && background(pane).a < 0.705f);    // the shipped overlay_opacity, 0.7
     w.frames(30, true);
     for (int i = 0; i < 2; ++i) {
         w.command('T', PrAppKeyCode_KeyT);

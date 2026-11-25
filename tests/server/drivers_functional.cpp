@@ -210,6 +210,11 @@ struct Server {
         a.friendName = "ada";
         CHECK(hub->apply(a));
         CHECK(store.find(kAda) != nullptr && store.find(kAda)->info.friendName == "ada");
+        // A new session takes its friend's first linked account (the shipped policy/rules/config.json
+        // account_default "first"): ada's, work.
+        if (registry) {
+            CHECK(store.find(kAda) != nullptr && store.find(kAda)->info.account == "work");
+        }
         see();
     }
 
@@ -249,7 +254,17 @@ struct Server {
         return done();
     }
 
-    const Supervisor& sup() { return *drivers->supervisor(kAda); }
+    // ada's supervisor. A case that asks before any driver of hers was started fails here, loudly, with her
+    // transcript (where the server said why), never by reading through a null.
+    const Supervisor& sup() {
+        const Supervisor* supervisor = drivers->supervisor(kAda);
+        if (supervisor == nullptr) {
+            std::fprintf(stderr, "drivers_functional: ada's session has no driver (none was started); her transcript:\n");
+            for (const std::string& line : transcript()) std::fprintf(stderr, "  | %s\n", line.c_str());
+            std::exit(1);
+        }
+        return *supervisor;
+    }
 
     // ada's whole transcript, an entry a line: "P " the person's, "F " the friend's, "T " a tool line, "N " a notice.
     std::vector<std::string> transcript() const {
@@ -748,13 +763,19 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
         "on-start 1 emit {\"kind\":\"text\",\"delta\":\"one\"}\non-start 1 await-stop\n"
         "on-start 1 emit {\"kind\":\"text-end\"}\non-start 1 emit {\"kind\":\"done\",\"outcome\":\"stopped\"}\n"
         "on-start 2 emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n");
+    // ada's session was made on work, her first linked account (Server); play is the account she changes to.
+    accounts::Registry r = adaRegistry();
+    r.accounts.push_back({"play", "fake"});
+    r.friends[0].accounts.push_back("play");
+    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    CHECK(s.store.find(kAda)->info.account == "work");
     s.send("first");
     CHECK(s.serveUntil([&] { return s.sup().gathering(); }, 10));
     const pid_t before = s.drivers->pid(kAda);
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetModel, "fast")));
     CHECK(s.store.find(kAda)->info.model == "fast");
-    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "work")));
-    CHECK(s.store.find(kAda)->info.account == "work");
+    CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "play")));
+    CHECK(s.store.find(kAda)->info.account == "play");
     const std::string actual = s.sup().driverAccount();
     CHECK(!s.drivers->retireForSignOut(actual).empty());
     CHECK(s.drivers->retireForSignOut("unrelated").empty());
@@ -763,18 +784,29 @@ void account(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.hub->apply(s.action(sync::ActionKind::Stop, "")));
     CHECK(s.serveUntil([&] { return none(s) && s.driver().openTurn == 0; }, 10));
     CHECK(s.sup().failedStarts() == 0);
-    CHECK((s.transcript() == std::vector<std::string>{"P first", "F one", "N Stopped."}));
+    CHECK((s.transcript() == std::vector<std::string>{"P first", "N Switched to play", "F one", "N Stopped."}));
     s.send("second");
     CHECK(s.serveUntil([&] { return idle(s) && s.driver().nextTurn == 3; }, 10));
     CHECK(s.drivers->pid(kAda) != before && s.drivers->pid(kAda) > 0);
-    CHECK(s.transcript().size() == 5 && has(s.transcript().back(), "belongs to a different account"));
-    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "work");
+    CHECK(s.transcript().size() == 6 && has(s.transcript().back(), "belongs to a different account"));
+    CHECK(s.store.size() == 1 && s.store.find(kAda)->info.account == "play");
     CHECK(!has(readFile(dir + "/starts.log"), "resume=s-1"));
     CHECK(s.drivers->retireForSignOut("unrelated").empty() && idle(s));
-    CHECK(s.drivers->retireForSignOut("work").empty());
+    CHECK(s.drivers->retireForSignOut("play").empty());
     CHECK(s.sup().phase() == Phase::Ending);
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     CHECK(s.sup().failedStarts() == 0);
+}
+
+// ada's accounts become `r`'s, which leave out work, the account her session was made on (Server): the server moves the
+// session to no account and says so, once, for that session alone; anything else it says is a failure.
+void relinkFromWork(Server& s, const accounts::Registry& r) {
+    const std::vector<std::string> notes = s.hub->useAccounts(r, nullptr);
+    if (notes.size() != 1 || !has(notes, "work")) {
+        for (const std::string& note : notes) std::fprintf(stderr, "  relink note: %s\n", note.c_str());
+    }
+    CHECK(notes.size() == 1 && has(notes, "work"));
+    CHECK(s.store.find(kAda) != nullptr && s.store.find(kAda)->info.account.empty());
 }
 
 // ada's drivers file and script for a driver that takes an account (`--account`, as the Claude driver's line does), and
@@ -787,7 +819,7 @@ void setUpAccounts(Server& s, const std::string& dir, const std::string& fake, c
     accounts::Registry r;
     r.accounts = {{"a1", provider}, {"a2", provider}};
     r.friends = {{"ada", {"a1", "a2"}, "a1"}};
-    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    relinkFromWork(s, r);
 }
 
 bool signedIn(Server& s, const std::string& account) {
@@ -1029,7 +1061,7 @@ void fableChoice(Server& s, const std::string& dir, const std::string& fake, boo
     accounts::Registry r;
     r.accounts = {{"a1", "claude"}, {"foreign", "codex"}, {"a2", "claude"}};
     r.friends = {{"ada", {"foreign", "a1"}, "a1"}};
-    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    CHECK(s.hub->useAccounts(r, nullptr).empty());     // setUpAccounts moved the session off work already
     CHECK(!s.hub->state().friends().front().canAutoAccount);
     CHECK(!s.hub->apply(s.action(sync::ActionKind::SetAccount, sync::kAutoAccountTarget)));
     r.friends[0].accounts.push_back("a2");
@@ -1121,8 +1153,9 @@ void friendRemoved(Server& s, const std::string& dir, const std::string& fake) {
     CHECK(s.serveUntil([&] { return none(s); }, 10));
     std::vector<std::string> t = s.transcript();
     // The notice is committed at the reload; the text gathered so far is committed when the stopped turn ends.
-    CHECK(t.size() == 4 && t[0] == "P go" && has(t[1], "ada was taken out of friends.json") && t[2] == "F Work" &&
-          t[3] == "N Stopped.");
+    // (First, the notice of setUpAccounts' relink: ada's session moved off work, the account it was made on.)
+    CHECK(t.size() == 5 && has(t[0], "The account work is no longer one of ada's accounts") && t[1] == "P go" &&
+          has(t[2], "ada was taken out of friends.json") && t[3] == "F Work" && t[4] == "N Stopped.");
     CHECK(s.store.find(kAda)->queue == std::vector<std::string>{"next"} && s.store.find(kAda)->info.account == "a1");
     s.send("now?");
     CHECK(has(s.transcript().back(), "ada is not in friends.json, so the prompt was not sent"));
@@ -1552,10 +1585,15 @@ void instanceElsewhere(Server& s, const std::string& dir, const std::string& fak
     CHECK(!std::filesystem::exists(dir + "/starts"));
 }
 
-// ada's driver as a shell script, for what the fake driver does not do: start processes of its own.
-void setUpShell(const std::string& dir, const std::string& script) {
+// ada's driver as a shell script, for what the fake driver does not do: start processes of its own. The script's
+// harness, sh, has no accounts: ada is linked to none, so that her session runs on none (on work, the fake driver's
+// account, the server would refuse to start sh for it).
+void setUpShell(Server& s, const std::string& dir, const std::string& script) {
     writeFile(dir + "/ada.sh", script);
     writeFile(dir + "/drivers", "driver sh /bin/sh " + dir + "/ada.sh\nfriend ada sh " + dir + "\n");
+    accounts::Registry r = adaRegistry();
+    r.friends = {{"ada", {}, ""}};
+    relinkFromWork(s, r);
 }
 
 pid_t readPid(const std::string& path) {
@@ -1577,7 +1615,7 @@ const char* const kShellHello = "printf '%s\\n' '{\"kind\":\"hello\",\"protocol\
 // A driver that exits on its own: what it started in its process group (its harness) is ended with it, so that the
 // next driver for the tab never works beside it.
 void orphan(Server& s, const std::string& dir, const std::string&) {
-    setUpShell(dir, "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + dir + "/child.pid\n" + kShellHello +
+    setUpShell(s, dir, "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + dir + "/child.pid\n" + kShellHello +
         "exit 3\n");
     s.send("q");
     CHECK(s.serveUntil([&] { return none(s) && s.sup().failedStarts() == 1; }, 10));
@@ -1593,7 +1631,7 @@ void orphan(Server& s, const std::string& dir, const std::string&) {
 // process group holds its output open: the loop as nexus-server ends its drivers (polling as long as waitMs() says)
 // collects it soon after SIGKILL, not when that process lets go.
 void escapedOutput(Server& s, const std::string& dir, const std::string&) {
-    setUpShell(dir, "trap '' TERM\nperl -e 'setpgrp(0, 0); sleep 5' </dev/null &\necho $! > " + dir +
+    setUpShell(s, dir, "trap '' TERM\nperl -e 'setpgrp(0, 0); sleep 5' </dev/null &\necho $! > " + dir +
         "/holder.pid\n" + kShellHello + "while :; do sleep 1; done\n");
     s.send("q");
     CHECK(s.serveUntil([&] { return s.sup().phase() == Phase::Working; }, 10));
@@ -1627,7 +1665,7 @@ void setUpClaude(Server& s, const std::string& dir, const std::string& fake, con
     accounts::Registry r;
     r.accounts = {{"a1", "claude"}};
     r.friends = {{"ada", {"a1"}, "a1"}};
-    CHECK(s.hub->useAccounts(r, nullptr).empty());
+    relinkFromWork(s, r);
     CHECK(s.hub->apply(s.action(sync::ActionKind::SetAccount, "a1")));
 }
 
