@@ -7,7 +7,9 @@
 # tailscale-linux, tailscale-windows) on that exact commit: on a pull request its head, which is what these jobs check
 # out (not the merge commit the other jobs build), and on a push or a merge queue the pushed commit. It is set only by
 # a job that built and tested that commit on that OS: success or failure, or failure when the job is cancelled or times
-# out. A lander waits for all three to be success on the head it lands; a missing or pending one is not a pass.
+# out. A lander waits for tailscale-macos and tailscale-linux to be success on the head it lands (ci.yml runs those
+# two per commit; the nightly runs Windows, whose restore alone does not fit 2 minutes); a missing or pending one is
+# not a pass.
 #
 # Caches. Go comes from the runner's machine (PATH, or ~/sdk/bin as the fleet installs it) and fetches the pinned Go
 # toolchain into the module cache itself. The toolchain, the modules, Go's build cache and (on Windows) llvm-mingw live

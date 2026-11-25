@@ -708,3 +708,16 @@ jobs:
             echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
           fi
           "${frames[@]}"
+
+  # The Tailscale shim on Windows (tailscale.yml), with no time limit: restoring its primed cache alone takes most of a
+  # per-commit job's 2 minutes on the hosted Windows image, so ci.yml runs macOS and Linux and this runs Windows. It
+  # saves the primed cache again when the pins changed.
+  tailscale-windows:
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      save: true
+      macos: false
+      linux: false
