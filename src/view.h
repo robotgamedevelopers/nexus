@@ -112,6 +112,20 @@ struct Secrets {
     virtual void cancel() = 0;                      // Escape, or the dialog closed: the request is cancelled
 };
 
+// The window's question for its server where nothing names one (server_choice.h): on iOS, at first launch and when
+// the person asks to change it. Our own seam, so that the dialog draws in a state shot without a link.
+struct ServerChoice {
+    virtual ~ServerChoice() = default;
+    virtual bool asking() = 0;                      // the dialog shows
+    virtual std::string_view current() = 0;         // the server kept now, or empty for none
+    virtual std::string_view typed() = 0;           // the field's text, valid for the round
+    virtual std::string_view problem() = 0;         // why the last Enter was not taken, or empty
+    virtual void type(std::string_view text) = 0;   // the field's text changed
+    virtual void submit() = 0;                      // Enter: checked, then kept and used, or a problem
+    virtual void change() = 0;                      // the person asks to change the server: the dialog opens
+    virtual void cancel() = 0;                      // closed: with a server kept, the dialog closes; else it stays
+};
+
 // The kit's record of one tab strip's tabs (pr/kit_choice.h PrKitTabs), freed with the view.
 struct KitTabsFree {
     void operator()(PrKitTabs* tabs) const { prKitTabsDestroy(tabs); }
@@ -262,6 +276,8 @@ struct View {
     std::function<void()> scaled;               // after a frame's start applied a new text scale (look->textSteps),
                                                 // the first one included: saves it (tab_order.h)
     Secrets* secrets = nullptr;                 // the secret dialog's requests and field; unset, none ever shows
+    ServerChoice* serverChoice = nullptr;       // the server dialog (iOS); unset, it never shows
+    bool serverShown = false;                   // the server dialog showed last round
     std::uint64_t secretShown = 0;              // the request the dialog showed last round (0: none)
     PrLayoutNode secretField = kPrLayoutNodeNone;   // its field, as the last round built it
     // Each friend's transcript scroll from the top in px, by Tab::id, kept while another shows; kAtEnd while it showed

@@ -9,6 +9,14 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME window_unit COMMAND nexus_window_tests)
     set_tests_properties(window_unit PROPERTIES LABELS unit)
 
+    # The server a window asks for where nothing names one (src/server_choice.h): the address's checks, server.txt and
+    # the kept server through a store in memory. Pure logic.
+    add_executable(nexus_server_choice_tests test_server_choice.cpp)
+    target_compile_options(nexus_server_choice_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_server_choice_tests PRIVATE nexus_window_logic)
+    add_test(NAME server_choice_unit COMMAND nexus_server_choice_tests)
+    set_tests_properties(server_choice_unit PROPERTIES LABELS unit)
+
     # A terminal tab's label in ssh (src/remote.h): the destination's parsing and matching, the machine list through a fake
     # command runner, and the label across sessions. Pure logic.
     add_executable(nexus_remote_tests test_remote.cpp)

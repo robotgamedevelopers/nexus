@@ -10,6 +10,8 @@
 #include "pr/app_input.h"
 #include "pr/color.h"
 
+#include "build_parts.h"
+
 namespace nexus::style {
 
 // Type sizes.
@@ -61,6 +63,17 @@ constexpr int kTextStepsUp = int((kTextScaleMax - 1) / kTextScaleStep + 0.5f);  
 constexpr float textScale(int steps) {
     return 1 + float(steps) * kTextScaleStep;
 }
+
+// The steps a window starts at until the person sets a scale (tab_order.h loadTextScale). 0 on a desktop. On iOS and
+// iPadOS -2 (0.8): text there is set in points as on the Mac, but a 13-inch iPad has 132 points to the inch at about
+// 45 cm against a Mac display's 109 at about 70 cm, so the same size looks about 1.25 times as large; 0.8 matches the
+// Mac's. A phone, at 153 points to the inch and closer still, is nearer -3; its own form (docs/ios.md) will say.
+#if NEXUS_PROCESSES
+constexpr int kDefaultTextSteps = 0;
+#else
+constexpr int kDefaultTextSteps = -2;
+#endif
+static_assert(kDefaultTextSteps >= -kTextStepsDown && kDefaultTextSteps <= kTextStepsUp);
 
 // Widths, as percentages of the window width.
 constexpr float kColumnPercent = 80;          // transcript (the reference's 54.1% widened at the owner's ask)

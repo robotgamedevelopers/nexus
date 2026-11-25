@@ -4,10 +4,13 @@
 //
 // With --compare, the shot is then compared with a golden image (matches below), and the exit says whether it matched.
 //
-//   nexus_ios_shot STATE OUT.png WIDTH HEIGHT RATIO [--lost] [--tab N] [--status TEXT] [--compare GOLDEN.png]
+//   nexus_ios_shot STATE OUT.png WIDTH HEIGHT RATIO [--lost] [--tab N] [--status TEXT] [--text-steps N]
+//                  [--ask-server TEXT] [--compare GOLDEN.png]
 //
 // STATE `-` is none: the window before the server has sent anything, with no tab. --status sets the link's line (what
-// FrameHost::pollLink writes, sync::linkStatus).
+// FrameHost::pollLink writes, sync::linkStatus). The text scale is the one an iOS window starts at
+// (style.h kDefaultTextSteps), or --text-steps. --ask-server shows the server dialog (server_choice.h) as at first
+// launch, with TEXT typed in its field and, when TEXT is not an address, the reason under it.
 
 #include <cstdio>
 #include <cstdlib>
@@ -25,7 +28,9 @@
 #include "frame_host.h"
 #include "model.h"
 #include "offscreen.h"
+#include "server_choice.h"
 #include "state_window.h"
+#include "style.h"
 #include "view.h"
 
 namespace {
@@ -92,10 +97,24 @@ bool matches(const char* shot, const char* golden) {
 
 } // namespace
 
+// The server dialog as at first launch: no server kept, TEXT typed, and Enter pressed once if TEXT is not empty.
+struct FirstLaunch : nexus::ServerChoice {
+    std::string field;
+    std::string why;
+    bool asking() override { return true; }
+    std::string_view current() override { return {}; }
+    std::string_view typed() override { return field; }
+    std::string_view problem() override { return why; }
+    void type(std::string_view text) override { field = std::string(text); }
+    void submit() override {}
+    void change() override {}
+    void cancel() override {}
+};
+
 int main(int argc, char** argv) {
     if (argc < 6) {
         std::fprintf(stderr, "usage: nexus_ios_shot STATE|- OUT.png WIDTH HEIGHT RATIO [--lost] [--tab N] [--status TEXT] "
-            "[--compare GOLDEN.png]\n");
+            "[--text-steps N] [--ask-server TEXT] [--compare GOLDEN.png]\n");
         return 2;
     }
     const std::string state = argv[1];
@@ -107,6 +126,8 @@ int main(int argc, char** argv) {
     std::size_t tab = 0;
     const char* golden = nullptr;
     const char* status = nullptr;
+    const char* askServer = nullptr;
+    int textSteps = nexus::style::kDefaultTextSteps;
     for (int i = 6; i < argc; ++i) {
         if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
@@ -114,6 +135,10 @@ int main(int argc, char** argv) {
             status = argv[++i];
         } else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) {
             tab = std::size_t(std::strtoul(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--text-steps") == 0 && i + 1 < argc) {
+            textSteps = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--ask-server") == 0 && i + 1 < argc) {
+            askServer = argv[++i];
         } else if (std::strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             golden = argv[++i];
         } else {
@@ -145,6 +170,14 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (status != nullptr) view.status = status;
+    view.askedTextSteps = textSteps;
+    FirstLaunch asked;
+    if (askServer != nullptr) {
+        asked.field = askServer;
+        std::string address;
+        if (!asked.field.empty()) nexus::parseServerAddress(asked.field, true, &address, &asked.why);
+        view.serverChoice = &asked;
+    }
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     prFontSetSetSystem(fonts, system);

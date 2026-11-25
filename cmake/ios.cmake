@@ -94,7 +94,7 @@ endif()
 function(nexus_ios_targets)
     # The window's logic that starts no process: its home and config (client_home.h) and the preferences it keeps
     # (tab_order.h). The same sources as the desktop's nexus_window_logic, less command.cpp, remote.cpp and sprint.cpp.
-    add_library(nexus_ios_logic STATIC src/tab_order.cpp src/client_home.cpp)
+    add_library(nexus_ios_logic STATIC src/tab_order.cpp src/client_home.cpp src/server_choice.cpp)
     target_include_directories(nexus_ios_logic PUBLIC src)
     target_compile_options(nexus_ios_logic PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_ios_logic PUBLIC nexus_config nexus_model nexus_accounts prax::json prax::core_cpp)

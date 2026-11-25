@@ -2365,6 +2365,55 @@ struct Builder {
         view.displayedLimit = view.windowApp.limitOffer;
         if (!view.accountPicker) view.lastHighlightedAccount.clear();
         secretDialog(window);
+        serverDialog(window);
+    }
+
+    // The server dialog (server_choice.h), on iOS where nothing names the server: Prax's dialog, titled Server, saying
+    // what to type, one field with the kept server or what is typed, and the reason the last Enter was not taken.
+    // Enter checks it: a good address is kept and used; a bad one stays, with its reason under the field. Closing it
+    // keeps the server there was; with none kept it opens again, as the window has nothing to connect to.
+    void serverDialog(PrLayoutNode window) {
+        ServerChoice* choice = view.serverChoice;
+        if (choice == nullptr || !choice->asking() || asking != nullptr) {
+            if (view.serverShown) {
+                prKitSetOpen(kit, window, false);
+                view.serverShown = false;
+            }
+            return;
+        }
+        const bool fresh = !view.serverShown;
+        if (fresh) {
+            prKitSetOpen(kit, window, true);
+            view.serverShown = true;
+        }
+        PrKitDialog dialog{};
+        dialog.key = prHashString(sv("server"), 0);
+        dialog.title = sv("Server");
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, PrKitDialogStyle{});
+        if (body == kPrLayoutNodeNone) {
+            if (!fresh) choice->cancel();
+            view.serverShown = false;
+            return;
+        }
+        auto about = textStyle(PrKitTextRole_Body, PrKitTone_Primary);
+        about.wrap = PrKitWrap_Wrap;
+        label(body, "The nexus-server this device connects to, as user@host.", about);
+        const bool enter = prUiKeyCaptured(ui, body, PrAppKey_Enter, 0);
+        PrKitTextField field{};
+        field.key = prHashString(sv("server-field"), 0);
+        const std::string_view typed = choice->typed();
+        field.text = sv(typed);
+        field.inputKind = PrAppTextInputKind_Email;   // a keyboard with @, and no capitals put in
+        const PrLayoutNode edit = prKitTextField(kit, body, field, PrKitFieldStyle{});
+        if (prUiFocus(ui) != edit) prUiSetFocus(ui, edit);
+        PrStringView changed{};
+        if (prKitTextChanged(kit, edit, &changed)) choice->type(std::string_view(changed.data, changed.size));
+        if (!choice->problem().empty()) {
+            auto problem = textStyle(PrKitTextRole_BodySmall, kNoticeTone);
+            problem.wrap = PrKitWrap_Wrap;
+            label(body, std::string(choice->problem()), problem);
+        }
+        if (enter) choice->submit();
     }
 
     std::string policyUiState(const Tab* active) {
@@ -2653,6 +2702,14 @@ struct Builder {
                 case Panel::Status:
                     caption(element(window, Part::Footer), view.status,
                         textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
+                    // Where the window asks for its server (iOS), the way to change it, under the line that says how
+                    // the link to it goes.
+                    if (view.serverChoice != nullptr && !view.serverChoice->current().empty()) {
+                        const auto button = prKitButton(kit, element(window, Part::Footer),
+                            {.key = prHashString(sv("change-server"), 0), .text = sv("Change server")}, {});
+                        if (asking == nullptr && !view.serverChoice->asking() && prKitActivated(kit, button))
+                            view.serverChoice->change();
+                    }
                     break;
             }
         }

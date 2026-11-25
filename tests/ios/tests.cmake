@@ -15,6 +15,13 @@
 # window_ios_status_no_tabs: the window before the server has sent a tab, with the link's line saying why it failed
 # (policy/rules/client/window.star shows the status panel when there is no tab), at an iPad's size, against its golden;
 # its reversed witness, window_ios_status_no_tabs_planted, is the same window with no line, which must not match.
+#
+# Every shot is at the text scale an iOS window starts at (src/style.h kDefaultTextSteps, smaller than the desktop's);
+# window_ios_text_scale_planted, the reversed witness, is the iPad's shot at the desktop's scale, which must not match.
+#
+# window_ios_server_dialog: the window at first launch, with no server kept (src/server_choice.h), asking for one,
+# with a host typed and no user, and the reason under the field; its reversed witness,
+# window_ios_server_dialog_planted, is the same window with no dialog, which must not match.
 
 set(state ${PROJECT_SOURCE_DIR}/tests/window/fixtures/busy.state)
 set(golden ${PROJECT_SOURCE_DIR}/tests/ios/golden)
@@ -43,6 +50,17 @@ add_test(NAME window_ios_status_no_tabs_planted
     COMMAND nexus_ios_shot - ${work}/status-planted.png 1032 1376 2 --compare ${golden}/status.png)
 set_tests_properties(window_ios_status_no_tabs_planted PROPERTIES LABELS "functional;ios" TIMEOUT 60 WILL_FAIL TRUE)
 
+add_test(NAME window_ios_text_scale_planted
+    COMMAND nexus_ios_shot ${state} ${work}/scale-planted.png 1032 1376 2 --text-steps 0 --compare ${golden}/ipad.png)
+set_tests_properties(window_ios_text_scale_planted PROPERTIES LABELS "functional;ios" TIMEOUT 60 WILL_FAIL TRUE)
+
+add_test(NAME window_ios_server_dialog
+    COMMAND nexus_ios_shot - ${work}/server.png 1032 1376 2 --ask-server mac --compare ${golden}/server.png)
+set_tests_properties(window_ios_server_dialog PROPERTIES LABELS "functional;ios" TIMEOUT 60)
+add_test(NAME window_ios_server_dialog_planted
+    COMMAND nexus_ios_shot - ${work}/server-planted.png 1032 1376 2 --compare ${golden}/server.png)
+set_tests_properties(window_ios_server_dialog_planted PROPERTIES LABELS "functional;ios" TIMEOUT 60 WILL_FAIL TRUE)
+
 # Writes the golden images again (see above): each shot without --compare, straight into tests/ios/golden.
 if(NEXUS_IOS_SIMULATOR)
     add_custom_target(nexus_ios_goldens
@@ -50,8 +68,10 @@ if(NEXUS_IOS_SIMULATOR)
         COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> ${state} ${golden}/ipad.png 1032 1376 2
         COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> - ${golden}/status.png 1032 1376 2
             --status ${status_line}
+        COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:nexus_ios_shot> - ${golden}/server.png 1032 1376 2
+            --ask-server mac
         DEPENDS nexus_ios_shot
-        COMMENT "Writing tests/ios/golden/iphone.png, ipad.png and status.png on the simulator; look at each before committing"
+        COMMENT "Writing tests/ios/golden/iphone.png, ipad.png, status.png and server.png on the simulator; look at each before committing"
         VERBATIM)
 endif()
 

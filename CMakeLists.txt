@@ -301,7 +301,7 @@ if(NEXUS_WINDOW_LOGIC)
     # them), a terminal tab's label in ssh (remote.h), the saved tab order, the window's home and config (client_home.h),
     # and the sprint tab's (where the board is served, which events go to it, the script nexus adds to it).
     add_library(nexus_window_logic STATIC src/command.cpp src/remote.cpp src/sprint.cpp src/tab_order.cpp
-        src/client_home.cpp)
+        src/client_home.cpp src/server_choice.cpp)
     target_include_directories(nexus_window_logic PUBLIC src)
     target_compile_options(nexus_window_logic PRIVATE ${NEXUS_WARNINGS})
     target_link_libraries(nexus_window_logic PUBLIC nexus_config nexus_model nexus_accounts nexus_scroll prax::app prax::json prax::process prax::core_cpp)

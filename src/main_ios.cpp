@@ -5,8 +5,9 @@
 // sprint tab, no attachment upload.
 //
 // It reaches nexus-server as the desktop window does, over mosh's transport after `nexus-server new` over ssh
-// (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is the client config's `server user@host`
-// (client_home.h), or `--server user@host`.
+// (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is `--server user@host`, the client
+// config's `server user@host` (client_home.h), or the one the person gives the window, which asks at first launch
+// and keeps it (server_choice.h), with a way to change it under the link's line.
 //
 // Launched with `--state FILE`, the window shows a server's state file as the desktop's `--screenshot --state` draws
 // it (state_window.h), live; `--lost` with it shows it as once the server is lost.
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -42,6 +44,7 @@
 #include "link/inapp_ssh.h"
 #include "model.h"
 #include "platform.h"
+#include "server_choice.h"
 #include "state_window.h"
 #include "style.h"
 #include "tab_order.h"
@@ -68,6 +71,61 @@ struct App {
     std::unique_ptr<link::ClientPort> link;
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
+};
+
+// The server the window asks for when nothing names one (server_choice.h), kept in its home's server.txt. The
+// first one kept starts the link; a change made while linked is kept for the next launch, as the window's link is to
+// one server for the life of the process (frame_host.h connect), and the dialog says so.
+struct AskedServer : ServerChoice {
+    TabOrderStore store;
+    std::string kept;               // the server kept, or empty for none
+    std::string field;              // the dialog's field
+    std::string why;                // the last Enter's answer, when it was not simply taken
+    bool open = false;
+    bool linked = false;            // a link was started this launch
+    std::function<void(const std::string&)> start;  // the first server kept: start the link to it
+
+    bool asking() override { return open; }
+    std::string_view current() override { return kept; }
+    std::string_view typed() override { return field; }
+    std::string_view problem() override { return why; }
+    void type(std::string_view text) override {
+        field = std::string(text);
+        why.clear();
+    }
+    void submit() override {
+        std::string address;
+        std::string reason;
+        if (!parseServerAddress(field, true, &address, &reason)) {
+            why = reason;
+            return;
+        }
+        if (address != kept && !store.write(formatServerFile(address), &reason)) {
+            why = reason;
+            return;
+        }
+        const bool changed = address != kept;
+        kept = address;
+        field = address;
+        if (linked && changed) {
+            why = "Kept. nexus connects to " + address + " the next time it opens.";
+            return;
+        }
+        why.clear();
+        open = false;
+        if (!linked && start) {
+            linked = true;
+            start(address);
+        }
+    }
+    void change() override {
+        field = kept;
+        why.clear();
+        open = true;
+    }
+    void cancel() override {
+        if (!kept.empty()) open = false;
+    }
 };
 
 App& appOf(void* context) {
@@ -201,7 +259,8 @@ void keepHome(App& a, const std::string& home) {
     a.host.selectionStore = &selection;
     a.view.selected = [&a] { a.host.personSelected(); };
     warning.clear();
-    a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &warning);
+    a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &warning,
+        style::kDefaultTextSteps);
     if (!warning.empty()) std::fprintf(stderr, "nexus: %s\n", warning.c_str());
     a.view.scaled = [&a] {
         std::string why;
@@ -247,28 +306,45 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    // The link, unless the window shows a state file: to --server, or the client config's server.
-    std::string serverHost;
+    // The link, unless the window shows a state file: to --server, the client config's server, or the server the
+    // person gave the window (server_choice.h), which it asks for when none is kept.
+    static AskedServer asked;
     if (state == nullptr) {
-        serverHost = server != nullptr ? server : clientConfig().serverHost;
         std::string home;
         std::string why;
         if (!clientHome(&home, &why) || !makeClientHome(home, &why))
             std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        link::InAppSshOptions ssh;
-        ssh.dir = home;
-        if (const char* h = std::getenv("HOME"))
-            ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
-        link::ClientLink::Options options;
-        options.bootstrap.host = serverHost;
-        options.run = link::inAppSsh(ssh);
-        options.wake = [&a] {
-            if (PrApp* app = a.wakeApp.load())
-                prAppWake(app);
+        auto startLink = [&a, home](const std::string& serverHost) {
+            link::InAppSshOptions ssh;
+            ssh.dir = home;
+            if (const char* h = std::getenv("HOME"))
+                ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
+            link::ClientLink::Options options;
+            options.bootstrap.host = serverHost;
+            options.run = link::inAppSsh(ssh);
+            options.wake = [&a] {
+                if (PrApp* app = a.wakeApp.load())
+                    prAppWake(app);
+            };
+            a.link = std::make_unique<link::ClientPort>(std::move(options));
+            a.host.connect(a.link.get(), serverHost);
         };
-        a.link = std::make_unique<link::ClientPort>(std::move(options));
-        a.host.connect(a.link.get(), serverHost);
         keepHome(a, home);
+        if (server != nullptr || clientConfig().serverSet) {
+            startLink(server != nullptr ? std::string(server) : clientConfig().serverHost);
+        } else {
+            asked.store = fileServerStore(home);
+            asked.kept = loadServerAddress(asked.store, true, &why);
+            if (!why.empty()) std::fprintf(stderr, "nexus: %s\n", why.c_str());
+            asked.start = startLink;
+            a.view.serverChoice = &asked;
+            if (asked.kept.empty()) {
+                asked.open = true;
+            } else {
+                asked.linked = true;
+                startLink(asked.kept);
+            }
+        }
     }
 
     a.fonts = prFontSetCreate(nullptr);

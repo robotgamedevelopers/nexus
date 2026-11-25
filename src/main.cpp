@@ -1095,7 +1095,8 @@ int main(int argc, char** argv) {
     // screenshot draws at the default scale and saves nothing.
     if (live) {
         std::string scaleWarning;
-        a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning);
+        a.view.askedTextSteps = loadTextScale(scale, -style::kTextStepsDown, style::kTextStepsUp, &scaleWarning,
+            style::kDefaultTextSteps);
         if (!scaleWarning.empty())
             std::fprintf(stderr, "nexus: %s\n", scaleWarning.c_str());
         a.view.scaled = [&a] {
