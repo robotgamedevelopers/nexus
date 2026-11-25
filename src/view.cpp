@@ -2359,8 +2359,8 @@ struct Builder {
         auto& flexGroup = record.groups[PrLayoutGroup_Flex];
         auto flex = prLayoutFlexStyleRecord(tree, flexGroup);
         flex.direction = PrLayoutFlexDirection_Row;
-        flex.alignItems = PrLayoutAlign_Center;
-        flex.justifyContent = PrLayoutJustify_SpaceBetween;
+        flex.alignItems = PrLayoutAlignment_Center;
+        flex.justifyContent = PrLayoutAlignment_SpaceBetween;
         flexGroup = prLayoutFlexStyleIntern(tree, &flex);
         auto& decorationGroup = record.groups[PrLayoutGroup_Decoration];
         auto decoration = prLayoutDecorationStyleRecord(tree, decorationGroup);
