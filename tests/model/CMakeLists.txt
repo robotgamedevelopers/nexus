@@ -1,6 +1,6 @@
 # Tests of the window model (src/model.h), with three labels:
 #   unit           model_test: the model's behaviour and edges, logic only
-#   model          TLC: Window.tla on four instances, every reversed witness rejected, code traces checked against the
+#   model          TLC: Window.tla on nine instances, every reversed witness rejected, code traces checked against the
 #                  spec over several seeds, and a faulty model's trace rejected. Needs TLA2TOOLS_JAR and java.
 #   model_nightly  TLC: Window.tla on the three largest instances (the nightly workflow)
 
@@ -257,7 +257,7 @@ tlc_test(tlc_spec_no_board  MCWindow MCWindowNoBoard.cfg pass WORKERS 8)
 tlc_test(tlc_spec_three_behind_board MCWindow MCWindow3Board.cfg pass WORKERS 8)
 # Nightly: the three largest instances. With the selection history, every order of it a state of its own: one dashboard,
 # two AIs, two terminals and entries of one, 320,760 states (37 s on eight workers in a login session; its form
-# without entries, MCWindowSprint.cfg, 8,910, runs above); three AIs in all orders, 384,912 (27 s); entries and
+# without entries, MCWindowBoard.cfg, 8,910, runs above); three AIs in all orders, 384,912 (27 s); entries and
 # queues of two, 214,326 (12 s).
 # The per-commit job checks every property on the instances above, every witness and every trace. On the studio's CI
 # runners TLC runs about four times slower than in a login session (MCWindow3.cfg on eight workers, before the history:

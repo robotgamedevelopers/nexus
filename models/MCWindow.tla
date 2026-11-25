@@ -40,7 +40,7 @@ MCDrafts3 == {"", " ", "hi"}
 MCBlank3 == {"", " "}
 MCAppendEntries3 == {[kind |-> "AI", text |-> "ok"]}
 
-\* The empty draft and one with text: for the instance with the sprint tab, three AIs and a terminal, where every
+\* The empty draft and one with text: for the instance with a dashboard, three AIs and a terminal, where every
 \* order of the selection history multiplies the states (the other instances keep an all-whitespace draft).
 MCDrafts2 == {"", "hi"}
 MCBlank2 == {""}
