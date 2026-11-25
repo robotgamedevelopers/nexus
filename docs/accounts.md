@@ -200,9 +200,13 @@ its own file under `accounts/<name>/`, and a driver reads only its account's, so
 the new one's driver reads. The old account's login is kept for switching back. These rules are
 `models/LoginSwitch.tla`, and `link_e2e_account_switch` runs them through the real server and link.
 
-Nexus can only check who signed in when the account has an `email`. Without one, the login is whatever identity the
-browser's Claude page approves, which may be the one it is already signed in to. Set each Claude account's `email`
-so that a login of the wrong identity is refused.
+A Claude account with no `email` learns it from its first sign-in: the identity Claude reports for the login just
+completed is recorded as the account's `email` in `accounts.json` (a commit in the config repository), shown in the
+account menu, and told in the transcript ("Signed in to work as you@example.org."). From then on the account takes only
+that identity. A sign-in whose identity is already another Claude account's email is refused, and its login removed:
+a browser still signed in to one account (a personal session, say) cannot quietly become another account's login. The
+conversation is told why, and stays where it was. Without nexus-claude-auth beside the server, an account with no email
+signs in by the older `claude setup-token`, which proves no identity.
 
 To clear an existing Nexus login, open the AI tab, type `/logout`
 in the AI's prompt, and press **Enter**. Finish or stop active work using that login and finish
