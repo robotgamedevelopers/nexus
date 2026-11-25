@@ -1244,11 +1244,16 @@ struct Builder {
                 extent = PrVec2{last.right - last.left, last.bottom - last.top};
         }
         view.boardBox = box;
-        std::string problem = "this build has no sprint board";
+        std::string problem = "this build has no dashboard";
         if (view.board == nullptr || !view.board->show(box, extent, &problem)) {
             PrLayoutNode column = element(box, Part::Column);
             PrLayoutNode centered = element(column, Part::Centered);
             caption(centered, problem, textStyle(PrKitTextRole_Body, kNoticeTone, PrKitTextAlign_Center));
+            // A dashboard waits on the server, so the link's own line shows under it while there is one: connecting,
+            // lost, or why it failed (a host key that changed, a key the server did not take), never hidden behind
+            // the wait.
+            if (!view.status.empty())
+                caption(centered, view.status, textStyle(PrKitTextRole_BodySmall, kStatusTone, PrKitTextAlign_Center));
         }
     }
 

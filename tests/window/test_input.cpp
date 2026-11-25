@@ -2851,6 +2851,23 @@ void dashboardKeepsRosterDiagnosticsOffscreen() {
     CHECK(!h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
 }
 
+// The dashboard waits on the server: while it has no page, the link's line shows under the board's, so a link that
+// failed (here, a server whose host key changed) says why on the tab that shows, rather than waiting in silence.
+void aFailedLinkShowsOnTheDashboard() {
+    Harness h(std::vector<FriendInfo>{}, false, true);
+    h.board.page = false;
+    h.board.problem = "waiting for nexus-server to say which dashboards it offers";
+    h.view.status = "glenn@studio: ssh to glenn@studio: the server's ecdsa-sha2-nistp256 host key is not the one kept";
+    h.frame();
+    h.frame();
+    const PrLayoutNode root = prLayoutTreeRoot(h.tree);
+    CHECK(h.board.shows > 0 && h.hasText(root, h.board.problem) && h.hasText(root, h.view.status));
+    const std::string failed = h.view.status;
+    h.view.status.clear();
+    h.frame();
+    CHECK(h.hasText(root, h.board.problem) && !h.hasText(root, failed));
+}
+
 // An iPad's regular width (View::columnScale, style.h kRegularWidthColumn): the prompt box and the transcript's column
 // stand 10% narrower than the policy's width, centred where they stood, and their left and right edges still line up.
 void regularWidthNarrowsThePromptAndTheColumn() {
@@ -3394,6 +3411,7 @@ int main(int argc, char** argv) {
     dashboardKeepsRosterDiagnosticsOffscreen();
     regularWidthNarrowsThePromptAndTheColumn();
     compactWidthRepliesTakeTheWholeColumn();
+    aFailedLinkShowsOnTheDashboard();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();
