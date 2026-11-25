@@ -519,6 +519,13 @@ private:
     std::set<std::string> signedIn_;
     std::function<bool(const accounts::Account&)> probe_;
     std::function<std::string(const accounts::Account&)> signOut_;
+    // A login switch (/login to another linked account): each account being signed in, and the sessions that move
+    // to it once it is. A session stays on its account until then; a sign-in that fails, is declined or expires moves
+    // none (switchOnSignIn).
+    std::map<std::string, std::set<SessionId>> switchOnSignIn_;
+    bool switchTo(SessionId id, const std::string& account);
+    void switchSignedIn(const std::string& account);
+    void dropSwitches(const std::string& account, const std::string& why);
     bool signOutAction(const Action& action, std::string* why, const std::string& client);
     SecretDesk desk_;
     SecretKeeper* secretKeeper_ = nullptr;

@@ -13,6 +13,7 @@ import secrets
 import shutil
 import signal
 import socket
+import socketserver
 import stat
 import struct
 import subprocess
@@ -499,6 +500,16 @@ class Portal(HTTPServer):
         self.session = None
         self.csrf = secrets.token_hex(32)
         self.csp_nonce = secrets.token_hex(16)
+
+    def server_bind(self):
+        # HTTPServer.server_bind names the server by socket.getfqdn(host), a reverse DNS lookup of 127.0.0.1 that
+        # takes the resolver's whole timeout on a machine whose DNS does not answer it (35 s on the macbook,
+        # 2026-11-25), and the page's URL reaches the runner only after it. The portal is loopback alone and its
+        # name is never used: bind without the lookup.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
     def get_request(self):
         sock, addr = super().get_request()

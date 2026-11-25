@@ -1158,6 +1158,7 @@ void Hub::reportSignedIn(const std::string& account, bool signedIn) {
     }
     if (signedIn) {
         if (signedIn_.insert(account).second && accounts_) stateFriends();
+        switchSignedIn(account);
         // Signed in otherwise (a paste, its driver): a flow for it ends, its process ended.
         if (signIns_.live(account)) {
             signInEffects(signIns_.signedIn(account));
@@ -1515,7 +1516,17 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 // A card or Enter names the exact session/account the person chose. Recheck it
                 // after any pending account changes and before allocating or claiming a flow.
                 const auto* session = store_.find(action.session);
-                if (!isClaimToken(action.text) || !session || action.account.empty() ||
+                // A login switch: a session on one account signs in to another linked one. It stays where it is
+                // until that sign-in succeeds, then moves (switchSignedIn); one signed in already moves now.
+                if (isClaimToken(action.text) && session && !action.account.empty() &&
+                        session->info.account != action.account && !isPrimary(action.session) && accounts_ &&
+                        accounts_->linked(session->info.friendName, action.account) && signsIn(action.account)) {
+                    if (signedIn_.contains(action.account)) {
+                        switchTo(action.session, action.account);
+                        break;
+                    }
+                    switchOnSignIn_[action.account].insert(action.session);
+                } else if (!isClaimToken(action.text) || !session || action.account.empty() ||
                     session->info.account != action.account || !signsIn(action.account) ||
                     (!isPrimary(action.session) && !accounts_->linked(session->info.friendName, action.account)) ||
                     signedIn_.contains(action.account)) {
@@ -1525,6 +1536,10 @@ bool Hub::signInAction(const Action& action, std::string* why, const std::string
                 if (!id) needSignIn(action.account);
                 const auto flow = signIns_.flowOf(action.account);
                 if (!flow || (id && flow->first != id)) {
+                    if (const auto p = switchOnSignIn_.find(action.account); p != switchOnSignIn_.end()) {
+                        p->second.erase(action.session);
+                        if (p->second.empty()) switchOnSignIn_.erase(p);
+                    }
                     if (why) *why = "The sign-in offer changed or could not be created. Retry the current account.";
                     return false;
                 }
@@ -1588,8 +1603,60 @@ void Hub::signInEffects(const SignInEffects& effects) {
     // A flow that ended unsigned leaves its account needing a fresh one, which a window claims at the person's next
     // show of the overlay: nothing starts without the person there.
     for (const std::string& account : effects.needAgain) {
+        dropSwitches(account, "The sign-in to " + account + " did not finish");
         if (signedIn_.count(account) == 0 && signsIn(account)) {
             needSignIn(account);
+        }
+    }
+}
+
+// The session moves to `account` as a person's account choice moves it (set): its driver ends once no turn is open,
+// and the next starts on `account`'s login alone. Only while the account is still one of its AI's and signed in.
+bool Hub::switchTo(SessionId id, const std::string& account) {
+    const StoredSession* s = store_.find(id);
+    if (s == nullptr || isPrimary(id) || !accounts_ || !accounts_->linked(s->info.friendName, account) ||
+            !signedIn_.contains(account)) {
+        return false;
+    }
+    Action a;
+    a.kind = ActionKind::SetAccount;
+    a.session = id;
+    a.text = account;
+    return set(a, nullptr, std::string());
+}
+
+// `account` is signed in: each session waiting on that sign-in to switch moves to it now.
+void Hub::switchSignedIn(const std::string& account) {
+    const auto it = switchOnSignIn_.find(account);
+    if (it == switchOnSignIn_.end()) {
+        return;
+    }
+    const std::set<SessionId> waiting = std::move(it->second);
+    switchOnSignIn_.erase(it);
+    for (SessionId id : waiting) {
+        switchTo(id, account);
+    }
+}
+
+// `account`'s sign-in ended without a login: every session waiting to switch to it stays on its own account, and is
+// told so.
+void Hub::dropSwitches(const std::string& account, const std::string& why) {
+    const auto it = switchOnSignIn_.find(account);
+    if (it == switchOnSignIn_.end()) {
+        return;
+    }
+    const std::set<SessionId> waiting = std::move(it->second);
+    switchOnSignIn_.erase(it);
+    for (SessionId id : waiting) {
+        const StoredSession* s = store_.find(id);
+        if (s == nullptr) {
+            continue;
+        }
+        const std::string text = why + "; this conversation stays on " +
+            (s->info.account.empty() ? std::string("no account") : s->info.account) + ".";
+        std::string failed;
+        if (store_.commit(id, {SessionChange{entry(EntryKind::Notice, text), {}}}, std::string(), 0, &failed)) {
+            refresh(id);
         }
     }
 }
