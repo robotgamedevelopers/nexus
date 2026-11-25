@@ -72,9 +72,10 @@ run time, everything that runs one (`src/build_parts.h`, `NEXUS_PROCESSES`; `cma
 
 - **nexus-server**, its store and drivers. The server runs on a Mac or Linux machine; the app reaches it.
 - **Terminal tabs.** A terminal tab is a local login shell. There is no Command-T.
-- **Looking up the sprint board.** A desktop window can find the board's address itself by running nova-config. The
-  app takes the address nexus-server sends in its state (`SessionsDiff.sprint_url`, `docs/formats.md`) and shows the
-  board in its sprint tab, the Dashboard, through the same page code as the desktop (`src/board.cpp`).
+- **Looking up a dashboard.** A desktop window can still find the sprint's board itself by running nova-config. The
+  app takes the dashboards nexus-server sends in its state (`SessionsDiff.dashboards`, `docs/formats.md`), from the
+  server's config, and shows the first in its Dashboard tab through the same page code as the desktop
+  (`src/board.cpp`). A tab for each dashboard, on every client, is the next step.
 - **Attachments.** A file goes to the server through ssh running `nexus-receive`, a child process. The in-app ssh
   runs only the link's commands, so attaching a file, or pasting text long enough to become one, says that it is not
   available on iOS yet; nothing is lost.

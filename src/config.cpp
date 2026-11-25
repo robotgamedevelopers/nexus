@@ -21,20 +21,24 @@ std::string_view trim(std::string_view s) {
     return s;
 }
 
-std::string known(const std::vector<std::string>& keys) {
-    if (keys.empty()) {
+std::string known(const std::vector<std::string>& keys, const std::vector<std::string>& listKeys) {
+    if (keys.empty() && listKeys.empty()) {
         return "it takes no settings yet";
     }
     std::string out = "the keys are";
     for (const std::string& k : keys) {
         out += " `" + k + "`";
     }
+    for (const std::string& k : listKeys) {
+        out += " `" + k + "` (on as many lines as you like)";
+    }
     return out;
 }
 
 } // namespace
 
-Config parseConfig(std::string_view text, const std::string& path, const std::vector<std::string>& keys) {
+Config parseConfig(std::string_view text, const std::string& path, const std::vector<std::string>& keys,
+        const std::vector<std::string>& listKeys) {
     Config config;
     std::set<std::string> seen;
     std::size_t number = 0;
@@ -63,6 +67,10 @@ Config parseConfig(std::string_view text, const std::string& path, const std::ve
                 " <value>`");
             continue;
         }
+        if (std::find(listKeys.begin(), listKeys.end(), key) != listKeys.end()) {
+            config.lists[key].emplace_back(number, value);
+            continue;
+        }
         if (!seen.insert(key).second) {
             config.errors.push_back(where + "`" + key + "` is set again, so the line is not used; keep one `" + key +
                 "` line");
@@ -70,7 +78,7 @@ Config parseConfig(std::string_view text, const std::string& path, const std::ve
         }
         if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
             config.warnings.push_back(where + "\"" + key + "\" is not a setting, so the line is skipped; " +
-                known(keys) + "; remove the line or fix the key");
+                known(keys, listKeys) + "; remove the line or fix the key");
             continue;
         }
         config.values[key] = value;

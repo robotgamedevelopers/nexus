@@ -27,7 +27,7 @@ bool serverHome(const char* home, std::string* resolved, std::string* top, std::
 
 bool readServerConfig(const std::string& text, const std::string& path, ServerSettings* out,
         std::vector<std::string>* warnings, std::string* why) {
-    const Config c = parseConfig(text, path, kServerConfigKeys);
+    const Config c = parseConfig(text, path, kServerConfigKeys, kServerConfigListKeys);
     *warnings = c.warnings;
     why->clear();
     std::vector<std::string> errors = c.errors;
@@ -56,6 +56,28 @@ bool readServerConfig(const std::string& text, const std::string& path, ServerSe
             out->busLauncher = name;
         } else {
             errors.push_back(path + ": bus-launcher requires a normalized absolute executable path");
+        }
+    }
+    if (const auto lines = c.lists.find("dashboard"); lines != c.lists.end()) {
+        for (const auto& [number, value] : lines->second) {
+            const std::string where = path + " line " + std::to_string(number) + ": ";
+            sync::Dashboard d;
+            std::string problem;
+            if (!sync::parseDashboardLine(value, &d, &problem)) {
+                errors.push_back(where + problem);
+                continue;
+            }
+            const bool twice = std::any_of(out->dashboards.begin(), out->dashboards.end(),
+                [&](const sync::Dashboard& x) { return x.name == d.name; });
+            if (twice) {
+                errors.push_back(where + "the dashboard name \"" + d.name + "\" is given twice; give each tab its own");
+                continue;
+            }
+            if (out->dashboards.size() == sync::kDashboardsMax) {
+                errors.push_back(where + "more than " + std::to_string(sync::kDashboardsMax) + " dashboards");
+                continue;
+            }
+            out->dashboards.push_back(std::move(d));
         }
     }
     for (const std::string& e : errors) {

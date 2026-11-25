@@ -293,7 +293,8 @@ like any others (an account no longer linked moves, and so on), and their queued
 
 The server's machine is the name the `machine` fields are compared with. It is the server's short host name (the
 `hostname` up to its first `.`), unless the server's config, `~/.nexus/server/config` (one `key value` per line,
-`#` for a comment), says `machine <name>`, the name the fleet knows it by. An instance is on this server's machine when
+`#` for a comment; `dashboard <url> <name>` lines, one per dashboard tab, are the one setting given more than once,
+`docs/formats.md`), says `machine <name>`, the name the fleet knows it by. An instance is on this server's machine when
 its `machine` equals, ignoring case, either that name or the full host name: on a Mac whose `hostname` is
 `studio.local`, both `studio` and `studio.local` are this machine. When the host name cannot be read and the config
 names none, the server has no machine: no instance is on it, and it says so in its log.

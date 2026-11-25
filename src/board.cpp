@@ -472,7 +472,7 @@ void PraxBoard::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     pageUrl_ = desc_.url;
     if (pageUrl_.empty() && desc_.fromServer) {
-        lookupError_ = "waiting for nexus-server to say where the sprint board is";
+        lookupError_ = "waiting for nexus-server to say which dashboards it offers";
         if (app_) prAppWake(app_);
         // Frames are acknowledged while it waits, as while a lookup fails (below).
         while (!ending_ && !offered_) {
@@ -488,8 +488,8 @@ void PraxBoard::run() {
 #if NEXUS_PROCESSES
         auto found = desc_.find ? desc_.find() : findSprintBoard();
 #else
-        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server sends no sprint board address: "
-            "it runs no sprint-run service, or is older than this window; the dashboard shows once it does"};
+        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server offers no dashboard: "
+            "its config has no dashboard line, or it is older than this window"};
 #endif
         lock.lock();
         if (pageUrl_.empty() && offered_ && !offeredUrl_.empty()) {

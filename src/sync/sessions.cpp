@@ -307,7 +307,7 @@ std::string Sessions::diff_from(const Sessions& existing) const {
         change.offers = *offers_;
         change.nextAction = nextAction_;
     }
-    change.sprintUrl = sprintUrl_;  // whole in every diff; the tables carry it (format 4 on), the legacy codecs do not
+    change.dashboards = dashboards_;    // whole in every diff; the tables carry them (format 4 on), the legacy codecs do not
     return tables ? codec::writeTables(change, format_) : codec::writeLegacy(change, format_);
 }
 
@@ -370,12 +370,12 @@ void Sessions::apply_string(const std::string& diff) {
     }
     setOffers(std::move(change.offers));
     nextAction_ = change.nextAction;
-    sprintUrl_ = std::move(change.sprintUrl);
+    dashboards_ = std::move(change.dashboards);
     unknown_ = unknown;
 }
 
 bool Sessions::operator==(const Sessions& x) const {
-    if (nextAction_ != x.nextAction_ || sprintUrl_ != x.sprintUrl_) return false;
+    if (nextAction_ != x.nextAction_ || dashboards_ != x.dashboards_) return false;
     if (requests_ != x.requests_ && *requests_ != *x.requests_) {
         return false;
     }

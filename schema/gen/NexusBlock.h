@@ -76,6 +76,10 @@ namespace nexuswire {
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.
 
+// table Dashboard has NO block form: it is VARIABLE-LENGTH: Dashboard.name is a pointer, and a pointer in the by-value closure means no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
+// Its wire (§3) and its cook (§7) are unaffected — only this projection
+// is absent, and it is absent by construction rather than by refusal.
+
 // table SessionsDiff has NO block form: it is VARIABLE-LENGTH: SessionsDiff.sessions is an unbounded array, and its elements are an extent inside the holder's own node, so there is no fixed pitch anywhere in it (docs/SPEC-TABLES.md §19).
 // Its wire (§3) and its cook (§7) are unaffected — only this projection
 // is absent, and it is absent by construction rather than by refusal.

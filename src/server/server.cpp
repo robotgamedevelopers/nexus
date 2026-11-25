@@ -40,7 +40,6 @@
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
 #include "server/service_manifest.h"
-#include "sync/sprint_board.h"
 #include "server/service_process.h"
 #include "server/signin_runner.h"
 #include "server/start_order.h"
@@ -503,6 +502,8 @@ bool Server::restoreAll(std::string* why) {
     hub_ = std::make_unique<sync::Hub>(store_, sync::Limits{}, drivers_.get(),
         [this] { return dirNow("policy.bundle.json"); });
     drivers_->attach(*hub_);
+    // The dashboards every window shows a tab for, from this server's config (home.h).
+    hub_->setDashboards(settings_.dashboards);
     bus_ = std::make_unique<BusInbox>(paths_.home, paths_.self, machine, host, dirFd_);
     bus_->listeners.setLauncher(settings_.busLauncher);
     // The secret dialog (docs/secrets.md): a value goes to its account's file, durable before the asker hears
@@ -650,12 +651,6 @@ bool Server::reloadServices() {
     }
     services_->configure(next, nowMs());
     serviceProblem_.clear();
-    // The sprint board the windows open in their sprint tab: the --listen of the sprint's run service this server
-    // runs (the record nova-config holds for it, as a window reads it), or none.
-    std::string board;
-    for (const ManagedService& service : next)
-        if (service.name == sync::kSprintRunService) board = sync::sprintBoardFromArgv(service.argv);
-    if (hub_) hub_->setSprintUrl(board);
     return true;
 }
 

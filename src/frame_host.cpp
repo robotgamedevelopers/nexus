@@ -245,8 +245,10 @@ void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
-    // The sprint board's address, as the server says it (empty: none it knows), for the sprint tab's page.
-    if (board != nullptr && s.phase == sync::LinkPhase::Connected) board->offer(s.sessions.sprintUrl());
+    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
+    // holds a tab for each dashboard.
+    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
+        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The friends first, so that a friend's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {

@@ -14,8 +14,8 @@
 // window shows, under a lock: the latest list, the load's state, when it next has work, and the links to open, which
 // the window's thread opens. Each new list wakes the app for a frame.
 //
-// The address comes from the server the window is linked to (offer: the server's state carries the board it serves,
-// sync/sprint_board.h), and otherwise from the window's own config or the sprint's record (sprint.h findSprintBoard),
+// The address comes from the server the window is linked to (offer: the first of the dashboards its state carries,
+// sync/dashboards.h), and otherwise from the window's own config or the sprint's record (sprint.h findSprintBoard),
 // looked up on a thread of its own so that the window never waits on it. A window with no processes (iOS) has only the
 // server's. Until there is a page to show, show() gives one line that says what is happening or what
 // failed and what to do.
@@ -129,7 +129,7 @@ public:
     // The page's rectangle in the window, px, at the last layout.
     PrRect pane() const { return pane_; }
 
-    // The board's address as the server's latest state gives it (sync::Sessions::sprintUrl), empty for none: the first
+    // The board's address as the server's latest state gives it (the first of sync::Sessions::dashboards), empty for none: the first
     // one decides whether the window looks its own up (Desc::fromServer), and a non-empty one is the page's address
     // when the page has none yet.
     void offer(const std::string& url);

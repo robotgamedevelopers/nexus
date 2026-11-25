@@ -1,7 +1,8 @@
 // nexus-server's home: everything the server keeps is in ~/.nexus/server (--dir gives another), beside the window's
 // ~/.nexus/client (client_home.h).
 //
-//   config            the server's settings (config.h): `machine <name>`, this machine's name in the fleet
+//   config            the server's settings (config.h): `machine <name>`, this machine's name in the fleet, and a
+//                     `dashboard <url> <name>` line for each dashboard the windows show (sync/dashboards.h)
 //   drivers           which program is each friend's driver (server/driver_table.h)
 //   store/            the sessions and the applied counters (src/store)
 //   server.sock       the control socket, mode 0600
@@ -24,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "sync/dashboards.h"
+
 namespace nexus::server {
 
 // The keys the server's config takes: machine, the name this machine has in the fleet, which a friend's instance
@@ -31,11 +34,16 @@ namespace nexus::server {
 // `claude` program in-app sign-in runs; and bus-launcher, the absolute path of a local authenticated bus wrapper.
 inline const std::vector<std::string> kServerConfigKeys{"machine", "claude", "bus-launcher"};
 
+// The list keys: dashboard, `dashboard <url> <name>` on as many lines as there are dashboards, in the order of the
+// windows' tabs (sync/dashboards.h). None is the default: the windows then show no dashboard tab.
+inline const std::vector<std::string> kServerConfigListKeys{"dashboard"};
+
 // The server's settings, as its config gives them (empty: not given).
 struct ServerSettings {
     std::string machine;
     std::string claude;
     std::string busLauncher;
+    std::vector<sync::Dashboard> dashboards;
 };
 
 // The machine this server runs on, by the name a friend's instance gives it: `configured` (the config's machine) when
