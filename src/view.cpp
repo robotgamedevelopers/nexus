@@ -2180,7 +2180,7 @@ struct Builder {
         }
         view.prompt = edit;
         // The focus is the secret dialog's while it shows (secretDialog).
-        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit)
+        if (!pickerInput && asking == nullptr && prUiFocus(ui) != edit && !view.promptDismissed)
             prUiSetFocus(ui, edit);
         PrStringView changed{};
         const bool coming = view.cutComing;

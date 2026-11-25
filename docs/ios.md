@@ -95,3 +95,8 @@ iOS is the container, whose top an app may not write. It holds what the desktop 
 An iOS app's window is the system's to show, so there is no overlay and no global hotkey: the app's window fills its
 scene, on iPhone and on iPad. Command is the key left of the space bar on an iPad's keyboard, as on a Mac, so the
 window's keys are the desktop's.
+
+The window is laid out inside the safe area, clear of the status bar and the home indicator, and while the on-screen
+keyboard shows, in the room above it, so the prompt sits at the safe area's foot or just above the keyboard. A tap
+outside the prompt's box ends editing and lowers the keyboard, as in other apps; a drag or a scroll, a tap in the
+prompt's box and a tap on a tab do not, and the draft stays. A tap in the prompt's box, or a key typed, edits again.

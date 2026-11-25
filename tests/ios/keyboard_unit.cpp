@@ -48,6 +48,21 @@ void noKeyboardOrNoneOverTheContentLeavesItWhole() {
     CHECK(roomAboveKeyboard(kIPad, kIPadSafe, {0, 10, 1376, 1032}) == 0);
 }
 
+void theContentBoxIsTheSafeAreaOrTheRoomAboveTheKeyboard() {
+    // No keyboard: the viewport less its safe area, never the whole frame, which runs under the home indicator.
+    PrVec2 box = contentBox(kIPad, kIPadSafe, 0);
+    CHECK(box.x == 1376 && box.y == 1032 - 24 - 20);
+    // An iPhone turned: the sensor housing and the home indicator's sides come off the width.
+    box = contentBox({874, 402}, {0, 62, 21, 62}, 0);
+    CHECK(box.x == 874 - 124 && box.y == 402 - 21);
+    // A keyboard over the foot: the room above it.
+    box = contentBox(kIPad, kIPadSafe, 640 - 24);
+    CHECK(box.x == 1376 && box.y == 640 - 24);
+    // Never past the safe area, and never below zero.
+    CHECK(contentBox(kIPad, kIPadSafe, 5000).y == 1032 - 44);
+    CHECK(contentBox({30, 30}, {24, 0, 20, 0}, 0).y == 0);
+}
+
 // The view as Prax's UIKit view is (uikit_view.mm): the first responder from the time it shows, with the empty input
 // view while it edits nothing; setEditing, at each frame's end, swaps the input view in place if it is the first
 // responder (reloadInputViews) and else becomes it. Each call is logged.
@@ -118,6 +133,7 @@ void theFirstFrameEditingTextPresentsTheKeyboard() {
 int main() {
     theContentEndsAtTheKeyboardsTop();
     noKeyboardOrNoneOverTheContentLeavesItWhole();
+    theContentBoxIsTheSafeAreaOrTheRoomAboveTheKeyboard();
     theKeyboardIsPresentedWholeEachTimeItRises();
     theFirstFrameEditingTextPresentsTheKeyboard();
     if (failures != 0) {
