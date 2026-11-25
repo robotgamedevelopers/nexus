@@ -8,7 +8,7 @@
 //     sessions   a later server's state diff applied by this build's window: the added kind shows as a notice, the
 //                added activity as busy, the added field is skipped, each counted (Sessions::unknown), and nothing is
 //                refused; this build's server's diffs (a first one and one that grows an open entry) read whole by a
-//                later window, nothing unknown
+//                later window, nothing unknown; the server's dashboards read whole both ways, in order
 //     actions    a later window's actions read by this build's server: the added kind reads as unknown (which the
 //                server refuses one by one, never the link), the added field is skipped, both counted, the rest as
 //                written, the secret's bytes included; this build's window's actions read whole by a later server
@@ -137,18 +137,23 @@ void test_sessions() {
         CHECK(window.offers()[0].url.bytes() == "https://claude.com/cai/oauth/authorize?state=test-state");
         CHECK(window.offers()[1].id == 5 && window.offers()[1].opener == "*" && window.offers()[1].url.empty());
     }
+    // The dashboards, which both know: whole, in the server's order.
+    CHECK((window.dashboards() == std::vector<Dashboard>{{"Dashboard", "http://board.test:8080/"},
+        {"Build farm", "https://ci.test/board"}}));
 
     // This build's server's diffs, read by a later window: a first diff, then one that grows an open entry.
     const Sessions empty;
-    const Sessions first({session(7, "rowan", Activity::Busy,
-                                  {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::AI, "hel", false)},
-                                  {"later"})});
+    Sessions first({session(7, "rowan", Activity::Busy,
+                            {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::AI, "hel", false)},
+                            {"later"})});
+    first.setDashboards({{"Costs", "http://costs.test:9001/"}, {"Dashboard", "https://board.test/"}});
     const std::string firstDiff = first.diff_from(empty);
     const wiretest::Read r1 = wiretest::nextReadSessions(bytes(firstDiff));
     CHECK(r1.loaded && !r1.damaged && !r1.refused && r1.unknown == 0);
     CHECK(r1.aiName == "rowan" && r1.instance == "studio" && !r1.titlePresent);
     CHECK((r1.kinds == Names{"Person", "AI"}));
     CHECK((r1.queue == Names{"later"}));
+    CHECK((r1.dashboards == Names{"Costs http://costs.test:9001/", "Dashboard https://board.test/"}));
     const Sessions grown({session(7, "rowan", Activity::Idle,
                                   {entry(nexus::EntryKind::Person, "hi"), entry(nexus::EntryKind::AI, "hello")})});
     const wiretest::Read r2 = wiretest::nextReadSessions(bytes(grown.diff_from(first)));
