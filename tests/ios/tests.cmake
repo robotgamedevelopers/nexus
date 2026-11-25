@@ -75,6 +75,14 @@ if(NEXUS_IOS_SIMULATOR)
         VERBATIM)
 endif()
 
+# ios_stock_window: the window with no applied policy bundle, as on a new install, is the shipped profile's: Dashboard
+# and capitalised names, the account menu centred (tests/window/stock_window_test.cpp), on a simulator.
+add_executable(ios_stock_window ${PROJECT_SOURCE_DIR}/tests/window/stock_window_test.cpp)
+target_compile_options(ios_stock_window PRIVATE ${NEXUS_WARNINGS})
+target_link_libraries(ios_stock_window PRIVATE nexus_ios_view)
+add_test(NAME ios_stock_window COMMAND ios_stock_window)
+set_tests_properties(ios_stock_window PROPERTIES LABELS "unit;ios" TIMEOUT 30)
+
 # ios_ssh_unit: the in-app ssh's parts that need no connection (tests/ios/ssh_unit.cpp), in a directory of its own.
 add_executable(ios_ssh_unit ${PROJECT_SOURCE_DIR}/tests/ios/ssh_unit.cpp)
 target_compile_options(ios_ssh_unit PRIVATE ${NEXUS_WARNINGS})

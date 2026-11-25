@@ -14,6 +14,7 @@
 //
 // Usage (as the simulator or devicectl passes a launch's arguments): nexus [--server USER@HOST | --state FILE [--lost]]
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@
 #include "pr/compress_select.h"
 #include "pr/image_select.h"
 #include "pr/font_set.h"
+#include "pr/hash.h"
 #include "pr/kit.h"
 #include "pr/kit_theme.h"
 #include "pr/studio_app.h"
@@ -36,6 +38,7 @@
 #include "pr/text_font.h"
 #include "pr/time.h"
 #include "pr/ui.h"
+#include "pr/ui_records.h"
 
 #include "client_home.h"
 #include "frame_host.h"
@@ -69,6 +72,7 @@ struct App {
     FrameHost host;
     std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
     std::unique_ptr<link::ClientPort> link;
+    float keyboardCover = 0;                // px of the viewport's foot that the on-screen keyboard covers, this frame
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
 };
@@ -168,9 +172,19 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
     *out = prStudioWindowKit(window)->theme.palette;
 }
 
+// How much of the viewport's foot the on-screen keyboard covers: the viewport is the frame less its safe area
+// (studio_window.h PrStudioWindowBuildFn), and the keyboard's rect is in the frame's coordinates, empty when it is
+// hidden.
+float keyboardCover(const PrAppFrame& f) {
+    if (f.keyboard.bottom <= f.keyboard.top || f.keyboard.right <= f.keyboard.left) return 0;
+    const float foot = f.extent.y - f.safeArea.bottom;
+    return f.keyboard.top < foot ? foot - f.keyboard.top : 0;
+}
+
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
+    a.keyboardCover = keyboardCover(*f);
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
 }
 
@@ -181,10 +195,34 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
     return a.host.event(*e);
 }
 
+// The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it leaves,
+// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would.
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const App&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
-    a.view.extent = extent;
-    a.host.build(prStudioWindowKit(window), root);
+    const float cover = std::min(a.keyboardCover, extent.y);
+    if (cover <= 0) {
+        a.view.extent = extent;
+        a.host.build(prStudioWindowKit(window), root);
+        return;
+    }
+    a.view.extent = PrVec2{extent.x, extent.y - cover};
+    PrUi* ui = prStudioWindowUi(window);
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, a, AboveKeyboard{a.view.extent.x, a.view.extent.y}), 0);
+    a.host.build(prStudioWindowKit(window), above);
 }
 
 bool laidOut(void* context, PrStudioWindow*) {

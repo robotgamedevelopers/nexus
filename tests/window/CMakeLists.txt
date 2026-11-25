@@ -9,6 +9,13 @@ if(NEXUS_WINDOW_LOGIC)
     add_test(NAME window_unit COMMAND nexus_window_tests)
     set_tests_properties(window_unit PROPERTIES LABELS unit)
 
+    # The window with no applied policy bundle is the shipped profile's (stock_window_test.cpp). Pure logic.
+    add_executable(nexus_stock_window_tests stock_window_test.cpp)
+    target_compile_options(nexus_stock_window_tests PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_stock_window_tests PRIVATE nexus_view)
+    add_test(NAME stock_window_unit COMMAND nexus_stock_window_tests)
+    set_tests_properties(stock_window_unit PROPERTIES LABELS unit)
+
     # The server a window asks for where nothing names one (src/server_choice.h): the address's checks, server.txt and
     # the kept server through a store in memory. Pure logic.
     add_executable(nexus_server_choice_tests test_server_choice.cpp)
