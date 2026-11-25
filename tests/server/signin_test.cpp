@@ -1612,8 +1612,18 @@ void paste_hub() {
     const std::uint64_t id = flow->first;
     s.hub->signInUrl(g.name, id, secret(kGoogle));
     s.hub->signInCodeWanted(g.name, id);
-    CHECK(s.hub->stateFor("w1").offers()[0].codeWanted && s.hub->stateFor("w1").offers()[0].url.bytes() == kGoogle);
-    CHECK(!s.hub->stateFor("w2").offers()[0].codeWanted && !s.hub->state().offers()[0].codeWanted);
+    // The fixture's other accounts have flows too: read g1's.
+    auto offerOf = [&](const sync::Sessions& state) {
+        for (const sync::SignInOffer& o : state.offers()) {
+            if (o.account == g.name) {
+                return o;
+            }
+        }
+        return sync::SignInOffer{};
+    };
+    CHECK(offerOf(s.hub->stateFor("w1")).codeWanted && offerOf(s.hub->stateFor("w1")).url.bytes() == kGoogle);
+    CHECK(!offerOf(s.hub->stateFor("w2")).codeWanted && !offerOf(s.hub->state()).codeWanted);
+    CHECK(offerOf(s.hub->stateFor("w2")).url.empty() && offerOf(s.hub->stateFor("w2")).opener == sync::kSignInHeldBy);
     auto paste = [&](const std::string& token, std::uint64_t request, const std::string& value) {
         sync::Action a;
         a.num = ++s.num;
