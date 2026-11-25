@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +38,7 @@
 #include "mock.h"
 #include "mock_link.h"
 #include "sync/actions.h"
+#include "sync/hub.h"
 #include "sync/sessions.h"
 
 #ifndef NEXUS_MOCK_SERVER
@@ -176,6 +178,9 @@ bool busy(const sync::SessionView& v) {
 // Plays each AI's seeded conversation (mock::seedFor) through the real link and server, every AI at once, each turn
 // after the one before it has ended.
 bool seed(mock::Client& c, const mock::Options& o, std::string* why) {
+    // A server holds at most sync::Limits::sessions sessions (16): the AIs past that are in its list, with tabs, and get
+    // no session, as with any server, so only the first that many are seeded.
+    const std::size_t seeded = std::min(o.ais.size(), sync::Limits{}.sessions);
     for (const std::string& name : o.ais) {
         sync::Action a;
         a.kind = sync::ActionKind::Ensure;
@@ -191,8 +196,8 @@ bool seed(mock::Client& c, const mock::Options& o, std::string* why) {
     const bool started = c.until([&] {
         if (!c.session->state().friendsKnown())
             return false;
-        for (const std::string& name : o.ais)
-            if (sessionOf(c, name) == nullptr)
+        for (std::size_t i = 0; i < seeded; ++i)
+            if (sessionOf(c, o.ais[i]) == nullptr)
                 return false;
         return true;
     }, kStallSeconds, why);
@@ -209,9 +214,9 @@ bool seed(mock::Client& c, const mock::Options& o, std::string* why) {
         std::uint64_t before = 0;       // the transcript's length when the open turn was sent
     };
     std::vector<Seeding> seeding;
-    for (std::size_t i = 0; i < o.ais.size(); ++i)
+    for (std::size_t i = 0; i < seeded; ++i)
         seeding.push_back(Seeding{o.ais[i], mock::seedFor(o.ais[i], i)});
-    const bool seeded = c.until([&] {
+    const bool played = c.until([&] {
         bool all = true;
         for (Seeding& s : seeding) {
             const sync::SessionView* v = sessionOf(c, s.name);
@@ -247,7 +252,7 @@ bool seed(mock::Client& c, const mock::Options& o, std::string* why) {
         }
         return all && c.session->allAcknowledged();
     }, kStallSeconds, why);
-    if (!seeded) {
+    if (!played) {
         *why = "seeding the AIs' conversations stopped: " + *why;
         return false;
     }
@@ -278,6 +283,9 @@ int start(const Paths& p, const mock::Options& o) {
         return fail(why + " (the server's log: " + p.server + "/server.log)");
     }
     c.close();
+    if (o.ais.size() + (o.signIn ? 1 : 0) > sync::Limits{}.sessions)
+        std::printf("nexus-mock: %zu AIs, and a server holds at most %zu sessions: the AIs past the first %zu have tabs "
+            "and no session\n\n", o.ais.size() + (o.signIn ? 1 : 0), sync::Limits{}.sessions, sync::Limits{}.sessions);
     printClients(p, serverCommand);
     return 0;
 }
@@ -307,8 +315,10 @@ int writeState(const Paths& p, const std::string& out) {
             }
             ensured = true;
         }
-        for (const sync::ServerFriend& f : s.friends())
-            if (s.first(f.name) == nullptr)
+        // The server makes sessions for its first sync::Limits::sessions AIs only (seed above).
+        const std::size_t sessions = std::min(s.friends().size(), sync::Limits{}.sessions);
+        for (std::size_t i = 0; i < sessions; ++i)
+            if (s.first(s.friends()[i].name) == nullptr)
                 return false;
         return c.session->allAcknowledged();
     }, kStallSeconds, &why);

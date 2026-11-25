@@ -7,7 +7,8 @@
 // has an account, and it needs a sign-in; each of the five has its seeded conversation, ending idle, with a tool line,
 // the stopped turn, the error and the turn its driver's exit cut short in the tail a client is sent; a prompt to Ada
 // gets the first scripted reply, exactly once, and nothing more comes after it. Then the state with no AIs: an empty
-// list. Then `nexus-mock stop` stops the server and removes the directory.
+// list. Then 30 AIs: all listed, the first 16 (the most sessions a server holds) seeded. Then `nexus-mock stop` stops
+// the server and removes the directory.
 
 #include <unistd.h>
 
@@ -211,6 +212,40 @@ void none(const std::string& mock, const std::string& dir) {
     c.close();
 }
 
+// The 30 preset: every AI in the list, in order, and sessions (seeded) for as many as a server holds.
+void thirty(const std::string& mock, const std::string& dir) {
+    const bool started = run(mock, {"start", "--dir", dir, "--ais", "30", "--instant"});
+    CHECK(started);
+    if (!started)
+        return;
+    std::string command = readFile(dir + "/server-command");
+    while (!command.empty() && command.back() == '\n')
+        command.pop_back();
+    mock::Client c;
+    std::string why;
+    if (!c.connect(command, "mock-e2e-thirty", &why)) {
+        std::fprintf(stderr, "mock_e2e: %s\n", why.c_str());
+        ++failures;
+        return;
+    }
+    CHECK(c.until([&] { return c.session->state().friendsKnown() && c.session->state().sessions().size() >= 16; },
+        kStallSeconds, &why));
+    std::vector<std::string> thirtyNames;
+    std::string ignored;
+    CHECK(mock::aisFor(30, &thirtyNames, &ignored));
+    std::vector<std::string> listed;
+    for (const sync::ServerFriend& f : c.session->state().friends())
+        listed.push_back(f.name);
+    CHECK(listed == thirtyNames);
+    CHECK(c.session->state().sessions().size() == 16);
+    for (std::size_t i = 0; i < 16; ++i) {
+        const sync::SessionView* v = c.session->state().first(thirtyNames[i]);
+        CHECK(v != nullptr && v->activity == sync::Activity::Idle && !v->entries.empty() &&
+            v->entries.back()->text == mock::seedFor(thirtyNames[i], i).back().reply);
+    }
+    c.close();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -227,6 +262,10 @@ int main(int argc, char** argv) {
     const int before = failures;
     none(mock, dir);
     if (failures != before)
+        printLog(dir);
+    const int beforeThirty = failures;
+    thirty(mock, dir);
+    if (failures != beforeThirty)
         printLog(dir);
     CHECK(run(mock, {"stop", "--dir", dir}));
     CHECK(!std::filesystem::exists(dir));

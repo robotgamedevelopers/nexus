@@ -29,7 +29,7 @@ the real link, and prints the command a client runs to reach it, which is also i
 
 | option | what it gives |
 |---|---|
-| `--ais N` | N AIs (default 5: Ada, Grace, Linus, Margaret, Alan). The presets are `1`, `5`, `12` and `30`, for menus and scrolling; `0` is the state with no AIs |
+| `--ais N` | N AIs (default 5: Ada, Grace, Linus, Margaret, Alan). The presets are `1`, `5`, `12` and `30`, for menus and scrolling; `0` is the state with no AIs. A server holds at most 16 sessions (`sync::Limits`), so past 16 the AIs are listed, with tabs, and only the first 16 have sessions and seeded conversations, as with any server |
 | `--names A,B,...` | these AIs, in this order |
 | `--sign-in` | one more AI, Ida, whose account has no login, to show the sign-in screen. Off by default. A sign-in started there runs a FAKE `claude` (`tests/server/fake_claude.cpp`) that hands its made-up URL to nobody: it never reaches a real login, page or network |
 | `--instant` | replies to new prompts written at once, for tests; without it they stream a word at a time at a reading pace, after a pause to think |
