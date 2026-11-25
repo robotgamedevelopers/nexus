@@ -54,7 +54,6 @@ void thePhoneOpensOnTheList() {
     CHECK(app.surface.menuTabs.has_value());
     CHECK((app.surface.menuTabs.value_or(std::vector<std::size_t>{}) == std::vector<std::size_t>{3, 1, 2, 0}));
     CHECK(app.surface.voiceMic);
-    CHECK(app.surface.voiceReply == "voice"); // the list's microphone talks back
 }
 
 void anAIsTabIsTheTranscriptAndThePrompt() {
@@ -63,7 +62,6 @@ void anAIsTabIsTheTranscriptAndThePrompt() {
     CHECK(!app.surface.showTabs);
     CHECK(!app.surface.focusPrompt); // the keyboard waits for a tap on the prompt
     CHECK(app.surface.voiceMic);     // the prompt's dictation
-    CHECK(app.surface.voiceReply == "text"); // a tab texts back
 }
 
 void theListWithNoTabs() {

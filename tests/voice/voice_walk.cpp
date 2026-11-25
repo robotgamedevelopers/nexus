@@ -121,7 +121,7 @@ std::string codeOf(const Turn& t) {
 }
 
 struct Step {
-    std::string op = "init", aiName, tick, r = "both", out = outOf(""), cur = "\"none\"";
+    std::string op = "init", aiName, tick, r = "voice", out = outOf(""), cur = "\"none\"";
     bool granted = false, h = false;
 };
 
@@ -190,7 +190,7 @@ int walk(uint64_t seed, int steps, const char* path) {
             t.turnEnded(s.aiName);
         } else if (pick < 21) {
             s.op = "set_reply";
-            const Reply r = rng.below(3) == 0 ? Reply::Text : rng.below(2) ? Reply::Voice : Reply::Both;
+            const Reply r = replyOn(rng.below(2) == 0); // the person moved between the menu and a tab
             s.r = replyName(r);
             acts = t.setReply(r);
         } else {

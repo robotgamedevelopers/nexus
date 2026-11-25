@@ -259,7 +259,10 @@ void textIsSilent() {
 
 void namesForTheModel() {
     CHECK(std::string(phaseName(Phase::Finishing)) == "finishing");
-    CHECK(std::string(replyName(Reply::Both)) == "both");
+    CHECK(std::string(replyName(Reply::Voice)) == "voice");
+    // Replies are no setting: the menu speaks them, a tab texts them.
+    CHECK(nexus::voice::replyOn(true) == Reply::Voice);
+    CHECK(nexus::voice::replyOn(false) == Reply::Text);
     CHECK(find({{K::Open, "x"}}, K::Open)->aiName == "x");
 }
 

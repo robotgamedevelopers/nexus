@@ -28,11 +28,12 @@ const char* phaseName(Phase phase) {
 const char* replyName(Reply reply) {
     switch (reply) {
         case Reply::Text: return "text";
-        case Reply::Voice: return "voice";
-        case Reply::Both: break;
+        case Reply::Voice: break;
     }
-    return "both";
+    return "voice";
 }
+
+Reply replyOn(bool menu) { return menu ? Reply::Voice : Reply::Text; }
 
 void VoiceTurn::context(std::string current, std::vector<SpokenAI> ais) {
     current_ = std::move(current);

@@ -11,6 +11,7 @@
 #include "pr/draw_list.h"
 #include "pr/json.h"
 #include "pr/kit_choice.h"
+#include "pr/kit_box.h"
 #include "pr/kit_button.h"
 #include "pr/kit_icon.h"
 #include "pr/kit_input.h"
@@ -747,25 +748,86 @@ struct Builder {
         if (!asking && prKitActivated(kit, mic) && voice.press) voice.press();
     }
 
-    // The way back from a tab to the phone's menu.
+    // The way back from a tab to the phone's menu: a back chevron alone (no words), laid over the bar, and the AI's
+    // title centred on the window's width whatever the chevron's, kept clear of it by the same room on both sides, and
+    // shortened at its end with an ellipsis when it does not fit that room.
     void phoneBack(PrLayoutNode window) {
+        const float edge = 0.5f * kLinePitch * k();
+        const float clear = edge + 2.2f * kLinePitch * k();  // the chevron's room, kept on both sides of the title
         PrKitBoxStyle bar{};
-        bar.direction = PrKitDirection_Row;
-        bar.align = PrKitAlign_Center;
-        bar.padding = {0.25f * kLinePitch * k(), 0.5f * kLinePitch * k(), 0, 0.5f * kLinePitch * k()};
-        const auto row = prKitBox(kit, window, {.key = prHashString(sv("phone-back"), 0)}, bar);
-        const auto back = prKitButton(kit, row, {.key = prHashString(sv("phone-back-button"), 0), .text = sv("AIs"),
-                                                 .icon = PrStudioIconKind_ChevronLeft},
-                                      {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+        bar.align = PrKitAlign_Stretch;
+        const auto stack = prKitStack(kit, window, {.key = prHashString(sv("phone-back"), 0)}, bar);
+        PrKitBoxStyle room{};
+        room.direction = PrKitDirection_Row;
+        room.justify = PrKitJustify_Center;
+        room.align = PrKitAlign_Center;
+        room.padding = {0.25f * kLinePitch * k(), clear, 0, clear};
+        room.place.minHeight = prKitPx(2.2f * kLinePitch * k());
+        room.overflow = PrKitOverflow_Clip;
+        const auto titleRoom = prKitBox(kit, stack, {.key = prHashString(sv("phone-title-room"), 0)}, room);
+        view.phoneTitleRoom = titleRoom;
+        view.phoneTitle = kPrLayoutNodeNone;
         if (model.tab_count()) {
             const auto& tab = model.tab(model.active());
             const auto& titles = view.windowApp.surface.tabTitles;
             const std::string title = model.active() < titles.size() ? titles[model.active()] : std::string(label(tab));
-            PrKitPlace spaced{};
-            spaced.margin.left = 0.5f * kLinePitch * k();
-            prKitPlace(kit, label(row, title, textStyle(PrKitTextRole_Heading, kChatTone)), spaced);
+            fitPhoneTitle(title);
+            auto style = textStyle(PrKitTextRole_Heading, kChatTone, PrKitTextAlign_Center);
+            style.wrap = PrKitWrap_Nowrap;
+            view.phoneTitle = label(titleRoom, view.phoneTitleShown, style);
+            PrKitPlace whole{};
+            whole.flex = PrKitFlex_Fixed;  // never squeezed: a title wider than its room is shortened, above
+            prKitPlace(kit, view.phoneTitle, whole);
         }
+        PrKitBoxStyle over{};
+        over.direction = PrKitDirection_Row;
+        over.align = PrKitAlign_Center;
+        over.padding = {0.25f * kLinePitch * k(), 0, 0, edge};
+        const auto layer = prKitLayer(kit, stack, {.key = prHashString(sv("phone-back-layer"), 0)}, over);
+        // Icon only: Prax has no accessibility label to give it ("Back"; docs/ios.md, For Prax).
+        const auto back = prKitButton(kit, layer, {.key = prHashString(sv("phone-back-button"), 0),
+                                                   .icon = PrStudioIconKind_ChevronLeft},
+                                      {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+        view.phoneBackButton = back;
         if (!asking && prKitActivated(kit, back)) view.phoneMenu = true;
+    }
+
+    // The title as shown: the whole title while it fits the room the last layout gave it; else as many of its
+    // characters as fit, then an ellipsis, measured from the last layout (the next one checks it again).
+    void fitPhoneTitle(const std::string& title) {
+        view.phoneTitleFitting = false;
+        if (title != view.phoneTitleFull) {
+            view.phoneTitleFull = title;
+            view.phoneTitleShown = title;
+            return;
+        }
+        auto width = [&](PrLayoutNode node) {
+            if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return 0.f;
+            const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Layout));
+            return std::max(0.f, r.right - r.left);
+        };
+        const float shown = width(view.phoneTitle);
+        float room = width(view.phoneTitleRoom);
+        if (room <= 0 || shown <= 0) return;
+        room -= 2 * (0.5f * kLinePitch * k() + 2.2f * kLinePitch * k());
+        if (shown <= room + 0.5f || view.phoneTitleShown.size() <= 1) return;
+        // Characters (UTF-8 lead bytes) in what is shown, less the ellipsis: keep the share that fits, then one fewer.
+        const std::string& now = view.phoneTitleShown;
+        const bool ellipsis = now.size() >= 3 && now.compare(now.size() - 3, 3, "\u2026") == 0;
+        const std::string body = ellipsis ? now.substr(0, now.size() - 3) : now;
+        std::size_t chars = 0;
+        for (unsigned char c : body) chars += (c & 0xC0) != 0x80;
+        std::size_t keep = std::size_t(float(chars) * room / shown);
+        keep = keep > 1 ? keep - 1 : 1;
+        std::size_t at = 0, seen = 0;
+        while (at < body.size()) {
+            if ((static_cast<unsigned char>(body[at]) & 0xC0) != 0x80 && seen++ == keep) break;
+            ++at;
+        }
+        std::string cut = body.substr(0, at);
+        while (!cut.empty() && cut.back() == ' ') cut.pop_back();
+        view.phoneTitleShown = cut + "\u2026";
+        view.phoneTitleFitting = view.phoneTitleShown != now;
     }
 
     void limitPanel(PrLayoutNode parent) {
@@ -3066,7 +3128,7 @@ bool windowWantsFrame(const View& view) {
     return view.look->prompt != view.windowApp.surface.prompt || view.look->tabs != view.windowApp.surface.tabs || view.look->transcriptStyle != view.windowApp.transcriptStyle ||
            view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
            (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.energyAnimating || view.cutComing ||
-           (view.phoneMenu && (view.menuScroll.moving() || view.menuScroll.dragging()));
+           (view.phoneMenu && (view.menuScroll.moving() || view.menuScroll.dragging())) || view.phoneTitleFitting;
 }
 
 // Forward margin drags through the native editor so its UTF-8 selection, clipboard and editing agree.

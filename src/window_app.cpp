@@ -477,11 +477,6 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readFlag(doc, 0, {"reorder_tabs", 12}, surface.reorderTabs) ||
             !readFlag(doc, 0, {"focus_prompt", 12}, surface.focusPrompt) ||
             !readFlag(doc, 0, {"voice_mic", 9}, surface.voiceMic)) return false;
-    const auto reply = prJsonMember(doc, 0, {"voice_reply", 11});
-    if (reply != kPrJsonMissing) {
-        surface.voiceReply = std::string(stringAt(doc, reply));
-        if (surface.voiceReply != "text" && surface.voiceReply != "voice" && surface.voiceReply != "both") return false;
-    }
     const auto names = prJsonMember(doc, 0, {"voice_names", 11});
     if (names != kPrJsonMissing) {
         if (prJsonKind(doc, names) != PrJsonKind_Object || prJsonCount(doc, names) > 256) return false;

@@ -293,6 +293,13 @@ struct View {
     PrLayoutNode menuViewport = kPrLayoutNodeNone;
     PrLayoutNode menuContent = kPrLayoutNodeNone;
     PrLayoutNode promptMic = kPrLayoutNodeNone;  // the phone prompt's microphone, inside the prompt's box
+    // An AI's page on the phone: its back chevron and its title, centred on the window's width under the chevron; the
+    // title as shown (shortened with an ellipsis to the room both sides of the chevron leave) and its full text.
+    PrLayoutNode phoneBackButton = kPrLayoutNodeNone;
+    PrLayoutNode phoneTitle = kPrLayoutNodeNone;
+    PrLayoutNode phoneTitleRoom = kPrLayoutNodeNone;
+    std::string phoneTitleFull, phoneTitleShown;
+    bool phoneTitleFitting = false;             // the shown title was shortened this frame: lay out again
     bool promptOpen = true;                     // false: no prompt on a friend's tab (before the server is reached)
     std::string status;                         // one plain line where the prompt stands (the link's state); empty,
                                                 // none

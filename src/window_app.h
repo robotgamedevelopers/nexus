@@ -90,9 +90,8 @@ struct AccountSurface {
     bool focusPrompt = true;
     // The phone's microphones (docs/voice.md): the list's, and the prompt's dictation. Off unless the policy turns them on.
     bool voiceMic = false;
-    // The phone's voice (docs/voice.md): how replies come back at first ("text", "voice" or "both"), and more spoken
-    // forms of AIs' names, by AI (voice_names).
-    std::string voiceReply = "both";
+    // The phone's voice (docs/voice.md): more spoken forms of AIs' names, by AI (voice_names). How replies come back is
+    // no setting: spoken on the menu, text in a tab (voice::replyOn).
     std::map<std::string, std::vector<std::string>> voiceNames;
     // The phone's list: the tabs it shows, by index, in its order (the dashboard, the AIs, then terminals); unset, all
     // of them in the strip's order.

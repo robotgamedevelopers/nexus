@@ -5,14 +5,6 @@
 #include "cursor.h"
 
 namespace nexus {
-namespace {
-
-voice::Reply replyOf(const std::string& name) {
-    return name == "text" ? voice::Reply::Text : name == "voice" ? voice::Reply::Voice : voice::Reply::Both;
-}
-
-} // namespace
-
 VoiceWindow::VoiceWindow(Model& model, View& view)
     : model_(model), view_(view),
       host_(nullptr, voice::VoiceSurface{
@@ -130,8 +122,8 @@ std::size_t VoiceWindow::tabOf(std::size_t id) const {
 
 void VoiceWindow::frame(double now) {
     now_ = now;
-    // How replies come back is the policy's, by where the person is (the menu speaks, a tab texts: window.star).
-    const auto reply = replyOf(view_.windowApp.surface.voiceReply);
+    // How replies come back is fixed by where the person is: the menu speaks, a tab texts (voice::replyOn).
+    const auto reply = voice::replyOn(view_.phoneMenu);
     if (host_.turn().reply() != reply) host_.setReply(reply);
     // The AI showing: a tab's own; on the menu none, so a prompt naming no one goes to the first AI (VoiceTurn). In a
     // tab the microphone is plain dictation into its prompt: no names are matched (no AIs given), nothing is spoken.

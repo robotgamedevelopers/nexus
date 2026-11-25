@@ -112,10 +112,9 @@ def _titles(tabs, config):
 
 # The iPhone's form (docs/voice.md), chosen by the device's idiom (ui.idiom: "phone", "pad" or "desktop"). The app opens
 # on the list of AIs (ui.menu), centred, with a microphone at the bottom: say an AI's name and what to ask, and the
-# reply comes back on the list, spoken (phone.menu_reply). An AI's tab opens full screen with the way back, its
+# reply comes back on the list, spoken. An AI's tab opens full screen with the way back, its
 # transcript and the prompt, whose microphone is plain dictation into the prompt; its replies are text. A fork turns
-# both microphones off with "phone": {"voice": false}, sets how the list's replies come back with "phone":
-# {"menu_reply": "text"} ("text", "voice" or "both"), and adds spoken forms of an AI's name with
+# both microphones off with "phone": {"voice": false}, and adds spoken forms of an AI's name with
 # "phone": {"voice_names": {"zhi": ["zhi ya wen"]}}.
 # The list's rows, by tab index: by kind in phone.menu_kinds' order (the dashboard, the AIs, then terminals), each kind
 # in the strip's order; tabs of a kind not listed come last.
@@ -134,7 +133,6 @@ def _phone(window, state, config):
     window["focus_prompt"] = False
     window["voice_mic"] = phone.get("voice", True)
     window["tab_titles"] = window.get("tab_titles") or _titles(ui.get("tabs", []), config)
-    window["voice_reply"] = phone.get("menu_reply", "voice") if menu else "text"
     window["voice_names"] = phone.get("voice_names", {})
     window["menu_tabs"] = _menu_tabs(ui.get("tabs", []), phone)
     if menu:

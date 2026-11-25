@@ -10,7 +10,7 @@
 // The rules, each a property of the model:
 // - The microphone is never on while the reply is being spoken: starting to listen stops the speech first, and a
 //   reply arriving while listening waits until the listen ends (NeverHearsItself).
-// - Only a reply to a prompt sent by voice is spoken, and only while the person chose voice or both (SpeaksAnswers,
+// - Only a reply to a prompt sent by voice is spoken, and only while replies are spoken (on the menu) (SpeaksAnswers,
 //   TextIsSilent).
 // - Without the microphone and speech recognition granted, nothing listens; a refusal says so, with the fix
 //   (DeniedNeverListens, DeniedIsTold).
@@ -32,7 +32,9 @@
 namespace nexus::voice {
 
 enum class Phase { Idle, Asking, Listening, Finishing, Denied };
-enum class Reply { Text, Voice, Both };
+// How replies come back: fixed by where the person is, never a setting (replyOn): spoken on the menu, text in a tab.
+enum class Reply { Text, Voice };
+Reply replyOn(bool menu);
 enum class Permission { Unknown, Granted, Refused };
 
 struct Act {
@@ -73,7 +75,7 @@ public:
     std::vector<Act> replied(std::string_view aiName, std::string_view text); // a block of a reply closed
     std::vector<Act> spoken();                                           // the synthesizer finished an utterance
     void turnEnded(std::string_view aiName);                         // the AI waits for the person again
-    std::vector<Act> setReply(Reply reply);                              // the person's choice of text, voice or both
+    std::vector<Act> setReply(Reply reply);                              // text or voice: set from where the person is (replyOn)
 
     Phase phase() const { return phase_; }
     Permission permitted() const { return permission_; }
@@ -94,7 +96,7 @@ private:
 
     Phase phase_ = Phase::Idle;
     Permission permission_ = Permission::Unknown;
-    Reply reply_ = Reply::Both;
+    Reply reply_ = Reply::Voice;
     bool speaking_ = false;
     bool trouble_ = false;
     std::deque<Queued> queue_;

@@ -16,7 +16,7 @@
 (*   phase       idle, asking (the OS), listening, finishing (stopped,     *)
 (*               the recognizer's final result to come), denied            *)
 (*   permission  unknown, granted, refused                                 *)
-(*   reply       text, voice or both: the person's choice                  *)
+(*   reply       text or voice: by where the person is               *)
 (*   speaking    the synthesizer is speaking a reply                       *)
 (*   queue       the AIs whose replies wait to be spoken, in order     *)
 (*   awaiting    the AIs sent a prompt by voice whose turn is open     *)
@@ -33,7 +33,7 @@ ASSUME None \notin AIs
 ASSUME First \in AIs
 
 Phases == {"idle", "asking", "listening", "finishing", "denied"}
-Replies == {"text", "voice", "both"}
+Replies == {"text", "voice"}
 Outs == [route : {"named"}, ai : AIs, prompt : BOOLEAN]
      \cup [route : {"current", "ambiguous"}, ai : {None}, prompt : BOOLEAN]
 Ops == {"init", "press", "permission", "partial", "final", "fail", "tick", "reply", "spoken", "turn_end", "set_reply"}
@@ -60,7 +60,7 @@ TypeOK ==
 Init ==
     /\ phase = "idle"
     /\ permission = "unknown"
-    /\ reply = "both"
+    /\ reply = "voice"
     /\ speaking = FALSE
     /\ queue = <<>>
     /\ awaiting = {}
