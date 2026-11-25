@@ -1059,7 +1059,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
         "emit {\"kind\":\"text\",\"delta\":\"signed in again\"}\nemit {\"kind\":\"text-end\"}\n"
         "emit {\"kind\":\"done\",\"outcome\":\"ok\"}\n"));
     CHECK(writeFile(dir + "/drivers", "driver claude " + fake + " --script " + dir + "/ada.script --account a1\n"
-        "AI ada claude " + dir + "\n"));
+        "ai ada claude " + dir + "\n"));
     pid_t pid = startServe(binary, dir);
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
@@ -1617,7 +1617,7 @@ umask 077
 printf '%s\n' '{"auth_mode":"chatgpt","tokens":{"id_token":"synthetic-id","access_token":"synthetic-access","refresh_token":"synthetic-refresh"}}' > "$CODEX_HOME/auth.json"
 )"));
     CHECK(::chmod(provider.c_str(), 0700) == 0);
-    CHECK(writeFile(dir + "/drivers", "AI fixture-AI codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
+    CHECK(writeFile(dir + "/drivers", "ai fixture-ai codex " + dir + "\nsignin codex " + dir + "/python -IB " + dir + "/enroll.py codex --binary " +
                     provider + "\n"));
     for (int start = 0; start < 2; ++start) {
         const pid_t pid = startServe(binary, dir);
@@ -1722,7 +1722,7 @@ int verifiedClaude(const std::string& binary, const std::string& dir, const std:
     CHECK(writeFile(config + "/accounts.json", accounts::accountsText(registry)));
     CHECK(writeFile(config + "/ais.json", accounts::aisText(registry)));
     CHECK(writeFile(dir + "/config", "claude " + fakeClaude + "\n"));
-    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nai fixture-AI claude " +
+    CHECK(writeFile(dir + "/drivers", "driver claude /usr/bin/false --account work\nai fixture-ai claude " +
                     dir + "\nai fixture-other claude " + dir + "\n"));
     const pid_t pid = startServe(binary, dir);
     CHECK(pid > 0 && waitFor([&] { return answering(dir); }, kStallSeconds));

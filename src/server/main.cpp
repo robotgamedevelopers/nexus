@@ -36,7 +36,7 @@
 // the log server.log and the store store/ live there, and the file drivers, which names each AI's driver
 // (server/driver_table.h):
 //   driver <harness> <program> [<argument>...]
-//   AI <name> <harness> [<directory>]
+//   ai <name> <harness> [<directory>]
 // The harness logins, accounts/<name>/, are always under $HOME/.nexus/server, whatever DIR is: a driver finds its
 // account there by its --account.
 
@@ -81,7 +81,7 @@ int usage() {
                          "  accounts and ais: DIR/nexus-config/accounts.json, ais.json (docs/accounts.md)\n"
                          "ID is 1 to 64 letters, digits, '-' or '_'; N is a number from 1\n"
                          "DIR ($HOME/.nexus/server unless given) holds the file drivers, read at each prompt, with lines\n"
-                         "  driver <harness> <program> [<argument>...]    and    AI <name> <harness> [<directory>]\n");
+                         "  driver <harness> <program> [<argument>...]    and    ai <name> <harness> [<directory>]\n");
     return 2;
 }
 

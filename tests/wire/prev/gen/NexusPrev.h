@@ -19,7 +19,7 @@ enum class EntryKind : uint8_t
 {
     None = 0,
     Person = 1,
-    Friend = 2,
+    AI = 2,
     Notice = 3,
     Tool = 4,
     Max = 4, // the exported extent (SPEC §4.2)
@@ -32,7 +32,7 @@ inline const char * EnumName( EntryKind value )
     {
         case EntryKind::None: return "None";
         case EntryKind::Person: return "Person";
-        case EntryKind::Friend: return "Friend";
+        case EntryKind::AI: return "AI";
         case EntryKind::Notice: return "Notice";
         case EntryKind::Tool: return "Tool";
         default: return "???";
@@ -76,7 +76,7 @@ enum class ActionKind : uint8_t
     SetEffort = 8,
     AddAccount = 9,
     RemoveAccount = 10,
-    AddFriend = 11,
+    AddAI = 11,
     LinkAccount = 12,
     UnlinkAccount = 13,
     SetDefault = 14,
@@ -101,7 +101,7 @@ inline const char * EnumName( ActionKind value )
         case ActionKind::SetEffort: return "SetEffort";
         case ActionKind::AddAccount: return "AddAccount";
         case ActionKind::RemoveAccount: return "RemoveAccount";
-        case ActionKind::AddFriend: return "AddFriend";
+        case ActionKind::AddAI: return "AddAI";
         case ActionKind::LinkAccount: return "LinkAccount";
         case ActionKind::UnlinkAccount: return "UnlinkAccount";
         case ActionKind::SetDefault: return "SetDefault";

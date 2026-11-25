@@ -28,8 +28,8 @@ bool has(const std::string& text, const std::string& part) {
 
 void lines() {
     const DriverTable t = parseDriverTable("# the drivers\n\n  driver claude /bin/drv --model x\r\n"
-                                           "AI ada claude /work\nai bo claude\n\tai cy claude ~/src\n"
-                                           "AI dee claude ~\nai eve claude ~other", "/home/me");
+                                           "ai ada claude /work\nai bo claude\n\tai cy claude ~/src\n"
+                                           "ai dee claude ~\nai eve claude ~other", "/home/me");
     CHECK(t.errors.empty());
     CHECK(t.drivers.size() == 1);
     CHECK((t.drivers.at("claude") == std::vector<std::string>{"/bin/drv", "--model", "x"}));
@@ -40,13 +40,18 @@ void lines() {
     CHECK(t.ais.at("dee").cwd == "/home/me");
     CHECK(t.ais.at("eve").cwd == "~other");     // only ~ and ~/ are the home directory
     // A later line for the same name replaces the earlier one.
-    const DriverTable again = parseDriverTable("AI ada a\nai ada b\ndriver a x\ndriver a y", "/h");
+    const DriverTable again = parseDriverTable("ai ada a\nai ada b\ndriver a x\ndriver a y", "/h");
     CHECK(again.ais.at("ada").harness == "b");
     CHECK((again.drivers.at("a") == std::vector<std::string>{"y"}));
     const auto enroll = parseDriverTable("signin codex /bin/login --device\nsignin grok relative\n", "/h");
     CHECK((enroll.signins.at("codex") == std::vector<std::string>{"/bin/login", "--device"}));
     CHECK(enroll.signins.size() == 1 && enroll.errors.size() == 1);
     CHECK(parseDriverTable("", "/h").ais.empty());
+    // A drivers file from before the friend names became AI: its lines and its argument read as `ai` and `{ai}`.
+    const DriverTable older = parseDriverTable("driver engine /program {friend} {harness}\nfriend cy engine /work\n", "/h");
+    CHECK(older.errors.empty() && older.ais.at("cy").harness == "engine");
+    const ResolvedDriver olderCy = resolveDriver(older, "cy", "/h/drivers");
+    CHECK(olderCy.problem.empty() && (olderCy.command == std::vector<std::string>{"/program", "cy", "engine"}));
 }
 
 void refusals() {
@@ -54,9 +59,9 @@ void refusals() {
     CHECK(t.errors.size() == 4);
     if (t.errors.size() == 4) {
         CHECK(has(t.errors[0], "line 1: a driver line is `driver <harness> <program>"));
-        CHECK(has(t.errors[1], "line 2: an AI line is `AI <name> <harness> [<directory>]`"));
+        CHECK(has(t.errors[1], "line 2: an ai line is `ai <name> <harness> [<directory>]`"));
         CHECK(has(t.errors[2], "line 3: an AI line"));
-        CHECK(has(t.errors[3], "line 4: \"thing\" is not `driver`, `signin` or `AI`"));
+        CHECK(has(t.errors[3], "line 4: \"thing\" is not `driver`, `signin` or `ai`"));
     }
     CHECK(t.drivers.empty() && t.ais.empty());
 }
@@ -73,7 +78,7 @@ void resolve() {
     CHECK(has(cy.problem, "cy has no driver, so the prompt was not sent"));
     CHECK(has(cy.problem, "`AI cy <harness> [<directory>]` in /d/drivers"));
     CHECK(has(cy.problem, "`driver <harness> <program> [<argument>...]`"));
-    CHECK(has(cy.problem, "/d/drivers line 4: \"bad\" is not `driver`, `signin` or `AI`."));
+    CHECK(has(cy.problem, "/d/drivers line 4: \"bad\" is not `driver`, `signin` or `ai`."));
     // An AI whose harness has no driver.
     const ResolvedDriver bo = resolveDriver(t, "bo", "/d/drivers");
     CHECK(bo.command.empty());
@@ -93,7 +98,7 @@ void seed() {
         "driver claude /bin/drv --account work --model x\n"
         "driver codex /bin/cx\n"
         "driver odd /bin/odd --account -rf\n"
-        "AI ada claude\nai bo claude /w/bo\nai cy codex\nai dee odd\n", "/h");
+        "ai ada claude\nai bo claude /w/bo\nai cy codex\nai dee odd\n", "/h");
     using nexus::accounts::AI;
     using nexus::accounts::Instance;
     const nexus::accounts::Registry r = accountsFromDrivers(t, "studio");

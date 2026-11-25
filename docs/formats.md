@@ -76,7 +76,7 @@ later field goes after them.
   default instance (its first) and says so in a notice, so an empty one never decides where a driver runs.
 - Absent list of AIs (a server from before it, or a link of format 3 or older): **not known**. Format 4's
   `SessionsDiff` carries `ais_sent` (bool, default false), `ais_known` (bool, default false) and `ais` (a
-  list of `AI` records with a `name` and linked `accounts`; default empty), the AIs the server's `ais.json` holds, in its order. A
+  list of `AI` records with a `name` and linked `accounts`; default empty), the AIs the server's `ais.json` holds, in its order. An
   AI's accounts are ordered `AccountChoice` records with the stable `name` used for SetAccount and an optional
   display `label`. The optional `email` is the address from the account’s server registry entry. It reads as
   empty for older servers. Older windows skip it and retain the account name, label and sign-in status.
@@ -352,6 +352,12 @@ a field, an enum value and a union arm (`tests/wire/next/NexusNext.schema`) and 
 ways. Step 2 is in: the state and the actions are on the tables from format 4 (the hand-written codecs stay for links
 of 1 to 3, so an older end still works), and the Hello replaces the old floors. The store is next; its record and
 snapshot formats above are unchanged.
+
+A rename is `| was = "<first name>"` (schema's §5): the id stays the hash of the first name, so the bytes do not move
+and every reader, older or newer, reads the renamed field as before. When nexus called its AIs "AI" (2026-11-25),
+`friend_name`, `friends`, `friends_known`, `friends_sent`, the table `Friend` and the values `Friend` and `AddFriend`
+became `ai_name`, `ais`, `ais_known`, `ais_sent`, `AI` and `AddAI` this way; `schema/tables.baseline` records each
+first name, and `wire_unit_versions` and the fixtures of main's formats read them both ways unchanged.
 
 Encode and decode on the link thread, never the window's frame thread (`tests/sync/wire_bench`, release build, mean of
 one): a typical frame's diff (one open entry grown by 120 bytes, 404 bytes) 0.023 ms to encode and 0.002 ms to

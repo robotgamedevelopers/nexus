@@ -122,7 +122,10 @@ def cli():
     inspect.add_argument("profile", type=Path)
     inspect.add_argument("ai")
     inspect.add_argument("--harness")
-    launch = commands.add_parser("ai-driver", help="start a Nexus driver with its AI's standing instructions")
+    # "friend-driver": this command's name before the friend names became AI, which an older drivers file still
+    # names (src/server/driver_table.h kOldAIDriver). The word stays here only.
+    launch = commands.add_parser("ai-driver", aliases=["friend-driver"],
+                                 help="start a Nexus driver with its AI's standing instructions")
     launch.add_argument("profile", type=Path)
     launch.add_argument("ai")
     launch.add_argument("harness")
@@ -133,6 +136,8 @@ def cli():
     primary.add_argument("program")
     primary.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.command == "friend-driver":
+        args.command = "ai-driver"
     try:
         if args.command == "primary-driver":
             if not os.path.isabs(args.program):

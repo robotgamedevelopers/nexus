@@ -2,7 +2,7 @@
 # Words are split on spaces; give the programs by absolute path, since the server's PATH may not hold node.
 #
 #   driver <harness> <program> [<argument>...]    the server adds --cwd <dir> and, to go on, --resume <session id>
-#   AI <name> <harness> [<directory>]
+#   ai <name> <harness> [<directory>]
 #
 # The Claude driver's one required argument is --account <name>: its login is ~/.nexus/server/accounts/<name>/, the
 # token in its file oauth-token (one line from `claude setup-token`, mode 0600), which Claude gets on a descriptor and

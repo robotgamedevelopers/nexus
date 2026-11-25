@@ -641,8 +641,10 @@ std::vector<sync::SessionChange> Drivers::queue(sync::SessionId id, const std::s
 std::string Drivers::aiInfo(const std::string& name) const {
     if (name.empty() || name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos)
         return {};
-    const auto file = std::filesystem::path(options_.table).parent_path() / "ai-info" / (name + ".json");
-    std::ifstream input(file, std::ios::binary);
+    const auto dir = std::filesystem::path(options_.table).parent_path();
+    std::ifstream input(dir / "ai-info" / (name + ".json"), std::ios::binary);
+    // friend-info: where a launcher from before the friend names became AI still writes it. The word stays here only.
+    if (!input) input.open(dir / "friend-info" / (name + ".json"), std::ios::binary);
     if (!input) return {};
     std::string data(16385, '\0');
     input.read(data.data(), static_cast<std::streamsize>(data.size()));

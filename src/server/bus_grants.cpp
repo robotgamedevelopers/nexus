@@ -16,7 +16,7 @@ namespace {
 // The executable/profile pair belongs to the fork. No registry program or profile comes from a message.
 std::vector<std::string> queryFor(const std::vector<std::string>& argv) {
     if (argv.size() < 9 || argv[0].empty() || argv[0].front() != '/' || argv[1] != "-I" ||
-        argv[2] != "-m" || argv[3] != "nexus_policy" || argv[4] != "ai-driver" ||
+        argv[2] != "-m" || argv[3] != "nexus_policy" || (argv[4] != "ai-driver" && argv[4] != kOldAIDriver) ||
         argv[5].empty() || argv[5].front() != '/') return {};
     return {argv[0], "-I", "-m", "nexus_policy", "bus-roster", argv[5]};
 }
@@ -84,7 +84,7 @@ void BusGrants::refresh(const DriverTable& table, std::int64_t nowMs) {
         if (driver == table.drivers.end()) continue;
         const auto& argv = driver->second;
         const auto query = queryFor(argv);
-        if (!query.empty() && (argv[6] == "{ai}" || argv[6] == name) &&
+        if (!query.empty() && (argv[6] == "{ai}" || argv[6] == kOldAIPlaceholder || argv[6] == name) &&
                               (argv[7] == "{harness}" || argv[7] == entry.harness)) {
             wanted[query][name] = entry.harness;
             routes.emplace(name, query);

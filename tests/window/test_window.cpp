@@ -261,6 +261,9 @@ void selectedTabTextRoundTrips() {
     CHECK(parseSelectedTab("nexus selected tab 1\nterminal\n", &saved, &error) && saved.kind == TabKind::Terminal &&
         saved.terminal == 0);
     CHECK(parseSelectedTab("nexus selected tab 2\nterminal 12\n", &saved, &error) && saved.terminal == 12);
+    // Saved before the friend names became AI: read as the AI's tab.
+    CHECK(parseSelectedTab("nexus selected tab 2\nfriend ada\n", &saved, &error) && saved.kind == TabKind::AI &&
+        saved.name == "ada");
     for (const char* bad : {"terminal", "terminal ", "terminal 0", "terminal 01", "terminal -1", "terminal x",
             "terminal 1234567"}) {
         CHECK(!parseSelectedTab(std::string("nexus selected tab 2\n") + bad + "\n", &saved, &error));

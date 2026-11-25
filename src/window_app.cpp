@@ -653,7 +653,7 @@ void WindowApplication::update(policy::Host& host, const char* tab, const std::s
         field({"label", 5}, signInAccount.label);
         field({"email", 5}, signInAccount.email);
         field({"provider", 8}, signInAccount.provider);
-        field({"ai", 6}, signInAccount.aiName);
+        field({"ai", 2}, signInAccount.aiName);
         prJsonWriterEndObject(json.get());
         const auto text = prJsonWriterText(json.get());
         context.append(text.data, text.size);

@@ -62,6 +62,14 @@ These rules are `models/Accounts.tla`, and the server's code is checked against 
 
 `nexus-server config path` prints the directory and both files. (With `--dir DIR`, they are under `DIR/nexus-config/`.)
 
+Before nexus called them AIs (2026-11-25), the AIs file was `friends.json`, its list `"friends"`. A nexus-server
+from then on moves an old `friends.json` to `ais.json` once, at its start, in a commit of its own
+(`nexus-server moved friends.json to ais.json`), the text exactly as it was, so a hand edit not yet applied stays one.
+The old `"friends"` list reads as `"ais"` and is written as `"ais"` at the next write; `config history` and
+`config restore` read commits from before under the old name. It refuses, saying how to fix it, when both files are
+there, when changes are staged in the repository, or when `friends.json` was deleted by hand. A nexus-server from
+before the move does not read `ais.json`: going back to one holds no AIs list until the newer server runs again.
+
 **No secret ever goes in these files.** They hold account and AI configuration. Each account's login lives in
 `~/.nexus/server/accounts/<name>/` (a 0700 directory of 0600 files), outside this directory, and is set up by the
 in-app sign-in, never through an AI and never by editing a file. The logins stay under your home whatever `--dir` says:
@@ -394,8 +402,8 @@ error: ais.json: the AI "claude" links to the account "gone", which accounts.jso
 ERROR 1 problem; nothing was changed
 
 $ nexus-server config reload
-applied: ai claude's accounts [work, home] -> [home]
-applied: ai claude's default work -> none
+applied: AI claude's accounts [work, home] -> [home]
+applied: AI claude's default work -> none
 applied: session 3 (claude): account work -> home, harness claude
 OK
 ```

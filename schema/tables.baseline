@@ -19,7 +19,7 @@ table AccountChoice
 table Action
     field kind id=0xef9c96d721673243 kind=7 enum=ActionKind
     field session id=0x3ca2c49553a457d7 kind=9
-    field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
+    field ai_name id=0x2bcee2fac7bb6eb5 kind=17 type=string was=friend_name
     field text id=0xfa04f4ef1995407e kind=17 type=string
     field account id=0xa23fd2965dc429bc kind=17 type=string
     field request id=0x6f4743b8bc5b4eb2 kind=9
@@ -48,7 +48,7 @@ table EntryChange
     field tail id=0xd94c56ef0798d723 kind=17 type=string
     field account_email_end id=0xb2ac393f2277c4d1 kind=8
 
-table Friend
+table Friend name=AI
     field name id=0xc4bcadba8e631b86 kind=17 type=string
     field accounts id=0x769ca48154530abd kind=14 elem=13 type=AccountChoice array=unbounded
     field can_auto_account id=0xbb15df0a66f3b845 kind=1
@@ -87,7 +87,7 @@ table SessionChange
     field primary_account id=0x8fd6d804ece1e65d kind=17 type=AccountChoice
 
 table SessionInfo
-    field friend_name id=0x2bcee2fac7bb6eb5 kind=17 type=string
+    field ai_name id=0x2bcee2fac7bb6eb5 kind=17 type=string was=friend_name
     field harness id=0x211fcbbafe5331ab kind=17 type=string
     field account id=0xa23fd2965dc429bc kind=17 type=string
     field model id=0x9de543933e6e703a kind=17 type=string
@@ -103,9 +103,9 @@ table SessionInfo
 table SessionsDiff
     field sessions id=0xacebadbd2040ebac kind=14 elem=13 type=SessionChange array=unbounded
     field requests id=0x7166d3e80f26d1f3 kind=14 elem=13 type=SecretRequest array=unbounded
-    field friends_known id=0xab40b3dce112851e kind=1
-    field friends id=0x82a6b14733b2685a kind=14 elem=13 type=Friend array=unbounded
-    field friends_sent id=0x6b65e9dac83a16e9 kind=1
+    field ais_known id=0xab40b3dce112851e kind=1 was=friends_known
+    field ais id=0x82a6b14733b2685a kind=14 elem=13 type=Friend array=unbounded was=friends
+    field ais_sent id=0x6b65e9dac83a16e9 kind=1 was=friends_sent
     field signins id=0x5fbecccd50c74838 kind=14 elem=13 type=SignInOffer array=unbounded
     field next_action id=0xd6bdffc29f42fe4f kind=9
 
@@ -149,7 +149,7 @@ enum ActionKind
     variant SetEffort id=0x7aa5e74b9dd7baa5
     variant AddAccount id=0xe8b69819a6b671db
     variant RemoveAccount id=0x49d09394f5773664
-    variant AddFriend id=0xf7368f51997e9bcc
+    variant AddAI id=0xf7368f51997e9bcc was=AddFriend
     variant LinkAccount id=0xff7b88c2ff4bff78
     variant UnlinkAccount id=0xdea837e630d4d73d
     variant SetDefault id=0xd9292b9837d05494
@@ -169,7 +169,7 @@ enum Activity
 
 enum EntryKind
     variant Person id=0x40d76f1f51639ec0
-    variant Friend id=0x9f57a2661b8a7e2d
+    variant AI id=0x9f57a2661b8a7e2d was=Friend
     variant Notice id=0x9117fb5195e75151
     variant Tool id=0x5a71f1fb3a12c6a7
     variant Bus id=0x166a3d19b1137d79
@@ -214,3 +214,10 @@ union Change
 
 ### 2026-11-24 (UTC) — Expose the primary chat's bound account to windows
 - no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-25 (UTC) — Rename the friend names to ai under was: wire ids unchanged
+- Action.ai_name: renamed under was = "friend_name", which keeps the wire id and NOT the text key — the JSON key is now "ai_name"; pair json = "friend_name" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+- SessionInfo.ai_name: renamed under was = "friend_name", which keeps the wire id and NOT the text key — the JSON key is now "ai_name"; pair json = "friend_name" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+- SessionsDiff.ais_known: renamed under was = "friends_known", which keeps the wire id and NOT the text key — the JSON key is now "ais_known"; pair json = "friends_known" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+- SessionsDiff.ais: renamed under was = "friends", which keeps the wire id and NOT the text key — the JSON key is now "ais"; pair json = "friends" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
+- SessionsDiff.ais_sent: renamed under was = "friends_sent", which keeps the wire id and NOT the text key — the JSON key is now "ais_sent"; pair json = "friends_sent" if an existing text must still read (docs/SPEC-TABLES.md §16.4) [warn]
