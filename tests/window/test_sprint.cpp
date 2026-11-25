@@ -209,12 +209,16 @@ void preludeCarriesTheZonesAndEscapesThem() {
     CHECK(has(odd, "\"a\\\"b\\u003c/script>\"") && has(odd, "\"c\\\\d\\n\""));
 }
 
-// The page keeps its own background: nothing in the sheet touches a background or --bg, and before the Cost breakdown's
-// top is measured the sheet is the brand alone, so the panel keeps its own height.
+// The transfer animation may paint a card. The page retains its theme and its unmeasured layout.
 void styleLeavesThePageBackgroundAlone() {
-    CHECK(sprintPageStyle(SpendFit{}) == kSprintRepoLinkStyle);
-    std::string s = sprintPageStyle(SpendFit{547.5, 32, 64});
-    CHECK(!has(s, "background") && !has(s, "--bg") && !has(s, "transparent"));
+    const auto base = sprintPageStyle(SpendFit{});
+    CHECK(base.starts_with(kSprintRepoLinkStyle));
+    CHECK(has(base, ".cell.flash { animation-name:nexus-transfer; }"));
+    CHECK(!has(base, "min-height: calc("));
+    const auto paint = base.find("background-color:");
+    CHECK(paint != std::string::npos && has(base, "@keyframes nexus-transfer { from {background-color:"));
+    CHECK(base.find("background", paint + 1) == std::string::npos);
+    CHECK(!has(base, "--bg") && !has(base, "transparent"));
 }
 
 // Measured: the open Cost breakdown reaches one gap above the viewport's bottom from its top, its body takes the
