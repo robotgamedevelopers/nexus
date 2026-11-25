@@ -179,7 +179,7 @@ Refused(op, f, a, s, notice) ==
     /\ UNCHANGED model
 
 \* The accounts and AIs become nl, nd, np, kn, ac, ni, and the sessions are settled, in one step. mv: the
-\* instances moved in place (<<ai, instance>>: another machine or directory), whose sessions are told too.
+\* instances moved in place (<<AI, instance>>: another machine or directory), whose sessions are told too.
 BecomeIM(op, f, a, ac, np, kn, nl, nd, ni, mv) ==
     /\ acct' = ac /\ prov' = np /\ known' = kn /\ links' = nl /\ dflt' = nd /\ insts' = ni
     /\ ses' = SettledI(nl, nd, np, ni, kn)

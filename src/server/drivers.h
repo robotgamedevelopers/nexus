@@ -1,4 +1,4 @@
-// nexus-server's ais: one driver supervisor (server/supervisor.h) per session, and the processes it asks for.
+// nexus-server's AIs: one driver supervisor (server/supervisor.h) per session, and the processes it asks for.
 // Several sessions may be with one AI: each has a driver of its own. This is the hub's Responder: a prompt sent in
 // a session goes to the session's supervisor, whose entries and durable state are committed with the window's action,
 // and only then is anything written to a driver. A prompt queued goes at the end of the session's queue, and the

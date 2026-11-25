@@ -186,7 +186,7 @@ Made in building the AI tabs from the server's list, to keep the locked rules ab
 - The window checks each AI name by the server's own rule (`accounts::isName`) before it labels a tab or writes the order: a name from the wire is untrusted input (`sync_unit` `ai_names_are_checked`).
 - The server sends its AIs only when they changed, and the window takes them only then: a reply streaming costs no AI work per frame, and the server's states share one list until its AIs change (`sync_unit` `ais_sent_only_when_changed`, `hub_keeps_one_ais_list`; `window_frame_budget` `many_ais_while_streaming`).
 - If the removed AI's tab was showing, the tab selected before it shows again, or the tab now at its place: the person is never left on nothing (`Window.tla` `RemoveActiveRule`).
-- `nexus --server H --tab N` with N past the tabs at launch waits up to 20 s, or until the link fails, for the server's ais: the link's bootstrap takes a few seconds (not measured; `sync_unit` `tab_given_waits_for_the_ais`).
+- `nexus --server H --tab N` with N past the tabs at launch waits up to 20 s, or until the link fails, for the server's AIs: the link's bootstrap takes a few seconds (not measured; `sync_unit` `tab_given_waits_for_the_ais`).
 - A saved AI tab is selected again once its AI arrives, and only a person's own change of tab is saved as the selection: the server's AIs come after launch, and a tab they select (the saved one arriving, another after the one that showed went) is no choice of the person's (`frame_host_unit`).
 - A server from before the list of AIs sends none: the window then shows the AIs of the server's sessions and removes none, so an older server keeps working.
 

@@ -2670,7 +2670,7 @@ void ai_names_are_checked() {
     AIStrip strip;
     const StripTake t = strip.take(m, s);
     CHECK(tabNames(m) == "ada bo cy" && t.dropped.size() == 2 && t.past == 0);
-    // Past kMaxAITabs (the most a ais.json holds) the rest have no tab, and are counted; a repeat counts once.
+    // Past kMaxAITabs (the most an ais.json holds) the rest have no tab, and are counted; a repeat counts once.
     Sessions many;
     std::vector<ServerAI> list;
     for (std::size_t i = 0; i < kMaxAITabs + 44; ++i) {
@@ -2862,7 +2862,7 @@ void saved_tab_waits_for_its_ai() {
     chose.personSelected();
     chose.take(n, listState({"ada"}));
     CHECK(n.active() == 0 && !chose.pending());
-    // The server's list without the saved ai: the wait ends, the selection stays.
+    // The server's list without the saved AI: the wait ends, the selection stays.
     Model o({}, true);
     AIStrip absent({}, "zed", {});
     absent.take(o, listState({"ada"}));

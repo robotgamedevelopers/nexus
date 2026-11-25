@@ -197,7 +197,7 @@ bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& d
 // The file is changed only by a change (KeptChange), read, merged and written whole under an OS lock on a file beside
 // it (kept-drafts.lock), never by writing a window's own drafts over it: so two windows, each keeping or giving back
 // drafts, never lose each other's (models/AIStrip.tla FileKeepsOthers). It is written 0600, by a rename.
-using KeptFile = std::map<std::pair<std::string, std::string>, std::string>;    // (server, ai) -> draft
+using KeptFile = std::map<std::pair<std::string, std::string>, std::string>;    // (server, AI) -> draft
 
 // A window's change of the file, for its server: the drafts it keeps (`put`, each AI's name and draft) and those it
 // gave back to an AI's new tab (`taken`, the same). A draft put where the file holds another for that server and
@@ -220,7 +220,7 @@ bool keptServer(std::string_view server);
 // The drafts `file` keeps for `server`, by AI name. Pure.
 std::map<std::string, std::string> keptFor(const KeptFile& file, const std::string& server);
 
-// The file's text: a header line, then for each draft, in (server, ai) order, a line "draft <server> <ai>
+// The file's text: a header line, then for each draft, in (server, AI) order, a line "draft <server> <ai>
 // <bytes>", then that many bytes of the draft as typed (any bytes, newlines too), then a line feed. Pure.
 std::string formatKeptDrafts(const KeptFile& file);
 
