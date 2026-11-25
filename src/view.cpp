@@ -1112,14 +1112,13 @@ struct Builder {
     }
 
     // A friend's tab shows the friend's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
-    // machine its ssh reaches, or the title its shell set), or "terminal".
+    // machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
     std::string label(const Tab& tab) {
         if (tab.kind == TabKind::Friend || tab.kind == TabKind::Extension)
             return std::string(tab.displayName());
         if (tab.kind == TabKind::Sprint)
             return "Dashboard";
-        std::string title = view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
-        return title.empty() ? std::string("terminal") : title;
+        return view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
     }
 
     // Each friend keeps its scroll while another shows, wherever its tab stands: a friend that showed its newest entry
@@ -2455,7 +2454,14 @@ struct Builder {
                 const auto id = tab.id;
                 if (tab.kind == TabKind::Friend && view.dismissFriend)
                     view.dismissFriend(tab);
-                model.dismiss_tab(model.active());
+                const auto closing = model.active();
+                if (terminal) {
+                    if (closing > 0 && model.tab(closing - 1).group == tab.group)
+                        model.select_tab(closing - 1);
+                    else if (closing + 1 < model.tab_count() && model.tab(closing + 1).group == tab.group)
+                        model.select_tab(closing + 1);
+                }
+                model.dismiss_tab(closing);
                 if (terminal && view.terminals) {
                     HitchScope scope(view.hitch, Phase::TerminalTab, std::uint32_t(id));
                     view.terminals->close(id);

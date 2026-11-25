@@ -29,8 +29,9 @@ first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
 and the size is kept across launches.
 
-Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; Cmd-W closes it and goes back to
-the tab selected before it, and it closes by itself when the shell exits. Terminal tabs can be dragged among themselves, never in among the friends. The
+Cmd-T opens a terminal tab, the login shell in the home directory, after the friends' tabs; its title stays blank until the shell name is available.
+Cmd-W closes the console and selects its left neighbor in the same group, or its right neighbor at the left edge.
+Closing the last console in the group returns to the previously selected open tab. The console also closes when its shell exits. Terminal tabs can be dragged among themselves, never in among the friends. The
 terminal tabs open at quit come back at the next launch, in the same order, each a new login shell in the directory
 its shell was last in (the home directory if that is gone); what a terminal showed, and any program running in it, do
 not come back. On a terminal tab every key that is not a Command chord, Escape included, goes to the shell. The

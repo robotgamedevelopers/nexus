@@ -2289,7 +2289,7 @@ void arrowsFollowTheActiveTab() {
 // ---- Terminal tabs ----
 
 // Command-T adds a terminal tab at the end, shows it below the strip at the window's full width, with no prompt and
-// no transcript; its label is "terminal" until its shell sets a title.
+// no transcript; its label is empty until its shell sets a title.
 void commandTAddsAndShowsATerminal() {
     Harness h;
     h.type("draft");
@@ -2304,7 +2304,7 @@ void commandTAddsAndShowsATerminal() {
     CHECK(h.model.tab(0).draft == "draft");
     h.frame();
     std::vector<std::string> l = h.labels();
-    CHECK(l.size() == 3 && l[2] == "terminal");
+    CHECK(l.size() == 3 && l[2].empty());
     // The fake terminal draws nothing below the strip and its divider.
     PrLayoutNode window = h.window();
     const auto divider = prLayoutNodeNextSibling(h.tree, prLayoutNodeFirstChild(h.tree, window));
@@ -2347,47 +2347,44 @@ void commandWClosesTheTerminal() {
     CHECK(h.ids() == "0 1 2 3 4" && h.model.active() == 4);
     h.commandDigit(4);  // id 3, between two terminals
     h.commandW();
-    CHECK(h.ids() == "0 1 2 4" && h.model.active() == 3 && h.active().id == 4);   // selected before it
+    CHECK(h.ids() == "0 1 2 4" && h.model.active() == 2 && h.active().id == 2);   // immediately left
     CHECK((h.terminals.closed == std::vector<std::size_t>{3}));
-    CHECK(h.terminals.shown.back() == 4);
-    h.commandW();       // the last tab
-    CHECK(h.ids() == "0 1 2" && h.model.active() == 2 && h.active().id == 2);
+    CHECK(h.terminals.shown.back() == 2);
+    h.commandW();       // no terminal left of this one
+    CHECK(h.ids() == "0 1 4" && h.model.active() == 2 && h.active().id == 4);
     h.commandW();
     CHECK(h.ids() == "0 1" && h.model.active() == 0);   // alex, shown before the first terminal; not emma beside it
-    CHECK((h.terminals.closed == std::vector<std::size_t>{3, 4, 2}) && h.terminals.running.empty());
+    CHECK((h.terminals.closed == std::vector<std::size_t>{3, 2, 4}) && h.terminals.running.empty());
     h.commandW();       // a friend: nothing
     CHECK(h.ids() == "0 1" && h.model.active() == 0);
     h.commandT();
     CHECK(h.ids() == "0 1 5");  // a new terminal takes a new id
 }
 
-// Command-W goes back to the tab selected before the one it closes, out of every friend, terminal and the sprint tab,
-// most recent first, skipping tabs closed since.
-void commandWGoesBackToThePreviousTab() {
-    Harness h = withSprint();   // sprint 2, f1 0, f2 1
-    h.commandT();               // terminal 1: id 3, at 3
-    h.commandT();               // terminal 2: id 4, at 4
-    h.commandDigit(2);          // f1
-    h.commandDigit(4);          // terminal 1
-    h.commandDigit(1);          // sprint
-    h.commandDigit(5);          // terminal 2
+// Repeated Command-W walks left, then right, then returns to the friend visited before the consoles.
+void commandWDrainsTheConsoleGroup() {
+    Harness h;
+    for (int i = 0; i < 5; ++i) h.commandT();
+    auto clickTab = [&](std::size_t index) {
+        const auto at = h.centre(h.tabs()[index]);
+        h.pointer(PrAppEventKind_PointerDown, at);
+        h.pointer(PrAppEventKind_PointerUp, at);
+        h.frame();
+    };
+    clickTab(1); // Emma
+    clickTab(4); // middle console
+    for (const auto id : {4u, 3u, 2u, 5u, 6u}) {
+        CHECK(h.active().id == id);
+        auto event = keyEvent(PrAppEventKind_KeyDown, 'W', PrAppKeyCode_KeyW, style::kCommand);
+        event.keyboard.repeat = id != 4;
+        h.push(event);
+        h.frame();
+    }
+    h.push(keyEvent(PrAppEventKind_KeyUp, 'W', PrAppKeyCode_KeyW, style::kCommand));
+    h.frame();
     h.commandW();
-    CHECK(h.ids() == "2 0 1 3" && h.active().kind == TabKind::Sprint);   // not f2 nor terminal 1, beside it
-    CHECK(h.board.shows > 0 && h.view.promptBox == kPrLayoutNodeNone);
-    h.commandDigit(4);          // terminal 1
-    h.commandW();
-    CHECK(h.ids() == "2 0 1" && h.active().kind == TabKind::Sprint);     // the sprint tab, selected last before it
-    h.commandT();               // id 5
-    h.commandT();               // id 6
-    h.commandDigit(3);          // f2
-    h.commandDigit(4);          // id 5
-    h.commandDigit(5);          // id 6
-    h.commandDigit(4);          // id 5 again: it moves to the front of the history
-    h.commandW();
-    CHECK(h.ids() == "2 0 1 6" && h.active().id == 6);                   // id 6, selected before id 5
-    h.commandW();
-    CHECK(h.ids() == "2 0 1" && h.active().name == "f2");                 // f2, selected before id 6 (id 5 closed)
-    CHECK((h.terminals.closed == std::vector<std::size_t>{4, 3, 5, 6}) && h.terminals.running.empty());
+    CHECK(h.ids() == "0 1" && h.active().id == 1);
+    CHECK((h.terminals.closed == std::vector<std::size_t>{4, 3, 2, 5, 6}));
 }
 
 // A terminal that closes while another tab shows (its shell ended) leaves the selection where it is.
@@ -3306,7 +3303,7 @@ int main(int argc, char** argv) {
     commandTAddsAndShowsATerminal();
     commandWOnAFriendDoesNothing();
     commandWClosesTheTerminal();
-    commandWGoesBackToThePreviousTab();
+    commandWDrainsTheConsoleGroup();
     anEndedTerminalElsewhereKeepsTheSelection();
     escapeOnATerminalHidesNothing();
     hiddenTerminalsAreServiced();
