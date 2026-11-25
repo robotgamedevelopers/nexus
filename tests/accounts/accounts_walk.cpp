@@ -178,9 +178,9 @@ struct Walk {
             const sync::StoredSession* s = store.find(id);
             o << (id == 1 ? "" : ", ");
             if (s == nullptr) {
-                o << "[made |-> FALSE, AI |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\", automatic |-> FALSE]";
+                o << "[made |-> FALSE, ai |-> \"none\", inst |-> \"none\", acct |-> \"none\", harness |-> \"none\", automatic |-> FALSE]";
             } else {
-                o << "[made |-> TRUE, AI |-> " << q(s->info.aiName) << ", inst |-> " <<
+                o << "[made |-> TRUE, ai |-> " << q(s->info.aiName) << ", inst |-> " <<
                     q(orNone(s->info.instance)) << ", acct |-> " << q(orNone(s->info.account)) << ", harness |-> " <<
                     q(s->info.harness) << ", automatic |-> " << (s->info.autoAccount ? "TRUE" : "FALSE") << "]";
             }

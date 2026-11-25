@@ -327,7 +327,7 @@ std::string state(const M& m) {
     const auto& h = m.selection_history();
     for (std::size_t k = 0; k < h.size(); ++k)
         o << (k ? ", " : "") << h[k];
-    o << ">>, AIs |-> <<";
+    o << ">>, ais |-> <<";
     for (std::size_t j = 0; j < m.tab_count(); ++j)
         o << (j ? ", " : "") << "[name |-> " << str(m.tab(j).name) << ", model |-> " << str(m.tab(j).model) << "]";
     o << ">>, active |-> " << m.active() << ", draft |-> <<";
@@ -361,7 +361,7 @@ std::string record(const char* op, std::size_t i, std::size_t j, const std::stri
                    bool ret, std::size_t id, const std::string& st, const AIInfo& f = AIInfo{}) {
     std::ostringstream o;
     o << "[op |-> \"" << op << "\", i |-> " << i << ", j |-> " << j << ", text |-> " << str(text) << ", entry |-> " << ent
-      << ", AI |-> " << aiRecord(f) << ", ret |-> " << (ret ? "TRUE" : "FALSE") << ", id |-> " << id << ", "
+      << ", ai |-> " << aiRecord(f) << ", ret |-> " << (ret ? "TRUE" : "FALSE") << ", id |-> " << id << ", "
       << st << "]";
     return o.str();
 }
