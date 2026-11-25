@@ -60,7 +60,7 @@ void refusals() {
     if (t.errors.size() == 4) {
         CHECK(has(t.errors[0], "line 1: a driver line is `driver <harness> <program>"));
         CHECK(has(t.errors[1], "line 2: an ai line is `ai <name> <harness> [<directory>]`"));
-        CHECK(has(t.errors[2], "line 3: an AI line"));
+        CHECK(has(t.errors[2], "line 3: an ai line"));
         CHECK(has(t.errors[3], "line 4: \"thing\" is not `driver`, `signin` or `ai`"));
     }
     CHECK(t.drivers.empty() && t.ais.empty());
@@ -76,7 +76,7 @@ void resolve() {
     const ResolvedDriver cy = resolveDriver(t, "cy", "/d/drivers");
     CHECK(cy.command.empty());
     CHECK(has(cy.problem, "cy has no driver, so the prompt was not sent"));
-    CHECK(has(cy.problem, "`AI cy <harness> [<directory>]` in /d/drivers"));
+    CHECK(has(cy.problem, "`ai cy <harness> [<directory>]` in /d/drivers"));
     CHECK(has(cy.problem, "`driver <harness> <program> [<argument>...]`"));
     CHECK(has(cy.problem, "/d/drivers line 4: \"bad\" is not `driver`, `signin` or `ai`."));
     // An AI whose harness has no driver.
