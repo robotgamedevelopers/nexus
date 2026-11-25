@@ -1,0 +1,121 @@
+# The native Windows build (ci.yml's windows job says what it holds) on a GitHub-hosted windows runner: MSVC x64 at
+# /W4, warnings as errors. Restores the newest cache for Prax's pin (C:\nexus-ci: the build directory, Prax's checkout
+# at its pin, Prax's downloads, cargo's target directory, and the pinned Rust toolchain), then configures where the
+# build directory has no CMakeCache.txt and builds; MSBuild rebuilds only what is newer than the cache (the checkout's
+# own files). Used by ci.yml (require: true, a missing cache fails at once) and cache-warm.yml (which saves it).
+# Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
+name: windows-build
+description: Restore caches, configure and build nexus's native Windows part on a GitHub-hosted runner
+inputs:
+  require:
+    default: "true"
+outputs:
+  key:
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Key
+      id: key
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
+        if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
+        "PRAX_PIN=$pin" >> $env:GITHUB_ENV
+        "prefix=windows-release-v1-$pin-" >> $env:GITHUB_OUTPUT
+        "key=windows-release-v1-$pin-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+    - name: Restore the newest cache for this pin
+      id: restore
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: |
+          C:\nexus-ci
+          ~\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc
+          ~\.cargo\registry\index
+          ~\.cargo\registry\cache
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - name: Environment and the Rust toolchain
+      shell: pwsh
+      env:
+        REQUIRE: ${{ inputs.require }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        PREFIX: ${{ steps.key.outputs.prefix }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (-not $env:MATCHED -and $env:REQUIRE -eq 'true') {
+          Write-Output "::error::no cache $($env:PREFIX)* on main for Prax's pin: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), then re-run this job; a cold Prax build does not fit the 2 minutes"
+          exit 1
+        }
+        Write-Output "restored: $(if ($env:MATCHED) { $env:MATCHED } else { 'nothing' })"
+        $caches = 'C:\nexus-ci'
+        New-Item -ItemType Directory -Force -Path "$caches\build-x64", "$caches\prax-downloads", "$caches\cargo-target" | Out-Null
+        "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
+        "NEXUS_BUILD=$caches\build-x64" >> $env:GITHUB_ENV
+        "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
+        "NEXUS_CARGO_TARGET_DIR=$caches\cargo-target" >> $env:GITHUB_ENV
+        "JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+        "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
+        $toolchain = '1.98.1-x86_64-pc-windows-msvc'
+        if (-not (Test-Path "$HOME\.rustup\toolchains\$toolchain\bin\cargo.exe")) {
+          rustup toolchain install $toolchain --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
+        }
+        "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
+    # Prax at the commit CMakeLists.txt pins, at depth 1, into a directory of its own, then renamed into place; and
+    # Prax's Slang compiler into Prax's download cache, checked against Prax's pinned sha256.
+    - name: Prax at its pin
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        $pin = $env:PRAX_PIN
+        $prax = "$env:NEXUS_CACHES\prax-$pin"
+        if (-not (Test-Path $prax)) {
+          Get-ChildItem -Force $env:NEXUS_CACHES -Filter 'prax-*' -Directory | Where-Object { $_.Name -ne 'prax-downloads' } | Remove-Item -Recurse -Force
+          $partial = "$env:NEXUS_CACHES\prax-partial"
+          git init -q $partial
+          if ($LASTEXITCODE -ne 0) { throw "git init exited $LASTEXITCODE" }
+          git -C $partial fetch -q --depth 1 https://github.com/pdoane/prax.git $pin
+          if ($LASTEXITCODE -ne 0) { throw "git fetch of Prax $pin exited $LASTEXITCODE" }
+          git -C $partial checkout -q FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout of Prax $pin exited $LASTEXITCODE" }
+          Rename-Item $partial "prax-$pin"
+        }
+        $head = git -C $prax rev-parse HEAD
+        if ($LASTEXITCODE -ne 0 -or $head -ne $pin) { throw "the Prax checkout at $prax is at '$head', not $pin" }
+        "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
+        $deps = Get-Content -Raw "$prax\cmake\slang.cmake"
+        $asset = 'windows-x86_64.zip'
+        $hash = [regex]::Match($deps, '_pr_slang_asset ' + [regex]::Escape($asset) + '\)\s+set\(_pr_slang_hash ([0-9a-f]{64})').Groups[1].Value
+        $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{_pr_slang_asset\}').Groups[1].Value
+        if (-not $hash -or -not $url) { throw "Prax's cmake/slang.cmake no longer names Slang's $asset as this step reads it" }
+        $file = ($url -split '/')[-1] + $asset
+        $slang = "$env:PR_DOWNLOAD_DIR\slang"
+        New-Item -ItemType Directory -Force -Path $slang | Out-Null
+        $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
+        if ($have -ne $hash) {
+          curl.exe -fsSL --retry 3 -o "$slang\$file.partial" ($url + $asset)
+          if ($LASTEXITCODE -ne 0) { throw "curl of Slang's $file exited $LASTEXITCODE" }
+          $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
+          if ($got -ne $hash) { Remove-Item -Force "$slang\$file.partial"; throw "Slang's $file has sha256 $got, and Prax pins $hash" }
+          Move-Item -Force "$slang\$file.partial" "$slang\$file"
+        }
+    # Every NEXUS_* option is given, so a kept CMakeCache.txt never decides what is built; `cmake --build` re-runs the
+    # configure itself (ZERO_CHECK) whenever a CMake file changed since the cache's configure.
+    - name: Configure (Release, MSVC x64)
+      shell: pwsh
+      run: |
+        if (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt") {
+          Write-Output "configured already (the restored build directory); cmake --build re-runs it if a CMake file changed"
+          exit 0
+        }
+        cmake -S . -B $env:NEXUS_BUILD -A x64 "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE" `
+          -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_LINK=OFF
+        if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
+    - name: Build
+      shell: pwsh
+      run: |
+        cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
+        if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }

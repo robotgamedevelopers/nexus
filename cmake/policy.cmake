@@ -18,6 +18,10 @@ if(DEFINED ENV{GITHUB_ACTIONS} AND DEFINED ENV{RUNNER_NAME})
         set(policy_cache_home "$ENV{USERPROFILE}")
     endif()
     set(policy_cargo_target "${policy_cache_home}/.cache/nexus-ci/$ENV{RUNNER_NAME}/starlark")
+    # GitHub-hosted runners have a new name for every job; their workflow names a fixed directory it caches.
+    if(DEFINED ENV{NEXUS_CARGO_TARGET_DIR} AND NOT "$ENV{NEXUS_CARGO_TARGET_DIR}" STREQUAL "")
+        set(policy_cargo_target "$ENV{NEXUS_CARGO_TARGET_DIR}")
+    endif()
     set(policy_stage_archive
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${policy_target}/release"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
