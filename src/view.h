@@ -210,6 +210,10 @@ struct View {
     // start: false on a desktop and an iPad, true on a compact width (an iPhone, main_ios.cpp), where the policy's share
     // wraps a reply at about half the screen.
     bool fullWidthReplies = false;
+    // The dialogs typed into (the server, a secret) stand at the window's top rather than its centre: true on iOS and
+    // iPadOS (main_ios.cpp), where the on-screen keyboard covers the window's lower part and a modal is placed over
+    // the whole window.
+    bool dialogsAtTop = false;
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing

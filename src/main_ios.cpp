@@ -377,6 +377,7 @@ int main(int argc, char** argv) {
     App a;
     a.model = &model;
     a.view.model = &model;
+    a.view.dialogsAtTop = true;     // the on-screen keyboard covers the lower part (View::dialogsAtTop)
     a.view.look = &a.look;
     a.host.model = &model;
     a.host.view = &a.view;

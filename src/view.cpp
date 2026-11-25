@@ -1012,6 +1012,15 @@ struct Builder {
         return cached.advance;
     }
 
+    // A dialog that is typed into: at the window's top where the view asks for it (View::dialogsAtTop, iOS), where the
+    // on-screen keyboard never covers it; centred otherwise. A modal is placed over the whole window, which knows
+    // nothing of the keyboard's room.
+    PrKitDialogStyle typedDialogStyle() const {
+        PrKitDialogStyle style{};
+        if (view.dialogsAtTop) style.modal.placement = PrKitModalPlacement_Top;
+        return style;
+    }
+
     PrVec2 boardExtent() const {
         return {view.extent.x, std::max(0.0f, view.extent.y - (look.tabs.height * k() + 1))};
     }
@@ -2238,7 +2247,7 @@ struct Builder {
         dialog.key = prHashString(sv("secret"), 0);
         const std::string title = asking->account + ": " + asking->what;
         dialog.title = sv(title);
-        const PrLayoutNode body = prKitDialog(kit, window, dialog, PrKitDialogStyle{});
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
             // The person closed it (Escape, the close button, a press outside): the request is cancelled.
             view.secretField = kPrLayoutNodeNone;
@@ -2394,7 +2403,7 @@ struct Builder {
         PrKitDialog dialog{};
         dialog.key = prHashString(sv("server"), 0);
         dialog.title = sv("Server");
-        const PrLayoutNode body = prKitDialog(kit, window, dialog, PrKitDialogStyle{});
+        const PrLayoutNode body = prKitDialog(kit, window, dialog, typedDialogStyle());
         if (body == kPrLayoutNodeNone) {
             if (!fresh) choice->cancel();
             view.serverShown = false;

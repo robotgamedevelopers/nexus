@@ -172,6 +172,7 @@ int main(int argc, char** argv) {
     }
     if (status != nullptr) view.status = status;
     view.askedTextSteps = textSteps;
+    view.dialogsAtTop = true;   // as the app places a typed dialog (main_ios.cpp, View::dialogsAtTop)
     // A frame as wide as an iPad's (a regular horizontal size class starts well below 1032 points) takes the narrower
     // prompt and column the app gives a regular width (main_ios.cpp, style.h kRegularWidthColumn).
     if (width >= kRegularFromPoints) view.columnScale = nexus::style::kRegularWidthColumn;
