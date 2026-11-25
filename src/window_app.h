@@ -3,6 +3,8 @@
 
 #include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "model.h"
@@ -20,7 +22,15 @@ struct Shortcut {
     int argument;
     std::string type{};
 };
-enum class Panel { Board, Terminal, Spacer, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply };
+// Menu and Back are the phone's form (docs/voice.md): the list of AIs with its microphone, and the way back to it from
+// a tab.
+enum class Panel { Board, Terminal, Spacer, Transcript, Prompt, Status, Account, LimitChoice, Native, TextArea, Label, ServiceReply,
+                   Menu, Back };
+// A row of the phone's list after its tabs (menu_rows): its title, and the window command it runs as a shortcut does.
+struct MenuRow {
+    std::string title;
+    Shortcut command{};
+};
 struct TabType {
     std::string title, group, native, service;
     bool operator==(const TabType&) const = default;
@@ -75,6 +85,18 @@ struct AccountSurface {
     TabStyle tabs;
     PromptStyle prompt;
     bool showTabs = true, reorderTabs = true, promptCommand = false;
+    // The prompt takes the focus on every frame (the desktop and the iPad). Off on the phone, where the focus brings up the
+    // on-screen keyboard over the microphone: a tap on the prompt focuses it there.
+    bool focusPrompt = true;
+    // The phone's microphones (docs/voice.md): the list's, and the prompt's dictation. Off unless the policy turns them on.
+    bool voiceMic = false;
+    // The phone's voice (docs/voice.md): more spoken forms of AIs' names, by AI (voice_names). How replies come back is
+    // no setting: spoken on the menu, text in a tab (voice::replyOn).
+    std::map<std::string, std::vector<std::string>> voiceNames;
+    // The phone's list: the tabs it shows, by index, in its order (the dashboard, the AIs, then terminals); unset, all
+    // of them in the strip's order.
+    std::optional<std::vector<std::size_t>> menuTabs;
+    std::vector<MenuRow> menuRows;
 };
 
 struct MessageCardStyle {
@@ -168,5 +190,9 @@ private:
     uint64_t generation_ = 0;
     std::optional<uint64_t> appliedGeneration_;
 };
+
+// Reads a window answer's menu_rows (docs/policy.md, The iPhone's form) into `rows`: absent is none; a malformed list is
+// refused, with why. readWindow uses it on every answer; a test reads one alone.
+bool readMenuRows(std::string_view json, std::vector<MenuRow>& rows, std::string& why);
 
 } // namespace nexus

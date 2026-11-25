@@ -90,6 +90,8 @@ set_tests_properties(overlay_unit PROPERTIES LABELS unit TIMEOUT 30)
 # With SEED and LABEL, the walk is label_walk (a terminal tab's label, FRIENDS remotes).
 # With SEED and OVERLAY, the walk is overlay_walk (the overlay's rules, STEPS steps), and FAULTY names one of its faults
 # (hide-unkeyed, hotkey-hides). With GLIDEWALK, it is glide_walk (the board's scroller), and FAULTY keyup its one fault.
+# With VOICEWALK, it is tests/voice's voice_walk (a client's voice turn), and FAULTY turn-end its one fault. Called from
+# tests/voice.
 # With STRIPWALK, it is strip_walk (the friend strip, FRIENDS friends), and FAULTY one of its faults (forget, wait).
 # With SUPWALK, it is tests/server's supervisor_walk (a friend tab's driver supervisor), and FAULTY one of its faults
 # (turn, resume, queue).
@@ -113,7 +115,7 @@ function(tlc_test name module cfg expect)
     if(NOT NEXUS_SERVER_PARTS)
         return()
     endif()
-    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK TERMWALK GLIDEWALK SUPWALK PASSWALK ACCWALK SECWALK
+    set(options SERVICETRACE PICKERTRACE PLUGINTRACE NOSPRINT CHURN NIGHTLY LINKWALK LABEL OVERLAY WATCHWALK TERMWALK GLIDEWALK VOICEWALK SUPWALK PASSWALK ACCWALK SECWALK
         SIGNWALK RECONNECTWALK DRIVERWALK DRIVERTESTS STRIPWALK SHARD TSWALK NODEADLOCK BUSDELIVERYTRACE BUSPEERTRACE)
     cmake_parse_arguments(T "${options}"
         "CREDITMODE;PROPERTY;SEED;STEPS;FRIENDS;WINDOWS;FAULTY;FORMAT;WORKERS;CAP;SPLIT;SPLITMODE;TEMPORALCFG" "" ${ARGN})
@@ -210,6 +212,8 @@ function(tlc_test name module cfg expect)
         list(APPEND defs -DPASSWALK=$<TARGET_FILE:pass_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_GLIDEWALK)
         list(APPEND defs -DGLIDEWALK=$<TARGET_FILE:glide_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
+    elseif(T_VOICEWALK)
+        list(APPEND defs -DVOICEWALK=$<TARGET_FILE:voice_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS})
     elseif(T_LINKWALK)
         list(APPEND defs -DLINKWALK=$<TARGET_FILE:link_walk> -DSEED=${T_SEED} -DSTEPS=${T_STEPS} -DWINDOWS=${T_WINDOWS})
     elseif(DEFINED T_SEED AND T_OVERLAY)

@@ -107,6 +107,46 @@ def _panels(state):
         panels.append("status")
     return panels
 
+def _titles(tabs, config):
+    return [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
+
+# The iPhone's form (docs/voice.md), chosen by the device's idiom (ui.idiom: "phone", "pad" or "desktop"). The app opens
+# on the list of AIs (ui.menu), centred, with a microphone at the bottom: say an AI's name and what to ask, and the
+# reply comes back on the list, spoken. An AI's tab opens full screen with the way back, its
+# transcript and the prompt, whose microphone is plain dictation into the prompt; its replies are text. A fork turns
+# both microphones off with "phone": {"voice": false}, and adds spoken forms of an AI's name with
+# "phone": {"voice_names": {"zhi": ["zhi ya wen"]}}.
+# The list's rows, by tab index: by kind in phone.menu_kinds' order (the dashboard, the AIs, then terminals), each kind
+# in the strip's order; tabs of a kind not listed come last.
+def _menu_tabs(tabs, phone):
+    kinds = phone.get("menu_kinds", ["sprint", "friend", "terminal"])
+    rank = {kind: i for i, kind in enumerate(kinds)}
+    order = sorted(range(len(tabs)), key = lambda i: (rank.get(tabs[i]["kind"], len(kinds)), i))
+    return order
+
+def _phone(window, state, config):
+    ui = state.get("ui", {})
+    phone = config.get("phone", {})
+    menu = ui.get("menu", True)
+    window["show_tabs"] = False
+    window["reorder_tabs"] = False
+    window["focus_prompt"] = False
+    window["voice_mic"] = phone.get("voice", True)
+    window["tab_titles"] = window.get("tab_titles") or _titles(ui.get("tabs", []), config)
+    window["voice_names"] = phone.get("voice_names", {})
+    window["menu_tabs"] = _menu_tabs(ui.get("tabs", []), phone)
+    # The list's last row opens a terminal on the server (docs/terminals.md) while the window can (ui.terminals).
+    if ui.get("terminals", False):
+        window["menu_rows"] = [{"title": "New terminal", "command": "open_terminal"}]
+    if menu:
+        window["panels"] = ["menu"]
+        return window
+    panels = [p for p in window["panels"] if p != "status"]
+    if state["tab"] == "friend" and state["has_status"]:
+        panels.append("status")
+    window["panels"] = (["back"] + panels)[:6]
+    return window
+
 def handle(event, state, config):
     if event == "overlay":
         return config.get("overlay_hotkey", {"modifiers": "Command", "code": "Backquote"})
@@ -236,7 +276,7 @@ def handle(event, state, config):
         window["prompt_command"] = bool(words) and (words[0] == "/help" or words[0] in config.get("prompt_commands", _COMMAND_HELP.keys()))
         tabs = state.get("ui", {}).get("tabs", [])
         if config.get("centered_account_menu", False) or config.get("tab_labels"):
-            window["tab_titles"] = [(t["label"][:1].upper() + t["label"][1:]) if t["kind"] == "friend" else config.get("tab_labels", {}).get(t["kind"], t["label"]) for t in tabs]
+            window["tab_titles"] = _titles(tabs, config)
         if config.get("centered_account_menu", False):
             window = account_window(window, state, config)
         if state["tab"] == "friend" and state["prompt_open"]:
@@ -305,6 +345,8 @@ def handle(event, state, config):
                 window["account_items"] = []
             else:
                 window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
+        if state.get("ui", {}).get("idiom") == "phone":
+            window = _phone(window, state, config)
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":

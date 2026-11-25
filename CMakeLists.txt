@@ -147,6 +147,13 @@ add_library(nexus_model STATIC src/model.cpp src/overlay.cpp src/cursor.cpp)
 target_include_directories(nexus_model PUBLIC src)
 target_compile_options(nexus_model PRIVATE ${NEXUS_WARNINGS})
 
+# Voice (src/voice): which AI a spoken prompt is for (name_match.h) and one voice turn of a client (voice_turn.h).
+# Pure C++, with no Prax, no OS and no time, so that the iPhone's window and a native watch client share it
+# (docs/voice.md). The OS's speech recognition and synthesis are the host's, behind src/voice/speech.h.
+add_library(nexus_voice STATIC src/voice/name_match.cpp src/voice/voice_turn.cpp src/voice/voice_host.cpp)
+target_include_directories(nexus_voice PUBLIC src)
+target_compile_options(nexus_voice PRIVATE ${NEXUS_WARNINGS})
+
 # The accounts and friends nexus-server holds (src/accounts/registry.h): their rules, their JSON files' text (with
 # Prax's JSON), and the accounts the server picks. No OS, no time.
 add_library(nexus_accounts STATIC src/accounts/registry.cpp)
@@ -284,9 +291,9 @@ add_library(nexus_hitch STATIC src/hitch.cpp)
 target_include_directories(nexus_hitch PUBLIC src)
 target_compile_options(nexus_hitch PRIVATE ${NEXUS_WARNINGS})
 
-# The sprint board's scrolling (src/scroll_glide.h): the curves and the scroller over its page. No OS, no time, no
-# Prax, so that the model job builds its trace walk alone.
-add_library(nexus_scroll STATIC src/scroll_glide.cpp)
+# The sprint board's scrolling (src/scroll_glide.h), and the phone list's under the finger (src/finger_scroll.h): the
+# curves and the scrollers. No OS, no time, no Prax, so that the model job builds their trace walks alone.
+add_library(nexus_scroll STATIC src/scroll_glide.cpp src/finger_scroll.cpp)
 target_include_directories(nexus_scroll PUBLIC src)
 target_compile_options(nexus_scroll PRIVATE ${NEXUS_WARNINGS})
 
@@ -465,6 +472,7 @@ if(NEXUS_SERVER_PARTS)
     add_subdirectory(tests/server)
 endif()
 add_subdirectory(tests/wire)
+add_subdirectory(tests/voice)
 if(NEXUS_LINK)
     add_subdirectory(tests/link)
 endif()
