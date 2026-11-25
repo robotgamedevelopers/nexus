@@ -116,6 +116,7 @@ table SignInOffer
     field opener id=0x8a28804a0a9ba5e2 kind=17 type=string
     field host id=0x4077f8cc7eaf4d6f kind=17 type=string
     field url id=0x4c4e8b193dc8be7e kind=17 type=bytes
+    field code_wanted id=0x20cc7f35d42125c2 kind=1
 
 table Snapshot
     field next_session id=0x17b96c48ba4cbde7 kind=9
@@ -160,6 +161,7 @@ enum ActionKind
     variant SignInCallback id=0x5c16b9e2e6fb5e04
     variant SignOut id=0x5cdb26887b48e1e8
     variant ResolveLimit id=0x0610706c3ede743e
+    variant SignInCode id=0x40a17ec4a8d3cb42
 
 enum Activity
     variant Idle id=0xc92905d14a9421f3
@@ -213,4 +215,7 @@ union Change
 - no compatibility-affecting edits; the wire absorbs the rest
 
 ### 2026-11-24 (UTC) — Expose the primary chat's bound account to windows
+- no compatibility-affecting edits; the wire absorbs the rest
+
+### 2026-11-25 (UTC) — sign-in offer says a code is wanted; actions gain sign-in-code
 - no compatibility-affecting edits; the wire absorbs the rest
