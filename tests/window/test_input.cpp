@@ -2858,7 +2858,7 @@ void regularWidthNarrowsThePromptAndTheColumn() {
     h.frame();
     h.frame();
     const PrRect box = h.bounds(h.view.promptBox);
-    const PrRect column = h.bounds(h.view.items.column);
+    const PrRect column = h.bounds(h.view.items[h.active().id].column);
     const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
     CHECK(box.right - box.left > 100);
     CHECK(near(column.left, box.left) && near(column.right, box.right));
@@ -2866,7 +2866,7 @@ void regularWidthNarrowsThePromptAndTheColumn() {
     h.frame();
     h.frame();
     const PrRect narrow = h.bounds(h.view.promptBox);
-    const PrRect narrowColumn = h.bounds(h.view.items.column);
+    const PrRect narrowColumn = h.bounds(h.view.items[h.active().id].column);
     CHECK(near(narrow.right - narrow.left, (box.right - box.left) * style::kRegularWidthColumn));
     CHECK(near(narrow.left + narrow.right, box.left + box.right));
     CHECK(near(narrowColumn.left, narrow.left) && near(narrowColumn.right, narrow.right));
