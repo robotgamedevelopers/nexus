@@ -252,6 +252,12 @@ struct View {
     // iPadOS (main_ios.cpp), where the on-screen keyboard covers the window's lower part and a modal is placed over
     // the whole window.
     bool dialogsAtTop = false;
+    // A tap outside the prompt's box ends editing, and the on-screen keyboard goes down, as in other apps: true on iOS
+    // and iPadOS (main_ios.cpp). A drag or a scroll is no tap, and a tap on a tab or in the prompt's box ends nothing
+    // (FrameHost::watchTap). The draft stays.
+    bool tapEndsEditing = false;
+    bool promptDismissed = false;               // a tap ended editing: the prompt does not take the focus back until
+                                                // a press in its box, a key, or another tab
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing
