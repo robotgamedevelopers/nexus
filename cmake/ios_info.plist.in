@@ -59,5 +59,7 @@
     <string>${NEXUS_IOS_COMMIT}</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>nexus reaches your nexus-server over ssh and mosh when the server is on your local network.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>nexus shows nothing until you unlock it with Face ID or your passcode.</string>
 </dict>
 </plist>
