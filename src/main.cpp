@@ -774,14 +774,14 @@ void trace(void* context, const PrStudioWindowFrameTimes* t) {
                 // A normal window veiled by a relock (veil): the lock screen's frame is drawn, so it shows again,
                 // without taking the keyboard or asking; Return or a click asks.
                 prAppWindowSetOpacity(window, 1);
-                return;
+            } else {
+                prAppWindowFocus(window);
+                prAppWindowSetOpacity(window, 1);
+                a.audio.play(a.view.windowApp.surface.openChirp);
+                prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
+                // Shown locked: the system is asked now, over the lock screen (after a refusal, on Return or a click).
+                if (a.lock) a.lock->shown();
             }
-            prAppWindowFocus(window);
-            prAppWindowSetOpacity(window, 1);
-            a.audio.play(a.view.windowApp.surface.openChirp);
-            prAppTimerSet(prStudioWindowApp(a.window), kKeyCheckTag, kKeyCheckSeconds, 0);
-            // Shown locked: the system is asked now, over the lock screen (after a refusal, on Return or a click).
-            if (a.lock) a.lock->shown();
         } else {
             if (a.board && !a.boardRevealStep) a.boardRevealStep = a.board->postedStep();
             prAppWindowRequestFrame(window);
