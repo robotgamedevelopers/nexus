@@ -122,9 +122,6 @@
       "to_hz": 510
     }
   },
-  "tab_labels": {
-    "sprint": "Dashboard"
-  },
   "tab_style": {
     "fill": "#1b1b1b",
     "ink": "#999999",

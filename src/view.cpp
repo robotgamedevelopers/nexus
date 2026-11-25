@@ -1019,11 +1019,11 @@ struct Builder {
     void select(std::size_t index) {
         if (index >= model.tab_count()) return;
         const auto& tab = model.tab(index);
-        if (view.board && tab.kind == TabKind::Sprint && model.active() != index) {
+        if (view.board && tab.kind == TabKind::Dashboard && model.active() != index) {
             if (view.pendingBoardId != tab.id) view.board->prepare(boardExtent());
             view.pendingBoardId = tab.id;
             if (!view.board->prepared()) { prUiRequestFrame(ui); return; }
-        } else if (view.board && tab.kind == TabKind::Sprint) {
+        } else if (view.board && tab.kind == TabKind::Dashboard) {
             view.board->home();
         }
         if (view.pendingBoardId && view.board) view.board->cancelPreparation();
@@ -1158,13 +1158,11 @@ struct Builder {
         }
     }
 
-    // An AI's tab shows the AI's name; the sprint tab "sprint"; a terminal's its label (Terminals::title: the
-    // machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
+    // An AI's tab shows the AI's name; a dashboard's its name (the server's, sync/dashboards.h); a terminal's its label
+    // (Terminals::title: the machine its ssh reaches, or the title its shell set). An untitled terminal starts blank.
     std::string label(const Tab& tab) {
-        if (tab.kind == TabKind::AI || tab.kind == TabKind::Extension)
+        if (tab.kind == TabKind::AI || tab.kind == TabKind::Extension || tab.kind == TabKind::Dashboard)
             return std::string(tab.displayName());
-        if (tab.kind == TabKind::Sprint)
-            return "Dashboard";
         return view.terminals != nullptr ? view.terminals->title(tab.id) : std::string();
     }
 
@@ -2342,7 +2340,7 @@ struct Builder {
             view.terminals->startPending(content);
         }
         // A click on the sprint tab, selected already or not, takes its page back to the board (Board::home).
-        if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Sprint &&
+        if (beforeStrip == model.active() && view.windowApp.surface.showTabs && view.board && model.tab_count() && model.tab(model.active()).kind == TabKind::Dashboard &&
                 prUiClicked(ui, view.tabNodes[model.active()], 0))
             view.board->home();
         // the strip may have selected or moved a tab: read the active tab again
@@ -2429,7 +2427,7 @@ struct Builder {
         for (std::size_t i = 0; i < model.tab_count(); ++i) {
             const auto& tab = model.tab(i);
             prJsonWriterBeginObject(w);
-            field("kind", tab.kind == TabKind::AI ? "ai" : tab.kind == TabKind::Sprint ? "sprint" :
+            field("kind", tab.kind == TabKind::AI ? "ai" : tab.kind == TabKind::Dashboard ? "dashboard" :
                           tab.kind == TabKind::Extension ? "extension" : "terminal");
             field("label", label(tab));
             field("group", tab.group);
@@ -2483,7 +2481,7 @@ struct Builder {
         const auto describe = [&] {
             const Tab* active = model.tab_count() ? &model.tab(model.active()) : nullptr;
             const char* kind = !active ? "empty" : active->kind == TabKind::AI ? "ai" :
-                active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Sprint ? "sprint" : "extension";
+                active->kind == TabKind::Terminal ? "terminal" : active->kind == TabKind::Dashboard ? "dashboard" : "extension";
             if (!active || view.choiceTab != active->id || (view.secrets && view.secrets->showing())) {
                 view.choiceKind.clear();
                 view.choiceValue.clear();

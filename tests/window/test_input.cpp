@@ -177,7 +177,7 @@ struct Harness {
 
     // With `overlay`, the window is drawn as the see-through overlay is.
     explicit Harness(const std::vector<AIInfo>& ais, bool overlay = false, bool sprint = false)
-            : model(ais, sprint) {
+            : model(ais, sprint ? std::vector<std::string>{"sprint"} : std::vector<std::string>{}) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -2346,7 +2346,7 @@ void arrowsFollowTheActiveTab() {
     CHECK(h.model.active() == next - 1);
     h.commandDigit(1);
     left();
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.model.select_tab(count - 1);
     h.frame();
     right();
@@ -2583,7 +2583,7 @@ void dragsStayInTheirZone() {
 void sprintTabIsFirstAndCommandOne() {
     Harness h = withSprint();
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f1", "f2"}));
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     CHECK(h.board.shows > 0 && h.view.prompt == kPrLayoutNodeNone && h.view.promptBox == kPrLayoutNodeNone);
     CHECK(h.board.extent.x == 1000 && h.board.extent.y > 600 && h.board.extent.y < 780);
     h.commandDigit(2);
@@ -2596,7 +2596,7 @@ void sprintTabIsFirstAndCommandOne() {
     h.commandDigit(4);
     CHECK(h.active().kind == TabKind::Terminal);
     h.commandDigit(1);
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
 }
 
 // Choosing the sprint tab takes its page back to the board: Command-1 from another tab and on the sprint tab itself, and
@@ -2609,12 +2609,12 @@ void choosingTheSprintTabGoesHome() {
     h.commandDigit(2);
     CHECK(h.board.homes == 1);
     h.commandDigit(1);
-    CHECK(h.board.homes == 2 && h.active().kind == TabKind::Sprint);
+    CHECK(h.board.homes == 2 && h.active().kind == TabKind::Dashboard);
     PrVec2 at = h.centre(h.tabs()[0]);
     h.pointer(PrAppEventKind_PointerDown, at);
     h.pointer(PrAppEventKind_PointerUp, at);
     h.frame();
-    CHECK(h.board.homes == 3 && h.active().kind == TabKind::Sprint);
+    CHECK(h.board.homes == 3 && h.active().kind == TabKind::Dashboard);
     at = h.centre(h.tabs()[1]);
     h.pointer(PrAppEventKind_PointerDown, at);
     h.pointer(PrAppEventKind_PointerUp, at);
@@ -2624,7 +2624,7 @@ void choosingTheSprintTabGoesHome() {
     h.pointer(PrAppEventKind_PointerDown, at);
     h.pointer(PrAppEventKind_PointerUp, at);
     h.frame();
-    CHECK(h.board.homes == 4 && h.active().kind == TabKind::Sprint);
+    CHECK(h.board.homes == 4 && h.active().kind == TabKind::Dashboard);
     h.commandDigit(2);
     h.board.ready = false;
     h.commandDigit(1);
@@ -2639,7 +2639,7 @@ void choosingTheSprintTabGoesHome() {
     CHECK(h.active().name == "f2");
     h.board.ready = true;
     h.frame();
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
 }
 
 // Command-digit selects by strip position from the sprint tab and from an AI's, at launch and after coming back to
@@ -2664,18 +2664,18 @@ void commandDigitsWorkFromTheSprintTab() {
     h.commandDigit(2);
     CHECK(h.active().name == "f1");
     h.commandDigit(1);
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.commandDigit(2);
     CHECK(h.active().name == "f1");
     h.commandDigit(1);
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.commandDigit(3);
     CHECK(h.active().name == "f2");
     h.commandDigit(9);
     CHECK(h.active().name == "f2");
     h.commandDigit(1);
     h.commandDigit(9);
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.commandDigit(4);
     CHECK(h.active().name == "f3");
 }
@@ -2687,7 +2687,7 @@ void commandOneWithCapsLockSelectsTheSprintTab() {
     h.commandDigit(2, PrAppModifierFlag_CapsLock);
     CHECK(h.active().name == "f1");
     h.commandDigit(1, PrAppModifierFlag_CapsLock);
-    CHECK(h.model.active() == 0 && h.active().kind == TabKind::Sprint);
+    CHECK(h.model.active() == 0 && h.active().kind == TabKind::Dashboard);
 }
 
 // Exactly the active tab is drawn selected, in whichever strip it stands: the other strip shows none selected.
@@ -2738,7 +2738,7 @@ void sprintTabNeverMoves() {
     h.dragTab(0, 2);
     CHECK(h.ids() == "3 0 1 2" && h.saves == 0);
     h.dragTab(2, 0);
-    CHECK(h.model.tab(0).kind == TabKind::Sprint && h.saves == 0);
+    CHECK(h.model.tab(0).kind == TabKind::Dashboard && h.saves == 0);
     h.dragTab(1, 3);
     CHECK(h.ids() == "3 1 2 0" && h.saves == 1);
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "f2", "f3", "f1"}));
@@ -2758,17 +2758,17 @@ void hideAndShowKeepTheSelectedTab() {
     h.pointer(PrAppEventKind_PointerMove, end);
     h.pointer(PrAppEventKind_PointerUp, end);
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "emma", "f3", "alex"}));
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);             // hide
     CHECK(h.hides == 1);
     h.frame();                                               // shown again
     h.frame();
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     CHECK(prUiFocus(h.ui) != h.tabs()[3]);                   // no ring on alex
     CHECK(prUiFocus(h.ui) == h.tabs()[0]);                   // the focus is on the sprint tab
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
     h.enter();
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     // On an AI's tab the same: the AI stays selected, and the prompt has the focus.
     h.commandDigit(2);
     CHECK(h.active().name == "emma");
@@ -2784,9 +2784,9 @@ void launchWithAlexLastShowsTheSprintTab() {
     std::vector<AIInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
     Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "rowan", "emma", "alex"}));
-    CHECK(h.active().kind == TabKind::Sprint);
+    CHECK(h.active().kind == TabKind::Dashboard);
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
-    CHECK(h.active().kind == TabKind::Sprint && prUiFocus(h.ui) != h.tabs()[3]);
+    CHECK(h.active().kind == TabKind::Dashboard && prUiFocus(h.ui) != h.tabs()[3]);
 }
 
 // Each change of the selected tab, and only a change, asks for the selection to be saved: a drag keeps the selected tab
@@ -2811,7 +2811,7 @@ void selectionChangesAreSaved() {
 void sprintTabKeysCloseNothing() {
     Harness h = withSprint();
     h.commandW();
-    CHECK(h.model.tab_count() == 3 && h.active().kind == TabKind::Sprint);
+    CHECK(h.model.tab_count() == 3 && h.active().kind == TabKind::Dashboard);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     CHECK(h.hides == 1);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape, style::kCommand);
@@ -3173,7 +3173,7 @@ int main(int argc, char** argv) {
         auto h = withSprint();
         h.view.application->watch(argv[2]);
         h.commandW();
-        CHECK(h.active().kind == TabKind::Sprint && h.model.tab_count() == 3);
+        CHECK(h.active().kind == TabKind::Dashboard && h.model.tab_count() == 3);
         h.commandDigit(2);
         h.commandW();
         CHECK(h.active().kind == TabKind::AI && h.model.tab_count() == 3);

@@ -1,4 +1,4 @@
-// The window's state without drawing: the sprint tab, one tab per AI (ais come and go with the server's AI
+// The window's state without drawing: one tab per dashboard (dashboards come and go with the server's list), one tab per AI (ais come and go with the server's AI
 // list), then the terminal tabs that come and go, the active tab, and each AI's transcript, unsent draft and queue
 // of prompts held for later.
 // Plain C++: no OS, no clock, no input events. models/Window.tla is its specification, and
@@ -31,7 +31,7 @@ bool blank(const std::string& text) {
 
 int zone(TabKind kind) {
     switch (kind) {
-        case TabKind::Sprint: return 0;
+        case TabKind::Dashboard: return 0;
         case TabKind::AI: return 1;
         case TabKind::Terminal: return 2;
         case TabKind::Extension: return 3;
@@ -39,15 +39,20 @@ int zone(TabKind kind) {
     return 2;
 }
 
-// Window.tla's Init: the sprint tab, if any, at position 0 with the id after the AIs', then the AIs by their
-// place in the list.
-Model::Model(const std::vector<AIInfo>& ais, bool sprint) {
-    tabs_.reserve(ais.size() + (sprint ? 1 : 0));
-    if (sprint)
-        tabs_.push_back(Tab{ais.size(), {}, {}, {}, {}, {}, TabKind::Sprint, {}, home_group(TabKind::Sprint)});
+// Window.tla's Init: the dashboards from position 0, with the ids after the AIs' (an empty or repeated name makes no
+// tab: Window.tla's Unique), then the AIs by their place in the list.
+Model::Model(const std::vector<AIInfo>& ais, const std::vector<std::string>& dashboards) {
+    tabs_.reserve(ais.size() + dashboards.size());
+    std::unordered_set<std::string> named;
+    std::size_t id = ais.size();
+    for (const std::string& name : dashboards) {
+        if (name.empty() || !named.insert(name).second)
+            continue;
+        tabs_.push_back(Tab{id++, name, {}, {}, {}, {}, TabKind::Dashboard, {}, home_group(TabKind::Dashboard)});
+    }
     for (std::size_t f = 0; f < ais.size(); ++f)
         tabs_.push_back(Tab{f, ais[f].name, ais[f].model, {}, {}, {}, TabKind::AI, {}, home_group(TabKind::AI)});
-    next_id_ = ais.size() + (sprint ? 1 : 0);
+    next_id_ = id;
     if (!tabs_.empty())
         history_.push_back(tabs_[0].id);
 }
@@ -194,7 +199,7 @@ void Model::edit_transcript(std::size_t i, std::vector<TranscriptEdit> edits) {
 // extension groups in the order they are first opened.
 std::string Model::home_group(TabKind kind, const std::string& type, const std::string& declared) const {
     const std::string_view key = kind == TabKind::Extension ? std::string_view(type) :
-        kind == TabKind::AI ? "ai" : kind == TabKind::Sprint ? "sprint" : "terminal";
+        kind == TabKind::AI ? "ai" : kind == TabKind::Dashboard ? "dashboard" : "terminal";
     for (const TabGroup& g : groups_) {
         if (std::find(g.types.begin(), g.types.end(), key) != g.types.end())
             return g.id;
@@ -378,7 +383,7 @@ bool Model::dismiss_tab(std::size_t i) {
     return true;
 }
 
-// Window.tla's AddAI: the tab goes at AIEnd, the first position past the sprint tab and the AIs; active_
+// Window.tla's AddAI: the tab goes at AIEnd, the first position past the dashboards and the AIs; active_
 // moves with the tab it names when that stood at or past it.
 bool Model::add_ai(AIInfo f) {
     if (f.name.empty()) {
@@ -410,6 +415,58 @@ bool Model::remove_ai(std::size_t i) {
     }
     remove_at(i);
     return true;
+}
+
+// Window.tla's AddBoard: the tab goes at BoardEnd, the first position past the dashboards; active_ moves with the tab it
+// names when that stood at or past it. The same arithmetic as add_ai's, on the dashboards' zone.
+bool Model::add_dashboard(std::string name) {
+    if (name.empty())
+        return false;
+    for (const Tab& t : tabs_) {
+        if (t.kind == TabKind::Dashboard && t.name == name)
+            return false;
+    }
+    const auto group = home_group(TabKind::Dashboard);
+    const std::size_t at = group_end(group);
+    ++layoutRevision_;
+    const std::size_t id = next_id_++;
+    const bool empty = tabs_.empty();
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at),
+                 Tab{id, std::move(name), {}, {}, {}, {}, TabKind::Dashboard, {}, group});
+    if (empty)
+        history_.push_back(id);
+    else if (active_ >= at)
+        ++active_;
+    return true;
+}
+
+// Window.tla's RemoveBoard: close_tab's rule (remove_at), for a dashboard's tab only.
+bool Model::remove_dashboard(std::size_t i) {
+    if (i >= tabs_.size() || tabs_[i].kind != TabKind::Dashboard)
+        return false;
+    remove_at(i);
+    return true;
+}
+
+// Removes first, from the last tab to the first so that the positions still to visit stand where they stood, then adds
+// in the list's order: each step is one remove_dashboard or add_dashboard, so a code trace of them is a behaviour of
+// Window.tla.
+Model::DashboardChanges Model::sync_dashboards(const std::vector<std::string>& names) {
+    DashboardChanges changes;
+    const std::unordered_set<std::string> wanted(names.begin(), names.end());
+    for (std::size_t i = tabs_.size(); i-- > 0;) {
+        if (tabs_[i].kind == TabKind::Dashboard && wanted.count(tabs_[i].name) == 0) {
+            std::string name = tabs_[i].name;
+            remove_dashboard(i);
+            changes.removed.push_back(std::move(name));
+        }
+    }
+    std::reverse(changes.removed.begin(), changes.removed.end());
+    for (const std::string& name : names) {
+        if (add_dashboard(name))
+            changes.added.push_back(name);
+    }
+    return changes;
 }
 
 // add_ai of each in turn: every tab goes at the AIs' zone's end, so the new tabs stand together there in the

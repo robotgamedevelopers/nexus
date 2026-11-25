@@ -6,24 +6,23 @@
 (* The queue is apart from the transcript: it is the state a server will  *)
 (* hold.                                                                   *)
 (*                                                                         *)
-(* A tab is the sprint tab, an AI's or a terminal's. Each tab has an   *)
-(* id that never changes and is never reused: an AI's at the start is  *)
-(* its place in the constructor's list, from 0; the sprint tab's is N,    *)
-(* the number of those AIs (SprintId); a terminal's, and an AI's   *)
-(* added later, is `nextId` when it is added, and `nextId` then grows.    *)
-(* The sprint tab exists when the constant Sprint is TRUE, as it always   *)
-(* does in the window (main.cpp); FALSE is the model's form without it,   *)
-(* which its tests and the older witnesses use. The sprint tab is made at *)
-(* the start and never closed;                                             *)
-(* terminal tabs are added at the end and closed by position. The sprint  *)
-(* tab and a terminal have no transcript, draft or queue: the per-AI  *)
-(* state is indexed by AI, so it moves with the tab.                   *)
+(* A tab is a dashboard's, an AI's or a terminal's. Each tab has an id    *)
+(* that never changes and is never reused: an AI's at the start is its    *)
+(* place in the constructor's list, from 0; a dashboard's at the start is  *)
+(* N, the number of those AIs, plus its place in its list (BoardList,      *)
+(* without an empty or repeated name: Unique); a terminal's, and an AI's   *)
+(* or a dashboard's added later, is `nextId` when it is added, and         *)
+(* `nextId` then grows. Dashboards are the server's pages (sync/           *)
+(* dashboards.h): the window makes its model with none (main.cpp), and    *)
+(* they arrive with the server's list. A dashboard's tab is known by its   *)
+(* name; it and a terminal have no transcript, draft or queue: the per-AI  *)
+(* state is indexed by AI, so it moves with the tab. Terminal tabs are     *)
+(* added at the end and closed by position; a dashboard's never closes.    *)
 (*                                                                         *)
-(* The strip is in zones: the sprint tab alone in zone 0, then every      *)
-(* AI's tab, then every terminal's, and a move stays inside its zone. *)
-(* Zone(id) is a number, and the zones stand in ascending order            *)
-(* (ZonesOrdered). So the sprint tab stays first: nothing moves into its  *)
-(* zone, and it moves only onto itself.                                    *)
+(* The strip is in zones: the dashboards in zone 0, then every AI's tab,   *)
+(* then every terminal's, and a move stays inside its zone. Zone(id) is a  *)
+(* number, and the zones stand in ascending order (ZonesOrdered): the      *)
+(* dashboards stand first, and move only among themselves.                 *)
 (*                                                                         *)
 (* A tab's position is its place in the strip, from 0, as in the code.    *)
 (* `order` maps each position to the id of the tab there. `active` is a  *)
@@ -62,6 +61,15 @@
 (* again is a new tab with a new id). Spec has neither; SpecAIsWith   *)
 (* adds both, with the AIs add_ai is tried with.                   *)
 (*                                                                         *)
+(* Dashboards come and go the same way with the server's dashboard list   *)
+(* (Model::sync_dashboards): `boards` maps each dashboard tab's id to its  *)
+(* name, and BoardIds is its domain. add_board puts a tab at the end of    *)
+(* the dashboards' zone (before every AI and terminal), refused for an     *)
+(* empty name or one a dashboard's tab already has, with add_ai's rule for *)
+(* the active tab and the history; remove_board takes a dashboard's tab    *)
+(* out by position, by close_tab's rule. SpecBoardsWith adds both, with    *)
+(* the names add_board is tried with; SpecAllWith adds the AIs' too.       *)
+(*                                                                         *)
 (* `last` is not model state. It is a history variable: the operation     *)
 (* just performed, its arguments and the value it returned. It lets the   *)
 (* per-operation guarantees below be stated as action properties, and it  *)
@@ -75,19 +83,29 @@ CONSTANTS
     Drafts,         \* the draft texts set_draft is tried with
     Blank,          \* the members of Drafts that are all whitespace (the empty string among them)
     AppendEntries,  \* the entries append is tried with
-    Sprint          \* TRUE: the strip starts with the sprint tab (the window's model always does)
+    BoardList       \* <<"name", ...>>, the constructor's dashboards (the window's model starts with none)
 
-ASSUME Blank \subseteq Drafts /\ "" \in Blank /\ Sprint \in BOOLEAN
+ASSUME Blank \subseteq Drafts /\ "" \in Blank /\ \A k \in 1 .. Len(BoardList) : BoardList[k] \in STRING
 
-VARIABLES ais, order, active, transcript, draft, queue, nextId, history, last
+VARIABLES ais, boards, order, active, transcript, draft, queue, nextId, history, last
 
-model == <<ais, order, active, transcript, draft, queue, nextId, history>>
-vars == <<ais, order, active, transcript, draft, queue, nextId, history, last>>
+model == <<ais, boards, order, active, transcript, draft, queue, nextId, history>>
+vars == <<ais, boards, order, active, transcript, draft, queue, nextId, history, last>>
+
+\* The names of s, in order, without the empty name and without a name given before: the dashboards the constructor
+\* makes a tab for (Model::Model skips the rest).
+RECURSIVE UniqueUpTo(_, _)
+UniqueUpTo(s, k) ==
+    IF k = 0 THEN <<>>
+    ELSE LET u == UniqueUpTo(s, k - 1) IN
+         IF s[k] = "" \/ \E m \in 1 .. Len(u) : u[m] = s[k] THEN u ELSE Append(u, s[k])
+Unique(s) == UniqueUpTo(s, Len(s))
 
 N == Len(AIList)
+Boards0 == Unique(BoardList)    \* the dashboards at the start
+B == Len(Boards0)
 Ids == DOMAIN ais       \* the AI tabs that stand, by id: at the start their places in AIList
-SprintId == N               \* the sprint tab's id, when there is one: the first after the AIs'
-Pinned == IF Sprint THEN 1 ELSE 0   \* the tabs before the AIs at the start
+BoardIds == DOMAIN boards   \* the dashboard tabs that stand, by id: at the start N .. N + B - 1
 Tabs == DOMAIN order        \* positions in the strip
 Count == Cardinality(Tabs)  \* how many tabs stand in it
 Kinds == {"Person", "AI", "Notice", "Tool"}
@@ -96,30 +114,36 @@ Entry == [kind : Kinds, text : Texts]
 NoEntry == [kind |-> "None", text |-> ""]
 NoAI == [name |-> "", model |-> ""]
 Ops == {"init", "select", "set_draft", "send", "queue", "take", "append", "move", "add", "close", "add_ai",
-        "remove_ai"}
+        "remove_ai", "add_board", "remove_board"}
 
-\* a tab's kind, by its id: the AIs' ids are theirs, SprintId the sprint tab's if there is one, every later id a
-\* terminal's
-TabKind(id) == IF id \in Ids THEN "AI" ELSE IF Sprint /\ id = SprintId THEN "Sprint" ELSE "Terminal"
+\* a tab's kind, by its id: the AIs' ids are theirs, the dashboards' theirs, every other id a terminal's
+TabKind(id) == IF id \in Ids THEN "AI" ELSE IF id \in BoardIds THEN "Dashboard" ELSE "Terminal"
 
-\* the zone a tab stands in, by its id: the sprint tab 0, AIs 1, terminals 2
-Zone(id) == CASE TabKind(id) = "Sprint" -> 0 [] TabKind(id) = "AI" -> 1 [] OTHER -> 2
+\* the zone a tab stands in, by its id: dashboards 0, AIs 1, terminals 2
+Zone(id) == CASE TabKind(id) = "Dashboard" -> 0 [] TabKind(id) = "AI" -> 1 [] OTHER -> 2
 
 Did(op, i, t, e, ok) == [op |-> op, i |-> i, j |-> 0, text |-> t, entry |-> e, ok |-> ok, id |-> 0,
-                         ai |-> NoAI]
+                         ai |-> NoAI, board |-> ""]
 DidMove(from, to, ok) == [op |-> "move", i |-> from, j |-> to, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> 0,
-                          ai |-> NoAI]
+                          ai |-> NoAI, board |-> ""]
 DidAdd(id) == [op |-> "add", i |-> 0, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> TRUE, id |-> id,
-               ai |-> NoAI]
+               ai |-> NoAI, board |-> ""]
 \* add_ai (i 0) and remove_ai (i the position): the AI, and the tab's id when it returned true
 DidAI(op, i, f, ok, id) == [op |-> op, i |-> i, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> id,
-                                ai |-> f]
+                                ai |-> f, board |-> ""]
+\* add_board (i 0) and remove_board (i the position): the dashboard's name (add_board's argument, or the name of the
+\* tab remove_board removed), and the tab's id when it returned true
+DidBoard(op, i, name, ok, id) == [op |-> op, i |-> i, j |-> 0, text |-> "", entry |-> NoEntry, ok |-> ok, id |-> id,
+                                  ai |-> NoAI, board |-> name]
 
 \* the id of the tab that stands at position i
 At(i) == order[i]
 
 \* i is the position of an AI's tab: only those hold a transcript, draft and queue
 AITab(i) == i \in Tabs /\ At(i) \in Ids
+
+\* i is the position of a dashboard's tab
+BoardTab(i) == i \in Tabs /\ At(i) \in BoardIds
 
 \* send and queue take a draft only on an AI's tab, and only when it is not all whitespace
 Sendable(i) == AITab(i) /\ draft[At(i)] \notin Blank
@@ -173,8 +197,18 @@ ClosedHistory(a, i, o, h) ==
 \* An AI standing has the name.
 Standing(name) == \E g \in Ids : ais[g].name = name
 
-\* The position just past the AIs' zone in the order o: the sprint tab's and the AIs' tabs stand before it.
+\* A dashboard's tab standing has the name.
+BoardStanding(name) == \E g \in BoardIds : boards[g] = name
+
+\* The position just past the AIs' zone in the order o: the dashboards' and the AIs' tabs stand before it.
 AIEnd(o) == Cardinality({p \in DOMAIN o : Zone(o[p]) <= 1})
+
+\* The position just past the dashboards' zone in the order o: the code's group_end of the dashboards' group.
+BoardEnd(o) == Cardinality({p \in DOMAIN o : Zone(o[p]) = 0})
+
+\* The order o with id n inserted at position at: the tabs from `at` on shift right by one. The code's vector insert.
+InsertAt(o, at, n) ==
+    [p \in 0 .. Cardinality(DOMAIN o) |-> IF p < at THEN o[p] ELSE IF p = at THEN n ELSE o[p - 1]]
 
 \* The function f on the ids `keep` only, or with id n mapped to v as well.
 Keep(f, keep) == [g \in keep |-> f[g]]
@@ -182,17 +216,18 @@ With(f, n, v) == [g \in DOMAIN f \cup {n} |-> IF g = n THEN v ELSE f[g]]
 
 -----------------------------------------------------------------------------
 
-\* The sprint tab first if there is one, then the AIs in their order; the first tab active, and the first entry of
-\* the selection history.
+\* The dashboards first, in their order, with the ids after the AIs'; then the AIs in their order; the first tab
+\* active, and the first entry of the selection history.
 Init ==
     /\ ais = [f \in 0 .. (N - 1) |-> AIList[f + 1]]
-    /\ order = [p \in 0 .. (N + Pinned - 1) |-> IF Sprint /\ p = 0 THEN SprintId ELSE p - Pinned]
+    /\ boards = [g \in N .. (N + B - 1) |-> Boards0[g - N + 1]]
+    /\ order = [p \in 0 .. (B + N - 1) |-> IF p < B THEN N + p ELSE p - B]
     /\ active = 0
     /\ transcript = [f \in 0 .. (N - 1) |-> <<>>]
     /\ draft = [f \in 0 .. (N - 1) |-> ""]
     /\ queue = [f \in 0 .. (N - 1) |-> <<>>]
-    /\ nextId = N + Pinned
-    /\ history = IF Sprint THEN <<SprintId>> ELSE IF N > 0 THEN <<0>> ELSE <<>>
+    /\ nextId = N + B
+    /\ history = IF B > 0 THEN <<N>> ELSE IF N > 0 THEN <<0>> ELSE <<>>
     /\ last = Did("init", 0, "", NoEntry, TRUE)
 
 \* select_tab(i): its tab active, and its id at the end of the history
@@ -201,7 +236,7 @@ SelectTab(i) ==
     THEN /\ active' = i
          /\ history' = Touch(history, At(i))
          /\ last' = Did("select", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<ais, order, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, boards, order, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("select", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -210,7 +245,7 @@ SetDraft(i, t) ==
     IF AITab(i)
     THEN /\ draft' = [draft EXCEPT ![At(i)] = t]
          /\ last' = Did("set_draft", i, t, NoEntry, TRUE)
-         /\ UNCHANGED <<ais, order, active, transcript, queue, nextId, history>>
+         /\ UNCHANGED <<ais, boards, order, active, transcript, queue, nextId, history>>
     ELSE /\ last' = Did("set_draft", i, t, NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -220,7 +255,7 @@ Send(i) ==
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, [kind |-> "Person", text |-> draft[At(i)]])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<ais, order, active, queue, nextId, history>>
+         /\ UNCHANGED <<ais, boards, order, active, queue, nextId, history>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -230,7 +265,7 @@ Queue(i) ==
     THEN /\ queue' = [queue EXCEPT ![At(i)] = Append(@, draft[At(i)])]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("queue", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<ais, order, active, transcript, nextId, history>>
+         /\ UNCHANGED <<ais, boards, order, active, transcript, nextId, history>>
     ELSE /\ last' = Did("queue", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -239,7 +274,7 @@ TakeQueued(i) ==
     IF AITab(i) /\ queue[At(i)] /= <<>>
     THEN /\ queue' = [queue EXCEPT ![At(i)] = Tail(@)]
          /\ last' = Did("take", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<ais, order, active, transcript, draft, nextId, history>>
+         /\ UNCHANGED <<ais, boards, order, active, transcript, draft, nextId, history>>
     ELSE /\ last' = Did("take", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -248,7 +283,7 @@ AppendEntry(i, e) ==
     IF AITab(i)
     THEN /\ transcript' = [transcript EXCEPT ![At(i)] = Append(@, e)]
          /\ last' = Did("append", i, "", e, TRUE)
-         /\ UNCHANGED <<ais, order, active, draft, queue, nextId, history>>
+         /\ UNCHANGED <<ais, boards, order, active, draft, queue, nextId, history>>
     ELSE /\ last' = Did("append", i, "", e, FALSE)
          /\ UNCHANGED model
 
@@ -259,7 +294,7 @@ MoveTab(from, to) ==
     THEN /\ order' = Moved(order, from, to)
          /\ active' = MovedIndex(active, from, to)
          /\ last' = DidMove(from, to, TRUE)
-         /\ UNCHANGED <<ais, transcript, draft, queue, nextId, history>>
+         /\ UNCHANGED <<ais, boards, transcript, draft, queue, nextId, history>>
     ELSE /\ last' = DidMove(from, to, FALSE)
          /\ UNCHANGED model
 
@@ -270,7 +305,7 @@ AddTerminal ==
     /\ nextId' = nextId + 1
     /\ history' = Touch(history, nextId)
     /\ last' = DidAdd(nextId)
-    /\ UNCHANGED <<ais, transcript, draft, queue>>
+    /\ UNCHANGED <<ais, boards, transcript, draft, queue>>
 
 \* close_tab(i): only a terminal's tab closes; its id leaves the history, and if it was active the tab selected before
 \* it is (ClosedActive)
@@ -280,7 +315,7 @@ CloseTab(i) ==
          /\ history' = ClosedHistory(active, i, order, Forget(history, At(i)))
          /\ active' = ClosedActive(active, i, order, Forget(history, At(i)))
          /\ last' = Did("close", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
+         /\ UNCHANGED <<ais, boards, transcript, draft, queue, nextId>>
     ELSE /\ last' = Did("close", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 
@@ -291,7 +326,7 @@ CloseTab(i) ==
 AddAI(f) ==
     IF f.name /= "" /\ ~Standing(f.name)
     THEN LET at == AIEnd(order) IN
-         /\ order' = [p \in 0 .. Count |-> IF p < at THEN order[p] ELSE IF p = at THEN nextId ELSE order[p - 1]]
+         /\ order' = InsertAt(order, at, nextId)
          /\ active' = IF Count > 0 /\ active >= at THEN active + 1 ELSE active
          /\ ais' = With(ais, nextId, f)
          /\ transcript' = With(transcript, nextId, <<>>)
@@ -300,6 +335,7 @@ AddAI(f) ==
          /\ nextId' = nextId + 1
          /\ history' = IF Count = 0 THEN <<nextId>> ELSE history
          /\ last' = DidAI("add_ai", 0, f, TRUE, nextId)
+         /\ UNCHANGED boards
     ELSE /\ last' = DidAI("add_ai", 0, f, FALSE, 0)
          /\ UNCHANGED model
 
@@ -317,13 +353,44 @@ RemoveAI(i) ==
          /\ draft' = Keep(draft, Ids \ {f})
          /\ queue' = Keep(queue, Ids \ {f})
          /\ last' = DidAI("remove_ai", i, ais[f], TRUE, f)
-         /\ UNCHANGED nextId
+         /\ UNCHANGED <<boards, nextId>>
     ELSE /\ last' = DidAI("remove_ai", i, NoAI, FALSE, 0)
          /\ UNCHANGED model
 
+\* add_board(name): a tab for the dashboard `name`, with the next id, at the end of the dashboards' zone (before every AI
+\* and terminal), holding nothing. The active tab stays the active tab, wherever it now stands; the history is untouched,
+\* but for an empty strip, where the new tab is the active one and so its id is the history. Refused for an empty name,
+\* or a name a dashboard's tab already has. add_ai's rule, on zone 0.
+AddBoard(name) ==
+    IF name /= "" /\ ~BoardStanding(name)
+    THEN LET at == BoardEnd(order) IN
+         /\ order' = InsertAt(order, at, nextId)
+         /\ active' = IF Count > 0 /\ active >= at THEN active + 1 ELSE active
+         /\ boards' = With(boards, nextId, name)
+         /\ nextId' = nextId + 1
+         /\ history' = IF Count = 0 THEN <<nextId>> ELSE history
+         /\ last' = DidBoard("add_board", 0, name, TRUE, nextId)
+         /\ UNCHANGED <<ais, transcript, draft, queue>>
+    ELSE /\ last' = DidBoard("add_board", 0, name, FALSE, 0)
+         /\ UNCHANGED model
+
+\* remove_board(i): only a dashboard's tab is removed this way, by close_tab's rule: its id leaves the history, and if it
+\* was active the tab selected before it is (ClosedActive).
+RemoveBoard(i) ==
+    IF BoardTab(i)
+    THEN LET g == At(i) IN
+         /\ order' = Removed(order, i)
+         /\ history' = ClosedHistory(active, i, order, Forget(history, g))
+         /\ active' = ClosedActive(active, i, order, Forget(history, g))
+         /\ boards' = Keep(boards, BoardIds \ {g})
+         /\ last' = DidBoard("remove_board", i, boards[g], TRUE, g)
+         /\ UNCHANGED <<ais, transcript, draft, queue, nextId>>
+    ELSE /\ last' = DidBoard("remove_board", i, "", FALSE, 0)
+         /\ UNCHANGED model
+
 \* The next-state relation over any set of the eight actions. The witnesses (witnesses/*.tla) pass a broken action in
-\* place of one of these. The first six never change nextId, and of them only select changes the history: the conjuncts
-\* say so for a broken one that leaves them out.
+\* place of one of these. The first six never change nextId, and of them only select changes the history; none of the
+\* eight changes the dashboards: the conjuncts say so for a broken one that leaves them out.
 NextWithAll(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _), Add, Cls(_)) ==
     \/ /\ \E i \in Idx :
             \/ Sel(i)
@@ -332,9 +399,9 @@ NextWithAll(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _), Add, Cls(_
             \/ Que(i) /\ UNCHANGED history
             \/ \E e \in AppendEntries : App(i, e) /\ UNCHANGED history
             \/ \E j \in Idx : Mov(i, j) /\ UNCHANGED history
-       /\ UNCHANGED nextId
-    \/ Add
-    \/ \E i \in Idx : Cls(i)
+       /\ UNCHANGED <<nextId, boards>>
+    \/ Add /\ UNCHANGED boards
+    \/ \E i \in Idx : Cls(i) /\ UNCHANGED boards
 
 \* With the real add and close: the form the witnesses of the first six actions use.
 NextWith(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _)) ==
@@ -343,7 +410,7 @@ NextWith(Sel(_), SetD(_, _), Snd(_), Que(_), App(_, _), Mov(_, _)) ==
 \* With take_queued as well: the form its witnesses use, passing a broken take.
 NextTake(Tk(_)) ==
     \/ NextWith(SelectTab, SetDraft, Send, Queue, AppendEntry, MoveTab)
-    \/ \E i \in Idx : Tk(i)
+    \/ \E i \in Idx : Tk(i) /\ UNCHANGED boards
 
 Next == NextTake(TakeQueued)
 
@@ -353,12 +420,28 @@ Spec == Init /\ [][Next]_vars
 \* The witnesses of the two pass a broken one in place of either.
 NextAIOps(AddF(_), RemF(_), Arrivals) ==
     \/ Next
-    \/ \E f \in Arrivals : AddF(f)
-    \/ \E i \in Idx : RemF(i)
+    \/ \E f \in Arrivals : AddF(f) /\ UNCHANGED boards
+    \/ \E i \in Idx : RemF(i) /\ UNCHANGED boards
 
 NextAIsWith(Arrivals) == NextAIOps(AddAI, RemoveAI, Arrivals)
 
 SpecAIsWith(Arrivals) == Init /\ [][NextAIsWith(Arrivals)]_vars
+
+\* With the dashboards coming and going as well: add_board tried with each name of `Names`, remove_board at every
+\* position, beside NextAIOps and its arguments. The witnesses of the two pass a broken one in place of either. Neither
+\* changes an AI: the conjuncts say so for a broken one that leaves them out.
+NextBoardOps(AddF(_), RemF(_), Arrivals, AddB(_), RemB(_), Names) ==
+    \/ NextAIOps(AddF, RemF, Arrivals)
+    \/ \E name \in Names : AddB(name) /\ UNCHANGED <<ais, transcript, draft, queue>>
+    \/ \E i \in Idx : RemB(i) /\ UNCHANGED <<ais, transcript, draft, queue>>
+
+NextAllWith(Arrivals, Names) == NextBoardOps(AddAI, RemoveAI, Arrivals, AddBoard, RemoveBoard, Names)
+
+\* The dashboards coming and going, the AIs fixed.
+SpecBoardsWith(Names) == Init /\ [][NextAllWith({}, Names)]_vars
+
+\* Both coming and going.
+SpecAllWith(Arrivals, Names) == Init /\ [][NextAllWith(Arrivals, Names)]_vars
 
 -----------------------------------------------------------------------------
 (* State invariants *)
@@ -366,7 +449,11 @@ SpecAIsWith(Arrivals) == Init /\ [][NextAIsWith(Arrivals)]_vars
 TypeOK ==
     /\ ais \in [Ids -> [name : STRING, model : STRING]]
     /\ Ids \subseteq 0 .. (nextId - 1)
-    /\ nextId \in Int /\ nextId >= N + Pinned
+    /\ boards \in [BoardIds -> STRING]
+    /\ \A g \in BoardIds : boards[g] /= ""
+    /\ BoardIds \subseteq 0 .. (nextId - 1)
+    /\ BoardIds \cap Ids = {}
+    /\ nextId \in Int /\ nextId >= N + B
     /\ Tabs = 0 .. (Count - 1)
     /\ \A p \in Tabs : order[p] \in Int
     /\ active \in Int
@@ -382,15 +469,20 @@ TypeOK ==
     /\ last.ok \in BOOLEAN
     /\ last.id \in Int
     /\ last.ai \in [name : STRING, model : STRING]
+    /\ last.board \in STRING
+    /\ last.op \notin {"add_board", "remove_board"} => last.board = ""
 
 \* active is always a tab, or 0 when there are no tabs
 ActiveValid == IF Count = 0 THEN active = 0 ELSE active \in Tabs
 
-\* every AI has a tab: no reordering or close loses one
-NoTabLost == \A f \in Ids : \E p \in Tabs : order[p] = f
+\* every AI and every dashboard has a tab: no reordering or close loses one
+NoTabLost == \A f \in Ids \cup BoardIds : \E p \in Tabs : order[p] = f
 
 \* no two AI tabs are of one AI: add_ai never makes a second tab for a name that has one
 NamesOnce == \A f, g \in Ids : f /= g => ais[f].name /= ais[g].name
+
+\* no two dashboard tabs have one name: add_board never makes a second tab for a name that has one
+BoardNamesOnce == \A f, g \in BoardIds : f /= g => boards[f] /= boards[g]
 
 \* no id stands twice: no reordering duplicates a tab, and no add reuses an id that stands
 NoTabDuplicated == \A p, q \in Tabs : p /= q => order[p] /= order[q]
@@ -398,11 +490,8 @@ NoTabDuplicated == \A p, q \in Tabs : p /= q => order[p] /= order[q]
 \* every id that stands was handed out: below nextId
 IdsHandedOut == \A p \in Tabs : 0 <= order[p] /\ order[p] < nextId
 
-\* the zones stand in ascending order: the sprint tab before every AI's, every AI's before every terminal's
+\* the zones stand in ascending order: every dashboard's before every AI's, every AI's before every terminal's
 ZonesOrdered == \A p, q \in Tabs : p < q => Zone(order[p]) <= Zone(order[q])
-
-\* with the sprint tab, it is always there, always first, and always has its one id
-SprintFirst == Sprint => (0 \in Tabs /\ order[0] = SprintId)
 
 \* the history holds only ids of tabs that stand: never a closed tab's, never one not handed out
 HistoryOpen == \A k \in 1 .. Len(history) : \E p \in Tabs : order[p] = history[k]
@@ -444,18 +533,14 @@ TerminalTakesNoText ==
     [][(last'.op \in {"set_draft", "send", "queue", "append"} /\ last'.i \in Tabs /\
         TabKind(At(last'.i)) = "Terminal") => ~last'.ok]_vars
 
-\* the sprint tab takes no text: set_draft, send, queue and append addressed to it return false
-SprintTakesNoText ==
+\* a dashboard's tab takes no text: set_draft, send, queue and append addressed to one return false
+BoardTakesNoText ==
     [][(last'.op \in {"set_draft", "send", "queue", "append"} /\ last'.i \in Tabs /\
-        TabKind(At(last'.i)) = "Sprint") => ~last'.ok]_vars
+        TabKind(At(last'.i)) = "Dashboard") => ~last'.ok]_vars
 
-\* the sprint tab never moves: a move from or to its position leaves the order and the active tab as they were
-SprintNeverMoves ==
-    [][(Sprint /\ last'.op = "move" /\ (last'.i = 0 \/ last'.j = 0)) => UNCHANGED <<order, active>>]_vars
-
-\* the sprint tab never closes: close addressed to it returns false
-SprintNeverCloses ==
-    [][(last'.op = "close" /\ last'.i \in Tabs /\ TabKind(At(last'.i)) = "Sprint") => ~last'.ok]_vars
+\* a dashboard's tab never closes: close addressed to one returns false (only remove_board takes it out)
+BoardNeverCloses ==
+    [][(last'.op = "close" /\ last'.i \in Tabs /\ TabKind(At(last'.i)) = "Dashboard") => ~last'.ok]_vars
 
 \* a send that returns true appends exactly one Person entry, with the draft's text, to that AI's transcript
 SendAppendsOne ==
@@ -523,14 +608,17 @@ MovePlaces ==
 MoveKeepsTabs ==
     [][last'.op = "move" => UNCHANGED <<ais, transcript, draft, queue, nextId>>]_vars
 
-\* only move reorders the tabs, add puts one at the end, add_ai one at the AIs' end, and close and remove_ai
-\* take one out: no other operation changes the order
+\* only move reorders the tabs, add puts one at the end, add_ai one at the AIs' end, add_board one at the dashboards'
+\* end, and close, remove_ai and remove_board take one out: no other operation changes the order
 OnlyMoveReorders ==
-    [][last'.op \notin {"move", "add", "close", "add_ai", "remove_ai"} => UNCHANGED order]_vars
+    [][last'.op \notin {"move", "add", "close", "add_ai", "remove_ai", "add_board", "remove_board"} =>
+        UNCHANGED order]_vars
 
-\* every operation but select, add, close and remove_ai keeps the same tab active, wherever it now stands
+\* every operation but select, add, close, remove_ai and remove_board keeps the same tab active, wherever it now stands
+\* (add_ai and add_board among them)
 ActiveAIKept ==
-    [][(Count > 0 /\ last'.op \notin {"select", "add", "close", "remove_ai"}) => order'[active'] = order[active]]_vars
+    [][(Count > 0 /\ last'.op \notin {"select", "add", "close", "remove_ai", "remove_board"}) =>
+        order'[active'] = order[active]]_vars
 
 \* add always succeeds: one terminal's tab, with the id it returns, at the end, active; every other tab where it was,
 \* and no AI's state touched
@@ -561,9 +649,9 @@ CloseRemovesExactly ==
             /\ DOMAIN order' = 0 .. (Count - 2)
             /\ \A p \in DOMAIN order' : order'[p] = IF p < last'.i THEN order[p] ELSE order[p + 1]]_vars
 
-\* a close changes no AI's transcript, draft or queue, nor the ids or the AIs
+\* a close changes no AI's transcript, draft or queue, nor the ids, the AIs or the dashboards
 CloseKeepsAIs ==
-    [][last'.op = "close" => UNCHANGED <<ais, transcript, draft, queue, nextId>>]_vars
+    [][last'.op = "close" => UNCHANGED <<ais, boards, transcript, draft, queue, nextId>>]_vars
 
 \* after a close, the same tab is active if another was; if the closed tab was active, the tab selected most recently
 \* before it, of those still open: the last id in the history once the closed tab's is taken out. With none there, the
@@ -645,16 +733,17 @@ AIOpsKeepOthers ==
         \A f \in Ids \cap Ids' :
             ais'[f] = ais[f] /\ transcript'[f] = transcript[f] /\ draft'[f] = draft[f] /\ queue'[f] = queue[f]]_vars
 
-\* a removed AI's tab leaves the history, and nothing else does; as for close, a history left empty with tabs open
-\* is the tab now active, alone
+\* a removed AI's or dashboard's tab leaves the history, and nothing else does; as for close, a history left empty
+\* with tabs open is the tab now active, alone
 RemoveForgets ==
-    [][(last'.op = "remove_ai" /\ last'.ok) => history' = LeftHistory(Forget(history, order[last'.i]))]_vars
+    [][(last'.op \in {"remove_ai", "remove_board"} /\ last'.ok) =>
+        history' = LeftHistory(Forget(history, order[last'.i]))]_vars
 
-\* after a remove_ai, the same tab is active if another was; if the removed tab was active, the tab selected most
-\* recently before it, of those still open; with none there, the tab now at its position, or the last tab if it was
-\* the last, or none (0) if no tabs remain: the rule of close
+\* after a remove_ai or remove_board, the same tab is active if another was; if the removed tab was active, the tab
+\* selected most recently before it, of those still open; with none there, the tab now at its position, or the last
+\* tab if it was the last, or none (0) if no tabs remain: the rule of close
 RemoveActiveRule ==
-    [][(last'.op = "remove_ai" /\ last'.ok) =>
+    [][(last'.op \in {"remove_ai", "remove_board"} /\ last'.ok) =>
         LET n == Cardinality(DOMAIN order')
             h == Forget(history, order[last'.i]) IN
         IF active /= last'.i
@@ -662,5 +751,43 @@ RemoveActiveRule ==
         ELSE IF h /= <<>>
         THEN order'[active'] = h[Len(h)]
         ELSE active' = (IF n = 0 THEN 0 ELSE IF last'.i < n THEN last'.i ELSE n - 1)]_vars
+
+\* the dashboards change only by add_board and remove_board: no other operation renames, adds or drops one
+BoardsFixed == [][last'.op \notin {"add_board", "remove_board"} => UNCHANGED boards]_vars
+
+\* add_board returns true exactly when the name is not empty and no dashboard's tab has it. Then its tab, with the id it
+\* returns (never handed out before), stands at the end of the dashboards' zone, with that name; every other tab keeps
+\* its place relative to the rest, and every other dashboard its name; the tab that was active is active still and the
+\* history is as it was, or, in a strip that was empty, the new tab is active and the history
+AddBoardExact ==
+    [][last'.op = "add_board" =>
+        /\ last'.ok = (last'.board /= "" /\ ~BoardStanding(last'.board))
+        /\ last'.ok =>
+            /\ last'.id = nextId /\ nextId' = nextId + 1
+            /\ BoardIds' = BoardIds \cup {last'.id}
+            /\ boards'[last'.id] = last'.board
+            /\ \A g \in BoardIds : boards'[g] = boards[g]
+            /\ order'[BoardEnd(order)] = last'.id
+            /\ Without(order', last'.id) = Without(order, last'.id)
+            /\ Count > 0 => (order'[active'] = order[active] /\ history' = history)
+            /\ Count = 0 => (active' = 0 /\ history' = <<last'.id>>)]_vars
+
+\* remove_board returns true exactly when i is a dashboard's tab; then exactly that tab is gone, with its name, the tabs
+\* after it shift left by one, and every other dashboard keeps its name
+RemoveBoardExact ==
+    [][last'.op = "remove_board" =>
+        /\ last'.ok = BoardTab(last'.i)
+        /\ last'.ok =>
+            /\ last'.id = order[last'.i]
+            /\ last'.board = boards[last'.id]
+            /\ BoardIds' = BoardIds \ {last'.id}
+            /\ \A g \in BoardIds' : boards'[g] = boards[g]
+            /\ DOMAIN order' = 0 .. (Count - 2)
+            /\ \A p \in DOMAIN order' : order'[p] = IF p < last'.i THEN order[p] ELSE order[p + 1]
+            /\ UNCHANGED nextId]_vars
+
+\* add_board and remove_board change no AI: its name, transcript, draft and queue are as they were
+BoardOpsKeepAIs ==
+    [][last'.op \in {"add_board", "remove_board"} => UNCHANGED <<ais, transcript, draft, queue>>]_vars
 
 =============================================================================

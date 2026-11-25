@@ -101,7 +101,7 @@ bool saveTabOrder(const TabOrderStore& store, const Model& model, std::string* e
 // The selected tab, kept across launches beside the order: the sprint tab, an AI by name, or a terminal by its place
 // among the terminal tabs (which are reopened in their saved order, below).
 struct SavedTab {
-    TabKind kind = TabKind::Sprint;
+    TabKind kind = TabKind::Dashboard;
     std::string name;           // an AI's
     std::size_t terminal = 0;   // a terminal's place among the terminal tabs, from 1; 0 for a version 1 file's
                                 // "terminal", which named none

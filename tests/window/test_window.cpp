@@ -180,14 +180,14 @@ void storeSavesAndRestores() {
 void sprintTabIsNeverSavedAndStaysFirst() {
     const std::vector<AIInfo> loaded = named({"a", "b", "c"});
     MemoryStore mem;
-    Model model(loaded, true);
+    Model model(loaded, {"sprint"});
     CHECK(model.move_tab(3, 1));
     CHECK(aiTabNames(model) == (std::vector<std::string>{"c", "a", "b"}));
     std::string error;
     CHECK(saveTabOrder(mem.store(), model, &error));
     std::string warning;
-    Model again(loadTabOrder(mem.store(), loaded, &warning), true);
-    CHECK(again.tab_count() == 4 && again.tab(0).kind == TabKind::Sprint && again.tab(1).name == "c");
+    Model again(loadTabOrder(mem.store(), loaded, &warning), {"sprint"});
+    CHECK(again.tab_count() == 4 && again.tab(0).kind == TabKind::Dashboard && again.tab(1).name == "c");
 }
 
 void terminalTabsAreNeverSaved() {
@@ -232,20 +232,20 @@ void savedNamesAndTabLoadAlone() {
 
     MemoryStore selection;
     SavedTab saved = loadSavedTab(selection.store(), &warning);
-    CHECK(saved.kind == TabKind::Sprint && warning.empty());
+    CHECK(saved.kind == TabKind::Dashboard && warning.empty());
     CHECK(saveSelectedTab(selection.store(), model, &error));
     saved = loadSavedTab(selection.store(), &warning);
     CHECK(saved.kind == TabKind::AI && saved.name == "a" && warning.empty());
     selection.text = "junk\n";
     saved = loadSavedTab(selection.store(), &warning);
-    CHECK(saved.kind == TabKind::Sprint && has(warning, "deleting it resets the selection"));
+    CHECK(saved.kind == TabKind::Dashboard && has(warning, "deleting it resets the selection"));
 }
 
 void selectedTabTextRoundTrips() {
     SavedTab saved;
     std::string error;
-    Model model(named({"alex", "zhi yǎ"}), true);
-    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Sprint);
+    Model model(named({"alex", "zhi yǎ"}), {"sprint"});
+    CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error) && saved.kind == TabKind::Dashboard);
     model.select_tab(2);
     CHECK(parseSelectedTab(formatSelectedTab(model), &saved, &error));
     CHECK(saved.kind == TabKind::AI && saved.name == "zhi yǎ");
@@ -285,13 +285,13 @@ void selectedTabComesBackByIdentity() {
     const std::vector<AIInfo> loaded = named({"alex", "emma", "rowan"});
     MemoryStore order;
     MemoryStore selection;
-    Model model(loaded, true);
+    Model model(loaded, {"sprint"});
     CHECK(model.select_tab(1) && model.tab(1).name == "alex");
     CHECK(model.move_tab(1, 3));
     std::string error;
     CHECK(saveTabOrder(order.store(), model, &error) && saveSelectedTab(selection.store(), model, &error));
     std::string warning;
-    Model again(loadTabOrder(order.store(), loaded, &warning), true);
+    Model again(loadTabOrder(order.store(), loaded, &warning), {"sprint"});
     CHECK(again.tab(3).name == "alex");
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 3 && warning.empty());
     // The sprint tab saved, with alex last: the sprint tab, never the last AI.
@@ -299,7 +299,7 @@ void selectedTabComesBackByIdentity() {
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     // emma saved, then the AI list changes order: emma wherever she now stands.
     CHECK(model.select_tab(1) && model.tab(1).name == "emma" && saveSelectedTab(selection.store(), model, &error));
-    Model reordered(named({"rowan", "alex", "emma"}), true);
+    Model reordered(named({"rowan", "alex", "emma"}), {"sprint"});
     CHECK(loadSelectedTab(selection.store(), reordered, &warning) == 3);
 }
 
@@ -307,13 +307,13 @@ void selectedTabComesBackByIdentity() {
 // in the list, or a file that is not a selection: the sprint tab. Only the bad file warns.
 void selectedTabFallsBackToTheSprintTab() {
     MemoryStore selection;
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     std::string warning;
     CHECK(loadSelectedTab(selection.store(), model, &warning) == 0 && warning.empty());
     model.add_terminal();
     std::string error;
     CHECK(saveSelectedTab(selection.store(), model, &error));
-    Model again(named({"a", "b"}), true);
+    Model again(named({"a", "b"}), {"sprint"});
     CHECK(loadSelectedTab(selection.store(), again, &warning) == 0 && warning.empty());
     again.add_terminal();
     selection.text = "nexus selected tab 1\nterminal\n";
@@ -386,7 +386,7 @@ void textScaleLoadsClampsAndWarns() {
 // The terminal tabs' directories, in the order the tabs stand, among AIs and behind the sprint tab; a directory a
 // line cannot hold, or none, is the home directory.
 void terminalDirectoriesFollowTheStrip() {
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     const std::size_t one = model.add_terminal();
     const std::size_t two = model.add_terminal();
     const std::size_t three = model.add_terminal();
@@ -397,7 +397,7 @@ void terminalDirectoriesFollowTheStrip() {
     dirs[three] = "/a b/three";
     CHECK(model.move_tab(5, 3));
     CHECK(terminalDirectories(model, of) == (std::vector<std::string>{"/a b/three", "/one", ""}));
-    CHECK(terminalDirectories(Model(named({"a"}), true), of).empty());
+    CHECK(terminalDirectories(Model(named({"a"}), {"sprint"}), of).empty());
 }
 
 void terminalsTextRoundTrips() {
@@ -448,7 +448,7 @@ void terminalsLoadAndFallBack() {
 void selectedTerminalComesBackByPlace() {
     MemoryStore terminals;
     MemoryStore selection;
-    Model model(named({"a", "b"}), true);
+    Model model(named({"a", "b"}), {"sprint"});
     const std::size_t one = model.add_terminal();
     const std::size_t two = model.add_terminal();
     model.add_terminal();
@@ -458,7 +458,7 @@ void selectedTerminalComesBackByPlace() {
     CHECK(saveTerminals(terminals.store(), terminalDirectories(model, [&](std::size_t id) { return dirs[id]; }), &error));
     CHECK(saveSelectedTab(selection.store(), model, &error));
     std::string warning;
-    Model again(named({"a", "b", "c"}), true);
+    Model again(named({"a", "b", "c"}), {"sprint"});
     const std::vector<std::string> reopened = loadTerminals(terminals.store(), &warning);
     CHECK(reopened == (std::vector<std::string>{"/one", "/two", ""}));
     for (std::size_t k = 0; k < reopened.size(); ++k)

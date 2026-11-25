@@ -55,7 +55,7 @@ def _bind(shortcuts, chord, command):
 
 # A fork orders groups, assigns tab types and grants each group's operations.
 _BUILTINS = [
-    {"id": "dashboards", "types": ["sprint"], "closable": False},
+    {"id": "dashboards", "types": ["dashboard"], "closable": False},
     {"id": "ais", "types": ["ai"], "closable": False},
     {"id": "terminals", "types": ["terminal"], "closable": True},
 ]
@@ -92,7 +92,7 @@ def _tab_groups(config, plugins):
 def _panels(state):
     if state["tab"] == "terminal":
         return ["terminal"]
-    if state["tab"] == "sprint":
+    if state["tab"] == "dashboard":
         return ["board"]
     if state["tab"] == "ai" and state["prompt_open"] and state.get("needs_sign_in", False):
         return ["account", "prompt"]

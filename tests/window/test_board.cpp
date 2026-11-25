@@ -205,7 +205,7 @@ struct Clock {
 struct Harness {
     Server server;
     Clock clock;
-    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, true};
+    Model model{std::vector<AIInfo>{AIInfo{"f1", "m"}}, std::vector<std::string>{"sprint"}};
     PrFontSystem* system = prFontSystemCreate(PrFontSystemBackend_Default);
     PrFontSet* fonts = prFontSetCreate(nullptr);
     PrTextShaper* shaper = prTextShaperCreate(PrTextShaperBackend_Default);

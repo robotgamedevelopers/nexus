@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server\n");
         return 2;
     }
-    static Model model({}, state == nullptr);   // the sprint tab (the Dashboard) when linked, as on the desktop
+    static Model model({});   // no dashboards and no AIs yet: both are the server's, as on the desktop
     App a;
     a.model = &model;
     a.view.model = &model;

@@ -265,7 +265,7 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
 TabLayout::TabLayout(SavedLayout saved) : saved_(std::move(saved)), pending_(saved_.selected) {}
 
 std::string TabLayout::keyOf(const Tab& tab) {
-    if (tab.kind == TabKind::Sprint) return "sprint";
+    if (tab.kind == TabKind::Dashboard) return "sprint";
     if (tab.primaryChat()) return "primary";
     if (tab.kind == TabKind::AI) return "ai:" + tab.name;
     auto& key = localKeys_[tab.id];
@@ -415,7 +415,7 @@ std::string formatSelectedTab(const Model& model) {
     std::string text(kSelectedHeader);
     text += '\n';
     const Tab* tab = model.tab_count() != 0 ? &model.tab(model.active()) : nullptr;
-    if (tab == nullptr || tab->kind == TabKind::Sprint || tab->kind == TabKind::Extension) {
+    if (tab == nullptr || tab->kind == TabKind::Dashboard || tab->kind == TabKind::Extension) {
         text += "sprint";
     } else if (tab->kind == TabKind::Terminal) {
         std::size_t place = 0;
@@ -488,7 +488,7 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved) {
     std::size_t sprint = 0;
     for (std::size_t i = 0; i < model.tab_count(); ++i) {
         const Tab& tab = model.tab(i);
-        if (tab.kind == TabKind::Sprint) sprint = i;
+        if (tab.kind == TabKind::Dashboard) sprint = i;
         if (saved.kind == TabKind::AI && tab.kind == TabKind::AI && tab.name == saved.name)
             return i;
         if (saved.kind == TabKind::Terminal && tab.kind == TabKind::Terminal && ++terminals == saved.terminal)
