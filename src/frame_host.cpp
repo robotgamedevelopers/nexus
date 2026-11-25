@@ -595,9 +595,25 @@ const sync::ServerFriend* FrameHost::rosterOf(sync::SessionId id) const {
     return it == friends.end() || it->accounts.empty() ? nullptr : &*it;
 }
 
-// /login of an account for the AI that shows: the account signs in while the AI stays on its own account, through the
-// server's sign-in (a claim naming the account), and the AI switches to it once the server says it is signed in
-// (settleLogin). A sign-in that is cancelled or fails leaves everything as it was.
+// A switch of a session to another of its AI's accounts, the server's login switch (src/sync/hub.cpp): a sign-in claim
+// naming the session and the account, with this window's claim token and no request. An account already signed in is
+// switched to at once, with no sign-in; one that needs signing in signs in while the session stays where it is, and the
+// server moves the session once it has. Never SetAccount first: a sign-in that then failed would leave the session on an
+// account with no login.
+std::uint64_t FrameHost::claimAccount(sync::SessionId session, const std::string& account) {
+    if (!link) return 0;
+    sync::Action action;
+    action.kind = sync::ActionKind::SignInClaim;
+    action.account = account;
+    action.session = session;
+    action.request = 0;
+    action.text = signIn.opener.token();
+    return link->send(std::move(action));
+}
+
+// /login of an account for the AI that shows: the account signs in while the AI stays on its own account (claimAccount),
+// and the server switches the AI to it once it has (settleLogin watches). A sign-in that is cancelled or fails leaves
+// everything as it was.
 void FrameHost::startLogin(const std::string& account) {
     if (!link || phase != sync::LinkPhase::Connected || !model->tab_count()) {
         view->problem = "Reconnect to the Nexus server to sign in.";
@@ -610,8 +626,11 @@ void FrameHost::startLogin(const std::string& account) {
     const auto it = std::find_if(roster->accounts.begin(), roster->accounts.end(),
                                  [&](const auto& a) { return a.name == account; });
     if (it == roster->accounts.end() || !pickable(*it)) return;
-    if (!it->needsSignIn) {         // signed in since the dialog opened: a switch is all it takes
-        if (current->info.account != account && !accountSelections_.contains(session)) setAccount(session, account);
+    if (!it->needsSignIn) {         // signed in since the dialog opened: the claim switches at once
+        if (current->info.account != account && !accountSelections_.contains(session)) {
+            const auto number = claimAccount(session, account);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
         return;
     }
     if (sync::usesLocalSignInPage(current->info.harness) && !signIn.loopback) {
@@ -625,18 +644,13 @@ void FrameHost::startLogin(const std::string& account) {
     const auto* offer = offerFor(account);
     if (offer && offer->opener == signIn.opener.token()) return;    // this window holds the flow: its page opens
     if (pendingClaims_.contains(account)) return;
-    sync::Action action;
-    action.kind = sync::ActionKind::SignInClaim;
-    action.account = account;
-    action.session = session;
-    action.request = offer ? offer->id : 0;
-    action.text = signIn.opener.token();
-    pendingClaims_.emplace(account, action.request);
-    link->send(std::move(action));
+    pendingClaims_.emplace(account, 0);
+    claimAccount(session, account);
 }
 
-// A /login under way, against the server's latest state: signed in, the AI switches to it; its flow gone without a
-// sign-in (cancelled, failed, expired), or the link lost, it ends and nothing changes.
+// A /login under way, against the server's latest state: the server moved the session to the account, it is done; its
+// flow gone with the account still not signed in (cancelled, failed, expired), or the link lost, it ends and nothing
+// changes. The window sends nothing more: the server moves the session itself, once no turn is open.
 void FrameHost::settleLogin() {
     if (!pendingLogin_) return;
     const auto [id, account] = *pendingLogin_;
@@ -652,13 +666,12 @@ void FrameHost::settleLogin() {
         pendingLogin_.reset();
         return;
     }
-    if (!choice->needsSignIn) {
+    if (session->info.account == account) {
         pendingLogin_.reset();
         view->problem.clear();
-        if (session->info.account != account && !accountSelections_.contains(id)) setAccount(id, account);
         return;
     }
-    if (!offerFor(account) && !pendingClaims_.contains(account)) {
+    if (choice->needsSignIn && !offerFor(account) && !pendingClaims_.contains(account)) {
         pendingLogin_.reset();
         view->problem = "The sign-in to " + accountShownAs(*choice) + " did not finish. The AI stays on its account.";
     }
@@ -685,7 +698,8 @@ void FrameHost::wireAccountMenu() {
                                      [&](const auto& a) { return a.name == account; });
         if (it == roster->accounts.end() || !pickable(*it) || it->needsSignIn) return;
         view->accountPicker.reset();
-        setAccount(session->id, account);
+        const auto number = claimAccount(session->id, account);
+        if (accountState_.nextAction()) accountSelections_[session->id] = number;
     };
     view->loginAccount = [this](const std::string& account) { startLogin(account); };
     view->logoutTarget = [this](std::string& account, std::string& shown, std::string& next) {
@@ -714,8 +728,12 @@ void FrameHost::wireAccountMenu() {
         const auto session = mirror.session(model->tab(model->active()).id);
         const auto next = logoutNext_;
         if (!view->signOut()) return false;
-        // The server applies the actions in order: the sign-out on the account the session is on, then the move.
-        if (!next.empty()) setAccount(session, next);
+        // The server applies the actions in order: the sign-out leaves the session on its account, asking for its
+        // sign-in; the claim of the next signed-in account then switches it there at once.
+        if (!next.empty()) {
+            const auto number = claimAccount(session, next);
+            if (accountState_.nextAction()) accountSelections_[session] = number;
+        }
         return true;
     };
 }

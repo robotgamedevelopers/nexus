@@ -233,11 +233,16 @@ struct Window {
         l.frame = bounds(text);
         return l;
     }
-    // The SetAccount actions sent, as "session:account".
+    // The switches sent, as "session:account": the server's login switch, a SignInClaim with this window's token and no
+    // request (src/sync/hub.cpp). A SetAccount shows as "set:session:account", so a test expecting claims fails on one.
     std::vector<std::string> switches() const {
         std::vector<std::string> out;
-        for (const auto& a : link.sent)
-            if (a.kind == sync::ActionKind::SetAccount) out.push_back(std::to_string(a.session) + ":" + a.text);
+        for (const auto& a : link.sent) {
+            if (a.kind == sync::ActionKind::SetAccount) out.push_back("set:" + std::to_string(a.session) + ":" + a.text);
+            if (a.kind == sync::ActionKind::SignInClaim)
+                out.push_back(std::to_string(a.session) + ":" + a.account + (a.request ? ":request" : "") +
+                              (a.text.empty() ? ":no-token" : ""));
+        }
         return out;
     }
     bool menuShows() const { return view.accounts.node != kPrLayoutNodeNone; }
@@ -474,8 +479,9 @@ void signInRowRunsLogin() {
     CHECK(w.switches().empty());
 }
 
-// /login of a3: the claim names a3 while rowan's session stays on a1 (no switch first); once the server says a3 is
-// signed in, the session switches to it. Plants: switch before signing in; never switch after.
+// /login of a3: one claim names a3 (token, no request) while rowan's session stays on a1, with no SetAccount first; the
+// server signs a3 in and moves the session, and the window sends nothing more. Plants: SetAccount before the claim; a
+// second claim or a SetAccount after the sign-in.
 void loginSignsInThenSwitches() {
     Window w;
     w.command("/login");
@@ -485,19 +491,25 @@ void loginSignsInThenSwitches() {
     CHECK(w.link.sent.size() == sentBefore + 1);
     if (w.link.sent.size() != sentBefore + 1) return;
     const auto& claim = w.link.sent.back();
-    CHECK(claim.kind == sync::ActionKind::SignInClaim && claim.account == "a3" && claim.session == kRowan);
-    CHECK(w.switches().empty());
+    CHECK(claim.kind == sync::ActionKind::SignInClaim && claim.account == "a3" && claim.session == kRowan &&
+          claim.request == 0 && !claim.text.empty());
+    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
     // The server opens a flow for a3, held by this window; the session stays on a1.
     w.offers = {sync::SignInOffer{.id = 4, .account = "a3", .provider = "claude"}};
     w.publish();
     w.frame();
-    CHECK(w.switches().empty());
-    // a3 signs in.
+    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
+    CHECK(!w.view.problem.empty());
+    // a3 signs in, and the server moves the session to it.
     w.rowan[2].needsSignIn = false;
     w.offers.clear();
     w.publish();
     w.frame();
+    w.current = "a3";
+    w.publish();
+    w.frame();
     CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
+    CHECK(w.view.problem.empty());
 }
 
 // A /login whose sign-in ends without signing in (cancelled, failed, expired) changes nothing. Plant: switch anyway.
@@ -510,12 +522,13 @@ void cancelledLoginChangesNothing() {
     w.offers.clear();
     w.publish();    // the flow is gone; a3 still needs signing in
     w.frame();
-    CHECK(w.switches().empty());
+    CHECK((w.switches() == std::vector<std::string>{"7:a3"}));
+    CHECK(w.view.problem.find("did not finish") != std::string::npos);
     CHECK(!w.view.problem.empty());
 }
 
-// /logout asks first, naming the email; only the confirm signs out, and the AI moves to the next signed-in account. Plant:
-// sign out on Enter with no confirm.
+// /logout asks first, naming the email; only the confirm signs out (SignOut naming the session and the account), and
+// the AI moves to the next signed-in account by its claim. Plants: sign out on Enter with no confirm; move by SetAccount.
 void logoutConfirmsThenMoves() {
     Window w;
     w.command("/logout");
@@ -527,10 +540,12 @@ void logoutConfirmsThenMoves() {
     std::size_t signOut = w.link.sent.size(), move = w.link.sent.size();
     for (std::size_t i = 0; i < w.link.sent.size(); ++i) {
         if (w.link.sent[i].kind == sync::ActionKind::SignOut) signOut = i;
-        if (w.link.sent[i].kind == sync::ActionKind::SetAccount) move = i;
+        if (w.link.sent[i].kind == sync::ActionKind::SignInClaim) move = i;
     }
     CHECK(signOut < w.link.sent.size() && w.link.sent[signOut].account == "a1" && w.link.sent[signOut].session == kRowan);
-    CHECK(move < w.link.sent.size() && move > signOut && w.link.sent[move].text == "a2");
+    CHECK(move < w.link.sent.size() && move > signOut && w.link.sent[move].account == "a2" &&
+          w.link.sent[move].request == 0);
+    CHECK((w.switches() == std::vector<std::string>{"7:a2"}));
 }
 
 // /logout of the only signed-in account: the AI is left to the sign-in prompt, with no move. Plant: move anyway.
