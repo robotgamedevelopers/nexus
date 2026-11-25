@@ -76,7 +76,7 @@ struct AI {
 struct Registry {
     std::vector<Account> accounts;      // in the file's order
     std::vector<AI> ais;        // in the file's order
-    // ais.json's "limit_keeps_out": more directories a limited AI's AI is kept out of, on top of the ones the
+    // ais.json's "limit_keeps_out": more directories a limited AI is kept out of, on top of the ones the
     // driver always keeps out (the home directory and the places people keep files: docs/accounts.md "limit"), as a
     // second data volume. It only adds: nothing here makes a limited AI read more. In the file's order.
     std::vector<std::string> keepsOut{};

@@ -2,7 +2,7 @@
 // to its 0600 file on nexus-server, with no AI ever seeing it. models/Secrets.tla is the model; tests/sync/
 // secrets_walk.cpp binds this code to it.
 //
-// An asker (an AI's AI through its driver, or the server itself) asks for a secret for an account. The server mints
+// An asker (an AI through its driver, or the server itself) asks for a secret for an account. The server mints
 // a request id (durable: never reused across restarts) and puts the request in the state every window receives: its
 // id, its account, what is asked, who asks and why, never a value (Sessions::requests). A window that can take requests
 // shows a dialog for the oldest open one it has not answered (SecretPrompt). The person pastes the value once into one
