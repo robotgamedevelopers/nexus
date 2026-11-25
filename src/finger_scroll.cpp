@@ -165,10 +165,9 @@ void FingerScroll::frame(double now) {
     }
     if (phase_ == FingerPhase::Spring) {
         const double s = std::max(0.0, now - start_);
-        double e = springOffset(p0_, v0_, s);
+        // Critically damped from past the end with no speed toward it (springFrom), it never crosses back inside.
+        const double e = springOffset(p0_, v0_, s);
         const double v = springSpeed(p0_, v0_, s);
-        // Never back inside the range: a spring rests on its end.
-        if ((p0_ >= 0 && e < 0) || (p0_ <= 0 && e > 0)) e = 0;
         const bool settled = s >= kSpringMaxSeconds || (std::fabs(e) < kSettlePixels && std::fabs(v) < kSettleSpeed);
         offset_ = settled ? end_ : end_ + e;
         if (settled) phase_ = FingerPhase::Rest;

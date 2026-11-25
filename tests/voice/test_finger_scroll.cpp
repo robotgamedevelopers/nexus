@@ -115,6 +115,24 @@ void pastTheTopIsRubberBandedAndSpringsBack() {
     CHECK(s.offset() == 0);
 }
 
+void letGoPastTheTopMovingInsideStillStopsAtTheTop() {
+    auto s = list();
+    s.down(100, 0, 0);
+    s.move(110, 0.01);
+    s.move(410, 0.5);
+    s.move(370, 0.52);
+    s.move(330, 0.54); // still past the top, the finger flicking the list back in at 2000 px/s
+    CHECK(s.offset() < 0);
+    s.up(0.54, 1.0);
+    CHECK(s.phase() == FingerPhase::Spring);
+    for (double t = 1.0; t < 3; t += 1.0 / 240) {
+        s.frame(t);
+        CHECK(s.offset() <= 0); // the spring takes it to the top, and not on past into the list
+    }
+    CHECK(s.phase() == FingerPhase::Rest);
+    CHECK(s.offset() == 0);
+}
+
 void aPressCatchesAMovingListAndIsNoTap() {
     auto s = list();
     s.down(400, 0, 0);
@@ -168,6 +186,7 @@ int main() {
     aFlickFlingsOnAndSlows();
     aFlingStopsAtTheEndAndNeverComesBackInside();
     pastTheTopIsRubberBandedAndSpringsBack();
+    letGoPastTheTopMovingInsideStillStopsAtTheTop();
     aPressCatchesAMovingListAndIsNoTap();
     aListThatFitsDoesNotScroll();
     aShorterRangeAtRestPullsIn();
