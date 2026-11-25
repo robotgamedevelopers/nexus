@@ -35,6 +35,9 @@
 //                        `account=<name>` and `limit=<value>` (each only when given), and each named environment variable as `VAR=<value>` or
 //                        `VAR unset`
 //   record-env <path>    append to <path> its whole environment, one `NAME=value` a line, as it was started with it
+//   record-login <path> append to <path> `login <account>=<token>`: the one line of HOME's
+//                        .nexus/server/accounts/<--account>/oauth-token, where the Claude driver reads its login
+//                        (`login <account> unset` when there is none)
 //   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
@@ -140,7 +143,7 @@ struct Script {
 };
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "await-secret", "hang", "exit",
-    "signal", "stderr", "record", "record-env", "record-send", "count-starts", "stream", "pause"};
+    "signal", "stderr", "record", "record-env", "record-send", "record-login", "count-starts", "stream", "pause"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
     "done-without-cause", "echo-input", "cycle"};
 
@@ -447,6 +450,8 @@ private:
             record(step.arg);
         } else if (step.op == "record-env") {
             recordEnv(step.arg);
+        } else if (step.op == "record-login") {
+            recordLogin(step.arg);
         } else if (step.op == "record-send") {
             std::ofstream out(step.arg, std::ios::app);
             out << "send " << turn << ":\n" << lastPrompt_ << "\n";
@@ -567,6 +572,21 @@ private:
             }
         }
         std::exit(0);
+    }
+
+    // Where the Claude driver reads its login (drivers/claude/src/account.ts readAccount): HOME's
+    // .nexus/server/accounts/<--account>/oauth-token. Appends `login <account>=<its one line>`, or `login <account> unset`.
+    void recordLogin(const std::string& path) {
+        const char* home = std::getenv("HOME");
+        const std::string account = arguments_.account.value_or("");
+        std::string token;
+        const bool read = home != nullptr && !account.empty() &&
+            static_cast<bool>(std::ifstream(std::string(home) + "/.nexus/server/accounts/" + account + "/oauth-token") >> token);
+        std::ofstream out(path, std::ios::app);
+        out << "login " << account << (read ? "=" + token : std::string(" unset")) << "\n";
+        if (!out) {
+            scriptBug("cannot record to " + path);
+        }
     }
 
     void recordEnv(const std::string& path) {

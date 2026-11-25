@@ -189,6 +189,21 @@ or sign out of Claude in that browser and sign in with the displayed email. Nexu
 only when Claude reports that email for the login just completed. A mismatch or missing identity
 leaves the selected slot awaiting sign-in.
 
+### Switching accounts
+
+Signing in to another of the AI's linked accounts from its tab (the window's sign-in claim naming the session and
+that account) is a switch. The conversation stays on its account until the new sign-in succeeds; then it moves at
+once, its driver ends as soon as no turn is open, and the next one starts on the new account's own login. A sign-in
+that fails, is declined on the page or expires changes nothing: the conversation stays where it was and is told so.
+An account that is signed in already needs no browser: the conversation moves to it at once. Each account's login is
+its own file under `accounts/<name>/`, and a driver reads only its account's, so nothing of the old account is where
+the new one's driver reads. The old account's login is kept for switching back. These rules are
+`models/LoginSwitch.tla`, and `link_e2e_account_switch` runs them through the real server and link.
+
+Nexus can only check who signed in when the account has an `email`. Without one, the login is whatever identity the
+browser's Claude page approves, which may be the one it is already signed in to. Set each Claude account's `email`
+so that a login of the wrong identity is refused.
+
 To clear an existing Nexus login, open the AI tab, type `/logout`
 in the AI's prompt, and press **Enter**. Finish or stop active work using that login and finish
 or cancel an in-progress sign-in first. This removes the Nexus credential for that account across

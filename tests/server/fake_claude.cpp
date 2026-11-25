@@ -9,7 +9,7 @@
 // - It listens on loopback (on <port> with one, else any port), on 127.0.0.1 alone, and makes up a sign-in URL whose
 //   redirect_uri is http://localhost:<that port>/callback; with mode `forward` the redirect names another, free port,
 //   as on another machine, and the test's replay port is <port>; `forward6` is the same listening on [::1] alone.
-// - It hands the URL to $BROWSER (modes `helper`, `forward`, `forward6`, `deny`, `apikey`, `quick`, `group`), or prints
+// - It hands the URL to $BROWSER (modes `helper`, `account`, `forward`, `forward6`, `deny`, `apikey`, `quick`, `group`), or prints
 //   it in its terminal (`print`), or does both (`both`), the way the real program falls back; `silent` gives it to
 //   nobody.
 // - With mode `quick` it exits the moment its token is printed; with `group` it first starts a process of its own, in
@@ -17,6 +17,8 @@
 // - It takes the one GET on /callback: with its state and code `fakeCode...`, it prints a made-up token (an API key's
 //   shape with `apikey`), between terminal escapes, and exits 0; with `error=...` it prints that sign-in was declined
 //   and exits 1; any other request (a wrong path or state) ends it: exit 5, as a wrong request would end a real login.
+// - With mode `account` the token it prints is that account's own: the account's name (CLAUDE_CONFIG_DIR is
+//   <account>/.signin) written over the token's first letters after its prefix.
 // - With mode `late` it prints its token only once it is told to end (SIGTERM), as a program whose flow's deadline
 //   passed while the browser was sent back.
 // - With no callback in 60 s it exits 4, so that no test hangs.
@@ -275,9 +277,20 @@ int main(int argc, char** argv) {
         int sig = 0;
         sigwait(&term, &sig);
     }
+    // Mode `account`: a token of the account being signed in (its name, from CLAUDE_CONFIG_DIR <account>/.signin,
+    // written over the token's first letters after its prefix), so that a test can tell whose login is whose.
+    std::string token = mode == "apikey" ? kApiKey : kToken;
+    if (mode == "account") {
+        const std::string dir = config;
+        const std::string parent = dir.substr(0, dir.rfind('/'));
+        const std::string account = parent.substr(parent.rfind('/') + 1);
+        const std::size_t at = std::strlen("sk-ant-oat01-");
+        if (account.empty() || account.size() > 8) return 3;
+        token.replace(at, account.size(), account);
+    }
     std::printf("\x1b[32m\xe2\x9c\x93 Long-lived authentication token created successfully!\x1b[0m\r\n\r\n"
                 "Your OAuth token (valid for 1 year):\r\n\r\n\x1b[33m%s\x1b[0m\r\n\r\n"
-                "Store this token securely.\r\n", mode == "apikey" ? kApiKey : kToken);
+                "Store this token securely.\r\n", token.c_str());
     std::fflush(stdout);
     if (mode == "quick") {
         return 0;       // at once: what it printed is still in the terminal when its exit is seen
