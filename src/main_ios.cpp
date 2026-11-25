@@ -242,33 +242,11 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
 }
 
 // The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it leaves,
-// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would.
-struct AboveKeyboard {
-    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
-    float width;
-    float height;
-
-    void make(const App&, PrLayoutBoxStyle& box) const {
-        box.boxSizing = PrLayoutBoxSizing_BorderBox;
-        box.display = PrLayoutDisplay_Flex;
-        box.width = prLayoutLengthPx(width);
-        box.height = prLayoutLengthPx(height);
-    }
-};
-
+// so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would
+// (FrameHost::buildAbove).
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
-    const float cover = std::min(a.keyboardCover, extent.y);
-    if (cover <= 0) {
-        a.view.extent = extent;
-        a.host.build(prStudioWindowKit(window), root);
-        return;
-    }
-    a.view.extent = PrVec2{extent.x, extent.y - cover};
-    PrUi* ui = prStudioWindowUi(window);
-    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
-        pr::uiStyle(ui, a, AboveKeyboard{a.view.extent.x, a.view.extent.y}), 0);
-    a.host.build(prStudioWindowKit(window), above);
+    a.host.buildAbove(prStudioWindowKit(window), root, extent, a.keyboardCover);
 }
 
 bool laidOut(void* context, PrStudioWindow*) {
