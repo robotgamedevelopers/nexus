@@ -199,7 +199,7 @@ jobs:
           # (outside $GITHUB_WORKSPACE, so a SIGKILLed 0555 build directory never breaks the next checkout), checking
           # every exit status.
           walks_root="$RUNNER_TEMP/nexus-walks"
-          chmod -R u+w "$walks_root"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
           rm -rf "$walks_root"
           launched=0
           in_batch=0
@@ -345,7 +345,7 @@ jobs:
             walk build/tests/server/takeover_walk 1 40 --fault "$fault"
           done
           flush_walks
-          chmod -R u+w "$walks_root"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
           rm -rf "$walks_root"
           echo "$launched of $listed walks passed (quarter $HALF; the other three jobs run the rest)"
 
@@ -737,7 +737,7 @@ jobs:
         run: |
           set -euo pipefail
           walks_root="$RUNNER_TEMP/nexus-walks"
-          chmod -R u+w "$walks_root"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
           rm -rf "$walks_root"
           launched=0
           running=0
@@ -885,7 +885,7 @@ jobs:
             wait -n
             running=$((running - 1))
           done
-          chmod -R u+w "$walks_root"
+          if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
           rm -rf "$walks_root"
           echo "$launched walks passed"
 
