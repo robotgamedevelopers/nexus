@@ -115,16 +115,16 @@ namespace nexus {
 
 LockAnswer lockAnswerForLAError(long code) {
     switch (code) {
-    case kLAErrorUserCancel:
-    case kLAErrorUserFallback:
-    case kLAErrorSystemCancel:
-    case kLAErrorAppCancel:
-    case kLAErrorInvalidContext:
+    case kLocalAuthErrorUserCancel:
+    case kLocalAuthErrorUserFallback:
+    case kLocalAuthErrorSystemCancel:
+    case kLocalAuthErrorAppCancel:
+    case kLocalAuthErrorInvalidContext:
         return LockAnswer::Cancelled;
-    case kLAErrorPasscodeNotSet:
-    case kLAErrorNotInteractive:
+    case kLocalAuthErrorPasscodeNotSet:
+    case kLocalAuthErrorNotInteractive:
         return LockAnswer::Unavailable;
-    case kLAErrorAuthenticationFailed:
+    case kLocalAuthErrorAuthenticationFailed:
     default:
         return LockAnswer::Failed;
     }
