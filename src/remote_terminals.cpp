@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -36,12 +38,6 @@ struct Locked {
     ~Locked() { prTerminalVtermUnlock(terminal); }
     Locked(const Locked&) = delete;
     Locked& operator=(const Locked&) = delete;
-    std::string take() {
-        const PrByteView out = prVtermOutput(vterm);
-        std::string bytes(reinterpret_cast<const char*>(out.data), out.size);
-        prVtermOutputConsume(vterm, out.size);
-        return bytes;
-    }
     void drop() { prVtermOutputConsume(vterm, prVtermOutput(vterm).size); }
     PrTerminal* terminal;
     PrVterm* vterm;
@@ -223,7 +219,7 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         paint(*t);
     }
     PrLayoutNode row = prKitBox(kit_, column, {.key = prHashString(sv("remote-terminal-keys"), id)},
-        {.direction = PrKitDirection_Row, .gap = 6, .padding = {6, 6, 6, 6}});
+        {.direction = PrKitDirection_Row, .gap = 6, .padding = {6, 6, 6, 6}, .place = {.flex = PrKitFlex_Fixed}});
     struct KeyCap { const char* label; PrAppKey key; };
     static constexpr KeyCap kKeys[] = {{"esc", PrAppKey_Escape}, {"tab", PrAppKey_Tab}, {"ctrl", PrAppKey(0)},
         {"\xe2\x86\x90", PrAppKey_Left}, {"\xe2\x86\x93", PrAppKey_Down}, {"\xe2\x86\x91", PrAppKey_Up},
@@ -233,7 +229,7 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
         const bool control = k.key == PrAppKey(0);
         const PrLayoutNode cap = prKitButton(kit_, row,
             {.key = prHashString(sv("remote-terminal-key-" + label), id), .text = sv(label),
-             .selected = control && control_, .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
+             .selected = control && keys_.controlHeld(), .disabled = t->fate != sync::TerminalFate::Running || t->terminal == 0},
             {.size = PrKitControlSize_Lg});
         if (prKitActivated(kit_, cap)) {
             if (control) toggleControl();
@@ -282,7 +278,9 @@ std::string RemoteTerminals::problem(std::size_t id) {
 
 std::string RemoteTerminals::title(std::size_t id) {
     const Tab* t = find(id);
-    return t != nullptr && t->now ? t->now->title : std::string();
+    if (t == nullptr) return {};
+    // The title its program set; until one does, "Terminal", so that the tab and the phone's list have a name to show.
+    return t->now && !t->now->title.empty() ? t->now->title : std::string("Terminal");
 }
 
 void RemoteTerminals::setTextScale(float k) {
@@ -318,6 +316,103 @@ void RemoteTerminals::sendBytes(Tab& t, std::string bytes) {
     sync::wipeBytes(bytes);
 }
 
+namespace {
+
+// How long after its key a Text event may come and still be that key's own (seconds, the events' clock).
+constexpr double kTextLag = 1.0;
+
+// Whether a key's text is a character to type: not empty, and no control character.
+bool typesText(std::string_view text) {
+    if (text.empty()) return false;
+    for (const char c : text) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7f) return false;
+    }
+    return true;
+}
+
+// The bytes the screen's input rules wrote, taken off it.
+std::string takeOutput(PrVterm* vterm) {
+    const PrByteView out = prVtermOutput(vterm);
+    std::string bytes(reinterpret_cast<const char*>(out.data), out.size);
+    prVtermOutputConsume(vterm, out.size);
+    return bytes;
+}
+
+} // namespace
+
+bool TerminalKeys::type(PrVterm* vterm, PrVec2 cell, const PrAppEvent& e, std::string* bytes) {
+    prVtermOutputConsume(vterm, prVtermOutput(vterm).size);
+    if (cell.x <= 0 || cell.y <= 0) cell = PrVec2{1, 1};
+    const PrVtermInputDesc desc{.cellExtent = cell};
+    if (control_ && (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_Text)) {
+        // The key row's Control on the next letter: the letter's control character (C0), as Control would send.
+        const PrStringView text = e.kind == PrAppEventKind_Text ? e.input.text : e.keyboard.text;
+        if (text.size == 1) {
+            const unsigned char c = static_cast<unsigned char>(text.data[0]);
+            if ((c >= '@' && c <= '_') || (c >= 'a' && c <= 'z')) {
+                bytes->push_back(static_cast<char>(c & 0x1f));
+                control_ = false;
+                if (e.kind == PrAppEventKind_KeyDown) sent_.push_back({std::string(text.data, text.size), e.time});
+                return true;
+            }
+        }
+    }
+    bool taken = false;
+    switch (e.kind) {
+        case PrAppEventKind_KeyDown: {
+            // Every byte at its key's own turn. The screen's rules send a key that types text as its Text event; but on
+            // iOS a hardware key's text comes from the text system later, after a key such as Enter that the rules
+            // send at once, which would reach the shell first. So a key that types text sends it here, and its Text
+            // event is dropped when it comes.
+            taken = prVtermInputEvent(vterm, &e, &desc);
+            const std::string_view text(e.keyboard.text.data, e.keyboard.text.size);
+            if (!taken && typesText(text) && (e.modifiers & (PrAppModifierFlag_Control | PrAppModifierFlag_Super)) == 0) {
+                PrAppEvent as{};
+                as.kind = PrAppEventKind_Text;
+                as.modifiers = e.modifiers;
+                as.time = e.time;
+                as.input.text = e.keyboard.text;
+                taken = prVtermInputEvent(vterm, &as, &desc);
+            }
+            if (taken && !text.empty()) sent_.push_back({std::string(text), e.time});
+            break;
+        }
+        case PrAppEventKind_Text: {
+            const std::string_view text(e.input.text.data, e.input.text.size);
+            while (!sent_.empty() && e.time - sent_.front().time > kTextLag) sent_.pop_front();
+            if (!sent_.empty() && sent_.front().text == text) {
+                sent_.pop_front();
+                return true;    // a key's own text, sent at its KeyDown
+            }
+            sent_.clear();
+            taken = prVtermInputEvent(vterm, &e, &desc) || !text.empty();
+            break;
+        }
+        case PrAppEventKind_Paste:
+            prVtermInputPaste(vterm, e.input.text);
+            taken = true;
+            break;
+        default:
+            break;
+    }
+    *bytes += takeOutput(vterm);
+    return taken;
+}
+
+void TerminalKeys::key(PrVterm* vterm, PrVec2 cell, PrAppKey key, PrAppModifierFlags modifiers, std::string* bytes) {
+    prVtermOutputConsume(vterm, prVtermOutput(vterm).size);
+    if (cell.x <= 0 || cell.y <= 0) cell = PrVec2{1, 1};
+    const PrVtermInputDesc desc{.cellExtent = cell};
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_KeyDown;
+    e.modifiers = modifiers | (control_ ? PrAppModifierFlag_Control : 0);
+    e.keyboard.key = key;
+    control_ = false;
+    prVtermInputEvent(vterm, &e, &desc);
+    *bytes += takeOutput(vterm);
+}
+
 bool RemoteTerminals::typed(std::size_t id, const PrAppEvent& e) {
     Tab* t = find(id);
     if (t == nullptr || t->view == nullptr) return false;
@@ -334,69 +429,22 @@ bool RemoteTerminals::typed(std::size_t id, const PrAppEvent& e) {
     bool taken = false;
     {
         Locked screen(t->view);
-        screen.drop();
-        PrVec2 cell = prTerminalCellExtent(t->view);
-        if (cell.x <= 0 || cell.y <= 0) cell = PrVec2{1, 1};
-        const PrVtermInputDesc desc{.cellExtent = cell};
-        PrAppEvent ev = e;
-        if (control_ && (e.kind == PrAppEventKind_KeyDown || e.kind == PrAppEventKind_Text)) {
-            // The key row's Control on the next letter: the letter's control character (C0), as Control would send.
-            const PrStringView text = e.kind == PrAppEventKind_Text ? e.input.text : e.keyboard.text;
-            if (text.size == 1) {
-                const unsigned char c = static_cast<unsigned char>(text.data[0]);
-                if ((c >= '@' && c <= '_') || (c >= 'a' && c <= 'z')) {
-                    bytes.push_back(static_cast<char>(c & 0x1f));
-                    control_ = false;
-                    dropText_ = e.kind == PrAppEventKind_KeyDown ? std::string(text.data, text.size) : std::string();
-                    taken = true;
-                }
-            }
-        }
-        if (!taken) {
-            switch (e.kind) {
-                case PrAppEventKind_KeyDown:
-                    taken = prVtermInputEvent(screen.vterm, &ev, &desc);
-                    dropText_ = taken ? std::string(e.keyboard.text.data, e.keyboard.text.size) : std::string();
-                    break;
-                case PrAppEventKind_Text:
-                    if (!dropText_.empty() && std::string_view(e.input.text.data, e.input.text.size) == dropText_) {
-                        taken = true;   // the key's own text, which its sequence carried
-                    } else {
-                        taken = prVtermInputEvent(screen.vterm, &ev, &desc) || e.input.text.size != 0;
-                    }
-                    dropText_.clear();
-                    break;
-                case PrAppEventKind_Paste:
-                    prVtermInputPaste(screen.vterm, e.input.text);
-                    taken = true;
-                    break;
-                default:
-                    break;
-            }
-            bytes += screen.take();
-        }
+        taken = keys_.type(screen.vterm, prTerminalCellExtent(t->view), e, &bytes);
     }
     if (!bytes.empty()) sendBytes(*t, std::move(bytes));
     return taken;
 }
 
 void RemoteTerminals::key(std::size_t id, PrAppKey key, PrAppModifierFlags modifiers) {
-    PrAppEvent e{};
-    e.kind = PrAppEventKind_KeyDown;
-    e.modifiers = modifiers | (control_ ? PrAppModifierFlag_Control : 0);
-    e.keyboard.key = key;
-    control_ = false;
     Tab* t = find(id);
-    if (t == nullptr || t->view == nullptr || t->terminal == 0 || t->fate != sync::TerminalFate::Running) return;
+    if (t == nullptr || t->view == nullptr || t->terminal == 0 || t->fate != sync::TerminalFate::Running) {
+        keys_.dropControl();
+        return;
+    }
     std::string bytes;
     {
         Locked screen(t->view);
-        screen.drop();
-        PrVec2 cell = prTerminalCellExtent(t->view);
-        if (cell.x <= 0 || cell.y <= 0) cell = PrVec2{1, 1};
-        const PrVtermInputDesc desc{.cellExtent = cell};
-        prVtermInputEvent(screen.vterm, &e, &desc);
-        bytes = screen.take();
+        keys_.key(screen.vterm, prTerminalCellExtent(t->view), key, modifiers, &bytes);
     }
     if (!bytes.empty()) sendBytes(*t, std::move(bytes));
 }

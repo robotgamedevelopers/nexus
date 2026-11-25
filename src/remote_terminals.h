@@ -27,6 +27,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <set>
@@ -44,10 +45,34 @@
 #include "view.h"
 
 struct PrTerminal;
+struct PrVterm;
 
 namespace nexus {
 
 struct LinkPort;
+
+// What a terminal tab's keys send: the bytes a screen's input rules (pr/vterm_input.h) make of each key, text and paste,
+// under the modes the program set, in the order they were typed; and the key row's Control, held for the next key.
+class TerminalKeys {
+public:
+    // Appends to bytes what e sends (cell: the screen's cell, px), and says whether e was the terminal's. On iOS a
+    // hardware key's Text event comes from the text system after its KeyDown, perhaps after the next keys: a key that
+    // types text is sent at its KeyDown, and its own Text dropped when it comes (within a second, by the events' time).
+    bool type(PrVterm* vterm, PrVec2 cell, const PrAppEvent& e, std::string* bytes);
+    // Appends to bytes what the key row's key sends, with Control if it was held.
+    void key(PrVterm* vterm, PrVec2 cell, PrAppKey key, PrAppModifierFlags modifiers, std::string* bytes);
+    void toggleControl() { control_ = !control_; }
+    void dropControl() { control_ = false; }
+    bool controlHeld() const { return control_; }
+
+private:
+    struct SentText {
+        std::string text;
+        double time = 0;
+    };
+    bool control_ = false;
+    std::deque<SentText> sent_;     // the text of each key sent at its KeyDown, oldest first, until its Text comes
+};
 
 class RemoteTerminals : public Terminals {
 public:
@@ -73,8 +98,8 @@ public:
     // The key row's keys: the bytes the screen's input rules make of `key` with `modifiers`, sent to the tab's shell.
     void key(std::size_t id, PrAppKey key, PrAppModifierFlags modifiers);
     // The key row's Control: the next key or letter typed is sent with Control.
-    void toggleControl() { control_ = !control_; }
-    bool controlHeld() const { return control_; }
+    void toggleControl() { keys_.toggleControl(); }
+    bool controlHeld() const { return keys_.controlHeld(); }
 
     bool open(std::size_t id) override;
     void close(std::size_t id) override;
@@ -114,7 +139,7 @@ private:
     LinkPort* link_ = nullptr;
     PrKit* kit_ = nullptr;
     float scale_ = 1;
-    bool control_ = false;
+    TerminalKeys keys_;
     bool served_ = false, connected_ = false;
     std::size_t count_ = 0;                 // the terminals the state holds
     std::uint64_t epoch_ = 0;
@@ -122,7 +147,6 @@ private:
     std::map<std::size_t, float> scales_;
     std::set<sync::TerminalId> closing_;    // closed by this window, until the state no longer holds them
     std::set<std::string> orphans_;         // openers of tabs closed while they waited: closed when they come
-    std::string dropText_;                  // a key's text that its sequence carried: its Text event is dropped
 };
 
 } // namespace nexus

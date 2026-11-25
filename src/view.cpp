@@ -1371,6 +1371,7 @@ struct Builder {
         if (plus) {
             const PrLayoutNode button = prKitButton(kit, row, {.key = prHashString(sv("new-terminal"), 0),
                 .text = sv("+")}, {.variant = PrKitButtonVariant_Ghost, .size = PrKitControlSize_Lg});
+            prKitPlace(kit, button, {.flex = PrKitFlex_Fixed, .align = PrKitAlign_Center});
             if (prKitActivated(kit, button)) openTerminal();
         }
         if (model.tab_count() > 0) element(window, Part::TabDivider);

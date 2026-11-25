@@ -3,12 +3,15 @@
 // the state holds it; a terminal no tab holds gets a tab of its own, the selection staying; a closed tab's terminal is
 // closed and never taken back; one another window closed leaves; one lost to a restart, or refused, says so; a server
 // from before terminals offers none. No OS, no clock, no window, no process, no network: the screens (which need a
-// window's kit) are the iOS shots'.
+// window's kit) are the iOS shots'. And what the keys send, in the order typed, through a screen of Prax's own.
 
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "pr/vterm.h"
 
 #include "frame_host.h"
 #include "model.h"
@@ -87,7 +90,7 @@ void opensAndTakesItsTerminal() {
     CHECK(t.open(tab));
     CHECK(port.sent.size() == 1 && port.sent[0].kind == sync::ActionKind::TerminalCreate);
     CHECK(port.sent[0].text == "tok/" + std::to_string(tab));
-    CHECK(t.problem(tab).empty() && t.title(tab).empty() && !t.ended(tab));
+    CHECK(t.problem(tab).empty() && t.title(tab) == "Terminal" && !t.ended(tab));
     // The state holds it: taken by its tab, not given another.
     t.received(state({term(idOf(kEpoch, 1), "tok/" + std::to_string(tab), "vim")}, 2), true, model);
     CHECK(terminalTabs(model) == 1);
@@ -193,6 +196,83 @@ void olderServerOffersNone() {
     CHECK(!t.available());
 }
 
+// A key typed at time t, as the iOS hardware keyboard reports it: KeyDown with the key's text.
+PrAppEvent keyDown(PrAppKey key, const char* text, double t, PrAppModifierFlags modifiers = 0) {
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_KeyDown;
+    e.time = t;
+    e.modifiers = modifiers;
+    e.keyboard.key = key;
+    e.keyboard.text = PrStringView{text, std::strlen(text)};
+    return e;
+}
+
+PrAppEvent textEvent(const char* text, double t) {
+    PrAppEvent e{};
+    e.kind = PrAppEventKind_Text;
+    e.time = t;
+    e.input.text = PrStringView{text, std::strlen(text)};
+    return e;
+}
+
+struct Screen {
+    PrVterm* vterm;
+    Screen() {
+        PrVtermDesc d{};
+        d.extent = PrUVec2{80, 24};
+        vterm = prVtermCreate(&d);
+    }
+    ~Screen() { prVtermDestroy(vterm); }
+    Screen(const Screen&) = delete;
+    Screen& operator=(const Screen&) = delete;
+};
+
+constexpr PrVec2 kCell{8, 16};
+
+// iOS's text system delivers a hardware key's text after its KeyDown, here after the Enter typed next: the shell still
+// gets the letters before the Enter, and each once.
+void keysKeepTheirOrder() {
+    Screen screen;
+    TerminalKeys keys;
+    std::string sent;
+    CHECK(keys.type(screen.vterm, kCell, keyDown('L', "l", 1.0), &sent));
+    CHECK(keys.type(screen.vterm, kCell, keyDown('S', "s", 1.01), &sent));
+    CHECK(keys.type(screen.vterm, kCell, keyDown(PrAppKey_Enter, "", 1.02), &sent));
+    CHECK(sent == "ls\r");
+    CHECK(keys.type(screen.vterm, kCell, textEvent("l", 1.05), &sent));
+    CHECK(keys.type(screen.vterm, kCell, textEvent("s", 1.06), &sent));
+    CHECK(sent == "ls\r");
+    // The on-screen keyboard's text comes with no KeyDown: typed as it comes.
+    CHECK(keys.type(screen.vterm, kCell, textEvent("x", 2.0), &sent));
+    CHECK(sent == "ls\rx");
+    // A key whose text never came is forgotten after a second: the same letter typed later on screen is typed.
+    CHECK(keys.type(screen.vterm, kCell, keyDown('Q', "q", 3.0), &sent));
+    CHECK(keys.type(screen.vterm, kCell, textEvent("q", 4.5), &sent));
+    CHECK(sent == "ls\rxqq");
+    // Text that is not the waiting key's (the text system changed it): typed, and nothing left waiting.
+    CHECK(keys.type(screen.vterm, kCell, keyDown('A', "a", 5.0), &sent));
+    CHECK(keys.type(screen.vterm, kCell, textEvent("b", 5.1), &sent));
+    CHECK(keys.type(screen.vterm, kCell, textEvent("a", 5.2), &sent));
+    CHECK(sent == "ls\rxqqaba");
+}
+
+// Control+C from a keyboard, and the key row's Control on the next letter, send ETX; Control is held for one key.
+void controlSendsItsCharacter() {
+    Screen screen;
+    TerminalKeys keys;
+    std::string sent;
+    CHECK(keys.type(screen.vterm, kCell, keyDown('C', "c", 1.0, PrAppModifierFlag_Control), &sent));
+    CHECK(keys.type(screen.vterm, kCell, textEvent("c", 1.01), &sent));   // its own text, dropped
+    CHECK(sent == "\x03");
+    keys.toggleControl();
+    CHECK(keys.controlHeld());
+    CHECK(keys.type(screen.vterm, kCell, textEvent("d", 2.0), &sent));
+    CHECK(sent == "\x03\x04");
+    CHECK(!keys.controlHeld());
+    keys.key(screen.vterm, kCell, PrAppKey_Left, 0, &sent);
+    CHECK(sent == "\x03\x04\x1b[D");
+}
+
 } // namespace
 
 int main() {
@@ -201,6 +281,8 @@ int main() {
     endedStaysAndRestartSays();
     refusedAndOrphaned();
     olderServerOffersNone();
+    keysKeepTheirOrder();
+    controlSendsItsCharacter();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
