@@ -44,22 +44,6 @@ jobs:
             config: mac-release
             brew: ninja protobuf
             targets: ""
-          - cache: mac-asan-units
-            os: macos-26
-            config: mac-asan
-            brew: ninja
-            targets: >-
-              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          - cache: mac-asan-walks
-            os: macos-26
-            config: mac-asan
-            brew: ninja
-            targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
           - cache: linux-release
             os: ubuntu-24.04
             config: linux-release
