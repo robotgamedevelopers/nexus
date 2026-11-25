@@ -237,6 +237,7 @@ const char* const kMachineRule = "1 to 253 letters, digits, '-' or '.', not star
 const char* const kDirRule = "starting with '/', printable, at most 4096 bytes, as \"/Users/me/work\"";
 const char* const kAccountsExample =
     "{ \"version\": 2, \"accounts\": [ { \"name\": \"work\", \"provider\": \"claude\", \"billing\": \"subscription\" } ] }";
+const char* const kOldAIsKey = "friends";
 const char* const kAIsExample =
     "{ \"version\": 2, \"ais\": [ { \"name\": \"claude\", \"limit\": true, \"accounts\": [\"work\"], \"default\": "
     "\"work\" } ] }";
@@ -563,11 +564,18 @@ Read readAIs(std::string_view text, const std::string& path, Registry* registry,
     if (!r.parse()) {
         return r.read;
     }
-    const PrJsonValueIndex list = top(r, "ais", kAIsExample, {"limit_keeps_out"});
+    // A file from before the friend names became AI keeps its list under "friends" (kOldAIsKey): read so, the file
+    // read as an upgrade, and written under "ais" at the next write. The word stays here only.
+    const bool oldKey = prJsonKind(r.doc(), 0) == PrJsonKind_Object &&
+        prJsonMember(r.doc(), 0, pr("ais")) == kPrJsonMissing && prJsonMember(r.doc(), 0, pr(kOldAIsKey)) != kPrJsonMissing;
+    const PrJsonValueIndex list = top(r, oldKey ? kOldAIsKey : "ais", kAIsExample, {"limit_keeps_out"});
     if (list == kPrJsonMissing) {
         return r.read;
     }
-    // "limit_keeps_out": absent is none. Each a directory a limited AI's AI is kept out of (isKeptOut).
+    if (oldKey) {
+        r.read.upgraded = true;
+    }
+    // "limit_keeps_out": absent is none. Each a directory a limited AI is kept out of (isKeptOut).
     const PrJsonValueIndex ko = prJsonMember(r.doc(), 0, pr("limit_keeps_out"));
     if (ko != kPrJsonMissing && prJsonKind(r.doc(), ko) != PrJsonKind_Array) {
         r.errorAt(ko, "\"limit_keeps_out\" is " + std::string(kindName(prJsonKind(r.doc(), ko))) + ", not a list",

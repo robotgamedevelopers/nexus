@@ -104,7 +104,7 @@ void verifyMigrated(MemFs& fs) {
     CHECK((topNames == std::vector<std::string>{"client", "server"}));
     CHECK(strOf(fs.data("/h/.nexus/client/config")) == "sprint-url https://board.example\n");
     CHECK(!fs.has("/h/.nexus/server/.migrating"));
-    CHECK(has(strOf(fs.data("/h/.nexus/server/drivers")), "AI ada claude"));
+    CHECK(has(strOf(fs.data("/h/.nexus/server/drivers")), "ai ada claude"));
     CHECK(strOf(fs.data("/h/.nexus/server/config")) == "machine studio\n");
 
     std::unique_ptr<Store> s;
@@ -200,10 +200,10 @@ void testRefusals() {
     {
         MemFs diff;
         populateOldHome(diff);
-        writeDurable(diff, "/h/.nexus/server/drivers", "AI other claude\n");
+        writeDurable(diff, "/h/.nexus/server/drivers", "ai other claude\n");
         const Status s = migrateOldLayout(diff, "/h/.nexus", "/h/.nexus/server");
         CHECK(s.code() == Status::Code::Failed && has(s.message(), "drivers"));
-        CHECK(strOf(diff.data("/h/.nexus/server/drivers")) == "AI other claude\n");
+        CHECK(strOf(diff.data("/h/.nexus/server/drivers")) == "ai other claude\n");
         CHECK(diff.has("/h/.nexus/drivers"));
 
         MemFs same;

@@ -433,6 +433,10 @@ if(TARGET nexus_policy)
         "-DTOOL=${policy_tool}" "-DCHECK=$<TARGET_FILE:policy_reload_test>"
         "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-reload-test" -P "${PROJECT_SOURCE_DIR}/tests/policy/reload.cmake")
     set_tests_properties(policy_functional_reload PROPERTIES LABELS functional TIMEOUT 30)
+    add_test(NAME policy_functional_old_names COMMAND ${CMAKE_COMMAND} "-DTOOL=${policy_tool}"
+        "-DROOT=${CMAKE_CURRENT_BINARY_DIR}/policy-old-names" "-DRULES=${PROJECT_SOURCE_DIR}/policy/rules"
+        -P "${PROJECT_SOURCE_DIR}/tests/policy/old_names.cmake")
+    set_tests_properties(policy_functional_old_names PROPERTIES LABELS functional TIMEOUT 30)
 endif()
 add_subdirectory(tests/model)
 add_subdirectory(tests/sync)

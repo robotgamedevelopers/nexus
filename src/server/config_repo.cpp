@@ -310,7 +310,7 @@ bool ConfigRepo::open(std::string* why) {
         return false;
     }
     if (::stat((dir() + "/.git").c_str(), &st) == 0) {
-        return true;
+        return moveOldAIsFile(why);
     }
     GitResult g = runGit(dir(), {"init", "-q"});
     if (g.status != 0) {
@@ -345,6 +345,71 @@ bool ConfigRepo::open(std::string* why) {
     return true;
 }
 
+// A repository from before ais.json holds the AIs in friends.json (kOldAIsFile): moved to ais.json once, the move and
+// the .gitignore that admits the new name committed alone. The file's text moves as it is: a hand edit not yet applied
+// stays one, and the old top-level key reads as before (accounts::readAIs) until the next write. A repository made
+// with friends.json but never committing it has the file renamed on disk only, still a hand edit to check and reload.
+bool ConfigRepo::moveOldAIsFile(std::string* why) {
+    moved_.clear();
+    struct stat st{};
+    const std::string oldPath = dir() + "/" + kOldAIsFile;
+    const bool oldOnDisk = ::lstat(oldPath.c_str(), &st) == 0;
+    const bool oldTracked = runGit(dir(), {"cat-file", "-e", "HEAD:" + kOldAIsFile}).status == 0 ||
+        runGit(dir(), {"ls-files", "--error-unmatch", "--", kOldAIsFile}).status == 0;
+    if (!oldOnDisk && !oldTracked) {
+        return true;
+    }
+    const bool newThere = ::lstat(aisPath().c_str(), &st) == 0 ||
+        runGit(dir(), {"cat-file", "-e", "HEAD:ais.json"}).status == 0;
+    if (newThere) {
+        *why = dir() + " holds both " + kOldAIsFile + " (the AIs file's name before nexus called them AIs) and ais.json, "
+            "so neither was moved over the other: keep the current one as ais.json, take " + kOldAIsFile + " out (`git -C " +
+            dir() + " rm " + kOldAIsFile + "` and commit), then start nexus-server again";
+        return false;
+    }
+    if (!oldTracked) {
+        if (::rename(oldPath.c_str(), aisPath().c_str()) != 0) {
+            *why = errnoText("cannot rename " + oldPath + " to " + aisPath());
+            return false;
+        }
+        moved_ = oldPath + " renamed to " + aisPath() + " (never committed: a hand edit to check and reload)";
+        return true;
+    }
+    if (runGit(dir(), {"diff", "--cached", "--quiet"}).status != 0) {
+        *why = dir() + " has changes staged in git, so " + kOldAIsFile + " was not moved to ais.json in a commit of its "
+            "own: unstage them (`git -C " + dir() + " reset -q`), then start nexus-server again";
+        return false;
+    }
+    if (!oldOnDisk) {
+        *why = dir() + "/" + kOldAIsFile + " was deleted by hand, so it was not moved to ais.json: put it back (`git -C " +
+            dir() + " checkout -- " + kOldAIsFile + "`), or commit its removal, then start nexus-server again";
+        return false;
+    }
+    const auto undo = [&](const std::string& failed) {
+        runGit(dir(), {"reset", "-q"});
+        ::rename(aisPath().c_str(), oldPath.c_str());
+        runGit(dir(), {"checkout", "-q", "--", ".gitignore"});
+        *why = failed + "; nothing was moved, so start nexus-server again once git works in " + dir();
+        return false;
+    };
+    if (!writeAtomic(dir() + "/.gitignore", kIgnore, why)) {
+        return false;
+    }
+    GitResult g = runGit(dir(), {"mv", "--", kOldAIsFile, "ais.json"});
+    if (g.status != 0) {
+        return undo(gitWhy("moving " + kOldAIsFile + " to ais.json", g));
+    }
+    if ((g = runGit(dir(), {"add", "--", ".gitignore"})).status != 0) {
+        return undo(gitWhy("staging .gitignore", g));
+    }
+    if ((g = runGit(dir(), {"commit", "-q", "-m", "nexus-server moved " + kOldAIsFile + " to ais.json: the file of "
+                            "AIs under its new name, its text as it was"})).status != 0) {
+        return undo(gitWhy("committing the move of " + kOldAIsFile + " to ais.json", g));
+    }
+    moved_ = dir() + "/" + kOldAIsFile + " moved to ais.json, committed";
+    return true;
+}
+
 bool ConfigRepo::hasAccounts() {
     return runGit(dir(), {"cat-file", "-e", "HEAD:accounts.json"}).status == 0;
 }
@@ -363,11 +428,16 @@ bool ConfigRepo::readAt(const std::string& rev, accounts::Registry* out, std::ve
             }
             continue;
         }
-        GitResult g = runGit(dir(), {"cat-file", "-e", rev + ":" + names[i]});
+        std::string name = names[i];
+        GitResult g = runGit(dir(), {"cat-file", "-e", rev + ":" + name});
+        if (g.status != 0 && i == 1 && runGit(dir(), {"cat-file", "-e", rev + ":" + kOldAIsFile}).status == 0) {
+            name = kOldAIsFile;   // a commit from before ais.json: the AIs under the file's old name
+            g.status = 0;
+        }
         if (g.status != 0) {
             continue;   // not in that commit: none
         }
-        g = runGit(dir(), {"show", rev + ":" + names[i]});
+        g = runGit(dir(), {"show", rev + ":" + name});
         if (g.status != 0) {
             errors->push_back(gitWhy("reading " + std::string(names[i]) + " at " + rev, g));
             return false;
@@ -577,7 +647,8 @@ bool ConfigRepo::onlyKnownHistory(std::string* why) {
     std::istringstream in(log.out + "\n" + index.out);
     std::string line;
     while (std::getline(in, line)) {
-        if (line.empty() || std::find(kConfigFiles.begin(), kConfigFiles.end(), line) != kConfigFiles.end()) {
+        if (line.empty() || line == kOldAIsFile ||
+                std::find(kConfigFiles.begin(), kConfigFiles.end(), line) != kConfigFiles.end()) {
             continue;
         }
         *why = "the history of " + dir() + " holds " + line + ", which is not one of its files (.gitignore, "

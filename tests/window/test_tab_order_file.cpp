@@ -133,6 +133,10 @@ static void mixedLayout() {
     CHECK(path.write(formatLayout(wanted), &error) && path.read(&text, &error) && parseLayout(text, &read));
     CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["sprint","dashboards",""],["sprint","ais",""]]})", &read));
     CHECK(!parseLayout(R"({"version":1,"selected":"extension:7","tabs":[]})", &read));
+    // Saved before the friend names became AI: its keys and group read as the AI's, and are saved so after.
+    CHECK(parseLayout(R"({"version":1,"selected":"friend:ada","tabs":[["friend:ada","friends",""]]})", &read) &&
+          read == (SavedLayout{"ai:ada", {{"ai:ada", "ais", ""}}}));
+    CHECK(!parseLayout(R"({"version":1,"selected":"","tabs":[["friend:ada","ais",""],["ai:ada","ais",""]]})", &read));
     const auto extension = [](const std::string& type, std::string* group, std::string* title) {
         if (type != "notes") return false;
         *group = "writing";

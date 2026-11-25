@@ -42,6 +42,9 @@ namespace nexus::server {
 
 // The files the repository holds, and the only ones it ever stages.
 inline const std::vector<std::string> kConfigFiles{".gitignore", "accounts.json", "ais.json"};
+// What ais.json was called before the friend names became AI (2026-11-25): open() moves it to ais.json once, readAt()
+// reads it at a commit from before, and a history holding it may still be pushed. The word stays here only.
+inline const std::string kOldAIsFile = "friends.json";
 
 // The deadline of a git call on the local repository, and of a push.
 constexpr int kGitMs = 30000;
@@ -75,8 +78,12 @@ public:
 
     // Makes the directory (0700) and the repository when they are missing, with its .gitignore and a first commit.
     // Files already there when the repository is made are committed in it only when they read and agree (else they
-    // are left as a hand edit to check and reload). False, with why, when git or the disk fails.
+    // are left as a hand edit to check and reload). A repository from before ais.json has its old file moved to
+    // ais.json, once, in a commit of its own (moved() says so). False, with why, when git or the disk fails.
     bool open(std::string* why);
+
+    // What open() did to move the old file to ais.json; empty when there was nothing to move.
+    const std::string& moved() const { return moved_; }
 
     // Whether HEAD holds accounts.json: false for a repository made before any account was set up.
     bool hasAccounts();
@@ -157,12 +164,14 @@ private:
     bool rawRemote(std::string* url, std::string* why);
     bool readAt(const std::string& rev, accounts::Registry* out, std::vector<std::string>* errors, bool* upgraded);
     bool onlyKnownHistory(std::string* why);
+    bool moveOldAIsFile(std::string* why);
     void endPush();
     std::string dir_;
     std::function<std::string()> dirNow_;
     bool applying_ = false;
     bool pushWanted_ = false;
     std::vector<std::string> notes_;
+    std::string moved_;
     Child push_;
 };
 

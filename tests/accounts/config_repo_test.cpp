@@ -404,6 +404,49 @@ int main(int argc, char** argv) {
     std::vector<std::string> lines;
     CHECK(!inner.history(&lines, &why) && lines.empty());
 
+    // A repository from before ais.json: friends.json under its old .gitignore, its list under "friends". The first open
+    // moves it to ais.json in a commit of its own, the text as it was (a hand edit still pending); HEAD reads the same
+    // registry, the commit before reads under the old name, and the next committed() writes the list as "ais".
+    {
+        const std::string olddir = work + "/old-config";
+        std::filesystem::create_directories(olddir);
+        CHECK(runGit(olddir, {"init", "-q"}).status == 0);
+        std::string oldText = accounts::aisText(sample());
+        oldText.replace(oldText.find("\"ais\""), 5, "\"friends\"");
+        spit(olddir + "/.gitignore", "*\n!.gitignore\n!accounts.json\n!friends.json\n");
+        spit(olddir + "/accounts.json", accounts::accountsText(sample()));
+        spit(olddir + "/friends.json", oldText);
+        CHECK(runGit(olddir, {"add", "--", ".gitignore", "accounts.json", "friends.json"}).status == 0);
+        CHECK(runGit(olddir, {"commit", "-q", "-m", "a repository from before"}).status == 0);
+        ConfigRepo old(olddir);
+        const std::string first = history(old)[0].substr(0, history(old)[0].find(' '));
+        Registry edited = sample();
+        edited.ais[0].preferred = "cx";
+        std::string editedText = accounts::aisText(edited);
+        editedText.replace(editedText.find("\"ais\""), 5, "\"friends\"");
+        spit(olddir + "/friends.json", editedText);       // a hand edit not yet applied
+        CHECK(old.open(&why) && old.moved().find("moved to ais.json, committed") != std::string::npos);
+        CHECK(!std::filesystem::exists(olddir + "/friends.json") && slurp(old.aisPath()) == editedText);
+        CHECK(slurp(olddir + "/.gitignore").find("!ais.json") != std::string::npos);
+        CHECK(history(old).size() == 2 && has(history(old), "nexus-server moved friends.json to ais.json"));
+        CHECK(runGit(olddir, {"cat-file", "-e", "HEAD:ais.json"}).status == 0);
+        CHECK(runGit(olddir, {"cat-file", "-e", "HEAD:friends.json"}).status != 0);
+        CHECK(old.pending(&why));                          // the hand edit is still one
+        Registry got;
+        std::vector<std::string> errs;
+        CHECK(old.working(&got, &errs) && got == edited);
+        CHECK(old.at(first, &got, &errs) && got == sample());
+        CHECK(runGit(olddir, {"checkout", "--", "ais.json"}).status == 0);
+        std::vector<std::string> said;
+        CHECK(old.committed(&got, &said) && got == sample() && has(said, "upgraded accounts.json and ais.json"));
+        CHECK(slurp(old.aisPath()) == accounts::aisText(sample()));
+        CHECK(old.open(&why) && old.moved().empty() && history(old).size() == 3);
+        // Both names there: refused, nothing moved, the fix named.
+        spit(olddir + "/friends.json", oldText);
+        CHECK(!old.open(&why) && why.find("holds both friends.json and ais.json") != std::string::npos);
+        std::filesystem::remove(olddir + "/friends.json");
+    }
+
     // What a driver tells its AI.
     const std::string brief = server::configBrief("/srv/.nexus/server");
     CHECK(brief.find("/srv/.nexus/server/nexus-config/accounts.json") != std::string::npos);

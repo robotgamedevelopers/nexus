@@ -724,7 +724,8 @@ Status readDiskFormats(Fs& fs, const std::string& serverDir, builds::DiskFormats
     out->storeRecordSeq = sr.record_seq;
     out->storeSnapshotReader = sr.snapshot_reader;
 
-    for (const char* name : {"accounts.json", "ais.json"}) {
+    // friends.json: ais.json's name before the friend names became AI, in a server directory not yet started since.
+    for (const char* name : {"accounts.json", "ais.json", "friends.json"}) {
         const std::string path = serverDir + "/nexus-config/" + name;
         Bytes bytes;
         s = fs.read_all(path, bytes);

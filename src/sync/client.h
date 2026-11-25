@@ -79,7 +79,7 @@ constexpr std::size_t kMaxAITabs = accounts::kMaxAIs;
 std::vector<AIInfo> aisOf(const Sessions& state, std::vector<std::string>* dropped = nullptr,
     std::size_t* past = nullptr);
 
-// The drafts the window keeps for AIs of its server that have no tab, by AI name: what the person typed to a
+// The drafts the window keeps for AIs of its server that have no tab, by AI name: what the person typed to an
 // AI the server's list then left out, given back when an AI of that name has a tab again (applyAIs). The
 // window keeps them across launches by server and name (tab_order.h KeptChange) and never deletes one itself.
 using KeptDrafts = std::map<std::string, std::string>;

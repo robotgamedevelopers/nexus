@@ -161,7 +161,18 @@ TabOrderStore fileStoreNamed(std::string_view name) {
 // "terminal", by no place, since terminals were not kept.
 constexpr std::string_view kSelectedHeader = "nexus selected tab 2";
 constexpr std::string_view kSelectedHeader1 = "nexus selected tab 1";
-constexpr std::string_view kAIPrefix = "AI ";
+constexpr std::string_view kAIPrefix = "ai ";
+// What the saved files said before the friend names became AI: the selected tab's "friend <name>", the layout's
+// "friend:<name>" keys and "friends" group. Read as the AI's, and written the new way at the next save; the word
+// stays here only.
+constexpr std::string_view kOldAIPrefix = "friend ";
+constexpr std::string_view kOldAIKey = "friend:";
+constexpr std::string_view kOldAIGroup = "friends";
+
+// A layout key or group as this version names it.
+std::string currentKey(std::string key) {
+    return key.starts_with(kOldAIKey) ? "ai:" + key.substr(kOldAIKey.size()) : key;
+}
 constexpr std::string_view kTerminalPrefix = "terminal ";
 
 // The first line of the terminals' file: what it is, and its format's version.
@@ -221,13 +232,17 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
     const auto tabs = prJsonMember(d, 0, pr("tabs"));
     if (prJsonKind(d, tabs) != PrJsonKind_Array || !stringAt(prJsonMember(d, 0, pr("selected")), result.selected))
         return false;
+    result.selected = currentKey(std::move(result.selected));
     std::set<std::string> seen;
     for (auto i = prJsonFirst(d, tabs); i != kPrJsonMissing; i = prJsonAfter(d, tabs, i)) {
         LayoutTab row;
         if (prJsonKind(d, i) != PrJsonKind_Array || prJsonCount(d, i) != 3 ||
             !stringAt(prJsonElement(d, i, 0), row.key) || !stringAt(prJsonElement(d, i, 1), row.group) ||
-            !stringAt(prJsonElement(d, i, 2), row.detail) || !seen.insert(row.key).second)
+            !stringAt(prJsonElement(d, i, 2), row.detail))
             return false;
+        row.key = currentKey(std::move(row.key));
+        if (row.group == kOldAIGroup) row.group = "ais";
+        if (!seen.insert(row.key).second) return false;
         const std::string_view key(row.key);
         if (key.starts_with("terminal:") || key.starts_with("extension:")) {
             auto number = key.substr(key.find(':') + 1);
@@ -236,7 +251,7 @@ bool parseLayout(std::string_view text, SavedLayout* layout) {
                 (key.starts_with("extension:") && row.detail.empty()))
                 return false;
         } else if (!(key == "sprint" || key == "primary" ||
-                     (key.starts_with("ai:") && accounts::isName(key.substr(7)))) ||
+                     (key.starts_with("ai:") && accounts::isName(key.substr(3)))) ||
                    !row.detail.empty()) {
             return false;
         }
@@ -454,16 +469,17 @@ bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error
         saved->terminal = place;
         return true;
     }
-    if (line.substr(0, kAIPrefix.size()) == kAIPrefix) {
-        if (line.size() == kAIPrefix.size()) {
-            *error = "its AI line has no name";
+    for (const std::string_view prefix : {kAIPrefix, kOldAIPrefix}) {
+        if (line.substr(0, prefix.size()) != prefix) continue;
+        if (line.size() == prefix.size()) {
+            *error = "its ai line has no name";
             return false;
         }
         saved->kind = TabKind::AI;
-        saved->name = std::string(line.substr(kAIPrefix.size()));
+        saved->name = std::string(line.substr(prefix.size()));
         return true;
     }
-    *error = "its second line \"" + std::string(line) + "\" is not sprint, terminal <n> or AI <name>";
+    *error = "its second line \"" + std::string(line) + "\" is not sprint, terminal <n> or ai <name>";
     return false;
 }
 

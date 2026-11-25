@@ -852,7 +852,7 @@ void limits() {
     CHECK(has(accounts::changes(fleet, flipped), "account work's billing subscription -> api"));
 
     // The hub: an AI made by a window is limited; linking an API-billed account to an unlimited AI is
-    // refused, changing nothing; a reload that sets limit false there is refused whole; a reload that changes a
+    // refused, changing nothing; a reload that sets limit false there is refused whole; a reload that changes an
     // AI's limit tells each of its sessions.
     sync::MemoryStore store;
     sync::Hub hub(store);
@@ -891,7 +891,14 @@ void limits() {
 void keepsOut() {
     Registry r;
     accounts::Read rd = accounts::readAIs("{\"version\": 2, \"ais\": []}", "f", &r);
-    CHECK(rd.ok && r.keepsOut.empty());
+    CHECK(rd.ok && r.keepsOut.empty() && !rd.upgraded);
+    // A file from before the friend names became AI: its list under the old key reads, as an upgrade; "ais" beside it
+    // leaves the old key unknown, refused.
+    rd = accounts::readAIs("{\"version\": 2, \"friends\": [{\"name\": \"ada\"}]}", "f", &r);
+    CHECK(rd.ok && rd.upgraded && r.ais.size() == 1 && r.ais[0].name == "ada");
+    CHECK(accounts::aisText(r).find("\"ais\": [") != std::string::npos);
+    rd = accounts::readAIs("{\"version\": 2, \"ais\": [], \"friends\": []}", "f", &r);
+    CHECK(!rd.ok);
     CHECK(accounts::aisText(r).find("limit_keeps_out") == std::string::npos);
     rd = accounts::readAIs("{\"version\": 2, \"limit_keeps_out\": [\"/data\", \"/mnt/net\"], \"ais\": "
         "[{\"name\": \"ada\"}]}", "f", &r);

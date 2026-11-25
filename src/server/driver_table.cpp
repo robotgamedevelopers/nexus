@@ -96,7 +96,7 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
             } else {
                 (w[0] == "signin" ? table.signins : table.primaryDrivers)[w[1]] = std::move(command);
             }
-        } else if (w[0] == "ai" && (w.size() == 3 || w.size() == 4)) {
+        } else if (isAILine(w[0]) && (w.size() == 3 || w.size() == 4)) {
             std::string cwd = w.size() == 4 ? w[3] : home;
             if (cwd == "~" || cwd.rfind("~/", 0) == 0) {
                 cwd = home + cwd.substr(1);
@@ -104,10 +104,10 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
             table.ais[w[1]] = DriverTable::AI{w[2], cwd};
         } else if (w[0] == "driver") {
             table.errors.push_back(where + "a driver line is `driver <harness> <program> [<argument>...]`");
-        } else if (w[0] == "ai") {
-            table.errors.push_back(where + "an AI line is `AI <name> <harness> [<directory>]`");
+        } else if (isAILine(w[0])) {
+            table.errors.push_back(where + "an ai line is `ai <name> <harness> [<directory>]`");
         } else {
-            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `AI`");
+            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `ai`");
         }
     }
     if (table.primary) table.primary->resume = resume;
@@ -123,7 +123,7 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
     auto f = table.ais.find(name);
     if (f == table.ais.end()) {
         r.problem = name + " has no driver, so the prompt was not sent. Name " + name + "'s harness with a line "
-            "`AI " + name + " <harness> [<directory>]` in " + path + ", and its driver with a line `driver "
+            "`ai " + name + " <harness> [<directory>]` in " + path + ", and its driver with a line `driver "
             "<harness> <program> [<argument>...]`; the file is read at each prompt." + errors;
         return r;
     }
@@ -136,7 +136,7 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
     }
     r.command = d->second;
     for (std::size_t i = 1; i < r.command.size(); ++i) {
-        if (r.command[i] == "{ai}") r.command[i] = name;
+        if (r.command[i] == "{ai}" || r.command[i] == kOldAIPlaceholder) r.command[i] = name;
         else if (r.command[i] == "{harness}") r.command[i] = f->second.harness;
     }
     r.cwd = f->second.cwd;

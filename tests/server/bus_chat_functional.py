@@ -47,7 +47,7 @@ def prepare(home, driver, messages):
     (state / "drivers").write_text(
         f"driver codex {home}/policy -I -m nexus_policy AI-driver {home}/profile "
         f"{{ai}} {{harness}} {home}/fake-driver --script {home}/driver-script\n"
-        f"AI bob codex {workspace}\n"
+        f"ai bob codex {workspace}\n"
     )
     executable(home / "policy", """\
 [ "$1" = -I ] && [ "$2" = -m ] && [ "$3" = nexus_policy ]

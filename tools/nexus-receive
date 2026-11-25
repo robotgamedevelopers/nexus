@@ -23,8 +23,16 @@ def workspace(server, ai, instance):
         if not line.startswith(b"OK /") or not line.endswith(b"\n"):
             raise ValueError("the primary conversation's workspace is unavailable; reconnect and try again")
         return Path(line[3:-1].decode("utf-8"))
-    data = subprocess.check_output(["git", "-C", str(server / "nexus-config"), "show", "HEAD:ais.json"])
-    roster = json.loads(data)["ais"]
+    config = server / "nexus-config"
+    # friends.json, and its "friends" list: the names before the friend names became AI, which a server not started
+    # since still holds (src/server/config_repo.h kOldAIsFile). The word stays here only.
+    names = [n for n in ("ais.json", "friends.json")
+             if subprocess.run(["git", "-C", str(config), "cat-file", "-e", "HEAD:" + n],
+                               stderr=subprocess.DEVNULL).returncode == 0]
+    if not names:
+        raise ValueError("the server's config repository holds no ais.json; set the AIs up (docs/accounts.md)")
+    data = json.loads(subprocess.check_output(["git", "-C", str(config), "show", "HEAD:" + names[0]]))
+    roster = data["ais"] if "ais" in data else data["friends"]
     owner = next((f for f in roster if f["name"] == ai), {})
     location = next((i for i in owner.get("instances", []) if i["name"] == instance), None)
     hosts = {socket.gethostname().lower(), socket.gethostname().split(".")[0].lower()}

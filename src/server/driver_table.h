@@ -6,7 +6,7 @@
 //   driver <harness> <program> [<argument>...]    the harness's driver, started with these arguments, then --cwd
 //                                                  and --resume (docs/driver-protocol.md)
 //   signin <provider> <absolute program> [<argument>...]  enrollment helper, started with --account <name>
-//   AI <name> <harness> [<directory>]         the AI's harness, and the directory it works in (--cwd): the
+//   ai <name> <harness> [<directory>]         the AI's harness, and the directory it works in (--cwd): the
 //                                                  home directory unless given; a leading ~/ is the home directory
 //   primary <harness> <account> <absolute workspace>     the installing harness; the workspace is the rest of the line
 //   primary-driver <harness> <absolute program> [<arguments>...]    its own command, independent of named AIs
@@ -29,6 +29,14 @@
 namespace nexus::sync { struct SessionInfo; }
 
 namespace nexus::server {
+
+// A drivers file written before the friend names became AI says `friend <name> ...` and `{friend}` (and
+// `nexus_policy friend-driver`): read as `ai`, `{ai}` and `ai-driver`, so an older file runs unchanged. The word stays
+// here only.
+inline constexpr std::string_view kOldAILine = "friend";
+inline constexpr std::string_view kOldAIPlaceholder = "{friend}";
+inline constexpr std::string_view kOldAIDriver = "friend-driver";
+inline bool isAILine(std::string_view word) { return word == "ai" || word == kOldAILine; }
 
 struct DriverTable {
     struct AI {
