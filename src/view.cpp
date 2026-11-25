@@ -2180,8 +2180,16 @@ struct Builder {
         fill.flex = PrKitFlex_Fill;
         prKitPlace(kit, edit, fill);
         frameless(edit);
-        if (look.prompt.bold) {
-            const auto value = prLayoutNodeFirstChild(tree, edit);
+        // The area's value (its first child) is read off the last layout, so a round that builds the area for the
+        // first time (a switch from the Dashboard, which has no prompt, or a tab chosen before the frame) finds none.
+        // It reads the area's extent then, which the round's layout changes, so the frame runs another round and
+        // shows the value bold and inked.
+        const auto value = prLayoutNodeFirstChild(tree, edit);
+        if (value == kPrLayoutNodeNone) {
+            PrVec2 extent{};
+            (void)prUiExtent(ui, edit, PrUiAxisFlag_Both, &extent);
+        }
+        if (look.prompt.bold && value != kPrLayoutNodeNone) {
             auto record = prLayoutStyleRecord(tree, prLayoutTreeFrameStyle(tree, value));
             auto& group = record.groups[PrLayoutGroup_Font];
             auto font = prLayoutFontStyleRecord(tree, group);
@@ -2215,9 +2223,8 @@ struct Builder {
                 promptCut(view, changed.size, kept.size, false);
             }
         }
-        const auto valueNode = prLayoutNodeFirstChild(tree, edit);
-        if (valueNode != kPrLayoutNodeNone)
-            ink(valueNode, look.prompt.ink, false, std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.textPeak));
+        if (value != kPrLayoutNodeNone)
+            ink(value, look.prompt.ink, false, std::clamp(prUiDisplay(ui).headroom, 1.f, look.prompt.textPeak));
         promptCaret(box, edit);
         // The line about cut text stands for the draft as the cut left it, and goes once that draft changes.
         if (!view.cut.empty() && view.cutTab == model.tab(active).id) {
