@@ -7,7 +7,7 @@
 - **One tab per friend.** Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
 - **The same controls across harnesses.** Use `/model` and `/effort` to choose how a friend works. Type `/info` to see the account, model and working directories.
 - **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your friends work. The server keeps going.
-- **A terminal beside your conversations.** Open a shell in its own tab to run a test or inspect a diff, then switch straight back to the friend you were working with.
+- **Terminal tabs and a dashboard you can customize.** Run a test or inspect a diff in a shell beside your conversations. Choose which work streams to follow on your dashboard.
 - **A setup your AI can change with you.** Configure friends in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
 
 ## Platform support in v0.2.0
