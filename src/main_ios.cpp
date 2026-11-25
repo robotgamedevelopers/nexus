@@ -51,6 +51,7 @@
 #include "frame_host.h"
 #include "hitch.h"
 #include "keyboard_room.h"
+#include "keyboard_start.h"
 #include "link/bootstrap.h"
 #include "link/client_port.h"
 #include "link/inapp_ssh.h"
@@ -84,6 +85,7 @@ struct App {
     bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
     std::string home;                       // the client home, for the board's storage
     std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
+    TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
     float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
@@ -234,8 +236,16 @@ void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 exte
     a.host.buildAbove(prStudioWindowKit(window), root, extent, a.keyboardRoom);
 }
 
-bool laidOut(void* context, PrStudioWindow*) {
-    return windowWantsFrame(appOf(context).view);
+// The frame is laid out, and Prax will raise or lower the keyboard by what it edits once it is drawn. A frame that starts
+// editing text lets the view go as the first responder first, so the keyboard rises with its keys (keyboard_start.h).
+bool laidOut(void* context, PrStudioWindow* window) {
+    App& a = appOf(context);
+    if (a.textInput.frameEnds(prUiOutput(prStudioWindowUi(window)).hasTextInput) == KeyboardStart::Present) {
+        PrSurface surface{};
+        if (prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok)
+            releaseFirstResponder(surface);
+    }
+    return windowWantsFrame(a.view);
 }
 
 void trace(void* context, const PrStudioWindowFrameTimes* t) {
