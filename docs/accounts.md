@@ -259,10 +259,10 @@ the identity for that slot. The upgrade preserves the old credential file and co
 | Field | Where | Required | Allowed values |
 |---|---|---|---|
 | `version` | top | yes | the whole number `2` (see Versions) |
-| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited AI's AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited AI read more. Written back only when it holds one |
+| `limit_keeps_out` | top | no (none) | a list of absolute directories, each once, never `"/"`: more places every limited AI is kept out of, on top of the ones it always is (below, "limit"), as a second data volume or a network mount; it can only add, never let a limited AI read more. Written back only when it holds one |
 | `ais` | top | yes | a list of AIs, at most 256, in every version; `[]` for none. A file with more is refused whole, with the count and the limit, and nothing changes (a version 1 file too, before any upgrade); adding one in the window at the limit is refused the same way |
 | `name` | each AI | yes | 1 to 64 letters, digits, `-`, `_` or `.`, not starting with `.` or `-`; unique among the AIs |
-| `limit` | each AI | no (`true`) | `true` or `false`, without quotes: whether the AI's AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for an AI that links an account with `"billing": "api"` |
+| `limit` | each AI | no (`true`) | `true` or `false`, without quotes: whether the AI reads and writes only in its instance's directory (below, "limit"); `false` is refused for an AI that links an account with `"billing": "api"` |
 | `accounts` | each AI | no (none) | a list of account names from accounts.json, each once; the shipped account rotation policy uses this order (see [customizing policy](policy.md)) |
 | `default` | each AI | no (none) | one of the AI's `accounts`, or `null` for none |
 | `instances` | each AI | no (none) | a list of instances, in order; the first is the AI's default instance |
@@ -317,7 +317,7 @@ driver started after a sign-in runs under its AI's `limit` as every driver start
 
 ## limit: an AI kept to its directory
 
-`"limit": true` keeps the AI's AI, its shell and its file tools, inside the directory of the instance its session
+`"limit": true` keeps the AI, its shell and its file tools, inside the directory of the instance its session
 runs in: it reads and writes there, and nowhere else people keep files. `"limit": false` is the AI as it ran before
 the field existed: under the token wall (docs/secrets.md), but free to read the rest of the home directory.
 

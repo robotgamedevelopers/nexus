@@ -13,12 +13,12 @@ below says what the binding covers, and what it does not yet.
 
 ## The flow
 
-1. An **asker** asks `nexus-server` for a secret for an account: an AI's AI, through its driver (below), or the
+1. An **asker** asks `nexus-server` for a secret for an account: an AI, through its driver (below), or the
    server itself (a login for an account whose provider has no in-app sign-in; a claude account signs in in the
    browser instead, "Sign-in" below).
 2. The server refuses the ask outright (below: no request, no id) unless the account and what is asked are each a name
    (letters, digits, `-`, `_` and `.`, at most 64), the account exists, the asker's AI is linked to it in
-   `ais.json` (an AI asks only for the accounts its AI may use; nexus itself may ask for any), the account's
+   `ais.json` (an AI asks only for the accounts it may use; nexus itself may ask for any), the account's
    provider documents the file, and the reason is one line of plain text. It refuses at once, answering the asker
    `refused` (`busy`), when a request is already open for that account, when the same asker has one of its own open
    already, or when it has asked 5 times in the last minute (a guess, not a measurement: enough for a person to fix
@@ -72,7 +72,7 @@ Every way an ask ends, by whose it is:
 | `no-client` | neither: no value exists yet | refused at the ask, no window can take it; nothing was pasted |
 | `cancelled` | the person's | they pressed Escape: nothing was pasted |
 | `timeout` | the person's | nobody pasted in 10 minutes. An answer that crossed the deadline is stored (step 8) |
-| `malformed` | the person's input | told why (never what); asked again: nexus's own asks at once, an AI's AI by its own ask |
+| `malformed` | the person's input | told why (never what); asked again: nexus's own asks at once, an AI by its own ask |
 | file cannot be written | ours | held and written again until durable; never refused (the old `unwritable`) |
 | durability not confirmed | ours | held and written again until durable (the old `stored` with `unconfirmed`) |
 | late: another window stored it | neither | already stored; nothing lost |

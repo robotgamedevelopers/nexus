@@ -1639,7 +1639,7 @@ bool Hub::askSecret(const SecretAsker& asker, const std::string& account, const 
     if (a == nullptr) {
         return refuse("no account " + account + " is set up in accounts.json (docs/accounts.md)");
     }
-    // An AI's AI asks only for an account its AI is linked to; nexus itself asks for any.
+    // An AI asks only for an account it is linked to; nexus itself asks for any.
     const bool primaryAccount = isPrimary(asker.session) && asker.name == kPrimaryChat &&
                                 store_.find(asker.session)->info.account == account;
     if (asker.session != 0 && !primaryAccount && !accounts_->linked(asker.name, account)) {

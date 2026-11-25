@@ -4,7 +4,7 @@
 (* from a person's fingers to its 0600 file on nexus-server, with no AI    *)
 (* ever seeing it, and never pasted twice for a failure of nexus's own.    *)
 (*                                                                         *)
-(* An asker (an AI's AI, through its driver, or the server itself, for  *)
+(* An asker (an AI, through its driver, or the server itself, for  *)
 (* a sign-in) asks the server for a secret for an account. The server      *)
 (* mints a request id, never reused across restarts, and the request goes  *)
 (* into the state every connected window receives: its id, its account    *)
@@ -53,7 +53,7 @@ CONSTANTS
     Clients,     \* the windows that may connect
     OldClients,  \* those of a version before secret requests: never offered one
     Accounts,    \* the accounts a secret can be for
-    Askers,      \* who may ask (an AI's AI through its driver, the server's own sign-in)
+    Askers,      \* who may ask (an AI through its driver, the server's own sign-in)
     Values,      \* the secrets a person may type: opaque tokens
     BadValues,   \* those not of the file's shape (secretShape): the person's input, refused "malformed"
     MaxRequests, \* how many requests are asked in a behaviour, ids 1..MaxRequests
