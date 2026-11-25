@@ -95,6 +95,9 @@ jobs:
         with:
           config: ${{ matrix.config }}
           targets: ${{ matrix.targets }}
+      - name: Record the sources the build was made from
+        shell: bash
+        run: bash .github/source-times.sh record build/.nexus-ci-sources
       - name: Trim ccache to its size
         shell: bash
         run: ccache --cleanup
@@ -124,6 +127,9 @@ jobs:
         uses: ./.github/actions/windows-build
         with:
           require: "false"
+      - name: Record the sources the build was made from
+        shell: bash
+        run: bash .github/source-times.sh record C:/nexus-ci/sources.txt
       - name: Save
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:

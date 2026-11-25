@@ -69,8 +69,9 @@ runs:
         set -euo pipefail
         pin=$(sed -n 's#.*codeload\.github\.com/pdoane/prax/tar\.gz/\([0-9a-f]\{40\}\).*#\1#p' CMakeLists.txt | head -n 1)
         if [ -z "$pin" ]; then echo "::error::no Prax pin found in CMakeLists.txt (the Prax archive URL)"; exit 1; fi
-        echo "prefix=$NAME-v1-$pin-" >> "$GITHUB_OUTPUT"
-        echo "key=$NAME-v1-$pin-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+        echo "prefix=$NAME-v2-$pin-" >> "$GITHUB_OUTPUT"
+        echo "older=$NAME-v1-$pin-" >> "$GITHUB_OUTPUT"
+        echo "key=$NAME-v2-$pin-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
     - name: Restore the newest cache for this pin
       id: restore
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -81,7 +82,10 @@ runs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
         key: ${{ steps.key.outputs.key }}
-        restore-keys: ${{ steps.key.outputs.prefix }}
+        # cache-warm may also start from a cache made before the source manifest (v1); a per-commit job may not.
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+          ${{ inputs.require != 'true' && steps.key.outputs.older || steps.key.outputs.prefix }}
     - name: Environment
       shell: bash
       env:
@@ -93,6 +97,11 @@ runs:
         if [ -z "$MATCHED" ] && [ "$REQUIRE" = true ]; then
           echo "::error::no cache ${PREFIX}* on main for Prax's pin: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), then re-run this job; a cold Prax build does not fit the 2 minutes"
           exit 1
+        fi
+        # What the cache was built from keeps an old time, so only what changed since is rebuilt (.github/source-times.sh).
+        # (cache-warm, restoring a cache made before the manifest existed, rebuilds it all instead.)
+        if [ -n "$MATCHED" ] && { [ "$REQUIRE" = true ] || [ -f build/.nexus-ci-sources ]; }; then
+          bash .github/source-times.sh apply build/.nexus-ci-sources
         fi
         caches="$HOME/nexus-ci"
         mkdir -p "$caches/ccache" "$caches/lto" "$caches/prax-downloads" "$caches/cargo-target"
