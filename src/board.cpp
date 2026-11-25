@@ -474,12 +474,15 @@ void PraxBoard::run() {
     if (pageUrl_.empty() && desc_.fromServer) {
         lookupError_ = "waiting for nexus-server to say which dashboards it offers";
         if (app_) prAppWake(app_);
-        // Frames are acknowledged while it waits, as while a lookup fails (below).
+        // Frames are acknowledged while it waits, as while a lookup fails (below). The wait has a predicate: a frame
+        // posted before this thread first waits must not be missed, or its poster waits for ever (wait()).
         while (!ending_ && !offered_) {
-            wake_.wait(lock);
             done_ = posted_;
             stepped_.notify_all();
+            wake_.wait(lock, [&] { return ending_ || offered_ || done_ != posted_; });
         }
+        done_ = posted_;
+        stepped_.notify_all();
         lookupError_.clear();
         pageUrl_ = offeredUrl_;
     }

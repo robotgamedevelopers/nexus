@@ -2851,6 +2851,31 @@ void dashboardKeepsRosterDiagnosticsOffscreen() {
     CHECK(!h.hasText(prLayoutTreeRoot(h.tree), h.view.notice));
 }
 
+// An iPad's regular width (View::columnScale, style.h kRegularWidthColumn): the prompt box and the transcript's column
+// stand 10% narrower than the policy's width, centred where they stood, and their left and right edges still line up.
+void regularWidthNarrowsThePromptAndTheColumn() {
+    Harness h;
+    h.frame();
+    h.frame();
+    const PrRect box = h.bounds(h.view.promptBox);
+    const PrRect column = h.bounds(h.view.items[h.active().id].column);
+    const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
+    CHECK(box.right - box.left > 100);
+    CHECK(near(column.left, box.left) && near(column.right, box.right));
+    h.view.columnScale = style::kRegularWidthColumn;
+    h.frame();
+    h.frame();
+    const PrRect narrow = h.bounds(h.view.promptBox);
+    const PrRect narrowColumn = h.bounds(h.view.items[h.active().id].column);
+    CHECK(near(narrow.right - narrow.left, (box.right - box.left) * style::kRegularWidthColumn));
+    CHECK(near(narrow.left + narrow.right, box.left + box.right));
+    CHECK(near(narrowColumn.left, narrow.left) && near(narrowColumn.right, narrow.right));
+    if (!near(narrow.right - narrow.left, (box.right - box.left) * style::kRegularWidthColumn) ||
+        !near(narrowColumn.left, narrow.left) || !near(narrowColumn.right, narrow.right))
+        std::fprintf(stderr, "prompt %g..%g -> %g..%g, column %g..%g -> %g..%g\n", box.left, box.right, narrow.left,
+            narrow.right, column.left, column.right, narrowColumn.left, narrowColumn.right);
+}
+
 } // namespace
 
 // The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
@@ -3332,6 +3357,7 @@ int main(int argc, char** argv) {
     sprintTabSaysWhyThereIsNoPage();
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
+    regularWidthNarrowsThePromptAndTheColumn();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();

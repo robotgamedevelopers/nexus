@@ -120,6 +120,7 @@ int main(int argc, char** argv) {
     const std::string state = argv[1];
     const char* out = argv[2];
     const float width = std::strtof(argv[3], nullptr);
+    constexpr float kRegularFromPoints = 700;
     const float height = std::strtof(argv[4], nullptr);
     const float ratio = std::strtof(argv[5], nullptr);
     bool lost = false;
@@ -171,6 +172,9 @@ int main(int argc, char** argv) {
     }
     if (status != nullptr) view.status = status;
     view.askedTextSteps = textSteps;
+    // A frame as wide as an iPad's (a regular horizontal size class starts well below 1032 points) takes the narrower
+    // prompt and column the app gives a regular width (main_ios.cpp, style.h kRegularWidthColumn).
+    if (width >= kRegularFromPoints) view.columnScale = nexus::style::kRegularWidthColumn;
     FirstLaunch asked;
     if (askServer != nullptr) {
         asked.field = askServer;
