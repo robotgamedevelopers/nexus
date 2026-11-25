@@ -23,7 +23,7 @@ constexpr float kTerminalSize = 21;    // a terminal tab's monospaced cells (not
 // Spacing, as multiples of the body size.
 constexpr float kU = kBodySize;
 constexpr float kLinePitch = 1.42f * kU;      // 31 capture px between body lines
-constexpr float kGap = 2.4f * kU;             // between transcript entries
+constexpr float kGap = 1.6f * kU;             // between transcript entries
 constexpr float kStripHeight = 3.1f * kU;     // the tab row, where the reference has its title bar
 constexpr float kBubblePadX = 1.07f * kU;
 constexpr float kBubblePadY = 0.75f * kU;
