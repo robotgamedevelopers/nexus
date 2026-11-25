@@ -75,6 +75,12 @@ Launch and the overlay
 - An overlay that had the keyboard and lost it (to Command-Tab or a click on another app) hides. One that never got the keyboard after a show is hidden at the key check rather than left standing over other apps.
 - Escape dismisses an open account menu. With no menu or dialog open, Escape hides the overlay on the sprint tab and on a friend's tab. On a terminal tab, Escape always goes to the terminal: vim, shells and agents need it.
 
+The client lock (owner, 2026-11-25: "you cannot use nexus without auth"; `docs/security.md`, `models/ClientLock.tla`, `src/client_lock.h`)
+- Every window is locked until the device's owner passes the system's authentication: Touch ID, an Apple Watch or the login password on macOS (LocalAuthentication, device-owner policy), Windows Hello on Windows, Face ID on iOS. Nothing turns it off.
+- Locked, the window draws the lock screen alone (owner: "no dashboard, no talk to ais, no terminals. nothing."): no Dashboard, no tab strip, no AI tab or name, no transcript or prompt, no terminal, no dialog, no sound of what an AI did; no input reaches anything but the lock screen (`window_input` `lockedWindowDrawsOnlyTheLockScreen`, `frame_host_unit` `lockedHostDropsInput`). The link, the AIs' work and the shells go on unseen.
+- It locks at launch, at sleep or the displays sleeping, at a screen lock, at a session switch, in the background on iOS, and after the idle timeout (client policy `lock_idle_minutes`, 10 unless set, 1 to 240). Locking hides the overlay at once. Launch still shows nothing: the system is asked when the window shows locked, and again by Return or a click after a refusal, which the lock screen names.
+- Only the system's grant for the current attempt unlocks; an answer that a relock overtook unlocks nothing (`UnlockOnlyByCurrent`, `StaleIgnored`).
+
 Tabs
 - The fork defines tab types, groups, group order, close permissions and key bindings in client Starlark and JSON. The following bindings and groups describe the shipped profile.
 - The strip holds three built-in groups, in this order: the sprint tab alone, then the friends, then the terminals. The sprint tab is always first and never moves or closes.
