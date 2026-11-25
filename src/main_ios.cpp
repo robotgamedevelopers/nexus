@@ -86,6 +86,7 @@ struct App {
     std::string home;                       // the client home, for the board's storage
     std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
     TextInputStart textInput;               // whether the frames edit text, for the keyboard's start (keyboard_start.h)
+    PrAppInsets safeArea{};                 // the frame's safe area, which Prax pads the window's panel by
     float keyboardRoom = 0;                 // px of content above the on-screen keyboard this frame; 0: none covers it
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
@@ -209,6 +210,7 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
+    a.safeArea = f->safeArea;
     a.keyboardRoom = roomAboveKeyboard(f->extent, f->safeArea, f->keyboard);
     // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn); an
     // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
@@ -229,10 +231,12 @@ bool event(void* context, PrStudioWindow*, const PrAppEvent* e) {
 // The window above the on-screen keyboard: while it shows, the window is laid out in the part of the viewport it leaves,
 // so that the prompt and the transcript's end stay in sight, as a desktop window shorter by that much would. The
 // content starts at the safe area's top (Prax's Studio window pads its panel to it), so the part is the room from there
-// to the keyboard's top. It is built in the same box with the keyboard and without it (FrameHost::buildAbove).
+// to the keyboard's top. Without a keyboard it is the viewport less its safe area: `extent` is the whole frame's, and a
+// box that tall ran past the screen's foot by the safe area's top and bottom. It is built in the same box with the
+// keyboard and without it (FrameHost::buildAbove).
 void build(void* context, PrStudioWindow* window, PrLayoutNode root, PrVec2 extent) {
     App& a = appOf(context);
-    a.host.buildAbove(prStudioWindowKit(window), root, extent, a.keyboardRoom);
+    a.host.buildAbove(prStudioWindowKit(window), root, contentBox(extent, a.safeArea, a.keyboardRoom));
 }
 
 // The frame is laid out, and Prax will raise or lower the keyboard by what it edits once it is drawn. A frame that starts
@@ -364,7 +368,8 @@ int main(int argc, char** argv) {
     App a;
     a.model = &model;
     a.view.model = &model;
-    a.view.dialogsAtTop = true;     // the on-screen keyboard covers the lower part (View::dialogsAtTop)
+    a.view.dialogsAtTop = true;
+    a.view.tapEndsEditing = true;   // a tap outside the prompt lowers the keyboard (View::tapEndsEditing)     // the on-screen keyboard covers the lower part (View::dialogsAtTop)
     a.view.look = &a.look;
     a.host.model = &model;
     a.host.view = &a.view;

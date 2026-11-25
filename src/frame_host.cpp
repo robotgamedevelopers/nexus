@@ -875,6 +875,9 @@ void FrameHost::showState(const sync::Sessions& state, bool lost) {
 
 void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAppDisplay& display) {
     ++pasteFrame_;
+    // Another tab chosen: its prompt takes the focus, as a switch does (View::promptDismissed).
+    if (view->promptDismissed && (model->tab_count() == 0 || model->tab(model->active()).id != tapTab_))
+        view->promptDismissed = false;
     if (!upload_.valid()) std::erase_if(stagedFiles_, [&](const StagedFile& file) {
         if (pasteFrame_ - file.frame < 3) return false;
         for (size_t i = 0; i < model->tab_count(); ++i) {
@@ -967,8 +970,70 @@ bool FrameHost::stageFile(std::string name, std::string bytes) {
     return true;
 }
 
+namespace {
+
+// How far a press may move and still be a tap, logical px: further, it is a drag or a scroll.
+constexpr float kTapSlop = 10;
+
+bool inside(PrLayoutTree* tree, PrLayoutNode node, PrVec2 p) {
+    if (node == kPrLayoutNodeNone || !prLayoutNodeIsValid(tree, node)) return false;
+    const PrRect r = prLayoutRectToPx(prLayoutNodeBounds(tree, node, PrLayoutCoordinates_Viewport));
+    return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
+}
+
+} // namespace
+
+void FrameHost::watchTap(const PrAppEvent& e) {
+    if (!view->tapEndsEditing || ui == nullptr) return;
+    PrLayoutTree* tree = prUiTree(ui);
+    switch (e.kind) {
+    case PrAppEventKind_PointerDown:
+        tapping_ = e.pointer.button == 0;
+        tapDown_ = e.pointer.position;
+        // A press in the prompt's box takes editing back up.
+        if (inside(tree, view->promptBox, tapDown_)) view->promptDismissed = false;
+        break;
+    case PrAppEventKind_PointerMove:
+        if (tapping_) {
+            const float dx = e.pointer.position.x - tapDown_.x, dy = e.pointer.position.y - tapDown_.y;
+            if (dx * dx + dy * dy > kTapSlop * kTapSlop) tapping_ = false;
+        }
+        break;
+    case PrAppEventKind_PointerCancel:
+    case PrAppEventKind_Scroll:
+    case PrAppEventKind_Gesture:
+        tapping_ = false;
+        break;
+    case PrAppEventKind_PointerUp: {
+        if (!tapping_) break;
+        tapping_ = false;
+        if (inside(tree, view->promptBox, tapDown_)) break;
+        for (const PrLayoutNode tab : view->tabNodes) {
+            if (inside(tree, tab, tapDown_)) return;     // a tab switches, as it does
+        }
+        if (view->prompt != kPrLayoutNodeNone && prUiFocus(ui) == view->prompt) prUiSetFocus(ui, kPrLayoutNodeNone);
+        view->promptDismissed = true;
+        tapTab_ = model->tab_count() != 0 ? model->tab(model->active()).id : ~std::size_t(0);
+        break;
+    }
+    case PrAppEventKind_KeyDown:
+    case PrAppEventKind_Text:
+    case PrAppEventKind_Paste:
+        // A key typed (a hardware keyboard's) goes to the prompt again.
+        if (view->promptDismissed) {
+            view->promptDismissed = false;
+            if (view->prompt != kPrLayoutNodeNone && prLayoutNodeIsValid(tree, view->prompt))
+                prUiSetFocus(ui, view->prompt);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
+    watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
     // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
@@ -1045,8 +1110,8 @@ struct AboveKeyboard {
 
 } // namespace
 
-void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float room) {
-    view->extent = PrVec2{extent.x, room > 0 ? std::min(room, extent.y) : extent.y};
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 box) {
+    view->extent = box;
     const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
         pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
     build(kit, above);

@@ -21,4 +21,14 @@ inline float roomAboveKeyboard(PrVec2 extent, const PrAppInsets& safe, const PrR
     return std::max(0.0f, keyboard.top - safe.top);
 }
 
+// The box the window's content is laid out in, in the frame's logical pixels: the viewport less its safe area, which
+// Prax's Studio window pads its panel by (studio_window.cpp build), and while the keyboard covers part of its foot,
+// only the room above it (roomAboveKeyboard). The content never reaches under the home indicator, the status bar or
+// the keyboard.
+inline PrVec2 contentBox(PrVec2 extent, const PrAppInsets& safe, float room) {
+    PrVec2 box{std::max(0.0f, extent.x - safe.left - safe.right), std::max(0.0f, extent.y - safe.top - safe.bottom)};
+    if (room > 0) box.y = std::min(room, box.y);
+    return box;
+}
+
 } // namespace nexus
