@@ -206,11 +206,13 @@ void RemoteTerminals::show(std::size_t id, PrLayoutNode parent) {
     }
     if (!prTerminalHasFocus(t->view)) prTerminalFocus(t->view);
     paint(*t);
-    // The screen above the key row, which the phone's keyboard lacks: Escape, Tab, Control and the arrows.
+    // The screen above the key row, which the phone's keyboard lacks: Escape, Tab, Control and the arrows. Neither box
+    // keeps its content's height as its least (a flex item's default): the screen measured last frame would hold its
+    // rows, and push the key row out of the window.
     PrLayoutNode column = prKitBox(kit_, parent, {.key = prHashString(sv("remote-terminal"), id)},
-        {.direction = PrKitDirection_Column, .place = {.flex = PrKitFlex_Fill}});
+        {.direction = PrKitDirection_Column, .place = {.minHeight = prKitPx(0), .flex = PrKitFlex_Fill}});
     PrLayoutNode screenBox = prKitBox(kit_, column, {.key = prHashString(sv("remote-terminal-screen"), id)},
-        {.place = {.flex = PrKitFlex_Fill}});
+        {.overflow = PrKitOverflow_Clip, .place = {.minHeight = prKitPx(0), .flex = PrKitFlex_Fill}});
     prTerminalFrame(t->view, kit_, screenBox, PrTerminalBackground_Parent);
     if (!t->launched && prTerminalLaunched(t->view)) {
         // Its first frame wrote that no program starts: the whole screen is painted over it next.
