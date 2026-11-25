@@ -1,12 +1,12 @@
-// nexus-server's friends: one driver supervisor (server/supervisor.h) per session, and the processes it asks for.
-// Several sessions may be with one friend: each has a driver of its own. This is the hub's Responder: a prompt sent in
+// nexus-server's ais: one driver supervisor (server/supervisor.h) per session, and the processes it asks for.
+// Several sessions may be with one AI: each has a driver of its own. This is the hub's Responder: a prompt sent in
 // a session goes to the session's supervisor, whose entries and durable state are committed with the window's action,
 // and only then is anything written to a driver. A prompt queued goes at the end of the session's queue, and the
 // supervisor takes the oldest at a turn's end (one per turn; a take and the person's entry are one step of the store).
 // A stop goes to the session's supervisor at once, never behind anything, once the hub has counted the action. A
 // change of the session's model or effort goes with its next turn's send; a change of its account ends its driver once
 // no turn is open, and the next driver starts under the new account (part 5 of the roadmap gives it the account, and a
-// summary of the session to start from). The friend's text not yet in a closed entry is the hub's open entry for the
+// summary of the session to start from). The AI's text not yet in a closed entry is the hub's open entry for the
 // session (Hub::setOpen), shown to the windows as it grows and kept in memory only: it becomes a durable closed entry
 // at its block's end, so a restart loses at most that block, and its turn is cut with a notice. It runs inside the
 // server's one poll loop: each driver is a child process with non-blocking pipes for its standard input and output (its
@@ -15,7 +15,7 @@
 // waiting. A driver that floods is read no faster than its effects are committed, so it fills its pipe and waits, and
 // the link to the windows keeps its turn in the loop.
 //
-// Which program is a session's driver comes from the drivers file (server/driver_table.h), by the session's friend,
+// Which program is a session's driver comes from the drivers file (server/driver_table.h), by the session's AI,
 // read at each prompt.
 //
 // The process must ignore SIGPIPE, as nexus-server does: a driver that exits mid-write is then an error from write.
@@ -83,7 +83,7 @@ public:
 
     struct Options {
         std::string table;              // the drivers file's path
-        std::string home;               // the home directory, for a friend with no directory
+        std::string home;               // the home directory, for an AI with no directory
         Timing timing;
         std::function<Millis()> clock;  // now, for the prompts the hub hands over
         std::string machine{};          // this server's machine, by its name in the fleet (server/home.h
@@ -121,29 +121,29 @@ public:
     std::vector<sync::SessionChange> prepareBus(sync::SessionId id, const std::string& prompt, std::string& why) override;
     std::vector<sync::SessionChange> queue(sync::SessionId id, const std::string& prompt) override;
     std::vector<sync::SessionChange> resetContext(sync::SessionId, const sync::DriverState&, bool compact) override;
-    std::string friendInfo(const std::string&) const override;
+    std::string aiInfo(const std::string&) const override;
     std::string catalog(const sync::SessionInfo&) const override;
     std::vector<sync::SessionChange> stop(sync::SessionId id) override;
     void sent(sync::SessionId id, bool committed) override;
-    // sync::Responder: what a new session with a friend is (its harness; no default account, model or effort yet), and
+    // sync::Responder: what a new session with an AI is (its harness; no default account, model or effort yet), and
     // a session's settings, changed: from its next turn on.
     std::optional<sync::AccountRoutes> accountRoutes() const override;
-    sync::SessionInfo defaults(const std::string& friendName) const override;
+    sync::SessionInfo defaults(const std::string& aiName) const override;
     void configured(sync::SessionId id, const sync::SessionInfo& info) override;
-    // sync::Responder: a session just made shows down when its friend has no driver configured.
+    // sync::Responder: a session just made shows down when its AI has no driver configured.
     void made(sync::SessionId id) override;
     // sync::Responder: the login of `account` arrived (the secret dialog stored it): each session on it whose starting
     // is held back goes on (Supervisor::signedIn), without a restart.
     void signedIn(const std::string& account) override;
     bool refreshSandbox(const std::set<std::string>& unsandboxed);
     std::string retireForSignOut(const std::string& account);
-    // sync::Responder: the session's friend was taken out of friends.json, or put back (Supervisor::setPresent): taken
+    // sync::Responder: the session's AI was taken out of ais.json, or put back (Supervisor::setPresent): taken
     // out, its open turn gets the person's stop and its driver is ended; while out, no driver starts for it, a prompt
     // sent is refused with a notice, and what is queued stays queued; put back, what waits goes on.
     void present(sync::SessionId id, bool present) override;
 
     // The secret dialog (docs/secrets.md): a driver's ask-secret goes to the hub once every slot is served (serve());
-    // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its friend, a file its
+    // a malformed one (Hub::askSecret: not names, an account not set up or not linked to its AI, a file its
     // provider does not document, a reason that is not a safe line) ends the driver as a line refused. The one answer
     // to an ask comes back as its `secret` line (server/secret_lines.h), written to session `id`'s driver if that is
     // still alive past its hello (else it has nowhere to go, and is dropped). It never holds the value.
@@ -197,14 +197,14 @@ private:
         std::unique_ptr<Process> proc;
     };
 
-    std::string friendOf(sync::SessionId id) const;
-    bool listed(sync::SessionId id) const;     // its friend is in friends.json (false while the hub holds no registry)
+    std::string aiOf(sync::SessionId id) const;
+    bool listed(sync::SessionId id) const;     // its AI is in ais.json (false while the hub holds no registry)
     ResolvedDriver resolve(sync::SessionId id) const;
     const accounts::Instance* instanceOf(const sync::SessionInfo& info) const;
     bool limitedOf(const sync::SessionInfo& info) const;
     std::vector<std::string> keepsOut() const;
     DriverTable readDriverTable(std::string& problem) const;
-    ResolvedDriver resolveFriend(const std::string& friendName, DriverTable* table = nullptr) const;
+    ResolvedDriver resolveAI(const std::string& aiName, DriverTable* table = nullptr) const;
     Config config(sync::SessionId id, const ResolvedDriver& driver) const;
     Output syncSlot(sync::SessionId id, Supervisor& sup, Millis now);
     bool run(sync::SessionId id, Output out, Millis now, bool committed, bool* changed = nullptr);

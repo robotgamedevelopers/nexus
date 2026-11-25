@@ -1,5 +1,5 @@
 // A driver that speaks the protocol (src/driver/protocol.h) from a script instead of a harness: the stand-in the
-// server's functional tests start as a friend's driver.
+// server's functional tests start as an AI's driver.
 //
 //   nexus-fake-driver --cwd <dir> [--resume <session id>] [--account <name>] [--limit cwd] --script <file>
 //

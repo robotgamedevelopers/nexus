@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from friend_identity import bus_grants, bus_roster, resolve
+from ai_identity import bus_grants, bus_roster, resolve
 
 import starlark
 
@@ -29,8 +29,8 @@ def exec_with_context(program, arguments, flag, instructions):
         os.execv(program, [program, *arguments, flag, str(descriptor.fileno())])
 
 
-def publish_friend_info(identity, cwd, model, effort):
-    directory = Path.home() / ".nexus/server/friend-info"
+def publish_ai_info(identity, cwd, model, effort):
+    directory = Path.home() / ".nexus/server/ai-info"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     data = {"pronouns": identity.get("pronouns", ""), "repository": identity["repository"], "directories": list(dict.fromkeys(
         path for path in [cwd, *identity["writable_dirs"]] if path)), "model": model, "effort": effort}
@@ -38,7 +38,7 @@ def publish_friend_info(identity, cwd, model, effort):
         try:
             json.dump(data, temp)
             temp.flush()
-            os.replace(temp.name, directory / (identity["friend"] + ".json"))
+            os.replace(temp.name, directory / (identity["ai"] + ".json"))
         finally:
             Path(temp.name).unlink(missing_ok=True)
 
@@ -104,27 +104,27 @@ def cli():
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="show one decision without starting a driver")
     check.add_argument("profile", type=Path)
-    check.add_argument("friend")
+    check.add_argument("ai")
     check.add_argument("--account", default="")
     check.add_argument("--resuming", action="store_true")
     driver = commands.add_parser("driver", help="apply driver_start, then run the configured Claude driver")
     driver.add_argument("profile", type=Path)
-    driver.add_argument("friend")
+    driver.add_argument("ai")
     driver.add_argument("node")
     driver.add_argument("entry")
     driver.add_argument("arguments", nargs=argparse.REMAINDER)
-    bus = commands.add_parser("bus-grants", help="list enabled friend, harness and loopback endpoint grants for nexus-server")
+    bus = commands.add_parser("bus-grants", help="list enabled AI, harness and loopback endpoint grants for nexus-server")
     bus.add_argument("profile", type=Path)
-    roster = commands.add_parser("bus-roster", help="list enabled registry friends and their server-owned inboxes")
+    roster = commands.add_parser("bus-roster", help="list enabled registry AIs and their server-owned inboxes")
     roster.add_argument("profile", type=Path)
     roster.add_argument("--startup-policy", action="store_true")
-    inspect = commands.add_parser("identity", help="verify the friend definition and home without starting a model")
+    inspect = commands.add_parser("identity", help="verify the AI definition and home without starting a model")
     inspect.add_argument("profile", type=Path)
-    inspect.add_argument("friend")
+    inspect.add_argument("ai")
     inspect.add_argument("--harness")
-    launch = commands.add_parser("friend-driver", help="start a Nexus driver with its friend's standing instructions")
+    launch = commands.add_parser("ai-driver", help="start a Nexus driver with its AI's standing instructions")
     launch.add_argument("profile", type=Path)
-    launch.add_argument("friend")
+    launch.add_argument("ai")
     launch.add_argument("harness")
     launch.add_argument("program")
     launch.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -140,18 +140,18 @@ def cli():
             if args.harness in ("claude", "codex") and "--limit" not in args.arguments:
                 args.arguments.extend(["--limit", "cwd"])
             exec_with_context(args.program, args.arguments, "--primary-context-fd", PRIMARY_CONTEXT)
-        if args.command in ("identity", "friend-driver", "bus-grants", "bus-roster"):
+        if args.command in ("identity", "ai-driver", "bus-grants", "bus-roster"):
             directory = os.open(args.profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 config = json.loads(read_profile_file(directory, "identities.json"))
                 os.environ.pop("NEXUS_WORK_ROUTES", None)
-                if args.command == "friend-driver" and args.harness == "claude":
+                if args.command == "ai-driver" and args.harness == "claude":
                     try:
                         routes = json.loads(read_profile_file(directory, "work-routes.json"))
                     except FileNotFoundError:
                         routes = {}
-                    if args.friend in routes:
-                        os.environ["NEXUS_WORK_ROUTES"] = json.dumps(routes[args.friend])
+                    if args.ai in routes:
+                        os.environ["NEXUS_WORK_ROUTES"] = json.dumps(routes[args.ai])
             finally:
                 os.close(directory)
             if args.command in ("bus-grants", "bus-roster"):
@@ -163,7 +163,7 @@ def cli():
                 for row in rows:
                     print("\t".join(row))
                 return 0
-            instructions, identity = resolve(config, args.friend, args.harness)
+            instructions, identity = resolve(config, args.ai, args.harness)
             if args.command == "identity":
                 print(json.dumps(identity))
                 return 0
@@ -173,7 +173,7 @@ def cli():
                     if args.arguments[pos] == key:
                         return args.arguments[pos + 1]
                 return ""
-            context = {"friend": args.friend, "provider": args.harness, "account": option("--account"),
+            context = {"ai": args.ai, "provider": args.harness, "account": option("--account"),
                        "resuming": bool(option("--resume")), "identity": identity}
             defaults = decision(args.profile.absolute(), context)
             if identity["model"] and identity["model"] != identity["harness"]:
@@ -191,10 +191,10 @@ def cli():
             # Existing registry rows keep their driver listener until the inbox owner transfers it.
             if identity["bus_listener"] and not identity["bus_owner"]:
                 if args.harness != "claude":
-                    raise ValueError("a driver-owned bus_listener requires a Claude friend")
-                extra.extend(["--bus-listener", args.friend + "@" + identity["bus_listener"]])
+                    raise ValueError("a driver-owned bus_listener requires a Claude AI")
+                extra.extend(["--bus-listener", args.ai + "@" + identity["bus_listener"]])
             if identity["bus_owner"] == "nexus-server" and args.harness in ("claude", "codex"):
-                extra.extend(["--bus-sender", args.friend + "@" + identity["bus_listener"]])
+                extra.extend(["--bus-sender", args.ai + "@" + identity["bus_listener"]])
             if not identity["no_sandbox"] and (identity["readable_dirs"] or identity["github_ssh_alias"]):
                 if args.harness != "claude":
                     raise ValueError("this harness does not implement read-only directory and GitHub grants")
@@ -206,15 +206,15 @@ def cli():
                     if not repo or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", alias):
                         raise ValueError("invalid GitHub SSH grant")
                     extra.extend(["--git-remote", f"git@{alias}:{repo[1].removesuffix('.git')}.git"])
-            publish_friend_info(identity, option("--cwd"), defaults.get("model", ""), defaults.get("effort", ""))
+            publish_ai_info(identity, option("--cwd"), defaults.get("model", ""), defaults.get("effort", ""))
             exec_with_context(args.program, [*args.arguments, *extra], "--startup-context-fd", instructions)
         if args.command == "check":
-            context = {"friend": args.friend, "provider": "claude", "account": args.account, "resuming": args.resuming}
+            context = {"ai": args.ai, "provider": "claude", "account": args.account, "resuming": args.resuming}
             print(json.dumps(decision(args.profile.absolute(), context), sort_keys=True))
             return 0
         # The driver takes pairs. Let its own parser validate them, unchanged.
         flags = dict(zip(args.arguments[::2], args.arguments[1::2]))
-        context = {"friend": args.friend, "provider": "claude", "account": flags.get("--account", ""),
+        context = {"ai": args.ai, "provider": "claude", "account": flags.get("--account", ""),
                    "resuming": "--resume" in flags}
         answer = decision(args.profile.absolute(), context)
         defaults = [item for key, value in answer.items() if "--" + key not in flags
@@ -222,7 +222,7 @@ def cli():
         os.execv(args.node, [args.node, args.entry, *defaults, *args.arguments])
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
         cause = "Nexus driver policy: " + " ".join(str(error).splitlines())[:500]
-        if args.command in ("driver", "friend-driver", "primary-driver"):
+        if args.command in ("driver", "ai-driver", "primary-driver"):
             harness = getattr(args, "harness", "claude")
             print(json.dumps({"kind": "hello", "protocol": 1, "harness": harness,
                               "features": ["limit"] if harness == "claude" else []}))

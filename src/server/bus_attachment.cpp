@@ -98,7 +98,7 @@ bool putBody(int dir, const char* name, std::string_view body, bool privateMail,
         written += static_cast<std::size_t>(n);
     }
     if (!syncToDisk(out.fd)) return problem("sync the file", why);
-    // linkat publishes complete bytes and refuses to overwrite a file the friend may have added.
+    // linkat publishes complete bytes and refuses to overwrite a file the AI may have added.
     if (::linkat(dir, kPartial, dir, name, 0) != 0) return problem("publish the file", why);
     if (::unlinkat(dir, kPartial, 0) != 0) return problem("remove the partial file", why);
     return true;
@@ -120,7 +120,7 @@ bool prepareBusBody(const std::string& workspace, const std::string& recipient, 
     }
     const std::filesystem::path path(workspace);
     if (!path.is_absolute() || workspace.find('\0') != std::string::npos) {
-        why = "An attached bus message needs a friend instance with an absolute working directory on this server.";
+        why = "An attached bus message needs an AI instance with an absolute working directory on this server.";
         return false;
     }
     Fd root(::open("/", kDirectory));
@@ -128,11 +128,11 @@ bool prepareBusBody(const std::string& workspace, const std::string& recipient, 
     for (const auto& part : path.relative_path()) {
         if (part.empty() || part == ".") continue;
         if (part == "..") {
-            why = "The receiving friend's working directory contains '..'. Configure its absolute directory.";
+            why = "The receiving AI's working directory contains '..'. Configure its absolute directory.";
             return false;
         }
         const int next = ::openat(root.fd, part.c_str(), kDirectory);
-        if (next < 0) return problem("open the receiving friend's workspace", why);
+        if (next < 0) return problem("open the receiving AI's workspace", why);
         ::close(root.fd);
         root.fd = next;
     }

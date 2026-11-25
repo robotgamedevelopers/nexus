@@ -292,10 +292,14 @@ fn compile_directory_revision(
         None => defaults(side)?,
     };
     if let Some(directory) = directory {
-        let data: Value =
-            serde_json::from_slice(directory).context("reading Nova friend directory")?;
-        ensure!(data.is_object(), "expected a Nova friend directory object");
-        bundle.config["nova_friends"] = data;
+        let mut data: Value =
+            serde_json::from_slice(directory).context("reading Nova AI directory")?;
+        ensure!(data.is_object(), "expected a Nova AI directory object");
+        // nova-config's snapshot keys its rows "friends"; the word stays only at this boundary, and policy reads "ais".
+        if let Some(rows) = data.as_object_mut().and_then(|o| o.remove("friends")) {
+            data["ais"] = rows;
+        }
+        bundle.config["nova_ais"] = data;
     }
     Program::new(bundle, side)
 }
@@ -326,6 +330,7 @@ impl Host {
         }
         let side = self.side.clone();
         let initial = self.active.as_ref().unwrap().0.clone();
+        // nova-config friend watch writes nova-friends.json: its name, so the word stays only at this boundary.
         let directory_path = Path::new(&path).with_file_name("nova-friends.json");
         let directory_path = directory_path
             .to_str()
@@ -341,7 +346,7 @@ impl Host {
             Ok(())
         })();
         if let Err(e) = initial_load {
-            eprintln!("nexus: Nova friend directory: {e:#}");
+            eprintln!("nexus: Nova AI directory: {e:#}");
         }
         let worker = thread::Builder::new()
             .name("nexus-policy".into())

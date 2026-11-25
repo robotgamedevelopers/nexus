@@ -1,6 +1,6 @@
 # Running Nova under nexus-server
 
-The host starts one nexus-server at boot. The server supervises the long-running programs selected for that machine in nova-config. Friends and tools invoke one-shot commands on demand. macOS and Linux host the server directly. On Windows the host is WSL2. The iPad connects to that server.
+The host starts one nexus-server at boot. The server supervises the long-running programs selected for that machine in nova-config. AIs and tools invoke one-shot commands on demand. macOS and Linux host the server directly. On Windows the host is WSL2. The iPad connects to that server.
 
 ## Studio migration
 
@@ -13,9 +13,9 @@ Observed on November 24, 2026. A loaded launchd job can be waiting for its next 
 | Studio Sprint worker | launchd, `sprint-worker-studio` | Drain active work and confirm the replacement can claim and complete a card once. |
 | Scheduled dispatch | launchd, `pingpong-nightly-dispatch` | Preserve the interval and verify a single dispatch per scheduled run. |
 | Message bus listeners | Two fleet-managed hook jobs and twelve independently registered hook jobs in launchd. Rowan also has a driver-scoped listener. | Reconcile by bus identity and recipient. Hand off each listener and verify delivery and replies without consuming a message twice. |
-| Friend directory | launchd, `com.robotgamedevelopers.nexus-friend-directory` | A registry update reaches connected clients while their overlays are closed. |
+| AI directory | launchd, `com.robotgamedevelopers.nexus-friend-directory` <!-- the installed service's label, which runs `nova-config friend watch`: the word stays only in that name --> | A registry update reaches connected clients while their overlays are closed. |
 
-Studio now runs Redis, the Sprint scheduler, watcher, worker, scheduled dispatch, friend directory watcher, and its selected inbox hooks under the always-on server. The former host jobs are disabled. The server starts again through the host service manager when it exits.
+Studio now runs Redis, the Sprint scheduler, watcher, worker, scheduled dispatch, AI directory watcher, and its selected inbox hooks under the always-on server. The former host jobs are disabled. The server starts again through the host service manager when it exits.
 
 During the live transfer, a bus message queued before Redis changed owners reached its recipient afterward with the same ID. With the client closed, the Sprint dashboard served its API and the worker registered all eight slots again. The scheduled dispatcher retained its interval. This check did not submit a production Sprint card or reboot Studio.
 
@@ -81,9 +81,9 @@ nexus-server services check --dir "$stage"
 
 After checking the whole replacement, atomically install it as the server's `services.json`, issue `services reload`, and check `services status` and the service's own health. For rollback, remove the service from the Nexus manifest, reload, confirm the owned process has stopped, then restore the old owner's row and unit. Sprint's `run` process starts its own Sprint bus hook. Give that identity a single owner. Redis provisioned by the dedicated fleet role needs its existing executable, config, data directory and a separately verified handoff. Each nonresident Nova CLI remains available to server-side programs on their configured PATH.
 
-For a Nexus friend's incoming chat messages, transfer its inbox using the
+For a Nexus AI's incoming chat messages, transfer its inbox using the
 [message bus ownership settings](accounts.md#message-bus-ownership).
 The native receiver starts the hook for that inbox and turns its deliveries into chat bubbles.
 Remove the old standalone hook for that identity at handoff so only one listener owns it.
 
-A Claude session with a server-owned inbox can send through the in-process `nexus_bus_send` tool. Pass `to`, `subject`, `body` and optionally `reply_to`. The driver fixes the sender and endpoint from the friend grant and returns the bus receipt.
+A Claude session with a server-owned inbox can send through the in-process `nexus_bus_send` tool. Pass `to`, `subject`, `body` and optionally `reply_to`. The driver fixes the sender and endpoint from the AI grant and returns the bus receipt.

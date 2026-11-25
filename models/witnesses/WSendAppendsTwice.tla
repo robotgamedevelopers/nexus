@@ -9,7 +9,7 @@ BrokenSend(i) ==
             transcript' = [transcript EXCEPT ![At(i)] = Append(Append(@, e), e)]
          /\ draft' = [draft EXCEPT ![At(i)] = ""]
          /\ last' = Did("send", i, "", NoEntry, TRUE)
-         /\ UNCHANGED <<friends, order, active, queue>>
+         /\ UNCHANGED <<ais, order, active, queue>>
     ELSE /\ last' = Did("send", i, "", NoEntry, FALSE)
          /\ UNCHANGED model
 

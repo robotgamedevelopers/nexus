@@ -303,7 +303,7 @@ void testE2eMigrationHandoverDrain(const std::string& fakeBin, const fs::path& b
         CHECK(store::Store::open(*pfs, (top / "store").string(), {}, oldSt).is_ok());
         store::Change mk;
         mk.kind = store::Change::Kind::SetInfo;
-        mk.info.friend_name = "alice";
+        mk.info.ai_name = "alice";
         mk.info.harness = "claude";
         store::Change app;
         app.kind = store::Change::Kind::Append;

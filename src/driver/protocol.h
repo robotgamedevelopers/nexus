@@ -1,4 +1,4 @@
-// The driver protocol (docs/driver-protocol.md): the lines nexus-server and a friend's driver process exchange over
+// The driver protocol (docs/driver-protocol.md): the lines nexus-server and an AI's driver process exchange over
 // the driver's standard input and output. One JSON object per line, UTF-8, both directions. This file is the messages,
 // their encoding and decoding, and a reader that cuts a byte stream into messages. Pure: no OS, no time, no processes.
 
@@ -115,7 +115,7 @@ struct TextEnd {
     bool operator==(const TextEnd&) const = default;
 };
 
-// The friend used a tool: its name and one line saying what it did.
+// The AI used a tool: its name and one line saying what it did.
 struct ChildAgents {
     std::uint32_t count;
     bool operator==(const ChildAgents&) const = default;

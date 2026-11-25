@@ -62,7 +62,7 @@ std::string DriverTable::Primary::instance() const {
 }
 
 bool DriverTable::Primary::matches(const sync::SessionInfo& info) const {
-    return info.friendName == kPrimaryChat && info.account == account && info.harness == harness && info.instance == instance();
+    return info.aiName == kPrimaryChat && info.account == account && info.harness == harness && info.instance == instance();
 }
 
 DriverTable parseDriverTable(std::string_view text, const std::string& home) {
@@ -96,18 +96,18 @@ DriverTable parseDriverTable(std::string_view text, const std::string& home) {
             } else {
                 (w[0] == "signin" ? table.signins : table.primaryDrivers)[w[1]] = std::move(command);
             }
-        } else if (w[0] == "friend" && (w.size() == 3 || w.size() == 4)) {
+        } else if (w[0] == "ai" && (w.size() == 3 || w.size() == 4)) {
             std::string cwd = w.size() == 4 ? w[3] : home;
             if (cwd == "~" || cwd.rfind("~/", 0) == 0) {
                 cwd = home + cwd.substr(1);
             }
-            table.friends[w[1]] = DriverTable::Friend{w[2], cwd};
+            table.ais[w[1]] = DriverTable::AI{w[2], cwd};
         } else if (w[0] == "driver") {
             table.errors.push_back(where + "a driver line is `driver <harness> <program> [<argument>...]`");
-        } else if (w[0] == "friend") {
-            table.errors.push_back(where + "a friend line is `friend <name> <harness> [<directory>]`");
+        } else if (w[0] == "ai") {
+            table.errors.push_back(where + "an AI line is `AI <name> <harness> [<directory>]`");
         } else {
-            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `friend`");
+            table.errors.push_back(where + "\"" + w[0] + "\" is not `driver`, `signin` or `AI`");
         }
     }
     if (table.primary) table.primary->resume = resume;
@@ -120,10 +120,10 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
     for (const std::string& e : table.errors) {
         errors += " " + path + " " + e + ".";
     }
-    auto f = table.friends.find(name);
-    if (f == table.friends.end()) {
+    auto f = table.ais.find(name);
+    if (f == table.ais.end()) {
         r.problem = name + " has no driver, so the prompt was not sent. Name " + name + "'s harness with a line "
-            "`friend " + name + " <harness> [<directory>]` in " + path + ", and its driver with a line `driver "
+            "`AI " + name + " <harness> [<directory>]` in " + path + ", and its driver with a line `driver "
             "<harness> <program> [<argument>...]`; the file is read at each prompt." + errors;
         return r;
     }
@@ -136,7 +136,7 @@ ResolvedDriver resolveDriver(const DriverTable& table, const std::string& name, 
     }
     r.command = d->second;
     for (std::size_t i = 1; i < r.command.size(); ++i) {
-        if (r.command[i] == "{friend}") r.command[i] = name;
+        if (r.command[i] == "{ai}") r.command[i] = name;
         else if (r.command[i] == "{harness}") r.command[i] = f->second.harness;
     }
     r.cwd = f->second.cwd;
@@ -162,11 +162,11 @@ accounts::Registry accountsFromDrivers(const DriverTable& table, const std::stri
     }
     if (table.primary && !r.account(table.primary->account))
         r.accounts.push_back(accounts::Account{table.primary->account, table.primary->harness});
-    for (const auto& [name, f] : table.friends) {
+    for (const auto& [name, f] : table.ais) {
         if (!accounts::isName(name)) {
             continue;
         }
-        accounts::Friend fr{name, {}, {}};
+        accounts::AI fr{name, {}, {}};
         fr.limit = false;   // it ran unlimited before the field: nothing changes under the person (docs/accounts.md)
         auto a = accountOf.find(f.harness);
         if (a != accountOf.end() && r.account(a->second)->provider == f.harness) {
@@ -177,7 +177,7 @@ accounts::Registry accountsFromDrivers(const DriverTable& table, const std::stri
             fr.instances.push_back(accounts::Instance{machine, machine, f.cwd});
         }
         if (!fr.accounts.empty() || !fr.instances.empty()) {
-            r.friends.push_back(std::move(fr));
+            r.ais.push_back(std::move(fr));
         }
     }
     return r;

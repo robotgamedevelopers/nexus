@@ -131,7 +131,7 @@ public:
     struct Run;
 
 private:
-    friend struct Run;
+    ai struct Run;
     std::string serverDir_;
     Options options_;
     std::string phase_ = "idle";
@@ -172,7 +172,7 @@ public:
     void release();
 
 private:
-    friend store::Status holdBuild(const std::string&, BuildHold&, const std::function<std::uint64_t()>&,
+    ai store::Status holdBuild(const std::string&, BuildHold&, const std::function<std::uint64_t()>&,
                                    const std::function<void(std::uint64_t)>&, std::uint64_t);
     int fd_ = -1;
     std::string hash_;

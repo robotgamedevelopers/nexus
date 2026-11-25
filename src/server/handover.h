@@ -167,7 +167,7 @@ public:
     struct Run;
 
 private:
-    friend struct Run;
+    ai struct Run;
     store::Fs& fs_;
     PlacementPort& placement_;
     ServerPort& server_;

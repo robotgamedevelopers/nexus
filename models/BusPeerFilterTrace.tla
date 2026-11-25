@@ -11,6 +11,6 @@ TraceStep == IF row < Len(Trace) THEN /\ row' = row + 1 /\ Apply(Trace[row'])
 TraceSpec == TraceInit /\ [][TraceStep]_traceVars
 Matches == /\ receipts = Trace[row].receipts /\ stored = Trace[row].stored
            /\ decision = Trace[row].decision
-           /\ (history = "friend") = Trace[row].known
-           /\ Trace[row].shown = (IF history = "friend" THEN stored ELSE {})
+           /\ (history = "ai") = Trace[row].known
+           /\ Trace[row].shown = (IF history = "ai" THEN stored ELSE {})
 =============================================================================

@@ -1,6 +1,6 @@
 // Unit tests of the driver supervisor (src/server/supervisor.h), by rule: starting a driver, turn numbers, prompts that
 // wait, every protocol break that ends a driver, every deadline at its edges (one millisecond before, at, after), text
-// gathering and splitting, the failed-start count, the credential, errors, stop, the friend taken out of friends.json
+// gathering and splitting, the failed-start count, the credential, errors, stop, the AI taken out of ais.json
 // and added back (alone and through the hub's reload), shutdown from every phase, and a restart's state. Logic only: no
 // processes, no clock (the time is an argument, from 1000), no files.
 //
@@ -361,7 +361,7 @@ void testText() {
         CHECK(s.gathering());
         Output o = s.message(TextEnd{1}, kStart + 4);
         CHECK(whats(o) == std::vector<What>{What::Reply} && o.effects[0].text == "Let me." && o.effects[0].turn == 1);
-        CHECK(!s.gathering() && entryKind(What::Reply) == EntryKind::Friend);
+        CHECK(!s.gathering() && entryKind(What::Reply) == EntryKind::AI);
         // An empty block adds nothing.
         CHECK(s.message(TextEnd{1}, kStart + 5).effects.empty());
     }
@@ -496,7 +496,7 @@ void testSignIn() {
         Output o = s.signedIn(kStart + 4);
         CHECK(!s.held() && o.commands.empty() && s.phase() == Phase::None);
     }
-    // The driver started after a sign-in runs under the limit its friend's record gives the session (Config::limited,
+    // The driver started after a sign-in runs under the limit its AI's record gives the session (Config::limited,
     // kept by setLimited), as every driver start does: limited, `--limit cwd`; not, no --limit at all.
     for (const bool limited : {true, false}) {
         Config c = config();
@@ -516,7 +516,7 @@ void testSignIn() {
         CHECK(!o.commands.empty() && flag == limited);
         CHECK(!limited || hasArgs(o, {"--limit", "cwd"}));
     }
-    // Its friend's record changed while the session was held: the start after the sign-in takes the new limit.
+    // Its AI's record changed while the session was held: the start after the sign-in takes the new limit.
     {
         Config c = config();
         c.limited = false;
@@ -602,7 +602,7 @@ void testActivity() {
     CHECK(a.retiring() && a.activity() == Activity::Idle);
     a.exited("exited with status 0", kStart + 5);
     CHECK(a.activity() == Activity::Idle);
-    // The server stopping is not the friend being down.
+    // The server stopping is not the AI being down.
     Supervisor d = working("w");
     d.message(Done{1, Outcome::Ok, std::nullopt, std::nullopt}, kStart + 3);
     d.shutdown(kStart + 4);
@@ -915,7 +915,7 @@ void testLimit() {
         CHECK(us.phase() == Phase::Working);
     }
 
-    // The directories kept out (friends.json "limit_keeps_out"): each given to a limited driver as --keep-out, never
+    // The directories kept out (ais.json "limit_keeps_out"): each given to a limited driver as --keep-out, never
     // to an unlimited one. More kept out while a turn runs on a limited driver is a tightening (the turn is stopped
     // now); fewer, a loosening (the turn finishes, then the driver is ended).
     {
@@ -1142,12 +1142,12 @@ void testStopHammered() {
     CHECK(whats(o).empty() && s.phase() == Phase::Idle && s.state().nextTurn == turn + 2);
 }
 
-// ---- the friend taken out of friends.json, and added back ----
+// ---- the AI taken out of ais.json, and added back ----
 
 // A removal with a turn open stops it as the person's stop does (a stop line, then the turn ends at its done) and ends
-// the driver once it is idle. While the friend is out nothing is taken from the queue and no driver starts; once it is
+// the driver once it is idle. While the AI is out nothing is taken from the queue and no driver starts; once it is
 // added back the queue goes on. A removal while the driver starts ends it quietly and keeps what waits.
-void testFriendRemoved() {
+void testAIRemoved() {
     {
         Supervisor s = working("go");
         s.queued("q1", kStart + 2);
@@ -1181,7 +1181,7 @@ void testFriendRemoved() {
         CHECK(s.state().openTurn == 0 && s.phase() == Phase::Ending && !o.commands.empty());
     }
     {
-        // Starting: ended quietly, the prompt kept waiting, no failed start counted; it goes once the friend is back.
+        // Starting: ended quietly, the prompt kept waiting, no failed start counted; it goes once the AI is back.
         Supervisor s = make();
         s.prompt("x", kStart);
         Output o = s.setPresent(false, kStart + 1);
@@ -1206,9 +1206,9 @@ void testFriendRemoved() {
 class OneDriver : public sync::Responder {
 public:
     explicit OneDriver(Millis* now) : now_(now), sup(config(), {}, *now, &last) {}
-    sync::SessionInfo defaults(const std::string& friendName) const override {
+    sync::SessionInfo defaults(const std::string& aiName) const override {
         sync::SessionInfo i;
-        i.friendName = friendName;
+        i.aiName = aiName;
         i.harness = "claude";
         return i;
     }
@@ -1251,16 +1251,16 @@ std::string lastNotice(const sync::SessionStore& store, sync::SessionId id) {
     return std::string();
 }
 
-// A reload that drops the friend with a turn open: the turn is stopped by the stop line and ends at its done, the
-// driver is ended, the session's transcript has the notice, its queue is kept, and nothing starts while the friend is
+// A reload that drops the AI with a turn open: the turn is stopped by the stop line and ends at its done, the
+// driver is ended, the session's transcript has the notice, its queue is kept, and nothing starts while the AI is
 // out (a reload that keeps it out, a prompt queued meanwhile). A reload that adds it back lets the queue go on.
-void testHubFriendRemoved() {
+void testHubAIRemoved() {
     Millis now = kStart;
     sync::MemoryStore store;
     OneDriver responder(&now);
     sync::Hub hub(store, {}, &responder);
     accounts::Registry withAda;
-    withAda.friends = {{"ada", {}, ""}};
+    withAda.ais = {{"ada", {}, ""}};
     hub.useAccounts(withAda, nullptr);
     std::string why;
     CHECK(hub.apply(sync::Action{1, sync::ActionKind::Ensure, 0, "ada", "", ""}, &why, "w"));
@@ -1278,7 +1278,7 @@ void testHubFriendRemoved() {
     CHECK(responder.presents == std::vector<bool>{false});
     CHECK(written(responder.last) == std::vector<ServerMessage>{Stop{1}} && responder.sup.phase() == Phase::Stopping);
     CHECK(store.find(1)->transcript.size() == entries + 1);
-    CHECK(contains(lastNotice(store, 1), "ada was taken out of friends.json (the accounts and friends were changed: "
+    CHECK(contains(lastNotice(store, 1), "ada was taken out of ais.json (the accounts and AIs were changed: "
                                          "reload), so nexus-server stopped any work running in this session and ended "
                                          "its driver."));
     CHECK(contains(lastNotice(store, 1), "its queued prompts are kept"));
@@ -1368,7 +1368,7 @@ void testQueue() {
         CHECK(s.queue() == std::vector<std::string>{"q1"});     // "x" waits ahead of it
     }
     {
-        // With no driver configured nothing is taken, at a turn's end or a restart, and the friend shows down once no
+        // With no driver configured nothing is taken, at a turn's end or a restart, and the AI shows down once no
         // turn runs: the queue stays as it is until a driver is configured again, which takes the oldest. A prompt
         // still waiting fails its start, honestly.
         Supervisor s = working();
@@ -1625,8 +1625,8 @@ const Group kGroups[] = {
     {"credential", testCredentialAndErrors},
     {"stop", testStop},
     {"stop_hammered", testStopHammered},
-    {"friend_removed", testFriendRemoved},
-    {"hub_friend_removed", testHubFriendRemoved},
+    {"ai_removed", testAIRemoved},
+    {"hub_ai_removed", testHubAIRemoved},
     {"queue", testQueue},
     {"shutdown", testShutdown},
     {"restart", testRestart},

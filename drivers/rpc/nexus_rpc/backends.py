@@ -207,7 +207,7 @@ async def acp(rpc, turn):
     caps = init["agentCapabilities"]
     if turn.harness == "antigravity":
         if not caps.get("_meta", {}).get("antigravity", {}).get("systemPrompt", {}).get("append"):
-            raise Failure("This Antigravity version cannot append friend instructions.")
+            raise Failure("This Antigravity version cannot append AI instructions.")
         options["_meta"] = {"antigravity": {"systemPrompt": {"append": turn.instructions}}}
     else:
         methods = {m["id"] for m in init["authMethods"]}
@@ -216,7 +216,7 @@ async def acp(rpc, turn):
         elif init.get("_meta", {}).get("defaultAuthMethodId") not in (None, "grok.com"):
             raise Failure("Grok did not confirm use of its cached Grok account login.")
         if not caps.get("promptCapabilities", {}).get("embeddedContext"):
-            raise Failure("This Grok version cannot accept friend context.")
+            raise Failure("This Grok version cannot accept AI context.")
     result = await session(
         rpc.call,
         ("session/new", options),
@@ -285,7 +285,7 @@ async def acp(rpc, turn):
             {
                 "type": "resource",
                 "resource": {
-                    "uri": "nexus://friend/startup",
+                    "uri": "nexus://ai/startup",
                     "mimeType": "text/plain",
                     "text": turn.instructions,
                 },

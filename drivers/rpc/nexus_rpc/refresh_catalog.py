@@ -46,7 +46,7 @@ async def account_catalog(provider, binary, home):
 
 def after_login(provider, binary, home):
     if provider == "codex":
-        # Codex's workspace-scoped launch requires the actual friend workspace.
+        # Codex's workspace-scoped launch requires the actual AI workspace.
         return
     from .backends import Failure
     try:

@@ -25,11 +25,11 @@ store::Driver toDriver(const sync::DriverState& d) {
 }
 
 sync::SessionInfo toInfo(const store::Info& i) {
-    return sync::SessionInfo{i.friend_name, i.harness, i.account, i.model, i.effort, i.instance, i.auto_account};
+    return sync::SessionInfo{i.ai_name, i.harness, i.account, i.model, i.effort, i.instance, i.auto_account};
 }
 
 store::Info toStored(const sync::SessionInfo& i) {
-    return store::Info{i.friendName, i.harness, i.account, i.model, i.effort, i.instance, i.autoAccount};
+    return store::Info{i.aiName, i.harness, i.account, i.model, i.effort, i.instance, i.autoAccount};
 }
 
 } // namespace

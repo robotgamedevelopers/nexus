@@ -10,8 +10,8 @@ import sys
 MAX_BYTES = 32 * 1024 * 1024
 
 
-def workspace(server, friend, instance):
-    if friend == "@primary":
+def workspace(server, ai, instance):
+    if ai == "@primary":
         if len(instance) != 32 or any(c not in "0123456789abcdef" for c in instance):
             raise ValueError("the selected conversation has no valid workspace binding")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -23,9 +23,9 @@ def workspace(server, friend, instance):
         if not line.startswith(b"OK /") or not line.endswith(b"\n"):
             raise ValueError("the primary conversation's workspace is unavailable; reconnect and try again")
         return Path(line[3:-1].decode("utf-8"))
-    data = subprocess.check_output(["git", "-C", str(server / "nexus-config"), "show", "HEAD:friends.json"])
-    roster = json.loads(data)["friends"]
-    owner = next((f for f in roster if f["name"] == friend), {})
+    data = subprocess.check_output(["git", "-C", str(server / "nexus-config"), "show", "HEAD:ais.json"])
+    roster = json.loads(data)["ais"]
+    owner = next((f for f in roster if f["name"] == ai), {})
     location = next((i for i in owner.get("instances", []) if i["name"] == instance), None)
     hosts = {socket.gethostname().lower(), socket.gethostname().split(".")[0].lower()}
     if (server / "config").exists():
@@ -34,7 +34,7 @@ def workspace(server, friend, instance):
             if len(parts) == 2 and parts[0] == "machine":
                 hosts.add(parts[1].lower())
     if not location or location["machine"].lower() not in hosts:
-        raise ValueError("the selected friend instance has no working directory on this server")
+        raise ValueError("the selected AI instance has no working directory on this server")
     return Path(location["dir"])
 
 
@@ -44,15 +44,15 @@ def receive(stream, server):
         if not line.endswith(b"\n"):
             raise ValueError("invalid attachment header")
         return line[:-1].decode("utf-8")
-    friend, instance, name, size = field(), field(), field(), int(field())
+    ai, instance, name, size = field(), field(), field(), int(field())
     if (not isinstance(name, str) or name in ("", ".", "..") or len(name.encode()) > 255
             or any(ord(c) < 32 or c in "/\\\x7f" for c in name)):
         raise ValueError("invalid attachment filename")
     if type(size) is not int or not 0 <= size <= MAX_BYTES:
         raise ValueError("attachment exceeds the 32 MiB limit")
-    # Hold the incoming directory by descriptor. The friend may rename files while we receive.
+    # Hold the incoming directory by descriptor. The AI may rename files while we receive.
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    working = workspace(server, friend, instance)
+    working = workspace(server, ai, instance)
     if not working.is_absolute() or ".." in working.parts:
         raise ValueError("the configured working directory must be absolute")
     root = os.open("/", flags)

@@ -86,10 +86,10 @@ PrAppEvent scrollEvent(PrVec2 at, PrVec2 delta) {
     return e;
 }
 
-std::vector<FriendInfo> friendsNamed(std::size_t count) {
-    std::vector<FriendInfo> out;
+std::vector<AIInfo> aisNamed(std::size_t count) {
+    std::vector<AIInfo> out;
     for (std::size_t i = 0; i < count; ++i)
-        out.push_back(FriendInfo{"f" + std::to_string(i + 1), "m"});
+        out.push_back(AIInfo{"f" + std::to_string(i + 1), "m"});
     return out;
 }
 
@@ -181,7 +181,7 @@ struct FakeBoard final : Board {
     void home() override { ++homes; }
 };
 
-// A window with no window: the view, its model of two friends (or as many as asked), and a kit over a UI context over
+// A window with no window: the view, its model of two AIs (or as many as asked), and a kit over a UI context over
 // a layout tree. With `sprint`, the sprint tab stands first, as in the app.
 struct Harness {
     Model model;
@@ -203,11 +203,11 @@ struct Harness {
     int saves = 0;      // tab order saves asked for after a move (View::moved)
     uint32_t rounds = 8; // the most rounds a frame runs
 
-    Harness() : Harness(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}) {}
+    Harness() : Harness(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}) {}
 
     // With `overlay`, the window is drawn as the see-through overlay is.
-    explicit Harness(const std::vector<FriendInfo>& friends, bool overlay = false, bool sprint = false)
-            : model(friends, sprint) {
+    explicit Harness(const std::vector<AIInfo>& ais, bool overlay = false, bool sprint = false)
+            : model(ais, sprint) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};
@@ -377,7 +377,7 @@ struct Harness {
             pointer(PrAppEventKind_PointerUp, end);
     }
 
-    // The friends' names in tab order.
+    // The AIs' names in tab order.
     std::string order() const {
         std::string out;
         for (std::size_t j = 0; j < model.tab_count(); ++j)
@@ -574,15 +574,15 @@ void commandDigitSelectsATabAndTypesNothing() {
 }
 
 void commandZeroSelectsTheTenthTab() {
-    Harness ten(friendsNamed(10));
+    Harness ten(aisNamed(10));
     ten.commandDigit(0);
     CHECK(ten.model.active() == 9);
     ten.commandDigit(9);
     CHECK(ten.model.active() == 8);
-    Harness eleven(friendsNamed(11));
+    Harness eleven(aisNamed(11));
     eleven.commandDigit(0);
     CHECK(eleven.model.active() == 9);   // the eleventh tab has no key
-    Harness nine(friendsNamed(9));
+    Harness nine(aisNamed(9));
     nine.commandDigit(9);
     CHECK(nine.model.active() == 8);
     nine.commandDigit(0);
@@ -654,7 +654,7 @@ bool near(float a, float b) {
 
 void textKeysScaleTheTranscriptAndThePrompt() {
     Harness h;
-    h.model.append(0, Entry{EntryKind::Friend, "a reply"});
+    h.model.append(0, Entry{EntryKind::AI, "a reply"});
     h.type("hello");
     h.frame();
     const float prompt1 = h.promptTextHeight();
@@ -737,7 +737,7 @@ void escapeHidesAndCommandEscapeStops() {
     h.type("draft");
     h.enter();              // held (hold_on_enter)
     h.type("more");
-    h.model.append(0, Entry{EntryKind::Friend, "a reply"});
+    h.model.append(0, Entry{EntryKind::AI, "a reply"});
     h.commandDigit(2);
     h.type("other");
     h.commandDigit(1);
@@ -798,22 +798,22 @@ void escapeWhileComposingDoesNotHide() {
     CHECK(h.hides == 1);
 }
 
-// Four friends: f1 f2 f3 f4.
-std::vector<FriendInfo> fourFriends() {
-    return friendsNamed(4);
+// Four ais: f1 f2 f3 f4.
+std::vector<AIInfo> fourAIs() {
+    return aisNamed(4);
 }
 
-// A drag of the tab at position 3 to position 1 reorders the strip, keeps the active friend, and Command-1 then selects
-// the moved tab. Each tab shows its friend's name only.
+// A drag of the tab at position 3 to position 1 reorders the strip, keeps the active AI, and Command-1 then selects
+// the moved tab. Each tab shows its AI's name only.
 void dragMovesATab() {
-    Harness h(fourFriends());
+    Harness h(fourAIs());
     h.commandDigit(2);                       // f2 active
     CHECK(h.model.active() == 1);
     CHECK(h.saves == 0);
     h.dragTab(2, 0);
     CHECK(h.order() == "f3 f1 f2 f4");
     CHECK(h.saves == 1);                     // a move asks for the order to be saved, once
-    CHECK(h.active().name == "f2");          // the same friend, now at position 3
+    CHECK(h.active().name == "f2");          // the same AI, now at position 3
     CHECK(h.model.active() == 2);
     CHECK(h.hides == 0);
     h.frame();
@@ -838,7 +838,7 @@ void dragMovesATab() {
 
 // A press and release that does not pass the threshold is a click: it selects the tab and moves nothing.
 void clickBelowThresholdSelects() {
-    Harness h(fourFriends());
+    Harness h(fourAIs());
     PrVec2 at = h.centre(h.tabs()[2]);
     h.pointer(PrAppEventKind_PointerDown, at);
     h.pointer(PrAppEventKind_PointerMove, PrVec2{at.x + 2, at.y});
@@ -851,7 +851,7 @@ void clickBelowThresholdSelects() {
 
 // A click without any movement selects the tab.
 void clickSelectsATab() {
-    Harness h(fourFriends());
+    Harness h(fourAIs());
     PrVec2 at = h.centre(h.tabs()[3]);
     h.pointer(PrAppEventKind_PointerDown, at);
     h.pointer(PrAppEventKind_PointerUp, at);
@@ -861,9 +861,9 @@ void clickSelectsATab() {
     CHECK(h.saves == 0);
 }
 
-// A relaunch: the friends come in the saved order (tab_order.h), so Command-1 selects the first saved friend.
+// A relaunch: the AIs come in the saved order (tab_order.h), so Command-1 selects the first saved AI.
 void savedOrderOnRelaunch() {
-    std::vector<FriendInfo> saved = applyTabOrder(fourFriends(), {"f3", "f1"});
+    std::vector<AIInfo> saved = applyTabOrder(fourAIs(), {"f3", "f1"});
     Harness h(saved);
     CHECK(h.order() == "f3 f1 f2 f4");
     h.commandDigit(2);
@@ -873,7 +873,7 @@ void savedOrderOnRelaunch() {
 
 // Escape during a drag cancels it: the order stays, the release drops nothing, and no hide is requested.
 void escapeCancelsADrag() {
-    Harness h(fourFriends());
+    Harness h(fourAIs());
     h.dragTab(3, 0, false);
     h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
     PrVec2 end{h.bounds(h.tabs()[0]).left + 2, h.centre(h.tabs()[0]).y};
@@ -888,11 +888,11 @@ void escapeCancelsADrag() {
     CHECK(h.hides == 1);
 }
 
-// Each friend's unsent text and transcript scroll go with its tab, not its position.
-void draftAndScrollStayWithTheirFriend() {
-    Harness h(fourFriends());
+// Each AI's unsent text and transcript scroll go with its tab, not its position.
+void draftAndScrollStayWithTheirAI() {
+    Harness h(fourAIs());
     for (int i = 0; i < 40; ++i)
-        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+        h.model.append(0, Entry{EntryKind::AI, "line " + std::to_string(i)});
     h.frame();
     h.frame();
     h.type("for f1");
@@ -949,7 +949,7 @@ void draftAndScrollStayWithTheirFriend() {
 
 // With one tab there is nowhere to move it: a drag changes nothing.
 void dragWithOneTabDoesNothing() {
-    Harness h(friendsNamed(1));
+    Harness h(aisNamed(1));
     h.type("x");
     h.dragTab(0, 0);
     PrRect b = h.bounds(h.tabs()[0]);
@@ -1088,7 +1088,7 @@ void checkPromptBox(const Harness& h) {
     CHECK(areaRecord.groups[PrLayoutGroup_Decoration] == 0);
 }
 
-// Nothing is shown under the prompt: no model name (the owner 2026-11-10; choosing a friend's model and effort by hotkey
+// Nothing is shown under the prompt: no model name (the owner 2026-11-10; choosing an AI's model and effort by hotkey
 // is roadmap work). The footer holds the prompt's box alone, one unit above the window's bottom.
 void noModelUnderThePrompt() {
     Harness h;
@@ -1119,7 +1119,7 @@ PrColor fillOf(const Harness& h, PrLayoutNode node) {
     return prLayoutDecorationStyleRecord(h.tree, record.groups[PrLayoutGroup_Decoration]).background;
 }
 void promptSegmentTracksInsertionAndUsesHeadroom() {
-    Harness h({FriendInfo{"alex", "m1"}}, true);
+    Harness h({AIInfo{"alex", "m1"}}, true);
     h.display.headroom = h.display.potentialHeadroom = 4;
     auto cell = [&] { return prLayoutNodeNextSibling(h.tree, h.view.prompt); };
     const auto start = h.bounds(cell());
@@ -1145,7 +1145,7 @@ void promptSegmentTracksInsertionAndUsesHeadroom() {
 }
 
 void newGlyphsFadeWithoutRelightingOldText() {
-    Harness h({FriendInfo{"alex", "m1"}}, true);
+    Harness h({AIInfo{"alex", "m1"}}, true);
     h.display.headroom = h.display.potentialHeadroom = 4;
     auto settings = [&] {
         h.view.windowApp.transcriptStyle.glyphPeak = 3;
@@ -1256,7 +1256,7 @@ void switchNoticeBubble() {
 void copyMarkdownConversation() {
     Harness h;
     h.model.append(0, Entry{EntryKind::Person, "**Hello**"});
-    h.model.append(0, Entry{EntryKind::Friend, "`world`"});
+    h.model.append(0, Entry{EntryKind::AI, "`world`"});
     h.frame();
     h.frame();
     const auto hello = h.findText(h.window(), "Hello");
@@ -1336,7 +1336,7 @@ void namedBusBubbles() {
 void markdownListsAndLinks() {
     Harness h;
     const std::string words = "First line wraps onto the next when several more words fill the available width and force it to wrap across the column.";
-    h.model.append(0, {EntryKind::Friend, "9. " + words + "\n10. Second  \n    continuation\n    - Nested [web link](https://example.org/path) "});
+    h.model.append(0, {EntryKind::AI, "9. " + words + "\n10. Second  \n    continuation\n    - Nested [web link](https://example.org/path) "});
     h.frame();
     h.frame();
     auto first = h.findText(h.window(), words);
@@ -1376,18 +1376,18 @@ void markdownListsAndLinks() {
 void longInlineCommandWrapsInTheReply() {
     const std::string lead = "The hook works.";
     const std::string prose = " I started it under Monitor with the full stream, using the new build's wrapper:";
-    const std::string command = "/home/friend/.nexus/server/builds/" + std::string(64, 'a') +
-        "/drivers/claude/bin/bus/nova-bus hook --as friend --harness claude";
+    const std::string command = "/home/ai/.nexus/server/builds/" + std::string(64, 'a') +
+        "/drivers/claude/bin/bus/nova-bus hook --as AI --harness claude";
     const auto intro = "**" + lead + "**" + prose;
     struct Layout { float width; int zoom; float replyWidth; };
     for (auto layout : {Layout{2525, 0, TranscriptStyle{}.replyWidth}, Layout{1450, 0, 72}, Layout{1080, 1, 56}}) {
         Harness h;
         h.extent = h.view.extent = {layout.width, 1400};
         h.view.askedTextSteps = layout.zoom;
-        h.model.append(0, {EntryKind::Friend, intro});
+        h.model.append(0, {EntryKind::AI, intro});
         // A single LF before the backtick is a Markdown soft break. The paragraph's last word still fits
         // exactly where it would have appeared without the following inline command.
-        h.model.append(0, {EntryKind::Friend, intro + "\n`" + command + "`"});
+        h.model.append(0, {EntryKind::AI, intro + "\n`" + command + "`"});
         for (int i = 0; i < 2; ++i) {
             h.view.windowApp.surface.prompt.width = 98;
             h.view.windowApp.transcriptStyle.replyWidth = layout.replyWidth;
@@ -1430,7 +1430,7 @@ void conversationBubblesAndSignInCard() {
     const std::string live = "Streaming reply";
     h.view.growing = [&](std::size_t) { return &live; };
     h.model.append(0, Entry{EntryKind::Person, "Hello"});
-    h.model.append(0, Entry{EntryKind::Friend, "A reply."});
+    h.model.append(0, Entry{EntryKind::AI, "A reply."});
     h.model.append(0, Entry{EntryKind::Notice, "Usage limit reached."});
     h.frame();
     h.frame();
@@ -1456,12 +1456,12 @@ void conversationBubblesAndSignInCard() {
 
 }
 
-// The shipped sign-in surface (centered_account_menu, sign_in_on_select): a friend whose account needs signing in shows,
+// The shipped sign-in surface (centered_account_menu, sign_in_on_select): an AI whose account needs signing in shows,
 // in place of the conversation, the centred account card asking for it, painted in the shipped message_card, with the
 // account's long address wrapped inside the card on a narrow overlay; Enter starts that account's sign-in, and once
 // signed in the conversation comes back.
 void signInCardInTheShippedMenu() {
-    Harness h(friendsNamed(2), true, true);
+    Harness h(aisNamed(2), true, true);
     test::FakeLink link;
     FrameHost host;
     host.model = &h.model;
@@ -1476,14 +1476,14 @@ void signInCardInTheShippedMenu() {
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setFriends({{"f1", {{"work", "Work", signedOut, email}, {"home", "Home", false, "home@example.test"}}},
+        link.state.sessions.setAIs({{"f1", {{"work", "Work", signedOut, email}, {"home", "Home", false, "home@example.test"}}},
                                       {"f2"}});
         link.changed = true;
         host.pollLink();
         h.frame();
         h.frame();
     };
-    h.model.append(1, Entry{EntryKind::Friend, "A reply."});
+    h.model.append(1, Entry{EntryKind::AI, "A reply."});
     publish(true);
     h.commandDigit(2);
     h.frame();
@@ -1520,7 +1520,7 @@ void signInCardInTheShippedMenu() {
     CHECK(h.hasText(h.window(), "A reply.") && !h.hasText(h.window(), "Please sign in to codex"));
 }
 void overlayKeepsAllButTheBackgroundOpaque() {
-    Harness h(std::vector<FriendInfo>{FriendInfo{"alex", "m1"}, FriendInfo{"emma", "m2"}}, true);
+    Harness h(std::vector<AIInfo>{AIInfo{"alex", "m1"}, AIInfo{"emma", "m2"}}, true);
     h.type("sent");
     h.enter();          // held (hold_on_enter)
     h.enter();          // and sent
@@ -1601,10 +1601,10 @@ bool within(const Harness& h, PrLayoutNode node, PrRect outer) {
     return true;
 }
 
-// No friends: no tabs and no prompt; the transcript shows the notice (why there are none) and nothing else.
-void noFriendsShowsTheNotice() {
-    Harness h(std::vector<FriendInfo>{});
-    h.view.notice = "No friends to show.\nnova-config listed no enabled friends";
+// No AIs: no tabs and no prompt; the transcript shows the notice (why there are none) and nothing else.
+void noAIsShowsTheNotice() {
+    Harness h(std::vector<AIInfo>{});
+    h.view.notice = "No AIs to show.\nnova-config listed no enabled AIs";
     h.frame();
     h.frame();
     CHECK(h.tabs().empty());
@@ -1624,16 +1624,16 @@ void noFriendsShowsTheNotice() {
     CHECK(h.model.tab_count() == 0);
 }
 
-// A binding creates the primary chat on a window whose server has no configured friends. Exercise
+// A binding creates the primary chat on a window whose server has no configured AIs. Exercise
 // the same keyboard composer and streaming transcript as a named conversation.
 void primaryChatUsesTheOrdinaryComposer() {
-    Harness h(std::vector<FriendInfo>{});
+    Harness h(std::vector<AIInfo>{});
     test::FakeLink link;
     FrameHost host;
     host.model = &h.model;
     host.view = &h.view;
     host.connect(&link, "test");
-    link.friends({});
+    link.ais({});
     host.pollLink();
     h.frame();
     CHECK(h.tabs().empty());
@@ -1643,11 +1643,11 @@ void primaryChatUsesTheOrdinaryComposer() {
     const auto publish = [&](std::vector<sync::EntryRef> entries) {
         auto session = std::make_shared<sync::SessionView>();
         session->id = 41;
-        session->info.friendName = kPrimaryChat;
+        session->info.aiName = kPrimaryChat;
         session->info.harness = "codex";
         session->entries = std::move(entries);
         sync::Sessions state({session});
-        state.setFriends({});
+        state.setAIs({});
         host.showState(state, false);
         h.frame();
         h.frame();
@@ -1671,10 +1671,10 @@ void primaryChatUsesTheOrdinaryComposer() {
 
     auto question = std::make_shared<const sync::SessionEntry>(
         sync::SessionEntry{EntryKind::Person, "Where shall we start?", true});
-    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "Right", false})});
+    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, "Right", false})});
     CHECK(h.hasText(h.window(), "Where shall we start?") && h.hasText(h.window(), "Right"));
     CHECK(h.active().transcript.size() == 1);
-    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::Friend, "Right here.", true})});
+    publish({question, std::make_shared<const sync::SessionEntry>(sync::SessionEntry{EntryKind::AI, "Right here.", true})});
     CHECK(h.active().transcript.size() == 2 && h.hasText(h.window(), "Right here."));
     CHECK(!h.hasText(h.window(), "Right") && link.sent.size() == 1);
 }
@@ -1683,7 +1683,7 @@ void primaryChatUsesTheOrdinaryComposer() {
 void longUnbrokenTextWraps() {
     Harness h;
     const std::string token = "https://example.com/" + std::string(580, 'x');
-    h.model.append(0, Entry{EntryKind::Friend, token});
+    h.model.append(0, Entry{EntryKind::AI, token});
     h.model.append(0, Entry{EntryKind::Person, token});
     h.model.set_draft(0, token);
     h.frame();
@@ -1703,10 +1703,10 @@ void longUnbrokenTextWraps() {
 // high however long its summary (cut at the column's edge, never wrapped), and close together.
 void toolLinesAreOneCompactLine() {
     Harness h;
-    h.model.append(0, Entry{EntryKind::Friend, "Let me look."});
+    h.model.append(0, Entry{EntryKind::AI, "Let me look."});
     h.model.append(0, Entry{EntryKind::Tool, "Bash: ls src"});
     h.model.append(0, Entry{EntryKind::Tool, "Read: " + std::string(400, 'x')});
-    h.model.append(0, Entry{EntryKind::Friend, "Done."});
+    h.model.append(0, Entry{EntryKind::AI, "Done."});
     h.frame();
     h.frame();
     std::vector<PrLayoutNode> e = h.entries();
@@ -1738,7 +1738,7 @@ void toolLinesAreOneCompactLine() {
     }
 }
 
-// The friend's text still growing shows after the transcript, as it grows, and goes when it closes (the transcript
+// The AI's text still growing shows after the transcript, as it grows, and goes when it closes (the transcript
 // then holds it); the queue stays after it.
 void growingTextShowsAfterTheTranscript() {
     Harness h;
@@ -1763,7 +1763,7 @@ void growingTextShowsAfterTheTranscript() {
     e = h.entries();
     CHECK(e.size() == 3 && h.hasText(e[1], "Hello, there") && h.hasText(e[2], "later"));
     growing.clear();
-    h.model.append(0, Entry{EntryKind::Friend, "Hello, there."});
+    h.model.append(0, Entry{EntryKind::AI, "Hello, there."});
     h.frame();
     e = h.entries();
     CHECK(e.size() == 3 && h.hasText(e[1], "Hello, there.") && !h.hasText(e[1], "Hello, there"));
@@ -1776,7 +1776,7 @@ void growingTextShowsAfterTheTranscript() {
 // the hook or for None.
 void stateCursorUnderTheLastText() {
     Harness h;
-    h.model.append(0, Entry{EntryKind::Friend, "Hello."});
+    h.model.append(0, Entry{EntryKind::AI, "Hello."});
     CursorState state = CursorState::None;
     h.view.cursor = [&](std::size_t) { return state; };
     h.frame();
@@ -1873,7 +1873,7 @@ void nativeBusSendIsPrivateInHistory() {
 
 void scannerHasPromptPadding() {
     Harness h;
-    h.model.append(0, Entry{EntryKind::Friend, "Finished."});
+    h.model.append(0, Entry{EntryKind::AI, "Finished."});
     h.view.cursor = [](std::size_t) { return CursorState::Busy; };
     h.look.prompt.caretOffsetY = 2;
     for (int zoom = 0; zoom < 2; ++zoom) {
@@ -1939,7 +1939,7 @@ void nothingAroundTheOpenPrompt() {
     CHECK(h.entries().empty());
 }
 
-// Text cut to the prompt's room ends on a whole UTF-8 character, and the room is what a friend's draft leaves.
+// Text cut to the prompt's room ends on a whole UTF-8 character, and the room is what an AI's draft leaves.
 void promptCutKeepsWholeCharacters() {
     const std::string text = "ab\xC3\xA9" "c";      // a, b, e-acute (two bytes), c
     const PrStringView all{text.data(), text.size()};
@@ -1978,7 +1978,7 @@ void promptRoomCountsTheSelection() {
 void cutLineStaysWithItsTabAndDraft() {
     Harness h;
     for (int i = 0; i < 400; ++i) {
-        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+        h.model.append(0, Entry{EntryKind::AI, "line " + std::to_string(i)});
     }
     h.model.set_draft(0, "abc");
     h.frame();
@@ -2035,7 +2035,7 @@ void cutLineStaysWithItsTabAndDraft() {
 void longTranscriptDeclaresWhatIsInSight() {
     Harness h;
     for (int i = 0; i < 2000; ++i) {
-        const EntryKind kind = i % 3 == 0 ? EntryKind::Person : i % 3 == 1 ? EntryKind::Friend : EntryKind::Tool;
+        const EntryKind kind = i % 3 == 0 ? EntryKind::Person : i % 3 == 1 ? EntryKind::AI : EntryKind::Tool;
         h.model.append(0, Entry{kind, "entry " + std::to_string(i)});
     }
     h.frame();
@@ -2070,7 +2070,7 @@ void longTranscriptDeclaresWhatIsInSight() {
 void scrollPastTheEndCountsTheLastItemOnce() {
     Harness h;
     for (int i = 0; i < 8; ++i) {
-        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+        h.model.append(0, Entry{EntryKind::AI, "line " + std::to_string(i)});
     }
     h.frame();
     h.frame();
@@ -2106,7 +2106,7 @@ void scrolledUpKeepsItsPlaceAsHeightsAreMeasured() {
         for (int p = 0; p < 1 + i % 4; ++p) {
             text += paragraph;
         }
-        h.model.append(0, Entry{i % 3 == 0 ? EntryKind::Person : EntryKind::Friend, text});
+        h.model.append(0, Entry{i % 3 == 0 ? EntryKind::Person : EntryKind::AI, text});
     }
     h.frame();
     h.frame();
@@ -2161,7 +2161,7 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     // Enough entries that only those in sight and a screen either side are declared, with a spacer above them.
     constexpr int kLines = 600;
     for (int i = 0; i < kLines; ++i)
-        h.model.append(0, Entry{EntryKind::Friend, "line " + std::to_string(i)});
+        h.model.append(0, Entry{EntryKind::AI, "line " + std::to_string(i)});
     for (std::size_t q = 0; q < queued; ++q) {
         h.model.set_draft(0, "held " + std::to_string(q));
         h.model.queue(0);
@@ -2177,7 +2177,7 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     // At the bottom: the last item shows, at the foot of the transcript.
     CHECK(!e.empty() && h.bounds(e.back()).bottom <= port.bottom + 0.5f);
     CHECK(!e.empty() && h.bounds(e.back()).bottom > port.bottom - 2 * style::kU);
-    h.model.append(0, Entry{EntryKind::Friend, "newest"});
+    h.model.append(0, Entry{EntryKind::AI, "newest"});
     h.frame();
     e = h.entries();
     CHECK(e.size() > queued && h.hasText(e[e.size() - 1 - queued], "newest"));
@@ -2204,7 +2204,7 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     CHECK(seen != kPrLayoutNodeNone);
     CHECK(h.bounds(e.back()).top > port.bottom);       // the newest is below the view: it did scroll up
     float before = h.bounds(seen).top;
-    h.model.append(0, Entry{EntryKind::Friend, "another"});
+    h.model.append(0, Entry{EntryKind::AI, "another"});
     h.model.append(0, Entry{EntryKind::Person, "and one more"});
     h.model.set_draft(0, "held later");
     h.model.queue(0);
@@ -2215,14 +2215,14 @@ void appendsFollowAtTheBottomAndHoldAViewScrolledUp(std::size_t queued) {
     CHECK(after > before - 0.5f && after < before + 0.5f);
 }
 
-// The harness with the sprint tab first, as the app runs, and `friends` friends f1, f2, ...
-Harness withSprint(std::size_t friends = 2) {
-    return Harness(friendsNamed(friends), false, true);
+// The harness with the sprint tab first, as the app runs, and `ais` AIs f1, f2, ...
+Harness withSprint(std::size_t ais = 2) {
+    return Harness(aisNamed(ais), false, true);
 }
 
 // Real key events, the production frame host and the actual Prax menu. Only the transport is fake.
 void accountPickerIsAnExplicitChoice() {
-    Harness h(friendsNamed(2), true, true);
+    Harness h(aisNamed(2), true, true);
     test::FakeLink link;
     FrameHost host;
     host.model = &h.model;
@@ -2237,7 +2237,7 @@ void accountPickerIsAnExplicitChoice() {
         link.state.phase = sync::LinkPhase::Connected;
         link.state.loopback = true;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setFriends({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
+        link.state.sessions.setAIs({{"f1", {{"a", "Personal"}, {"b", "Work"}, {"c", "Archive", true}}, supportsAuto},
                                       {"f2"}});
         link.changed = true;
         host.pollLink();
@@ -2332,7 +2332,7 @@ void accountPickerIsAnExplicitChoice() {
 }
 
 void fableLimitOffersKeyboardAndMouseChoices() {
-    Harness h(friendsNamed(2), true, true);
+    Harness h(aisNamed(2), true, true);
     test::FakeLink link;
     FrameHost host;
     host.model = &h.model;
@@ -2348,7 +2348,7 @@ void fableLimitOffersKeyboardAndMouseChoices() {
         session->info.limitModel = std::move(model);
         link.state.phase = sync::LinkPhase::Connected;
         link.state.sessions = sync::Sessions({session});
-        link.state.sessions.setFriends({{"f1", {{"first"}, {"second"}}}, {"f2"}});
+        link.state.sessions.setAIs({{"f1", {{"first"}, {"second"}}}, {"f2"}});
         link.changed = true;
         host.pollLink();
         h.frame();
@@ -2370,7 +2370,7 @@ void fableLimitOffersKeyboardAndMouseChoices() {
     if (link.sent.size() != 1) return;
     const auto& first = link.sent.front();
     CHECK(first.kind == sync::ActionKind::ResolveLimit && first.session == 19 && first.request == 87);
-    CHECK(first.account == "first" && first.text == "model" && first.friendName == "opus");
+    CHECK(first.account == "first" && first.text == "model" && first.aiName == "opus");
     CHECK(h.hasText(h.window(), "Waiting for the server to resume the conversation…"));
     h.key(PrAppKey('A'), PrAppKeyCode_KeyA, mods);
     CHECK(link.sent.size() == 1);
@@ -2390,7 +2390,7 @@ void fableLimitOffersKeyboardAndMouseChoices() {
     if (link.sent.size() != 2) return;
     const auto& second = link.sent.back();
     CHECK(second.kind == sync::ActionKind::ResolveLimit && second.request == 88 &&
-          second.text == "account" && second.friendName == "second" && second.account == "first");
+          second.text == "account" && second.aiName == "second" && second.account == "first");
 
     publish(89, "", "opus");
     CHECK(h.hasText(h.window(), "Out of Fable. Drop to Opus?"));
@@ -2417,7 +2417,7 @@ void arrowsFollowTheActiveTab() {
     CHECK(h.active().name == "f1");
     h.type("unsent draft");
     // In the shipped profile Command-Up/Down are the account menu's (accountPickerIsAnExplicitChoice), bound only to
-    // a friend's tab with an account list from its server: with none here they reach no account command, and never
+    // an AI's tab with an account list from its server: with none here they reach no account command, and never
     // move the tab or touch the draft.
     std::vector<std::string> accountActions;
     h.view.accountAction = [&](const std::string& action) { accountActions.push_back(action); };
@@ -2480,15 +2480,15 @@ void commandTAddsAndShowsATerminal() {
     // Typing reaches no draft: keys on a terminal tab are the terminal's.
     h.type("ls");
     CHECK(h.model.tab(0).draft == "draft" && h.model.tab(1).draft.empty() && h.active().draft.empty());
-    // Back on a friend, its prompt shows its draft again.
+    // Back on an AI, its prompt shows its draft again.
     h.commandDigit(1);
     CHECK(h.view.promptBox != kPrLayoutNodeNone);
     h.type("!");
     CHECK(h.model.tab(0).draft == "draft!");
 }
 
-// Command-W on a friend's tab does nothing at all, whatever terminals are open.
-void commandWOnAFriendDoesNothing() {
+// Command-W on an AI's tab does nothing at all, whatever terminals are open.
+void commandWOnAAIDoesNothing() {
     Harness h;
     h.type("keep");
     h.commandW();
@@ -2518,13 +2518,13 @@ void commandWClosesTheTerminal() {
     h.commandW();
     CHECK(h.ids() == "0 1" && h.model.active() == 0);   // alex, shown before the first terminal; not emma beside it
     CHECK((h.terminals.closed == std::vector<std::size_t>{3, 2, 4}) && h.terminals.running.empty());
-    h.commandW();       // a friend: nothing
+    h.commandW();       // an AI: nothing
     CHECK(h.ids() == "0 1" && h.model.active() == 0);
     h.commandT();
     CHECK(h.ids() == "0 1 5");  // a new terminal takes a new id
 }
 
-// Repeated Command-W walks left, then right, then returns to the friend visited before the consoles.
+// Repeated Command-W walks left, then right, then returns to the AI visited before the consoles.
 void commandWDrainsTheConsoleGroup() {
     Harness h;
     for (int i = 0; i < 5; ++i) h.commandT();
@@ -2576,7 +2576,7 @@ void escapeOnATerminalHidesNothing() {
     CHECK(h.look.textSteps == 0 && near(h.terminals.scale, 1));
     h.commandDigit(1);
     CHECK(h.model.active() == 0);
-    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);    // a friend again: Escape hides
+    h.key(PrAppKey_Escape, PrAppKeyCode_Escape);    // an AI again: Escape hides
     CHECK(h.hides == 1);
 }
 
@@ -2615,7 +2615,7 @@ void aTerminalTakesTheFocusFromTheAITabBefore() {
     CHECK(h.terminals.focused && prUiFocus(h.ui) == h.terminals.node);
     // Back to the AI and to the terminal again: the same.
     h.commandDigit(1);
-    CHECK(h.active().kind == TabKind::Friend && prUiFocus(h.ui) == h.view.prompt);
+    CHECK(h.active().kind == TabKind::AI && prUiFocus(h.ui) == h.view.prompt);
     h.commandDigit(3);
     CHECK(h.active().kind == TabKind::Terminal);
     CHECK(!h.terminals.focused || prUiFocus(h.ui) == h.terminals.node);
@@ -2672,7 +2672,7 @@ void aTerminalThatCannotStartLeavesNoTab() {
     CHECK(h.ids() == "0 1 3");
 }
 
-// Terminals stand after the friends: a drag across the zones changes nothing; a drag among terminals reorders them;
+// Terminals stand after the AIs: a drag across the zones changes nothing; a drag among terminals reorders them;
 // Command-digits follow positions.
 void dragsStayInTheirZone() {
     Harness h;
@@ -2680,17 +2680,17 @@ void dragsStayInTheirZone() {
     h.commandT();   // 3
     h.commandT();   // 4
     h.frame();
-    h.dragTab(3, 0);        // a terminal before a friend
+    h.dragTab(3, 0);        // a terminal before an AI
     CHECK(h.ids() == "0 1 2 3 4");
-    h.dragTab(3, 1);        // between the friends' end and ... still a friend's place
+    h.dragTab(3, 1);        // between the AIs' end and ... still an AI's place
     CHECK(h.ids() == "0 1 2 3 4");
-    h.dragTab(0, 3);        // a friend among the terminals
+    h.dragTab(0, 3);        // an AI among the terminals
     CHECK(h.ids() == "0 1 2 3 4");
-    h.dragTab(1, 4);        // a friend to the end
+    h.dragTab(1, 4);        // an AI to the end
     CHECK(h.ids() == "0 1 2 3 4");
     h.dragTab(4, 2);        // among the terminals
     CHECK(h.ids() == "0 1 4 2 3");
-    h.dragTab(0, 1);        // among the friends
+    h.dragTab(0, 1);        // among the AIs
     CHECK(h.ids() == "1 0 4 2 3");
     h.commandDigit(3);
     CHECK(h.active().id == 4);
@@ -2703,7 +2703,7 @@ void dragsStayInTheirZone() {
 // ---------------------------------------------------------------------------------------------------------------------
 // The sprint tab, first, as the app runs.
 
-// The sprint tab is first, titled "Dashboard" (tab_labels), shown at launch and Command-1; the friends are Command-2 onward, and the
+// The sprint tab is first, titled "Dashboard" (tab_labels), shown at launch and Command-1; the AIs are Command-2 onward, and the
 // terminals follow them. Its page shows, below the strip, and no prompt.
 void sprintTabIsFirstAndCommandOne() {
     Harness h = withSprint();
@@ -2767,8 +2767,8 @@ void choosingTheSprintTabGoesHome() {
     CHECK(h.active().kind == TabKind::Sprint);
 }
 
-// Command-digit selects by strip position from the sprint tab and from a friend's, at launch and after coming back to
-// the sprint tab from a friend (whose prompt had the focus); a digit past the last tab changes nothing.
+// Command-digit selects by strip position from the sprint tab and from an AI's, at launch and after coming back to
+// the sprint tab from an AI (whose prompt had the focus); a digit past the last tab changes nothing.
 void commandDigitsWorkFromTheSprintTab() {
     Harness h = withSprint(3);
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F1", "F2", "F3"}));
@@ -2805,7 +2805,7 @@ void commandDigitsWorkFromTheSprintTab() {
     CHECK(h.active().name == "f3");
 }
 
-// With Caps Lock on, Command-1 still selects the first tab, the sprint tab, and Command-2 the first friend: Prax's key
+// With Caps Lock on, Command-1 still selects the first tab, the sprint tab, and Command-2 the first ai: Prax's key
 // bindings leave Caps Lock out of the modifiers they compare (ui.cpp 820-824), so nexus filters nothing.
 void commandOneWithCapsLockSelectsTheSprintTab() {
     Harness h = withSprint();
@@ -2857,7 +2857,7 @@ void sprintTabTakesNoText() {
     CHECK(h.view.prompt == kPrLayoutNodeNone);
 }
 
-// The sprint tab is never carried, nothing lands before it, and the friends still reorder behind it.
+// The sprint tab is never carried, nothing lands before it, and the AIs still reorder behind it.
 void sprintTabNeverMoves() {
     Harness h = withSprint(3);
     h.dragTab(0, 2);
@@ -2869,12 +2869,12 @@ void sprintTabNeverMoves() {
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "F2", "F3", "F1"}));
 }
 
-// The owner's report: alex dragged to the end of the friends, the overlay hidden on the sprint tab and shown again
+// The owner's report: alex dragged to the end of the AIs, the overlay hidden on the sprint tab and shown again
 // comes up focused on alex. A press focuses the tab it lands on (ui.cpp PointerDown), the sprint tab has no prompt to
 // take the focus back, and Escape makes the focus visible (ui.cpp routeKey): the ring stood on alex, and Enter or Space
 // reaching the tree selected alex. Hiding and showing keep the selected tab, and the keyboard focus is on it.
 void hideAndShowKeepTheSelectedTab() {
-    Harness h(std::vector<FriendInfo>{{"alex", "m"}, {"emma", "m"}, {"f3", "m"}}, true, true);
+    Harness h(std::vector<AIInfo>{{"alex", "m"}, {"emma", "m"}, {"f3", "m"}}, true, true);
     std::vector<PrLayoutNode> t = h.tabs();
     PrVec2 start = h.centre(t[1]);
     PrVec2 end{h.bounds(t.back()).right + 80, start.y};      // past the last tab: alex to the end
@@ -2894,7 +2894,7 @@ void hideAndShowKeepTheSelectedTab() {
     h.key(PrAppKey(' '), PrAppKeyCode_Space, 0, " ");
     h.enter();
     CHECK(h.active().kind == TabKind::Sprint);
-    // On a friend's tab the same: the friend stays selected, and the prompt has the focus.
+    // On an AI's tab the same: the AI stays selected, and the prompt has the focus.
     h.commandDigit(2);
     CHECK(h.active().name == "emma");
     h.dragTab(1, 3);                                         // emma to the end, past alex
@@ -2906,7 +2906,7 @@ void hideAndShowKeepTheSelectedTab() {
 
 // A launch with a saved order that puts alex last shows the sprint tab, with no focus on alex.
 void launchWithAlexLastShowsTheSprintTab() {
-    std::vector<FriendInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
+    std::vector<AIInfo> loaded{{"alex", "m"}, {"emma", "m"}, {"rowan", "m"}};
     Harness h(applyTabOrder(loaded, {"rowan", "emma", "alex"}), true, true);
     CHECK((h.labels() == std::vector<std::string>{"Dashboard", "Rowan", "Emma", "Alex"}));
     CHECK(h.active().kind == TabKind::Sprint);
@@ -2968,8 +2968,8 @@ void textKeysZoomTheBoard() {
 
 // Directory diagnostics never become a footer on the dashboard.
 void dashboardKeepsRosterDiagnosticsOffscreen() {
-    Harness h(std::vector<FriendInfo>{}, false, true);
-    h.view.notice = "No friends to show.\nnova-config failed";
+    Harness h(std::vector<AIInfo>{}, false, true);
+    h.view.notice = "No AIs to show.\nnova-config failed";
     h.frame();
     h.frame();
     CHECK(h.model.tab_count() == 1 && h.board.shows > 0);
@@ -2981,20 +2981,20 @@ void dashboardKeepsRosterDiagnosticsOffscreen() {
 // The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
 void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     nexus::WindowApplication window;
-    window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"a", "Work \"team\"", "selected@example.test"});
+    window.update(host, "ai", "", true, false, 0, 1, "verify-sign-in", {"a", "Work \"team\"", "selected@example.test"});
     CHECK(window.overlayOpacity == 0.25f && window.messageCard.emailInk == 0x557799);
-    window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"b", "Work \"team\"", "second@example.test"});
+    window.update(host, "ai", "", true, false, 0, 1, "verify-sign-in", {"b", "Work \"team\"", "second@example.test"});
     CHECK(window.overlayOpacity != 0.25f && window.signInAccount.name == "b");
     // A window application the window rejects falls back to the stock one, which is the shipped profile's
     // (policy/rules/config.json transcript_style).
     nexus::policy::Host stockHost("client");
     nexus::WindowApplication stock;
-    stock.update(stockHost, "friend", "", true, false, 0, 1, "validate-style");
+    stock.update(stockHost, "ai", "", true, false, 0, 1, "validate-style");
     const nexus::TranscriptStyle shipped = stock.transcriptStyle;
     CHECK(shipped.ink == 0xffffff && shipped.noticeInk == 0xff4455 && shipped.fill == 0x252525);
     CHECK(shipped.toolPrompts.count("Bash") == 1);
     for (std::size_t i = 0; i < 14; ++i) {
-        window.update(host, "friend", "", true, false, i, 14, "validate-style");
+        window.update(host, "ai", "", true, false, i, 14, "validate-style");
         CHECK((window.overlayOpacity == 0.125f) == (i < 4));
         nexus::TranscriptStyle expected = i < 4 ? nexus::TranscriptStyle{} : shipped;
         if (i == 2) {
@@ -3024,7 +3024,7 @@ int main(int argc, char** argv) {
             link.state.phase = sync::LinkPhase::Connected;
             link.state.loopback = true;
             link.state.sessions = sync::Sessions({session});
-            link.state.sessions.setFriends({{"f1", {{"a", "A", false, "a@example.test"},
+            link.state.sessions.setAIs({{"f1", {{"a", "A", false, "a@example.test"},
                 {"b", "B", false, "b@example.test"}, {"c", "C", true, "c@example.test"}}, true}, {"f2", {}, true}});
             link.state.sessions.setNextAction(ack);
             link.changed = true;
@@ -3154,11 +3154,11 @@ int main(int argc, char** argv) {
         CHECK(std::abs(card.left - backdrop.left - extension) < 2);
         CHECK(std::abs(backdrop.right - card.right - extension) < 2);
 
-        const auto otherFriend = h.centre(h.tabs()[2]);
+        const auto otherAI = h.centre(h.tabs()[2]);
         const auto layer = h.bounds(prLayoutNodeParent(h.tree, h.view.accountMenu));
         CHECK(layer.top >= h.bounds(h.tabs()[2]).bottom);
-        h.pointer(PrAppEventKind_PointerDown, otherFriend);
-        h.pointer(PrAppEventKind_PointerUp, otherFriend);
+        h.pointer(PrAppEventKind_PointerDown, otherAI);
+        h.pointer(PrAppEventKind_PointerUp, otherAI);
         h.frame();
         CHECK(h.active().name == "f2" && h.view.accountMenu == kPrLayoutNodeNone);
         h.commandDigit(2);
@@ -3264,7 +3264,7 @@ int main(int argc, char** argv) {
         h.key('Y', PrAppKeyCode_KeyY, style::kCommand);
         h.commandT();
         h.frame();
-        // Tools [script, terminal], Chat [friend, native], Review [sprint, second instance of same native renderer].
+        // Tools [script, terminal], Chat [ai, native], Review [sprint, second instance of same native renderer].
         CHECK(h.model.tab_count() == 6);
         if (h.model.tab_count() != 6) return 1;
         CHECK(h.ids() == "4 5 0 2 1 3");
@@ -3309,7 +3309,7 @@ int main(int argc, char** argv) {
         CHECK(h.active().kind == TabKind::Sprint && h.model.tab_count() == 3);
         h.commandDigit(2);
         h.commandW();
-        CHECK(h.active().kind == TabKind::Friend && h.model.tab_count() == 3);
+        CHECK(h.active().kind == TabKind::AI && h.model.tab_count() == 3);
         h.commandT();
         const auto first = h.active().id;
         h.commandT();
@@ -3405,7 +3405,7 @@ int main(int argc, char** argv) {
             Harness styled;
             styled.view.accountCaption = [] { return "Fixture account"; };
             styled.model.append(0, {EntryKind::Person, "Fixture question"});
-            styled.model.append(0, {EntryKind::Friend, "Fixture chat"});
+            styled.model.append(0, {EntryKind::AI, "Fixture chat"});
             styled.model.set_draft(0, "Fixture queued");
             styled.model.queue(0);
             styled.model.append(0, {EntryKind::Notice, "Fixture notice"});
@@ -3495,7 +3495,7 @@ int main(int argc, char** argv) {
     clickSelectsATab();
     savedOrderOnRelaunch();
     escapeCancelsADrag();
-    draftAndScrollStayWithTheirFriend();
+    draftAndScrollStayWithTheirAI();
     dragWithOneTabDoesNothing();
     insertionCaretAndPromptMargins();
     emptyPromptAndTranscriptShowNoText();
@@ -3512,7 +3512,7 @@ int main(int argc, char** argv) {
     signInCardInTheShippedMenu();
     overlayKeepsAllButTheBackgroundOpaque();
     longUnbrokenTextWraps();
-    noFriendsShowsTheNotice();
+    noAIsShowsTheNotice();
     primaryChatUsesTheOrdinaryComposer();
     longTranscriptDeclaresWhatIsInSight();
     promptCutKeepsWholeCharacters();
@@ -3530,7 +3530,7 @@ int main(int argc, char** argv) {
     sendingKeepsBubbleOnScannerRow();
     nothingAroundTheOpenPrompt();
     commandTAddsAndShowsATerminal();
-    commandWOnAFriendDoesNothing();
+    commandWOnAAIDoesNothing();
     commandWClosesTheTerminal();
     commandWDrainsTheConsoleGroup();
     anEndedTerminalElsewhereKeepsTheSelection();

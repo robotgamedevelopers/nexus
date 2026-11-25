@@ -20,14 +20,14 @@ struct FakeLink final : LinkPort {
     }
     std::uint64_t send(sync::Action action) override { sent.push_back(std::move(action)); return sent.size(); }
 
-    void friends(const std::vector<std::string>& names) {
+    void ais(const std::vector<std::string>& names) {
         LinkState s;
         s.phase = sync::LinkPhase::Connected;
-        std::vector<sync::ServerFriend> list;
+        std::vector<sync::ServerAI> list;
         for (const std::string& n : names) {
-            list.push_back(sync::ServerFriend{n});
+            list.push_back(sync::ServerAI{n});
         }
-        s.sessions.setFriends(std::move(list));
+        s.sessions.setAIs(std::move(list));
         state = std::move(s);
         changed = true;
     }

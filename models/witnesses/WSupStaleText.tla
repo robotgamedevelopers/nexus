@@ -1,5 +1,5 @@
 ----------------------------- MODULE WSupStaleText -----------------------------
-\* Reversed witness: text for a turn other than the open one is shown as the friend's reply instead of ending the
+\* Reversed witness: text for a turn other than the open one is shown as the AI's reply instead of ending the
 \* driver. EffectsForOpen must reject it.
 EXTENDS MCSupervisor
 

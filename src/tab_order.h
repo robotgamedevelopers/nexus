@@ -1,4 +1,4 @@
-// The order of the friend tabs, the selected tab, the text scale and the terminal tabs, kept across launches: the
+// The order of the AI tabs, the selected tab, the text scale and the terminal tabs, kept across launches: the
 // person's drag, choice, size and open terminals are remembered.
 //
 // Kept on this machine for now, each in one small file in the window's home, ~/.nexus/client (client_home.h). Later
@@ -18,14 +18,14 @@
 
 namespace nexus {
 
-// The friends in `loaded` (the store's order), in the order `saved` names them; friends `saved` does not name follow,
+// The AIs in `loaded` (the store's order), in the order `saved` names them; AIs `saved` does not name follow,
 // in their loaded order. Saved names that no longer exist are dropped, and a name saved twice counts once. Pure.
-std::vector<FriendInfo> applyTabOrder(const std::vector<FriendInfo>& loaded, const std::vector<std::string>& saved);
+std::vector<AIInfo> applyTabOrder(const std::vector<AIInfo>& loaded, const std::vector<std::string>& saved);
 
-// The names of the friend tabs, in the order they stand. Terminal tabs are skipped: they are never saved. A saved
-// order only ever orders friends, inside the friend zone: the server's friends are added to the model in it as they
-// arrive (sync/client.h applyFriends), after any terminals were opened.
-std::vector<std::string> friendTabNames(const Model& model);
+// The names of the AI tabs, in the order they stand. Terminal tabs are skipped: they are never saved. A saved
+// order only ever orders AIs, inside the AI zone: the server's AIs are added to the model in it as they
+// arrive (sync/client.h applyAIs), after any terminals were opened.
+std::vector<std::string> aiTabNames(const Model& model);
 
 // The file's text: a header line, then one name per line, UTF-8. Pure.
 std::string formatTabOrder(const std::vector<std::string>& names);
@@ -51,7 +51,7 @@ TabOrderStore fileTabOrderStore();
 // The store in a file at `path`, written atomically (Prax's prFileWrite: a file beside it, then a rename).
 TabOrderStore fileTabOrderStore(std::string path);
 
-// One atomic layout across tab kinds. Friends and the sprint board have intrinsic keys. Local instances receive
+// One atomic layout across tab kinds. AIs and the sprint board have intrinsic keys. Local instances receive
 // persistent keys on creation so two terminals in the same directory and two tabs of the same type stay distinct.
 struct LayoutTab {
     std::string key, group, detail;  // detail is a terminal's directory or an extension's registered type
@@ -72,11 +72,11 @@ public:
     const SavedLayout& saved() const { return saved_; }
     std::vector<std::pair<std::size_t, std::string>> reopenTerminals(Model& model);
     // Registers extensions only after their type becomes available. Restores order under the active fork's movement
-    // rules and preserves focus by logical key, including a friend that arrives after startup.
+    // rules and preserves focus by logical key, including an AI that arrives after startup.
     void restore(Model& model, const std::function<bool(const std::string&, std::string*, std::string*)>& type,
-                 bool friendsKnown);
+                 bool aisKnown);
     void personSelected() { pending_.clear(); }
-    void capture(const Model& model, const std::vector<std::string>& directories, bool friendsKnown);
+    void capture(const Model& model, const std::vector<std::string>& directories, bool aisKnown);
 
 private:
     std::string keyOf(const Tab& tab);
@@ -88,34 +88,34 @@ private:
 
 // The names the store saved, in order: none if nothing is saved, and on an unreadable or malformed file, with `warning`
 // one line naming the file, what was wrong and that deleting it resets the order. The window reads them before it
-// shows and orders the server's friends by them as they arrive (sync/client.h applyFriends).
+// shows and orders the server's AIs by them as they arrive (sync/client.h applyAIs).
 std::vector<std::string> loadTabOrderNames(const TabOrderStore& store, std::string* warning);
 
 // `loaded` in the saved order: applyTabOrder over loadTabOrderNames.
-std::vector<FriendInfo> loadTabOrder(const TabOrderStore& store, const std::vector<FriendInfo>& loaded,
+std::vector<AIInfo> loadTabOrder(const TabOrderStore& store, const std::vector<AIInfo>& loaded,
     std::string* warning);
 
-// Saves the order of the model's friend tabs. Returns false, with one line in `error` naming the file and the cause.
+// Saves the order of the model's AI tabs. Returns false, with one line in `error` naming the file and the cause.
 bool saveTabOrder(const TabOrderStore& store, const Model& model, std::string* error);
 
-// The selected tab, kept across launches beside the order: the sprint tab, a friend by name, or a terminal by its place
+// The selected tab, kept across launches beside the order: the sprint tab, an AI by name, or a terminal by its place
 // among the terminal tabs (which are reopened in their saved order, below).
 struct SavedTab {
     TabKind kind = TabKind::Sprint;
-    std::string name;           // a friend's
+    std::string name;           // an AI's
     std::size_t terminal = 0;   // a terminal's place among the terminal tabs, from 1; 0 for a version 1 file's
                                 // "terminal", which named none
 };
 
 // The file's text for the model's active tab: a header line, then "sprint", "terminal <n>" (its place among the terminal
-// tabs, from 1) or "friend <name>". Pure.
+// tabs, from 1) or "AI <name>". Pure.
 std::string formatSelectedTab(const Model& model);
 
 // Reads the file's text into `saved`. Returns false, with `error` saying what is wrong, for text that is not a selected
 // tab file. Reads version 1 files too, whose "terminal" names no terminal. Pure.
 bool parseSelectedTab(std::string_view text, SavedTab* saved, std::string* error);
 
-// The position of the saved tab in `model`: the friend of that name, wherever it stands, or the terminal at that place
+// The position of the saved tab in `model`: the AI of that name, wherever it stands, or the terminal at that place
 // among the terminal tabs. The sprint tab (position 0) if the sprint tab was saved, or the tab saved is not in the
 // model. Pure.
 std::size_t savedTabPosition(const Model& model, const SavedTab& saved);
@@ -124,8 +124,8 @@ std::size_t savedTabPosition(const Model& model, const SavedTab& saved);
 TabOrderStore fileSelectedTabStore();
 
 // The tab the store saved: the sprint tab's SavedTab{} if nothing is saved, and on an unreadable or malformed file,
-// with `warning` one line naming the file, what was wrong and that deleting it resets the selection. A saved friend is
-// selected once the server's friends have arrived (frame_host.h). When requested, loaded distinguishes a real saved
+// with `warning` one line naming the file, what was wrong and that deleting it resets the selection. A saved AI is
+// selected once the server's AIs have arrived (frame_host.h). When requested, loaded distinguishes a real saved
 // choice (including the sprint tab) from the default.
 SavedTab loadSavedTab(const TabOrderStore& store, std::string* warning, bool* loaded = nullptr);
 
@@ -187,21 +187,21 @@ std::vector<std::string> loadTerminals(const TabOrderStore& store, std::string* 
 // Saves the terminal tabs' directories. Returns false, with one line in `error` naming the file and the cause.
 bool saveTerminals(const TabOrderStore& store, const std::vector<std::string>& directories, std::string* error);
 
-// The drafts kept for friends without a tab (sync/client.h KeptDrafts), kept across launches beside the order: what
-// the person typed to a friend the server's list left out, until a friend of that name on the same server has a tab
+// The drafts kept for AIs without a tab (sync/client.h KeptDrafts), kept across launches beside the order: what
+// the person typed to an AI the server's list left out, until an AI of that name on the same server has a tab
 // again. One file serves every window on this machine, each linked to its own server, so a draft is kept by server and
-// friend name: the server is the window's link target, the host `--server` names as given (an alias and an address of
+// AI name: the server is the window's link target, the host `--server` names as given (an alias and an address of
 // one machine are two servers to it). A window with no server keeps none. The window never deletes a draft but the
 // one it gives back; deleting the file deletes them all.
 //
 // The file is changed only by a change (KeptChange), read, merged and written whole under an OS lock on a file beside
 // it (kept-drafts.lock), never by writing a window's own drafts over it: so two windows, each keeping or giving back
-// drafts, never lose each other's (models/FriendStrip.tla FileKeepsOthers). It is written 0600, by a rename.
-using KeptFile = std::map<std::pair<std::string, std::string>, std::string>;    // (server, friend) -> draft
+// drafts, never lose each other's (models/AIStrip.tla FileKeepsOthers). It is written 0600, by a rename.
+using KeptFile = std::map<std::pair<std::string, std::string>, std::string>;    // (server, ai) -> draft
 
-// A window's change of the file, for its server: the drafts it keeps (`put`, each friend's name and draft) and those it
-// gave back to a friend's new tab (`taken`, the same). A draft put where the file holds another for that server and
-// friend (another window's) is joined to it, kKeptJoin between, so that neither is lost; one given back leaves the file
+// A window's change of the file, for its server: the drafts it keeps (`put`, each AI's name and draft) and those it
+// gave back to an AI's new tab (`taken`, the same). A draft put where the file holds another for that server and
+// AI (another window's) is joined to it, kKeptJoin between, so that neither is lost; one given back leaves the file
 // only while the file still holds exactly what was given (another window may have joined one to it since).
 struct KeptChange {
     std::string server;
@@ -217,10 +217,10 @@ void applyKeptChange(KeptFile* file, const KeptChange& change);
 // it, user@ and all). A window whose server cannot keeps no draft across launches. Pure.
 bool keptServer(std::string_view server);
 
-// The drafts `file` keeps for `server`, by friend name. Pure.
+// The drafts `file` keeps for `server`, by AI name. Pure.
 std::map<std::string, std::string> keptFor(const KeptFile& file, const std::string& server);
 
-// The file's text: a header line, then for each draft, in (server, friend) order, a line "draft <server> <friend>
+// The file's text: a header line, then for each draft, in (server, ai) order, a line "draft <server> <ai>
 // <bytes>", then that many bytes of the draft as typed (any bytes, newlines too), then a line feed. Pure.
 std::string formatKeptDrafts(const KeptFile& file);
 

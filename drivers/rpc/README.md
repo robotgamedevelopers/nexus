@@ -9,14 +9,14 @@ Each command in the server's `drivers` file selects a protocol adapter and an ab
 path to the harness program. For example:
 
 ```text
-driver codex /opt/nexus/venv/bin/python -I -m nexus_policy friend-driver /srv/nexus/profile {friend} {harness} /opt/nexus/venv/bin/python -I -m nexus_rpc.driver {harness} --binary /usr/local/bin/codex --account work
+driver codex /opt/nexus/venv/bin/python -I -m nexus_policy ai-driver /srv/nexus/profile {ai} {harness} /opt/nexus/venv/bin/python -I -m nexus_rpc.driver {harness} --binary /usr/local/bin/codex --account work
 signin codex /opt/nexus/venv/bin/python -I -m nexus_rpc.enroll codex --binary /usr/local/bin/codex
-friend reviewer codex /srv/review
+ai reviewer codex /srv/review
 ```
 
 The server supplies the session's actual account, working directory and resume ID.
 Configure a linked subscription account and instance in the server's accounts and
-friends files. The program's home is a private server-owned directory at
+AIs files. The program's home is a private server-owned directory at
 `~/.nexus/server/harness/<harness>/<account>`. The driver starts the program with
 a fresh environment. A missing home or a rejected credential produces a Nexus error.
 Each installed adapter declares which limits it enforces. Codex checks the effective
@@ -38,9 +38,9 @@ current turn. Nexus controls the next prompt and can restart the driver.
 ### Enroll a named account
 
 Add a `signin` line for each provider alongside its `driver` line. Both lines
-must point to the same installed vendor executable. Link accounts to friends in
+must point to the same installed vendor executable. Link accounts to AIs in
 the order the fork should offer them. A signed-out account marked
-`"sign_in_on_use": true` defers its sign-in offer until use. In the selected friend's tab,
+`"sign_in_on_use": true` defers its sign-in offer until use. In the selected AI's tab,
 press **Enter** or click **Sign in to** to open that account’s browser flow. Its draft stays in the prompt.
 
 The local Nexus window opens a private page for that account. Complete the vendor's

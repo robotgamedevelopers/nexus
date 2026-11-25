@@ -19,7 +19,7 @@ struct PickerOption {
     std::string label;
 };
 
-inline bool offersAuto(const sync::ServerFriend& roster) {
+inline bool offersAuto(const sync::ServerAI& roster) {
     return roster.canAutoAccount && roster.accounts.size() > 1;
 }
 
@@ -31,7 +31,7 @@ struct AccountPicker {
     std::string current;  // selected row: a pinned account or automatic mode
     std::string account;  // concrete account, including while "auto" is selected
 
-    static std::vector<PickerOption> rows(const sync::ServerFriend& roster, bool emails = false) {
+    static std::vector<PickerOption> rows(const sync::ServerAI& roster, bool emails = false) {
         std::vector<PickerOption> result;
         const bool automatic = !emails && offersAuto(roster);
         if (automatic) result.push_back({sync::kAutoAccountTarget, {}});
@@ -51,7 +51,7 @@ struct AccountPicker {
     }
 
     static std::optional<AccountPicker> open(std::size_t tab, const sync::SessionView& session,
-                                             const sync::ServerFriend& roster, int direction, bool emails = false) {
+                                             const sync::ServerAI& roster, int direction, bool emails = false) {
         auto options = rows(roster, emails);
         if (options.empty()) return std::nullopt;
         const bool automatic = !emails && offersAuto(roster) && session.info.autoAccount;
@@ -75,7 +75,7 @@ struct AccountPicker {
     }
 
     // Keep the preview attached to its account id when the server changes list order or display metadata.
-    bool refresh(std::size_t activeTab, const sync::SessionView& activeSession, const sync::ServerFriend& roster, bool emails = false) {
+    bool refresh(std::size_t activeTab, const sync::SessionView& activeSession, const sync::ServerAI& roster, bool emails = false) {
         const bool automatic = !emails && offersAuto(roster) && activeSession.info.autoAccount;
         if (activeTab != tab || activeSession.id != session || activeSession.info.account != account ||
                 automatic != (current == sync::kAutoAccountTarget)) return false;

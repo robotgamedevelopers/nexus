@@ -379,14 +379,14 @@ def main():
         with os.fdopen(fd, "rb") as f:
             data = f.read(262145)
         if not data or len(data) > 262144:
-            raise ValueError("Invalid friend context.")
+            raise ValueError("Invalid AI context.")
         args.instructions = data.decode()
         if args.bus_sender:
             from .bus_tool import validate
             validate(args.bus_sender)
             args.instructions += "\nUse nexus_bus_send to send or reply as yourself. Keep routine sends and their receipts out of the conversation unless the person asks."
         if args.primary_context_fd is None:
-            setup_guide = Path(__file__).with_name("friend-setup.txt").read_text(encoding="utf-8").strip()
+            setup_guide = Path(__file__).with_name("ai-setup.txt").read_text(encoding="utf-8").strip()
             args.instructions += "\n\n" + setup_guide
         try:
             args.account_home = home_for(args.harness, args.account)
@@ -399,7 +399,7 @@ def main():
     except Failure as exc:
         error(exc.code, str(exc), account=args.account)
     except (ValueError, OSError, argparse.ArgumentError, SystemExit):
-        error("other", "Invalid startup arguments, account directory, scope or friend instructions.")
+        error("other", "Invalid startup arguments, account directory, scope or AI instructions.")
     return 1
 
 
