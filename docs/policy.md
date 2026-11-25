@@ -113,6 +113,27 @@ the account label if the roster has no email. Bind `ArrowUp` and `ArrowDown` in
 `account_picker_shortcuts` to use unmodified arrows from the prompt. Enable `sign_in_on_select`
 to start sign-in when the server acknowledges a different account that needs authentication.
 
+### The account menu
+
+`account_menu` in client `config.json` sets the look of the menu that drops from the active AI's tab and of
+its gesture ([accounts.md](accounts.md#switching-accounts)). The row text always uses the tab label's text
+style, never bigger; a long email is cut with "…", never wrapped.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `row_height` | 44 | points per row; never less than 44 |
+| `gap` | 4 | points between the bottom of the tab's highlight and the menu |
+| `padding_x` | 14 | points either side of a row's text |
+| `radius` | 10 | the menu's corner radius |
+| `max_width_em` | 22 | the widest the menu grows, in the tab label's em |
+| `tab_move_threshold` | 12 | points sideways from the press past which the press becomes the tab's move |
+| `fill`, `ink` | `#2a2a2a`, `#ffffff` | the menu and its text |
+| `hover_fill`, `hover_opacity` | `#86c5ff`, 0.5 | the row under the finger |
+| `mark`, `mark_ink` | `✓`, `#86c5ff` | the current account's mark |
+
+`/account` and `/login` are bound in stock `client/window.star` to the `account_menu` shortcut op, whose
+argument is `account`, `login` or `logout`.
+
 ### Editing sign-in and tabs in Starlark
 
 The window calls `app.window` with the active tab, sign-in state, limit offer and `ui`.
