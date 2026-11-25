@@ -65,6 +65,15 @@ if(TARGET nexus_view)
     target_compile_options(menu_rows_test PRIVATE ${NEXUS_WARNINGS})
     add_test(NAME menu_rows_unit COMMAND menu_rows_test)
     set_tests_properties(menu_rows_unit PROPERTIES LABELS unit TIMEOUT 30)
+    # An AI's page on the phone, laid out offscreen: the title centred on the window, the prompt in the room left.
+    if(TARGET nexus)
+        add_executable(phone_layout_test test_phone_layout.cpp ${PROJECT_SOURCE_DIR}/src/offscreen.cpp)
+        target_link_libraries(phone_layout_test PRIVATE nexus_view prax::png prax::studio_app prax::gpu_select
+            prax::draw_select prax::image_select prax::compress_select)
+        target_compile_options(phone_layout_test PRIVATE ${NEXUS_WARNINGS})
+        add_test(NAME phone_layout_unit COMMAND phone_layout_test)
+        set_tests_properties(phone_layout_unit PROPERTIES LABELS unit TIMEOUT 30)
+    endif()
 endif()
 
 # The phone's list under the finger (src/finger_scroll.h): drag, fling, the ends. Pure: the times are the test's numbers.

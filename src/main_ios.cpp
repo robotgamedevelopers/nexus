@@ -190,6 +190,11 @@ void palette(void*, PrStudioWindow* window, const PrAppUserPreferences*, PrKitPa
 void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
+    // Studio pads its panel to the safe area but leaves it the screen's height, and leaves the keyboard alone: the
+    // window takes exactly the room between them (view.cpp buildWindow).
+    const bool keyboard = f->keyboard.bottom > f->keyboard.top;
+    a.view.usableHeight = usableHeightOf(f->extent.y, f->safeArea.top, f->safeArea.bottom,
+                                         keyboard ? f->keyboard.top : 0);
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
     if (a.voice) a.voice->frame(f->time);
 }

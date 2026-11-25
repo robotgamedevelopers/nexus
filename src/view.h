@@ -295,6 +295,10 @@ struct View {
     PrLayoutNode promptMic = kPrLayoutNodeNone;  // the phone prompt's microphone, inside the prompt's box
     // An AI's page on the phone: its back chevron and its title, centred on the window's width under the chevron; the
     // title as shown (shortened with an ellipsis to the room both sides of the chevron leave) and its full text.
+    // The height the window's content may use, px: on iOS the screen less its safe area and the keyboard (usableHeight
+    // in view.h's usableHeightOf); 0, the parent's whole height. usableRoom is the box that holds it.
+    float usableHeight = 0;
+    PrLayoutNode usableRoom = kPrLayoutNodeNone;
     PrLayoutNode phoneBackButton = kPrLayoutNodeNone;
     PrLayoutNode phoneTitle = kPrLayoutNodeNone;
     PrLayoutNode phoneTitleRoom = kPrLayoutNodeNone;
@@ -370,5 +374,10 @@ bool windowWantsFrame(const View& view);
 // that do not show are serviced, and one whose shell ended closes.
 bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event);
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
+
+// The height the window's content may use on a screen `extentY` px tall: less the safe area's top and bottom insets
+// (the status bar, the home indicator), and above the on-screen keyboard when it shows (its top edge, px from the
+// screen's top; 0 or less when it does not show). Never below 0.
+float usableHeightOf(float extentY, float safeTop, float safeBottom, float keyboardTop);
 
 } // namespace nexus

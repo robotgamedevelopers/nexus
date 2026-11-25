@@ -3195,8 +3195,24 @@ bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event) {
     return true;
 }
 
+float usableHeightOf(float extentY, float safeTop, float safeBottom, float keyboardTop) {
+    float h = extentY - safeTop - safeBottom;
+    if (keyboardTop > 0) h = std::min(h, keyboardTop - safeTop);
+    return std::max(0.f, h);
+}
+
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
     Builder b{view, kit, kit->ui, kit->tree, *view.look, *view.model, {}};
+    if (view.usableHeight > 0) {
+        // The room the window may use, exactly: Studio's panel pads to the safe area but is the screen's height itself,
+        // so a window of its full height runs past the home indicator by the insets; nor does it leave the keyboard.
+        PrKitBoxStyle room{};
+        room.align = PrKitAlign_Stretch;
+        room.place.height = prKitPx(view.usableHeight);
+        room.place.flex = PrKitFlex_Fixed;
+        parent = prKitBox(kit, parent, {.key = prHashString(std::string_view("usable-room"), 0)}, room);
+        view.usableRoom = parent;
+    }
     b.build(parent);
 }
 
