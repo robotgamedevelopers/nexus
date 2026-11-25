@@ -285,7 +285,7 @@ void automaticAccountIsASelectionMode() {
 }
 
 void savedStateShowsTheSelectedEmailWithoutStartingSignIn() {
-    Model model({}, true);
+    Model model({}, {"sprint"});
     View view;
     view.model = &model;
     FrameHost host;

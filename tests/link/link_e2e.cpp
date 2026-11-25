@@ -276,7 +276,7 @@ int roundtrip(const std::string& binary, const std::string& dir, const std::stri
     // text, as such a window always has.
     for (const std::uint32_t format : {sync::kStateFormat, std::uint32_t(0)}) {
         const bool older = format == 0;
-        Model model(kAIs, true);
+        Model model(kAIs, {"sprint"});
         sync::Mirror mirror;
         const auto start = Clock::now();
         link::ClientLink::Options options;
@@ -1827,7 +1827,7 @@ int takeover(const std::string& binary, const std::string& dir) {
     CHECK(pid > 0);
     CHECK(waitFor([&] { return answering(dir); }, kStallSeconds));
 
-    Model model(kAIs, true);
+    Model model(kAIs, {"sprint"});
     sync::Mirror mirror;
     link::ClientLink::Options options;
     options.bootstrap = server.bootstrap("localhost");

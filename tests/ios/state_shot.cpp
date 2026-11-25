@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     // No sprint tab on iOS (platform.h NEXUS_PROCESSES).
-    nexus::Model model({}, false);
+    nexus::Model model({});
     nexus::Look look;
     nexus::View view;
     view.model = &model;

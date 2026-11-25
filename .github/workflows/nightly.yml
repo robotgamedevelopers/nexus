@@ -871,14 +871,20 @@ jobs:
             for seed in 1 2 3 4 5 6 7 8; do
               walk build/tests/model/trace_walk "$seed" 1000 "$ais"
             done
-            walk build/tests/model/trace_walk 1 1000 "$ais" --no-sprint
+            walk build/tests/model/trace_walk 1 1000 "$ais" --boards 0
+            walk build/tests/model/trace_walk 2 1000 "$ais" --boards 3
           done
-          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-sprint-move --faulty-sprint-close --faulty-close-fallback; do
+          for fault in --faulty --faulty-queue --faulty-move --faulty-queue-cap --faulty-send-trim --faulty-send-dedup --faulty-close --faulty-board-move --faulty-board-close --faulty-close-fallback; do
             walk build/tests/model/trace_walk 1 1000 3 "$fault"
           done
           walk build/tests/model/trace_walk 10 1000 3 --ais-churn
-          walk build/tests/model/trace_walk 11 1000 0 --no-sprint --ais-churn
+          walk build/tests/model/trace_walk 11 1000 0 --boards 0 --ais-churn
           walk build/tests/model/trace_walk 1 300 3 --ais-churn --faulty-remove-ai
+          walk build/tests/model/trace_walk 13 1000 3 --boards 2 --boards-churn
+          walk build/tests/model/trace_walk 14 1000 0 --boards 0 --ais-churn --boards-churn
+          for fault in --faulty-add-board --faulty-remove-board; do
+            walk build/tests/model/trace_walk 1 300 3 --boards-churn "$fault"
+          done
           for seed in 1 2 3; do
             walk build/tests/model/strip_walk "$seed" 400 2
           done

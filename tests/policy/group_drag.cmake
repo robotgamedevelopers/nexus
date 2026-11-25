@@ -6,7 +6,7 @@ set(config [=[
   "tab_groups": [
     {"id":"Tools","types":["terminal","words"]},
     {"id":"Chat","types":["ai","left"]},
-    {"id":"Review","types":["sprint","right"],"closable":true}
+    {"id":"Review","types":["dashboard","right"],"closable":true}
   ],
   "tab_types": [
     {"id":"left","title":"Left","group":"Chat","open":"Command+L","native":"text_editor"},
