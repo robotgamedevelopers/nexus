@@ -160,6 +160,13 @@ void dashboardsAreTheServersList() {
     CHECK(w.model.tab(3).name == "ada");
     CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/" && w.host.dashboardUrl("Costs") == "http://costs.test:9000/");
 
+    // The same names, one address moved: the same tabs, the new address.
+    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Builds", "https://ci.test/next/"},
+        {"Costs", "http://costs.test:9000/"}});
+    w.host.pollLink();
+    CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
+    CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/next/");
+
     w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Costs", "http://costs.test:9001/"}});
     w.host.pollLink();
     CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Costs"}));
