@@ -416,6 +416,8 @@ bool open(void* context, PrStudioWindow* window) {
         board.initialExtent = {float(screen.extent.x), float(screen.extent.y)};
     board.initialExtent.y -= a.look.tabs.height * style::textScale(a.look.textSteps) + 1;
     board.open = a.urls->handle();
+    // Linked to a server: the board it says it serves, and this window's own lookup only if it says none.
+    board.fromServer = a.link != nullptr;
     if (a.overlay)
         board.visible = [&a] { return overlayVisible(a); };
     if (clientConfig().sprintEnabled) a.board = std::make_unique<PraxBoard>(board);

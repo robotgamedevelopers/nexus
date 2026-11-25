@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "platform.h"
-#if NEXUS_PROCESSES
 #include "board.h"
+#if NEXUS_PROCESSES
 #include "command.h"
 #include "terminals.h"
 #endif
@@ -245,6 +245,8 @@ void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
+    // The sprint board's address, as the server says it (empty: none it knows), for the sprint tab's page.
+    if (board != nullptr && s.phase == sync::LinkPhase::Connected) board->offer(s.sessions.sprintUrl());
     // The friends first, so that a friend's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -881,14 +883,10 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         HitchScope scope(hitch, Phase::Layout);
         beginWindowFrame(*view, kit, fonts);
     }
-#if NEXUS_PROCESSES
     if (board != nullptr) {
         HitchScope scope(hitch, Phase::Board);
         board->frame(time, display);
     }
-#else
-    (void)display;
-#endif
 }
 
 bool FrameHost::stageFile(std::string name, std::string bytes) {
@@ -946,10 +944,10 @@ bool FrameHost::event(const PrAppEvent& e) {
                 return false; // Route an application shortcut to the window's capture ahead of the embedded page.
         }
     }
-#if NEXUS_PROCESSES
     if (board != nullptr && board->event(e)) {
         return true;
     }
+#if NEXUS_PROCESSES
     // Typed into a terminal tab before its screen can take it: held for its shell, in order.
     if (terminals != nullptr && model->tab_count() != 0) {
         const Tab& tab = model->tab(model->active());

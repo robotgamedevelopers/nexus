@@ -172,6 +172,11 @@ public:
     // First action from this client still unapplied when the server built this exact state. Zero on older links.
     std::uint64_t nextAction() const { return nextAction_; }
     void setNextAction(std::uint64_t next) { nextAction_ = next; }
+    // The address of the sprint board the server serves (server/sprint_board.h), for the windows' sprint tab: an
+    // http:// or https:// URL, or empty when the server knows none. On a table link (format 4 on); a link of 1 to 3
+    // carries none, and a window then reads empty.
+    const std::string& sprintUrl() const { return sprintUrl_; }
+    void setSprintUrl(std::string url) { sprintUrl_ = std::move(url); }
     const SessionView* find(SessionId id) const;
     // The friend's first session: the one with the lowest id. Null when the friend has none.
     const SessionView* first(const std::string& friendName) const;
@@ -211,6 +216,7 @@ private:
     std::uint32_t format_ = kStateFormat;
     int unknown_ = 0;
     std::uint64_t nextAction_ = 0;
+    std::string sprintUrl_;
 };
 
 // A state kept in a file, for `nexus --state` (a screenshot of what a server's state draws) and tests' fixtures: the

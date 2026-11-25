@@ -99,6 +99,13 @@ later field goes after them.
   is sent, adds a tab for each new one and removes none, as a window did before the list. Formats 1 to 3 carry none,
   byte for byte as before (`sync_unit` `friends_cross_the_wire`, `friends_not_in_older_formats`,
   `friends_sent_only_when_changed`).
+- Absent sprint board address (a server from before it, or a link of format 3 or older): **none known**.
+  `SessionsDiff.sprint_url` (`*string`, default empty) is the address of the sprint board the server serves: the
+  `--listen` of the `sprint-run` service in its own services.json, as `http://HOST:PORT/` (`sync/sprint_board.h`),
+  or empty. It is whole in every diff. A window opens it in its sprint tab (the Dashboard); given none, a window that
+  can run processes looks the board up itself, from its client config's `sprint-url` or the sprint's record, as it
+  did before the field, and one that cannot (iOS) says the server sends none. An older window skips the field and
+  looks the board up as before. Formats 1 to 3 carry none (`sync_unit` `sessions_sprint_url_appended`).
 
 Text in format 4 is schema's text: well-formed UTF-8 with no NUL, or the whole diff would not load. The server writes
 what it holds with each malformed byte, and each NUL, shown as U+FFFD (the replacement character), so a friend's

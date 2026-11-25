@@ -108,12 +108,22 @@ function(nexus_ios_targets)
         prax::markdown prax::studio_kit prax::ui prax::ui_cpp prax::layout prax::font prax::text prax::draw prax::app
         prax::core_cpp)
 
-    # What the window does around the view each frame (frame_host.h), without terminals, board or uploads
+    # The sprint tab's page (board.h): the desktop's, with the board's address from the server alone (no lookup here:
+    # sprint.h findSprintBoard runs a process), over Prax's page stack as the desktop's nexus_board.
+    add_library(nexus_ios_board STATIC src/board.cpp src/sprint.cpp)
+    target_compile_definitions(nexus_ios_board PRIVATE NEXUS_DISPLAY_VERSION="v${PROJECT_VERSION}")
+    target_include_directories(nexus_ios_board PUBLIC src)
+    target_compile_options(nexus_ios_board PRIVATE ${NEXUS_WARNINGS})
+    target_link_libraries(nexus_ios_board PUBLIC nexus_ios_view nexus_scroll prax::html prax::html_quickjs prax::svg_quickjs
+        prax::url_quickjs prax::dom prax::fetch prax::net prax::tls prax::http prax::image_select prax::compress_select
+        prax::text prax::font prax::draw prax::layout prax::ui prax::studio_kit prax::app prax::core_cpp)
+
+    # What the window does around the view each frame (frame_host.h), with the board and without terminals or uploads
     # (NEXUS_PROCESSES is 0 here, platform.h), and its offscreen frame (offscreen.h).
     add_library(nexus_ios_frame STATIC src/frame_host.cpp src/url_opener.cpp src/offscreen.cpp src/state_window.cpp)
     target_include_directories(nexus_ios_frame PUBLIC src)
     target_compile_options(nexus_ios_frame PRIVATE ${NEXUS_WARNINGS})
-    target_link_libraries(nexus_ios_frame PUBLIC nexus_ios_view nexus_sync nexus_hitch nexus_signin_gate
+    target_link_libraries(nexus_ios_frame PUBLIC nexus_ios_view nexus_ios_board nexus_sync nexus_hitch nexus_signin_gate
         prax::image_select prax::compress_select prax::gpu_select prax::draw_select Threads::Threads)
 
     # The link to nexus-server (src/link/client.h), the desktop's sources, with the in-app ssh in place of

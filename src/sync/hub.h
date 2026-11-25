@@ -452,6 +452,9 @@ public:
     // The state for the link of the window whose claim token is `opener`: state() with the URL of each flow that
     // window holds. state() itself carries no URL.
     Sessions stateFor(const std::string& opener, const std::string& client = {}) const;
+    // The sprint board's address that every window's state carries (Sessions::sprintUrl): empty for none.
+    void setSprintUrl(std::string url) { sprintUrl_ = std::move(url); }
+    const std::string& sprintUrl() const { return sprintUrl_; }
     const SignInDesk& signIns() const { return signIns_; }
     // The walk's faulty runs alone: SignInDesk's seams.
     void injectSignInClaimFault() { signIns_.injectClaimFault(); }
@@ -509,6 +512,7 @@ private:
     std::map<SessionId, EntryRef> open_;     // each session's open entry, if it has one
     std::map<SessionId, std::pair<Activity, std::uint32_t>> activity_; // each session's activity, if not Idle
     Sessions state_;
+    std::string sprintUrl_;
     std::optional<SessionId> primary_;
     std::optional<accounts::Registry> accounts_;
     AccountsKeeper* keeper_ = nullptr;

@@ -146,7 +146,8 @@ table SignInOffer
 // server holding no friends file it could read, and the window shows the friends of the sessions it holds) and
 // friends the list, whole, in its friends.json's order. Absent friends_sent (no change, or a server from before the
 // list) reads false: the reader keeps the friends it held. Then, from format 5 and only on a link of 5 or later, the
-// live sign-in flows in id order, whole in every diff.
+// live sign-in flows in id order, whole in every diff. Then the address of the sprint board the server serves (an
+// http:// or https:// URL; empty: none known), which a window opens in its sprint tab.
 table SessionsDiff
 {
     sessions      []SessionChange
@@ -156,6 +157,7 @@ table SessionsDiff
     friends_sent  bool
     signins       []SignInOffer
     next_action   uint64
+    sprint_url    *string
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----

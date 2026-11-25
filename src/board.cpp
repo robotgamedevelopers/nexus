@@ -29,6 +29,7 @@
 #include "pr/ui.h"
 #include "pr/url_quickjs.h"
 
+#include "build_parts.h"
 #include "style.h"
 
 namespace nexus {
@@ -206,6 +207,16 @@ void PraxBoard::frame(double seconds, const PrAppDisplay& display) {
     for (const std::string& url : opens) {
         openLink(url);
     }
+}
+
+void PraxBoard::offer(const std::string& url) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (offered_ && offeredUrl_ == url) return;
+        offered_ = true;
+        offeredUrl_ = url;
+    }
+    wake_.notify_one();
 }
 
 void PraxBoard::openLink(const std::string& url) {
@@ -460,10 +471,32 @@ std::string PraxBoard::documentUrl() {
 void PraxBoard::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     pageUrl_ = desc_.url;
+    if (pageUrl_.empty() && desc_.fromServer) {
+        lookupError_ = "waiting for nexus-server to say where the sprint board is";
+        if (app_) prAppWake(app_);
+        // Frames are acknowledged while it waits, as while a lookup fails (below).
+        while (!ending_ && !offered_) {
+            wake_.wait(lock);
+            done_ = posted_;
+            stepped_.notify_all();
+        }
+        lookupError_.clear();
+        pageUrl_ = offeredUrl_;
+    }
     while (pageUrl_.empty() && !ending_) {
         lock.unlock();
+#if NEXUS_PROCESSES
         auto found = desc_.find ? desc_.find() : findSprintBoard();
+#else
+        auto found = desc_.find ? desc_.find() : SprintBoardAddress{{}, "nexus-server sends no sprint board address: "
+            "it runs no sprint-run service, or is older than this window; the dashboard shows once it does"};
+#endif
         lock.lock();
+        if (pageUrl_.empty() && offered_ && !offeredUrl_.empty()) {
+            pageUrl_ = offeredUrl_;
+            lookupError_.clear();
+            break;
+        }
         lookupError_ = found.error;
         pageUrl_ = std::move(found.url);
         if (app_) prAppWake(app_);
@@ -472,7 +505,7 @@ void PraxBoard::run() {
             stepped_.notify_all();
             // Process frame acknowledgments while the service is unavailable.
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(int(kRetrySeconds));
-            while (!ending_ && std::chrono::steady_clock::now() < deadline) {
+            while (!ending_ && std::chrono::steady_clock::now() < deadline && offeredUrl_.empty()) {
                 wake_.wait_until(lock, deadline);
                 done_ = posted_;
                 stepped_.notify_all();

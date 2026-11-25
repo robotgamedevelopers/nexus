@@ -157,6 +157,7 @@ table SessionsDiff
     friends_sent  bool
     signins       []SignInOffer
     next_action   uint64
+    sprint_url    *string
 }
 
 // ---- The actions, window to server (src/sync/actions.h) ----

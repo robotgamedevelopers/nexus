@@ -1,8 +1,8 @@
 // nexus on iOS and iPadOS: the window as a UIKit app (Prax's UIKit backend through its Studio app), filling its scene
 // on iPhone and iPad. A second client of nexus-server, a thin portal as the desktop window is (AGENTS.md): it sends the
 // person's input and shows the server's state. There is no overlay and no hotkey (an app's window is the system's to
-// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no terminal tabs, no
-// sprint tab, no attachment upload.
+// show), and what an iOS app cannot run is left out of this build (platform.h NEXUS_PROCESSES): no terminal tabs and no
+// attachment upload. The sprint tab shows the board at the address the server sends (board.h offer).
 //
 // It reaches nexus-server as the desktop window does, over mosh's transport after `nexus-server new` over ssh
 // (link/client.h), with the ssh inside the app (link/inapp_ssh.h): the server is `--server user@host`, the client
@@ -40,6 +40,7 @@
 #include "pr/ui.h"
 #include "pr/ui_records.h"
 
+#include "board.h"
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
@@ -72,6 +73,9 @@ struct App {
     FrameHost host;
     std::atomic<PrApp*> wakeApp{nullptr};   // while the window is open: for the link's thread to wake it
     std::unique_ptr<link::ClientPort> link;
+    bool linked = false;                    // the window reaches a server (not a state file): it has the sprint tab
+    std::string home;                       // the client home, for the board's storage
+    std::unique_ptr<PraxBoard> board;       // the sprint tab's page, while the window is open
     float keyboardCover = 0;                // px of the viewport's foot that the on-screen keyboard covers, this frame
     HitchDetector hitch{HitchClock{[](void*) { return prTimeMonotonicMilliseconds(); }, nullptr},
         HitchLog{[](void*, const char* line) { std::fprintf(stderr, "%s\n", line); }, nullptr}};
@@ -151,6 +155,21 @@ bool open(void* context, PrStudioWindow* window) {
         return a.window && prAppDataWriteText(prStudioWindowApp(a.window), kPrAppDataSourceClipboard,
             {text.data(), text.size()}) == PrStatus_Ok;
     };
+    // The sprint tab's page, the board at the address the server sends (board.h offer): this build looks none up.
+    if (a.linked) {
+        PraxBoard::Desc board;
+        board.kit = prStudioWindowKit(window);
+        board.fonts = a.fonts;
+        board.app = prStudioWindowApp(window);
+        board.window = prStudioWindowAppWindow(window);
+        if (!a.home.empty()) board.storageDirectory = a.home + "/dashboard-storage";
+        board.initialExtent = {1000, 780};
+        board.open = a.urls->handle();
+        board.fromServer = true;
+        a.board = std::make_unique<PraxBoard>(board);
+        a.view.board = a.board.get();
+        a.host.board = a.board.get();
+    }
     PrAppDisplayInfo info{};
     a.hitch.setRefreshRate(prAppDisplays(prStudioWindowApp(window), &info, 1) != 0 ? double(info.refreshRate) : 0);
     return true;
@@ -164,6 +183,9 @@ void closeWindow(void* context, PrStudioWindow*, PrStatus) {
     a.view.copy = nullptr;
     a.host.signIn.openUrl = nullptr;
     a.host.ui = nullptr;
+    a.host.board = nullptr;
+    a.view.board = nullptr;
+    a.board.reset();
     a.urls.reset();
 }
 
@@ -328,7 +350,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server\n");
         return 2;
     }
-    static Model model({}, false);
+    static Model model({}, state == nullptr);   // the sprint tab (the Dashboard) when linked, as on the desktop
     App a;
     a.model = &model;
     a.view.model = &model;
@@ -367,6 +389,8 @@ int main(int argc, char** argv) {
             a.link = std::make_unique<link::ClientPort>(std::move(options));
             a.host.connect(a.link.get(), serverHost);
         };
+        a.linked = true;
+        a.home = home;
         keepHome(a, home);
         if (server != nullptr || clientConfig().serverSet) {
             startLink(server != nullptr ? std::string(server) : clientConfig().serverHost);

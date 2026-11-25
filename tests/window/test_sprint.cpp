@@ -9,6 +9,7 @@
 
 #include "sprint.h"
 #include "style.h"
+#include "sync/sprint_board.h"
 
 namespace {
 
@@ -45,6 +46,13 @@ void parsesTheListenAddress() {
 // A service listening everywhere is reached on this machine.
 void listeningEverywhereIsReachedLocally() {
     CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","0.0.0.0:8080"])")).url == "http://127.0.0.1:8080/");
+    // The same reading of an argv the server's own services.json holds (sync/sprint_board.h): behind a wrapper's
+    // words, as --listen V or --listen=V, and none without it.
+    CHECK(sync::sprintBoardFromArgv({"nova-secrets", "exec", "--", "nova-sprint", "run", "--listen", "100.76.29.55:8080"}) ==
+        "http://100.76.29.55:8080/");
+    CHECK(sync::sprintBoardFromArgv({"nova-sprint", "run", "--listen=[::]:9000"}) == "http://127.0.0.1:9000/");
+    CHECK(sync::sprintBoardFromArgv({"nova-sprint", "run"}).empty());
+    CHECK(sync::sprintBoardFromArgv({"nova-sprint", "run", "--listen"}).empty());
     CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen",":8080"])")).url == "http://127.0.0.1:8080/");
     CHECK(parseSprintRun(record(R"(["nova-sprint","run","--listen","[::]:8080"])")).url == "http://127.0.0.1:8080/");
 }

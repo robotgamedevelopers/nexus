@@ -40,6 +40,7 @@
 #include "server/secret_files.h"
 #include "server/secret_lines.h"
 #include "server/service_manifest.h"
+#include "sync/sprint_board.h"
 #include "server/service_process.h"
 #include "server/signin_runner.h"
 #include "server/start_order.h"
@@ -649,6 +650,12 @@ bool Server::reloadServices() {
     }
     services_->configure(next, nowMs());
     serviceProblem_.clear();
+    // The sprint board the windows open in their sprint tab: the --listen of the sprint's run service this server
+    // runs (the record nova-config holds for it, as a window reads it), or none.
+    std::string board;
+    for (const ManagedService& service : next)
+        if (service.name == sync::kSprintRunService) board = sync::sprintBoardFromArgv(service.argv);
+    if (hub_) hub_->setSprintUrl(board);
     return true;
 }
 

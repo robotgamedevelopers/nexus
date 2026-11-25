@@ -186,6 +186,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
             }
         }
     }
+    if (!change.sprintUrl.empty()) putText(b.main, d->sprint_url, change.sprintUrl, scratch);
     if (signIns) {
         d->next_action = change.nextAction;
         for (const SignInOffer& o : change.offers) {
@@ -234,6 +235,7 @@ SessionsChange readTables(const std::string& diff, int* unknown) {
     *unknown = report.unknown;
     SessionsChange out;
     out.nextAction = d->next_action;
+    out.sprintUrl = textOf(d->sprint_url);
     out.sessions.reserve(static_cast<std::size_t>(d->sessions.size()));
     for (const wire::SessionChange& x : d->sessions) {
         SessionChange s;
