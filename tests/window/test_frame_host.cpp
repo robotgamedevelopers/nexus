@@ -147,13 +147,13 @@ void dashboardsAreTheServersList() {
     CHECK(dashboardTabs(w.model).empty() && w.model.tab_count() == 1);
     CHECK(w.host.dashboardUrl("Dashboard").empty());
 
-    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}});
+    w.link.dashboards({{"Dashboard", "http://100.64.0.10:8080/"}});
     w.host.pollLink();
     CHECK(dashboardTabs(w.model) == std::vector<std::string>{"Dashboard"});
     CHECK(w.model.tab(0).kind == TabKind::Dashboard && w.model.tab(1).name == "ada");
-    CHECK(w.host.dashboardUrl("Dashboard") == "http://100.76.29.55:8080/");
+    CHECK(w.host.dashboardUrl("Dashboard") == "http://100.64.0.10:8080/");
 
-    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Builds", "https://ci.test/"},
+    w.link.dashboards({{"Dashboard", "http://100.64.0.10:8080/"}, {"Builds", "https://ci.test/"},
         {"Costs", "http://costs.test:9000/"}});
     w.host.pollLink();
     CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
@@ -161,13 +161,13 @@ void dashboardsAreTheServersList() {
     CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/" && w.host.dashboardUrl("Costs") == "http://costs.test:9000/");
 
     // The same names, one address moved: the same tabs, the new address.
-    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Builds", "https://ci.test/next/"},
+    w.link.dashboards({{"Dashboard", "http://100.64.0.10:8080/"}, {"Builds", "https://ci.test/next/"},
         {"Costs", "http://costs.test:9000/"}});
     w.host.pollLink();
     CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Builds", "Costs"}));
     CHECK(w.host.dashboardUrl("Builds") == "https://ci.test/next/");
 
-    w.link.dashboards({{"Dashboard", "http://100.76.29.55:8080/"}, {"Costs", "http://costs.test:9001/"}});
+    w.link.dashboards({{"Dashboard", "http://100.64.0.10:8080/"}, {"Costs", "http://costs.test:9001/"}});
     w.host.pollLink();
     CHECK((dashboardTabs(w.model) == std::vector<std::string>{"Dashboard", "Costs"}));
     CHECK(w.host.dashboardUrl("Builds").empty() && w.host.dashboardUrl("Costs") == "http://costs.test:9001/");
