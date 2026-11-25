@@ -1,34 +1,21 @@
-# Standard GitHub runners run policy, native driver checks, and schema generation.
-# The fleet provides WSL2 and prebuilt toolchains and caches for the native builds and sanitizers.
+# Every job here runs on GitHub-hosted runners, for every pull request (forks included) and every push to main; no job
+# needs a secret. The fleet's own runners run only the nightly (.github/workflows/nightly.yml), from main, in a runner
+# group that admits nothing else: what needs the fleet by nature runs there (the TLC shards, WSL2 on captain: the
+# wsl2 token wall, wsl2-functional and the WSL2 terminal test).
 # The Tailscale shim is built and tested separately on macOS, Linux and Windows (.github/workflows/tailscale.yml).
 #
-# Each per-commit job finishes in 2 minutes: timeout-minutes says so here, and the runners' own job hook
-# enforces the same limit. Longer work belongs in a nightly (schedule) workflow.
+# Each per-commit job finishes in 2 minutes: timeout-minutes says so here. Longer work belongs in the nightly.
 #
 # Warnings are errors: CMakeLists.txt sets the flags, so these jobs use the plain build commands.
 #
-# Java and the TLC jar come from the runner's machine (the fleet installs them), never downloaded here. The
-# jar must be the pinned tla2tools.jar v1.7.4, whose sha256 is in .github/tla2tools.sha256; any other jar
-# fails the job.
-#
-# Compiles use the job's share of its host's cores (JOBS, for `cmake --build --parallel`): NOVA_JOB_CORES, which each
-# fleet runner exports, or the machine's core count where it is unset or not a positive integer (.github/job-cores.sh;
-# the windows job does the same in pwsh). Runners share hosts, and a compile that took every core starved the other
-# jobs on its host. Tests run one ctest job per core of the whole machine (TEST_JOBS, for `ctest -j`), as before: the
-# model shards' TLC tests reserve 8 processors each (PROCESSORS) and run one at a time under a share of 2, and the
-# functional tests mostly wait on processes and sockets, so a share made them slower (2 s to 16 s on hulk) for no
-# saving in CPU. Caches live outside the workspace, under ~/Library/Caches/nexus-ci on the runner's machine, so a build
-# is from scratch but Prax is not recompiled each time:
-#   ccache/                    compiled objects, when the machine has ccache; CCACHE_BASEDIR makes the runners'
-#                              different workspaces hit (it compiles with relative paths, so objects are identical)
-#   lto/                       the linker's ThinLTO cache (Prax builds Release with ThinLTO, so a link recompiles
-#                              everything it pulls in unless this cache holds it); it hits across workspaces only
-#                              because ccache made the objects identical
-# Both are shared by the machine's runners: ccache and LLVM's LTO cache write each entry to a temporary file and rename
-# it into place, so concurrent jobs are safe.
-#   <runner>/prax-downloads/   Prax's download cache (PR_DOWNLOAD_DIR). One per runner, because Prax writes a download
-#                              straight to its final path and two jobs fetching one file at once corrupt it; a runner
-#                              runs one job at a time.
+# Caches. A hosted runner starts empty, so each build job restores the newest cache of its own name for Prax's pin
+# (.github/actions/hosted-caches, windows-build): its build directory (Prax is then not recompiled: the checkout makes
+# only nexus's own files newer) and ccache (nexus's own files hit; CCACHE_BASEDIR keeps paths relative), the linker's
+# ThinLTO cache, Prax's downloads (PR_DOWNLOAD_DIR), cargo's target directory for the Starlark policy crate
+# (NEXUS_CARGO_TARGET_DIR, cmake/policy.cmake) and cargo's registry. Those caches are made only by
+# .github/workflows/cache-warm.yml, on main (daily, and by hand after a Prax or Tailscale pin changes), with the same
+# build steps (.github/actions/nexus-build) and no per-commit limit; jobs here only restore. A job that finds no cache
+# for its pin fails at once, saying to run cache-warm: a cold Prax build never runs inside the 2 minutes.
 
 name: ci
 
@@ -46,66 +33,56 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain: the newest macOS image (macos-26, arm64).
+  # Two jobs: the build with its unit and functional tests, and the frame budget alone (it times the frame thread on
+  # the real clock, so it shares its machine with nothing else of nexus's).
   build-and-unit:
-    # a pull request from a fork never runs on the fleet's runners
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain. Today only the runners labelled
-    # `services` have Xcode; drop the extra label when every macOS runner has it.
-    runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    runs-on: macos-26
     name: ${{ matrix.check }}
     strategy:
       fail-fast: false
       matrix:
-        check: [build-and-unit, frame-budget]
+        include:
+          - check: build-and-unit
+            cache: mac-release
+            targets: ""
+          - check: frame-budget
+            cache: mac-frame
+            targets: nexus_frame_tests
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/Library/Caches/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "NEXUS_CACHES=$caches"
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "CARGO_BUILD_JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Release)
-        shell: bash
-        run: |
-          set -euo pipefail
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
-          else
-            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
-          fi
-          # The link's functional tests reach this machine over ssh by its loopback and, when it is on the tailnet, by
-          # its tailnet address too (tests/link/CMakeLists.txt).
-          tailnet=""
-          if command -v tailscale >/dev/null; then
-            tailnet=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "${launcher[@]}" \
-            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-cache_path_lto,$NEXUS_CACHES/lto" \
-            "-DNEXUS_E2E_TAILNET=$tailnet"
-      - name: Build the frame-budget test
-        if: matrix.check == 'frame-budget'
-        run: cmake --build build --parallel "$JOBS" --target nexus_frame_tests
-      - name: Build
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: ${{ matrix.cache }}
+          brew: ccache ninja protobuf
+      # The link's functional tests reach this machine over `ssh localhost` without a password prompt
+      # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
+      - name: Passwordless ssh to this machine
         if: matrix.check == 'build-and-unit'
-        run: cmake --build build --parallel "$JOBS"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ ! -f ~/.ssh/id_ed25519 ]; then ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519; fi
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          if ! nc -z -G 2 127.0.0.1 22; then
+            sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+          fi
+          ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
+          ssh -o BatchMode=yes localhost true
+          echo "ssh localhost works for $(id -un)"
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-release
+          targets: ${{ matrix.targets }}
       - name: Unit tests
         if: matrix.check == 'build-and-unit'
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
@@ -135,20 +112,16 @@ jobs:
             echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
           fi
           "${frames[@]}"
-      - name: ccache hits in this job
-        if: always()
-        shell: bash
-        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The model and its check programs built Debug with AddressSanitizer and UndefinedBehaviorSanitizer, which stop at
-  # the first report: the unit tests, and the trace walks (the window's on every friend count, the overlay's) with every
+  # the first report: the unit tests, and the trace walks (the window's on every AI count, the overlay's) with every
   # fault (no TLC); the same for the link's states (src/sync) and their walks, and the store (store_test, durable_test
   # and journal_walk). Configured without the link's transport (NEXUS_LINK=OFF: mosh and protobuf), which these programs
-  # do not use, so any macOS runner will do.
+  # do not use.
   sanitizers:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: macos-26
     timeout-minutes: 2
+    name: sanitizers (${{ matrix.part }})
     strategy:
       fail-fast: false
       matrix:
@@ -168,39 +141,16 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/Library/Caches/nexus-ci"
-          downloads="$caches/$RUNNER_NAME/prax-downloads"
-          mkdir -p "$caches/ccache" "$downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(sysctl -n hw.ncpu)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Debug, ASan and UBSan)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
-            export CMAKE_GENERATOR=Ninja
-          fi
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                      -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
-            "${launcher[@]}" \
-            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
-            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      - name: Build the programs for this shard
-        run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: mac-asan-${{ matrix.part }}
+          brew: ccache ninja
+      - name: Configure and build the programs for this part
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-asan
+          targets: ${{ matrix.targets }}
       - name: Unit tests under the sanitizers
         if: matrix.part == 'units'
         shell: bash
@@ -381,13 +331,13 @@ jobs:
           rm -rf "$walks_root"
           echo "$launched walks passed"
 
+
   # The Claude driver (drivers/claude): compiled under the strict tsconfig, linted with warnings as errors, its unit
   # tests (a scripted query: no process, clock or network), and the protocol's conformance cases run against it as a
   # process (ctest -L claude_driver). Node comes from the runner's machine (the fleet's sdk/bin on the runner's PATH),
   # never installed here; npm ci takes the pinned packages from package-lock.json, without the optional per-platform
   # Claude executable the tests never run. The live test (npm run test:live) spends a subscription and never runs here.
   server-policy:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -406,7 +356,6 @@ jobs:
           "$runtime/bin/python" -m unittest discover -s drivers/rpc -v
 
   claude-driver:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-26
     timeout-minutes: 2
     steps:
@@ -448,7 +397,6 @@ jobs:
   # wall, the wall without its hook, and together a friend limited to its directory with the hook and without it (two
   # short runs in one job: the setup is the cost).
   claude-driver-wall:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -493,33 +441,25 @@ jobs:
   # (cmake/sandbox.cmake) and found by the driver (drivers/claude/src/tools.ts), with nothing installed for them: on an
   # Ubuntu bench (the tlc runners are the amd benches, never WSL2), whose AppArmor lets a program make user namespaces
   # only with a profile, which the driver loads for nexus's bwrap through passwordless sudo (the test unloads it first
-  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time), and inside captain's WSL2, which
-  # has no AppArmor. The sandbox tools' build directory is kept per runner under ~/.cache/nexus-ci, so they are built
-  # once per pin.
+  # where sudo -n can, NEXUS_WALL_FRESH_PROFILE, so that the real step runs each time). On GitHub-hosted Ubuntu here;
+  # the same wall inside captain's WSL2, which has no AppArmor, runs in the nightly (it needs the fleet).
   claude-driver-wall-linux:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
-        where: [ubuntu, wsl2]
+        where: [ubuntu]
         # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
         # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
         run: [whole-wall, without-the-hook, "limited,limited-nohook"]
         include:
           - where: ubuntu
             labels: ubuntu-24.04
-          - where: wsl2
-            labels: [self-hosted, fleet, Linux, X64, wsl2]
     runs-on: ${{ matrix.labels }}
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: matrix.where == 'wsl2'
-        with:
-          node-version: '22.14.0'
       - name: Where this runs, and caches outside the workspace
         shell: bash
         run: |
@@ -599,15 +539,13 @@ jobs:
           # Serialize just this test on each Linux host, including across workflow runs.
           flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
 
+
   # Linux: everything but the window, which Prax cannot run here yet (no lib/app backend for Linux, no system fonts in
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
   # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the
-  # window's logic, so it is off too (NEXUS_LINK=OFF); it also needs protobuf, which the Linux runners do not have yet.
-  # On the fleet's Linux runners, with clang and lld, warnings as errors as on macOS. Caches live under
-  # ~/.cache/nexus-ci on the runner's machine, laid out as the macOS jobs' (the linker's ThinLTO cache is lld's).
+  # window's logic, so it is off too (NEXUS_LINK=OFF). With clang and lld, warnings as errors as on macOS.
   build-and-unit-linux:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     env:
       CC: clang
@@ -617,37 +555,15 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/lto" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "NEXUS_CACHES=$caches"
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "CCACHE_STATSLOG=$RUNNER_TEMP/ccache-stats.log"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(nproc)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Release)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v ninja >/dev/null && [ ! -f build/CMakeCache.txt ]; then
-            export CMAKE_GENERATOR=Ninja
-          fi
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          else
-            echo "::warning::no ccache on $(hostname -s): Prax compiles from scratch (install ccache there through the fleet play)"
-          fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF "${launcher[@]}" \
-            -DCMAKE_LINKER_TYPE=LLD "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--thinlto-cache-dir=$NEXUS_CACHES/lto"
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: linux-release
+          apt: ccache ninja-build lld
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-release
       # A configure with no options at all takes the defaults that hold here (no window, no window logic, no link), so
       # a plain `cmake -S . -B build` on Linux works rather than failing late; this proves it.
       - name: Configure with the defaults
@@ -662,17 +578,11 @@ jobs:
               exit 1
             fi
           done
-      - name: Build
-        run: cmake --build build --parallel "$JOBS"
       - name: Unit tests
         run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
       # Real child processes and real files: not unit tests.
       - name: Functional tests
         run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
-      - name: ccache hits in this job
-        if: always()
-        shell: bash
-        run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
   # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
@@ -680,7 +590,6 @@ jobs:
   # stored data means. Go comes from the runner's machine (the fleet's sdk/bin); the compiler is built once per pin and
   # runner, and kept outside the workspace under ~/.cache/nexus-ci/<runner>/schema.
   schema-generated:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -702,14 +611,12 @@ jobs:
             exit 1
           fi
 
+
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
-  # On the runners labelled tlc, as the model shards: on hulk's loaded general runners its build ran past the 2 minutes.
-  # It builds the programs it runs and nothing else, through ccache (sanitizer flags key their own entries).
-  # Two parts in parallel, each within the 2 minutes: the unit programs, and the trace walks with their faults. Both
-  # share the compiler cache outside the workspace, and each builds only the programs it runs.
+  # Two parts in parallel, each within the 2 minutes: the unit programs, and the trace walks with their faults; each
+  # builds only the programs it runs, from its own cache.
   sanitizers-linux:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Linux, X64, tlc]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     strategy:
       fail-fast: false
@@ -734,39 +641,16 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Caches outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          caches="$HOME/.cache/nexus-ci"
-          mkdir -p "$caches/ccache" "$caches/$RUNNER_NAME/prax-downloads"
-          {
-            echo "PR_DOWNLOAD_DIR=$caches/$RUNNER_NAME/prax-downloads"
-            echo "CCACHE_DIR=$caches/ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_MAXSIZE=4G"
-            echo "JOBS=$(sh .github/job-cores.sh)"
-            echo "TEST_JOBS=$(nproc)"
-          } >> "$GITHUB_ENV"
-      - name: Configure (Debug, ASan and UBSan)
-        shell: bash
-        run: |
-          set -euo pipefail
-          generator=()
-          if command -v ninja >/dev/null && { [ ! -f build/CMakeCache.txt ] || grep -q '^CMAKE_GENERATOR:INTERNAL=Ninja$' build/CMakeCache.txt; }; then
-            generator=(-G Ninja)
-          fi
-          launcher=()
-          if command -v ccache >/dev/null; then
-            launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          fi
-          cmake -S . -B build "${generator[@]}" -DCMAKE_BUILD_TYPE=Debug -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF -DNEXUS_WINDOW_LOGIC=OFF \
-            -DCMAKE_LINKER_TYPE=LLD "${launcher[@]}" \
-            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all" \
-            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-      # Exactly the programs this part runs (model_checks would add the accounts' and the glide's, which it does not).
-      - name: Build the programs it runs
-        run: cmake --build build --parallel "$JOBS" --target ${{ matrix.targets }}
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: linux-asan-${{ matrix.part }}
+          apt: ccache ninja-build lld
+      - name: Configure and build the programs it runs
+        uses: ./.github/actions/nexus-build
+        with:
+          config: linux-asan
+          targets: ${{ matrix.targets }}
       # Every unit program here runs in memory (MemFs where it has files; no sockets, processes or shared paths), so
       # they are independent: they run at once, at most TEST_JOBS at a time, each with its own output under units/.
       - name: Unit tests under the sanitizers
@@ -987,261 +871,46 @@ jobs:
           rm -rf "$walks_root"
           echo "$launched walks passed"
 
+
   # The Tailscale shim built and tested alone on macOS, Linux and Windows (.github/workflows/tailscale.yml, which says
-  # how its caches are kept so that only a pin change is cold, and how a machine not yet primed hands this commit to
-  # tailscale-prime.yml). On a pull request it builds the head, not the merge commit, and each OS's verdict is the
-  # commit status tailscale-<os> on that head, which a lander waits for; statuses: write sets it, actions: write is
-  # for the hand-off's dispatch.
+  # how its caches are kept so that only a pin change is cold). On a pull request it builds the head, not the merge
+  # commit, and each OS's verdict is the commit status tailscale-<os> on that head, which a lander waits for;
+  # statuses: write sets it. A pull request from a fork has a read-only token, so its jobs build and test but set no
+  # status (a lander of a fork's pull request reads the jobs).
   tailscale:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/tailscale.yml
     permissions:
       contents: read
-      actions: write
       statuses: write
     with:
       prime: false
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      status: true
+      status: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
-  # the flags), on captain's Windows runners: the native window's code and its unit tests, nothing else. On Windows only
-  # the overlay window is native; nexus-server, its store, the driver protocol and supervisor, the link and every test
-  # of them build and run as the Linux build inside WSL2 (wsl2-functional) and on Linux (build-and-unit-linux), so a
-  # native Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them,
-  # which TLC runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the
-  # link's states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's
-  # launch line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal test,
-  # which wsl2-terminal runs. Not the window itself (Prax's Win32 backend of lib/app does not compile at its pin).
-  #
-  # The build directory lives outside the workspace, one per runner, under %LOCALAPPDATA%\nexus-ci\<runner>, so that a
-  # build is incremental and Prax is not recompiled each time (no ccache for MSVC on the runner); the first build on a
-  # runner is cold. Prax's download cache sits beside it (PR_DOWNLOAD_DIR), one per runner for the reason given above.
-  # The repository has no submodules, so the checkout does not look for them (its submodule sync, update and foreach
-  # cost about 2.5 s here, where each git command takes most of a second).
+  # the flags): the native window's code and its unit tests, nothing else. On Windows only the overlay window is
+  # native; nexus-server, its store, the driver protocol and supervisor, the link and every test of them build and run
+  # as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (build-and-unit-linux), so a native
+  # Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them, which TLC
+  # runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the link's
+  # states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's launch
+  # line), the formats' tables (nexus_wire), src/platform_win.cpp, their unit tests, and the WSL2 terminal test, which
+  # the nightly runs on captain (it needs a WSL2 distribution). Not the window itself (Prax's Win32 backend of lib/app
+  # does not compile at its pin). The build directory and Prax come from cache-warm's cache
+  # (.github/actions/windows-build).
   windows:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, fleet, Windows, X64, captain]
+    runs-on: windows-2025
     timeout-minutes: 2
     defaults:
       run:
         shell: pwsh
     steps:
-      # An image may have a warmed build beside a checkout fetched directly by URL.
-      # Preserve source timestamps when the seed's fetch came from this same repository.
-      - name: Identify a prebuilt checkout
-        working-directory: ${{ runner.temp }}
-        run: |
-          $dir = $env:GITHUB_WORKSPACE
-          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY"
-          $fetch = Join-Path $dir '.git/FETCH_HEAD'
-          if ((Test-Path $fetch) -and ((Get-Content $fetch -Last 1).EndsWith(" of $url"))) {
-            if (-not (git -C $dir remote)) {
-              git -C $dir remote add origin $url
-              if ($LASTEXITCODE -ne 0) { throw "Cannot set the prebuilt checkout's origin" }
-            }
-          }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Select the Rust toolchain for the embedded Starlark host
-        run: |
-          $toolchain = '1.98.1-x86_64-pc-windows-msvc'
-          rustup toolchain install $toolchain --profile minimal
-          if ($LASTEXITCODE -ne 0) { throw "Cannot prepare Rust $toolchain" }
-          "RUSTUP_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
-      # Each native command's exit code is checked by hand ($LASTEXITCODE): pwsh does not stop on one by itself.
-      - name: Build directory and caches outside the workspace
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pin = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'codeload\.github\.com/pdoane/prax/tar\.gz/([0-9a-f]{40})').Groups[1].Value
-          if (-not $pin) { throw "no Prax pin found in CMakeLists.txt (the Prax archive URL)" }
-          $caches = Join-Path $env:LOCALAPPDATA "nexus-ci\$env:RUNNER_NAME"
-          $build = "$caches\build-x64"
-          New-Item -ItemType Directory -Force -Path $caches | Out-Null
-          # The runner's directory holds only what this job keeps: anything else (an old Prax pin, a leftover build
-          # directory) goes.
-          $keep = @('build-x64', 'build-x64.ok', 'build-x64.unfinished', 'prax-downloads', "prax-$pin")
-          Get-ChildItem -Force $caches | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
-            Write-Output "removing $($_.FullName)"
-            Remove-Item -Recurse -Force $_.FullName
-          }
-          # build-x64.ok is written only after a build that finished. A build directory without it is from a run cut
-          # off (or failed) mid-configure or mid-build: it is resumed, since a cold build outlasts one run's 2 minutes,
-          # but at most 3 times (build-x64.unfinished counts them); the 4th start without a finished build starts from
-          # nothing, so a directory a cut left broken does not stay.
-          $finished = Test-Path "$build.ok"
-          if ($finished) {
-            Remove-Item -Force -ErrorAction SilentlyContinue "$build.unfinished"
-          } elseif (Test-Path $build) {
-            $starts = 1
-            if (Test-Path "$build.unfinished") { $starts = [int](Get-Content "$build.unfinished") + 1 }
-            if ($starts -gt 3) {
-              Write-Output "the build directory has had 3 starts without a finished build; removing it"
-              Remove-Item -Recurse -Force $build
-              $starts = 0
-            } else {
-              Write-Output "the build directory has no finished build; resuming it (start $starts of 3)"
-            }
-            Set-Content -Path "$build.unfinished" -Value $starts
-          }
-          Remove-Item -Force -ErrorAction SilentlyContinue "$build.ok"
-          "NEXUS_BUILD_FINISHED=$finished" >> $env:GITHUB_ENV
-          New-Item -ItemType Directory -Force -Path $build, "$caches\prax-downloads" | Out-Null
-          "PRAX_PIN=$pin" >> $env:GITHUB_ENV
-          "NEXUS_CACHES=$caches" >> $env:GITHUB_ENV
-          "NEXUS_BUILD=$build" >> $env:GITHUB_ENV
-          "PR_DOWNLOAD_DIR=$caches\prax-downloads" >> $env:GITHUB_ENV
-          # The job's share of the host's cores, as .github/job-cores.sh: NOVA_JOB_CORES, else the processor count.
-          $jobs = [Environment]::ProcessorCount
-          $share = 0
-          if ("$env:NOVA_JOB_CORES" -match '^[1-9][0-9]*$' -and [int]::TryParse($env:NOVA_JOB_CORES, [ref]$share)) {
-            $jobs = $share
-            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is ${share}: jobs use it"
-          } else {
-            $shown = if ($null -eq $env:NOVA_JOB_CORES) { 'unset' } else { $env:NOVA_JOB_CORES }
-            Write-Output "NOVA_JOB_CORES on ${env:COMPUTERNAME} is '$shown', not a positive integer: jobs use the processor count, $jobs"
-          }
-          "JOBS=$jobs" >> $env:GITHUB_ENV
-          "TEST_JOBS=$([Environment]::ProcessorCount)" >> $env:GITHUB_ENV
-          cmake --version
-          if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
-      # Prax at the commit CMakeLists.txt pins, fetched once per runner at depth 1 (a full clone outlasts the job's 2
-      # minutes) into a directory of its own, then renamed into place, so a fetch cut short leaves nothing half made. A
-      # kept checkout is used only when its HEAD is the pin.
-      - name: Prax at its pin, outside the workspace
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          $pin = $env:PRAX_PIN
-          $prax = "$env:NEXUS_CACHES\prax-$pin"
-          if (Test-Path $prax) {
-            $head = git -C $prax rev-parse HEAD
-            if ($LASTEXITCODE -ne 0 -or $head -ne $pin) {
-              Write-Output "the Prax checkout at $prax is at '$head', not $pin; fetching it again"
-              Remove-Item -Recurse -Force $prax
-            }
-          }
-          if (-not (Test-Path $prax)) {
-            $partial = "$env:NEXUS_CACHES\prax-partial"
-            if (Test-Path $partial) { Remove-Item -Recurse -Force $partial }
-            git init -q $partial
-            if ($LASTEXITCODE -ne 0) { throw "git init exited $LASTEXITCODE" }
-            git -C $partial fetch -q --depth 1 https://github.com/pdoane/prax.git $pin
-            if ($LASTEXITCODE -ne 0) { throw "git fetch of Prax $pin exited $LASTEXITCODE" }
-            git -C $partial checkout -q FETCH_HEAD
-            if ($LASTEXITCODE -ne 0) { throw "git checkout of Prax $pin exited $LASTEXITCODE" }
-            $head = git -C $partial rev-parse HEAD
-            if ($LASTEXITCODE -ne 0 -or $head -ne $pin) { throw "the fetched Prax is at '$head', not $pin" }
-            Rename-Item $partial "prax-$pin"
-          }
-          "PRAX_SOURCE=$prax" >> $env:GITHUB_ENV
-          # Prax's Slang compiler, into Prax's download cache the same way (downloaded beside, checked, then renamed):
-          # Prax's own configure writes it straight to its final path, and a download the 2 minutes cut short would
-          # start again from nothing on the next run.
-          $deps = Get-Content -Raw "$prax\cmake\slang.cmake"
-          $asset = 'windows-x86_64.zip'
-          $hash = [regex]::Match($deps, '_pr_slang_asset ' + [regex]::Escape($asset) + '\)\s+set\(_pr_slang_hash ([0-9a-f]{64})').Groups[1].Value
-          $url = [regex]::Match($deps, 'URL (https://github.com/shader-slang/\S+)\$\{_pr_slang_asset\}').Groups[1].Value
-          if (-not $hash -or -not $url) { throw "Prax's cmake/slang.cmake no longer names Slang's $asset as this step reads it" }
-          $file = ($url -split '/')[-1] + $asset
-          $slang = "$env:PR_DOWNLOAD_DIR\slang"
-          New-Item -ItemType Directory -Force -Path $slang | Out-Null
-          $have = if (Test-Path "$slang\$file") { (Get-FileHash -Algorithm SHA256 "$slang\$file").Hash.ToLower() } else { '' }
-          if ($have -ne $hash) {
-            # curl.exe resumes a download that an earlier run's 2 minutes cut short (-C -).
-            curl.exe -fsSL --retry 3 -C - -o "$slang\$file.partial" ($url + $asset)
-            if ($LASTEXITCODE -ne 0) { throw "curl of Slang's $file exited $LASTEXITCODE (the partial file is kept to resume)" }
-            $got = (Get-FileHash -Algorithm SHA256 "$slang\$file.partial").Hash.ToLower()
-            if ($got -ne $hash) {
-              Remove-Item -Force "$slang\$file.partial"
-              throw "Slang's $file has sha256 $got, and Prax pins $hash (removed; the next run downloads it again)"
-            }
-            Move-Item -Force "$slang\$file.partial" "$slang\$file"
-          }
-      # Every NEXUS_* option is given, so a kept CMakeCache.txt never decides what is built. The window, its logic and
-      # the link are off on Windows (CMakeLists.txt says why for each); src/platform_win.cpp is compiled on its own.
-      # A configure here regenerates every project file (Prax's included), about 6 s. It is skipped when the kept build
-      # directory finished its last build and was configured with these same arguments by this same cmake (the stamp
-      # nexus-ci-configured.txt inside it, so it goes with the directory): `cmake --build` then re-runs the configure
-      # itself (the solution's ZERO_CHECK project) whenever a CMakeLists.txt or an included .cmake file has changed
-      # since, so a skip never builds a stale project.
-      - name: Configure (Release, MSVC x64)
-        run: |
-          $configure = @('-S', '.', '-B', $env:NEXUS_BUILD, '-A', 'x64', "-DFETCHCONTENT_SOURCE_DIR_PRAX=$env:PRAX_SOURCE",
-                         '-DNEXUS_WINDOW=OFF', '-DNEXUS_WINDOW_LOGIC=OFF', '-DNEXUS_LINK=OFF')
-          # All of its output, then the first line: Select-Object -First would stop cmake mid-write and fail it.
-          $versionText = @(cmake --version)
-          if ($LASTEXITCODE -ne 0) { throw "cmake --version exited $LASTEXITCODE" }
-          $version = $versionText[0]
-          $stamp = "$version`n$($configure -join "`n")"
-          $stampFile = Join-Path $env:NEXUS_BUILD 'nexus-ci-configured.txt'
-          $kept = if (Test-Path $stampFile) { [string](Get-Content -Raw $stampFile) } else { '' }
-          if ($env:NEXUS_BUILD_FINISHED -ne 'True') {
-            Write-Output "configuring: the kept build directory has no finished build"
-          } elseif (-not (Test-Path "$env:NEXUS_BUILD\CMakeCache.txt")) {
-            Write-Output "configuring: the kept build directory has no CMakeCache.txt"
-          } elseif ($kept.TrimEnd() -ne $stamp) {
-            Write-Output "configuring: the kept build directory was configured otherwise (stamp '$($kept.TrimEnd())', now '$stamp')"
-          } else {
-            Write-Output "configured already with these arguments by $version; cmake --build re-runs it if a CMake file changed"
-            exit 0
-          }
-          Remove-Item -Force -ErrorAction SilentlyContinue $stampFile
-          cmake @configure
-          if ($LASTEXITCODE -ne 0) { throw "cmake configure exited $LASTEXITCODE" }
-          Set-Content -NoNewline -Path $stampFile -Value $stamp
-      - name: Build
-        run: |
-          cmake --build "$env:NEXUS_BUILD" --config Release --parallel $env:JOBS
-          if ($LASTEXITCODE -ne 0) { throw "cmake --build exited $LASTEXITCODE" }
-          New-Item -ItemType File -Force -Path "$env:NEXUS_BUILD.ok" | Out-Null
-          Remove-Item -Force -ErrorAction SilentlyContinue "$env:NEXUS_BUILD.unfinished"
+      - name: Caches, configure and build
+        uses: ./.github/actions/windows-build
       - name: Unit tests
         run: |
           ctest --test-dir "$env:NEXUS_BUILD" -C Release -L unit -j $env:TEST_JOBS --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "ctest exited $LASTEXITCODE" }
-      # The terminal tab's WSL2 shell test, for wsl2-terminal to run (this job's NETWORK SERVICE has no WSL2 distribution).
-      - name: Keep the WSL2 terminal test for wsl2-terminal
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: wsl2-terminal-test
-          path: ${{ env.NEXUS_BUILD }}\tests\window\Release\nexus_wsl2_terminal_tests.exe
-          if-no-files-found: error
-          retention-days: 1
-
-  # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
-  # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
-  # shell's prompt, TERM, home directory, Escape and exit. The windows job builds it with MSVC; it runs here, on captain's
-  # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
-  # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
-  wsl2-terminal:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    needs: windows
-    runs-on: [self-hosted, fleet, Linux, X64, wsl2]
-    timeout-minutes: 2
-    steps:
-      - name: Inside WSL2, with interop to Windows
-        shell: bash
-        run: |
-          set -euo pipefail
-          kernel=$(cat /proc/sys/kernel/osrelease)
-          case "$kernel" in
-            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
-            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
-          esac
-          if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
-            echo "::error::WSL interop is off on $(hostname -s) (no /proc/sys/fs/binfmt_misc/WSLInterop): Windows programs cannot start from here; turn it on in /etc/wsl.conf ([interop] enabled=true)"
-            exit 1
-          fi
-      - name: The test the windows job built
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: wsl2-terminal-test
-          path: ${{ runner.temp }}/wsl2-terminal
-      - name: wsl2_terminal (functional)
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
-          "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
