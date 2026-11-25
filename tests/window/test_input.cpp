@@ -177,7 +177,7 @@ struct Harness {
 
     // With `overlay`, the window is drawn as the see-through overlay is.
     explicit Harness(const std::vector<AIInfo>& ais, bool overlay = false, bool sprint = false)
-            : model(ais, sprint ? std::vector<std::string>{"sprint"} : std::vector<std::string>{}) {
+            : model(ais, sprint ? std::vector<std::string>{"Dashboard"} : std::vector<std::string>{}) {
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));
         PrLayoutTreeDesc desc{.shaper = shaper, .targetPixelRatio = 1};

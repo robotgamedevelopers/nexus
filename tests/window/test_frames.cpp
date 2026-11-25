@@ -260,7 +260,7 @@ struct Window {
     std::string firstLine;              // and its phases, as a hitch's line gives them
 
     Window() : model(std::vector<AIInfo>{AIInfo{"alex", "m"}, AIInfo{"emma", "m"}, AIInfo{"stella", "m"}},
-            true) {
+            {"sprint"}) {
         hitch.setRefreshRate(120);
         prFontSetSetSystem(fonts, system);
         prFontSetSetDefaultFamily(fonts, prFontFamilyGeneric(PrFontGeneric_SystemUi));

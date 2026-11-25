@@ -56,7 +56,7 @@ struct Window {
     std::string server;
     StoreWriter writer;
     KeptDraftsStore store;
-    Model model{{}, false};
+    Model model{{}};
     sync::AIStrip strip;
 
     Window(const std::string& path, std::string on) : server(std::move(on)) {

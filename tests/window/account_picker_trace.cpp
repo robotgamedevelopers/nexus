@@ -23,7 +23,7 @@ void options(std::ostream& out, const std::vector<Choice>& choices) {
 struct Trace {
     std::ostream& out;
     bool faulty;
-    Model model{{}, true};
+    Model model{{}, {"sprint"}};
     View view;
     test::FakeLink link;
     FrameHost host;

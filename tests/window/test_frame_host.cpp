@@ -28,7 +28,7 @@ int failures = 0;
 using test::FakeLink;
 
 struct Window {
-    Model model{{}, true};
+    Model model{{}, {"sprint"}};
     View view;
     FakeLink link;
     FrameHost host;
