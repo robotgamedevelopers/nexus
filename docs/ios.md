@@ -88,7 +88,10 @@ terminal row at the end of the list. Command-W, or closing the tab, ends its she
 window opened, on this device or another, shows in a tab of its own here too.
 
 Under the screen is a row of the keys the on-screen keyboard lacks: Escape, Tab, Control (held for the next key) and
-the arrows. The phone's keyboard types the rest; a hardware keyboard types everything.
+the arrows. The phone's keyboard types the rest; a hardware keyboard types everything. iOS hands a hardware key's
+character to the app after the key itself, at times after the next keys: so a key that types a character sends it as
+the key goes down, and the character that follows is dropped, so that `ls` then Return reaches the shell as typed
+(`TerminalKeys`, `src/remote_terminals.h`; Prax's own terminal view would need the same on iOS).
 
 What a terminal tab keeps on the device: the screen, in memory, while the tab is open. Nothing in a file or a log.
 
