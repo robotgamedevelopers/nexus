@@ -70,7 +70,7 @@ void serverConfig() {
     // dashboard: none by default; one line each, `<url> <name>`, kept in order, the name the rest of the line.
     CHECK(readServerConfig("machine studio\n", "/s/config", &s, &warnings, &why) && s.dashboards.empty());
     CHECK(readServerConfig("dashboard http://100.76.29.55:8080/ Dashboard\n", "/s/config", &s, &warnings, &why));
-    CHECK(warnings.empty() && s.dashboards == std::vector<sync::Dashboard>{{"Dashboard", "http://100.76.29.55:8080/"}});
+    CHECK((warnings.empty() && s.dashboards == std::vector<sync::Dashboard>{{"Dashboard", "http://100.76.29.55:8080/"}}));
     CHECK(readServerConfig("dashboard https://b.example/x Build farm\n# a note\ndashboard http://a:1/ Dashboard\n"
                            "dashboard http://c:2/  Third  one \n", "/s/config", &s, &warnings, &why));
     CHECK(s.dashboards == (std::vector<sync::Dashboard>{{"Build farm", "https://b.example/x"},
@@ -80,7 +80,7 @@ void serverConfig() {
     CHECK(has(why, "/s/config line 1:") && has(why, "dashboard <url> <name>") && s.dashboards.empty());
     CHECK(!readServerConfig("dashboard ftp://a/ A\ndashboard http://b:1/ B\n", "/s/config", &s, &warnings, &why));
     CHECK(has(why, "line 1:") && has(why, "not http:// or https://"));
-    CHECK(s.dashboards == std::vector<sync::Dashboard>{{"B", "http://b:1/"}});
+    CHECK((s.dashboards == std::vector<sync::Dashboard>{{"B", "http://b:1/"}}));
     CHECK(!readServerConfig("dashboard http:// A\n", "/s/config", &s, &warnings, &why) && has(why, "no host"));
     CHECK(!readServerConfig("dashboard http://a:1/ A\ndashboard http://b:1/ A\n", "/s/config", &s, &warnings, &why));
     CHECK(has(why, "line 2:") && has(why, "given twice") && s.dashboards.size() == 1);
