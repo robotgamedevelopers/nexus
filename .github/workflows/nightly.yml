@@ -330,7 +330,7 @@ jobs:
           fi
           npm ci --omit=optional --no-audit --no-fund
           npm run build
-      # Without the window, its logic and the link's transport, which no check program uses (as build-and-unit-linux).
+      # Without the window, its logic and the link's transport, which no check program uses (as ci.yml's build-linux).
       - name: Configure (Release)
         shell: bash
         run: |
@@ -438,9 +438,9 @@ jobs:
   # Windows' functional tests, inside WSL2: on Windows the overlay stays native and everything else (nexus-server, the
   # link, the drivers and their tests) runs as the Linux build inside WSL2 (AGENTS.md, platform targets). So these run
   # on captain's WSL2 runners (label wsl2: Linux runners inside captain's WSL2 distro, from the fleet's record), with
-  # the same configure as build-and-unit-linux, and so with what Prax lets Linux build at its pin (no window logic, so
-  # no link and no nexus-server yet: build-and-unit-linux says why). The first step refuses to run anywhere but WSL2.
-  # Caches as build-and-unit-linux's, under ~/.cache/nexus-ci inside the distro.
+  # the same configure as ci.yml's build-linux, and so with what Prax lets Linux build at its pin (no window logic, so
+  # no link and no nexus-server yet: ci.yml's build-linux says why). The first step refuses to run anywhere but WSL2.
+  # Caches as ci.yml's build-linux's, under ~/.cache/nexus-ci inside the distro.
   wsl2-functional:
     runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
     timeout-minutes: 15
@@ -673,7 +673,7 @@ jobs:
 
   # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
   # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
-  # link, as ci.yml's build-and-unit, then run alone, with every nova-reserve slot on this host when it can have them
+  # link, as ci.yml's build-macos, then run alone, with every nova-reserve slot on this host when it can have them
   # within 20 s; else shared.
   frame-budget:
     runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
@@ -1071,3 +1071,32 @@ jobs:
             echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
           fi
           npm run test:functional
+
+  # The macOS Release build, with Prax's ThinLTO, and its unit and functional tests, on the fleet Mac with no time
+  # limit: ci.yml builds Debug per pull request (no LTO, whose link alone took about 36 s on a hosted runner). The frame
+  # budget and the server lock under contention have their own jobs above. Hosted caches are made by Xcode 26 and do not
+  # fit this Mac's Xcode, so it starts from what is on this machine.
+  macos-release:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Tools and caches
+        uses: ./.github/actions/hosted-caches
+        with:
+          name: fleet-mac-release
+          require: "false"
+          brew: ninja protobuf
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-release
+      - name: Unit tests
+        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure --no-tests=error
+      # The link's functional tests reach this machine over `ssh localhost` as the runner's login, which this Mac allows.
+      - name: Functional tests
+        run: >-
+          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$'
+          -j "$TEST_JOBS" --output-on-failure --no-tests=error

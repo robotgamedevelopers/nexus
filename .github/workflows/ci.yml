@@ -2,9 +2,9 @@
 # needs a secret. The fleet's own runners run only the nightly (.github/workflows/nightly.yml), from main, in a runner
 # group that admits nothing else: what needs the fleet by nature runs there (the TLC shards, WSL2 on captain: the
 # wsl2 token wall, wsl2-functional and the WSL2 terminal test). The hosted macOS runners are few (about five at once for
-# the organisation), so a pull request's macOS jobs are the build with its unit tests, the functional tests in four
-# parts and the Tailscale shim; the macOS sanitizers, the macOS Claude driver and its token wall run in the nightly on
-# the fleet Mac, and their Linux forms run here.
+# the organisation), so a pull request's macOS jobs are six: the Debug build, its unit tests, its functional tests in
+# three parts, and the Tailscale shim; the Release build with LTO and its tests, the macOS sanitizers, the macOS
+# Claude driver and its token wall run in the nightly on the fleet Mac, and their Linux forms run here.
 # The Tailscale shim is built and tested separately on macOS, Linux and Windows (.github/workflows/tailscale.yml).
 #
 # Each per-commit job finishes in 2 minutes: timeout-minutes says so here. Longer work belongs in the nightly.
@@ -19,6 +19,9 @@
 # .github/workflows/cache-warm.yml, on main (daily, and by hand after a Prax or Tailscale pin changes), with the same
 # build steps (.github/actions/nexus-build) and no per-commit limit; jobs here only restore. A job that finds no cache
 # for its pin fails at once, saying to run cache-warm: a cold Prax build never runs inside the 2 minutes.
+#
+# Each configuration is built once per run (build-macos, build-linux, build-linux-asan), and its build tree is shared
+# with the jobs that run its tests (.github/actions/build-share, build-fetch): those download it and only run tests.
 
 name: ci
 
@@ -37,26 +40,14 @@ concurrency:
 
 jobs:
   # The build compiles Metal shaders (Prax) and needs Xcode's Metal toolchain: the newest macOS image (macos-26, arm64).
-  # Three jobs, each building from the cache: the unit tests, and the functional tests in two halves (ctest -I, every
-  # other test), which together take about a minute on the image's 3 cores. The frame budget (docs/frame-budget.md),
-  # which times the frame thread on the real clock against budgets set on the fleet's Macs, runs in the nightly on a
-  # fleet Mac: a shared 3-core VM is not the machine those budgets are for.
-  build-and-unit:
+  # One build, shared: build-macos builds Debug (no LTO: Prax turns ThinLTO on for Release only, and its link alone took
+  # about 36 s here; asserts on) from the cache and uploads the build tree (.github/actions/build-share); the unit tests
+  # and the functional tests in three parts (ctest -I, every third test) download it and only run tests. The Release
+  # build with LTO and its tests run in the nightly on the fleet Mac. The frame budget (docs/frame-budget.md), which
+  # times the frame thread on the real clock against budgets set on the fleet's Macs, runs in the nightly on a fleet
+  # Mac: a shared 3-core VM is not the machine those budgets are for.
+  build-macos:
     runs-on: macos-26
-    name: ${{ matrix.check }}${{ matrix.shard && format(' ({0} of 4)', matrix.shard) || '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - check: build-and-unit
-          - check: functional
-            shard: 1
-          - check: functional
-            shard: 2
-          - check: functional
-            shard: 3
-          - check: functional
-            shard: 4
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -66,9 +57,52 @@ jobs:
       - name: Tools and caches
         uses: ./.github/actions/hosted-caches
         with:
-          name: mac-release
+          name: mac-debug
           brew: ninja protobuf
           brew-keep: protobuf abseil
+      - name: Configure and build
+        uses: ./.github/actions/nexus-build
+        with:
+          config: mac-debug
+      - name: Share the build tree
+        uses: ./.github/actions/build-share
+        with:
+          name: build-macos
+
+  tests-macos:
+    needs: build-macos
+    runs-on: macos-26
+    name: ${{ matrix.check }}${{ matrix.shard && format(' ({0} of 3)', matrix.shard) || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check: unit
+          - check: functional
+            shard: 1
+          - check: functional
+            shard: 2
+          - check: functional
+            shard: 3
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      # The link's programs load Homebrew's protobuf at run time.
+      - name: Tools the image lacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! brew list --versions protobuf >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
+              HOMEBREW_NO_ENV_HINTS=1 brew install --quiet protobuf
+          fi
+      - name: The build tree
+        uses: ./.github/actions/build-fetch
+        with:
+          name: build-macos
       # The link's functional tests reach this machine over `ssh localhost` without a password prompt
       # (tests/link/CMakeLists.txt): a key made here, for this job only, authorized for the runner's own login.
       - name: Passwordless ssh to this machine
@@ -87,20 +121,16 @@ jobs:
           ssh-keyscan -T 5 localhost 127.0.0.1 >> ~/.ssh/known_hosts
           ssh -o BatchMode=yes localhost true
           echo "ssh localhost works for $(id -un)"
-      - name: Configure and build
-        uses: ./.github/actions/nexus-build
-        with:
-          config: mac-release
       - name: Unit tests
-        if: matrix.check == 'build-and-unit'
-        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
+        if: matrix.check == 'unit'
+        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure --no-tests=error
       # The headless window (system fonts), real child processes and a real file, and the link end to end (nexus-server
       # over ssh to this machine, mosh's transport over real UDP): not unit tests.
       # The frame budget and the server lock under contention run in the nightly.
-      - name: Functional tests (every fourth one, from the shard's)
+      - name: Functional tests (every third one, from the shard's)
         if: matrix.check == 'functional'
         run: >-
-          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,4'
+          ctest --test-dir build -L functional -E '^(window_frame_budget|server_lock_functional)$' -I '${{ matrix.shard }},,3'
           -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # On hosted Ubuntu per commit; the same job on macOS runs in the nightly (on the fleet Mac), as do the macOS token
@@ -285,7 +315,8 @@ jobs:
   # lib/font; CMakeLists.txt NEXUS_WINDOW), and the window's logic, which starts processes through Prax's lib/process,
   # whose POSIX backend does not link on Linux at nexus's pin (NEXUS_WINDOW_LOGIC). The link (nexus-server) uses the
   # window's logic, so it is off too (NEXUS_LINK=OFF). With clang and lld, warnings as errors as on macOS.
-  build-and-unit-linux:
+  # One build, shared: build-linux builds and uploads the build tree; the unit and functional tests download it.
+  build-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     env:
@@ -305,6 +336,10 @@ jobs:
         uses: ./.github/actions/nexus-build
         with:
           config: linux-release
+      - name: Share the build tree
+        uses: ./.github/actions/build-share
+        with:
+          name: build-linux
       # A configure with no options at all takes the defaults that hold here (no window, no window logic, no link), so
       # a plain `cmake -S . -B build` on Linux works rather than failing late; this proves it.
       - name: Configure with the defaults
@@ -319,11 +354,28 @@ jobs:
               exit 1
             fi
           done
-      - name: Unit tests
-        run: ctest --test-dir build -L unit -j "$TEST_JOBS" --output-on-failure
-      # Real child processes and real files: not unit tests.
-      - name: Functional tests
-        run: ctest --test-dir build -L functional -j "$TEST_JOBS" --output-on-failure
+
+  tests-linux:
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    name: ${{ matrix.check }}-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [unit, functional]
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: The build tree
+        uses: ./.github/actions/build-fetch
+        with:
+          name: build-linux
+      # functional: real child processes and real files, not unit tests.
+      - name: Tests
+        run: ctest --test-dir build -L '${{ matrix.check }}' -j "$TEST_JOBS" --output-on-failure --no-tests=error
 
   # The code generated from schema/Nexus.schema (and the tests' later version) is checked in; this regenerates it with
   # schema's compiler at the pinned commit (cmake/schema.cmake) and fails on any difference, so the checked-in code is
@@ -354,34 +406,11 @@ jobs:
 
 
   # The macOS sanitizers job's programs and walks on Linux, with clang's AddressSanitizer and UndefinedBehaviorSanitizer.
-  # Two parts in parallel, each within the 2 minutes: the unit programs, and the trace walks with their faults; each
-  # builds only the programs it runs, from its own cache.
-  sanitizers-linux:
+  # One build, shared: build-linux-asan builds every program the parts run and uploads the build tree; three parts run
+  # in parallel, each within the 2 minutes: the unit programs, and the trace walks with their faults in two halves.
+  build-linux-asan:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - part: units
-            targets: >-
-              model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
-              store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
-              nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
-          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
-          - part: walks
-            half: 1
-            targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
-          - part: walks
-            half: 2
-            targets: >-
-              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
-              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
-              migration_walk takeover_walk
-    name: sanitizers-linux (${{ matrix.part }}${{ matrix.half && format(' {0} of 2', matrix.half) || '' }})
     env:
       CC: clang
       CXX: clang++
@@ -393,13 +422,47 @@ jobs:
       - name: Tools and caches
         uses: ./.github/actions/hosted-caches
         with:
-          name: linux-asan-${{ matrix.part }}
+          name: linux-asan
           apt: ""
-      - name: Configure and build the programs it runs
+      - name: Configure and build the programs the parts run
         uses: ./.github/actions/nexus-build
         with:
           config: linux-asan
-          targets: ${{ matrix.targets }}
+          targets: >-
+            model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
+            store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
+            nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+            overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+            journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+            migration_walk takeover_walk
+      - name: Share the build tree
+        uses: ./.github/actions/build-share
+        with:
+          name: build-linux-asan
+
+  sanitizers-linux:
+    needs: build-linux-asan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: units
+          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
+          - part: walks
+            half: 1
+          - part: walks
+            half: 2
+    name: sanitizers-linux (${{ matrix.part }}${{ matrix.half && format(' {0} of 2', matrix.half) || '' }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The build tree
+        uses: ./.github/actions/build-fetch
+        with:
+          name: build-linux-asan
       # Every unit program here runs in memory (MemFs where it has files; no sockets, processes or shared paths), so
       # they are independent: they run at once, at most TEST_JOBS at a time, each with its own output under units/.
       - name: Unit tests under the sanitizers
@@ -648,7 +711,7 @@ jobs:
   # 64-bit Windows (x64 only; there is no 32-bit build), with MSVC at /W4 and warnings as errors (CMakeLists.txt sets
   # the flags): the native window's code and its unit tests, nothing else. On Windows only the overlay window is
   # native; nexus-server, its store, the driver protocol and supervisor, the link and every test of them build and run
-  # as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (build-and-unit-linux), so a native
+  # as the Linux build inside WSL2 (the nightly's wsl2-functional) and on Linux (build-linux), so a native
   # Windows build leaves them out (CMakeLists.txt NEXUS_SERVER_PARTS), and the model checks' walks with them, which TLC
   # runs on Linux and macOS. What is built here: the libraries the window links (the model and overlay, the link's
   # states with the accounts, the settings files, the hitch detector, the board's scroller, the terminal tab's launch

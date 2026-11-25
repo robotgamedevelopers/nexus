@@ -217,7 +217,7 @@ jobs:
           TARGET: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/tailscale-status.sh
 
-  # On the fleet's Linux runners with clang and lld, as build-and-unit-linux; also the licence notices
+  # On the fleet's Linux runners with clang and lld, as ci.yml's build-linux; also the licence notices
   # (src/tailscale/NOTICES.md) against the modules the shim links on every platform.
   tailscale-linux:
     if: inputs.linux
