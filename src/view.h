@@ -206,6 +206,10 @@ struct View {
     // The share of the policy's prompt width the prompt box and the transcript's column take, applied at the next
     // frame's start: 1 on a desktop, style::kRegularWidthColumn on an iPad (main_ios.cpp).
     float columnScale = 1;
+    // The AI's replies take the column's whole width rather than the policy's reply_width, applied at the next frame's
+    // start: false on a desktop and an iPad, true on a compact width (an iPhone, main_ios.cpp), where the policy's share
+    // wraps a reply at about half the screen.
+    bool fullWidthReplies = false;
     std::string notice;                         // shown in place of the transcript when there are no tabs
     std::function<void()> hide;                 // Escape: hides the overlay (overlay.h escape); unset when
                                                 // windowed, where Escape does nothing

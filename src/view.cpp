@@ -2785,20 +2785,24 @@ bool beginWindowFrame(View& view, PrKit* kit, PrFontSet* fonts) {
     // The prompt as the policy gives it, at the share of its width this screen takes (View::columnScale).
     PromptStyle askedPrompt = view.windowApp.surface.prompt;
     askedPrompt.width *= view.columnScale;
+    // The transcript as the policy gives it, with the replies at the column's full width where the view asks for it
+    // (View::fullWidthReplies).
+    TranscriptStyle askedTranscript = view.windowApp.transcriptStyle;
+    if (view.fullWidthReplies) askedTranscript.replyWidth = 100;
     const bool cardChanged = look.messageCard != view.windowApp.messageCard || look.tabs != view.windowApp.surface.tabs || look.prompt != askedPrompt;
-    const bool transcriptChanged = look.transcriptStyle != view.windowApp.transcriptStyle;
+    const bool transcriptChanged = look.transcriptStyle != askedTranscript;
     if (!scaleChanged && !opacityChanged && !cardChanged && !transcriptChanged) return false;
     if (scaleChanged || cardChanged) view.tabWidths.clear();
     if (opacityChanged || cardChanged || transcriptChanged) {
-        if (look.transcriptStyle.showNotices != view.windowApp.transcriptStyle.showNotices ||
-            look.transcriptStyle.showTools != view.windowApp.transcriptStyle.showTools ||
-            look.transcriptStyle.codeSizeOffset != view.windowApp.transcriptStyle.codeSizeOffset ||
-            look.transcriptStyle.listItemGapLines != view.windowApp.transcriptStyle.listItemGapLines ||
-            look.transcriptStyle.listGap != view.windowApp.transcriptStyle.listGap ||
-            look.transcriptStyle.replyWidth != view.windowApp.transcriptStyle.replyWidth ||
+        if (look.transcriptStyle.showNotices != askedTranscript.showNotices ||
+            look.transcriptStyle.showTools != askedTranscript.showTools ||
+            look.transcriptStyle.codeSizeOffset != askedTranscript.codeSizeOffset ||
+            look.transcriptStyle.listItemGapLines != askedTranscript.listItemGapLines ||
+            look.transcriptStyle.listGap != askedTranscript.listGap ||
+            look.transcriptStyle.replyWidth != askedTranscript.replyWidth ||
             look.prompt.width != askedPrompt.width)
             view.items.clear();
-        look.transcriptStyle = view.windowApp.transcriptStyle;
+        look.transcriptStyle = askedTranscript;
         look.messageCard = view.windowApp.messageCard;
         look.tabs = view.windowApp.surface.tabs;
         look.prompt = askedPrompt;

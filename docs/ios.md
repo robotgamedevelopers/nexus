@@ -55,6 +55,11 @@ ssh is inside the app (`src/link/inapp_ssh.h`, libssh2 over mbedTLS); everything
 
 - **The server's host key** is trusted on first use and kept in `known_hosts` in the client home; a different key later is
   refused, with what to do.
+- **What it runs there.** `nexus-server new`, unless the client config's `server-command <words>` (or
+  `--server-command <words>` at launch) names another command, as on the desktop: words split at spaces and tabs, with no
+  quoting (`src/link/bootstrap.h` serverCommandWords), such as the mock's `/usr/bin/env HOME=<home> <nexus-server> new
+  --dir <dir>`. A key behind `nexus-ios-gate` runs only `nexus-server new` and `history-page`, so the gate refuses any
+  other command: a server command reaches only a server whose key is not behind the gate.
 
 Until the server has sent a tab, the window shows the link's line: connecting, or why it failed.
 

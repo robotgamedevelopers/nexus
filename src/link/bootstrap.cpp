@@ -3,6 +3,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <sstream>
@@ -127,6 +128,25 @@ bool statesHello(const Bootstrap& b, sync::Hello* out) {
         return false;
     }
     *out = sync::Hello{b.stateFormat, sync::kMinPeer};
+    return true;
+}
+
+bool serverCommandWords(const std::string& text, std::vector<std::string>* words, std::string* why) {
+    words->clear();
+    std::size_t at = 0;
+    while (at < text.size()) {
+        const std::size_t start = text.find_first_not_of(" \t", at);
+        if (start == std::string::npos)
+            break;
+        const std::size_t end = std::min(text.find_first_of(" \t", start), text.size());
+        words->push_back(text.substr(start, end - start));
+        at = end;
+    }
+    if (words->empty()) {
+        *why = "the server command is empty: give the command to run in place of `nexus-server new`, as "
+            "`/usr/bin/env HOME=<home> <nexus-server> new --dir <dir>`";
+        return false;
+    }
     return true;
 }
 

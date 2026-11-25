@@ -33,6 +33,11 @@ std::string connectLine(const std::string& port, const std::string& key, std::ui
 // (sync::readHello), separated by single spaces.
 bool parseConnect(const std::string& line, Connect* out);
 
+// The words of a client's server command (--server-command, the client config's `server-command`): what it runs on the
+// server's machine in place of `nexus-server new`, as the mock's `/usr/bin/env HOME=<home> <nexus-server> new --dir <dir>`
+// (docs/mock.md). Words are separated by spaces or tabs, with no quoting. False, with why, when it has no word.
+bool serverCommandWords(const std::string& text, std::vector<std::string>* words, std::string* why);
+
 // The line ssh runs on the server's machine: `exec "$SHELL" -l -c '<command>'`, each word of the command quoted.
 std::string remoteLine(const std::vector<std::string>& command);
 

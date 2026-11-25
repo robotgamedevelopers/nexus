@@ -12,7 +12,12 @@
 // Launched with `--state FILE`, the window shows a server's state file as the desktop's `--screenshot --state` draws
 // it (state_window.h), live; `--lost` with it shows it as once the server is lost.
 //
-// Usage (as the simulator or devicectl passes a launch's arguments): nexus [--server USER@HOST | --state FILE [--lost]]
+// --server-command WORDS, or the client config's `server-command`, is what the link runs there in place of
+// `nexus-server new` (link/bootstrap.h serverCommandWords), as on the desktop: the mock's command (docs/mock.md). A
+// device key behind nexus-ios-gate runs only nexus-server new and history-page, so the gate refuses any other.
+//
+// Usage (as the simulator or devicectl passes a launch's arguments):
+//   nexus [--server USER@HOST] [--server-command WORDS] | nexus --state FILE [--lost]
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +27,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "pr/app_select.h"
 #include "pr/app_device.h"
@@ -44,6 +50,7 @@
 #include "client_home.h"
 #include "frame_host.h"
 #include "hitch.h"
+#include "link/bootstrap.h"
 #include "link/client_port.h"
 #include "link/inapp_ssh.h"
 #include "model.h"
@@ -207,10 +214,12 @@ void beginFrame(void* context, PrStudioWindow* window, const PrAppFrame* f) {
     App& a = appOf(context);
     a.hitch.begin();
     a.keyboardCover = keyboardCover(*f);
-    // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn).
+    // An iPad's regular width takes a narrower prompt and column than the policy's (style.h kRegularWidthColumn); an
+    // iPhone's compact width gives the replies the column's whole width (View::fullWidthReplies).
     PrSurface surface{};
-    a.view.columnScale = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok &&
-        regularWidth(surface) ? style::kRegularWidthColumn : 1;
+    const bool known = prAppWindowSurface(prStudioWindowAppWindow(window), &surface) == PrStatus_Ok;
+    a.view.columnScale = known && regularWidth(surface) ? style::kRegularWidthColumn : 1;
+    a.view.fullWidthReplies = known && !regularWidth(surface);
     a.host.beginFrame(prStudioWindowKit(window), a.fonts, f->time, f->display);
 }
 
@@ -337,22 +346,36 @@ void keepHome(App& a, const std::string& home) {
 int main(int argc, char** argv) {
     const char* state = nullptr;
     const char* server = nullptr;
+    const char* serverCommand = nullptr;
     bool lost = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
             state = argv[++i];
         } else if (std::strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
             server = argv[++i];
+        } else if (std::strcmp(argv[i], "--server-command") == 0 && i + 1 < argc) {
+            serverCommand = argv[++i];
         } else if (std::strcmp(argv[i], "--lost") == 0) {
             lost = true;
         } else {
-            std::fprintf(stderr, "usage: nexus [--server USER@HOST | --state FILE [--lost]]\n");
+            std::fprintf(stderr, "usage: nexus [--server USER@HOST] [--server-command WORDS] | --state FILE [--lost]\n");
             return 2;
         }
     }
-    if ((lost && state == nullptr) || (state != nullptr && server != nullptr)) {
-        std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server\n");
+    if ((lost && state == nullptr) || (state != nullptr && (server != nullptr || serverCommand != nullptr))) {
+        std::fprintf(stderr, "nexus: --lost needs --state, and --state shows a file without --server or "
+            "--server-command\n");
         return 2;
+    }
+    // --server-command, else the client config's server-command: the words the link runs in place of nexus-server new.
+    std::vector<std::string> serverWords;
+    {
+        const std::string command = serverCommand != nullptr ? serverCommand : clientConfig().serverCommand;
+        std::string why;
+        if (!command.empty() && !link::serverCommandWords(command, &serverWords, &why)) {
+            std::fprintf(stderr, "nexus: --server-command: %s\n", why.c_str());
+            return 2;
+        }
     }
     static Model model({}, state == nullptr);   // the sprint tab (the Dashboard) when linked, as on the desktop
     App a;
@@ -378,13 +401,14 @@ int main(int argc, char** argv) {
         std::string why;
         if (!clientHome(&home, &why) || !makeClientHome(home, &why))
             std::fprintf(stderr, "nexus: %s\n", why.c_str());
-        auto startLink = [&a, home](const std::string& serverHost) {
+        auto startLink = [&a, home, serverWords](const std::string& serverHost) {
             link::InAppSshOptions ssh;
             ssh.dir = home;
             if (const char* h = std::getenv("HOME"))
                 ssh.publicCopy = std::string(h) + "/Documents/nexus-ssh-key.pub";
             link::ClientLink::Options options;
             options.bootstrap.host = serverHost;
+            if (!serverWords.empty()) options.bootstrap.command = serverWords;
             options.run = link::inAppSsh(ssh);
             options.wake = [&a] {
                 if (PrApp* app = a.wakeApp.load())

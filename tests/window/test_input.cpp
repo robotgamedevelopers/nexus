@@ -2876,6 +2876,40 @@ void regularWidthNarrowsThePromptAndTheColumn() {
             narrow.right, column.left, column.right, narrowColumn.left, narrowColumn.right);
 }
 
+// An iPhone's compact width (View::fullWidthReplies): an AI's reply takes the transcript column's whole width, where
+// the policy's reply_width (two thirds by default) wraps it at about half the screen.
+void compactWidthRepliesTakeTheWholeColumn() {
+    Harness h;
+    h.extent = h.view.extent = {402, 874};
+    const std::string reply = "The nightly went red in the link walk: seed 17 loses a diff when the window reconnects "
+        "while the server is still sending the state it had before the link was made again.";
+    h.model.append(0, {EntryKind::Friend, reply});
+    h.frame();
+    h.frame();
+    const auto near = [](float a, float b) { return std::fabs(a - b) <= 1.f; };
+    const auto widths = [&](float* text, float* column) {
+        const auto entries = h.entries();
+        const PrLayoutNode body = entries.empty() ? kPrLayoutNodeNone : h.findText(entries.back(), reply);
+        CHECK(body != kPrLayoutNodeNone);
+        if (body == kPrLayoutNodeNone) return;
+        const PrRect r = h.bounds(body);
+        const PrRect c = h.bounds(h.view.items[h.active().id].column);
+        *text = r.right - r.left;
+        *column = c.right - c.left;
+    };
+    float text = 0, column = 0;
+    widths(&text, &column);
+    CHECK(column > 100 && text < column * 0.7f);
+    h.view.fullWidthReplies = true;
+    h.frame();
+    h.frame();
+    float fullText = 0, fullColumn = 0;
+    widths(&fullText, &fullColumn);
+    CHECK(near(fullColumn, column) && fullText > fullColumn * 0.9f);
+    if (!(fullText > fullColumn * 0.9f))
+        std::fprintf(stderr, "reply %g of column %g -> %g of %g\n", text, column, fullText, fullColumn);
+}
+
 } // namespace
 
 // The test bundle in tests/policy/window.cmake returns one candidate appearance per active tab.
@@ -3358,6 +3392,7 @@ int main(int argc, char** argv) {
     textKeysZoomTheBoard();
     dashboardKeepsRosterDiagnosticsOffscreen();
     regularWidthNarrowsThePromptAndTheColumn();
+    compactWidthRepliesTakeTheWholeColumn();
     typingFillsTheActiveDraft();
     enterSendsExactlyTheText();
     logoutRequiresAnExplicitEnterAndNeverBecomesChat();

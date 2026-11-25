@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
     // A frame as wide as an iPad's (a regular horizontal size class starts well below 1032 points) takes the narrower
     // prompt and column the app gives a regular width (main_ios.cpp, style.h kRegularWidthColumn).
     if (width >= kRegularFromPoints) view.columnScale = nexus::style::kRegularWidthColumn;
+    // Narrower, an iPhone's compact width: the replies take the column's whole width (View::fullWidthReplies).
+    else view.fullWidthReplies = true;
     FirstLaunch asked;
     if (askServer != nullptr) {
         asked.field = askServer;
