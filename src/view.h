@@ -163,6 +163,11 @@ struct View {
     std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> inlineFont{nullptr, prTextFontRelease};
     std::unique_ptr<PrTextFont, decltype(&prTextFontRelease)> promptFont{nullptr, prTextFontRelease};
     ChatSelection selection;
+    bool promptPointerDown = false;
+    std::optional<uint32_t> marginAnchor;
+    bool caretInserting = false;
+    float caretExpansion = 1;
+    double caretSampleTime = 0;
     std::function<bool(const std::string&)> copy;
     std::function<void(const std::string&)> openLink;
     Model* model = nullptr;
@@ -311,6 +316,7 @@ bool windowWantsFrame(const View& view);
 // first in a strip of its own, which nothing is dragged into or out of, and shows its page (or the line that says why
 // there is none) with no prompt. A terminal tab shows its terminal in place of the transcript and the prompt; terminals
 // that do not show are serviced, and one whose shell ended closes.
+bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event);
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent);
 
 } // namespace nexus

@@ -915,6 +915,52 @@ void textsUnder(const Harness& h, PrLayoutNode node, std::vector<std::string>& o
 // The empty prompt shows no text (no placeholder), and an empty tab's transcript shows nothing (no hint). The prompt's
 // one text node is the edit's own: Prax shows an empty value as a single space, so the caret has a line
 // (ui_text_edit.cpp, "a space after it if it is empty").
+void insertionCaretAndPromptMargins() {
+    Harness h;
+    h.type("Wide iii");
+    h.frame();
+    const auto width = [&] {
+        const auto rect = h.bounds(prLayoutNodeNextSibling(h.tree, h.view.prompt));
+        return rect.right - rect.left;
+    };
+    const auto block = width();
+    h.key(PrAppKey_Left, PrAppKeyCode_ArrowLeft);
+    h.frame();
+    const auto moving = width();
+    for (int i = 0; i < 8; ++i) h.frame();
+    CHECK(width() < moving && moving < block);
+    h.key(PrAppKey_Right, PrAppKeyCode_ArrowRight);
+    for (int i = 0; i < 8; ++i) h.frame();
+    CHECK(std::abs(width() - block) < 0.1f);
+    const auto panel = h.bounds(h.view.promptBox);
+    const auto from = PrVec2{panel.right - 4, panel.top + 1};
+    const auto to = PrVec2{panel.left + 4, panel.bottom - 1};
+    const auto pointer = [&](PrAppEventKind kind, PrVec2 pos) {
+        const auto event = pointerEvent(kind, pos);
+        if (!routePromptPointer(h.view, h.ui, event)) h.push(event);
+        h.frame();
+    };
+    pointer(PrAppEventKind_PointerDown, from);
+    pointer(PrAppEventKind_PointerMove, to);
+    pointer(PrAppEventKind_PointerUp, to);
+    auto selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    if (selection.anchor || selection.caret != 8) std::fprintf(stderr, "margin drag selected %u..%u\n", selection.anchor, selection.caret);
+    CHECK(selection.anchor == 0 && selection.caret == 8);
+    pointer(PrAppEventKind_PointerDown, {panel.left, panel.top - 8});
+    selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == selection.caret);
+    pointer(PrAppEventKind_PointerUp, {panel.left, panel.top - 8});
+    const auto leaf = h.findText(h.view.prompt, "Wide iii");
+    PrLayoutRect caret{};
+    CHECK(prLayoutNodeTextCaret(h.tree, leaf, 4, PrLayoutTextAffinity_Downstream, PrLayoutCoordinates_Viewport, &caret));
+    const auto r = prLayoutRectToPx(caret);
+    pointer(PrAppEventKind_PointerDown, {r.left, (r.top + r.bottom) / 2});
+    pointer(PrAppEventKind_PointerMove, to);
+    pointer(PrAppEventKind_PointerUp, to);
+    selection = prUiTextEditSelection(h.ui, h.view.prompt);
+    CHECK(selection.anchor == 4 && selection.caret == 8);
+}
+
 void emptyPromptAndTranscriptShowNoText() {
     Harness h;
     h.frame();
@@ -3283,6 +3329,7 @@ int main(int argc, char** argv) {
     escapeCancelsADrag();
     draftAndScrollStayWithTheirFriend();
     dragWithOneTabDoesNothing();
+    insertionCaretAndPromptMargins();
     emptyPromptAndTranscriptShowNoText();
     promptIsARoundedBoxHoldingThePlus();
     promptSegmentTracksInsertionAndUsesHeadroom();

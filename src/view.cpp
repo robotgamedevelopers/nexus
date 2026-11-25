@@ -2012,12 +2012,28 @@ struct Builder {
 
         auto box = prLayoutBoxStyleDefault();
         box.position = PrLayoutPosition_Absolute;
-        box.width = px(width);
         box.height = px(height);
         const auto& draft = model.tab(model.active()).draft;
         const bool afterText = !draft.empty() && selection.caret == draft.size() && draft.back() != '\n';
-        const float gap = afterText ? look.prompt.caretGap * k() : 0;
-        box.inset[PrRectSide_Left] = px(std::min(at.left + gap, field.right - width) - origin.left - 1);
+        const bool inserting = selection.caret < draft.size();
+        if (inserting != view.caretInserting) {
+            view.caretInserting = inserting;
+            view.caretSampleTime = view.time;
+        }
+        const float target = inserting ? 0.f : 1.f;
+        const float step = float(std::clamp((view.time - view.caretSampleTime) / 0.09, 0.0, 1.0));
+        view.caretSampleTime = view.time;
+        view.caretExpansion = prUiUserPreferences(ui).reducedMotion ? target :
+            std::clamp(target, view.caretExpansion - step, view.caretExpansion + step);
+        view.energyAnimating |= view.caretExpansion != target;
+        const float t = view.caretExpansion;
+        const float eased = t * t * (3 - 2 * t);
+        const float thin = std::min(width, std::max(1.f, 1.25f * k()));
+        const float drawnWidth = thin + (width - thin) * eased;
+        box.width = px(drawnWidth);
+        const float offset = afterText ? look.prompt.caretGap * k() * eased : inserting ? -drawnWidth / 2 : 0;
+        box.inset[PrRectSide_Left] = px(std::clamp(at.left + offset, field.left,
+            std::max(field.left, field.right - drawnWidth)) - origin.left - 1);
         const float alignedTop = std::clamp(top + look.prompt.caretOffsetY * k(), field.top, field.bottom - height);
         box.inset[PrRectSide_Top] = px(alignedTop - origin.top - 1);
         const bool animate = !prUiUserPreferences(ui).reducedMotion && (!view.savingPower || view.time - view.lastInput < 2);
@@ -2745,6 +2761,70 @@ bool windowWantsFrame(const View& view) {
     return view.look->prompt != view.windowApp.surface.prompt || view.look->tabs != view.windowApp.surface.tabs || view.look->transcriptStyle != view.windowApp.transcriptStyle ||
            view.look->messageCard != view.windowApp.messageCard || view.look->textSteps != view.askedTextSteps ||
            (view.look->overlay && view.look->overlayOpacity != view.windowApp.overlayOpacity) || view.breathing || view.energyAnimating || view.cutComing;
+}
+
+// Forward margin drags through the native editor so its UTF-8 selection, clipboard and editing agree.
+bool routePromptPointer(View& view, PrUi* ui, const PrAppEvent& event) {
+    const bool down = event.kind == PrAppEventKind_PointerDown && event.pointer.button == 0;
+    if (down || event.kind == PrAppEventKind_PointerCancel) {
+        view.promptPointerDown = false;
+        view.marginAnchor.reset();
+    }
+    if (!down && !(view.promptPointerDown && (event.kind == PrAppEventKind_PointerMove ||
+            event.kind == PrAppEventKind_PointerUp))) return false;
+    if (event.kind == PrAppEventKind_PointerUp) view.promptPointerDown = false;
+    if (!ui) return false;
+    auto* tree = prUiTree(ui);
+    const auto edit = view.prompt;
+    if (!prLayoutNodeIsValid(tree, edit) || !prLayoutNodeIsValid(tree, view.promptBox)) return false;
+    const auto coords = PrLayoutCoordinates_Viewport;
+    const auto panel = prLayoutRectToPx(prLayoutNodeBounds(tree, view.promptBox, coords));
+    const auto p = event.pointer.position;
+    if (down) {
+        const auto selected = prUiTextEditSelection(ui, edit);
+        if (selected.anchor != selected.caret && !(event.modifiers & PrAppModifierFlag_Shift))
+            prUiTextEditSetSelection(ui, edit, {selected.caret, selected.caret});
+        if (p.x < panel.left || p.x >= panel.right || p.y < panel.top || p.y >= panel.bottom) return false;
+        view.promptPointerDown = true;
+    }
+    const auto field = prLayoutRectToPx(prLayoutNodeBounds(tree, edit, coords));
+    if (field.right - field.left < 2 || field.bottom - field.top < 2) return false;
+    PrLayoutNode leaf = kPrLayoutNodeNone;
+    textNodes(tree, edit, [&](PrLayoutNode node) { if (!leaf) leaf = node; });
+    if (!leaf || prUiTextEditIsComposing(ui, edit)) return false;
+    PrLayoutRect first{}, last{};
+    if (!prLayoutNodeTextCaret(tree, leaf, 0, PrLayoutTextAffinity_Downstream, coords, &first) ||
+        !prLayoutNodeTextCaret(tree, leaf, uint32_t(prLayoutNodeText(tree, leaf).size),
+                               PrLayoutTextAffinity_Upstream, coords, &last)) return false;
+    auto q = p;
+    const auto start = prLayoutRectToPx(first), end = prLayoutRectToPx(last);
+    if (p.y < start.top) q = {start.left, (start.top + start.bottom) / 2};
+    else if (p.y >= end.bottom) q = {end.left, (end.top + end.bottom) / 2};
+    q.x = std::clamp(q.x, field.left + 0.5f, field.right - 0.5f);
+    q.y = std::clamp(q.y, field.top + 0.5f, field.bottom - 0.5f);
+    if ((down && (q.x != p.x || q.y != p.y)) || view.marginAnchor) {
+        uint32_t offset = 0;
+        if (p.y >= end.bottom) offset = uint32_t(prLayoutNodeText(tree, leaf).size);
+        else if (p.y >= start.top) {
+            PrLayoutTextPosition hit{};
+            if (prLayoutTextPositionFromPoint(tree, edit, {prLayoutUnitFromPx(q.x), prLayoutUnitFromPx(q.y)}, &hit))
+                offset = hit.offset;
+        }
+        if (down) {
+            view.marginAnchor = (event.modifiers & PrAppModifierFlag_Shift) ?
+                prUiTextEditSelection(ui, edit).anchor : offset;
+            prUiSetFocus(ui, edit);
+        }
+        prUiTextEditSetSelection(ui, edit, {*view.marginAnchor, offset});
+        if (!view.promptPointerDown) view.marginAnchor.reset();
+        prUiRequestFrame(ui);
+        return true;
+    }
+    if (q.x == p.x && q.y == p.y) return false;
+    auto redirected = event;
+    redirected.pointer.position = q;
+    prUiPushEvent(ui, kPrUiViewportMain, &redirected);
+    return true;
 }
 
 void buildWindow(View& view, PrKit* kit, PrLayoutNode parent) {
