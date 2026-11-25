@@ -193,7 +193,10 @@ def fresh_stage(stage):
 
 
 def verified_login(claude, stage, email):
-    login = run_cli(claude, ["auth", "login", "--claudeai", "--email", email], stage, enroll=True, timeout=600)
+    # With no email configured, the login is of whichever identity the person chooses in the browser, and that identity
+    # (what Claude reports for the login just completed) is stored with it for the server to read.
+    hint = ["--email", email] if email else []
+    login = run_cli(claude, ["auth", "login", "--claudeai", *hint], stage, enroll=True, timeout=600)
     if login.returncode:
         raise Refusal(13)
     status = run_cli(claude, ["auth", "status", "--json"], stage, capture=True)
@@ -203,7 +206,7 @@ def verified_login(claude, stage, email):
     if not isinstance(who, dict) or who.get("loggedIn") is not True or who.get("authMethod") != "claude.ai" or who.get("apiProvider") != "firstParty":
         raise Refusal(12)
     returned = who.get("email")
-    if address(returned) != address(email):
+    if address(returned) != (address(email) if email else address(returned)):
         raise Refusal(11)
     grant = validate(read_json(stage / "config" / ".credentials.json").get("claudeAiOauth"))
     if grant["expiresAt"] <= time.time() * 1000:
@@ -263,13 +266,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("operation", choices=["enroll", "access"])
     parser.add_argument("--account-dir", required=True, type=Path)
-    parser.add_argument("--email", required=True)
+    parser.add_argument("--email", default=None)
     parser.add_argument("--claude", required=True, type=Path)
     args = parser.parse_args()
     account = args.account_dir
     if not args.claude.is_absolute():
         raise Refusal(13)
-    address(args.email)
+    if args.email is not None or args.operation == "access":
+        address(args.email)
     os.umask(0o077)
     with locked_account(account) as dfd:
         if args.operation == "enroll":

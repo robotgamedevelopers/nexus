@@ -26,6 +26,10 @@
 //                        `account=<name>` and `limit=<value>` (each only when given), and each named environment variable as `VAR=<value>` or
 //                        `VAR unset`
 //   record-env <path>    append to <path> its whole environment, one `NAME=value` a line, as it was started with it
+//   record-login <path>  append to <path> `login <account>=<token>`: the login the Claude driver would use for
+//                        --account, the one line of HOME's .nexus/server/accounts/<account>/oauth-token, or for a
+//                        verified account (--account-email, --verified-helper, --auth-claude) what the helper's
+//                        `access` prints (`login <account> unset` when there is none)
 //   record-send <path>   in a send block: append to <path> `send <turn>:`, a newline, the send's prompt and a newline
 //   count-starts <path>  count this start in the file <path> (which holds the count of earlier starts, or is absent)
 //   on-start <n> <step>  run <step> only on the <n>th start, as counted by an earlier count-starts
@@ -48,6 +52,8 @@
 // messages of unknown kinds; and it exits 0 when its standard input ends. A script that cannot be read or that writes a
 // message which does not decode is a bug in the test: the fake says why on standard error and exits 2.
 
+#include <fcntl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -109,6 +115,11 @@ struct Arguments {
     std::optional<std::string> account;
     std::optional<std::string> limit;
     std::string script;
+    // A verified Claude account's (the server passes all three, as to the Claude driver): its login is read through
+    // the helper's `access`, as drivers/claude/src/verified.ts reads it.
+    std::optional<std::string> accountEmail;
+    std::optional<std::string> verifiedHelper;
+    std::optional<std::string> authClaude;
 };
 
 struct Step {
@@ -125,7 +136,7 @@ struct Script {
 };
 
 const std::set<std::string> kSteps = {"emit", "raw", "tail", "flood", "await-stop", "await-secret", "hang", "exit",
-    "signal", "stderr", "record", "record-env", "record-send", "count-starts"};
+    "signal", "stderr", "record", "record-env", "record-send", "record-login", "count-starts"};
 const std::set<std::string> kOptions = {"ignore-eof", "ignore-sigterm", "stop-any-turn", "accept-bad-input",
     "done-without-cause", "echo-input"};
 
@@ -355,6 +366,8 @@ private:
             record(step.arg);
         } else if (step.op == "record-env") {
             recordEnv(step.arg);
+        } else if (step.op == "record-login") {
+            recordLogin(step.arg);
         } else if (step.op == "record-send") {
             std::ofstream out(step.arg, std::ios::app);
             out << "send " << turn << ":\n" << lastPrompt_ << "\n";
@@ -423,6 +436,58 @@ private:
         std::exit(0);
     }
 
+    // Where the Claude driver reads its login (drivers/claude/src/account.ts readAccount): HOME's
+    // .nexus/server/accounts/<--account>/oauth-token. Appends `login <account>=<its one line>`, or `login <account> unset`.
+    // The login the account's driver would use: a verified account's from its helper's `access` (its stdout, one token
+    // line), any other's from its oauth-token file.
+    std::string loginOf(const std::string& home, const std::string& account) {
+        const std::string dir = home + "/.nexus/server/accounts/" + account;
+        if (!arguments_.verifiedHelper) {
+            std::string token;
+            std::ifstream(dir + "/oauth-token") >> token;
+            return token;
+        }
+        int out[2];
+        if (::pipe(out) != 0) return std::string();
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            ::dup2(out[1], 1);
+            ::close(out[0]);
+            ::close(out[1]);
+            const int null = ::open("/dev/null", O_RDWR);
+            ::dup2(null, 0);
+            ::dup2(null, 2);
+            const std::string helper = *arguments_.verifiedHelper;
+            const std::string email = arguments_.accountEmail.value_or("");
+            const std::string claude = arguments_.authClaude.value_or("");
+            ::execl(helper.c_str(), helper.c_str(), "access", "--account-dir", dir.c_str(), "--email", email.c_str(),
+                    "--claude", claude.c_str(), static_cast<char*>(nullptr));
+            ::_exit(127);
+        }
+        ::close(out[1]);
+        std::string text;
+        char buf[512];
+        ssize_t n = 0;
+        while (pid > 0 && (n = ::read(out[0], buf, sizeof buf)) > 0) text.append(buf, static_cast<std::size_t>(n));
+        ::close(out[0]);
+        int status = 0;
+        if (pid <= 0 || ::waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            return std::string();
+        }
+        return text.substr(0, text.find('\n'));
+    }
+
+    void recordLogin(const std::string& path) {
+        const char* home = std::getenv("HOME");
+        const std::string account = arguments_.account.value_or("");
+        const std::string token = home != nullptr && !account.empty() ? loginOf(home, account) : std::string();
+        std::ofstream out(path, std::ios::app);
+        out << "login " << account << (!token.empty() ? "=" + token : std::string(" unset")) << "\n";
+        if (!out) {
+            scriptBug("cannot record to " + path);
+        }
+    }
+
     void recordEnv(const std::string& path) {
         std::ofstream out(path, std::ios::app);
         for (char** e = environ; *e != nullptr; ++e) {
@@ -477,10 +542,16 @@ int main(int argc, char** argv) {
     Arguments arguments;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if ((a == "--cwd" || a == "--resume" || a == "--script" || a == "--account" || a == "--limit") &&
-                i + 1 < argc) {
+        if ((a == "--cwd" || a == "--resume" || a == "--script" || a == "--account" || a == "--limit" ||
+                a == "--account-email" || a == "--verified-helper" || a == "--auth-claude") && i + 1 < argc) {
             const char* value = argv[++i];
-            if (a == "--cwd") {
+            if (a == "--account-email") {
+                arguments.accountEmail = value;
+            } else if (a == "--verified-helper") {
+                arguments.verifiedHelper = value;
+            } else if (a == "--auth-claude") {
+                arguments.authClaude = value;
+            } else if (a == "--cwd") {
                 arguments.cwd = value;
             } else if (a == "--resume") {
                 arguments.resume = value;
@@ -493,7 +564,8 @@ int main(int argc, char** argv) {
             }
         } else {
             scriptBug("unknown or incomplete argument " + std::string(a) + "; the arguments are --cwd <dir>, "
-                "--resume <session id>, --account <name>, --limit cwd and --script <file>");
+                "--resume <session id>, --account <name>, --limit cwd, --script <file>, and --account-email, "
+                "--verified-helper and --auth-claude together");
         }
     }
     if (arguments.cwd.empty() || arguments.script.empty())

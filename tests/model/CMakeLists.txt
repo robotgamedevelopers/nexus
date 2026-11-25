@@ -634,6 +634,13 @@ tlc_test(tlc_signin_witness_expired_keeps WSignInExpiredKeeps WSignInExpiredKeep
 tlc_test(tlc_window_account_picker_spec AccountPicker AccountPicker.cfg pass)
 tlc_test(tlc_window_account_picker_preview_rejected AccountPicker witnesses/WPickerPreviewSends.cfg invariant PROPERTY OnlyConfirmationSends)
 tlc_test(tlc_window_account_picker_stale_rejected AccountPicker witnesses/WPickerStaleSession.cfg invariant PROPERTY LiveBinding)
+# A conversation's login switch (models/LoginSwitch.tla): it moves only once the new sign-in succeeds, and no driver
+# runs on a deleted login; its reversed witnesses, the move-first picker and a sign-out that leaves the driver.
+tlc_test(tlc_login_switch_spec LoginSwitch LoginSwitch.cfg pass)
+tlc_test(tlc_login_switch_before_sign_in_rejected LoginSwitch witnesses/WSwitchBeforeSignIn.cfg invariant
+         PROPERTY SwitchLandsSignedIn)
+tlc_test(tlc_login_switch_logout_keeps_driver_rejected LoginSwitch witnesses/WLogoutKeepsDriver.cfg invariant
+         PROPERTY DriverOnSignedIn)
 
 # The supervised service name is shared by an old server's draining group and its replacement.
 tlc_test(tlc_managed_service_spec ManagedService ManagedService.cfg pass)

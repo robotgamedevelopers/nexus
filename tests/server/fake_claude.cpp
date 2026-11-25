@@ -155,8 +155,10 @@ void openInBrowser(const std::string& url) {
 
 int main(int argc, char** argv) {
     const char* config = std::getenv("CLAUDE_CONFIG_DIR");
-    const bool authLogin = argc == 6 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "login") == 0 &&
-        std::strcmp(argv[3], "--claudeai") == 0 && std::strcmp(argv[4], "--email") == 0 && config;
+    // `auth login --claudeai [--email <hint>]`: the hint is optional, as for an account with no email set.
+    const bool authLogin = (argc == 4 || (argc == 6 && std::strcmp(argv[4], "--email") == 0)) &&
+        std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "login") == 0 &&
+        std::strcmp(argv[3], "--claudeai") == 0 && config;
     if (argc == 4 && std::strcmp(argv[1], "auth") == 0 && std::strcmp(argv[2], "status") == 0 &&
             std::strcmp(argv[3], "--json") == 0 && config) {
         std::ifstream identity(std::string(config) + "/test-browser-email");
@@ -259,12 +261,19 @@ int main(int argc, char** argv) {
     }
     if (authLogin) {
         // Simulate the identity chosen in the browser, independently of the --email hint used to open it.
-        const char* email = first.find(std::string(kCode) + "Other") != std::string::npos
+        // A code of kCode + "As" + <name> (up to the next & or space) signs in as <name>@example.test.
+        std::string email = first.find(std::string(kCode) + "Other") != std::string::npos
                           ? "other@example.test" : "work@example.test";
+        if (const std::size_t as = first.find(std::string(kCode) + "As"); as != std::string::npos) {
+            const std::size_t from = as + std::strlen(kCode) + 2;
+            email = first.substr(from, first.find_first_of("& ", from) - from) + "@example.test";
+        }
         std::ofstream identity(std::string(config) + "/test-browser-email");
         identity << email;
         std::ofstream grant(std::string(config) + "/.credentials.json");
-        grant << R"({"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh",)"
+        // The grant is the identity's own: its access token names the address's local part.
+        grant << R"({"claudeAiOauth":{"accessToken":"fixture-access-)" << email.substr(0, email.find('@'))
+              << R"(","refreshToken":"fixture-refresh",)"
                  R"("expiresAt":4102444800000,"scopes":["user:profile","user:inference"]}})";
         return identity.good() && grant.good() ? 0 : 3;
     }

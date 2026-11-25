@@ -828,7 +828,8 @@ struct Responder : sync::Responder {
     std::vector<sync::SessionChange> queue(sync::SessionId, const std::string&) override { return {}; }
     std::vector<sync::SessionChange> stop(sync::SessionId) override { return {}; }
     void sent(sync::SessionId, bool) override {}
-    void configured(sync::SessionId, const sync::SessionInfo&) override {}
+    std::vector<std::string> configuredAccounts;     // each session settings change: its account, in order
+    void configured(sync::SessionId, const sync::SessionInfo& info) override { configuredAccounts.push_back(info.account); }
     void signedIn(const std::string& account) override { logins.push_back(account); }
 };
 
@@ -940,6 +941,50 @@ void signOut() {
     CHECK(s.hub->apply(select));
     a.account = "a3";
     CHECK(!logout() && holds(why, "provider") && removed.size() == 2);
+}
+
+// A login switch (models/LoginSwitch.tla): a sign-in claim naming session 1 and another of f's accounts. Session 1 is
+// on a1 (no login; its flow 1 offered at the start), a2 signed in by its file.
+void hubSwitch() {
+    store::MemFs fs;
+    Keeper k;
+    Server s(fs, k);
+    std::string why;
+    auto claim = [&](const std::string& account, const std::string& token) {
+        sync::Action a;
+        a.num = ++s.num;
+        a.kind = sync::ActionKind::SignInClaim;
+        a.session = 1;
+        a.account = account;
+        a.text = token;
+        return s.hub->apply(a, &why, "c1");
+    };
+    const auto on = [&] { return s.store.find(1)->info.account; };
+    s.responder.configuredAccounts.clear();     // the start's own settling
+    CHECK(on() == "a1" && s.hub->signedIn().count("a2") == 1);
+    // To a2, signed in already: moved at once, its driver told (configured), no sign-in started.
+    CHECK(claim("a2", "w1") && on() == "a2" && s.store.applied("c1") == s.num);
+    CHECK(s.runner.started.empty() && s.responder.configuredAccounts == std::vector<std::string>{"a2"});
+    // To a1, with no login: its sign-in starts and the session stays on a2 meanwhile.
+    CHECK(claim("a1", "w1") && on() == "a2");
+    CHECK((s.runner.started == std::vector<std::pair<std::uint64_t, std::string>>{{1, "a1"}}));
+    // The sign-in ends with no login (declined on the page): nothing moves, and the session is told so.
+    s.hub->signInExited("a1", 1, "it exited 1");
+    CHECK(on() == "a2" && s.hub->signedIn().count("a1") == 0 && holds(s.transcript(1), "stays on a2"));
+    CHECK(s.responder.configuredAccounts == std::vector<std::string>{"a2"});
+    // A later sign-in of a1 by another route does not move it: the switch it asked for ended with that flow.
+    s.hub->reportSignedIn("a1", true);
+    CHECK(on() == "a2");
+    s.hub->reportSignedIn("a1", false);
+    // Asked again, and this time signed in: the session moves to a1 once, as the login lands.
+    CHECK(claim("a1", "w2") && on() == "a2" && s.runner.started.size() == 2);
+    s.hub->reportSignedIn("a1", true);
+    CHECK(on() == "a1" && (s.responder.configuredAccounts == std::vector<std::string>{"a2", "a1"}));
+    // Not one of f's accounts, nor a claim with no token: refused, nothing moves.
+    CHECK(!claim("nobody", "w3") && on() == "a1");
+    CHECK(!claim("a2", "") && on() == "a1");
+    // a3's provider has no in-app sign-in: no switch through it.
+    CHECK(!claim("a3", "w3") && on() == "a1");
 }
 
 void hub() {
@@ -1418,7 +1463,7 @@ struct Group {
 
 const Group kGroups[] = {
     {"urls", urls}, {"desk", desk}, {"opener", opener}, {"gate", gate}, {"scanner", scanner},
-    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); signOut(); }}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
+    {"codecs", codecs}, {"hub", [] { hub(); hub_enrolled(); signOut(); }}, {"hub_switch", hubSwitch}, {"hub_late", hub_late}, {"hub_older", hub_older}, {"leak", leak}, {"leak_scan", leak_scan},
 };
 
 } // namespace

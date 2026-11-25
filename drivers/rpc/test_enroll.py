@@ -23,12 +23,23 @@ from nexus_rpc.account_runtime import (
     process_env,
     remove_receipt_if_current,
 )
-from nexus_rpc.enroll import Login, enrollment_lock, link_from, recover, run
+from nexus_rpc.enroll import Login, Portal, enrollment_lock, link_from, recover, run
 
 GOOGLE = "https://accounts.google.com/o/oauth2/auth?test=one&scope=two"
 
 
 class BrowserFlow(unittest.TestCase):
+    def test_portal_binds_without_a_reverse_lookup(self):
+        # HTTPServer names itself by socket.getfqdn, a reverse DNS lookup that waited out the resolver (35 s on the
+        # macbook) before the page URL reached the runner, past link_e2e_private_signin's wait. The portal never
+        # asks: a lookup here fails the test.
+        def lookup(*args):
+            raise AssertionError("the portal looked up its own name")
+
+        with patch("socket.getfqdn", lookup), Portal(object()) as portal:
+            self.assertEqual(portal.server_address[0], "127.0.0.1")
+            self.assertTrue(portal.authority.startswith("127.0.0.1:"))
+
     def test_private_authorization_code_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory).resolve()
