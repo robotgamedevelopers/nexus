@@ -341,7 +341,7 @@ void roundtripActions() {
     }
     CHECK(d->start == 9);
     const int kinds = static_cast<int>(ActionKind::Max);
-    CHECK(kinds == 21);     // through SignOut (20) and ResolveLimit (21)
+    CHECK(kinds == 22);     // through SignOut (20), ResolveLimit (21) and SignInCode (22)
     CHECK(d->actions.size() == kinds);
     for (int32_t i = 0; i < d->actions.size(); ++i) {
         const int k = i + 1;

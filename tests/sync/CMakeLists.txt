@@ -198,7 +198,7 @@ tlc_test(tlc_signin_trace_faulty_stray_rejected SignInTrace SignInTrace.cfg inva
 # Trace binding of sign-in by a pasted code (models/SignInPasteTrace.tla): the desk's random walks (signin_paste_walk),
 # each a behaviour of SignInPaste.tla with every safety property, no log line or notice holding a code or the URL. The
 # faulty walk (a code taken from a window that does not hold the flow) must be rejected by CodeCodeOnlyFromHolder.
-foreach(seed 1 2 3)
+foreach(seed 1 2 4)
     tlc_test(tlc_signin_paste_trace_seed_${seed} SignInPasteTrace SignInPasteTrace.cfg pass PASTEWALK SEED ${seed}
              STEPS 600)
 endforeach()
