@@ -183,8 +183,12 @@ struct BoxRecipe {
                 box.margin[PrRectSide_Top] = prLayoutLengthAuto();
                 box.margin[PrRectSide_Bottom] = prLayoutLengthAuto();
                 break;
-            case Part::ReplyRow:
             case Part::Entry:
+                // Align outgoing bubbles to the same inset from the panel's right and bottom edges.
+                if (look.transcriptStyle.conversationPanel)
+                    box.margin[PrRectSide_Right] = px(caretInset(look.prompt, -look.prompt.caretOffsetY, k) - kBubblePadX * k);
+                [[fallthrough]];
+            case Part::ReplyRow:
                 box.display = PrLayoutDisplay_Flex;
                 break;
             case Part::ActionRow:

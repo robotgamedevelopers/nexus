@@ -1742,6 +1742,8 @@ void sendingKeepsBubbleOnScannerRow() {
     const auto held = h.bounds(h.findText(h.window(), "Same place"));
     const auto scanner = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().front()));
     const auto heldBubble = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().back()));
+    const auto panel = h.bounds(h.view.conversation);
+    CHECK(near(panel.right - heldBubble.right, panel.bottom - heldBubble.bottom));
     CHECK(near(heldBubble.bottom, scanner.bottom));
     CHECK(scanner.top < held.bottom + style::kBubblePadY && scanner.bottom > held.top);
     h.model.pop_held(0);
@@ -1750,6 +1752,7 @@ void sendingKeepsBubbleOnScannerRow() {
     h.frame();
     const auto sent = h.bounds(h.findText(h.window(), "Same place"));
     const auto sentBubble = h.bounds(prLayoutNodeFirstChild(h.tree, h.entries().front()));
+    CHECK(near(panel.right - sentBubble.right, panel.bottom - sentBubble.bottom));
     CHECK(near(sentBubble.bottom, heldBubble.bottom));
     CHECK(near(held.top, sent.top) && near(held.left, sent.left));
 }
