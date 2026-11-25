@@ -151,30 +151,36 @@ jobs:
         with:
           config: mac-asan
           targets: ${{ matrix.targets }}
+      # Each program runs in memory (MemFs where it has files; no sockets, processes or shared paths), so they run at
+      # once, at most TEST_JOBS at a time, each with its own output under units/; a failure shows its program and output.
       - name: Unit tests under the sanitizers
         if: matrix.part == 'units'
         shell: bash
         run: |
           set -euo pipefail
-          build/tests/model/model_test
-          build/tests/model/overlay_test
-          build/tests/window/nexus_terminal_watch_tests
-          build/tests/sync/sync_test
-          build/tests/sync/redial_test
-          build/tests/server/secrets_test
-          build/tests/server/signin_test
-          build/tests/store/store_test
-          build/tests/store/durable_test
-          build/tests/driver/driver_protocol_test
-          build/tests/server/supervisor_test
-          build/tests/server/server_pass_test
-          build/tests/server/builds_test
-          build/tests/server/handover_test
-          build/tests/server/supervision_test
-          build/tests/server/migration_test
-          build/tests/server/takeover_test
-          build/tests/wire/wire_test
-          build/tests/wire/nexus_versions_test
+          mkdir -p units
+          printf '%s\n' \
+            build/tests/model/model_test \
+            build/tests/model/overlay_test \
+            build/tests/window/nexus_terminal_watch_tests \
+            build/tests/sync/sync_test \
+            build/tests/sync/redial_test \
+            build/tests/server/secrets_test \
+            build/tests/server/signin_test \
+            build/tests/store/store_test \
+            build/tests/store/durable_test \
+            build/tests/driver/driver_protocol_test \
+            build/tests/server/supervisor_test \
+            build/tests/server/server_pass_test \
+            build/tests/server/builds_test \
+            build/tests/server/handover_test \
+            build/tests/server/supervision_test \
+            build/tests/server/migration_test \
+            build/tests/server/takeover_test \
+            build/tests/wire/wire_test \
+            build/tests/wire/nexus_versions_test \
+            | xargs -P "$TEST_JOBS" -I{} sh -c 'out="units/$(basename "$1").out"; "$1" >"$out" 2>&1 || { echo "::error::unit failed: $1"; cat "$out"; exit 1; }' _ {}
+          echo "19 unit programs passed"
       - name: Trace walks under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
