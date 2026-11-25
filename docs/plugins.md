@@ -35,7 +35,7 @@ The stock client reads the ordered `tab_groups` array from the fork's `config.js
 ```json
 {
   "tab_groups": [
-    {"id":"dashboards", "types":["sprint"], "closable":false},
+    {"id":"dashboards", "types":["dashboard"], "closable":false},
     {"id":"ais", "types":["ai"], "closable":false},
     {"id":"terminals", "types":["terminal"], "closable":true}
   ]

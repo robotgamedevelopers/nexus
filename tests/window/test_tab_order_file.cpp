@@ -102,13 +102,13 @@ void clientHomeFiles() {
     CHECK(chmod(top.c_str(), 0755) == 0 && makeClientHome(dir, &why) && modeOf(top) == 0700);
     // No config: the defaults. A config: its settings, and its problems named by file and line.
     ClientConfig c = readClientConfig(dir);
-    CHECK(c.path == dir + "/config" && c.novaConfig.empty() && c.sprintUrl.empty() && c.problems.empty());
-    const std::string text = "nova-config /opt/nova-config\nsprint-url http://h:1/\nwho knows\n";
+    CHECK(c.path == dir + "/config" && c.novaConfig.empty() && !c.serverSet && c.problems.empty());
+    const std::string text = "nova-config /opt/nova-config\nserver h\nwho knows\n";
     const std::string path = dir + "/config";
     CHECK(prFileWrite(PrStringView{path.data(), path.size()},
         PrByteView{reinterpret_cast<const uint8_t*>(text.data()), text.size()}));
     c = readClientConfig(dir);
-    CHECK(c.novaConfig == "/opt/nova-config" && c.sprintUrl == "http://h:1/");
+    CHECK(c.novaConfig == "/opt/nova-config" && c.serverHost == "h");
     CHECK(c.problems.size() == 1 && c.problems[0].find(path + " line 3:") != std::string::npos);
     // No HOME: the stores say so and write nothing.
     CHECK(unsetenv("HOME") == 0);

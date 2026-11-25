@@ -3,7 +3,7 @@
 // while nexus-server inside WSL2 has its own $HOME/.nexus/server there: two directories on purpose, each side with its
 // own config.
 //
-//   config            the window's settings (config.h): `nova-config <path>` and `sprint-url <url>`
+//   config            the window's settings (config.h): `nova-config <path>` and `server <host>`
 //   tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
 //                     its saved preferences (tab_order.h)
 //   kept-drafts.txt   the drafts of AIs with no tab, by server and AI name (tab_order.h KeptDraftsStore),
@@ -41,13 +41,12 @@ struct ClientConfig {
                                     // (remote.h); empty: found on the PATH
     std::string serverHost = "localhost";
     bool serverSet = false;         // the file has a `server` line (else serverHost is the default)
-    bool sprintEnabled = true;
-    std::string sprintUrl;          // `sprint-url <url>`: the sprint board's address; empty: from the sprint's record
     std::vector<std::string> problems;  // one line each: the errors, then the warnings
 };
 
 // The keys the window's config takes.
-inline const std::vector<std::string> kClientConfigKeys{"nova-config", "sprint-url", "sprint", "server"};
+// (The dashboards, once `sprint` and `sprint-url` here, are nexus-server's: its config's `dashboard` lines.)
+inline const std::vector<std::string> kClientConfigKeys{"nova-config", "server"};
 
 // The settings in `text`, the file at `path`. Pure.
 ClientConfig clientConfigFrom(std::string_view text, const std::string& path);

@@ -24,8 +24,9 @@ Escape hides it too, and so does switching away: Command-Tab, a click on another
 `--windowed` it is a normal window instead.
 
 Each AI the server holds (its `ais.json`, `docs/accounts.md`) has a tab, and an AI added or removed there
-gets or loses its tab as soon as the server applies the change (`nexus-server config reload`); the sprint tab comes
-first. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
+gets or loses its tab as soon as the server applies the change (`nexus-server config reload`). The dashboards come
+first: one tab for each `dashboard <url> <name>` line in the server's config (`docs/accounts.md`), in its order,
+labelled with its name, and none when it has no such line. Cmd-1 to Cmd-0 select the first ten. Drag a tab to
 reorder the tabs; the order is kept across launches. In the [keyboard profile](policy.md#start-with-the-keyboard-driven-client), Enter stages the current message. Empty Enter sends the batch. Command-Enter sends the batch and current draft in order. Command-Delete clears the draft and all locally staged messages in this tab. Shift-Enter starts a new line. The stock profile binds Enter to send and Command-Enter to queue. Cmd-Escape is stop. Cmd-plus and Cmd-minus make all text larger and smaller,
 and the size is kept across launches.
 
@@ -52,7 +53,7 @@ remote side that sets its own title does not change it. When ssh ends, the tab h
 back until its shell sets a new title. A nested ssh on the remote machine is not seen: the tab names the machine the
 local ssh reaches.
 
-For those machine names and the sprint board's address, nexus finds `nova-config` on the PATH your login shell gives,
+For those machine names, nexus finds `nova-config` on the PATH your login shell gives,
 or at the full path its config names (`nova-config <path>` in `~/.nexus/client/config`, below); without it, ssh tabs
 show the host as typed.
 
@@ -69,7 +70,7 @@ the Keychain, the environment or another tool's directory (`~/.claude` included)
 
 ```
 ~/.nexus/client/                the window
-    config                      its settings: `nova-config <path>`, `sprint-url <url>`
+    config                      its settings: `nova-config <path>`, `server <host>`
     tab-order.txt, selected-tab.txt, text-scale.txt, terminals.txt
                                 its saved order, selection, text size and terminals
     kept-drafts.txt, kept-drafts.lock
@@ -88,7 +89,7 @@ the Keychain, the environment or another tool's directory (`~/.claude` included)
 A config file holds one setting per line, `<key> <value>`; a line starting with `#` is a comment. A key the side does
 not know is a warning and skipped; a key with no value, or one given twice, is an error naming the file and the line
 (the server does not start on one; the window logs it and goes on without that line). No config file means the
-defaults: `nova-config` found on the login shell's PATH, and the sprint board found from the sprint's own record.
+defaults: `nova-config` found on the login shell's PATH, and `server localhost`.
 
 On Windows the two sides are two machines as far as nexus is concerned: the native window's home is
 `%USERPROFILE%\.nexus\client` (with its own config), and `nexus-server`, inside WSL2, keeps its own

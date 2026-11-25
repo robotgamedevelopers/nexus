@@ -1,10 +1,6 @@
-// The sprint tab's logic that runs without a page: where nova-sprint serves its board, which events go to the page, and
-// the script and style nexus adds to the page. The page itself is board.h's, over Prax's HTML view.
-//
-// The board's address is read from the sprint's own record: the service `sprint-run` in nova-config, which
-// `nova-sprint up` installs to run `nova-sprint run --listen <host:port>`, and which `nova-sprint up` and `check` read
-// back. (`nova-sprint show run` names the same service, but answers only a name hooked in to the sprint's bus, which an
-// app launched at login is not.) The client config's `sprint-url` (client_home.h) overrides it with the board's address.
+// A dashboard tab's logic that runs without a page: which events go to the page, and the script and style nexus adds to
+// the page (written for nova-sprint's board, and harmless on another). The page itself is board.h's, over Prax's HTML
+// view; its address is the server's (frame_host.h takeDashboards).
 
 #pragma once
 
@@ -17,33 +13,6 @@
 #include "command.h"
 
 namespace nexus {
-
-// The board's address, or why there is none: one line for the tab, saying what failed and what to do.
-struct SprintBoardAddress {
-    std::string url;            // http://<host:port>/, empty when `error` is set
-    std::string error;
-};
-
-// How long findSprintBoard waits for nova-config. It runs off the window's thread.
-constexpr int kSprintRunTimeoutSeconds = 5;
-
-// The command that reads the sprint's run service: novaConfigCommand with `service show sprint-run --json`.
-Command sprintRunCommand(const char* override, const char* shell);
-
-// Reads the command's JSON: {"result": {"status": "ok"}, "items": [{"fields": {"argv": [...]}}]}, whose argv holds
-// `--listen <host:port>`. A host the service listens on everywhere (empty, 0.0.0.0 or ::) is reached at 127.0.0.1.
-// Pure: no OS.
-SprintBoardAddress parseSprintRun(std::string_view json);
-
-// The board's address: `override` (the client config's sprint-url) if set, else what `command` prints, run with `run`. Every error
-// names what failed and what to do.
-SprintBoardAddress findSprintBoard(const char* override, const Command& command, const CommandRunner& run);
-
-// findSprintBoard with the client config's sprint-url, sprintRunCommand(its nova-config, SHELL) and runCommand. Blocks for up to
-// kSprintRunTimeoutSeconds: call it off the window's thread. Not where the build runs no processes (iOS: build_parts.h).
-#if NEXUS_PROCESSES
-SprintBoardAddress findSprintBoard();
-#endif
 
 // Where an event goes while the sprint tab shows.
 enum class BoardRoute {
