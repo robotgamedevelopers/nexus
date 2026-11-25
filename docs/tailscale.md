@@ -143,22 +143,13 @@ tested that commit on that OS sets it, to success or failure (a cancelled or tim
 waits for all three statuses to be success on the head it lands**; a missing or pending one is not a pass, whatever
 the jobs show.
 
-The Go toolchain, the modules, Go's build cache and llvm-mingw live on the runner's machine in a directory keyed by the
-pins (`src/tailscale/pins.cmake`, `go.mod`, `go.sum`), which no other job cleans, so only a pin change is cold; each is
-checked against its pin when used. A cold build does not fit a per-commit job's 2 minutes (the times below), so that one
-case has its own workflow, `tailscale-prime.yml`. A per-commit job on a machine whose key directory is not yet primed
-sets its status to pending (linked to tailscale-prime's runs), dispatches tailscale-prime for the same commit and OS,
-and fails, since it built and tested nothing. The dispatched run is one slot, which GitHub places on any runner of that
-OS (runners carry no label per machine, so it cannot be sent to the one that asked): it sets the status to pending with
-a link to itself, builds and tests the commit with no time limit, primes the machine it ran on, and sets the status to
-its result. So after a pin change a pull request shows its tailscale jobs red and its statuses pending, then the
-statuses turn to the prime's result. Every hand-off ends in success or failure on the commit that asked: a dispatch
-GitHub does not take sets the status to error at once, and a prime that does not succeed and never reached its own
-status step (its runner lost) gets failure from the prime's `verdict` job. A status belongs to its commit only: when a
-pull request's head moves on, the new head gets its own statuses from its own jobs, and the old head's, pending or
-not, neither blocks nor passes it. A machine the prime did not reach hands off again at its next per-commit job. The
-nightly (main, every OS) runs a slot per runner so that GitHub may place one on every machine: a slot on a machine
-already primed marks its key directory used and builds nothing, and one on a new machine primes it; it sets no status.
+The Go toolchain, the modules, Go's build cache and llvm-mingw live in a directory keyed by the pins
+(`src/tailscale/pins.cmake`, `go.mod`, `go.sum`), so only a pin change is cold; each is checked against its pin when used.
+The jobs run on GitHub-hosted runners, which start empty, so that directory is a GitHub Actions cache: `cache-warm.yml`,
+run on main daily and by hand after a pin change, builds and tests main with no time limit and saves the primed
+directory; every per-commit job restores it. A per-commit job that finds no primed cache for its pins builds nothing,
+sets its status to failure and fails, saying to run cache-warm (a cold build does not fit the 2 minutes; the times
+below).
 
 #### Build times
 
@@ -185,7 +176,7 @@ the same sources.
 | Linux x86_64 | 84 s [77 s] on amd-3 alone; 111 s build on hulk; 183 s build on captain's WSL2 beside another | 14 s [7 s] on hulk | 16 s on hulk |
 | Windows x64 (captain) | 8 min 20 s in tailscale-prime: configure 58 s (llvm-mingw fetched), build 331 s (go vet, which compiles the whole dependency tree first, 210 s; the DLL's Go build and link 104 s; the test program 13 s), tests 2 s | see the note below | 93 s [29 s] per commit (checkout 24 s, configure 16 s, tests 2 s); a rebuild in the same job: 11.5 to 12.8 s |
 
-A cold build fits a per-commit job's 2 minutes on macOS only, hence `tailscale-prime.yml`. On Windows, once primed, a
+A cold build fits a per-commit job's 2 minutes on macOS only, hence the primed cache that cache-warm.yml saves (these measurements were taken on the fleet, in the workflow it replaced, tailscale-prime). On Windows, once primed, a
 per-commit job fits with 27 s to spare, of which checkout is the largest single step. In tailscale-prime the first build
 in a job over a full key directory (7,931 cache files, 1.2 GB) took 94 s in tailscale-prime (go vet 37 s, then the
 DLL's Go build and link 40 s, then the test program 11 s; two slots building at once on captain), against 12.8 s for a
