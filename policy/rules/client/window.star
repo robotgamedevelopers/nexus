@@ -297,13 +297,26 @@ def handle(event, state, config):
             for chord in config.get("clear_draft_keys", ["Command+Backspace", "Command+Delete"]):
                 window["shortcuts"] = _bind(window["shortcuts"], chord, ["clear_composer"])
         if state["tab"] == "friend" and state.get("needs_sign_in"):
-            window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
+            if state.get("ui", {}).get("help_visible") and state.get("ui", {}).get("dismissed") and not state.get("account_picker_open"):
+                window["panels"] = ["transcript", "prompt"]
+                window["account_items"] = []
+            else:
+                window["panels"] = ["spacer" if p == "transcript" else p for p in window["panels"]]
         return window
     if event == "prompt_key":
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() == "/help":
             commands = dict(_COMMAND_HELP)
             commands.update(config.get("command_help", {}))
-            return [{"op": "draft", "text": ""}] + [
+            shortcuts = [
+                "Keyboard shortcuts",
+                "⌘ + backtick (the ~ key)   Open the Nexus overlay",
+                "⌘T / ⌘W   Open a terminal tab / close the current terminal",
+                "⌘1, ⌘2, ⌘3, ⌘4 …   Select a tab by position",
+                "⌘← / ⌘→   Move to the previous / next tab",
+                "⌘↑ / ⌘↓   Choose an account for the current AI, including among multiple Claude accounts",
+                "Esc   Hide the overlay and return to the previous app. In a picker, Esc closes the picker first.",
+            ]
+            return [{"op": "draft", "text": ""}, {"op": "notice", "text": "\n".join(shortcuts)}, {"op": "notice", "text": "\nSlash commands"}] + [
                 {"op": "notice", "text": cmd + "  " + description} for cmd, description in commands.items()
             ]
         if state["key"] in ["Enter", "Command+Enter"] and state["text"].strip() in ["/quiet", "/quiet off", "/loud"]:

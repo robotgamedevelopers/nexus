@@ -1,6 +1,6 @@
 # ![nexus](docs/nexus-banner.png)
 
-**Talk to your AIs in one keyboard-driven window.** On macOS, press ⌘ and the backtick key from any app. Your conversations are right there.
+**Talk to your AIs in one keyboard-driven window.** On macOS, press ⌘ and the backtick key from any app. Your conversations are right there. Type `/help` in any friend’s prompt for keyboard shortcuts and slash commands.
 
 ## What you get
 

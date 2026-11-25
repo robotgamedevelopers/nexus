@@ -167,7 +167,7 @@ while hidden. Return a physical key code and modifiers, for example
 Use UI Events physical codes such as `Backquote`, `KeyJ` and `F8`. In-window shortcuts
 continue to use logical key names. Applying a client profile updates the global binding.
 
-Type `/help` in a friend tab to print the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
+Type `/help` in a friend tab to show overlay, terminal, tab and account shortcuts alongside the slash-command reference. It works while signed out. A fork can add descriptions to the client config’s `command_help` map or replace the help handler in Starlark.
 
 The fork can return `prompt_command` for a draft that should bypass the account reminder.
 The prompt handler receives `signed_out` and can return `clear_local` to clear the active

@@ -1759,6 +1759,8 @@ struct Builder {
             message(assistantMessage(element(column, Part::ReplyRow), tab), *growing, EntryKind::Friend, 1, &reply);
         }
         // Keep the reason alongside the conversation if a prompt could not be sent.
+        if (view.helpTab == tab.id)
+            caption(element(column, Part::ReplyRow), view.helpText, textStyle(PrKitTextRole_Body, kChatTone));
         if (!view.problem.empty()) {
             caption(element(column, Part::ReplyRow), view.problem, textStyle(PrKitTextRole_Body, kNoticeTone));
         }
@@ -1922,6 +1924,9 @@ struct Builder {
     void promptKey(std::size_t active, const char* key) {
         const Tab& tab = model.tab(active);
         const bool logout = tab.draft == "/logout";
+        const auto first = tab.draft.find_first_not_of(" \t\r\n");
+        const bool help = first != std::string::npos &&
+            std::string_view(tab.draft).substr(first, tab.draft.find_last_not_of(" \t\r\n") - first + 1) == "/help";
         policy::MessagePlan plan;
         std::string why;
         const std::string friendName(tab.displayName());
@@ -1930,6 +1935,21 @@ struct Builder {
         if (!policy::messagePlan(*view.application, {}, true, key, state, plan, why) ||
                 (plan.text && plan.text->size() > kPromptBytes)) {
             view.problem = "Prompt application: " + (why.empty() ? "draft exceeds the prompt limit" : why);
+            return;
+        }
+        view.helpTab.reset();
+        if (help && plan.delivery == policy::Delivery::None && !plan.notices.empty()) {
+            view.helpText.clear();
+            for (const auto& line : plan.notices) {
+                if (!view.helpText.empty()) view.helpText += "\n";
+                view.helpText += line;
+            }
+            view.helpTab = tab.id;
+            view.cutFollow = true;
+            view.cutTab = tab.id;
+            model.set_draft(active, {});
+            if (state.signedOut && view.accountAction) view.accountAction("dismiss");
+            view.problem.clear();
             return;
         }
         if (plan.delivery == policy::Delivery::ClearLocal) {
@@ -2359,6 +2379,8 @@ struct Builder {
         prJsonWriterEndArray(w);
         prJsonWriterKey(w, sv("dismissed"));
         prJsonWriterBool(w, view.dismissedSignIn.has_value());
+        prJsonWriterKey(w, sv("help_visible"));
+        prJsonWriterBool(w, active && view.helpTab == active->id);
         field("draft", active ? active->draft : std::string_view{});
         prJsonWriterKey(w, sv("logout"));
         prJsonWriterBool(w, active && active->draft == "/logout");

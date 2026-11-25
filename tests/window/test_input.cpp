@@ -3064,11 +3064,14 @@ int main(int argc, char** argv) {
         CHECK(link.sent.size() == sent);
         h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
         h.frame();
-        down(0);
-        CHECK(h.view.accountPicker && h.view.accountPicker->highlighted == 0);
-        h.key(PrAppKey_Escape, PrAppKeyCode_Escape);
+        h.type("/help");
+        h.enter();
         h.frame();
-        CHECK(!h.view.accountPicker && h.view.accountMenu == kPrLayoutNodeNone && h.hides == 0);
+        CHECK(h.active().draft.empty() && link.sent.size() == sent);
+        CHECK(h.view.transcript != kPrLayoutNodeNone && h.view.accountMenu == kPrLayoutNodeNone);
+        CHECK(h.view.helpText.find("⌘↑ / ⌘↓") != std::string::npos);
+        CHECK(h.view.helpText.find("/login") != std::string::npos);
+        CHECK(h.hasText(h.view.transcript, h.view.helpText));
         h.model.append(h.model.active(), {EntryKind::Notice, "local history"});
         h.model.set_draft(h.model.active(), "/clear");
         h.frame();
