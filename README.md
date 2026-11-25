@@ -7,7 +7,7 @@
 - **One tab per AI.** Work with Claude on a change, then switch to Codex for a second opinion. Each keeps its own conversation and workspace.
 - **The same controls across harnesses.** Use `/model` and `/effort` to choose how a friend works. Type `/info` to see the account, model and working directories.
 - **Room to finish a thought.** Stack messages with Enter and send them together. Close the overlay while your friends work. The server keeps going.
-- **A setup your AI can change with you.** Configure friends in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
+- **A setup your AI can change with you.** Configure AIs in nova-config. Tune shortcuts, tabs, colors and sounds in Starlark and JSON.
 
 Built for Apple silicon on macOS 26 or newer. Bring a supported subscription and a machine to run the server. The same Mac can do both.
 
