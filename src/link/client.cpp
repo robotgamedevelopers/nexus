@@ -10,6 +10,7 @@
 #include <memory>
 #include <random>
 
+#include "build_parts.h"
 #include "link/mosh_link.h"
 #include "sync/redial.h"
 
@@ -38,6 +39,20 @@ std::string makeClientId() {
 }
 
 } // namespace
+
+CommandRunner linkRunner(const CommandRunner& given) {
+    if (given) return given;
+#if NEXUS_PROCESSES
+    return runCommand;
+#else
+    return [](const Command& c, int) {
+        CommandResult r;
+        r.end = CommandResult::End::NotStarted;
+        r.err = "this build runs no process, and the link was given no way to run `" + c.shown + "`";
+        return r;
+    };
+#endif
+}
 
 ClientLink::ClientLink(Options options) : options_(std::move(options)) {
     int fds[2];
@@ -116,12 +131,13 @@ void ClientLink::run() {
     std::uint64_t handed = 0;   // actions moved into a session (each once: one sent again is not counted again)
     int lastUnknown = 0;
     std::string why;
+    const CommandRunner run = linkRunner(options_.run);
 
     // One run of the bootstrap: a new session, which goes on from the first action the one it replaces has no
     // acknowledgement for, holding those again; or false, with why, and the session held kept.
     auto dial = [&](std::string* problem) -> bool {
         std::string ip = options_.ip;
-        if (ip.empty() && !resolveHost(options_.bootstrap, runCommand, &ip, problem)) {
+        if (ip.empty() && !resolveHost(options_.bootstrap, run, &ip, problem)) {
             return false;
         }
         Bootstrap b = options_.bootstrap;
@@ -129,7 +145,7 @@ void ClientLink::run() {
         b.next = session ? session->firstUnacknowledged() : 1;
         b.askRunning = !redial.mayStart();
         Connect connect;
-        if (!bootstrap(b, runCommand, &connect, problem)) {
+        if (!bootstrap(b, run, &connect, problem)) {
             return false;
         }
         // The server's Hello, against the window's (sync/formats.h): a server whose proto is below the window's

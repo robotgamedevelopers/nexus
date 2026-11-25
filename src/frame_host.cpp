@@ -7,8 +7,15 @@
 #include <utility>
 #include <vector>
 
+#include "pr/hash.h"
+#include "pr/ui_records.h"
+
+#include "platform.h"
 #include "board.h"
+#if NEXUS_PROCESSES
+#include "command.h"
 #include "terminals.h"
+#endif
 
 static_assert(nexus::kPromptBytes == nexus::sync::Limits{}.text, "the prompt holds what the server takes");
 
@@ -51,6 +58,7 @@ void FrameHost::keepSelection() {
 void FrameHost::keepTerminals() {
     if (!keep || terminals == nullptr || terminalStore == nullptr)
         return;
+#if NEXUS_PROCESSES
     PraxTerminals* t = terminals;
     std::vector<std::string> directories = terminalDirectories(*model,
         [t](std::size_t id) { return t->workingDirectory(id); });
@@ -75,6 +83,7 @@ void FrameHost::keepTerminals() {
         }
     }
     keepSelection();
+#endif
 }
 
 void FrameHost::personSelected() {
@@ -239,6 +248,10 @@ void FrameHost::pollLink() {
     LinkState s;
     if (link == nullptr || !link->poll(&s))
         return;
+    // The first dashboard's address, as the server says it (empty: none), for the sprint tab's page, until the strip
+    // holds a tab for each dashboard.
+    if (board != nullptr && s.phase == sync::LinkPhase::Connected)
+        board->offer(s.sessions.dashboards().empty() ? std::string() : s.sessions.dashboards().front().url);
     // The AIs first, so that an AI's new tab shows its session in this same state.
     if (s.phase == sync::LinkPhase::Connected) {
         for (const auto& [name, claim] : pendingClaims_) {
@@ -760,6 +773,7 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 } else link->send(std::move(action));
                 return;
             }
+#if NEXUS_PROCESSES
             const auto aiName = model->tab(i).name;
             const auto instance = current ? current->info.instance : "";
             view->outgoing.push_back({tabId, 0, action.text});
@@ -792,6 +806,12 @@ void FrameHost::connect(LinkPort* port, const std::string& serverHost) {
                 if (wake) wake();
             });
             return;
+#else
+            // Unreachable: this build stages no file (stageFile), so no prompt names one.
+            (void)current;
+            link->send(std::move(action));
+            return;
+#endif
         }
         if (!why.empty())
             view->problem = why;
@@ -835,6 +855,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
         return true;
     });
     view->hitch = hitch;
+#if NEXUS_PROCESSES
     if (terminals != nullptr) {
         // Each terminal's foreground process, for its tab's label, read where its working directory is read.
         HitchScope scope(hitch, Phase::Terminals);
@@ -843,6 +864,7 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
             terminals->deliver(ui);
         }
     }
+#endif
     {
         HitchScope scope(hitch, Phase::Keep);
         keepTerminals();
@@ -875,6 +897,13 @@ void FrameHost::beginFrame(PrKit* kit, PrFontSet* fonts, double time, const PrAp
 bool FrameHost::stageFile(std::string name, std::string bytes) {
     if (!ui || view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt ||
         (view->secrets && view->secrets->showing()) || !model->tab_count()) return false;
+#if !NEXUS_PROCESSES
+    // An attachment goes to the server through a child process (ssh running nexus-receive, the upload worker above),
+    // which this build cannot start (build_parts.h). The in-app ssh (link/inapp_ssh.h) runs only the link's commands.
+    (void)bytes;
+    view->problem = "Attaching " + name + " is not available on iOS yet; nothing was sent.";
+    return false;
+#endif
     if (name.empty() || name == "." || name == ".." || name.size() > 255 ||
         name.find_first_of("/\\") != std::string::npos || std::any_of(name.begin(), name.end(),
             [](unsigned char c) { return c < 32 || c == 127; })) {
@@ -923,6 +952,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     if (board != nullptr && board->event(e)) {
         return true;
     }
+#if NEXUS_PROCESSES
     // Typed into a terminal tab before its screen can take it: held for its shell, in order.
     if (terminals != nullptr && model->tab_count() != 0) {
         const Tab& tab = model->tab(model->active());
@@ -930,6 +960,7 @@ bool FrameHost::event(const PrAppEvent& e) {
             return true;
         }
     }
+#endif
     if (ui == nullptr || (e.kind != PrAppEventKind_Text && e.kind != PrAppEventKind_Paste) ||
             view->prompt == kPrLayoutNodeNone || prUiFocus(ui) != view->prompt) {
         return false;
@@ -958,6 +989,31 @@ bool FrameHost::event(const PrAppEvent& e) {
 
 void FrameHost::build(PrKit* kit, PrLayoutNode root) {
     buildWindow(*view, kit, root);
+}
+
+namespace {
+
+// The box the window is built in above the on-screen keyboard (FrameHost::buildAbove).
+struct AboveKeyboard {
+    static constexpr PrLayoutGroup kKind = PrLayoutGroup_Box;
+    float width;
+    float height;
+
+    void make(const View&, PrLayoutBoxStyle& box) const {
+        box.boxSizing = PrLayoutBoxSizing_BorderBox;
+        box.display = PrLayoutDisplay_Flex;
+        box.width = prLayoutLengthPx(width);
+        box.height = prLayoutLengthPx(height);
+    }
+};
+
+} // namespace
+
+void FrameHost::buildAbove(PrKit* kit, PrLayoutNode root, PrVec2 extent, float room) {
+    view->extent = PrVec2{extent.x, room > 0 ? std::min(room, extent.y) : extent.y};
+    const PrLayoutNode above = prUiElement(ui, root, prHashString(PrStringView{"above-keyboard", 14}, 0),
+        pr::uiStyle(ui, *view, AboveKeyboard{view->extent.x, view->extent.y}), 0);
+    build(kit, above);
 }
 
 } // namespace nexus

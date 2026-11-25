@@ -138,11 +138,13 @@ SprintBoardAddress findSprintBoard(const char* override, const Command& command,
     return parseSprintRun(r.out);
 }
 
+#if NEXUS_PROCESSES
 SprintBoardAddress findSprintBoard() {
     const ClientConfig& config = clientConfig();
     return findSprintBoard(config.sprintUrl.c_str(), sprintRunCommand(config.novaConfig.c_str(), std::getenv("SHELL")),
         runCommand);
 }
+#endif
 
 BoardRoute routeBoardEvent(const PrAppEvent& event, bool inPage, bool pressInPage) {
     switch (event.kind) {

@@ -2,7 +2,13 @@
 find_program(NEXUS_CARGO cargo HINTS "$ENV{HOME}/sdk/bin" "$ENV{USERPROFILE}/sdk/bin" "$ENV{HOME}/.cargo/bin" "$ENV{USERPROFILE}/.cargo/bin" REQUIRED)
 set(policy_crate "${PROJECT_SOURCE_DIR}/policy/native")
 set(policy_target "${CMAKE_BINARY_DIR}/policy-rust")
-set(policy_archive "${policy_target}/release/${CMAKE_STATIC_LIBRARY_PREFIX}nexus_policy_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}")
+# A cross build (iOS: cmake/ios.cmake) sets NEXUS_RUST_TARGET: the archive the window links is built for that target,
+# into Cargo's directory of its own, and the CLI for the machine that builds, as everywhere else.
+set(policy_triple_dir "")
+if(NEXUS_RUST_TARGET)
+    set(policy_triple_dir "${NEXUS_RUST_TARGET}/")
+endif()
+set(policy_archive "${policy_target}/${policy_triple_dir}release/${CMAKE_STATIC_LIBRARY_PREFIX}nexus_policy_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}")
 set(policy_tool "${CMAKE_BINARY_DIR}/nexus-policy${CMAKE_EXECUTABLE_SUFFIX}")
 file(GLOB_RECURSE policy_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/policy/rules/*.star")
 set(policy_cargo_env)
@@ -23,9 +29,9 @@ if(DEFINED ENV{GITHUB_ACTIONS} AND DEFINED ENV{RUNNER_NAME})
         set(policy_cargo_target "$ENV{NEXUS_CARGO_TARGET_DIR}")
     endif()
     set(policy_stage_archive
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${policy_target}/release"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${policy_target}/${policy_triple_dir}release"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${policy_cargo_target}/release/${CMAKE_STATIC_LIBRARY_PREFIX}nexus_policy_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            "${policy_cargo_target}/${policy_triple_dir}release/${CMAKE_STATIC_LIBRARY_PREFIX}nexus_policy_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}"
             "${policy_archive}")
     if("$ENV{NOVA_JOB_CORES}" MATCHES "^[1-9][0-9]*$")
         list(APPEND policy_cargo_env "CARGO_BUILD_JOBS=$ENV{NOVA_JOB_CORES}")
@@ -34,8 +40,20 @@ endif()
 if(APPLE)
     list(APPEND policy_cargo_env "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
 endif()
+set(policy_cross_build)
+if(NEXUS_RUST_TARGET)
+    # Cargo runs the rustc on PATH unless told: the one beside it, whose toolchain has the target (cmake/ios.cmake).
+    # Its release builds are not stripped: rustup's toolchain from Homebrew cannot run its rust-objcopy (it finds no
+    # libLLVM.dylib), and the archive is stripped when the app links.
+    list(APPEND policy_cargo_env "RUSTC=${NEXUS_RUSTC}" "CARGO_PROFILE_RELEASE_STRIP=false")
+    set(policy_cross_build
+        COMMAND "${CMAKE_COMMAND}" -E env ${policy_cargo_env} ${NEXUS_RUST_TARGET_ENV} "${NEXUS_CARGO}" build --release
+            --locked --lib --target "${NEXUS_RUST_TARGET}" --manifest-path "${policy_crate}/Cargo.toml"
+            --target-dir "${policy_cargo_target}")
+endif()
 add_custom_command(OUTPUT "${policy_archive}" "${policy_tool}"
     COMMAND "${CMAKE_COMMAND}" -E env ${policy_cargo_env} "${NEXUS_CARGO}" build --release --locked --manifest-path "${policy_crate}/Cargo.toml" --target-dir "${policy_cargo_target}"
+    ${policy_cross_build}
     ${policy_stage_archive}
     COMMAND "${CMAKE_COMMAND}" -E copy "${policy_cargo_target}/release/nexus-policy${CMAKE_EXECUTABLE_SUFFIX}" "${policy_tool}"
     DEPENDS "${CMAKE_CURRENT_LIST_FILE}" "${policy_crate}/Cargo.toml" "${policy_crate}/Cargo.lock" "${policy_crate}/build.rs"
