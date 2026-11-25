@@ -416,7 +416,7 @@ HistoryEndsActive == Count > 0 => (history /= <<>> /\ history[Len(history)] = or
 -----------------------------------------------------------------------------
 (* Action properties: what each operation does to the state, checked on   *)
 (* every step whatever the action that took it. Each is stated per        *)
-(* ai: the operation on position i acts on At(i), the AI there.   *)
+(* AI: the operation on position i acts on At(i), the AI there.   *)
 
 Others(f) == Ids \ {f}
 

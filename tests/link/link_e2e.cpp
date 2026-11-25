@@ -14,7 +14,7 @@
 //       through a relay on loopback that the test can cut: prompts sent while the network is down for 8 s arrive once
 //       each when it comes back, the window says it has no contact while it is down, and converges after
 //   link_e2e <nexus-server> <dir> soak <clients> <prompts>
-//       several windows at once, prompts from each to random ais: every window ends holding the server's state,
+//       several windows at once, prompts from each to random AIs: every window ends holding the server's state,
 //       each prompt applied once, each window's prompts in its order, and every window's transcripts agree
 //   link_e2e <nexus-server> <dir> restart
 //       the server started by the test and killed with SIGKILL while a window is connected, then started again: a new
@@ -1149,7 +1149,7 @@ int secret(const std::string& binary, const std::string& dir, const std::string&
     return failures == 0 ? 0 : 1;   // the Server prints server.log and removes the directory
 }
 
-// ---- ais: the strip built from the server's list of AIs ----
+// ---- AIs: the strip built from the server's list of AIs ----
 
 // One headless window as the app opens it on a fresh install: no AI compiled in or read from any outside tool, no
 // sprint board, every AI tab built from the list the server sends by the window's own code (sync/ai_strip.h

@@ -798,7 +798,7 @@ void escapeWhileComposingDoesNotHide() {
     CHECK(h.hides == 1);
 }
 
-// Four ais: f1 f2 f3 f4.
+// Four AIs: f1 f2 f3 f4.
 std::vector<AIInfo> fourAIs() {
     return aisNamed(4);
 }
@@ -2805,7 +2805,7 @@ void commandDigitsWorkFromTheSprintTab() {
     CHECK(h.active().name == "f3");
 }
 
-// With Caps Lock on, Command-1 still selects the first tab, the sprint tab, and Command-2 the first ai: Prax's key
+// With Caps Lock on, Command-1 still selects the first tab, the sprint tab, and Command-2 the first AI: Prax's key
 // bindings leave Caps Lock out of the modifiers they compare (ui.cpp 820-824), so nexus filters nothing.
 void commandOneWithCapsLockSelectsTheSprintTab() {
     Harness h = withSprint();
@@ -3264,7 +3264,7 @@ int main(int argc, char** argv) {
         h.key('Y', PrAppKeyCode_KeyY, style::kCommand);
         h.commandT();
         h.frame();
-        // Tools [script, terminal], Chat [ai, native], Review [sprint, second instance of same native renderer].
+        // Tools [script, terminal], Chat [AI, native], Review [sprint, second instance of same native renderer].
         CHECK(h.model.tab_count() == 6);
         if (h.model.tab_count() != 6) return 1;
         CHECK(h.ids() == "4 5 0 2 1 3");

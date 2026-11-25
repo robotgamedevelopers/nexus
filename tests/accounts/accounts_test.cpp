@@ -700,7 +700,7 @@ void hubInstances() {
     CHECK(store.find(1)->info.instance == "studio" && has(report, "session 1 (ada): instance rocketnet -> studio"));
 }
 
-// The cap on ais: a ais.json of kMaxAIs AIs reads; one more is refused whole, in one line with the
+// The cap on AIs: an ais.json of kMaxAIs AIs reads; one more is refused whole, in one line with the
 // count, the cap and what to do, in version 1 (before any upgrade) and in version 2 alike; a window's AddAI at the
 // cap is refused and changes nothing.
 void aisCap() {

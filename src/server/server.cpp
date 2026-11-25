@@ -516,7 +516,7 @@ bool Server::restoreAll(std::string* why) {
         return std::any_of(links_.begin(), links_.end(),
                            [](const Link& l) { return l.link->format() >= sync::kSecretsFormat; });
     }, [] { return static_cast<std::uint64_t>(nowMs()); });
-    // The accounts and ais: what the config repository's HEAD holds (server/config_repo.h). The sessions are
+    // The accounts and AIs: what the config repository's HEAD holds (server/config_repo.h). The sessions are
     // settled against them before any driver starts.
     config_ = std::make_unique<ConfigRepo>([this] { return dirNow("nexus-config"); });
     hub_->signOutWith([this](const accounts::Account& account) -> std::string {
