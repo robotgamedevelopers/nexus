@@ -367,12 +367,20 @@ jobs:
               model_test overlay_test nexus_terminal_watch_tests sync_test redial_test secrets_test signin_test
               store_test durable_test driver_protocol_test supervisor_test server_pass_test wire_test
               nexus_versions_test builds_test handover_test supervision_test migration_test takeover_test
+          # The walks in two halves (every other walk each): together they took past 2 minutes on the image's 4 cores.
           - part: walks
+            half: 1
             targets: >-
               overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
               journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
               migration_walk takeover_walk
-    name: sanitizers-linux (${{ matrix.part }})
+          - part: walks
+            half: 2
+            targets: >-
+              overlay_walk watch_walk trace_walk strip_walk link_walk reconnect_walk secrets_walk signin_walk
+              journal_walk store_lock_walk supervisor_walk pass_walk builds_walk handover_walk supervision_walk
+              migration_walk takeover_walk
+    name: sanitizers-linux (${{ matrix.part }}${{ matrix.half && format(' {0} of 2', matrix.half) || '' }})
     env:
       CC: clang
       CXX: clang++
@@ -456,6 +464,8 @@ jobs:
       - name: Trace walks and their faults under the sanitizers
         if: matrix.part == 'walks'
         shell: bash
+        env:
+          HALF: ${{ matrix.half }}
         run: |
           set -euo pipefail
           walks_root="$RUNNER_TEMP/nexus-walks"
@@ -463,7 +473,11 @@ jobs:
           rm -rf "$walks_root"
           launched=0
           running=0
+          # This job runs every other walk: HALF 1 the first, third, ...; HALF 2 the second, fourth, ...
+          listed=0
           walk() {
+            listed=$((listed + 1))
+            if [ $((listed % 2)) -ne $((HALF % 2)) ]; then return 0; fi
             local dir="$walks_root/$launched"
             mkdir -p "$dir"
             ( "$@" "$dir/trace.tla" >"$dir/output" 2>&1 || { echo "::error::walk failed: $*"; cat "$dir/output"; exit 1; } ) &
@@ -609,7 +623,7 @@ jobs:
           done
           if [ -e "$walks_root" ]; then chmod -R u+w "$walks_root"; fi
           rm -rf "$walks_root"
-          echo "$launched walks passed"
+          echo "$launched of $listed walks passed (half $HALF; the other job runs the rest)"
 
   # The Tailscale shim built and tested alone on macOS and Linux (.github/workflows/tailscale.yml, which says how its
   # caches are kept so that only a pin change is cold; Windows runs in the nightly). On a pull request it builds the
