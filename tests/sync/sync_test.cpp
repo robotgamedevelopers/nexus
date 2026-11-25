@@ -1551,6 +1551,61 @@ void sessions_dashboards_appended() {
     CHECK(b.dashboards().empty());
 }
 
+// A dashboard a window shows has an http:// or https:// address with a host, and no space, control or non-ASCII byte
+// in it (sync/dashboards.h dashboardProblem): an address a page could run as script (javascript:), read the machine's
+// files through (file:) or carry a whole page in (data:) has no tab, nor has one that would break a config line or a
+// log line. Each refusal names the dashboard; the config line's parser refuses them too.
+void dashboard_addresses_refused() {
+    CHECK(dashboardProblem({"Board", "http://board.test:8080/"}).empty());
+    CHECK(dashboardProblem({"Board", "https://board.test/x?y=1#z"}).empty());
+    for (const char* url : {"javascript:alert(1)", "JavaScript:alert(1)", "file:///etc/passwd", "file://board.test/x",
+             "data:text/html,<p>hi</p>", "data:,x", "ftp://board.test/", "board.test/x", "http:/board.test/",
+             "httpx://board.test/"}) {
+        const std::string problem = dashboardProblem({"Board", url});
+        CHECK(problem.find("is not http:// or https://") != std::string::npos);
+        CHECK(problem.find("Board") != std::string::npos);
+        Dashboard parsed;
+        std::string why;
+        CHECK(!parseDashboardLine(std::string(url) + " Board", &parsed, &why) && why == problem);
+    }
+    for (const std::string& url : {std::string("http://board.test/a b"), std::string("http://board.test/\tx"),
+             std::string("http://board.test/\nx"), std::string("http://board.test/\rx"),
+             std::string("http://board.test/\x01x"), std::string("http://board.test/\x7fx"),
+             std::string("http://board.test/x\0y", 20), std::string("https://board.test/\xc3\xa9")}) {
+        const std::string problem = dashboardProblem({"Board", url});
+        CHECK(problem.find("holds a space, a control character or a non-ASCII byte") != std::string::npos);
+    }
+    for (const char* url : {"http://", "https://", "http:///x", "http://:80/"})
+        CHECK(dashboardProblem({"Board", url}).find("has no host") != std::string::npos);
+    for (const std::string& name : {std::string(""), std::string(kDashboardNameMax + 1, 'n'), std::string("a\x01" "b"),
+             std::string("a\x7f" "b"), std::string("a\nb"), std::string("\xff")})
+        CHECK(!dashboardProblem({name, "http://board.test/"}).empty() && !dashboardNameProblem(name).empty());
+    CHECK(dashboardNameProblem(std::string(kDashboardNameMax, 'n')).empty() && dashboardNameProblem("Build farm").empty());
+}
+
+// The dashboards a window takes (sync/dashboards.h shownDashboards) from a server's or a state file's list: each it
+// cannot show, the second of a name and those past kDashboardsMax are left out, each with a line saying why, and the
+// rest keep the list's order.
+void dashboards_shown_from_a_list() {
+    std::vector<std::string> refused;
+    const std::vector<Dashboard> list{{"A", "http://a.test/"}, {"Bad", "javascript:alert(1)"}, {"B", "https://b.test/"},
+        {"A", "http://other.test/"}, {"C", "file:///etc/passwd"}};
+    CHECK((shownDashboards(list, &refused) == std::vector<Dashboard>{{"A", "http://a.test/"}, {"B", "https://b.test/"}}));
+    CHECK(refused.size() == 3);
+    CHECK(refused.size() == 3 && refused[0].find("Bad") != std::string::npos && refused[0].find("no tab") != std::string::npos);
+    CHECK(refused.size() == 3 && refused[1].find("\"A\" twice") != std::string::npos);
+    CHECK(refused.size() == 3 && refused[2].find("C") != std::string::npos);
+    std::vector<Dashboard> many;
+    for (std::size_t i = 0; i <= kDashboardsMax; ++i)
+        many.push_back({"D" + std::to_string(i), "http://h.test/"});
+    refused.clear();
+    const std::vector<Dashboard> shown = shownDashboards(many, &refused);
+    CHECK(shown.size() == kDashboardsMax && shown.back().name == "D" + std::to_string(kDashboardsMax - 1));
+    CHECK(refused.size() == 1 && refused[0].find("D" + std::to_string(kDashboardsMax)) != std::string::npos);
+    refused.clear();
+    CHECK(shownDashboards({}, &refused).empty() && refused.empty());
+}
+
 // The instance crosses the wire as a field appended to format 2's session frame, so no format number changed: a
 // diff main wrote before instances (old to new) reads each session on no instance, its AI's default; this build's
 // diff is main's with the instance at the frame's end (new to old: a reader from before skips it, as format 2's readers
@@ -3057,6 +3112,8 @@ const Case kCases[] = {
     {"sessions_removed_session", sessions_removed_tab},
     {"sessions_instance_appended", sessions_instance_appended},
     {"sessions_dashboards_appended", sessions_dashboards_appended},
+    {"dashboard_addresses_refused", dashboard_addresses_refused},
+    {"dashboards_shown_from_a_list", dashboards_shown_from_a_list},
     {"sessions_malformed_refused_unchanged", sessions_malformed_refused_unchanged},
     {"sessions_through_mosh_bookkeeping", sessions_through_mosh_bookkeeping},
     {"hub_send_and_queue", hub_send_and_queue},

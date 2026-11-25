@@ -23,6 +23,10 @@ constexpr std::size_t kDashboardsMax = 16;
 constexpr std::size_t kDashboardNameMax = 64;
 constexpr std::size_t kDashboardUrlMax = 2048;
 
+// Why `name` is not a dashboard's name, or empty when it is: 1 to kDashboardNameMax bytes of UTF-8 with no control
+// character. A saved layout's dashboard key holds such a name (tab_order.h).
+std::string dashboardNameProblem(std::string_view name);
+
 // Why `d` is not a dashboard a window can show, or empty when it is: a name of 1 to kDashboardNameMax bytes of UTF-8
 // with no control character, and an http:// or https:// address with a host, of at most kDashboardUrlMax bytes, with
 // no space or control character.
@@ -32,8 +36,9 @@ std::string dashboardProblem(const Dashboard& d);
 // with why, when it is malformed or dashboardProblem refuses it.
 bool parseDashboardLine(std::string_view value, Dashboard* out, std::string* why);
 
-// Why `list` is not a list a server sends, or empty when it is: at most kDashboardsMax, each one shown
-// (dashboardProblem), and no name twice.
-std::string dashboardsProblem(const std::vector<Dashboard>& list);
+// The dashboards of `list` a window shows a tab for, in the list's order: each that dashboardProblem passes, the first
+// of a name given twice, and at most kDashboardsMax. Each one left out adds one line to `refused` saying which and why.
+// The window takes a server's list (frame_host.h takeDashboards) and a state file's (main.cpp) through it.
+std::vector<Dashboard> shownDashboards(const std::vector<Dashboard>& list, std::vector<std::string>* refused);
 
 } // namespace nexus::sync

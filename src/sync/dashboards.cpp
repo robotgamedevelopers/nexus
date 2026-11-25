@@ -16,13 +16,19 @@ bool startsWith(std::string_view s, std::string_view prefix) {
 
 } // namespace
 
-std::string dashboardProblem(const Dashboard& d) {
-    if (d.name.empty() || d.name.size() > kDashboardNameMax)
+std::string dashboardNameProblem(std::string_view name) {
+    if (name.empty() || name.size() > kDashboardNameMax)
         return "a dashboard's name is 1 to " + std::to_string(kDashboardNameMax) + " bytes";
-    if (!codec::tableText(d.name))
-        return "the dashboard name \"" + d.name + "\" is not UTF-8";
-    for (unsigned char c : d.name)
-        if (control(c)) return "the dashboard name \"" + d.name + "\" holds a control character";
+    if (!codec::tableText(name))
+        return "the dashboard name \"" + std::string(name) + "\" is not UTF-8";
+    for (unsigned char c : name)
+        if (control(c)) return "the dashboard name \"" + std::string(name) + "\" holds a control character";
+    return {};
+}
+
+std::string dashboardProblem(const Dashboard& d) {
+    if (std::string problem = dashboardNameProblem(d.name); !problem.empty())
+        return problem;
     const std::string_view url = d.url;
     std::string_view rest;
     if (startsWith(url, "http://")) rest = url.substr(7);
@@ -55,15 +61,24 @@ bool parseDashboardLine(std::string_view value, Dashboard* out, std::string* why
     return true;
 }
 
-std::string dashboardsProblem(const std::vector<Dashboard>& list) {
-    if (list.size() > kDashboardsMax)
-        return "at most " + std::to_string(kDashboardsMax) + " dashboards";
-    for (std::size_t i = 0; i < list.size(); ++i) {
-        if (std::string problem = dashboardProblem(list[i]); !problem.empty()) return problem;
-        for (std::size_t j = 0; j < i; ++j)
-            if (list[j].name == list[i].name) return "the dashboard name \"" + list[i].name + "\" is given twice";
+std::vector<Dashboard> shownDashboards(const std::vector<Dashboard>& list, std::vector<std::string>* refused) {
+    std::vector<Dashboard> shown;
+    for (const Dashboard& d : list) {
+        std::string problem = dashboardProblem(d);
+        bool twice = false;
+        for (const Dashboard& s : shown)
+            twice = twice || s.name == d.name;
+        if (!problem.empty())
+            refused->push_back("a dashboard this window cannot show (" + problem + "): it has no tab");
+        else if (twice)
+            refused->push_back("the dashboard \"" + d.name + "\" twice: the first has its tab");
+        else if (shown.size() == kDashboardsMax)
+            refused->push_back("more than the " + std::to_string(kDashboardsMax) + " dashboards a window shows: \"" +
+                d.name + "\" has no tab");
+        else
+            shown.push_back(d);
     }
-    return {};
+    return shown;
 }
 
 } // namespace nexus::sync

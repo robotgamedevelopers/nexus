@@ -115,23 +115,14 @@ void FrameHost::takeDashboards(const sync::Sessions& state) {
     if (dashboardsTaken_ && list == *dashboardsTaken_) return;
     dashboardsTaken_ = list;
     dashboardUrls_.clear();
+    std::vector<std::string> refused;
     std::vector<std::string> names;
-    for (const sync::Dashboard& d : list) {
-        const std::string problem = sync::dashboardProblem(d);
-        if (!problem.empty()) {
-            std::fprintf(stderr, "nexus: %s sent a dashboard this window cannot show (%s): it has no tab\n",
-                host.c_str(), loggable(problem).c_str());
-        } else if (dashboardUrls_.count(d.name) != 0) {
-            std::fprintf(stderr, "nexus: %s sent the dashboard \"%s\" twice: the first has its tab\n", host.c_str(),
-                loggable(d.name).c_str());
-        } else if (names.size() == sync::kDashboardsMax) {
-            std::fprintf(stderr, "nexus: %s sent more than the %zu dashboards a window shows: \"%s\" has no tab\n",
-                host.c_str(), sync::kDashboardsMax, loggable(d.name).c_str());
-        } else {
-            dashboardUrls_.emplace(d.name, d.url);
-            names.push_back(d.name);
-        }
+    for (const sync::Dashboard& d : sync::shownDashboards(list, &refused)) {
+        dashboardUrls_.emplace(d.name, d.url);
+        names.push_back(d.name);
     }
+    for (const std::string& why : refused)
+        std::fprintf(stderr, "nexus: %s sent %s\n", host.c_str(), loggable(why).c_str());
     if (model->sync_dashboards(names).empty()) return;
     restoreLayout();
     // A tab the server's list selected (the strip was empty, or the one showing went) is no choice of the person's.
@@ -1035,7 +1026,7 @@ bool FrameHost::event(const PrAppEvent& e) {
     HitchScope scope(hitch, Phase::Input);
     watchTap(e);
     // While the secret dialog shows, every event is the window's tree's, where the dialog's field has the focus: none
-    // reaches the sprint tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
+    // reaches a dashboard tab's page or a terminal's shell, so a value typed or pasted goes only to the field.
     if (view->secrets != nullptr && view->secrets->showing() != nullptr) {
         return false;
     }
