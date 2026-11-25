@@ -449,7 +449,9 @@ void theLabelNeverChanges() {
 }
 
 // Still frames: with the finger down and the menu open, 300 frames with no input change nothing: not the focus, not the
-// keyboard, not the menu; and none asks for another once it is open. The same after it closes. Plant: focus a row each
+// keyboard, not the menu; and once the strip has settled none asks for another (the strip's own motion after a press runs
+// about 8 frames, the same as a press on any tab: the first 30 frames are not counted). The same after it closes. Plant:
+// focus a row each
 // frame (prUiSetFocus in accountDropMenu).
 void stillFramesWhileTheMenuIsOpen() {
     Window w;
@@ -466,7 +468,7 @@ void stillFramesWhileTheMenuIsOpen() {
         w.frame();
         refocused += prUiFocus(w.ui) != focusBefore;
         toggled += w.editing != editingBefore;
-        asked += i >= 2 && w.wantsFrame;
+        asked += i >= 30 && w.wantsFrame;
         moved += w.view.accounts.node != menu || !w.menuShows();
     }
     if (refocused || toggled || asked || moved)
