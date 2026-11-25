@@ -22,9 +22,10 @@
 | iOS client (one universal app for iPhone and iPad), a second client of the server; after layer 2, waiting on Prax's iOS app backend (later) | ❌ |
 | iPhone depth: a TLA+ layout model and trace check for the momentum list scroll (finger_scroll), as the rules for index arithmetic ask | ❌ |
 | iOS lock depth: a trace check binding the iOS lock glue to ClientLock.tla, so the lock the phone shows is the lock the model proves | ❌ |
+| Login switch bound to its model: the hub's sign-in-then-switch (SignInClaim naming a session and another account, switchTo, switchSignedIn, dropSwitches, the learned email) driven by a random walk of sign-ins that succeed, fail, are declined or are refused as another account's identity, and logouts, its trace checked by TLC as a behaviour of models/LoginSwitch.tla in CI beside its witnesses | ❌ |
 | Install through AI, no installer: a person in their own AI, on their own subscription, points it at this repo; the AI builds nexus from source by README, installs nexus-server as a login item, and sets nexus up with one friend, its own harness and account. No sprint, no fleet. README is the installer and is proven by a cold run on a clean Mac. After the friends layer. (later) | ❌ |
 | Real isolation, for people who need it: everything on the fleet (friends, fleet workers on API billing, and CI workers) runs inside a sandboxed VM or container, so nothing it runs can reach the machine's own files, logins or services. The token wall today is best effort (docs/secrets.md). Candidates to try, none chosen, by host, in docs/secrets.md "Real isolation: candidates": on Mac hosts Tart (a separate program only: source-available, never taken in), Apple's containerization and container tool, Lima, lume, vfkit, Podman's VM mode; on Linux and WSL2 libkrun through BoxLite or microsandbox, Firecracker with Fireactions for CI runners, Cloud Hypervisor, gVisor, Kata Containers, Podman, Incus; on any host Kubernetes (agent-sandbox, a runner controller) or VMs on GCP or AWS; bubblewrap and nsjail as the process-level baseline. Day-to-day friends on a Mac stay on the process sandbox (GPU and Xcode natively). (later) | ❌ |
-| complete | 6% |
+| complete | 5% |
 
 [Source data](roadmap.sexp)
 
