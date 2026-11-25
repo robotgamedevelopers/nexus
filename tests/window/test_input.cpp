@@ -2937,10 +2937,16 @@ void checkTranscriptStyleValidation(nexus::policy::Host& host) {
     CHECK(window.overlayOpacity == 0.25f && window.messageCard.emailInk == 0x557799);
     window.update(host, "friend", "", true, false, 0, 1, "verify-sign-in", {"b", "Work \"team\"", "second@example.test"});
     CHECK(window.overlayOpacity != 0.25f && window.signInAccount.name == "b");
+    // A rejected edit falls back to the stock policy (WindowApplication::update), so its transcript style is the stock's:
+    // policy/rules/config.json, not TranscriptStyle's built-in defaults.
+    nexus::policy::Host stock("client");
+    nexus::WindowApplication stockWindow;
+    stockWindow.update(stock, "friend", "", true, false, 0, 14, "validate-style");
+    CHECK(!(stockWindow.transcriptStyle == nexus::TranscriptStyle{}));
     for (std::size_t i = 0; i < 14; ++i) {
         window.update(host, "friend", "", true, false, i, 14, "validate-style");
         CHECK((window.overlayOpacity == 0.125f) == (i < 4));
-        nexus::TranscriptStyle expected;
+        nexus::TranscriptStyle expected = i < 4 ? nexus::TranscriptStyle{} : stockWindow.transcriptStyle;
         if (i == 2) {
             expected.ink = expected.personInk = 0xaabbcc;
             expected.radius = 0;
@@ -3287,7 +3293,10 @@ int main(int argc, char** argv) {
         h.view.application->watch(argv[1]);
         h.type("before");
         h.enter();
-        CHECK(h.active().transcript.size() == 1);
+        // The stock holds a draft on Enter (hold_on_enter, docs/policy.md), and an empty Enter sends what it holds.
+        CHECK(h.active().transcript.empty() && h.active().held == "before");
+        h.enter();
+        CHECK(h.active().transcript.size() == 1 && h.active().held.empty());
         std::filesystem::copy_file(argv[2], argv[1]);
         // Wait for the running window to observe the atomic activation.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -3352,7 +3361,8 @@ int main(int argc, char** argv) {
             styled.model.append(0, {EntryKind::Tool, "Bash: git status"});
             styled.frame();
             styled.frame();
-            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "Bash: git status"));
+            // The stock shows notices and tools, a Bash call behind its "$ " prompt (transcript_style.tool_prompts).
+            CHECK(styled.hasText(styled.window(), "Fixture notice") && styled.hasText(styled.window(), "$ git status"));
             const std::string styleFile = std::string(argv[1]) + ".styles";
             styled.view.application->watch(styleFile);
             std::filesystem::copy_file(argv[2], styleFile);
