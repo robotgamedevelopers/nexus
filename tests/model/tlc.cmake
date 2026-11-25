@@ -17,10 +17,10 @@
 #               text just sent appends nothing, close the one whose close_tab removes an AI, sprint-move the one
 #               whose move_tab puts the sprint tab among the AIs, sprint-close the one whose close_tab removes the
 #               sprint tab, close-fallback the one whose close of the active tab ignores the selection history,
-#               remove-AI (with CHURN) the one whose remove_ai leaves the tab's id in the history;
+#               remove-ai (with CHURN) the one whose remove_ai leaves the tab's id in the history;
 #               for label_walk, before the one that takes the label to return to at a session's first observation
 #   NOSPRINT    with WALK: ON walks a model made without the sprint tab
-#   CHURN       with WALK: ON walks the AIs coming and going (trace_walk --AIs-churn)
+#   CHURN       with WALK: ON walks the AIs coming and going (trace_walk --ais-churn)
 #   LINKWALK    optional, in place of WALK: tests/sync's link_walk program; it is run first and writes
 #               LinkTraceData.tla into WORK, with SEED, STEPS and WINDOWS (its windows), and FAULTY one of applier,
 #               mirror, tail, close or ensure
@@ -31,7 +31,7 @@
 #   SUPWALK     optional, in place of WALK: tests/server's supervisor_walk; it is run first and writes
 #               SupervisorTraceData.tla into WORK, with SEED and STEPS, FAULTY one of turn, resume, queue,
 #               limit, setting, account, activity, dir, remove or unknown (both with CHURN), and CHURN ON for the
-#               AI taken out of ais.json and put back (supervisor_walk --AIs-churn)
+#               AI taken out of ais.json and put back (supervisor_walk --ais-churn)
 #   DRIVERWALK  optional, in place of WALK: the Claude driver's walk (drivers/claude/dist/test/walk.js), run under
 #               NODE; it is run first and writes ClaudeDriverTraceData.tla into WORK, with SEED and STEPS, and FAULTY
 #               one of settings, refusal, latch
@@ -446,7 +446,7 @@ elseif(DEFINED WALK AND NOT "${WALK}" STREQUAL "")
         list(APPEND walk_args --faulty-before)
     elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
         message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not send, queue, move, queue-cap, send-trim, send-dedup, "
-            "close, sprint-move, sprint-close, close-fallback, remove-AI or before")
+            "close, sprint-move, sprint-close, close-fallback, remove-ai or before")
     endif()
     if(NOSPRINT)
         list(APPEND walk_args --no-sprint)
