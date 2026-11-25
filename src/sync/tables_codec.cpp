@@ -174,7 +174,7 @@ std::string writeTables(const SessionsChange& change, std::uint32_t format) {
         d->ais_sent = true;
         d->ais_known = change.aisKnown;
         for (const ServerAI& f : change.ais) {
-            wire::AI* w = added(wire::SessionsDiffAIsAdd(b.main, d->ais));
+            wire::AI* w = added(wire::SessionsDiffAisAdd(b.main, d->ais));
             putText(b.main, w->name, f.name, scratch);
             w->can_auto_account = f.canAutoAccount;
             for (const AccountChoice& account : f.accounts) {
