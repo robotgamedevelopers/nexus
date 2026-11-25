@@ -5,6 +5,7 @@
 #include <optional>
 #include <vector>
 
+#include "account_menu.h"
 #include "model.h"
 #include "policy/host.h"
 #include "style.h"
@@ -12,7 +13,7 @@
 
 namespace nexus {
 
-enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit };
+enum class WindowCommand { ScrollTranscript, ClearComposer, ReplaceDraft, SelectTab, MoveTab, Zoom, OpenTerminal, CloseTerminal, Stop, OpenTab, CloseTab, InvokeService, AccountCommand, AccountPicker, AccountAction, ResolveLimit, AccountMenu };
 struct Shortcut {
     PrAppKey key;
     PrAppModifierFlags modifiers;
@@ -74,6 +75,7 @@ struct AccountSurface {
     std::vector<std::string> tabTitles;
     TabStyle tabs;
     PromptStyle prompt;
+    AccountMenuStyle accountMenu;   // the menu under an AI's tab (account_menu.h), from the policy's account_menu
     bool showTabs = true, reorderTabs = true, promptCommand = false;
 };
 

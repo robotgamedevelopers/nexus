@@ -104,6 +104,11 @@ bool shortcut(const PrJson* d, Index row, Shortcut& out) {
         return prJsonCount(d, row) == 3 && (out.type == "open" || out.type == "previous" ||
             out.type == "next" || out.type == "confirm" || out.type == "cancel");
     }
+    if (op == "account_menu") {
+        out.command = WindowCommand::AccountMenu;
+        out.type = stringAt(d, prJsonElement(d, row, 2));
+        return prJsonCount(d, row) == 3 && (out.type == "account" || out.type == "login" || out.type == "logout");
+    }
     if (op == "open_tab" || op == "account_command") {
         out.command = op == "open_tab" ? WindowCommand::OpenTab : WindowCommand::AccountCommand;
         out.type = stringAt(d, prJsonElement(d, row, 2));
@@ -404,6 +409,27 @@ bool readSurface(const PrJson* doc, AccountSurface& surface) {
             !readPoints(doc, style, {"gap", 3}, tabs.gap, 0, 128) ||
             !readPoints(doc, style, {"leading", 7}, tabs.leading, 0, 128) ||
             !readFlag(doc, style, {"reserve_width", 13}, tabs.reserveWidth))) return false;
+    auto& menu = surface.accountMenu;
+    const auto drop = prJsonMember(doc, 0, {"account_menu", 12});
+    if (drop != kPrJsonMissing) {
+        if (prJsonKind(doc, drop) != PrJsonKind_Object ||
+                !readPoints(doc, drop, {"row_height", 10}, menu.rowHeight, kMinRowHeight, 128) ||
+                !readPoints(doc, drop, {"gap", 3}, menu.gap, 0, 64) ||
+                !readPoints(doc, drop, {"padding_x", 9}, menu.paddingX, 0, 64) ||
+                !readPoints(doc, drop, {"radius", 6}, menu.radius, 0, 64) ||
+                !readPoints(doc, drop, {"max_width_em", 12}, menu.maxWidthEm, 4, 80) ||
+                !readPoints(doc, drop, {"tab_move_threshold", 18}, menu.tabMoveThreshold, 4, 128) ||
+                !readPoints(doc, drop, {"hover_opacity", 13}, menu.hoverOpacity, 0, 1) ||
+                !readColor(doc, drop, {"fill", 4}, menu.fill) || !readColor(doc, drop, {"ink", 3}, menu.ink) ||
+                !readColor(doc, drop, {"hover_fill", 10}, menu.hoverFill) ||
+                !readColor(doc, drop, {"mark_ink", 8}, menu.markInk) ||
+                !readColor(doc, drop, {"divider", 7}, menu.divider)) return false;
+        const auto mark = prJsonMember(doc, drop, {"mark", 4});
+        if (mark != kPrJsonMissing) {
+            if (prJsonKind(doc, mark) != PrJsonKind_String || stringAt(doc, mark).size() > 16) return false;
+            menu.mark = std::string(stringAt(doc, mark));
+        }
+    }
     auto& prompt = surface.prompt;
     const auto box = prJsonMember(doc, 0, {"prompt_style", 12});
     if (box != kPrJsonMissing && (prJsonKind(doc, box) != PrJsonKind_Object ||
