@@ -52,7 +52,7 @@ jobs:
 
   model:
     # Keep the compiled trace walks and the CPU-intensive specs on prebuilt runners.
-    runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","fleet","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ (matrix.build || matrix.prebuilt) && fromJSON('["self-hosted","nexus-nightly","Linux","X64","tlc"]') || 'ubuntu-24.04' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -367,7 +367,7 @@ jobs:
   # The tab label's trace checks (TabLabelTrace.tla), whose walk needs the window's logic: on macOS, as the model job
   # ran them before it moved to Linux.
   model-window:
-    runs-on: [self-hosted, fleet, macOS, ARM64]
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -440,7 +440,7 @@ jobs:
   # no link and no nexus-server yet: build-and-unit-linux says why). The first step refuses to run anywhere but WSL2.
   # Caches as build-and-unit-linux's, under ~/.cache/nexus-ci inside the distro.
   wsl2-functional:
-    runs-on: [self-hosted, fleet, Linux, X64, wsl2]
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
     timeout-minutes: 15
     env:
       CC: clang
@@ -496,7 +496,7 @@ jobs:
         run: if command -v ccache >/dev/null && [ -f "$CCACHE_STATSLOG" ]; then ccache --show-log-stats; fi
 
   server-lock:
-    runs-on: [self-hosted, fleet, macOS, ARM64, services]
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -507,3 +507,217 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_WINDOW=OFF
           cmake --build build --parallel "$(sh .github/job-cores.sh)" --target server_lock
           ctest --test-dir build -R '^server_lock_functional$' --output-on-failure --no-tests=error
+
+  # The Claude driver's token wall inside captain's WSL2 (ci.yml's claude-driver-wall-linux runs it on hosted Ubuntu
+  # per commit; WSL2 needs the fleet, so it runs here).
+  claude-driver-wall-wsl2:
+    strategy:
+      fail-fast: false
+      matrix:
+        where: [wsl2]
+        # The unlimited runs each in a job of its own: on WSL2 under load one run took 52 s, two past the cap. The two
+        # limited runs share one: each took seconds on macOS (2026-11-15); WSL2 under load is the one to watch.
+        run: [whole-wall, without-the-hook, "limited,limited-nohook"]
+        include:
+          - where: wsl2
+            labels: [self-hosted, nexus-nightly, Linux, X64, wsl2]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: matrix.where == 'wsl2'
+        with:
+          node-version: '22.14.0'
+      - name: Where this runs, and caches outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in *microsoft*|*WSL2*) wsl=wsl2 ;; *) wsl=ubuntu ;; esac
+          if [ "$wsl" != "${{ matrix.where }}" ]; then
+            echo "::error::$(hostname -s) (kernel $kernel) is not a ${{ matrix.where }} machine"
+            exit 1
+          fi
+          restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo none)
+          echo "$(hostname -s): kernel $kernel; apparmor_restrict_unprivileged_userns: $restrict; passwordless sudo: $(sudo -n true 2>/dev/null && echo yes || echo no)"
+          if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
+            echo "::error::no node or npm on $(hostname -s)'s runner PATH; the fleet installs Node (sdk/bin) on its runners"
+            exit 1
+          fi
+          # The runs' directories under a temporary directory of this runner's own: two Claude sandboxes at once whose
+          # working directories share an ancestor a few levels up fail each other's commands now and then (bwrap:
+          # Can't find source path .../runner-tmp/.mcp.json; two jobs on amd-2, 2026-11-15). Always under /tmp (never an
+          # inherited TMPDIR such as ~/.cache/runner-tmp, which pushes Unix domain socket paths past sun_path's 108-byte
+          # limit on long runner names).
+          runner_dir=${RUNNER_NAME// /_}
+          own="/tmp/$runner_dir"
+          mkdir -p "$own"
+          echo "TMPDIR=$own" >> "$GITHUB_ENV"
+          caches="$HOME/.cache/nexus-ci"
+          mkdir -p "$caches/$runner_dir/prax-downloads"
+          {
+            echo "SANDBOX_BUILD=$caches/$runner_dir/sandbox-build"
+            echo "PR_DOWNLOAD_DIR=$caches/$runner_dir/prax-downloads"
+            echo "NEXUS_SANDBOX_BIN=$caches/$runner_dir/sandbox-build/sandbox"
+          } >> "$GITHUB_ENV"
+      - name: Build bubblewrap and socat
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$SANDBOX_BUILD" -DCMAKE_BUILD_TYPE=Release -DNEXUS_LINK=OFF -DNEXUS_WINDOW=OFF \
+            -DNEXUS_WINDOW_LOGIC=OFF -DNEXUS_SANDBOX_TOOLS=ON > /dev/null
+          cmake --build "$SANDBOX_BUILD" --target nexus_sandbox_tools --parallel "$(sh .github/job-cores.sh)"
+          "$NEXUS_SANDBOX_BIN/bwrap/bwrap" --version
+          "$NEXUS_SANDBOX_BIN/socat/socat" -V | head -2
+      - name: Install the pinned packages, with the Claude executable
+        working-directory: drivers/claude
+        # Installed once per lockfile on each runner and kept beside its other caches: WSL2's install took 24 to 47 s
+        # when it asked the registry each time, and 26 to 38 s from npm's cache on a loaded captain (Ubuntu: 4 s).
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$HOME/.cache/nexus-ci/$RUNNER_NAME/claude-driver-packages"
+          kept="$base/$(sha256sum package-lock.json | cut -c1-16)"
+          if [ ! -d "$kept/node_modules" ]; then
+            npm ci --prefer-offline --no-audit --no-fund
+            rm -rf "$base"
+            mkdir -p "$kept"
+            mv node_modules "$kept/node_modules"
+          fi
+          rm -rf node_modules
+          ln -s "$kept/node_modules" node_modules
+      - name: Compile
+        working-directory: drivers/claude
+        run: npm run build
+      - name: The token wall
+        working-directory: drivers/claude
+        env:
+          NEXUS_WALL_REPORT: '1'
+          NEXUS_WALL_FRESH_PROFILE: '1'
+          NEXUS_WALL_RUN: ${{ matrix.run }}
+        # Where this runner's own login reaches hulk, ssh there must work from the sandbox too, and from there no
+        # login back to this machine; a runner with no fleet login skips that probe.
+        run: |
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 hulk true 2>/dev/null; then
+            export NEXUS_WALL_SSH_HOST=hulk NEXUS_WALL_SSH_BACK="$(hostname -s)"
+          else
+            echo "no login to hulk from $(hostname -s) as $(id -un): the ssh-out probe is skipped"
+          fi
+          # Separate runner workspaces still share /tmp/.mcp.json during SDK setup.
+          # Serialize just this test on each Linux host, including across workflow runs.
+          flock "$HOME/.cache/nexus-ci/claude-wall.lock" npm run test:functional
+
+  # The WSL2 terminal test (wsl2-terminal below), built with MSVC on a GitHub-hosted Windows runner as ci.yml's windows
+  # job builds it (.github/actions/windows-build, from cache-warm's cache when there is one; no limit here).
+  windows-wsl2-test:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Caches, configure and build
+        uses: ./.github/actions/windows-build
+        with:
+          require: "false"
+      - name: Keep the WSL2 terminal test for wsl2-terminal
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wsl2-terminal-test
+          path: ${{ env.NEXUS_BUILD }}\tests\window\Release\nexus_wsl2_terminal_tests.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # A Windows terminal tab's shell for real (tests/window/test_wsl2_terminal.cpp, ctest wsl2_terminal): the probe through
+  # wsl.exe, then the launch line on a Windows pseudoconsole through Prax's lib/process, as a terminal tab starts it; the
+  # shell's prompt, TERM, home directory, Escape and exit. windows-wsl2-test builds it with MSVC on a GitHub-hosted runner; it runs here, on captain's
+  # WSL2 runners, through WSL interop, which starts it on Windows as the user whose WSL2 distribution that is. It cannot
+  # run in the windows job: those runners run as NETWORK SERVICE, which has no WSL2 distribution.
+  wsl2-terminal:
+    needs: windows-wsl2-test
+    runs-on: [self-hosted, nexus-nightly, Linux, X64, wsl2]
+    timeout-minutes: 30
+    steps:
+      - name: Inside WSL2, with interop to Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel=$(cat /proc/sys/kernel/osrelease)
+          case "$kernel" in
+            *microsoft*WSL2*|*WSL2*) echo "WSL2 kernel $kernel${WSL_DISTRO_NAME:+, distro $WSL_DISTRO_NAME}" ;;
+            *) echo "::error::$(hostname -s) is not inside WSL2 (kernel $kernel): the wsl2 label belongs only to runners in captain's WSL2 distro"; exit 1 ;;
+          esac
+          if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+            echo "::error::WSL interop is off on $(hostname -s) (no /proc/sys/fs/binfmt_misc/WSLInterop): Windows programs cannot start from here; turn it on in /etc/wsl.conf ([interop] enabled=true)"
+            exit 1
+          fi
+      - name: The test the windows job built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wsl2-terminal-test
+          path: ${{ runner.temp }}/wsl2-terminal
+      - name: wsl2_terminal (functional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+          "$RUNNER_TEMP/wsl2-terminal/nexus_wsl2_terminal_tests.exe"
+
+  # The frame budget (docs/frame-budget.md): the frame thread timed on the real clock, against budgets set on the fleet's
+  # Macs, so on a fleet Mac (a shared 3-core hosted VM is not that machine; ci.yml says so). Built Release with the
+  # link, as ci.yml's build-and-unit, then run alone, with every nova-reserve slot on this host when it can have them
+  # within 20 s; else shared.
+  frame-budget:
+    runs-on: [self-hosted, nexus-nightly, macOS, ARM64, xcode]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Configure (Release) and build the frame-budget test
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloads="$HOME/Library/Caches/nexus-ci/$RUNNER_NAME/prax-downloads"
+          mkdir -p "$downloads"
+          export PR_DOWNLOAD_DIR="$downloads"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_E2E_TAILNET=
+          cmake --build build --parallel "$(sh .github/job-cores.sh)" --target nexus_frame_tests
+      - name: Frame budget, alone
+        shell: bash
+        run: |
+          set -uo pipefail
+          frames=(ctest --test-dir build -R '^window_frame_budget$' --output-on-failure --no-tests=error)
+          if command -v nova-reserve >/dev/null; then
+            held="$RUNNER_TEMP/frame-budget-held"
+            rm -f "$held"
+            if nova-reserve run --exclusive --wait 20s --why "nexus CI frame budget" -- \
+                sh -c 'touch "$0" && exec "$@"' "$held" "${frames[@]}"; then
+              exit 0
+            fi
+            if [ -f "$held" ]; then
+              exit 1
+            fi
+            echo "::notice::no exclusive hold on $(hostname -s) within 20 s: the frame budget runs shared"
+          fi
+          "${frames[@]}"
+
+  # The Tailscale shim on Windows and on macOS with its x86_64 slice under Rosetta (tailscale.yml), with no time limit:
+  # restoring Windows's primed cache alone takes most of a per-commit job's 2 minutes on the hosted image, and the
+  # x86_64 build and run do not fit beside the arm64 one, so ci.yml runs macOS arm64 and Linux and this runs the rest.
+  # It saves the primed caches again when the pins changed.
+  tailscale-windows-and-rosetta:
+    uses: ./.github/workflows/tailscale.yml
+    permissions:
+      contents: read
+    with:
+      prime: true
+      save: true
+      linux: false

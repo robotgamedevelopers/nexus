@@ -1,13 +1,15 @@
 # The Tailscale shim (docs/tailscale.md, layer 0) on each OS, in jobs of its own: src/tailscale/CMakeLists.txt builds it
 # alone, without Prax, so a job is the shim's Go build (nexus's and the test program's), its test program and
 # `ctest -L tailscale` (no test here reaches another machine). Called by ci.yml for every pull request and push to main,
-# with the 2-minute limit of those events, and by tailscale-prime.yml, without it.
+# with the 2-minute limit of those events, and by cache-warm.yml and nightly.yml, without it.
 #
 # The verdict is a commit status. Each OS's result for a commit is the status tailscale-<os> (tailscale-macos,
 # tailscale-linux, tailscale-windows) on that exact commit: on a pull request its head, which is what these jobs check
 # out (not the merge commit the other jobs build), and on a push or a merge queue the pushed commit. It is set only by
 # a job that built and tested that commit on that OS: success or failure, or failure when the job is cancelled or times
-# out. A lander waits for all three to be success on the head it lands; a missing or pending one is not a pass.
+# out. A lander waits for tailscale-macos and tailscale-linux to be success on the head it lands (ci.yml runs those
+# two per commit, macOS for arm64 alone; the nightly runs Windows, whose restore alone does not fit 2 minutes, and
+# macOS's x86_64 slice under Rosetta); a missing or pending one is not a pass.
 #
 # Caches. Go comes from the runner's machine (PATH, or ~/sdk/bin as the fleet installs it) and fetches the pinned Go
 # toolchain into the module cache itself. The toolchain, the modules, Go's build cache and (on Windows) llvm-mingw live
@@ -63,6 +65,10 @@ on:
       macos:
         type: boolean
         default: true
+      rosetta:
+        description: macOS also builds the x86_64 slice and runs it under Rosetta (false from ci.yml, whose 2 minutes it does not fit; the nightly runs it)
+        type: boolean
+        default: true
       linux:
         type: boolean
         default: true
@@ -82,7 +88,8 @@ on:
         default: "[1]"
 
 jobs:
-  # macOS builds arm64 and x86_64 (joined by lipo) and runs both, the second under Rosetta.
+  # macOS builds arm64 and x86_64 (joined by lipo) and runs both, the second under Rosetta; with rosetta false (ci.yml),
+  # arm64 alone.
   tailscale-macos:
     if: inputs.macos
     runs-on: macos-26
@@ -155,10 +162,12 @@ jobs:
         run: |
           echo "::error::no primed Tailscale cache for these pins on main: run the cache-warm workflow on main (gh workflow run cache-warm.yml --ref main), then re-run; a cold Go build does not fit the 2 minutes"
           exit 1
-      - name: Configure (Release, arm64 and x86_64)
+      - name: Configure (Release, ${{ inputs.rosetta && 'arm64 and x86_64' || 'arm64' }})
         if: ${{ steps.caches.outputs.build == 'true' }}
+        env:
+          ARCHS: ${{ inputs.rosetta && 'arm64;x86_64' || 'arm64' }}
         run: >-
-          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          cmake -S src/tailscale -B build-tailscale -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=$ARCHS"
           "-DNEXUS_GO_MODCACHE=$NEXUS_GO_CACHES/mod" "-DNEXUS_GO_BUILDCACHE=$NEXUS_GO_CACHES/build"
       # tailscale_checks: the test program, nexus's build of the shim, go vet and the licence notices' check, side by
       # side (tests/tailscale).
@@ -172,7 +181,7 @@ jobs:
       # children that lock_two_process and quiet start are the program again, which macOS runs as its native (arm64)
       # slice.
       - name: Tests (x86_64, under Rosetta)
-        if: ${{ steps.caches.outputs.build == 'true' }}
+        if: ${{ steps.caches.outputs.build == 'true' && inputs.rosetta }}
         shell: bash
         run: |
           set -euo pipefail

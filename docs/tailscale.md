@@ -131,16 +131,18 @@ outside its workspace: `NEXUS_GO_MODCACHE` (modules and the toolchain), `NEXUS_G
 on Windows, `NEXUS_TAILSCALE_DOWNLOADS` (llvm-mingw) or `NEXUS_LLVM_MINGW` (an unpacked one). Each defaults to a
 directory under the build tree.
 
-CI has one job per OS (`.github/workflows/tailscale.yml`, called by `ci.yml` for every pull request and push to main),
-beside the others and in parallel with them: `tailscale-macos` (arm64 and x86_64, the x86_64 slice run under Rosetta),
-`tailscale-linux` (with the licence check) and `tailscale-windows` (captain). Each configures `src/tailscale` alone,
+CI has one job per OS (`.github/workflows/tailscale.yml`), on GitHub-hosted runners: `tailscale-macos` (arm64) and
+`tailscale-linux` (with the licence check), called by `ci.yml` for every pull request and push to main, beside the
+others and in parallel with them; and, called by the nightly, `tailscale-windows`, since restoring its primed cache
+(about 1.3 GB of Go's build cache) alone took 83 s on the hosted Windows image, and `tailscale-macos` with its x86_64
+slice built beside arm64 and run under Rosetta, which took the per-commit job past 2 minutes. Each configures `src/tailscale` alone,
 builds both builds of the shim and the test program, vets and runs `ctest -L tailscale`. On a pull request they check
 out the head commit, not the merge commit the other jobs build.
 
 **The verdict is a commit status.** Each OS's result is the status `tailscale-macos`, `tailscale-linux` or
 `tailscale-windows` on the exact commit built: a pull request's head, or the pushed commit. Only a job that built and
 tested that commit on that OS sets it, to success or failure (a cancelled or timed-out job sets failure). **A lander
-waits for all three statuses to be success on the head it lands**; a missing or pending one is not a pass, whatever
+waits for `tailscale-macos` and `tailscale-linux` to be success on the head it lands**; a missing or pending one is not a pass, whatever
 the jobs show.
 
 The Go toolchain, the modules, Go's build cache and llvm-mingw live in a directory keyed by the pins
