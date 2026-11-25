@@ -294,6 +294,16 @@ struct View {
     PrLayoutNode transcript = kPrLayoutNodeNone; // the transcript's scroller, as the last round built it
     PrLayoutNode boardBox = kPrLayoutNodeNone;  // the box that holds the sprint tab's page, as the last round built it
     HitchDetector* hitch = nullptr;             // names each terminal tab's update and show as a phase; null, none
+    // The client lock (client_lock.h): set while the window is locked. A round then builds the lock screen alone, its
+    // title and message: no tab strip, no AI tabs or their names, no transcript or prompt, no terminal, no Dashboard,
+    // no dialog. The terminals' shells and the board keep running unseen (each round services them as hidden). Return
+    // or a click on it calls `unlock` (asks the system again); Escape hides the overlay (`hide`).
+    struct LockScreen {
+        std::string title;
+        std::string message;
+    };
+    std::optional<LockScreen> lockScreen;
+    std::function<void()> unlock;
 };
 
 // The most a prompt holds, in bytes: the server's text limit (sync/hub.h Limits::text), past which the server refuses a

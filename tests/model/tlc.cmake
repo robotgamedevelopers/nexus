@@ -50,6 +50,8 @@
 #               ReconnectTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of cached, no-reset
 #   OVERLAYWALK optional, in place of WALK: tests/model's overlay_walk program; it is run first and writes
 #               OverlayTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of hide-unkeyed, hotkey-hides
+#   LOCKWALK    optional, in place of WALK: tests/model's lock_walk program; it is run first and writes
+#               ClientLockTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of stale, draw, idle
 #   TSWALK      optional, in place of WALK: the Tailscale shim's lifecycle module (src/tailscale/lifecycle), whose walk
 #               (./walk) runs under GO, offline, with the local toolchain (the module needs no other); it is run
 #               first and writes TailscaleTraceData.tla into WORK, with SEED and STEPS, and FAULTY one of ready, url,
@@ -377,6 +379,19 @@ elseif(DEFINED OVERLAYWALK AND NOT "${OVERLAYWALK}" STREQUAL "")
     message("${walk_out}")
     if(NOT walk_rc EQUAL 0)
         message(FATAL_ERROR "overlay_walk failed (${walk_rc}): ${walk_out}")
+    endif()
+elseif(DEFINED LOCKWALK AND NOT "${LOCKWALK}" STREQUAL "")
+    set(walk_args "${SEED}" "${STEPS}")
+    if(FAULTY STREQUAL "stale" OR FAULTY STREQUAL "draw" OR FAULTY STREQUAL "idle")
+        list(APPEND walk_args "--faulty-${FAULTY}")
+    elseif(DEFINED FAULTY AND NOT FAULTY STREQUAL "")
+        message(FATAL_ERROR "tlc.cmake: FAULTY is ${FAULTY}, not stale, draw or idle")
+    endif()
+    execute_process(COMMAND "${LOCKWALK}" ${walk_args} "${WORK}/ClientLockTraceData.tla"
+        RESULT_VARIABLE walk_rc OUTPUT_VARIABLE walk_out ERROR_VARIABLE walk_out TIMEOUT 30)
+    message("${walk_out}")
+    if(NOT walk_rc EQUAL 0)
+        message(FATAL_ERROR "lock_walk failed (${walk_rc}): ${walk_out}")
     endif()
 elseif(DEFINED WATCHWALK AND NOT "${WATCHWALK}" STREQUAL "")
     set(walk_args "${SEED}" "${STEPS}")
